@@ -149,6 +149,7 @@ enum Commands {
     },
 
     /// Start web server for graph visualization
+    #[cfg(feature = "mcp-server")]
     Serve {
         /// Port number
         #[arg(long, default_value = "8080")]
@@ -674,6 +675,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
 
+        #[cfg(feature = "mcp-server")]
         Commands::Serve { port, open } => {
             use rbuilder::cli::serve;
             use std::path::Path;

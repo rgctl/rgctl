@@ -1,5 +1,7 @@
 //! Phase 6 integration tests: MCP, chat, API, and formatting
 
+#![cfg(feature = "mcp-server")]
+
 use rbuilder::api::state::AppState;
 use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::schema::{Node, NodeType};

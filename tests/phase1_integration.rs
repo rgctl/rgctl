@@ -16,6 +16,7 @@ fn write(path: &std::path::Path, contents: &str) {
 }
 
 #[test]
+#[cfg(feature = "lang-markdown")]
 fn test_end_to_end_multi_language_repo() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

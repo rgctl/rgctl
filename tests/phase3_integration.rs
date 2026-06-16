@@ -31,6 +31,7 @@ fn test_rule_engine_integration() {
 }
 
 #[test]
+#[cfg(feature = "lang-java")]
 fn test_java_plugin_extraction() {
     let temp = TempDir::new().unwrap();
     fs::write(
@@ -45,6 +46,7 @@ fn test_java_plugin_extraction() {
 }
 
 #[test]
+#[cfg(all(feature = "lang-kotlin", feature = "lang-csharp", feature = "lang-java"))]
 fn test_kotlin_and_csharp_plugins() {
     let registry = LanguageRegistry::new();
     assert!(registry.has_plugin("kotlin"));

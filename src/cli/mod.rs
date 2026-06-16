@@ -1,13 +1,11 @@
 //! CLI command implementations
 
-pub mod update;
-
-#[cfg(feature = "mcp-server")]
 pub mod chat;
+pub mod update;
+pub mod workspace;
 
 #[cfg(feature = "mcp-server")]
 pub mod mcp;
 
 #[cfg(feature = "mcp-server")]
 pub mod serve;
-pub mod workspace;
