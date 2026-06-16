@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rBuilder Graph Browser</title>
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e6edf3; height: 100vh; display: flex; flex-direction: column; }
+    header { padding: 12px 20px; background: #161b22; border-bottom: 1px solid #30363d; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 1.1rem; margin-right: auto; color: #58a6ff; }
+    input, select, button { background: #21262d; border: 1px solid #30363d; color: #e6edf3; padding: 6px 10px; border-radius: 6px; font-size: 0.875rem; }
+    button { cursor: pointer; background: #238636; border-color: #238636; }
+    button:hover { background: #2ea043; }
+    button.secondary { background: #21262d; border-color: #30363d; }
+    main { flex: 1; display: grid; grid-template-columns: 280px 1fr 300px; overflow: hidden; }
+    aside, .panel { background: #161b22; border-right: 1px solid #30363d; overflow-y: auto; padding: 12px; }
+    .panel { border-right: none; border-left: 1px solid #30363d; }
+    #graph { background: #0d1117; }
+    .stat { padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 0.85rem; }
+    .stat span { color: #8b949e; }
+    .stat strong { float: right; color: #58a6ff; }
+    #node-detail h3 { font-size: 0.95rem; margin-bottom: 8px; color: #58a6ff; }
+    #node-detail p { font-size: 0.8rem; color: #8b949e; margin: 4px 0; }
+    .label-tag { display: inline-block; background: #21262d; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin: 2px; }
+    #search-results { margin-top: 8px; }
+    .result-item { padding: 6px; cursor: pointer; border-radius: 4px; font-size: 0.8rem; }
+    .result-item:hover { background: #21262d; }
+    .loading { color: #8b949e; font-size: 0.85rem; padding: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>rBuilder Graph Browser</h1>
+    <input type="text" id="search" placeholder="Search nodes..." style="width:220px">
+    <select id="type-filter">
+      <option value="">All types</option>
+      <option value="Function">Function</option>
+      <option value="Class">Class</option>
+      <option value="Struct">Struct</option>
+      <option value="File">File</option>
+      <option value="Module">Module</option>
+    </select>
+    <button onclick="loadGraph()">Refresh</button>
+    <button class="secondary" onclick="askNlp()">Ask NLP</button>
+  </header>
+  <main>
+    <aside>
+      <h2 style="font-size:0.9rem;margin-bottom:8px">Statistics</h2>
+      <div id="stats"><div class="loading">Loading...</div></div>
+      <h2 style="font-size:0.9rem;margin:12px 0 8px">Communities</h2>
+      <div id="communities"><div class="loading">Loading...</div></div>
+    </aside>
+    <div id="graph"></div>
+    <div class="panel">
+      <div id="node-detail"><p>Select a node to view details.</p></div>
+      <div id="search-results"></div>
+    </div>
+  </main>
+  <script>
+    const API = '';
+    let network = null;
+    let allNodes = [];
+    let allEdges = [];
+
+    const typeColors = {
+      Function: '#58a6ff', Class: '#bc8cff', Struct: '#79c0ff',
+      File: '#8b949e', Module: '#3fb950', ConfigKey: '#d29922',
+      default: '#484f58'
+    };
+
+    async function fetchJson(path) {
+      const r = await fetch(API + path);
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
+
+    async function loadStats() {
+      const stats = await fetchJson('/api/graph/stats');
+      document.getElementById('stats').innerHTML = `
+        <div class="stat"><span>Nodes</span><strong>${stats.node_count}</strong></div>
+        <div class="stat"><span>Edges</span><strong>${stats.edge_count}</strong></div>
+        <div class="stat"><span>Functions</span><strong>${stats.function_count}</strong></div>
+        <div class="stat"><span>Classes</span><strong>${stats.class_count}</strong></div>
+        <div class="stat"><span>Avg Complexity</span><strong>${(stats.avg_complexity||0).toFixed(1)}</strong></div>
+      `;
+    }
+
+    async function loadCommunities() {
+      const data = await fetchJson('/api/communities');
+      document.getElementById('communities').innerHTML = data.communities.slice(0, 10).map(c =>
+        `<div class="stat"><span>Community ${c.id}</span><strong>${c.member_count}</strong></div>`
+      ).join('') || '<p class="loading">No communities detected</p>';
+    }
+
+    async function loadGraph() {
+      const typeFilter = document.getElementById('type-filter').value;
+      const params = new URLSearchParams({ limit: '200' });
+      if (typeFilter) params.set('node_type', typeFilter);
+
+      const [nodeData, edgeData] = await Promise.all([
+        fetchJson('/api/graph/nodes?' + params),
+        fetchJson('/api/graph/edges?limit=300')
+      ]);
+
+      allNodes = nodeData.nodes;
+      allEdges = edgeData.edges;
+
+      const nodeIds = new Set(allNodes.map(n => n.id));
+      const visNodes = new vis.DataSet(allNodes.map(n => ({
+        id: n.id,
+        label: n.name.length > 20 ? n.name.slice(0, 18) + '…' : n.name,
+        title: `${n.name} (${n.type})`,
+        color: typeColors[n.type] || typeColors.default,
+        font: { color: '#e6edf3', size: 11 }
+      })));
+
+      const visEdges = new vis.DataSet(
+        allEdges
+          .filter(e => nodeIds.has(e.from) && nodeIds.has(e.to))
+          .map((e, i) => ({
+            id: i,
+            from: e.from,
+            to: e.to,
+            arrows: 'to',
+            color: { color: '#30363d' },
+            width: 1
+          }))
+      );
+
+      const container = document.getElementById('graph');
+      if (network) network.destroy();
+      network = new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
+        physics: { barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
+        interaction: { hover: true, tooltipDelay: 100 }
+      });
+
+      network.on('click', params => {
+        if (params.nodes.length) showNodeDetail(params.nodes[0]);
+      });
+
+      loadStats();
+      loadCommunities();
+    }
+
+    function showNodeDetail(nodeId) {
+      const node = allNodes.find(n => n.id === nodeId);
+      if (!node) return;
+      const labels = (node.labels || []).map(l => `<span class="label-tag">${l}</span>`).join('');
+      document.getElementById('node-detail').innerHTML = `
+        <h3>${node.name}</h3>
+        <p><strong>Type:</strong> ${node.type}</p>
+        <p><strong>File:</strong> ${node.file || '?'}</p>
+        <p><strong>Line:</strong> ${node.line || '?'}</p>
+        ${node.complexity ? `<p><strong>Complexity:</strong> ${node.complexity}</p>` : ''}
+        ${labels ? `<p><strong>Labels:</strong> ${labels}</p>` : ''}
+      `;
+    }
+
+    async function searchNodes() {
+      const q = document.getElementById('search').value.trim();
+      if (!q) return;
+      const data = await fetchJson('/api/graph/search?q=' + encodeURIComponent(q) + '&limit=20');
+      document.getElementById('search-results').innerHTML = data.nodes.map(n =>
+        `<div class="result-item" onclick="focusNode('${n.id}')">${n.name} <span style="color:#8b949e">(${n.type})</span></div>`
+      ).join('') || '<p class="loading">No results</p>';
+    }
+
+    function focusNode(id) {
+      if (network) {
+        network.selectNodes([id]);
+        network.focus(id, { scale: 1.5, animation: true });
+        showNodeDetail(id);
+      }
+    }
+
+    async fn askNlp() {
+      const q = prompt('Ask a natural language question:');
+      if (!q) return;
+      const r = await fetch('/api/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: q })
+      });
+      const result = await r.json();
+      alert(result.answer || JSON.stringify(result));
+    }
+
+    document.getElementById('search').addEventListener('keydown', e => {
+      if (e.key === 'Enter') searchNodes();
+    });
+    document.getElementById('type-filter').addEventListener('change', loadGraph);
+
+    loadGraph().catch(err => {
+      document.getElementById('stats').innerHTML = `<p class="loading">Error: ${err.message}. Run \`rbuilder init\` first.</p>`;
+    });
+  </script>
+</body>
+</html>

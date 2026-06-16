@@ -407,8 +407,9 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Chat => {
-            println!("Starting interactive chat mode...");
-            println!("\n⚠️  Command not yet implemented (Phase 6, Task 6.2.2)");
+            use rbuilder::cli::chat;
+            use std::path::Path;
+            chat::run_chat(Path::new("."))?;
             Ok(())
         }
 
@@ -614,19 +615,19 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Serve { port, open } => {
-            println!("Starting web server on port {}...", port);
-            println!("Open browser: {}", open);
-            println!("\n⚠️  Command not yet implemented (Phase 6, Task 6.3.3)");
+            use rbuilder::cli::serve;
+            use std::path::Path;
+            serve::run_serve(Path::new("."), port, open)?;
             Ok(())
         }
 
         #[cfg(feature = "mcp-server")]
         Commands::Mcp { command } => {
+            use rbuilder::cli::mcp;
+            use std::path::Path;
             match command {
                 McpCommands::Serve { transport, port } => {
-                    println!("Starting MCP server...");
-                    println!("Transport: {}, Port: {}", transport, port);
-                    println!("\n⚠️  Command not yet implemented (Phase 6, Task 6.1.4)");
+                    mcp::run_mcp_serve(Path::new("."), &transport, port, cli.verbose)?;
                 }
             }
             Ok(())

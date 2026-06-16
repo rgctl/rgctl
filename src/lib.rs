@@ -46,9 +46,10 @@ pub mod nlp;
 
 // Integration layer
 #[cfg(feature = "mcp-server")]
-pub mod mcp;
-
 pub mod api;
+
+#[cfg(feature = "mcp-server")]
+pub mod mcp;
 
 // Utility modules
 pub mod cli;
@@ -64,6 +65,7 @@ pub use graph::CodeGraph;
 pub use pipeline::{PipelineConfig, PipelineStats, ProcessingPipeline};
 pub use config::analyzer::{ConfigAnalyzer, MissingEnvVar, UnusedConfigKey};
 pub use config::secret_detector::{DetectedSecret, SecretDetector, Severity as SecretSeverity};
+pub use nlp::conversation::ConversationContext;
 pub use nlp::{DomainContext, PatternDetector, PatternMatcher, QueryResult, TranslatedQuery};
 pub use rules::{RuleApplicationReport, RuleEngine, Ruleset};
 pub use semantic::{FunctionSignature, IdlFormat, IdlGenerator, SignatureExtractor, TypeInferencer};

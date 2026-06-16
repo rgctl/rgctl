@@ -149,6 +149,11 @@ impl FileTracker {
         Ok(path)
     }
 
+    /// Git commit recorded at last index.
+    pub fn last_commit(&self) -> Option<&str> {
+        self.metadata.last_commit.as_deref()
+    }
+
     /// Access stored file hashes.
     pub fn file_hashes(&self) -> &HashMap<String, String> {
         &self.metadata.files
