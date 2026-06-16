@@ -1,6 +1,6 @@
 //! TOML configuration format plugin
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::languages::plugin_trait::*;
 use std::path::Path;
 

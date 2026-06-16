@@ -5,7 +5,7 @@
 use crate::error::{Error, Result};
 use crate::graph::backend::MemoryBackend;
 use crate::graph::schema::NodeType;
-use crate::semantic::signature::{FunctionSignature, Param, SignatureExtractor};
+use crate::semantic::signature::{FunctionSignature, SignatureExtractor};
 use crate::semantic::type_inference::TypeInferencer;
 use handlebars::Handlebars;
 use std::collections::HashMap;
@@ -307,6 +307,7 @@ paths:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::semantic::signature::Param;
 
     #[test]
     fn test_proto_generation() {

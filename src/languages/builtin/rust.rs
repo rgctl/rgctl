@@ -6,32 +6,15 @@
 use crate::error::{Error, Result};
 use crate::languages::plugin_trait::*;
 use std::path::Path;
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Node, Parser};
 
 /// Rust language plugin
-pub struct RustPlugin {
-    parser: Parser,
-}
+pub struct RustPlugin;
 
 impl RustPlugin {
     /// Create a new Rust plugin
     pub fn new() -> Result<Self> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(tree_sitter_rust::language())
-            .map_err(|e| Error::PluginError(format!("Failed to set Rust grammar: {}", e)))?;
-        Ok(Self { parser })
-    }
-
-    /// Parse source code into AST
-    fn parse(&mut self, source: &[u8]) -> Result<Tree> {
-        self.parser
-            .parse(source, None)
-            .ok_or_else(|| Error::ParseError {
-                file: "unknown".into(),
-                line: 0,
-                message: "Failed to parse Rust source".to_string(),
-            })
+        Ok(Self)
     }
 
     /// Extract function node details

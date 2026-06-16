@@ -28,8 +28,8 @@ toml = "0.8"
 quick-xml = "0.31"
 
 # Graph Backend
-indradb = "4.0"
-# rocksdb is pulled in by indradb, no need for explicit dependency
+indradb-lib = "4.0"
+# rocksdb is pulled in by indradb-lib, no need for explicit dependency
 
 # Graph Algorithms
 petgraph = "0.6"

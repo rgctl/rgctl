@@ -304,7 +304,7 @@ fn main() -> anyhow::Result<()> {
             all,
         } => {
             use rbuilder::analysis::{
-                CentralityAnalyzer, CommunityDetector, ComplexityAnalyzer, DependencyAnalyzer,
+                ComplexityAnalyzer, DependencyAnalyzer,
             };
             use rbuilder::graph::CodeGraph;
             use rbuilder::nlp::PatternMatcher;

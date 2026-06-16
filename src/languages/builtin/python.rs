@@ -5,8 +5,9 @@
 
 use crate::error::{Error, Result};
 use crate::languages::plugin_trait::*;
+use crate::semantic::type_inference::TypeInferencer;
 use std::path::Path;
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Node, Parser};
 
 /// Python language plugin
 pub struct PythonPlugin {
@@ -68,6 +69,21 @@ impl PythonPlugin {
             line: node.start_position().row + 1,
             message: "Function missing name".to_string(),
         })?;
+
+        // Infer types for parameters without explicit type hints
+        let function_source = node.utf8_text(source).unwrap_or("");
+        let inferencer = TypeInferencer::new();
+        let inferred_types = inferencer.infer_python(function_source);
+
+        // Update parameters with inferred types
+        for param in &mut parameters {
+            if param.param_type.is_none() {
+                if let Some(inference) = inferred_types.get(&param.name) {
+                    // Store inferred type with confidence as metadata
+                    param.param_type = Some(format!("{:?}", inference.inferred));
+                }
+            }
+        }
 
         Ok(Symbol {
             name: name.clone(),
@@ -473,5 +489,27 @@ mod tests {
         assert!(complexity.is_some());
         let metrics = complexity.unwrap();
         assert_eq!(metrics.cyclomatic, 3);
+    }
+
+    #[test]
+    fn test_type_inference() {
+        let plugin = PythonPlugin::new().unwrap();
+        let source = b"def process(name, count):\n    return name.upper() + str(count + 1)";
+        let symbols = plugin.extract_symbols(Path::new("test.py"), source).unwrap();
+
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].parameters.len(), 2);
+
+        // name should be inferred as String (uses .upper())
+        let name_param = &symbols[0].parameters[0];
+        assert_eq!(name_param.name, "name");
+        assert!(name_param.param_type.is_some());
+        assert!(name_param.param_type.as_ref().unwrap().contains("String"));
+
+        // count should be inferred as Numeric (uses +)
+        let count_param = &symbols[0].parameters[1];
+        assert_eq!(count_param.name, "count");
+        assert!(count_param.param_type.is_some());
+        assert!(count_param.param_type.as_ref().unwrap().contains("Numeric"));
     }
 }

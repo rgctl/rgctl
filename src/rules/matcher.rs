@@ -12,13 +12,12 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 /// Context for evaluating graph-aware rule conditions.
-pub struct MatchContext<'a> {
-    backend: &'a MemoryBackend,
+pub struct MatchContext {
     outgoing_calls: HashSet<Uuid>,
 }
 
-impl<'a> MatchContext<'a> {
-    fn new(backend: &'a MemoryBackend, node_id: Uuid) -> Result<Self> {
+impl MatchContext {
+    fn new(backend: &MemoryBackend, node_id: Uuid) -> Result<Self> {
         let edges = backend.all_edges()?;
         let outgoing_calls = edges
             .iter()
@@ -26,7 +25,6 @@ impl<'a> MatchContext<'a> {
             .map(|e| e.to)
             .collect();
         Ok(Self {
-            backend,
             outgoing_calls,
         })
     }
@@ -145,7 +143,6 @@ fn node_cyclomatic(node: &Node) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::backend::GraphBackend;
     use crate::rules::schema::{Rule, RuleAction};
 
     fn auth_node() -> Node {
