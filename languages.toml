@@ -1,0 +1,223 @@
+# rBuilder tree-sitter language configuration
+# Single source of truth for built-in language plugins (Phase 7)
+
+[metadata]
+version = "1.0"
+description = "Official tree-sitter grammar configuration for rBuilder"
+
+# ---------------------------------------------------------------------------
+# Tree-sitter languages (custom handlers — full extraction logic)
+# ---------------------------------------------------------------------------
+
+[languages.rust]
+handler = "custom"
+plugin = "RustPlugin"
+module = "crate::languages::builtin::rust"
+crate = "tree-sitter-rust"
+extensions = ["rs"]
+aliases = ["rs"]
+function_kinds = ["function_item", "function_signature_item"]
+class_kinds = ["struct_item", "enum_item", "impl_item"]
+import_kinds = ["use_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.python]
+handler = "custom"
+plugin = "PythonPlugin"
+module = "crate::languages::builtin::python"
+crate = "tree-sitter-python"
+extensions = ["py", "pyw"]
+aliases = ["python", "python3", "py"]
+shebangs = ["python", "python3"]
+function_kinds = ["function_definition"]
+class_kinds = ["class_definition"]
+import_kinds = ["import_statement", "import_from_statement"]
+enable_complexity = true
+enable_type_inference = true
+
+[languages.typescript]
+handler = "custom"
+plugin = "TypeScriptPlugin"
+module = "crate::languages::builtin::typescript"
+crate = "tree-sitter-typescript"
+extensions = ["ts", "tsx"]
+aliases = ["ts"]
+function_kinds = ["function_declaration", "method_definition", "arrow_function"]
+class_kinds = ["class_declaration", "interface_declaration"]
+import_kinds = ["import_statement"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.javascript]
+handler = "custom"
+plugin = "JavaScriptPlugin"
+module = "crate::languages::builtin::javascript"
+crate = "tree-sitter-javascript"
+extensions = ["js", "jsx", "mjs"]
+aliases = ["js"]
+function_kinds = ["function_declaration", "method_definition", "arrow_function"]
+class_kinds = ["class_declaration"]
+import_kinds = ["import_statement"]
+enable_complexity = true
+enable_type_inference = true
+
+[languages.go]
+handler = "custom"
+plugin = "GoPlugin"
+module = "crate::languages::builtin::go"
+crate = "tree-sitter-go"
+extensions = ["go"]
+function_kinds = ["function_declaration", "method_declaration"]
+class_kinds = ["type_declaration"]
+import_kinds = ["import_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.java]
+handler = "custom"
+plugin = "JavaPlugin"
+module = "crate::languages::builtin::java"
+crate = "tree-sitter-java"
+extensions = ["java"]
+function_kinds = ["method_declaration"]
+class_kinds = ["class_declaration", "interface_declaration", "enum_declaration"]
+import_kinds = ["import_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+# ---------------------------------------------------------------------------
+# Regex-based languages (generic handler)
+# ---------------------------------------------------------------------------
+
+[languages.kotlin]
+handler = "regex"
+crate = ""
+extensions = ["kt", "kts"]
+function_kinds = ["fun"]
+class_kinds = ["class", "object", "interface", "data class"]
+enable_complexity = false
+enable_type_inference = false
+
+[[languages.kotlin.regex_patterns]]
+pattern = '(?m)^\s*fun\s+([A-Za-z_][A-Za-z0-9_]*)'
+symbol_type = "function"
+
+[[languages.kotlin.regex_patterns]]
+pattern = '(?m)^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)'
+symbol_type = "class"
+
+[[languages.kotlin.regex_patterns]]
+pattern = '(?m)^\s*object\s+([A-Za-z_][A-Za-z0-9_]*)'
+symbol_type = "class"
+
+[[languages.kotlin.regex_patterns]]
+pattern = '(?m)^\s*interface\s+([A-Za-z_][A-Za-z0-9_]*)'
+symbol_type = "interface"
+
+[[languages.kotlin.regex_patterns]]
+pattern = '(?m)^\s*data\s+class\s+([A-Za-z_][A-Za-z0-9_]*)'
+symbol_type = "class"
+
+[languages.csharp]
+handler = "regex"
+crate = ""
+extensions = ["cs"]
+function_kinds = ["method"]
+class_kinds = ["class", "interface", "struct", "enum"]
+enable_complexity = false
+enable_type_inference = false
+
+[[languages.csharp.regex_patterns]]
+pattern = '(?m)\bclass\s+([A-Za-z_][A-Za-z0-9_]*)'
+symbol_type = "class"
+
+[[languages.csharp.regex_patterns]]
+pattern = '(?m)\binterface\s+([A-Za-z_][A-Za-z0-9_]*)'
+symbol_type = "interface"
+
+[[languages.csharp.regex_patterns]]
+pattern = '(?m)\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)'
+symbol_type = "struct"
+
+[[languages.csharp.regex_patterns]]
+pattern = '(?m)\benum\s+([A-Za-z_][A-Za-z0-9_]*)'
+symbol_type = "enum"
+
+[[languages.csharp.regex_patterns]]
+pattern = '(?m)\b(?:public|private|protected|internal|static|async|\s)+[\w<>\[\]?]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*\('
+symbol_type = "function"
+
+# ---------------------------------------------------------------------------
+# Documentation format (custom markdown handler)
+# ---------------------------------------------------------------------------
+
+[languages.markdown]
+handler = "markdown"
+crate = ""
+extensions = ["md", "mdx"]
+enable_complexity = false
+enable_type_inference = false
+
+# ---------------------------------------------------------------------------
+# TOML-only languages (generic tree-sitter handler, Phase 7.4)
+# ---------------------------------------------------------------------------
+
+[languages.c]
+handler = "tree-sitter"
+crate = "tree-sitter-c"
+extensions = ["c", "h"]
+function_kinds = ["function_definition", "function_declarator"]
+class_kinds = ["struct_specifier", "enum_specifier", "type_definition"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.ruby]
+handler = "tree-sitter"
+crate = "tree-sitter-ruby"
+extensions = ["rb", "rake"]
+function_kinds = ["method", "singleton_method"]
+class_kinds = ["class", "module"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.php]
+handler = "tree-sitter"
+crate = "tree-sitter-php"
+extensions = ["php"]
+function_kinds = ["function_definition", "method_declaration"]
+class_kinds = ["class_declaration", "interface_declaration", "trait_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.cpp]
+handler = "tree-sitter"
+crate = "tree-sitter-cpp"
+extensions = ["cpp", "cc", "cxx", "hpp", "hxx"]
+function_kinds = ["function_definition", "function_declarator"]
+class_kinds = ["class_specifier", "struct_specifier", "enum_specifier"]
+enable_complexity = true
+enable_type_inference = false
+
+# ---------------------------------------------------------------------------
+# Bundles
+# ---------------------------------------------------------------------------
+
+[bundles.minimal]
+description = "Core languages for backend development"
+languages = ["rust", "python"]
+
+[bundles.extended]
+description = "Common web and systems languages"
+languages = ["rust", "python", "typescript", "javascript", "go", "java"]
+
+[bundles.full]
+description = "All built-in languages"
+languages = [
+    "rust", "python", "typescript", "javascript", "go", "java",
+    "kotlin", "csharp", "markdown",
+]
+
+[bundles.extra]
+description = "Additional TOML-only languages (Phase 7.4)"
+languages = ["c", "ruby", "php", "cpp"]

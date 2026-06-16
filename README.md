@@ -77,6 +77,23 @@ rbuilder mcp serve --transport stdio
 rbuilder serve --port 8080 --open
 ```
 
+### Language Feature Flags (Phase 7)
+
+Languages are configured in `languages.toml` and selected at compile time:
+
+```bash
+# Default: all 9 built-in languages
+cargo build
+
+# Smaller binary — Rust + Python only
+cargo build --no-default-features --features bundle-minimal
+
+# Add C, Ruby, PHP, C++
+cargo build --no-default-features --features "bundle-full,bundle-extra,mcp-server,nlp-patterns"
+```
+
+See [LANGUAGE_GUIDE.md](./LANGUAGE_GUIDE.md) for adding new languages via TOML.
+
 ---
 
 ## 🔧 IDL Generation

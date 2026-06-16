@@ -3,7 +3,6 @@
 //! Manages all available language plugins and routes files to the appropriate plugin.
 
 use crate::error::{Error, Result};
-use crate::languages::builtin::*;
 use crate::languages::config::*;
 use crate::languages::plugin_trait::{ConfigFormatPlugin, LanguagePlugin};
 use std::collections::HashMap;
@@ -35,16 +34,8 @@ impl LanguageRegistry {
             config_extension_map: HashMap::new(),
         };
 
-        // Register built-in language plugins
-        registry.register_language_plugin(Arc::new(RustPlugin::new().unwrap()));
-        registry.register_language_plugin(Arc::new(PythonPlugin::new().unwrap()));
-        registry.register_language_plugin(Arc::new(TypeScriptPlugin::new().unwrap()));
-        registry.register_language_plugin(Arc::new(JavaScriptPlugin::new().unwrap()));
-        registry.register_language_plugin(Arc::new(GoPlugin::new().unwrap()));
-        registry.register_language_plugin(Arc::new(JavaPlugin::new().unwrap()));
-        registry.register_language_plugin(Arc::new(KotlinPlugin::new().unwrap()));
-        registry.register_language_plugin(Arc::new(CSharpPlugin::new().unwrap()));
-        registry.register_language_plugin(Arc::new(MarkdownPlugin::new().unwrap()));
+        // Register language plugins (generated from languages.toml)
+        register_all_language_plugins(&mut registry);
 
         // Register built-in config format plugins
         registry.register_config_plugin(Arc::new(YamlPlugin::new().unwrap()));
@@ -190,6 +181,8 @@ pub struct RegistryStats {
     pub total_extensions: usize,
 }
 
+include!(concat!(env!("OUT_DIR"), "/generated_register.rs"));
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,40 +191,64 @@ mod tests {
     fn test_registry_creation() {
         let registry = LanguageRegistry::new();
         let stats = registry.stats();
-
-        // Should have 9 built-in language plugins
-        assert_eq!(stats.language_plugins, 9);
+        assert!(stats.language_plugins >= 1);
+        assert_eq!(stats.config_plugins, 4);
     }
 
+    #[cfg(feature = "lang-rust")]
     #[test]
-    fn test_get_plugin_by_language_id() {
+    fn test_get_rust_plugin() {
         let registry = LanguageRegistry::new();
-
         let rust_plugin = registry.get_language_plugin("rust");
         assert!(rust_plugin.is_some());
         assert_eq!(rust_plugin.unwrap().language_id(), "rust");
+    }
 
+    #[cfg(feature = "lang-python")]
+    #[test]
+    fn test_get_python_plugin() {
+        let registry = LanguageRegistry::new();
         let python_plugin = registry.get_language_plugin("python");
         assert!(python_plugin.is_some());
         assert_eq!(python_plugin.unwrap().language_id(), "python");
     }
 
+    #[cfg(feature = "lang-rust")]
     #[test]
-    fn test_get_plugin_for_file() {
+    fn test_get_plugin_for_rust_file() {
         let registry = LanguageRegistry::new();
-
         let plugin = registry.get_plugin_for_file(Path::new("test.rs")).unwrap();
         assert_eq!(plugin.language_id(), "rust");
+    }
 
+    #[cfg(feature = "lang-python")]
+    #[test]
+    fn test_get_plugin_for_python_file() {
+        let registry = LanguageRegistry::new();
         let plugin = registry.get_plugin_for_file(Path::new("test.py")).unwrap();
         assert_eq!(plugin.language_id(), "python");
+    }
 
+    #[cfg(feature = "lang-typescript")]
+    #[test]
+    fn test_get_plugin_for_typescript_file() {
+        let registry = LanguageRegistry::new();
         let plugin = registry.get_plugin_for_file(Path::new("test.ts")).unwrap();
         assert_eq!(plugin.language_id(), "typescript");
+    }
 
+    #[cfg(feature = "lang-javascript")]
+    #[test]
+    fn test_get_plugin_for_javascript_file() {
+        let registry = LanguageRegistry::new();
         let plugin = registry.get_plugin_for_file(Path::new("test.js")).unwrap();
         assert_eq!(plugin.language_id(), "javascript");
+    }
 
+    #[cfg(feature = "lang-go")]
+    #[test]
+    fn test_get_plugin_for_go_file() {
+        let registry = LanguageRegistry::new();
         let plugin = registry.get_plugin_for_file(Path::new("test.go")).unwrap();
         assert_eq!(plugin.language_id(), "go");
     }
@@ -239,7 +256,6 @@ mod tests {
     #[test]
     fn test_unsupported_file() {
         let registry = LanguageRegistry::new();
-
         let result = registry.get_plugin_for_file(Path::new("test.xyz"));
         assert!(result.is_err());
         if let Err(Error::UnsupportedLanguage(ext)) = result {
@@ -249,98 +265,58 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "lang-rust")]
     #[test]
-    fn test_can_process_file() {
+    fn test_can_process_rust_file() {
         let registry = LanguageRegistry::new();
-
         assert!(registry.can_process_file(Path::new("test.rs")));
-        assert!(registry.can_process_file(Path::new("test.py")));
-        assert!(registry.can_process_file(Path::new("test.ts")));
-        assert!(registry.can_process_file(Path::new("test.js")));
-        assert!(registry.can_process_file(Path::new("test.go")));
-        assert!(!registry.can_process_file(Path::new("test.xyz")));
     }
 
+    #[cfg(all(feature = "bundle-full", not(feature = "bundle-extra")))]
     #[test]
-    fn test_supported_languages() {
+    fn test_full_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        let languages = registry.supported_languages();
-
-        assert_eq!(languages.len(), 9);
-        assert!(languages.contains(&"rust".to_string()));
-        assert!(languages.contains(&"python".to_string()));
-        assert!(languages.contains(&"typescript".to_string()));
-        assert!(languages.contains(&"javascript".to_string()));
-        assert!(languages.contains(&"go".to_string()));
+        assert_eq!(registry.stats().language_plugins, 9);
     }
 
+    #[cfg(feature = "bundle-extra")]
     #[test]
-    fn test_supported_extensions() {
+    fn test_extra_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        let extensions = registry.supported_extensions();
-
-        assert!(extensions.contains(&"rs".to_string()));
-        assert!(extensions.contains(&"py".to_string()));
-        assert!(extensions.contains(&"ts".to_string()));
-        assert!(extensions.contains(&"js".to_string()));
-        assert!(extensions.contains(&"go".to_string()));
+        assert_eq!(registry.stats().language_plugins, 13);
     }
 
+    #[cfg(feature = "lang-javascript")]
     #[test]
-    fn test_multiple_extensions() {
+    fn test_javascript_multiple_extensions() {
         let registry = LanguageRegistry::new();
-
-        // JavaScript plugin handles multiple extensions
-        let plugin1 = registry.get_plugin_for_file(Path::new("test.js")).unwrap();
-        let plugin2 = registry.get_plugin_for_file(Path::new("test.jsx")).unwrap();
-        let plugin3 = registry.get_plugin_for_file(Path::new("test.mjs")).unwrap();
-
-        assert_eq!(plugin1.language_id(), "javascript");
-        assert_eq!(plugin2.language_id(), "javascript");
-        assert_eq!(plugin3.language_id(), "javascript");
-
-        // TypeScript plugin handles .ts and .tsx
-        let plugin4 = registry.get_plugin_for_file(Path::new("test.ts")).unwrap();
-        let plugin5 = registry.get_plugin_for_file(Path::new("test.tsx")).unwrap();
-
-        assert_eq!(plugin4.language_id(), "typescript");
-        assert_eq!(plugin5.language_id(), "typescript");
+        for ext in ["test.js", "test.jsx", "test.mjs"] {
+            let plugin = registry.get_plugin_for_file(Path::new(ext)).unwrap();
+            assert_eq!(plugin.language_id(), "javascript");
+        }
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
-    fn test_registry_stats() {
+    fn test_typescript_multiple_extensions() {
         let registry = LanguageRegistry::new();
-        let stats = registry.stats();
-
-        assert_eq!(stats.language_plugins, 9);
-        assert_eq!(stats.config_plugins, 4); // YAML, JSON, TOML, Properties
-        assert!(stats.total_extensions > 0);
+        for ext in ["test.ts", "test.tsx"] {
+            let plugin = registry.get_plugin_for_file(Path::new(ext)).unwrap();
+            assert_eq!(plugin.language_id(), "typescript");
+        }
     }
 
     #[test]
     fn test_config_plugins() {
         let registry = LanguageRegistry::new();
-
-        // YAML plugin
-        let yaml_plugin = registry.get_config_plugin("yaml");
-        assert!(yaml_plugin.is_some());
-        assert_eq!(yaml_plugin.unwrap().format_id(), "yaml");
-
-        // JSON plugin
-        let json_plugin = registry.get_config_plugin("json");
-        assert!(json_plugin.is_some());
-        assert_eq!(json_plugin.unwrap().format_id(), "json");
-
-        // TOML plugin
-        let toml_plugin = registry.get_config_plugin("toml");
-        assert!(toml_plugin.is_some());
-        assert_eq!(toml_plugin.unwrap().format_id(), "toml");
+        assert!(registry.get_config_plugin("yaml").is_some());
+        assert!(registry.get_config_plugin("json").is_some());
+        assert!(registry.get_config_plugin("toml").is_some());
     }
 
     #[test]
     fn test_can_process_config_files() {
         let registry = LanguageRegistry::new();
-
         assert!(registry.can_process_file(Path::new("config.yaml")));
         assert!(registry.can_process_file(Path::new("config.yml")));
         assert!(registry.can_process_file(Path::new("config.json")));

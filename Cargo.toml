@@ -9,16 +9,27 @@ repository = "https://github.com/yourusername/rbuilder"
 readme = "README.md"
 keywords = ["code-analysis", "graph", "ai", "mcp", "knowledge-graph"]
 categories = ["development-tools", "command-line-utilities"]
+build = "build.rs"
+
+[workspace]
+members = [".", "rbuilder-macros"]
 
 [dependencies]
 # Parsing & AST - Programming Languages
 tree-sitter = "0.20"
-tree-sitter-rust = "0.20"
-tree-sitter-python = "0.20"
-tree-sitter-typescript = "0.20"
-tree-sitter-javascript = "0.20"
-tree-sitter-go = "0.20"
-tree-sitter-java = "0.20"
+tree-sitter-rust = { version = "0.20", optional = true }
+tree-sitter-python = { version = "0.20", optional = true }
+tree-sitter-typescript = { version = "0.20", optional = true }
+tree-sitter-javascript = { version = "0.20", optional = true }
+tree-sitter-go = { version = "0.20", optional = true }
+tree-sitter-java = { version = "0.20", optional = true }
+tree-sitter-c = { version = "0.20", optional = true }
+tree-sitter-cpp = { version = "0.20", optional = true }
+tree-sitter-ruby = { version = "0.20", optional = true }
+tree-sitter-php = { version = "0.20", optional = true }
+
+# Proc macros (Phase 7.2)
+rbuilder-macros = { path = "rbuilder-macros", optional = true }
 
 # Configuration Format Parsers
 serde = { version = "1", features = ["derive"] }
@@ -100,20 +111,57 @@ tempfile = "3"
 pretty_assertions = "1"
 insta = "1"
 
-[features]
-default = ["all-languages", "nlp-patterns", "mcp-server"]
+[build-dependencies]
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
 
-# Language support
-all-languages = []
+[features]
+default = ["bundle-full", "nlp-patterns", "mcp-server"]
+
+# Backward-compatible alias
+all-languages = ["bundle-full"]
+
+# Individual language features (from languages.toml)
+lang-rust = ["tree-sitter-rust"]
+lang-python = ["tree-sitter-python"]
+lang-typescript = ["tree-sitter-typescript"]
+lang-javascript = ["tree-sitter-javascript"]
+lang-go = ["tree-sitter-go"]
+lang-java = ["tree-sitter-java"]
+lang-kotlin = []
+lang-csharp = []
+lang-markdown = []
+lang-c = ["tree-sitter-c"]
+lang-cpp = ["tree-sitter-cpp"]
+lang-ruby = ["tree-sitter-ruby"]
+lang-php = ["tree-sitter-php"]
+
+# Bundles (from languages.toml)
+bundle-minimal = ["lang-rust", "lang-python"]
+bundle-extended = [
+    "bundle-minimal",
+    "lang-typescript",
+    "lang-javascript",
+    "lang-go",
+    "lang-java",
+]
+bundle-full = [
+    "bundle-extended",
+    "lang-kotlin",
+    "lang-csharp",
+    "lang-markdown",
+]
+bundle-extra = ["lang-c", "lang-ruby", "lang-php", "lang-cpp"]
 
 # NLP Query Features (progressive enhancement)
-nlp-patterns = []                           # Pattern-based NLP (no LLM, 60% queries)
-nlp-cache = ["nlp-patterns", "ndarray"]     # + Learned patterns with embeddings (90% queries)
-nlp-llm = ["nlp-cache", "reqwest"]          # + LLM fallback (98% queries)
+nlp-patterns = []
+nlp-cache = ["nlp-patterns", "ndarray"]
+nlp-llm = ["nlp-cache", "reqwest"]
 
 # Integration Features
-mcp-server = ["axum", "tower-http"]         # MCP server for AI agents
-plugin-system = ["libloading"]              # External plugin loading
+mcp-server = ["axum", "tower-http"]
+plugin-system = ["libloading"]
+proc-macros = ["rbuilder-macros"]
 
 [profile.release]
 lto = true

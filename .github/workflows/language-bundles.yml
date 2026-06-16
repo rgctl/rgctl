@@ -1,0 +1,62 @@
+name: Language Feature Matrix
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  feature-matrix:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: bundle-minimal
+            features: bundle-minimal,nlp-patterns
+            test_args: --lib
+          - name: bundle-extended
+            features: bundle-extended,nlp-patterns,mcp-server
+            test_args: ""
+          - name: bundle-full
+            features: bundle-full,nlp-patterns,mcp-server
+            test_args: ""
+          - name: bundle-extra
+            features: bundle-full,bundle-extra,nlp-patterns,mcp-server
+            test_args: ""
+          - name: custom-rust-go
+            features: lang-rust,lang-go,nlp-patterns
+            test_args: --lib
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bundles-${{ matrix.name }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --no-default-features --features "${{ matrix.features }}"
+
+      - name: Test
+        run: cargo test --no-default-features --features "${{ matrix.features }}" ${{ matrix.test_args }}
+
+      - name: Clippy
+        run: cargo clippy --no-default-features --features "${{ matrix.features }}" -- -D warnings
+
+      - name: Binary size
+        run: ls -lh target/debug/rbuilder
