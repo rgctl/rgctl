@@ -11,13 +11,37 @@ use crate::graph::schema::{Node, NodeType};
 /// - `type:Function` or `type:function` — filter by node type
 /// - `name:main` — filter by exact name
 /// - `label:soa:service` — filter by label
+/// - `repo:backend` — filter by repository namespace (multi-repo)
 /// - `name_suffix:Service` — filter by name suffix (naming patterns)
 /// - `functions`, `classes`, `files`, `config` — common shortcuts
+/// - Compound filters with `|` — e.g. `repo:backend|type:Function`
 /// - `all` or empty string — return all nodes
 pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
     let query = query.trim();
     if query.is_empty() || query.eq_ignore_ascii_case("all") {
         return backend.all_nodes();
+    }
+
+    if query.contains('|') {
+        let parts: Vec<&str> = query.split('|').map(str::trim).filter(|s| !s.is_empty()).collect();
+        if parts.is_empty() {
+            return backend.all_nodes();
+        }
+        let mut results = execute(backend, parts[0])?;
+        for part in &parts[1..] {
+            let next = execute(backend, part)?;
+            let ids: std::collections::HashSet<_> = next.iter().map(|n| n.id).collect();
+            results.retain(|n| ids.contains(&n.id));
+        }
+        return Ok(results);
+    }
+
+    if let Some(repo) = query.strip_prefix("repo:") {
+        let nodes = backend.all_nodes()?;
+        return Ok(nodes
+            .into_iter()
+            .filter(|n| n.get_property("repo").is_some_and(|r| r == repo))
+            .collect());
     }
 
     if let Some(type_name) = query.strip_prefix("type:") {
@@ -96,6 +120,27 @@ mod tests {
 
         let results = execute(&backend, "functions").unwrap();
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_query_by_repo() {
+        let mut backend = MemoryBackend::new();
+        backend
+            .insert_node(
+                Node::new(NodeType::Function, "main".to_string())
+                    .with_property("repo".to_string(), "api".to_string()),
+            )
+            .unwrap();
+        backend
+            .insert_node(
+                Node::new(NodeType::Function, "other".to_string())
+                    .with_property("repo".to_string(), "web".to_string()),
+            )
+            .unwrap();
+
+        let results = execute(&backend, "repo:api").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "main");
     }
 
     #[test]

@@ -1,0 +1,112 @@
+name: rBuilder Graph CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  graph-update:
+    name: Update Knowledge Graph
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rbuilder-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build rbuilder
+        run: cargo build --release
+
+      - name: Initialize or update graph
+        run: |
+          if [ -f .rbuilder/graph.json ]; then
+            ./target/release/rbuilder update
+          else
+            ./target/release/rbuilder init .
+          fi
+
+      - name: Upload graph artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rbuilder-graph
+          path: .rbuilder/
+          retention-days: 30
+
+      - name: Graph statistics
+        run: ./target/release/rbuilder stats
+
+  pr-impact:
+    name: PR Impact Analysis
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build rbuilder
+        run: cargo build --release
+
+      - name: Ensure graph exists
+        run: |
+          if [ ! -f .rbuilder/graph.json ]; then
+            ./target/release/rbuilder init .
+          fi
+
+      - name: Generate PR impact report
+        id: impact
+        run: |
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | head -20)
+          STATS=$(./target/release/rbuilder stats 2>/dev/null || echo "Stats unavailable")
+          {
+            echo "## rBuilder Impact Analysis"
+            echo ""
+            echo "**Changed files (sample):**"
+            echo '```'
+            echo "$CHANGED"
+            echo '```'
+            echo ""
+            echo "**Graph stats:**"
+            echo '```'
+            echo "$STATS"
+            echo '```'
+            echo ""
+            echo "> Run \`rbuilder update\` locally after merging to refresh the graph."
+          } > impact.md
+          cat impact.md
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('impact.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });

@@ -26,6 +26,10 @@ enum Commands {
         #[arg(default_value = ".")]
         path: String,
 
+        /// Repository namespace for multi-repo workspaces
+        #[arg(long)]
+        namespace: Option<String>,
+
         /// Languages to include (comma-separated)
         #[arg(short, long)]
         languages: Option<String>,
@@ -175,6 +179,16 @@ enum Commands {
         /// Find hotspots
         #[arg(long)]
         hotspots: bool,
+
+        /// Filter by repository namespace
+        #[arg(long)]
+        repo: Option<String>,
+    },
+
+    /// Multi-repository workspace management
+    Workspace {
+        #[command(subcommand)]
+        command: WorkspaceCommands,
     },
 }
 
@@ -208,6 +222,34 @@ enum McpCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum WorkspaceCommands {
+    /// Initialize a multi-repo workspace
+    Init,
+
+    /// Add a repository to the workspace
+    Add {
+        /// Path to repository
+        path: String,
+
+        /// Namespace identifier (used in `repo:` queries)
+        #[arg(long)]
+        namespace: String,
+    },
+
+    /// List workspace repositories
+    List,
+
+    /// Index all repos and merge into workspace graph
+    Sync,
+
+    /// Remove a repository from the workspace
+    Remove {
+        /// Namespace to remove
+        namespace: String,
+    },
+}
+
 #[derive(clap::ValueEnum, Clone, Debug)]
 enum OutputFormat {
     Text,
@@ -227,11 +269,13 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Init {
             path,
+            namespace,
             languages,
             exclude,
         } => {
             use rbuilder::discovery::DiscoveryConfig;
             use rbuilder::languages::registry::LanguageRegistry;
+            use rbuilder::multi_repo::stamp_repo_namespace;
             use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
             use std::path::Path;
             use std::sync::Arc;
@@ -266,7 +310,12 @@ fn main() -> anyhow::Result<()> {
                 },
             );
 
-            let (graph, stats) = pipeline.process_repository(root)?;
+            let (mut graph, stats) = pipeline.process_repository(root)?;
+            if let Some(ns) = namespace {
+                stamp_repo_namespace(&mut graph, &ns);
+                println!("Tagged graph with repo namespace: {ns}");
+            }
+
             let saved = graph.save_to_repo(root)?;
 
             let mut tracker = rbuilder::incremental::FileTracker::new(root);
@@ -523,8 +572,19 @@ fn main() -> anyhow::Result<()> {
                 println!("Potential secrets found: {total}");
             }
             if let Some(paths) = drift {
-                println!("Config drift comparison for: {:?}", paths);
-                println!("Drift analysis not yet implemented.");
+                use rbuilder::config::drift::{compare_configs, format_drift_report};
+                use std::path::Path;
+
+                if paths.len() < 2 {
+                    anyhow::bail!("--drift requires at least two config file paths");
+                }
+                let left = Path::new(&paths[0]);
+                let right = Path::new(&paths[1]);
+                let report = compare_configs(left, right)?;
+                println!("{}", format_drift_report(&report));
+                if !report.is_clean() {
+                    std::process::exit(1);
+                }
             }
             Ok(())
         }
@@ -637,15 +697,24 @@ fn main() -> anyhow::Result<()> {
             community_report,
             complexity_report,
             hotspots,
+            repo,
         } => {
-            use rbuilder::graph::backend::GraphBackend;
             use rbuilder::analysis::{CentralityAnalyzer, ComplexityAnalyzer};
+            use rbuilder::graph::backend::GraphBackend;
             use rbuilder::graph::CodeGraph;
+            use rbuilder::multi_repo::load_workspace_graph;
             use rbuilder::nlp::PatternMatcher;
             use std::path::Path;
 
-            let graph = CodeGraph::load_from_repo(Path::new("."))?;
+            let graph = load_workspace_graph(Path::new("."))
+                .or_else(|_| CodeGraph::load_from_repo(Path::new(".")))?;
             let backend = graph.backend();
+
+            if let Some(ref ns) = repo {
+                let nodes = graph.query(&format!("repo:{ns}"))?;
+                println!("Repo '{ns}': {} nodes", nodes.len());
+            }
+
             let run_all = !community_report && !complexity_report && !hotspots;
 
             if community_report || run_all {
@@ -665,9 +734,30 @@ fn main() -> anyhow::Result<()> {
                 println!("Top PageRank hotspots:");
                 for (id, score) in report.top_pagerank.iter().take(10) {
                     if let Ok(Some(node)) = backend.get_node(*id) {
+                        if let Some(ref ns) = repo {
+                            if node.get_property("repo").is_none_or(|r| r != ns) {
+                                continue;
+                            }
+                        }
                         println!("  - {} ({score:.4})", node.name);
                     }
                 }
+            }
+            Ok(())
+        }
+
+        Commands::Workspace { command } => {
+            use rbuilder::cli::workspace;
+            use std::path::Path;
+            let root = Path::new(".");
+            match command {
+                WorkspaceCommands::Init => workspace::run_init(root)?,
+                WorkspaceCommands::Add { path, namespace } => {
+                    workspace::run_add(root, Path::new(&path), &namespace)?;
+                }
+                WorkspaceCommands::List => workspace::run_list(root)?,
+                WorkspaceCommands::Sync => workspace::run_sync(root, cli.verbose)?,
+                WorkspaceCommands::Remove { namespace } => workspace::run_remove(root, &namespace)?,
             }
             Ok(())
         }

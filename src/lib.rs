@@ -58,6 +58,7 @@ pub mod output;
 pub mod pipeline;
 pub mod rules;
 pub mod semantic;
+pub mod multi_repo;
 
 // Re-exports for convenience
 pub use error::{Error, Result};
@@ -70,6 +71,11 @@ pub use nlp::{DomainContext, PatternDetector, PatternMatcher, QueryResult, Trans
 pub use rules::{RuleApplicationReport, RuleEngine, Ruleset};
 pub use semantic::{FunctionSignature, IdlFormat, IdlGenerator, SignatureExtractor, TypeInferencer};
 pub use incremental::{ChangeSet, FileTracker, IncrementalUpdater, UpdateOptions, UpdateResult};
+pub use config::drift::{compare_configs, format_drift_report, ConfigDiffEntry, ConfigDiffKind, ConfigDriftReport};
+pub use multi_repo::{
+    link_cross_repo, load_workspace_graph, stamp_repo_namespace, sync_workspace, CrossRepoLinkReport,
+    RepoEntry, WorkspaceManifest, WorkspaceSyncReport, WORKSPACE_FILE,
+};
 
 /// Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
