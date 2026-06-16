@@ -10,6 +10,8 @@ use crate::graph::schema::{Node, NodeType};
 /// Supported forms:
 /// - `type:Function` or `type:function` — filter by node type
 /// - `name:main` — filter by exact name
+/// - `label:soa:service` — filter by label
+/// - `name_suffix:Service` — filter by name suffix (naming patterns)
 /// - `functions`, `classes`, `files`, `config` — common shortcuts
 /// - `all` or empty string — return all nodes
 pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
@@ -25,6 +27,16 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
 
     if let Some(name) = query.strip_prefix("name:") {
         return backend.find_nodes_by_name(name);
+    }
+
+    if let Some(label) = query.strip_prefix("label:") {
+        let nodes = backend.all_nodes()?;
+        return Ok(nodes.into_iter().filter(|n| n.has_label(label)).collect());
+    }
+
+    if let Some(suffix) = query.strip_prefix("name_suffix:") {
+        let nodes = backend.all_nodes()?;
+        return Ok(nodes.into_iter().filter(|n| n.name.ends_with(suffix)).collect());
     }
 
     match query.to_ascii_lowercase().as_str() {
@@ -85,5 +97,23 @@ mod tests {
 
         let results = execute(&backend, "functions").unwrap();
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_query_by_name_suffix() {
+        let mut backend = MemoryBackend::new();
+        backend
+            .insert_node(Node::new(NodeType::Class, "UserService".to_string()))
+            .unwrap();
+        backend
+            .insert_node(Node::new(NodeType::Class, "OrderService".to_string()))
+            .unwrap();
+        backend
+            .insert_node(Node::new(NodeType::Class, "UserController".to_string()))
+            .unwrap();
+
+        let results = execute(&backend, "name_suffix:Service").unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|n| n.name.ends_with("Service")));
     }
 }

@@ -10,9 +10,10 @@ use crate::config::analyzer::ConfigAnalyzer;
 use crate::error::{Error, Result};
 use crate::graph::backend::MemoryBackend;
 use crate::graph::schema::Node;
+use crate::nlp::pattern_detection::DomainContext;
 use crate::nlp::entity_extraction::EntityExtractor;
 use crate::nlp::intent::{Intent, IntentClassifier};
-use crate::nlp::query_cache::QueryCache;
+use crate::nlp::query_cache::{CachedQuery, QueryCache};
 use crate::nlp::templates::{MatchedTemplate, QueryTemplates};
 
 /// Translation method used.
@@ -62,6 +63,7 @@ pub struct PatternMatcher {
     extractor: EntityExtractor,
     templates: QueryTemplates,
     cache: QueryCache,
+    domain: Option<DomainContext>,
 }
 
 impl Default for PatternMatcher {
@@ -71,6 +73,7 @@ impl Default for PatternMatcher {
             extractor: EntityExtractor::new(),
             templates: QueryTemplates::new(),
             cache: QueryCache::bootstrap_default(),
+            domain: None,
         }
     }
 }
@@ -81,28 +84,72 @@ impl PatternMatcher {
         Self::default()
     }
 
+    /// Create a matcher with domain context learned from the graph.
+    pub fn from_graph(backend: &MemoryBackend) -> Result<Self> {
+        let domain = crate::nlp::pattern_detection::PatternDetector::new().analyze(backend)?;
+        Ok(Self::new().with_domain(domain))
+    }
+
+    /// Attach domain context for improved translation.
+    pub fn with_domain(mut self, domain: DomainContext) -> Self {
+        self.domain = Some(domain);
+        self
+    }
+
     /// Translate a question to an internal query representation.
     pub fn translate(&self, question: &str) -> Result<TranslatedQuery> {
         let intent_result = self.classifier.classify(question);
-        let entities = self.extractor.extract(question);
+        let mut entities = self.extractor.extract(question);
 
-        if let Some(hit) = self.cache.find_similar(question, 0.92) {
-            return Ok(TranslatedQuery {
-                question: question.to_string(),
-                operation: hit.entry.operation.clone(),
-                internal_query: hit.entry.operation.clone(),
-                description: format!("Cache hit (similarity {:.2})", hit.similarity),
-                confidence: hit.similarity,
-                method: TranslationMethod::CacheHit,
-                intent: intent_result.intent,
-            });
+        // Apply domain vocabulary (Task 4.2.2)
+        if let Some(ref domain) = self.domain {
+            let q_lower = question.to_lowercase();
+            for (term, label) in &domain.term_to_label {
+                if q_lower.contains(term) {
+                    entities.keywords.push(label.clone());
+                }
+            }
+            // Also inject node type information from naming patterns
+            for (term, node_type) in &domain.term_to_node_type {
+                if q_lower.contains(term) && !entities.node_types.contains(node_type) {
+                    entities.node_types.push(node_type.clone());
+                }
+            }
         }
 
         if let Some(template) = self
             .templates
             .find_match(question, intent_result.intent, &entities)
         {
-            let internal = operation_to_query(&template);
+            let mut internal = operation_to_query(&template);
+
+            // Domain-aware label and naming pattern routing
+            if let Some(ref domain) = self.domain {
+                let q_lower = question.to_lowercase();
+
+                // Check for label-based routing first
+                for (term, label) in &domain.term_to_label {
+                    if q_lower.contains(term) {
+                        internal = format!("query=label:{label}");
+                        break;
+                    }
+                }
+
+                // If no label match, check for naming pattern routing
+                if !internal.contains("label:") {
+                    for pattern in &domain.naming_patterns {
+                        let suffix_lower = pattern.suffix.to_lowercase();
+                        let plural = format!("{}s", suffix_lower);
+
+                        if q_lower.contains(&suffix_lower) || q_lower.contains(&plural) {
+                            // Route to nodes matching this naming pattern
+                            internal = format!("query=name_suffix:{}", pattern.suffix);
+                            break;
+                        }
+                    }
+                }
+            }
+
             return Ok(TranslatedQuery {
                 question: question.to_string(),
                 operation: template.operation.clone(),
@@ -111,6 +158,28 @@ impl PatternMatcher {
                 confidence: template.confidence * intent_result.confidence,
                 method: TranslationMethod::PatternBased,
                 intent: template.intent,
+            });
+        }
+
+        if let Some(hit) = self.cache.find_similar(question, 0.92) {
+            let mut internal = cache_hit_to_query(&hit.entry);
+            if let Some(ref domain) = self.domain {
+                let q_lower = question.to_lowercase();
+                for (term, label) in &domain.term_to_label {
+                    if q_lower.contains(term) {
+                        internal = format!("query=label:{label}");
+                        break;
+                    }
+                }
+            }
+            return Ok(TranslatedQuery {
+                question: question.to_string(),
+                operation: hit.entry.operation.clone(),
+                internal_query: internal,
+                description: format!("Cache hit (similarity {:.2})", hit.similarity),
+                confidence: hit.similarity,
+                method: TranslationMethod::CacheHit,
+                intent: intent_result.intent,
             });
         }
 
@@ -143,8 +212,15 @@ impl PatternMatcher {
         match translated.operation.as_str() {
             "count" => {
                 let q = params.get("query").map(String::as_str).unwrap_or("type:Function");
-                let nodes = crate::graph::query::execute(backend, q)?;
-                Ok(QueryResult::Count(nodes.len()))
+                if q.starts_with("label:") {
+                    let label = q.strip_prefix("label:").unwrap_or("");
+                    let nodes = backend.all_nodes()?;
+                    let count = nodes.iter().filter(|n| n.has_label(label)).count();
+                    Ok(QueryResult::Count(count))
+                } else {
+                    let nodes = crate::graph::query::execute(backend, q)?;
+                    Ok(QueryResult::Count(nodes.len()))
+                }
             }
             "list" | "find" => {
                 let q = params.get("query").map(String::as_str).unwrap_or("type:Function");
@@ -287,6 +363,13 @@ impl PatternMatcher {
     }
 }
 
+fn cache_hit_to_query(entry: &CachedQuery) -> String {
+    match entry.operation.as_str() {
+        "count" | "list" | "find" => "query=type:Function".to_string(),
+        other => format!("operation={other}|query=type:Function"),
+    }
+}
+
 fn operation_to_query(template: &MatchedTemplate) -> String {
     let node_type = template
         .parameters
@@ -320,7 +403,7 @@ fn operation_to_query(template: &MatchedTemplate) -> String {
 }
 
 fn normalize_node_type(raw: &str) -> String {
-    let lower = raw.to_lowercase();
+    let lower = raw.trim_end_matches(['?', '.', ',', ';']).to_lowercase();
     match lower.as_str() {
         "functions" | "function" => "Function".to_string(),
         "classes" | "class" | "components" | "component" | "services" | "service" => {

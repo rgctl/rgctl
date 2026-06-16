@@ -63,8 +63,9 @@ pub use graph::CodeGraph;
 pub use pipeline::{PipelineConfig, PipelineStats, ProcessingPipeline};
 pub use config::analyzer::{ConfigAnalyzer, MissingEnvVar, UnusedConfigKey};
 pub use config::secret_detector::{DetectedSecret, SecretDetector, Severity as SecretSeverity};
-pub use nlp::{PatternMatcher, QueryResult, TranslatedQuery};
+pub use nlp::{DomainContext, PatternDetector, PatternMatcher, QueryResult, TranslatedQuery};
 pub use rules::{RuleApplicationReport, RuleEngine, Ruleset};
+pub use semantic::{FunctionSignature, IdlFormat, IdlGenerator, SignatureExtractor, TypeInferencer};
 
 /// Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

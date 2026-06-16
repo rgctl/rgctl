@@ -342,7 +342,7 @@ fn main() -> anyhow::Result<()> {
             use std::path::Path;
 
             let graph = CodeGraph::load_from_repo(Path::new("."))?;
-            let matcher = PatternMatcher::new();
+            let matcher = PatternMatcher::from_graph(graph.backend())?;
             let translated = matcher.translate(&question)?;
 
             if explain {
@@ -432,12 +432,27 @@ fn main() -> anyhow::Result<()> {
             module,
             output_dir,
         } => {
-            println!("Generating IDL...");
-            println!(
-                "Format: {}, Module: {:?}, Output: {:?}",
-                format, module, output_dir
-            );
-            println!("\n⚠️  Command not yet implemented (Phase 4, Task 4.1.4)");
+            use rbuilder::graph::CodeGraph;
+            use rbuilder::semantic::{IdlFormat, IdlGenerator};
+            use std::path::Path;
+
+            let idl_format = IdlFormat::parse(&format)?;
+            let graph = CodeGraph::load_from_repo(Path::new("."))?;
+            let generator = IdlGenerator::new();
+            let module_name = module.unwrap_or_else(|| "service".to_string());
+
+            if let Some(dir) = output_dir {
+                let path = generator.write_module(
+                    graph.backend(),
+                    idl_format,
+                    &module_name,
+                    Path::new(&dir),
+                )?;
+                println!("Generated IDL: {}", path.display());
+            } else {
+                let content = generator.generate_module(graph.backend(), idl_format, &module_name)?;
+                print!("{content}");
+            }
             Ok(())
         }
 

@@ -68,6 +68,11 @@ impl GraphBuilder {
         if let Some(ret) = &symbol.return_type {
             node = node.with_property("return_type".to_string(), ret.clone());
         }
+        if !symbol.parameters.is_empty() {
+            if let Ok(params_json) = serde_json::to_string(&symbol.parameters) {
+                node = node.with_property("parameters".to_string(), params_json);
+            }
+        }
         if !symbol.modifiers.is_empty() {
             node = node.with_property("modifiers".to_string(), symbol.modifiers.join(" "));
         }

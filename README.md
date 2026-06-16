@@ -79,6 +79,56 @@ rbuilder serve --port 8080 --open
 
 ---
 
+## 🔧 IDL Generation
+
+Generate Interface Definition Language (IDL) files from your codebase for API documentation and cross-language interfaces:
+
+```bash
+# Generate Protocol Buffers (Proto3) from function signatures
+rbuilder idl --format proto --module auth --output-dir ./idl
+
+# Generate Apache Thrift definitions
+rbuilder idl --format thrift --module user --output-dir ./idl
+
+# Generate OpenAPI 3.0 specifications
+rbuilder idl --format openapi --module api --output-dir ./idl
+
+# Preview to stdout (no output directory)
+rbuilder idl --format proto --module auth
+```
+
+**Supported formats**:
+- `proto` - Protocol Buffers proto3 with gRPC service definitions
+- `thrift` - Apache Thrift with service definitions
+- `openapi` - OpenAPI 3.0 YAML with REST endpoints
+
+**How it works**:
+1. Extracts function signatures from your codebase (types, parameters, return values)
+2. Normalizes types across languages (e.g., Rust `i64` → Proto `int64` → Thrift `i64` → OpenAPI `integer`)
+3. Generates idiomatic IDL for each format with request/response messages
+
+**Example output** (Proto):
+```protobuf
+syntax = "proto3";
+
+package CalculateDiscount;
+
+message CalculateDiscountRequest {
+  double price = 1;
+  string tier = 2;
+}
+
+message CalculateDiscountResponse {
+  double result = 1;
+}
+
+service CalculateDiscountService {
+  rpc calculate_discount(CalculateDiscountRequest) returns (CalculateDiscountResponse);
+}
+```
+
+---
+
 ## 🏗️ Architecture
 
 ```
