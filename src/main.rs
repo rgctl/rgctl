@@ -403,9 +403,27 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Label { ruleset, dry_run } => {
-            println!("Applying rules from: {}", ruleset);
-            println!("Dry run: {}", dry_run);
-            println!("\n⚠️  Command not yet implemented (Phase 3, Task 3.1.4)");
+            use rbuilder::graph::CodeGraph;
+            use rbuilder::rules::{RuleEngine, Ruleset};
+            use std::path::Path;
+
+            let ruleset = Ruleset::from_file(Path::new(&ruleset))?;
+            let mut graph = CodeGraph::load_from_repo(Path::new("."))?;
+            let report = RuleEngine::apply_ruleset(graph.backend_mut(), &ruleset, dry_run)?;
+
+            if dry_run {
+                println!("Would apply {} rules:", ruleset.rules.len());
+            } else {
+                println!("Applied {} rules:", ruleset.rules.len());
+                graph.save_to_repo(Path::new("."))?;
+            }
+
+            for (rule, count) in &report.rule_matches {
+                println!("  - {rule}: {count} matches");
+            }
+            if !dry_run {
+                println!("Modified {} nodes", report.nodes_modified);
+            }
             Ok(())
         }
 
@@ -486,21 +504,68 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Plugin { command } => {
+            use rbuilder::languages::plugin_loader::{PluginLoader, PluginRegistry};
+            use rbuilder::languages::registry::LanguageRegistry;
+            use std::path::Path;
+
             match command {
                 PluginCommands::Install { path } => {
-                    println!("Installing plugin from: {}", path);
+                    let source = Path::new(&path);
+                    let dest = PluginLoader::copy_to_plugins_dir(Path::new("."), source)?;
+                    let metadata = PluginLoader::install(Path::new("."), &dest)?;
+                    println!(
+                        "Installed plugin '{}' v{} from {}",
+                        metadata.language_id, metadata.version, dest.display()
+                    );
                 }
                 PluginCommands::List => {
-                    println!("Listing plugins...");
+                    let registry = LanguageRegistry::new();
+                    println!("Built-in plugins:");
+                    for id in registry.language_plugin_ids() {
+                        if let Some(plugin) = registry.get_language_plugin(&id) {
+                            println!(
+                                "  - {} (extensions: {})",
+                                plugin.language_id(),
+                                plugin.file_extensions().join(", ")
+                            );
+                        }
+                    }
+                    let external = PluginRegistry::load(Path::new("."))?;
+                    if external.plugins.is_empty() {
+                        println!("\nExternal plugins: none");
+                    } else {
+                        println!("\nExternal plugins:");
+                        for plugin in &external.plugins {
+                            println!("  - {} v{} at {}", plugin.language_id, plugin.version, plugin.path);
+                        }
+                    }
                 }
                 PluginCommands::Info { plugin_id } => {
-                    println!("Plugin info: {}", plugin_id);
+                    let registry = LanguageRegistry::new();
+                    if let Some(plugin) = registry.get_language_plugin(&plugin_id) {
+                        println!("Built-in plugin: {}", plugin.language_id());
+                        println!("Extensions: {:?}", plugin.file_extensions());
+                        let caps = plugin.capabilities();
+                        println!("Capabilities: functions={}, types={}", caps.extracts_functions, caps.extracts_types);
+                    } else if let Some(ext) = PluginRegistry::load(Path::new("."))?.get(&plugin_id) {
+                        println!("External plugin: {}", ext.language_id);
+                        println!("Version: {}", ext.version);
+                        println!("Path: {}", ext.path);
+                        println!("Extensions: {:?}", ext.extensions);
+                    } else {
+                        anyhow::bail!("Plugin not found: {plugin_id}");
+                    }
                 }
                 PluginCommands::Uninstall { plugin_id } => {
-                    println!("Uninstalling plugin: {}", plugin_id);
+                    let mut registry = PluginRegistry::load(Path::new("."))?;
+                    if registry.uninstall(&plugin_id) {
+                        registry.save(Path::new("."))?;
+                        println!("Uninstalled plugin: {plugin_id}");
+                    } else {
+                        anyhow::bail!("External plugin not found: {plugin_id}");
+                    }
                 }
             }
-            println!("\n⚠️  Command not yet implemented (Phase 3, Task 3.2.6)");
             Ok(())
         }
 

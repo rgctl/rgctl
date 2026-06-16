@@ -41,6 +41,9 @@ impl LanguageRegistry {
         registry.register_language_plugin(Arc::new(TypeScriptPlugin::new().unwrap()));
         registry.register_language_plugin(Arc::new(JavaScriptPlugin::new().unwrap()));
         registry.register_language_plugin(Arc::new(GoPlugin::new().unwrap()));
+        registry.register_language_plugin(Arc::new(JavaPlugin::new().unwrap()));
+        registry.register_language_plugin(Arc::new(KotlinPlugin::new().unwrap()));
+        registry.register_language_plugin(Arc::new(CSharpPlugin::new().unwrap()));
         registry.register_language_plugin(Arc::new(MarkdownPlugin::new().unwrap()));
 
         // Register built-in config format plugins
@@ -50,6 +53,16 @@ impl LanguageRegistry {
         registry.register_config_plugin(Arc::new(PropertiesPlugin::new().unwrap()));
 
         registry
+    }
+
+    /// Check if a language plugin is registered.
+    pub fn has_plugin(&self, language_id: &str) -> bool {
+        self.language_plugins.contains_key(language_id)
+    }
+
+    /// List all language plugin IDs.
+    pub fn language_plugin_ids(&self) -> Vec<String> {
+        self.language_plugins.keys().cloned().collect()
     }
 
     /// Register a language plugin
@@ -186,8 +199,8 @@ mod tests {
         let registry = LanguageRegistry::new();
         let stats = registry.stats();
 
-        // Should have 6 built-in language plugins
-        assert_eq!(stats.language_plugins, 6);
+        // Should have 9 built-in language plugins
+        assert_eq!(stats.language_plugins, 9);
     }
 
     #[test]
@@ -253,7 +266,7 @@ mod tests {
         let registry = LanguageRegistry::new();
         let languages = registry.supported_languages();
 
-        assert_eq!(languages.len(), 6);
+        assert_eq!(languages.len(), 9);
         assert!(languages.contains(&"rust".to_string()));
         assert!(languages.contains(&"python".to_string()));
         assert!(languages.contains(&"typescript".to_string()));
@@ -299,7 +312,7 @@ mod tests {
         let registry = LanguageRegistry::new();
         let stats = registry.stats();
 
-        assert_eq!(stats.language_plugins, 6);
+        assert_eq!(stats.language_plugins, 9);
         assert_eq!(stats.config_plugins, 4); // YAML, JSON, TOML, Properties
         assert!(stats.total_extensions > 0);
     }

@@ -64,6 +64,7 @@ pub use pipeline::{PipelineConfig, PipelineStats, ProcessingPipeline};
 pub use config::analyzer::{ConfigAnalyzer, MissingEnvVar, UnusedConfigKey};
 pub use config::secret_detector::{DetectedSecret, SecretDetector, Severity as SecretSeverity};
 pub use nlp::{PatternMatcher, QueryResult, TranslatedQuery};
+pub use rules::{RuleApplicationReport, RuleEngine, Ruleset};
 
 /// Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

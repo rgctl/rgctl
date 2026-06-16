@@ -2,8 +2,7 @@
 
 pub mod builtin;
 pub mod config;
+pub mod plugin_abi;
+pub mod plugin_loader;
 pub mod plugin_trait;
 pub mod registry;
-
-#[cfg(feature = "plugin-system")]
-pub mod plugin_abi;
