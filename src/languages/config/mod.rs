@@ -1,13 +1,13 @@
 //! Configuration format plugins
 
-pub mod yaml;
 pub mod json;
+pub mod markdown;
+pub mod properties;
 pub mod toml_plugin;
+pub mod yaml;
 
 pub use json::JsonPlugin;
+pub use markdown::MarkdownPlugin;
+pub use properties::PropertiesPlugin;
 pub use toml_plugin::TomlPlugin;
 pub use yaml::YamlPlugin;
-
-// Placeholder - additional config parsers
-// Task 1.3.4: Properties plugin
-// Task 1.3.5: Markdown plugin

@@ -41,11 +41,13 @@ impl LanguageRegistry {
         registry.register_language_plugin(Arc::new(TypeScriptPlugin::new().unwrap()));
         registry.register_language_plugin(Arc::new(JavaScriptPlugin::new().unwrap()));
         registry.register_language_plugin(Arc::new(GoPlugin::new().unwrap()));
+        registry.register_language_plugin(Arc::new(MarkdownPlugin::new().unwrap()));
 
         // Register built-in config format plugins
         registry.register_config_plugin(Arc::new(YamlPlugin::new().unwrap()));
         registry.register_config_plugin(Arc::new(JsonPlugin::new().unwrap()));
         registry.register_config_plugin(Arc::new(TomlPlugin::new().unwrap()));
+        registry.register_config_plugin(Arc::new(PropertiesPlugin::new().unwrap()));
 
         registry
     }
@@ -184,8 +186,8 @@ mod tests {
         let registry = LanguageRegistry::new();
         let stats = registry.stats();
 
-        // Should have 5 built-in language plugins
-        assert_eq!(stats.language_plugins, 5);
+        // Should have 6 built-in language plugins
+        assert_eq!(stats.language_plugins, 6);
     }
 
     #[test]
@@ -251,7 +253,7 @@ mod tests {
         let registry = LanguageRegistry::new();
         let languages = registry.supported_languages();
 
-        assert_eq!(languages.len(), 5);
+        assert_eq!(languages.len(), 6);
         assert!(languages.contains(&"rust".to_string()));
         assert!(languages.contains(&"python".to_string()));
         assert!(languages.contains(&"typescript".to_string()));
@@ -297,8 +299,8 @@ mod tests {
         let registry = LanguageRegistry::new();
         let stats = registry.stats();
 
-        assert_eq!(stats.language_plugins, 5);
-        assert_eq!(stats.config_plugins, 3); // YAML, JSON, TOML
+        assert_eq!(stats.language_plugins, 6);
+        assert_eq!(stats.config_plugins, 4); // YAML, JSON, TOML, Properties
         assert!(stats.total_extensions > 0);
     }
 

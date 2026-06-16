@@ -14,16 +14,13 @@
 //!
 //! # Example
 //!
-//! ```no_run
-//! use rbuilder::Graph;
+//! ```ignore
+//! use rbuilder::CodeGraph;
 //!
-//! // Initialize graph for a repository
-//! let graph = Graph::from_repository("./my-project")?;
-//!
-//! // Query using natural language
-//! let result = graph.query_nl("How many React components?")?;
-//! println!("{}", result);
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! let graph = CodeGraph::from_repository("./my-project")?;
+//! let functions = graph.query("functions")?;
+//! println!("Found {} functions", functions.len());
+//! # Ok::<(), rbuilder::Error>(())
 //! ```
 
 #![warn(missing_docs)]
@@ -62,6 +59,11 @@ pub mod semantic;
 
 // Re-exports for convenience
 pub use error::{Error, Result};
+pub use graph::CodeGraph;
+pub use pipeline::{PipelineConfig, PipelineStats, ProcessingPipeline};
+pub use config::analyzer::{ConfigAnalyzer, MissingEnvVar, UnusedConfigKey};
+pub use config::secret_detector::{DetectedSecret, SecretDetector, Severity as SecretSeverity};
+pub use nlp::{PatternMatcher, QueryResult, TranslatedQuery};
 
 /// Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

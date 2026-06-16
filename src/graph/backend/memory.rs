@@ -186,9 +186,8 @@ impl GraphBackend for MemoryBackend {
         self.find_nodes_by_name(filter)
     }
 
-    fn query(&self, _query: &str) -> Result<Vec<Node>> {
-        // Placeholder - will implement query DSL later
-        Ok(Vec::new())
+    fn query(&self, query: &str) -> Result<Vec<Node>> {
+        crate::graph::query::execute(self, query)
     }
 }
 

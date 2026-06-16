@@ -12,7 +12,8 @@ Cargo.lock
 *~
 .DS_Store
 
-# Testing
+# Generated graph data
+.rbuilder/
 /coverage
 *.profraw
 *.profdata

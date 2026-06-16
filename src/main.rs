@@ -230,10 +230,53 @@ fn main() -> anyhow::Result<()> {
             languages,
             exclude,
         } => {
-            println!("Initializing graph for repository: {}", path);
-            println!("Languages: {:?}", languages);
-            println!("Exclude: {:?}", exclude);
-            println!("\n⚠️  Command not yet implemented (Phase 1, Task 1.6.3)");
+            use rbuilder::discovery::DiscoveryConfig;
+            use rbuilder::languages::registry::LanguageRegistry;
+            use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
+            use std::path::Path;
+            use std::sync::Arc;
+
+            let root = Path::new(&path);
+            let mut discovery = DiscoveryConfig::default();
+            if let Some(langs) = languages {
+                discovery.languages = Some(
+                    langs
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                );
+            }
+            if let Some(excludes) = exclude {
+                discovery.exclude_patterns = excludes
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+
+            let pipeline = ProcessingPipeline::with_config(
+                Arc::new(LanguageRegistry::new()),
+                PipelineConfig {
+                    discovery,
+                    show_progress: true,
+                },
+            );
+
+            let (graph, stats) = pipeline.process_repository(root)?;
+            let saved = graph.save_to_repo(root)?;
+
+            println!("Processed {} files", stats.files_processed);
+            if stats.files_failed > 0 {
+                println!("Skipped {} files due to errors", stats.files_failed);
+            }
+            println!("Created {} nodes", stats.nodes_created);
+            println!("Created {} edges", stats.edges_created);
+            println!("Time: {:.2}s", stats.duration.as_secs_f64());
+            println!("Graph saved to {}", saved.display());
+
+            let functions = graph.query("functions")?;
+            println!("\nSample query (`functions`): {} result(s)", functions.len());
             Ok(())
         }
 
@@ -250,12 +293,41 @@ fn main() -> anyhow::Result<()> {
             centrality,
             all,
         } => {
-            println!("Running analysis...");
-            println!(
-                "Community: {}, Complexity: {}, Centrality: {}, All: {}",
-                community, complexity, centrality, all
-            );
-            println!("\n⚠️  Command not yet implemented (Phase 2)");
+            use rbuilder::analysis::{
+                CentralityAnalyzer, CommunityDetector, ComplexityAnalyzer, DependencyAnalyzer,
+            };
+            use rbuilder::graph::CodeGraph;
+            use rbuilder::nlp::PatternMatcher;
+            use std::path::Path;
+
+            let graph = CodeGraph::load_from_repo(Path::new("."))?;
+            let backend = graph.backend();
+            let matcher = PatternMatcher::new();
+
+            let run_all = all || (!community && !complexity && !centrality);
+
+            if community || run_all {
+                println!("{}", matcher.analyze_communities(backend)?);
+            }
+            if complexity || run_all {
+                let report = ComplexityAnalyzer::analyze(backend)?;
+                println!(
+                    "Complexity: {} functions, avg cyclomatic {:.1}, max {}",
+                    report.functions.len(),
+                    report.avg_cyclomatic,
+                    report.max_cyclomatic
+                );
+                for (level, count) in &report.by_level {
+                    println!("  {:?}: {}", level, count);
+                }
+            }
+            if centrality || run_all {
+                println!("{}", matcher.analyze_centrality(backend)?);
+            }
+            if run_all {
+                let cycles = DependencyAnalyzer::find_circular_dependencies(backend)?;
+                println!("Circular dependencies: {}", cycles.len());
+            }
             Ok(())
         }
 
@@ -264,9 +336,63 @@ fn main() -> anyhow::Result<()> {
             explain,
             format,
         } => {
-            println!("Question: {}", question);
-            println!("Explain: {}, Format: {:?}", explain, format);
-            println!("\n⚠️  Command not yet implemented (Phase 2, Task 2.3.6)");
+            use rbuilder::graph::CodeGraph;
+            use rbuilder::nlp::PatternMatcher;
+            use rbuilder::nlp::QueryResult;
+            use std::path::Path;
+
+            let graph = CodeGraph::load_from_repo(Path::new("."))?;
+            let matcher = PatternMatcher::new();
+            let translated = matcher.translate(&question)?;
+
+            if explain {
+                println!("Intent: {:?}", translated.intent);
+                println!("Operation: {}", translated.operation);
+                println!("Internal query: {}", translated.internal_query);
+                println!("Confidence: {:.2}", translated.confidence);
+                println!();
+            }
+
+            let result = matcher.execute(&translated, graph.backend())?;
+
+            match format {
+                OutputFormat::Json => {
+                    let json = match &result {
+                        QueryResult::Count(n) => serde_json::json!({ "count": n }),
+                        QueryResult::Nodes(nodes) => serde_json::json!({
+                            "results": nodes.iter().map(|n| serde_json::json!({
+                                "name": n.name,
+                                "type": format!("{:?}", n.node_type),
+                                "file": n.file_path,
+                            })).collect::<Vec<_>>()
+                        }),
+                        QueryResult::Text(lines) => serde_json::json!({ "lines": lines }),
+                    };
+                    println!("{}", serde_json::to_string_pretty(&json)?);
+                }
+                OutputFormat::Text | OutputFormat::Table => match result {
+                    QueryResult::Count(n) => println!("Found {n} result(s)"),
+                    QueryResult::Nodes(nodes) => {
+                        if nodes.is_empty() {
+                            println!("No results found.");
+                        } else {
+                            println!("Found {} result(s):", nodes.len());
+                            for node in nodes.iter().take(50) {
+                                let file = node.file_path.as_deref().unwrap_or("?");
+                                println!("  - {} ({:?}) @ {}", node.name, node.node_type, file);
+                            }
+                            if nodes.len() > 50 {
+                                println!("  ... and {} more", nodes.len() - 50);
+                            }
+                        }
+                    }
+                    QueryResult::Text(lines) => {
+                        for line in lines {
+                            println!("{line}");
+                        }
+                    }
+                },
+            }
             Ok(())
         }
 
@@ -303,12 +429,59 @@ fn main() -> anyhow::Result<()> {
             secrets,
             drift,
         } => {
-            println!("Config analysis...");
-            println!(
-                "Unused: {}, Missing env: {}, Secrets: {}, Drift: {:?}",
-                unused, missing_env, secrets, drift
-            );
-            println!("\n⚠️  Command not yet implemented (Phase 2)");
+            use rbuilder::config::analyzer::ConfigAnalyzer;
+            use rbuilder::config::secret_detector::SecretDetector;
+            use rbuilder::discovery::FileDiscoverer;
+            use rbuilder::graph::CodeGraph;
+            use rbuilder::languages::registry::LanguageRegistry;
+            use std::path::Path;
+            use std::sync::Arc;
+
+            let graph = CodeGraph::load_from_repo(Path::new("."))?;
+            let run_all = !unused && !missing_env && !secrets && drift.is_none();
+
+            if unused || run_all {
+                let unused_keys = ConfigAnalyzer::find_unused_keys(graph.backend())?;
+                println!("Unused config keys: {}", unused_keys.len());
+                for key in unused_keys.iter().take(20) {
+                    println!("  - {} ({})", key.key, key.file.as_deref().unwrap_or("?"));
+                }
+            }
+            if missing_env || run_all {
+                let missing =
+                    ConfigAnalyzer::find_missing_env_vars(graph.backend(), &[Path::new(".env")])?;
+                println!("Missing env vars: {}", missing.len());
+                for var in &missing {
+                    println!("  - {}", var.var);
+                }
+            }
+            if secrets || run_all {
+                let discoverer = FileDiscoverer::new(Arc::new(LanguageRegistry::new()));
+                let files = discoverer.discover(Path::new("."))?;
+                let detector = SecretDetector::new();
+                let mut total = 0usize;
+                for file in files {
+                    if let Ok(content) = std::fs::read_to_string(&file) {
+                        let found = detector.scan(&content);
+                        for secret in &found {
+                            println!(
+                                "  [{}] {}:{} - {} ({:?})",
+                                file.display(),
+                                secret.line,
+                                secret.secret_type,
+                                secret.value,
+                                secret.severity
+                            );
+                        }
+                        total += found.len();
+                    }
+                }
+                println!("Potential secrets found: {total}");
+            }
+            if let Some(paths) = drift {
+                println!("Config drift comparison for: {:?}", paths);
+                println!("Drift analysis not yet implemented.");
+            }
             Ok(())
         }
 
@@ -332,9 +505,21 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Export { format, output } => {
-            println!("Exporting graph...");
-            println!("Format: {}, Output: {}", format, output);
-            println!("\n⚠️  Command not yet implemented (Phase 1, Task 1.6.4)");
+            use rbuilder::graph::CodeGraph;
+            use std::path::Path;
+
+            if !format.eq_ignore_ascii_case("json") {
+                anyhow::bail!("Only json export is supported in Phase 1");
+            }
+
+            let graph = CodeGraph::load_from_repo(Path::new("."))?;
+            std::fs::write(&output, graph.export_json()?)?;
+            println!(
+                "Exported {} nodes and {} edges to {}",
+                graph.node_count(),
+                graph.edge_count(),
+                output
+            );
             Ok(())
         }
 
@@ -362,12 +547,37 @@ fn main() -> anyhow::Result<()> {
             complexity_report,
             hotspots,
         } => {
-            println!("Generating statistics...");
-            println!(
-                "Community: {}, Complexity: {}, Hotspots: {}",
-                community_report, complexity_report, hotspots
-            );
-            println!("\n⚠️  Command not yet implemented (Phase 2)");
+            use rbuilder::graph::backend::GraphBackend;
+            use rbuilder::analysis::{CentralityAnalyzer, ComplexityAnalyzer};
+            use rbuilder::graph::CodeGraph;
+            use rbuilder::nlp::PatternMatcher;
+            use std::path::Path;
+
+            let graph = CodeGraph::load_from_repo(Path::new("."))?;
+            let backend = graph.backend();
+            let run_all = !community_report && !complexity_report && !hotspots;
+
+            if community_report || run_all {
+                println!("{}", PatternMatcher::new().analyze_communities(backend)?);
+            }
+            if complexity_report || run_all {
+                let report = ComplexityAnalyzer::analyze(backend)?;
+                println!(
+                    "Functions: {}, avg complexity {:.1}, max {}",
+                    report.functions.len(),
+                    report.avg_cyclomatic,
+                    report.max_cyclomatic
+                );
+            }
+            if hotspots || run_all {
+                let report = CentralityAnalyzer::new().analyze(backend)?;
+                println!("Top PageRank hotspots:");
+                for (id, score) in report.top_pagerank.iter().take(10) {
+                    if let Ok(Some(node)) = backend.get_node(*id) {
+                        println!("  - {} ({score:.4})", node.name);
+                    }
+                }
+            }
             Ok(())
         }
     }

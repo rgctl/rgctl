@@ -201,14 +201,14 @@ mod tests {
         let root = temp_dir.path();
 
         write_file(&root.join("src/main.rs"), "fn main() {}");
-        write_file(&root.join("README.md"), "# readme");
+        write_file(&root.join("notes.txt"), "plain text");
         write_file(&root.join(".git/config"), "[core]");
 
         let files = discoverer().discover(root).unwrap();
 
         assert!(files.iter().any(|f| f.extension().is_some_and(|e| e == "rs")));
         assert!(!files.iter().any(|f| f.components().any(|c| c.as_os_str() == ".git")));
-        assert!(!files.iter().any(|f| f.extension().is_some_and(|e| e == "md")));
+        assert!(!files.iter().any(|f| f.extension().is_some_and(|e| e == "txt")));
     }
 
     #[test]
