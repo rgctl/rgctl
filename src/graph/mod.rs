@@ -3,6 +3,7 @@
 pub mod backend;
 pub mod code_graph;
 pub mod export;
+pub mod intern;
 pub mod query;
 pub mod schema;
 

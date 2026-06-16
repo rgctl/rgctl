@@ -21,6 +21,10 @@ pub struct PipelineConfig {
     pub discovery: DiscoveryConfig,
     /// Show progress bar during processing
     pub show_progress: bool,
+    /// Optional thread count for parallel extraction (defaults to rayon pool size)
+    pub thread_count: Option<usize>,
+    /// Batch size for parallel file processing
+    pub batch_size: usize,
 }
 
 impl Default for PipelineConfig {
@@ -28,6 +32,8 @@ impl Default for PipelineConfig {
         Self {
             discovery: DiscoveryConfig::default(),
             show_progress: true,
+            thread_count: None,
+            batch_size: 64,
         }
     }
 }

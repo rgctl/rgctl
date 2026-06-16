@@ -255,16 +255,26 @@ fn main() -> anyhow::Result<()> {
                     .collect();
             }
 
+            let discovery_config = discovery.clone();
+            let registry = Arc::new(LanguageRegistry::new());
             let pipeline = ProcessingPipeline::with_config(
-                Arc::new(LanguageRegistry::new()),
+                Arc::clone(&registry),
                 PipelineConfig {
                     discovery,
                     show_progress: true,
+                    ..PipelineConfig::default()
                 },
             );
 
             let (graph, stats) = pipeline.process_repository(root)?;
             let saved = graph.save_to_repo(root)?;
+
+            let mut tracker = rbuilder::incremental::FileTracker::new(root);
+            let discoverer =
+                rbuilder::discovery::FileDiscoverer::with_config(registry, discovery_config);
+            let files = discoverer.discover(root)?;
+            tracker.index_files(&files, &graph)?;
+            tracker.save()?;
 
             println!("Processed {} files", stats.files_processed);
             if stats.files_failed > 0 {
@@ -281,9 +291,9 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Update { since, force } => {
-            println!("Updating graph...");
-            println!("Since: {:?}, Force: {}", since, force);
-            println!("\n⚠️  Command not yet implemented (Phase 5, Task 5.1.3)");
+            use rbuilder::cli::update;
+            use std::path::Path;
+            update::run_update(Path::new("."), since, force, cli.verbose)?;
             Ok(())
         }
 

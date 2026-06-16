@@ -51,6 +51,7 @@ pub mod mcp;
 pub mod api;
 
 // Utility modules
+pub mod cli;
 pub mod incremental;
 pub mod output;
 pub mod pipeline;
@@ -66,6 +67,7 @@ pub use config::secret_detector::{DetectedSecret, SecretDetector, Severity as Se
 pub use nlp::{DomainContext, PatternDetector, PatternMatcher, QueryResult, TranslatedQuery};
 pub use rules::{RuleApplicationReport, RuleEngine, Ruleset};
 pub use semantic::{FunctionSignature, IdlFormat, IdlGenerator, SignatureExtractor, TypeInferencer};
+pub use incremental::{ChangeSet, FileTracker, IncrementalUpdater, UpdateOptions, UpdateResult};
 
 /// Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

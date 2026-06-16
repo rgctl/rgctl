@@ -34,7 +34,7 @@ impl Default for DiscoveryConfig {
     fn default() -> Self {
         Self {
             max_file_size: DEFAULT_MAX_FILE_SIZE,
-            exclude_patterns: Vec::new(),
+            exclude_patterns: vec![".rbuilder/**".to_string()],
             languages: None,
         }
     }

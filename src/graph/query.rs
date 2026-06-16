@@ -30,8 +30,7 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
     }
 
     if let Some(label) = query.strip_prefix("label:") {
-        let nodes = backend.all_nodes()?;
-        return Ok(nodes.into_iter().filter(|n| n.has_label(label)).collect());
+        return backend.find_nodes_by_label(label);
     }
 
     if let Some(suffix) = query.strip_prefix("name_suffix:") {
