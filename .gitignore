@@ -39,3 +39,6 @@ graphify-out/
 # Temporary files
 *.tmp
 .cache/
+
+# Session notes (local only, not version controlled)
+SESSION_NOTES.md
