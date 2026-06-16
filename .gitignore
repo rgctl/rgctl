@@ -1,0 +1,41 @@
+# Rust
+/target
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+/coverage
+*.profraw
+*.profdata
+
+# Benchmarks
+/target/criterion
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+
+# Graph data (don't commit large graphs)
+graph.db
+graph.json
+graphify-out/
+
+# MCP
+.claude/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+.cache/
