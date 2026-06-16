@@ -565,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_relation_type_variants() {
-        let types = vec![
+        let types = [
             RelationType::Calls,
             RelationType::Uses,
             RelationType::Implements,

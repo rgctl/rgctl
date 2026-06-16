@@ -5,6 +5,7 @@
 
 use crate::error::{Error, Result};
 use crate::languages::plugin_trait::*;
+use crate::semantic::type_inference::TypeInferencer;
 use std::path::Path;
 use tree_sitter::{Node, Parser};
 
@@ -37,6 +38,20 @@ impl JavaScriptPlugin {
         }
 
         let name = name.unwrap_or_else(|| "anonymous".to_string());
+
+        // Infer types for parameters
+        let function_source = node.utf8_text(source).unwrap_or("");
+        let inferencer = TypeInferencer::new();
+        let inferred_types = inferencer.infer_javascript(function_source);
+
+        // Update parameters with inferred types
+        for param in &mut parameters {
+            if param.param_type.is_none() {
+                if let Some(inference) = inferred_types.get(&param.name) {
+                    param.param_type = Some(format!("{:?}", inference.inferred));
+                }
+            }
+        }
 
         Ok(Symbol {
             name: name.clone(),
@@ -364,7 +379,7 @@ mod tests {
         let source = b"function add(a, b) { return a + b; }";
         let symbols = plugin.extract_symbols(Path::new("test.js"), source).unwrap();
 
-        assert!(symbols.len() >= 1);
+        assert!(!symbols.is_empty());
         let add_fn = symbols.iter().find(|s| s.name == "add").expect("add function not found");
         assert_eq!(add_fn.symbol_type, SymbolType::Function);
         assert_eq!(add_fn.parameters.len(), 2);
@@ -386,7 +401,7 @@ mod tests {
         let source = b"class User { constructor(name) { this.name = name; } }";
         let symbols = plugin.extract_symbols(Path::new("test.js"), source).unwrap();
 
-        assert!(symbols.len() >= 1);
+        assert!(!symbols.is_empty());
         assert_eq!(symbols[0].name, "User");
         assert_eq!(symbols[0].symbol_type, SymbolType::Class);
     }

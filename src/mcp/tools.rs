@@ -670,11 +670,11 @@ fn names_to_compact(names: &[String], verbose: bool) -> Value {
 mod tests {
     use super::*;
     use crate::graph::backend::GraphBackend;
-    use crate::graph::schema::{Edge, EdgeType};
+    use crate::graph::schema::{Edge, EdgeType, NodeType};
 
     fn test_graph() -> CodeGraph {
         let mut graph = CodeGraph::new();
-        let mut backend = graph.backend_mut();
+        let backend = graph.backend_mut();
         let caller = Node::new(NodeType::Function, "authenticate_user".into())
             .with_file_path("src/auth.rs".into())
             .with_location(10, 20)

@@ -153,8 +153,10 @@ impl MemoryBackend {
     pub fn remove_nodes_for_file(&mut self, file_path: &str) -> Result<usize> {
         let normalized = normalize_path_str(file_path);
         let ids: Vec<Uuid> = self
-            .all_nodes()?
-            .into_iter()
+            .nodes
+            .read()
+            .unwrap()
+            .values()
             .filter(|n| node_matches_file(n, &normalized))
             .map(|n| n.id)
             .collect();
@@ -299,14 +301,14 @@ impl MemoryBackend {
             .write()
             .unwrap()
             .entry(node.name.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(node.id);
 
         self.node_type_index
             .write()
             .unwrap()
             .entry(node.node_type)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(node.id);
 
         for label in &node.labels {
@@ -314,7 +316,7 @@ impl MemoryBackend {
                 .write()
                 .unwrap()
                 .entry(label.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(node.id);
         }
     }
@@ -380,7 +382,7 @@ impl GraphBackend for MemoryBackend {
             .write()
             .unwrap()
             .entry(edge.edge_type)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(idx);
         edges.push(edge);
         self.invalidate_cache();

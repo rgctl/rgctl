@@ -183,7 +183,7 @@ impl McpHandler {
 }
 
 fn serialize_response(response: JsonRpcResponse) -> Result<String> {
-    Ok(serde_json::to_string(&response).map_err(|e| Error::SerdeError(e.to_string()))?)
+    serde_json::to_string(&response).map_err(|e| Error::SerdeError(e.to_string()))
 }
 
 fn error_response(id: Value, code: i32, message: &str) -> JsonRpcResponse {

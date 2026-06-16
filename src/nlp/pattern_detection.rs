@@ -261,10 +261,11 @@ fn extract_top_level_dir(path: &str) -> Option<String> {
 
     // Look for directories after common prefixes
     for (i, part) in parts.iter().enumerate() {
-        if *part == "src" || *part == "lib" || *part == "app" {
-            if i + 1 < parts.len() && !parts[i + 1].contains('.') {
-                return Some(parts[i + 1].to_string());
-            }
+        if (*part == "src" || *part == "lib" || *part == "app")
+            && i + 1 < parts.len()
+            && !parts[i + 1].contains('.')
+        {
+            return Some(parts[i + 1].to_string());
         }
     }
 

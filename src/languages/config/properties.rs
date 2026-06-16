@@ -32,10 +32,9 @@ impl ConfigFormatPlugin for PropertiesPlugin {
         })?;
 
         let mut keys = Vec::new();
-        let mut line_no = 0usize;
 
-        for line in text.lines() {
-            line_no += 1;
+        for (line_idx, line) in text.lines().enumerate() {
+            let line_no = line_idx + 1;
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('!') {
                 continue;

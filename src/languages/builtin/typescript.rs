@@ -503,7 +503,7 @@ mod tests {
         let source = b"function add(a: number, b: number): number { return a + b; }";
         let symbols = plugin.extract_symbols(Path::new("test.ts"), source).unwrap();
 
-        assert!(symbols.len() >= 1);
+        assert!(!symbols.is_empty());
         let add_fn = symbols.iter().find(|s| s.name == "add").expect("add function not found");
         assert_eq!(add_fn.symbol_type, SymbolType::Function);
         assert_eq!(add_fn.parameters.len(), 2);
@@ -527,7 +527,7 @@ mod tests {
         let source = b"interface Person { name: string; age: number; }";
         let symbols = plugin.extract_symbols(Path::new("test.ts"), source).unwrap();
 
-        assert!(symbols.len() >= 1);
+        assert!(!symbols.is_empty());
         let person_iface = symbols.iter().find(|s| s.name == "Person").expect("Person interface not found");
         assert_eq!(person_iface.symbol_type, SymbolType::Interface);
         // Fields extraction may vary based on tree-sitter parsing

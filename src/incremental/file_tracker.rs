@@ -208,13 +208,14 @@ pub fn build_node_mapping(graph: &CodeGraph) -> HashMap<String, Vec<Uuid>> {
     let mut mapping: HashMap<String, Vec<Uuid>> = HashMap::new();
     if let Ok(nodes) = graph.backend().all_nodes() {
         for node in nodes {
-            if let Some(file) = node.file_path.as_deref().or_else(|| {
-                if matches!(node.node_type, crate::graph::schema::NodeType::File) {
-                    Some(node.name.as_str())
-                } else {
-                    None
-                }
-            }) {
+            let file = if let Some(path) = node.file_path.as_deref() {
+                Some(path)
+            } else if matches!(node.node_type, crate::graph::schema::NodeType::File) {
+                Some(node.name.as_str())
+            } else {
+                None
+            };
+            if let Some(file) = file {
                 mapping.entry(normalize_path_str(file)).or_default().push(node.id);
             }
         }
@@ -328,13 +329,13 @@ mod tests {
 
         let mut tracker = FileTracker::new(temp.path());
         tracker
-            .index_files(&[main.clone()], &CodeGraph::new())
+            .index_files(std::slice::from_ref(&main), &CodeGraph::new())
             .unwrap();
 
         fs::write(&extra, "fn extra() {}\n").unwrap();
         fs::remove_file(&main).unwrap();
 
-        let changes = tracker.detect_changes(&[extra.clone()]).unwrap();
+        let changes = tracker.detect_changes(std::slice::from_ref(&extra)).unwrap();
         assert_eq!(changes.added.len(), 1);
         assert_eq!(changes.deleted.len(), 1);
     }

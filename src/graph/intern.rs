@@ -19,19 +19,20 @@ impl StringInterner {
 
     /// Intern a string, returning a shared handle.
     pub fn intern(&self, value: &str) -> Arc<str> {
+        // Fast path: check if already interned (read lock)
         if let Ok(read) = self.pool.read() {
             if let Some(existing) = read.get(value) {
                 return existing.clone();
             }
         }
 
-        let mut write = self.pool.write().unwrap();
-        if let Some(existing) = write.get(value) {
-            return existing.clone();
-        }
-        let arc: Arc<str> = Arc::from(value);
-        write.insert(value.to_string(), arc.clone());
-        arc
+        // Slow path: insert if not present (write lock with entry API)
+        self.pool
+            .write()
+            .unwrap()
+            .entry(value.to_string())
+            .or_insert_with(|| Arc::from(value))
+            .clone()
     }
 
     /// Intern a owned string in-place.

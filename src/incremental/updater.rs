@@ -204,7 +204,7 @@ impl IncrementalUpdater {
             ..Default::default()
         };
 
-        let progress = if self.config.show_progress && changes.len() > 0 {
+        let progress = if self.config.show_progress && !changes.is_empty() {
             let pb = ProgressBar::new(changes.len() as u64);
             pb.set_style(
                 ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] {msg}")

@@ -68,7 +68,7 @@ fn test_file_hash_tracking() {
 
     let mut tracker = FileTracker::new(temp.path());
     tracker
-        .index_files(&[file.clone()], &CodeGraph::new())
+        .index_files(std::slice::from_ref(&file), &CodeGraph::new())
         .unwrap();
     tracker.save().unwrap();
 
