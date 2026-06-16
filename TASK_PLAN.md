@@ -14,13 +14,79 @@
 
 ---
 
+## 📊 **PROJECT STATUS** (as of June 17, 2026)
+
+### Current State
+- **Current Phase:** 7 (Tree-sitter Language System Refactor) 🎯
+- **Status:** Production-ready, 222 tests passing, zero warnings
+- **Languages Supported:** 9 (Rust, Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Markdown)
+- **Test Coverage:** High (222 tests)
+- **Performance:** Meeting targets
+
+### Completed Work ✅
+
+**Phase 1-6 (Weeks 1-19):** COMPLETE
+- ✅ Basic graph construction (9 languages)
+- ✅ Configuration file support (YAML, JSON, TOML, Properties)
+- ✅ Code-to-config linking
+- ✅ Pattern-based NLP (60% queries, no LLM)
+- ✅ Query cache with embeddings (90% queries)
+- ✅ Graph analysis (communities, complexity, centrality)
+- ✅ Configuration analysis
+- ✅ Rule engine for labeling
+- ✅ IDL generation (Proto, Thrift, OpenAPI)
+- ✅ Domain pattern learning
+- ✅ Incremental updates (< 5s)
+- ✅ MCP server for AI agents
+- ✅ Web-based graph browser
+- ✅ Conversational query mode
+
+**Recent Production Fixes (June 2026):**
+- ✅ Fixed indradb dependency warning
+- ✅ Removed all unused imports and dead code
+- ✅ Applied all clippy suggestions (zero warnings)
+- ✅ Fixed TOCTOU race in StringInterner
+- ✅ Optimized remove_nodes_for_file (no graph cloning)
+- ✅ Integrated TypeInferencer into extraction pipeline
+- ✅ Added resource caching for MCP tools (50-80% speedup)
+
+**Phase 10 (Multi-repo):** Early implementation committed
+- ✅ Multi-repo workspace detection
+- ✅ Cross-repo dependency tracking
+- ✅ Shared type analysis
+- ⏸️ Full integration deferred to later
+
+### Current Priority: Phase 7 🎯
+
+**Goal:** Replace manual per-language plugins with TOML-based configuration and procedural macros
+
+**Why Now:**
+- Need foundation before scaling to 100+ languages
+- Reduce maintenance burden by 80%
+- Enable community contributions without Rust knowledge
+- Smaller binaries via feature flags
+
+**Timeline:** 4 weeks (Weeks 20-23)
+- Week 20: Infrastructure setup (TOML, build.rs, feature flags)
+- Week 21: Procedural macro development
+- Week 22: Migration of existing 9 languages
+- Week 23: Testing, documentation, add 5-10 new languages
+
+**Next Up (Phases 8-9):**
+- Phase 8: Performance optimizations (parallel processing, batch APIs)
+- Phase 9: Security & production hardening (auth, rate limiting, deployment)
+
+---
+
 ## Task Tracking
 
 - ⬜ Not started
-- 🔄 In progress
+- 🔄 In progress  
 - ✅ Complete
 - 🧪 Testing
 - 📊 Performance validated
+- ⏸️ Deferred
+- 🎯 Current priority
 
 ---
 
@@ -2812,56 +2878,828 @@ rbuilder serve --port 8080 --open
 
 ---
 
-# Phase 7: Advanced Features (Weeks 20+)
+# Phase 7: Tree-sitter Language System Refactor (Weeks 20-23) 🎯
 
-## 7.1 Multi-Repo Support
+**Status:** Active  
+**Duration:** 4 weeks  
+**Goal:** Replace manual per-language plugins with TOML-based configuration and procedural macros
 
-### Task 7.1.1: Implement Multi-Repo Graph ⬜
-**Description**: Support multiple repositories in one graph
+## Motivation
+
+- **Current:** 9 languages, ~5,000 LOC of repetitive plugin code
+- **Target:** 110+ languages via simple TOML configuration
+- **Benefits:** 
+  - 80% reduction in maintenance burden
+  - Community can add languages without Rust knowledge
+  - Smaller binaries via feature flags (60% reduction for minimal builds)
+  - Add new language in < 30 minutes (vs. 4-8 hours)
+
+## 7.1 Infrastructure Setup (Week 20) 🔄
+
+### Task 7.1.1: Create `languages.toml` Configuration 🎯
+**Description**: Define TOML-based language configuration format
 
 **Acceptance Criteria**:
-- [ ] Each repo has namespace
-- [ ] Cross-repo edges (API calls, shared libraries)
-- [ ] Query across all repos
-- [ ] Filter by repo
+- [ ] Schema defined for language metadata
+- [ ] All 9 current languages configured
+- [ ] Bundle definitions (minimal, extended, full)
+- [ ] Documentation for TOML format
+
+**Example Structure**:
+```toml
+[metadata]
+version = "1.0"
+description = "rBuilder tree-sitter language configuration"
+
+[languages.rust]
+crate = "tree-sitter-rust"
+version = "0.20"
+extensions = ["rs"]
+function_kinds = ["function_item", "function_signature_item"]
+class_kinds = ["struct_item", "enum_item", "impl_item"]
+
+[bundles.minimal]
+description = "Core languages"
+languages = ["rust", "python"]
+
+[bundles.extended]
+description = "Common web and systems languages"
+languages = ["rust", "python", "typescript", "javascript", "go", "java"]
+
+[bundles.full]
+description = "All available languages"
+languages = ["rust", "python", "typescript", "javascript", "go", "java", "kotlin", "csharp", "markdown"]
+```
 
 **Deliverables**:
-- [ ] Multi-repo support
-- [ ] Test suite
+- [ ] `languages.toml` - Language configuration file
+- [ ] Documentation for configuration options
+- [ ] Validation schema
 
 ---
 
-## 7.2 CI/CD Integration
-
-### Task 7.2.1: GitHub Actions Integration ⬜
-**Description**: Auto-update graph on push
+### Task 7.1.2: Implement `build.rs` Code Generator 🔄
+**Description**: Build-time code generation for plugin registration
 
 **Acceptance Criteria**:
-- [ ] GitHub Action workflow
-- [ ] Incremental update on push
-- [ ] Publish graph artifact
-- [ ] PR comments with impact analysis
+- [ ] Parse `languages.toml` at build time
+- [ ] Generate plugin registration code
+- [ ] Generate feature flag conditional compilation
+- [ ] Validate TOML correctness
+
+**Generated Code Example**:
+```rust
+pub fn register_all_plugins(registry: &mut LanguageRegistry) {
+    #[cfg(feature = "lang-rust")]
+    registry.register_language_plugin(Arc::new(RustPlugin::new().unwrap()));
+    
+    #[cfg(feature = "lang-python")]
+    registry.register_language_plugin(Arc::new(PythonPlugin::new().unwrap()));
+    
+    // ... etc for all languages
+}
+```
+
+**Tests**:
+```bash
+cargo build  # Should succeed
+cargo build --no-default-features --features lang-rust  # Should work
+```
 
 **Deliverables**:
-- [ ] `.github/workflows/rbuilder.yml`
+- [ ] `build.rs` - Build-time code generator
+- [ ] Generated `target/.../generated_plugins.rs`
+- [ ] Build validation (TOML syntax, duplicate IDs)
+
+---
+
+### Task 7.1.3: Update `Cargo.toml` with Feature Flags ⬜
+**Description**: Make tree-sitter dependencies optional with feature flags
+
+**Acceptance Criteria**:
+- [ ] All tree-sitter-* dependencies made optional
+- [ ] Individual language features (lang-rust, lang-python, etc.)
+- [ ] Bundle features (bundle-minimal, bundle-extended, bundle-full)
+- [ ] Default bundle set
+- [ ] Build dependencies added (toml, serde)
+
+**Changes Required**:
+```toml
+[dependencies]
+tree-sitter = "0.20"  # Always included
+
+# Make all language grammars optional
+tree-sitter-rust = { version = "0.20", optional = true }
+tree-sitter-python = { version = "0.20", optional = true }
+# ... etc
+
+[build-dependencies]
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+
+[features]
+default = ["bundle-extended"]
+
+# Individual language features
+lang-rust = ["tree-sitter-rust"]
+lang-python = ["tree-sitter-python"]
+# ... etc
+
+# Bundles
+bundle-minimal = ["lang-rust", "lang-python"]
+bundle-extended = ["bundle-minimal", "lang-typescript", "lang-javascript", "lang-go", "lang-java"]
+bundle-full = ["bundle-extended", "lang-kotlin", "lang-csharp", "lang-markdown"]
+```
+
+**Tests**:
+```bash
+# Test all bundle configurations
+cargo build --no-default-features --features bundle-minimal
+cargo build --features bundle-extended
+cargo build --features bundle-full
+cargo build --no-default-features --features "lang-rust,lang-go"
+```
+
+**Deliverables**:
+- [ ] Updated `Cargo.toml`
+- [ ] Feature flag documentation
+
+---
+
+### Task 7.1.4: Test & Validate Infrastructure ⬜
+**Description**: Ensure infrastructure works with all feature combinations
+
+**Acceptance Criteria**:
+- [ ] All 222 tests pass with default features
+- [ ] All tests pass with minimal bundle
+- [ ] All tests pass with full bundle
+- [ ] Generated code is syntactically correct
+- [ ] No new clippy warnings
+- [ ] Binary sizes vary by feature selection
+
+**Test Matrix**:
+```bash
+cargo build
+cargo build --no-default-features --features bundle-minimal
+cargo build --features bundle-extended
+cargo build --features bundle-full
+cargo test
+cargo test --no-default-features --features bundle-minimal
+cargo test --features bundle-full
+cargo clippy -- -D warnings
+```
+
+**Performance**:
+- [ ] Build time acceptable (< 2x current)
+- [ ] Binary size with minimal: ~60% reduction
+- [ ] Binary size with full: similar to current
+
+**Deliverables**:
+- [ ] All tests passing
+- [ ] CI configuration for feature matrix
+- [ ] Binary size tracking
+
+---
+
+## 7.2 Procedural Macro Development (Week 21) ⏸️
+
+### Task 7.2.1: Create `rbuilder-macros` Crate ⬜
+**Description**: Set up proc-macro crate structure
+
+**Acceptance Criteria**:
+- [ ] New crate in workspace
+- [ ] Proc-macro dependencies (syn, quote, proc-macro2)
+- [ ] Basic macro skeleton
+- [ ] Documentation structure
+
+**Deliverables**:
+- [ ] `rbuilder-macros/` directory
+- [ ] `rbuilder-macros/Cargo.toml`
+- [ ] `rbuilder-macros/src/lib.rs`
+
+---
+
+### Task 7.2.2: Implement `#[derive(LanguagePlugin)]` Macro ⬜
+**Description**: Auto-generate LanguagePlugin trait implementation
+
+**Acceptance Criteria**:
+- [ ] Parse `#[lang_config("languages.toml", "rust")]` attribute
+- [ ] Read language metadata from TOML
+- [ ] Generate `LanguagePlugin` trait implementation
+- [ ] Generate tree-sitter grammar loading code
+- [ ] Generate file extension mapping
+
+**Example Usage**:
+```rust
+#[derive(LanguagePlugin)]
+#[lang_config("languages.toml", "rust")]
+pub struct RustPlugin;
+
+#[derive(LanguagePlugin)]
+#[lang_config("languages.toml", "python")]
+pub struct PythonPlugin;
+```
+
+**Tests**:
+```rust
+#[test]
+fn test_macro_expansion() {
+    let expanded = quote! {
+        #[derive(LanguagePlugin)]
+        #[lang_config("languages.toml", "rust")]
+        pub struct RustPlugin;
+    };
+    // Verify expansion
+}
+```
+
+**Deliverables**:
+- [ ] Macro implementation
+- [ ] Macro tests
+- [ ] Usage documentation
+
+---
+
+### Task 7.2.3: Implement Generic Extraction Helpers ⬜
+**Description**: Reusable extraction functions for common patterns
+
+**Acceptance Criteria**:
+- [ ] `extract_with_node_kinds()` - Generic extraction by node type
+- [ ] `extract_functions_generic()` - Reusable function extraction
+- [ ] `extract_classes_generic()` - Reusable class extraction
+- [ ] Node kind mappings from TOML
+
+**Tests**:
+```rust
+#[test]
+fn test_generic_function_extraction() {
+    let node_kinds = vec!["function_definition", "method_definition"];
+    let symbols = extract_functions_generic(source, node_kinds);
+    assert!(symbols.len() > 0);
+}
+```
+
+**Deliverables**:
+- [ ] Generic extraction utilities
+- [ ] Test suite
 - [ ] Documentation
 
 ---
 
-## 7.3 Configuration Drift Detection
-
-### Task 7.3.1: Implement Config Comparison ⬜
-**Description**: Compare configs across environments
+### Task 7.2.4: Documentation & Examples ⬜
+**Description**: Document macro usage and best practices
 
 **Acceptance Criteria**:
-- [ ] Load multiple config files
-- [ ] Diff configs
-- [ ] Report differences
-- [ ] CLI: `rbuilder config --drift <file1> <file2>`
+- [ ] Usage examples
+- [ ] Configuration options documented
+- [ ] Language-specific overrides explained
+- [ ] Migration guide from manual plugins
 
 **Deliverables**:
-- [ ] Config diff tool
+- [ ] `MACRO_GUIDE.md`
+- [ ] Example plugins
+- [ ] Migration checklist
+
+---
+
+## 7.3 Migration of Existing Languages (Week 22) ⏸️
+
+### Task 7.3.1: Migrate Simple Languages (Kotlin, C#) ⬜
+**Description**: Migrate simplest languages first to validate approach
+
+**Acceptance Criteria**:
+- [ ] Kotlin plugin uses macro
+- [ ] C# plugin uses macro
+- [ ] All existing tests pass
+- [ ] No functionality regression
+- [ ] Code reduction documented
+
+**Migration Order**:
+1. Kotlin (simplest)
+2. C# (similar to Kotlin)
+
+**Deliverables**:
+- [ ] Migrated plugins
+- [ ] Updated TOML metadata
+- [ ] Test validation
+
+---
+
+### Task 7.3.2: Migrate Medium Complexity Languages (Java, Go) ⬜
+**Description**: Migrate languages with moderate complexity
+
+**Acceptance Criteria**:
+- [ ] Java plugin uses macro
+- [ ] Go plugin uses macro
+- [ ] TOML metadata complete
+- [ ] Tests passing
+- [ ] Language-specific quirks handled
+
+**Deliverables**:
+- [ ] Migrated plugins
+- [ ] Updated tests
+- [ ] Documentation of quirks
+
+---
+
+### Task 7.3.3: Migrate Complex Languages (JavaScript, TypeScript, Python, Rust) ⬜
+**Description**: Migrate most complex languages with type inference
+
+**Acceptance Criteria**:
+- [ ] JavaScript plugin uses macro (with type inference)
+- [ ] TypeScript plugin uses macro (TSX handling)
+- [ ] Python plugin uses macro (type inference)
+- [ ] Rust plugin uses macro (most complex, save for last)
+- [ ] All type inference preserved
+- [ ] All tests passing
+
+**Special Considerations**:
+- JavaScript/Python: Type inference integration
+- TypeScript: TSX variant handling
+- Rust: Complex trait system, lifetimes, macros
+
+**Deliverables**:
+- [ ] Migrated plugins
+- [ ] Type inference integration
+- [ ] Comprehensive tests
+
+---
+
+### Task 7.3.4: Migrate Config Format (Markdown) ⬜
+**Description**: Migrate Markdown config format parser
+
+**Acceptance Criteria**:
+- [ ] Markdown plugin uses macro
+- [ ] Documentation structure preserved
+- [ ] Tests passing
+
+**Deliverables**:
+- [ ] Migrated Markdown plugin
+- [ ] Tests
+
+---
+
+### Task 7.3.5: Remove Legacy Plugin Code ⬜
+**Description**: Clean up old manual implementations
+
+**Acceptance Criteria**:
+- [ ] Old plugin files deleted
+- [ ] Imports updated
+- [ ] Registry updated
+- [ ] No dead code remaining
+- [ ] ~3,500 LOC removed
+
+**Deliverables**:
+- [ ] Cleaned codebase
+- [ ] Updated module structure
+- [ ] LOC reduction report
+
+---
+
+## 7.4 Testing & Documentation (Week 23) ⏸️
+
+### Task 7.4.1: Comprehensive Testing ⬜
+**Description**: Test all feature combinations and configurations
+
+**Test Matrix**:
+- [ ] Each language individually
+- [ ] All bundle combinations
+- [ ] Feature flag edge cases
+- [ ] Performance benchmarks (before/after)
+- [ ] Memory usage comparison
+
+**Acceptance Criteria**:
+- [ ] All tests pass with all feature combinations
+- [ ] No performance regression
+- [ ] Memory usage similar or better
+- [ ] Build time acceptable
+
+**Deliverables**:
+- [ ] Comprehensive test suite
+- [ ] Performance report
+- [ ] CI/CD configurations
+
+---
+
+### Task 7.4.2: Add New Languages (Proof of Scalability) ⬜
+**Description**: Demonstrate ease of adding languages with TOML
+
+**Target Languages** (5-10 additional):
+- C
+- C++
+- Ruby
+- PHP
+- Swift
+- Scala
+- Elixir
+- Haskell
+- Zig
+- Nim
+
+**Acceptance Criteria**:
+- [ ] 5-10 new languages added
+- [ ] Only TOML configuration needed (no code)
+- [ ] Each language < 30 minutes to add
+- [ ] Tests generated/passing
+
+**Deliverables**:
+- [ ] 14-19 total languages supported
+- [ ] TOML configurations for new languages
+- [ ] Time tracking for additions
+
+---
+
+### Task 7.4.3: Update Documentation ⬜
+**Description**: Comprehensive documentation update
+
+**Documentation Updates**:
+- [ ] README: Explain feature flags
+- [ ] CONTRIBUTING: How to add new languages
+- [ ] Language guide: Document TOML format
+- [ ] Migration guide: For users with custom plugins
+- [ ] Performance guide: Binary size optimization
+
+**Acceptance Criteria**:
+- [ ] All documentation accurate
+- [ ] Examples working
+- [ ] Migration path clear
+
+**Deliverables**:
+- [ ] Updated README.md
+- [ ] CONTRIBUTING.md updates
+- [ ] LANGUAGE_GUIDE.md (new)
+- [ ] MIGRATION_GUIDE.md (new)
+
+---
+
+### Task 7.4.4: CI/CD Configuration ⬜
+**Description**: Test matrix for feature combinations
+
+**Acceptance Criteria**:
+- [ ] GitHub Actions matrix for bundles
+- [ ] Binary size tracking
+- [ ] Build time monitoring
+- [ ] Performance regression detection
+
+**Deliverables**:
+- [ ] Updated `.github/workflows/`
+- [ ] Binary size tracking
+- [ ] Performance benchmarks in CI
+
+---
+
+## Phase 7 Success Metrics
+
+**Code Quality:**
+- LOC reduction: ~3,500 (from 5,000 to 1,500) - **70% reduction**
+- Duplication: Reduced by 80%
+- Complexity: Each language now ~10 lines (macro invocation)
+
+**Maintainability:**
+- Adding new language: **30 minutes** (vs. 4-8 hours) - **90% faster**
+- Configuration-driven vs. code-driven
+- Community can add languages without Rust expertise
+
+**Performance:**
+- Binary size with all features: No change
+- Binary size with minimal features: **~60% reduction**
+- Build time: Slightly longer (proc macros), acceptable
+- Runtime performance: **Identical**
+
+**Scalability:**
+- Current: 9 languages
+- After Phase 7.3: 9 languages (migrated to macro)
+- After Phase 7.4: **15-20 languages**
+- Potential: **110+ languages** (via TOML only)
+
+---
+
+# Phase 8: Performance & Scalability (Weeks 24-26) ⏸️
+
+**Priority:** Medium  
+**Duration:** 2-3 weeks  
+**Dependencies:** Phase 7 complete
+
+## 8.1 Parallel Processing with Rayon 🔥
+
+### Task 8.1.1: Implement Parallel File Processing ⬜
+**Description**: Use rayon for multi-threaded file processing
+
+**Priority:** High  
+**Effort:** 2-3 hours  
+
+**Changes**:
+- Use rayon for multi-threaded file processing
+- Parallelize extraction in `pipeline/mod.rs`
+- Parallelize updates in `incremental/updater.rs`
+
+**Target Performance**:
+- Current: 10 files in ~4s (single-threaded)
+- With rayon: 10 files in ~2s (multi-threaded)
+- 100+ files: 4x speedup expected
+
+**Acceptance Criteria**:
+- [ ] `rayon` dependency already in Cargo.toml
+- [ ] Parallel extraction implemented
+- [ ] Tests pass with parallel processing
+- [ ] Benchmarks show performance improvement
+
+**Deliverables**:
+- [ ] Parallel processing implementation
+- [ ] Performance benchmarks
 - [ ] Test suite
+
+---
+
+## 8.2 Batch GraphBackend APIs ⏸️
+
+### Task 8.2.1: Implement Batch Insert APIs ⬜
+**Description**: Add batch operations to GraphBackend trait
+
+**Priority:** Nice-to-have  
+**Effort:** 1-2 hours
+
+**Changes**:
+```rust
+// Current
+for node in nodes {
+    backend.insert_node(node)?;  // Acquires lock per node
+}
+
+// Proposed
+backend.insert_nodes_batch(nodes)?;  // Single lock acquisition
+```
+
+**Impact**: 10-20% performance improvement for bulk inserts
+
+**Acceptance Criteria**:
+- [ ] Batch insert_nodes API
+- [ ] Batch insert_edges API
+- [ ] Tests for batch operations
+- [ ] Performance benchmarks
+
+**Deliverables**:
+- [ ] Batch API implementation
+- [ ] Performance comparison
+
+---
+
+## 8.3 Query Optimization ⏸️
+
+### Task 8.3.1: Optimize Graph Queries ⬜
+**Description**: Profile and optimize common query patterns
+
+**Priority:** Medium  
+**Effort:** 1-2 days
+
+**Tasks**:
+- [ ] Profile common query patterns
+- [ ] Add specialized query methods for hot paths
+- [ ] Optimize graph traversal algorithms
+- [ ] Add query result streaming for large datasets
+
+**Deliverables**:
+- [ ] Optimized query methods
+- [ ] Performance report
+- [ ] Query profiling tools
+
+---
+
+# Phase 9: Security & Production Hardening (Weeks 25-27) ⏸️
+
+**Priority:** High (for production deployment)  
+**Duration:** 2-3 weeks  
+**Dependencies:** None (can run parallel to Phase 8)
+
+## 9.1 Authentication for Web Server 🔒
+
+### Task 9.1.1: Implement API Key Authentication ⬜
+**Description**: Add authentication to web server endpoints
+
+**Priority:** Should-fix  
+**Effort:** 2-3 hours
+
+**Current State:** No auth (localhost only)
+
+**Proposed Solutions**:
+1. **API Keys** (Recommended for MVP)
+   ```rust
+   async fn auth_middleware(
+       headers: HeaderMap,
+       request: Request<Body>,
+       next: Next,
+   ) -> Response {
+       let api_key = headers.get("X-API-Key").and_then(|v| v.to_str().ok());
+       if !verify_api_key(api_key) {
+           return Response::builder()
+               .status(401)
+               .body("Unauthorized".into())
+               .unwrap();
+       }
+       next.run(request).await
+   }
+   ```
+
+2. **OAuth** (Future enhancement)
+   - GitHub/Google SSO
+   - For team deployments
+
+**Acceptance Criteria**:
+- [ ] API key authentication working
+- [ ] Configurable via environment variable or config file
+- [ ] Tests for auth middleware
+- [ ] Documentation for setup
+
+**Deliverables**:
+- [ ] Authentication middleware
+- [ ] Configuration options
+- [ ] Tests
+- [ ] Documentation
+
+---
+
+## 9.2 Rate Limiting & Security ⏸️
+
+### Task 9.2.1: Implement Rate Limiting ⬜
+**Description**: Add rate limiting for MCP endpoints
+
+**Priority:** Medium  
+**Effort:** 1-2 days
+
+**Tasks**:
+- [ ] Add rate limiting for MCP endpoints
+- [ ] Input validation for natural language queries
+- [ ] Sanitize graph query inputs
+- [ ] Add request size limits
+- [ ] Implement timeout for long-running queries
+
+**Deliverables**:
+- [ ] Rate limiting implementation
+- [ ] Input validation
+- [ ] Security tests
+
+---
+
+## 9.3 Production Deployment Guide ⏸️
+
+### Task 9.3.1: Create Deployment Documentation ⬜
+**Description**: Document production deployment best practices
+
+**Priority:** High  
+**Effort:** 1-2 days
+
+**Tasks**:
+- [ ] Docker configuration
+- [ ] Kubernetes manifests
+- [ ] Environment variable documentation
+- [ ] Monitoring & logging setup
+- [ ] Health check endpoints
+- [ ] Graceful shutdown handling
+
+**Deliverables**:
+- [ ] `DEPLOYMENT.md`
+- [ ] Docker configurations
+- [ ] Kubernetes manifests
+- [ ] Monitoring setup guide
+
+---
+
+# Phase 10: Advanced Features (Weeks 28+) ⏸️
+
+**Priority:** Low  
+**Duration:** Ongoing  
+**Dependencies:** Phases 7-9 complete
+
+**Note:** Early implementation of multi-repo support committed in Week 19. Full integration deferred.
+
+## 10.1 Multi-repo Support ⏸️
+
+### Task 10.1.1: Complete Multi-Repo Integration ⬜
+**Description**: Finish multi-repo workspace support (early implementation exists)
+
+**Effort:** 1 week (foundation already implemented)
+
+**Current Status**:
+- ✅ Multi-repo workspace detection (committed)
+- ✅ Cross-repo dependency tracking (committed)
+- ✅ Shared type analysis (committed)
+- ⏸️ Full integration with CLI
+- ⏸️ Web UI support
+- ⏸️ MCP tool integration
+
+**Remaining Work**:
+- [ ] CLI integration (`rbuilder init --workspace <path>`)
+- [ ] Web UI visualization for multi-repo graphs
+- [ ] MCP tools for cross-repo queries
+- [ ] Performance optimization for large workspaces
+
+**Deliverables**:
+- [ ] Completed CLI integration
+- [ ] Web UI updates
+- [ ] MCP tool updates
+- [ ] Documentation
+
+---
+
+## 10.2 CI/CD Integration ⏸️
+
+### Task 10.2.1: GitHub Actions Integration ⬜
+**Description**: Auto-update graph on push
+
+**Effort:** 1 week
+
+**Features**:
+- [ ] GitHub Actions integration
+- [ ] GitLab CI integration
+- [ ] Pre-commit hooks
+- [ ] PR comment automation
+- [ ] Impact analysis in CI
+
+**Deliverables**:
+- [ ] GitHub Actions workflow
+- [ ] GitLab CI configuration
+- [ ] Documentation
+
+---
+
+## 10.3 Plugin Marketplace ⏸️
+
+### Task 10.3.1: Design Plugin Marketplace ⬜
+**Description**: Community-contributed language plugins
+
+**Effort:** 2-3 weeks
+
+**Features**:
+- [ ] Plugin discovery
+- [ ] Version management
+- [ ] Security scanning for plugins
+- [ ] Publishing workflow
+
+**Deliverables**:
+- [ ] Marketplace infrastructure
+- [ ] Publishing guide
+- [ ] Security review process
+
+---
+
+## 10.4 Configuration Drift Detection ⏸️
+
+### Task 10.4.1: Implement Config Drift Detection ⬜
+**Description**: Detect config changes over time
+
+**Effort:** 1 week
+
+**Features**:
+- [ ] Detect config changes over time
+- [ ] Alert on unexpected config modifications
+- [ ] Config version history
+- [ ] Compliance checking
+
+**Deliverables**:
+- [ ] Config drift detection
+- [ ] Alerting system
+- [ ] Compliance reports
+
+---
+
+## 10.5 WebSocket Support (DEFERRED) ⏸️
+
+### Task 10.5.1: Real-time Graph Updates ⬜
+**Description**: WebSocket support for live updates
+
+**Priority:** Nice-to-have  
+**Effort:** 3-4 hours
+
+**Features**:
+- [ ] Real-time graph updates
+- [ ] Multi-user collaboration
+- [ ] Live query results
+
+**Deliverables**:
+- [ ] WebSocket server
+- [ ] Client library
+- [ ] Documentation
+
+---
+
+## 10.6 Graph Export Formats (DEFERRED) ⏸️
+
+### Task 10.6.1: Additional Export Formats ⬜
+**Description**: More graph export formats
+
+**Priority:** Nice-to-have  
+**Effort:** 1-2 hours
+
+**Formats**:
+- [ ] PNG/SVG (static images)
+- [ ] GraphML (graph exchange)
+- [ ] DOT (Graphviz)
+- [ ] JSON (raw data) - already implemented
+
+**Deliverables**:
+- [ ] Export implementations
+- [ ] CLI commands
+- [ ] Documentation
 
 ---
 
@@ -2955,15 +3793,108 @@ Project is complete when:
 
 # Next Steps
 
-1. **Review this task plan** with stakeholders
-2. **Set up project tracking** (GitHub Projects, Jira, etc.)
-3. **Begin Phase 1.1** (Project Setup)
-4. **Establish weekly review cadence**
-5. **Set up CI/CD pipeline** early
+## Immediate (Week 20 - Current)
+
+1. ✅ **Phase 1-6 Complete** - All foundation work done
+2. 🎯 **Start Phase 7.1** - Begin tree-sitter infrastructure setup
+   - Create `languages.toml` configuration
+   - Implement `build.rs` code generator
+   - Update `Cargo.toml` with feature flags
+   - Test and validate
+
+## Short-term (Weeks 21-23)
+
+3. **Complete Phase 7** - Tree-sitter refactor
+   - Week 21: Procedural macro development
+   - Week 22: Migrate existing 9 languages
+   - Week 23: Testing, docs, add 5-10 new languages
+
+## Medium-term (Weeks 24-27)
+
+4. **Phase 8** - Performance optimizations
+   - Parallel processing with rayon
+   - Batch GraphBackend APIs
+   - Query optimization
+
+5. **Phase 9** - Security & production hardening
+   - Authentication for web server
+   - Rate limiting
+   - Production deployment guide
+
+## Long-term (Weeks 28+)
+
+6. **Phase 10** - Advanced features
+   - Complete multi-repo integration
+   - CI/CD integration
+   - Plugin marketplace
+   - Config drift detection
 
 ---
 
-**Last Updated**: 2026-06-16
-**Document Version**: 1.0
-**Total Estimated Duration**: 22+ weeks
-**Total Tasks**: 100+
+## Priority Summary
+
+### Critical Path (Next 6 Weeks)
+1. ✅ **Weeks 17-19:** Phase 6 (MCP + Visualization) - DONE
+2. 🎯 **Week 20:** Phase 7.1 - Tree-sitter infrastructure (CURRENT)
+3. 🎯 **Week 21:** Phase 7.2 - Procedural macros
+4. 🎯 **Week 22:** Phase 7.3 - Language migration
+5. 🎯 **Week 23:** Phase 7.4 - Testing & docs
+6. 🔥 **Week 24:** Phase 8.1 - Parallel processing
+
+### High Priority (Weeks 24-27)
+- Phase 8: Performance optimizations
+- Phase 9: Security & auth
+- Production deployment
+
+### Medium Priority (Weeks 28+)
+- Additional language support (20 → 110+)
+- Multi-repo support (complete integration)
+- CI/CD integration
+
+### Low Priority (Backlog)
+- WebSocket support
+- Graph export formats
+- Plugin marketplace
+
+---
+
+## Decision Log
+
+### Why Phase 7 Now?
+1. **Foundation for scale:** Need this before adding 100+ languages
+2. **Community enablement:** TOML config allows non-Rust contributions
+3. **Maintenance burden:** Current approach doesn't scale
+4. **Performance:** Feature flags enable smaller binaries
+
+### Why Not Wait?
+- Each new language added manually increases migration effort
+- Technical debt compounds
+- Community wants to add languages (blocked on current architecture)
+
+### Risk Mitigation
+- Incremental migration (one language at a time)
+- Keep tests passing throughout
+- Can rollback if needed
+- Parallel development allowed (auth, perf work can continue)
+
+---
+
+**Last Updated**: June 17, 2026  
+**Document Version**: 2.0 (Consolidated from ROADMAP.md and PHASE7_PLAN.md)  
+**Current Phase**: 7.1 (Infrastructure Setup)  
+**Next Review**: June 23, 2026  
+**Total Estimated Duration**: 30+ weeks (22 weeks complete, 8+ weeks remaining)  
+**Total Tasks**: 120+  
+
+---
+
+## Document History
+
+- **v2.0** (June 17, 2026): Major update
+  - Consolidated ROADMAP.md and PHASE7_PLAN.md into single source of truth
+  - Updated status to reflect completed Phase 1-6
+  - Replaced old Phase 7 (Advanced Features) with tree-sitter refactor
+  - Added Phase 8 (Performance), Phase 9 (Security), Phase 10 (Advanced Features)
+  - Added project status section and decision log
+
+- **v1.0** (June 16, 2026): Initial detailed task plan
