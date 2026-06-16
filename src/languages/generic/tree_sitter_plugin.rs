@@ -116,7 +116,9 @@ impl LanguagePlugin for TreeSitterLanguagePlugin {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "lang-c")]
     use super::*;
+    #[cfg(feature = "lang-c")]
     use std::path::Path;
 
     #[cfg(feature = "lang-c")]

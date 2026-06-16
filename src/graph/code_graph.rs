@@ -1,7 +1,7 @@
 //! High-level code graph API
 
 use crate::error::{Error, Result};
-use crate::graph::backend::{GraphBackend, MemoryBackend};
+use crate::graph::backend::MemoryBackend;
 use crate::graph::export::{export_json, import_json, GraphSnapshot};
 use crate::graph::query;
 use crate::graph::schema::{Edge, Node, NodeType};
@@ -29,12 +29,8 @@ impl CodeGraph {
 
     /// Load nodes and edges into the graph.
     pub fn load(&mut self, nodes: Vec<Node>, edges: Vec<Edge>) -> Result<()> {
-        for node in nodes {
-            self.backend.insert_node(node)?;
-        }
-        for edge in edges {
-            self.backend.insert_edge(edge)?;
-        }
+        self.backend.insert_nodes_batch(nodes)?;
+        self.backend.insert_edges_batch(edges)?;
         Ok(())
     }
 

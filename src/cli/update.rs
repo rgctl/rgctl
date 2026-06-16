@@ -84,6 +84,7 @@ pub fn run_update(repo_root: &Path, since: Option<String>, force: bool, verbose:
             force: false,
             discovery: DiscoveryConfig::default(),
             show_progress: !verbose,
+            ..Default::default()
         },
     );
 

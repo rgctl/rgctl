@@ -208,7 +208,9 @@ pub fn parse_source(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "lang-c")]
     use super::*;
+    #[cfg(feature = "lang-c")]
     use std::path::Path;
 
     #[cfg(feature = "lang-c")]

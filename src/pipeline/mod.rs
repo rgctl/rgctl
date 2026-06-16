@@ -4,12 +4,12 @@
 
 use crate::discovery::{DiscoveryConfig, FileDiscoverer};
 use crate::error::Result;
-use crate::extraction::extractor::{Extractor, FileExtraction};
+use crate::extraction::extractor::Extractor;
 use crate::extraction::graph_builder::GraphBuilder;
 use crate::graph::code_graph::CodeGraph;
 use crate::languages::registry::LanguageRegistry;
+use crate::parallel::par_filter_map;
 use indicatif::{ProgressBar, ProgressStyle};
-use rayon::prelude::*;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -97,23 +97,14 @@ impl ProcessingPipeline {
         };
 
         let extractor = Extractor::new(Arc::clone(&self.registry));
-        let extractions: Vec<FileExtraction> = files
-            .par_iter()
-            .map(|path| {
-                let result = extractor.extract_file(path);
-                if let Some(pb) = &progress {
-                    pb.inc(1);
-                }
-                (path.clone(), result)
-            })
-            .filter_map(|(path, result)| match result {
-                Ok(extraction) => Some(extraction),
-                Err(err) => {
-                    tracing::warn!("Failed to extract {}: {}", path.display(), err);
-                    None
-                }
-            })
-            .collect();
+        let progress_ref = progress.as_ref();
+        let extractions = par_filter_map(self.config.thread_count, &files, |path| {
+            let result = extractor.extract_file(path);
+            if let Some(pb) = progress_ref {
+                pb.inc(1);
+            }
+            result.ok()
+        });
 
         if let Some(pb) = progress {
             pb.finish_with_message("done");

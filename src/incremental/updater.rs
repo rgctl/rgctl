@@ -6,13 +6,13 @@ use crate::discovery::{DiscoveryConfig, FileDiscoverer};
 use crate::error::Result;
 use crate::extraction::extractor::Extractor;
 use crate::extraction::graph_builder::GraphBuilder;
-use crate::graph::backend::GraphBackend;
 use crate::graph::code_graph::CodeGraph;
 use crate::graph::schema::EdgeType;
 use crate::incremental::file_tracker::{
     git_changed_files, relative_path, resolve_path, ChangeSet, FileTracker,
 };
 use crate::languages::registry::LanguageRegistry;
+use crate::parallel::{par_filter_map, par_map};
 use crate::pipeline::{PipelineConfig, ProcessingPipeline};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
@@ -32,6 +32,8 @@ pub struct UpdateOptions {
     pub discovery: DiscoveryConfig,
     /// Show progress during update
     pub show_progress: bool,
+    /// Optional thread count for parallel extraction
+    pub thread_count: Option<usize>,
 }
 
 /// Summary of an incremental update operation.
@@ -122,6 +124,7 @@ impl IncrementalUpdater {
             PipelineConfig {
                 discovery: self.config.discovery.clone(),
                 show_progress: self.config.show_progress,
+                thread_count: self.config.thread_count,
                 ..PipelineConfig::default()
             },
         );
@@ -251,10 +254,9 @@ impl IncrementalUpdater {
         }
 
         let extractor = Extractor::new(Arc::clone(&self.registry));
-        let extractions: Vec<_> = paths_to_update
-            .iter()
-            .filter_map(|path| extractor.extract_file(path).ok())
-            .collect();
+        let extractions = par_filter_map(self.config.thread_count, &paths_to_update, |path| {
+            extractor.extract_file(path).ok()
+        });
 
         let mut builder = GraphBuilder::new();
         extractor.populate_graph(&extractions, &mut builder)?;
@@ -264,12 +266,8 @@ impl IncrementalUpdater {
 
         {
             let backend = graph.backend_mut();
-            for node in new_nodes {
-                backend.insert_node(node)?;
-            }
-            for edge in new_edges {
-                backend.insert_edge(edge)?;
-            }
+            backend.insert_nodes_batch(new_nodes)?;
+            backend.insert_edges_batch(new_edges)?;
         }
 
         result.nodes_added = nodes_added;
@@ -299,14 +297,14 @@ impl IncrementalUpdater {
 
         let extractor = Extractor::new(Arc::clone(&self.registry));
         let symbol_index = graph.backend().build_symbol_index();
-        let mut added = 0usize;
+        let repo_root = repo_root.to_path_buf();
 
-        for path in changed_files {
+        let pending_edges = par_map(self.config.thread_count, changed_files, |path| {
             let Ok(extraction) = extractor.extract_file(path) else {
-                continue;
+                return Vec::new();
             };
 
-            let file = relative_path(repo_root, path)
+            let file = relative_path(&repo_root, path)
                 .unwrap_or_else(|_| extraction.path.to_string_lossy().to_string());
 
             let mut batch = Vec::new();
@@ -315,21 +313,31 @@ impl IncrementalUpdater {
                 let to_id = resolve_symbol(&symbol_index, &relation.to, &file);
 
                 if let (Some(from), Some(to)) = (from_id, to_id) {
-                    let edge_type = relation_type_to_edge(relation.relation_type);
-                    batch.push((from, to, edge_type));
+                    batch.push((from, to, relation_type_to_edge(relation.relation_type)));
                 }
             }
+            batch
+        });
 
+        let mut edges_to_add = Vec::new();
+        for batch in pending_edges {
+            edges_to_add.extend(batch);
+        }
+
+        let mut added = 0usize;
+        if !edges_to_add.is_empty() {
             let backend = graph.backend_mut();
-            for (from, to, edge_type) in batch {
+            let mut new_edges = Vec::new();
+            for (from, to, edge_type) in edges_to_add {
                 if !backend.has_edge(from, to, edge_type) {
-                    backend.insert_edge(crate::graph::schema::Edge::new(from, to, edge_type))?;
+                    new_edges.push(crate::graph::schema::Edge::new(from, to, edge_type));
                     added += 1;
                 }
             }
+            backend.insert_edges_batch(new_edges)?;
+            graph.backend_mut().prune_orphan_edges();
         }
 
-        graph.backend_mut().prune_orphan_edges();
         Ok(added)
     }
 }

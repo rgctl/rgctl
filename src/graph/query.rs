@@ -27,8 +27,11 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
         if parts.is_empty() {
             return backend.all_nodes();
         }
-        let mut results = execute(backend, parts[0])?;
-        for part in &parts[1..] {
+        // Intersect starting from the most selective clause (smallest result set)
+        let mut ordered = parts;
+        ordered.sort_by_key(|part| selectivity_rank(part));
+        let mut results = execute(backend, ordered[0])?;
+        for part in &ordered[1..] {
             let next = execute(backend, part)?;
             let ids: std::collections::HashSet<_> = next.iter().map(|n| n.id).collect();
             results.retain(|n| ids.contains(&n.id));
@@ -37,11 +40,7 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
     }
 
     if let Some(repo) = query.strip_prefix("repo:") {
-        let nodes = backend.all_nodes()?;
-        return Ok(nodes
-            .into_iter()
-            .filter(|n| n.get_property("repo").is_some_and(|r| r == repo))
-            .collect());
+        return backend.find_nodes_by_property("repo", repo);
     }
 
     if let Some(type_name) = query.strip_prefix("type:") {
@@ -58,8 +57,7 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
     }
 
     if let Some(suffix) = query.strip_prefix("name_suffix:") {
-        let nodes = backend.all_nodes()?;
-        return Ok(nodes.into_iter().filter(|n| n.name.ends_with(suffix)).collect());
+        return backend.find_nodes_by_name_suffix(suffix);
     }
 
     match query.to_ascii_lowercase().as_str() {
@@ -69,6 +67,38 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
         "files" | "file" => backend.find_nodes_by_type(NodeType::File),
         "config" | "configkeys" => backend.find_nodes_by_type(NodeType::ConfigKey),
         _ => backend.find_nodes(query),
+    }
+}
+
+/// Return query results in fixed-size chunks for streaming large result sets.
+pub fn execute_chunks(
+    backend: &MemoryBackend,
+    query: &str,
+    chunk_size: usize,
+) -> Result<Vec<Vec<Node>>> {
+    if chunk_size == 0 {
+        return Err(Error::InvalidQuery("chunk_size must be > 0".into()));
+    }
+    let results = execute(backend, query)?;
+    Ok(results
+        .chunks(chunk_size)
+        .map(|chunk| chunk.to_vec())
+        .collect())
+}
+
+fn selectivity_rank(part: &str) -> usize {
+    if part.starts_with("name:") {
+        0
+    } else if part.starts_with("repo:") {
+        1
+    } else if part.starts_with("type:") {
+        2
+    } else if part.starts_with("label:") {
+        3
+    } else if part.starts_with("name_suffix:") {
+        4
+    } else {
+        5
     }
 }
 
@@ -159,5 +189,19 @@ mod tests {
         let results = execute(&backend, "name_suffix:Service").unwrap();
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|n| n.name.ends_with("Service")));
+    }
+
+    #[test]
+    fn test_execute_chunks() {
+        let mut backend = MemoryBackend::new();
+        for i in 0..5 {
+            backend
+                .insert_node(Node::new(NodeType::Function, format!("fn{i}")))
+                .unwrap();
+        }
+
+        let chunks = execute_chunks(&backend, "functions", 2).unwrap();
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks.iter().map(|c| c.len()).sum::<usize>(), 5);
     }
 }

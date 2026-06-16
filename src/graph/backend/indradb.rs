@@ -50,6 +50,14 @@ impl GraphBackend for IndraDbBackend {
         self.inner.insert_edge(edge)
     }
 
+    fn insert_nodes_batch(&mut self, nodes: Vec<Node>) -> Result<()> {
+        self.inner.insert_nodes_batch(nodes)
+    }
+
+    fn insert_edges_batch(&mut self, edges: Vec<Edge>) -> Result<()> {
+        self.inner.insert_edges_batch(edges)
+    }
+
     fn delete_node(&mut self, id: Uuid) -> Result<()> {
         self.inner.delete_node(id)
     }

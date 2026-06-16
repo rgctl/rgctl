@@ -56,6 +56,7 @@ pub mod cli;
 pub mod incremental;
 pub mod output;
 pub mod pipeline;
+pub mod parallel;
 pub mod rules;
 pub mod semantic;
 pub mod multi_repo;

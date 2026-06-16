@@ -11,6 +11,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+type PropertyIndex = HashMap<String, HashMap<String, Vec<Uuid>>>;
+
 /// In-memory graph backend with secondary indexes for fast queries.
 #[derive(Debug, Clone)]
 pub struct MemoryBackend {
@@ -19,6 +21,7 @@ pub struct MemoryBackend {
     node_name_index: Arc<RwLock<HashMap<String, Vec<Uuid>>>>,
     node_type_index: Arc<RwLock<HashMap<NodeType, Vec<Uuid>>>>,
     node_label_index: Arc<RwLock<HashMap<String, Vec<Uuid>>>>,
+    node_property_index: Arc<RwLock<PropertyIndex>>,
     edge_type_index: Arc<RwLock<HashMap<EdgeType, Vec<usize>>>>,
     string_interner: StringInterner,
     query_cache: Arc<RwLock<HashMap<String, Vec<Node>>>>,
@@ -33,6 +36,7 @@ impl MemoryBackend {
             node_name_index: Arc::new(RwLock::new(HashMap::new())),
             node_type_index: Arc::new(RwLock::new(HashMap::new())),
             node_label_index: Arc::new(RwLock::new(HashMap::new())),
+            node_property_index: Arc::new(RwLock::new(HashMap::new())),
             edge_type_index: Arc::new(RwLock::new(HashMap::new())),
             string_interner: StringInterner::new(),
             query_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -82,6 +86,77 @@ impl MemoryBackend {
         } else {
             Ok(Vec::new())
         }
+    }
+
+    /// Find nodes by property key/value (indexed).
+    pub fn find_nodes_by_property(&self, key: &str, value: &str) -> Result<Vec<Node>> {
+        let index = self.node_property_index.read().unwrap();
+        if let Some(values) = index.get(key) {
+            if let Some(ids) = values.get(value) {
+                let nodes = self.nodes.read().unwrap();
+                return Ok(ids.iter().filter_map(|id| nodes.get(id).cloned()).collect());
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    /// Find nodes whose names end with the given suffix (uses name index).
+    pub fn find_nodes_by_name_suffix(&self, suffix: &str) -> Result<Vec<Node>> {
+        let index = self.node_name_index.read().unwrap();
+        let nodes = self.nodes.read().unwrap();
+        let mut results = Vec::new();
+        for (name, ids) in index.iter() {
+            if name.ends_with(suffix) {
+                for id in ids {
+                    if let Some(node) = nodes.get(id) {
+                        results.push(node.clone());
+                    }
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    /// Insert multiple nodes with a single nodes-map lock.
+    pub fn insert_nodes_batch(&mut self, nodes: Vec<Node>) -> Result<()> {
+        if nodes.is_empty() {
+            return Ok(());
+        }
+
+        let mut prepared = Vec::with_capacity(nodes.len());
+        for mut node in nodes {
+            self.intern_node(&mut node);
+            prepared.push(node);
+        }
+
+        self.index_nodes(&prepared);
+
+        let mut store = self.nodes.write().unwrap();
+        for node in prepared {
+            store.insert(node.id, node);
+        }
+        drop(store);
+        self.invalidate_cache();
+        Ok(())
+    }
+
+    /// Insert multiple edges with a single edges-map lock.
+    pub fn insert_edges_batch(&mut self, edges: Vec<Edge>) -> Result<()> {
+        if edges.is_empty() {
+            return Ok(());
+        }
+
+        let mut store = self.edges.write().unwrap();
+        let mut type_index = self.edge_type_index.write().unwrap();
+        for edge in edges {
+            let idx = store.len();
+            type_index.entry(edge.edge_type).or_default().push(idx);
+            store.push(edge);
+        }
+        drop(type_index);
+        drop(store);
+        self.invalidate_cache();
+        Ok(())
     }
 
     /// Find edges by type (indexed)
@@ -272,6 +347,7 @@ impl MemoryBackend {
         self.node_name_index.write().unwrap().clear();
         self.node_type_index.write().unwrap().clear();
         self.node_label_index.write().unwrap().clear();
+        self.node_property_index.write().unwrap().clear();
         self.edge_type_index.write().unwrap().clear();
         self.query_cache.write().unwrap().clear();
         Ok(())
@@ -297,27 +373,38 @@ impl MemoryBackend {
     }
 
     fn index_node(&self, node: &Node) {
-        self.node_name_index
-            .write()
-            .unwrap()
-            .entry(node.name.clone())
-            .or_default()
-            .push(node.id);
+        self.index_nodes(std::slice::from_ref(node));
+    }
 
-        self.node_type_index
-            .write()
-            .unwrap()
-            .entry(node.node_type)
-            .or_default()
-            .push(node.id);
+    fn index_nodes(&self, nodes: &[Node]) {
+        let mut name_index = self.node_name_index.write().unwrap();
+        let mut type_index = self.node_type_index.write().unwrap();
+        let mut label_index = self.node_label_index.write().unwrap();
+        let mut property_index = self.node_property_index.write().unwrap();
 
-        for label in &node.labels {
-            self.node_label_index
-                .write()
-                .unwrap()
-                .entry(label.clone())
+        for node in nodes {
+            name_index
+                .entry(node.name.clone())
                 .or_default()
                 .push(node.id);
+            type_index
+                .entry(node.node_type)
+                .or_default()
+                .push(node.id);
+            for label in &node.labels {
+                label_index
+                    .entry(label.clone())
+                    .or_default()
+                    .push(node.id);
+            }
+            for (key, value) in &node.properties {
+                property_index
+                    .entry(key.clone())
+                    .or_default()
+                    .entry(value.clone())
+                    .or_default()
+                    .push(node.id);
+            }
         }
     }
 
@@ -336,6 +423,13 @@ impl MemoryBackend {
         for label in &node.labels {
             if let Some(ids) = self.node_label_index.write().unwrap().get_mut(label) {
                 ids.retain(|&x| x != node.id);
+            }
+        }
+        for (key, value) in &node.properties {
+            if let Some(values) = self.node_property_index.write().unwrap().get_mut(key) {
+                if let Some(ids) = values.get_mut(value) {
+                    ids.retain(|&x| x != node.id);
+                }
             }
         }
     }
@@ -376,17 +470,15 @@ impl GraphBackend for MemoryBackend {
     }
 
     fn insert_edge(&mut self, edge: Edge) -> Result<()> {
-        let mut edges = self.edges.write().unwrap();
-        let idx = edges.len();
-        self.edge_type_index
-            .write()
-            .unwrap()
-            .entry(edge.edge_type)
-            .or_default()
-            .push(idx);
-        edges.push(edge);
-        self.invalidate_cache();
-        Ok(())
+        self.insert_edges_batch(vec![edge])
+    }
+
+    fn insert_nodes_batch(&mut self, nodes: Vec<Node>) -> Result<()> {
+        MemoryBackend::insert_nodes_batch(self, nodes)
+    }
+
+    fn insert_edges_batch(&mut self, edges: Vec<Edge>) -> Result<()> {
+        MemoryBackend::insert_edges_batch(self, edges)
     }
 
     fn delete_node(&mut self, id: Uuid) -> Result<()> {
@@ -591,5 +683,54 @@ mod tests {
         backend.clear().unwrap();
         assert_eq!(backend.node_count(), 0);
         assert_eq!(backend.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_insert_nodes_batch() {
+        let mut backend = MemoryBackend::new();
+        let nodes: Vec<_> = (0..100)
+            .map(|i| Node::new(NodeType::Function, format!("fn{i}")))
+            .collect();
+        backend.insert_nodes_batch(nodes).unwrap();
+        assert_eq!(backend.node_count(), 100);
+    }
+
+    #[test]
+    fn test_insert_edges_batch() {
+        let mut backend = MemoryBackend::new();
+        let n1 = Node::new(NodeType::Function, "a".to_string());
+        let n2 = Node::new(NodeType::Function, "b".to_string());
+        let id1 = n1.id;
+        let id2 = n2.id;
+        backend.insert_nodes_batch(vec![n1, n2]).unwrap();
+
+        backend
+            .insert_edges_batch(vec![
+                Edge::new(id1, id2, EdgeType::Calls),
+                Edge::new(id2, id1, EdgeType::Calls),
+            ])
+            .unwrap();
+        assert_eq!(backend.edge_count(), 2);
+    }
+
+    #[test]
+    fn test_find_nodes_by_property() {
+        let mut backend = MemoryBackend::new();
+        backend
+            .insert_node(
+                Node::new(NodeType::Function, "main".to_string())
+                    .with_property("repo".into(), "api".into()),
+            )
+            .unwrap();
+        backend
+            .insert_node(
+                Node::new(NodeType::Function, "other".to_string())
+                    .with_property("repo".into(), "web".into()),
+            )
+            .unwrap();
+
+        let api_nodes = backend.find_nodes_by_property("repo", "api").unwrap();
+        assert_eq!(api_nodes.len(), 1);
+        assert_eq!(api_nodes[0].name, "main");
     }
 }
