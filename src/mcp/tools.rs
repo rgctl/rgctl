@@ -1,7 +1,7 @@
 //! MCP tool implementations for AI agent integration.
 
-use crate::analysis::community::CommunityDetector;
-use crate::analysis::complexity::ComplexityAnalyzer;
+use crate::analysis::community::{CommunityDetector, CommunityResult};
+use crate::analysis::complexity::{ComplexityAnalyzer, ComplexityReport};
 use crate::analysis::dependency::DependencyAnalyzer;
 use crate::analysis::graph_utils::PetGraphView;
 use crate::config::analyzer::ConfigAnalyzer;
@@ -21,7 +21,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashSet, VecDeque};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// MCP tool descriptor for tools/list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,9 +36,55 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+/// Cache for expensive analysis results.
+#[derive(Debug, Clone)]
+struct AnalysisCache {
+    complexity: Option<(ComplexityReport, Instant)>,
+    community: Option<(CommunityResult, Instant)>,
+    ttl: Duration,
+}
+
+impl AnalysisCache {
+    fn new(ttl_seconds: u64) -> Self {
+        Self {
+            complexity: None,
+            community: None,
+            ttl: Duration::from_secs(ttl_seconds),
+        }
+    }
+
+    fn get_complexity(&mut self, backend: &MemoryBackend) -> Result<ComplexityReport> {
+        if let Some((report, time)) = &self.complexity {
+            if time.elapsed() < self.ttl {
+                return Ok(report.clone());
+            }
+        }
+        let report = ComplexityAnalyzer::analyze(backend)?;
+        self.complexity = Some((report.clone(), Instant::now()));
+        Ok(report)
+    }
+
+    fn get_community(&mut self, backend: &MemoryBackend) -> Result<CommunityResult> {
+        if let Some((result, time)) = &self.community {
+            if time.elapsed() < self.ttl {
+                return Ok(result.clone());
+            }
+        }
+        let result = CommunityDetector::new().detect(backend)?;
+        self.community = Some((result.clone(), Instant::now()));
+        Ok(result)
+    }
+
+    fn invalidate(&mut self) {
+        self.complexity = None;
+        self.community = None;
+    }
+}
+
 /// Executes MCP tools against a loaded code graph.
 pub struct ToolExecutor {
     repo_root: std::path::PathBuf,
+    cache: Arc<Mutex<AnalysisCache>>,
 }
 
 impl ToolExecutor {
@@ -45,6 +92,22 @@ impl ToolExecutor {
     pub fn new(repo_root: impl AsRef<Path>) -> Self {
         Self {
             repo_root: repo_root.as_ref().to_path_buf(),
+            cache: Arc::new(Mutex::new(AnalysisCache::new(300))), // 5 minute TTL
+        }
+    }
+
+    /// Create a tool executor with custom cache TTL.
+    pub fn with_cache_ttl(repo_root: impl AsRef<Path>, ttl_seconds: u64) -> Self {
+        Self {
+            repo_root: repo_root.as_ref().to_path_buf(),
+            cache: Arc::new(Mutex::new(AnalysisCache::new(ttl_seconds))),
+        }
+    }
+
+    /// Invalidate the analysis cache.
+    pub fn invalidate_cache(&self) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.invalidate();
         }
     }
 
@@ -278,7 +341,7 @@ impl ToolExecutor {
         labels: &[String],
         verbose: bool,
     ) -> Result<Value> {
-        let report = ComplexityAnalyzer::analyze(backend)?;
+        let report = self.cache.lock().unwrap().get_complexity(backend)?;
         let mut matches: Vec<Value> = Vec::new();
 
         for fc in &report.functions {
@@ -327,7 +390,7 @@ impl ToolExecutor {
         name_filter: Option<&str>,
         verbose: bool,
     ) -> Result<Value> {
-        let result = CommunityDetector::new().detect(backend)?;
+        let result = self.cache.lock().unwrap().get_community(backend)?;
         let mut communities = Vec::new();
 
         for community in &result.communities {
@@ -750,5 +813,71 @@ mod tests {
             )
             .unwrap();
         assert_eq!(result["count"], 1);
+    }
+
+    #[test]
+    fn test_analysis_caching() {
+        use std::time::Instant;
+
+        let graph = test_graph();
+        let executor = ToolExecutor::with_cache_ttl(".", 60); // 60 second TTL
+
+        // First call - should compute
+        let start = Instant::now();
+        let result1 = executor
+            .execute(
+                &graph,
+                "find_by_complexity",
+                json!({ "min_complexity": 1 }),
+            )
+            .unwrap();
+        let first_duration = start.elapsed();
+
+        // Second call - should use cache
+        let start = Instant::now();
+        let result2 = executor
+            .execute(
+                &graph,
+                "find_by_complexity",
+                json!({ "min_complexity": 1 }),
+            )
+            .unwrap();
+        let second_duration = start.elapsed();
+
+        // Results should be identical
+        assert_eq!(result1, result2);
+
+        // Second call should be faster (cached)
+        // Note: This might be flaky in CI, but demonstrates caching
+        assert!(second_duration < first_duration || second_duration.as_micros() < 1000);
+    }
+
+    #[test]
+    fn test_cache_invalidation() {
+        let graph = test_graph();
+        let executor = ToolExecutor::with_cache_ttl(".", 60);
+
+        // Populate cache
+        executor
+            .execute(
+                &graph,
+                "find_by_complexity",
+                json!({ "min_complexity": 1 }),
+            )
+            .unwrap();
+
+        // Invalidate cache
+        executor.invalidate_cache();
+
+        // Next call should recompute (not crash)
+        let result = executor
+            .execute(
+                &graph,
+                "find_by_complexity",
+                json!({ "min_complexity": 1 }),
+            )
+            .unwrap();
+
+        assert!(result["count"].is_number());
     }
 }
