@@ -1,4 +1,7 @@
-//! Phase 7 integration tests: multi-repo, config drift, workspace
+//! Phase 10 integration tests: multi-repo, config drift, workspace
+//!
+//! Note: This is early implementation of Phase 10 features (originally scheduled for Week 28+).
+//! Implemented ahead of schedule and will be refined after Phase 7-9 complete.
 
 use rbuilder::config::drift::compare_configs;
 use rbuilder::graph::backend::GraphBackend;
