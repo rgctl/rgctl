@@ -109,7 +109,12 @@ impl McpServer {
 
 /// Run MCP HTTP transport on the given port.
 #[cfg(feature = "mcp-server")]
-pub async fn run_http(state: AppState, port: u16, verbose: bool) -> Result<()> {
+pub async fn run_http(
+    state: AppState,
+    port: u16,
+    verbose: bool,
+    notifications: Option<crate::watch::NotificationStore>,
+) -> Result<()> {
     use axum::{
         extract::{Path as AxumPath, State},
         routing::{get, post},
@@ -122,11 +127,13 @@ pub async fn run_http(state: AppState, port: u16, verbose: bool) -> Result<()> {
     #[derive(Clone)]
     struct HttpState {
         handler: std::sync::Arc<std::sync::Mutex<McpHandler>>,
+        notifications: Option<crate::watch::NotificationStore>,
     }
 
     let handler = McpHandler::new(state);
     let http_state = HttpState {
         handler: std::sync::Arc::new(std::sync::Mutex::new(handler)),
+        notifications,
     };
 
     async fn health() -> Json<Value> {
@@ -135,6 +142,20 @@ pub async fn run_http(state: AppState, port: u16, verbose: bool) -> Result<()> {
 
     async fn list_tools() -> Json<Value> {
         Json(json!({ "tools": ToolExecutor::list_tools() }))
+    }
+
+    async fn latest_notification(State(state): State<HttpState>) -> Json<Value> {
+        let notification = state
+            .notifications
+            .as_ref()
+            .and_then(crate::watch::latest_notification);
+        match notification {
+            Some(n) => Json(json!({
+                "method": "notifications/graph_updated",
+                "params": n,
+            })),
+            None => Json(json!({ "notification": null })),
+        }
     }
 
     async fn call_tool(
@@ -186,6 +207,7 @@ pub async fn run_http(state: AppState, port: u16, verbose: bool) -> Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/tools", get(list_tools))
+        .route("/notifications/latest", get(latest_notification))
         .route("/tools/call", post(call_tool))
         .route("/tools/:name", post(call_tool_by_name))
         .route("/mcp", post(mcp_jsonrpc))

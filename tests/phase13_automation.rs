@@ -182,3 +182,95 @@ fn test_graph_update_notification_shape() {
     assert_eq!(n.files_changed.len(), 2);
     assert_eq!(n.edges_changed, 3);
 }
+
+#[test]
+fn test_critical_risk_blocks_per_config() {
+    use rbuilder::config::project::RbuilderConfig;
+    let cfg = RbuilderConfig::default();
+    assert!(cfg.hooks.block_on_risk.blocks(RiskLevel::Critical));
+    assert!(!cfg.hooks.block_on_risk.blocks(RiskLevel::Medium));
+}
+
+#[test]
+fn test_high_risk_blocked_when_configured() {
+    use rbuilder::config::project::{RbuilderConfig, RiskLevel};
+    let mut cfg = RbuilderConfig::default();
+    cfg.hooks.block_on_risk = RiskLevel::High;
+    assert!(cfg.hooks.block_on_risk.blocks(RiskLevel::Critical));
+    assert!(cfg.hooks.block_on_risk.blocks(RiskLevel::High));
+    assert!(!cfg.hooks.block_on_risk.blocks(RiskLevel::Medium));
+}
+
+#[test]
+fn test_detect_changes_json_contains_summary() {
+    let mut graph = rbuilder::CodeGraph::new();
+    let backend = graph.backend_mut();
+    let leaf = Node::new(NodeType::Function, "leaf".into()).with_file_path("f.rs".into());
+    backend.insert_node(leaf).unwrap();
+    let result = ChangeDetector::new().detect(&graph, &["f.rs".into()]).unwrap();
+    let json = serde_json::to_string(&result).unwrap();
+    assert!(json.contains("summary"));
+    assert!(json.contains("files_analyzed"));
+}
+
+#[test]
+fn test_changes_for_paths_detects_new_file() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let _graph = chain_graph_repo(&temp);
+    fs::write(root.join("src/extra.rs"), "pub fn extra() {}\n").unwrap();
+    let changes = changes_for_paths(root, &["src/extra.rs".into()]).unwrap();
+    assert!(changes.added.contains(&"src/extra.rs".to_string()));
+}
+
+#[test]
+fn test_hooks_write_rbuilder_toml_on_install() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init_git(root);
+    install_hooks(root, true).unwrap();
+    assert!(root.join("rbuilder.toml").exists());
+}
+
+#[test]
+fn test_installed_pre_commit_script_content() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init_git(root);
+    let hooks = install_hooks(root, true).unwrap();
+    let pre_commit = hooks
+        .iter()
+        .find(|p| p.ends_with("pre-commit"))
+        .unwrap();
+    let body = fs::read_to_string(pre_commit).unwrap();
+    assert!(body.contains("detect-changes"));
+    assert!(body.contains("--no-verify"));
+}
+
+#[test]
+fn test_full_workflow_modify_and_update() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let mut graph = chain_graph_repo(&temp);
+    let before = graph.node_count();
+
+    let lib = root.join("src/lib.rs");
+    fs::write(
+        &lib,
+        "pub fn a() { b(); }\npub fn b() { c(); }\npub fn c() {}\npub fn added() {}\n",
+    )
+    .unwrap();
+
+    let updater = IncrementalUpdater::with_options(
+        Arc::new(LanguageRegistry::new()),
+        UpdateOptions {
+            show_progress: false,
+            ..Default::default()
+        },
+    );
+    let result = updater
+        .update_files(&mut graph, root, &["src/lib.rs".into()])
+        .unwrap();
+    assert!(result.files_affected() >= 1);
+    assert!(graph.node_count() >= before);
+}

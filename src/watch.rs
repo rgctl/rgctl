@@ -151,10 +151,10 @@ impl WatchService {
                         last_event = Instant::now();
                     }
                 }
-                Err(RecvTimeoutError::Timeout) => {
-                    if pending.is_empty() || last_event.elapsed() < self.debounce {
-                        continue;
-                    }
+            Err(RecvTimeoutError::Timeout) => {
+                if !debounce_ready(!pending.is_empty(), last_event, self.debounce) {
+                    continue;
+                }
                     let batch: Vec<PathBuf> = pending.drain().collect();
                     let rel_paths: Vec<String> = batch
                         .iter()
@@ -195,6 +195,35 @@ impl WatchService {
 /// Notification channel for MCP graph-update events.
 #[cfg(feature = "mcp-server")]
 pub type NotificationSender = Sender<GraphUpdateNotification>;
+
+/// Shared store for the latest graph-update notification (HTTP MCP clients).
+#[cfg(feature = "mcp-server")]
+pub type NotificationStore = std::sync::Arc<std::sync::Mutex<Option<GraphUpdateNotification>>>;
+
+/// Create an empty notification store for HTTP polling clients.
+#[cfg(feature = "mcp-server")]
+pub fn new_notification_store() -> NotificationStore {
+    std::sync::Arc::new(std::sync::Mutex::new(None))
+}
+
+/// Record the latest notification for polling clients.
+#[cfg(feature = "mcp-server")]
+pub fn record_notification(store: &NotificationStore, notification: GraphUpdateNotification) {
+    if let Ok(mut guard) = store.lock() {
+        *guard = Some(notification);
+    }
+}
+
+/// Read the latest notification, if any.
+#[cfg(feature = "mcp-server")]
+pub fn latest_notification(store: &NotificationStore) -> Option<GraphUpdateNotification> {
+    store.lock().ok().and_then(|guard| guard.clone())
+}
+
+/// Returns true when a debounced batch is ready to flush.
+pub fn debounce_ready(pending: bool, last_event: Instant, debounce: Duration) -> bool {
+    pending && last_event.elapsed() >= debounce
+}
 
 /// Spawn watch mode updating shared MCP state, sending notifications.
 #[cfg(feature = "mcp-server")]
@@ -266,7 +295,7 @@ fn run_watch_loop(
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
-                if pending.is_empty() || last_event.elapsed() < debounce {
+                if !debounce_ready(!pending.is_empty(), last_event, debounce) {
                     continue;
                 }
                 let batch: Vec<PathBuf> = pending.drain().collect();
@@ -338,6 +367,8 @@ fn is_tracked_path(repo_root: &Path, path: &Path, tracked: &HashSet<PathBuf>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::event::{CreateKind, DataChange, ModifyKind};
+    use std::path::PathBuf;
 
     #[test]
     fn test_graph_update_notification() {
@@ -353,5 +384,68 @@ mod tests {
         assert_eq!(n.files_changed, vec!["a.rs"]);
         assert_eq!(n.nodes_added, 2);
         assert_eq!(n.edges_changed, 4);
+    }
+
+    #[test]
+    fn test_debounce_ready_waits_for_window() {
+        let debounce = Duration::from_millis(100);
+        let last = Instant::now() - Duration::from_millis(200);
+        assert!(debounce_ready(true, last, debounce));
+        let recent = Instant::now();
+        assert!(!debounce_ready(true, recent, debounce));
+        assert!(!debounce_ready(false, last, debounce));
+    }
+
+    #[test]
+    fn test_watch_paths_from_modify_event() {
+        let event = Event {
+            kind: EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            paths: vec![PathBuf::from("src/main.rs")],
+            attrs: Default::default(),
+        };
+        let paths = watch_paths_from_event(&event).unwrap();
+        assert_eq!(paths, vec![PathBuf::from("src/main.rs")]);
+    }
+
+    #[test]
+    fn test_watch_paths_from_create_event() {
+        let event = Event {
+            kind: EventKind::Create(CreateKind::File),
+            paths: vec![PathBuf::from("src/new.rs")],
+            attrs: Default::default(),
+        };
+        assert!(watch_paths_from_event(&event).is_some());
+    }
+
+    #[test]
+    fn test_is_tracked_path_ignores_git_and_rbuilder() {
+        let root = PathBuf::from("/repo");
+        let tracked: HashSet<PathBuf> = [root.join("src/main.rs")].into_iter().collect();
+        assert!(!is_tracked_path(
+            &root,
+            &root.join(".git/HEAD"),
+            &tracked
+        ));
+        assert!(!is_tracked_path(
+            &root,
+            &root.join(".rbuilder/graph.json"),
+            &tracked
+        ));
+    }
+
+    #[cfg(feature = "mcp-server")]
+    #[test]
+    fn test_notification_store_roundtrip() {
+        let store = new_notification_store();
+        assert!(latest_notification(&store).is_none());
+        let notification = GraphUpdateNotification {
+            timestamp: 1,
+            files_changed: vec!["a.rs".into()],
+            nodes_added: 2,
+            nodes_removed: 0,
+            edges_changed: 1,
+        };
+        record_notification(&store, notification.clone());
+        assert_eq!(latest_notification(&store), Some(notification));
     }
 }

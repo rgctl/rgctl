@@ -198,11 +198,8 @@ mod tests {
     }
 
     #[test]
-    fn test_risk_classification() {
-        assert_eq!(
-            classify_risk(85.0, &[], 50),
-            RiskLevel::Critical
-        );
+    fn test_risk_classification_critical() {
+        assert_eq!(classify_risk(85.0, &[], 50), RiskLevel::Critical);
         assert_eq!(
             classify_risk(
                 10.0,
@@ -217,5 +214,23 @@ mod tests {
             ),
             RiskLevel::Critical
         );
+    }
+
+    #[test]
+    fn test_risk_classification_medium_and_high() {
+        assert_eq!(classify_risk(65.0, &[], 50), RiskLevel::High);
+        assert_eq!(classify_risk(45.0, &[], 50), RiskLevel::Medium);
+        assert_eq!(classify_risk(10.0, &[], 50), RiskLevel::Low);
+    }
+
+    #[test]
+    fn test_detect_changes_json_roundtrip() {
+        let graph = chain_graph();
+        let result = ChangeDetector::new()
+            .detect(&graph, &["src/lib.rs".to_string()])
+            .unwrap();
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("risk_level"));
+        assert!(json.contains("max_score"));
     }
 }

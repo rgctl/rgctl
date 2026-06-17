@@ -269,5 +269,31 @@ mod tests {
         let response = handler.handle_message(request).unwrap().unwrap();
         let parsed: Value = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed["result"]["serverInfo"]["name"], "rbuilder");
+        assert!(parsed["result"]["capabilities"]["notifications"]["graph_updated"].is_object());
+    }
+
+    #[test]
+    fn test_graph_updated_notification_payload() {
+        use crate::incremental::UpdateResult;
+        use crate::watch::GraphUpdateNotification;
+        use std::time::Duration;
+
+        let notification = GraphUpdateNotification::from_result(
+            vec!["src/auth.rs".into()],
+            &UpdateResult {
+                files_changed: 1,
+                nodes_added: 2,
+                nodes_removed: 1,
+                edges_added: 1,
+                edges_removed: 0,
+                duration: Duration::from_millis(5),
+                ..Default::default()
+            },
+        );
+        let raw = graph_updated_notification(&notification).unwrap();
+        let parsed: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["method"], "notifications/graph_updated");
+        assert_eq!(parsed["params"]["files_changed"][0], "src/auth.rs");
+        assert_eq!(parsed["params"]["nodes_added"], 2);
     }
 }

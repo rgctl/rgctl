@@ -26,27 +26,36 @@ pub fn run_mcp_serve(
         }
         "http" => {
             let state = AppState::from_repo(repo_root)?;
+            let notification_store = if watch {
+                Some(crate::watch::new_notification_store())
+            } else {
+                None
+            };
             if watch {
                 let (tx, rx) = std::sync::mpsc::channel();
                 let debounce = crate::config::project::RbuilderConfig::load(repo_root)
                     .map(|c| c.watch.debounce_ms)
                     .unwrap_or(500);
-                let _handle = crate::watch::spawn_watch_with_state(state.clone_handle(), debounce, tx)?;
+                let _handle =
+                    crate::watch::spawn_watch_with_state(state.clone_handle(), debounce, tx)?;
+                let store = notification_store
+                    .as_ref()
+                    .expect("notification store")
+                    .clone();
                 std::thread::spawn(move || {
                     while let Ok(notification) = rx.recv() {
-                        eprintln!(
-                            "graph_updated: {}",
-                            serde_json::to_string(&notification).unwrap_or_default()
-                        );
+                        crate::watch::record_notification(&store, notification);
                     }
                 });
                 if verbose {
-                    eprintln!("Watch mode enabled (notifications logged to stderr)");
+                    eprintln!(
+                        "Watch mode enabled — poll GET /notifications/latest for graph updates"
+                    );
                 }
             }
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| crate::error::Error::Other(format!("Failed to start runtime: {e}")))?;
-            rt.block_on(run_http(state, port, verbose))
+            rt.block_on(run_http(state, port, verbose, notification_store))
         }
         other => Err(crate::error::Error::InvalidQuery(format!(
             "Unknown transport '{other}'. Use 'stdio' or 'http'."

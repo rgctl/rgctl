@@ -132,6 +132,15 @@ pub fn install_hooks(repo_root: &Path, force: bool) -> Result<Vec<PathBuf>> {
     Ok(written)
 }
 
+/// Installed hook names and their script bodies (for tests/docs).
+pub fn hook_templates() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("pre-commit", PRE_COMMIT),
+        ("post-commit", POST_COMMIT),
+        ("post-checkout", POST_CHECKOUT),
+    ]
+}
+
 fn write_hook(path: &Path, content: &str, force: bool) -> Result<PathBuf> {
     if path.exists() && !force {
         return Err(Error::Other(format!(
@@ -187,5 +196,50 @@ mod tests {
                 assert!(meta.permissions().mode() & 0o111 != 0);
             }
         }
+    }
+
+    #[test]
+    fn test_install_hooks_refuses_existing_without_force() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        init_git(root);
+        install_hooks(root, true).unwrap();
+        let err = install_hooks(root, false).unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn test_pre_commit_template_runs_detect_changes() {
+        let script = hook_templates()
+            .into_iter()
+            .find(|(name, _)| *name == "pre-commit")
+            .map(|(_, body)| body)
+            .unwrap();
+        assert!(script.contains("rbuilder detect-changes --json"));
+        assert!(script.contains("CRITICAL"));
+        assert!(script.contains("HIGH"));
+    }
+
+    #[test]
+    fn test_post_commit_template_updates_graph() {
+        let script = hook_templates()
+            .into_iter()
+            .find(|(name, _)| *name == "post-commit")
+            .map(|(_, body)| body)
+            .unwrap();
+        assert!(script.contains("rbuilder update --files"));
+        assert!(script.contains("diff-tree"));
+    }
+
+    #[test]
+    fn test_post_checkout_template_branch_switch() {
+        let script = hook_templates()
+            .into_iter()
+            .find(|(name, _)| *name == "post-checkout")
+            .map(|(_, body)| body)
+            .unwrap();
+        assert!(script.contains(r#""$3" != "1""#));
+        assert!(script.contains("git diff --name-only"));
+        assert!(script.contains("rbuilder update --files"));
     }
 }
