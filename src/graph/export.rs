@@ -4,7 +4,7 @@
 
 use crate::error::{Error, Result};
 use crate::graph::backend::MemoryBackend;
-use crate::graph::schema::{Edge, Node};
+use crate::graph::schema::{Edge, Node, GRAPH_SCHEMA_VERSION};
 use serde::{Deserialize, Serialize};
 
 /// Serializable graph snapshot.
@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 pub struct GraphSnapshot {
     /// rBuilder version that created the snapshot
     pub version: String,
+    /// Graph schema version (Phase 12.0)
+    #[serde(default)]
+    pub schema_version: u32,
     /// All nodes
     pub nodes: Vec<Node>,
     /// All edges
@@ -22,15 +25,23 @@ pub struct GraphSnapshot {
 pub fn export_json(backend: &MemoryBackend) -> Result<String> {
     let snapshot = GraphSnapshot {
         version: crate::VERSION.to_string(),
+        schema_version: GRAPH_SCHEMA_VERSION,
         nodes: backend.all_nodes()?,
         edges: backend.all_edges()?,
     };
     serde_json::to_string_pretty(&snapshot).map_err(|e| Error::SerdeError(e.to_string()))
 }
 
-/// Import a graph snapshot from JSON.
+/// Import a graph snapshot from JSON and migrate to the current schema.
 pub fn import_json(json: &str) -> Result<GraphSnapshot> {
-    serde_json::from_str(json).map_err(|e| Error::SerdeError(e.to_string()))
+    let mut snapshot: GraphSnapshot =
+        serde_json::from_str(json).map_err(|e| Error::SerdeError(e.to_string()))?;
+    snapshot.schema_version = crate::graph::migration::migrate_snapshot(
+        snapshot.schema_version,
+        &mut snapshot.nodes,
+        &mut snapshot.edges,
+    )?;
+    Ok(snapshot)
 }
 
 #[cfg(test)]

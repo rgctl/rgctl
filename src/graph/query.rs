@@ -14,7 +14,9 @@ use crate::graph::schema::{Node, NodeType};
 /// - `repo:backend` — filter by repository namespace (multi-repo)
 /// - `name_suffix:Service` — filter by name suffix (naming patterns)
 /// - `functions`, `classes`, `files`, `config` — common shortcuts
-/// - Compound filters with `|` — e.g. `repo:backend|type:Function`
+/// - `signature:*pattern*` — filter by signature substring (wildcards `*` supported)
+/// - `return_type:Type` — filter by return type prefix match
+/// - Compound filters with `|` — e.g. `type:Function|return_type:Result`
 /// - `all` or empty string — return all nodes
 pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
     let query = query.trim();
@@ -60,6 +62,14 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
         return backend.find_nodes_by_name_suffix(suffix);
     }
 
+    if let Some(pattern) = query.strip_prefix("signature:") {
+        return filter_nodes_by_signature(backend, pattern);
+    }
+
+    if let Some(return_type) = query.strip_prefix("return_type:") {
+        return filter_nodes_by_return_type(backend, return_type);
+    }
+
     match query.to_ascii_lowercase().as_str() {
         "functions" | "function" => backend.find_nodes_by_type(NodeType::Function),
         "classes" | "class" => backend.find_nodes_by_type(NodeType::Class),
@@ -86,22 +96,6 @@ pub fn execute_chunks(
         .collect())
 }
 
-fn selectivity_rank(part: &str) -> usize {
-    if part.starts_with("name:") {
-        0
-    } else if part.starts_with("repo:") {
-        1
-    } else if part.starts_with("type:") {
-        2
-    } else if part.starts_with("label:") {
-        3
-    } else if part.starts_with("name_suffix:") {
-        4
-    } else {
-        5
-    }
-}
-
 fn parse_node_type(value: &str) -> Result<NodeType> {
     match value.to_ascii_lowercase().as_str() {
         "function" => Ok(NodeType::Function),
@@ -118,6 +112,76 @@ fn parse_node_type(value: &str) -> Result<NodeType> {
         "import" => Ok(NodeType::Import),
         other => Err(Error::InvalidQuery(format!("Unknown node type: {other}"))),
     }
+}
+
+fn selectivity_rank(part: &str) -> usize {
+    if part.starts_with("name:") {
+        0
+    } else if part.starts_with("signature:") {
+        1
+    } else if part.starts_with("return_type:") {
+        2
+    } else if part.starts_with("repo:") {
+        3
+    } else if part.starts_with("type:") {
+        4
+    } else if part.starts_with("label:") {
+        5
+    } else if part.starts_with("name_suffix:") {
+        6
+    } else {
+        7
+    }
+}
+
+fn filter_nodes_by_signature(backend: &MemoryBackend, pattern: &str) -> Result<Vec<Node>> {
+    Ok(backend
+        .all_nodes()?
+        .into_iter()
+        .filter(|node| {
+            node.signature_text()
+                .is_some_and(|sig| signature_wildcard_match(pattern, sig))
+        })
+        .collect())
+}
+
+fn filter_nodes_by_return_type(backend: &MemoryBackend, prefix: &str) -> Result<Vec<Node>> {
+    Ok(backend
+        .all_nodes()?
+        .into_iter()
+        .filter(|node| {
+            node.return_type_text()
+                .is_some_and(|ty| ty.starts_with(prefix))
+        })
+        .collect())
+}
+
+fn signature_wildcard_match(pattern: &str, text: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+        if parts.len() == 1 {
+            return text.contains(parts[0]);
+        }
+        let mut start = 0usize;
+        for (i, part) in parts.iter().enumerate() {
+            if part.is_empty() {
+                continue;
+            }
+            if i == 0 {
+                if !text.starts_with(part) {
+                    return false;
+                }
+                start = part.len();
+            } else if i == parts.len() - 1 {
+                if !text[start..].ends_with(part) {
+                    return false;
+                }
+            } else if let Some(pos) = text[start..].find(part) {
+                start += pos + part.len();
+            } else {
+                return false;
+            }
+        }
+        true
 }
 
 #[cfg(test)]
@@ -189,6 +253,19 @@ mod tests {
         let results = execute(&backend, "name_suffix:Service").unwrap();
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|n| n.name.ends_with("Service")));
+    }
+
+    #[test]
+    fn test_query_signature_filter() {
+        let mut backend = MemoryBackend::new();
+        backend
+            .insert_node(
+                Node::new(NodeType::Function, "run".to_string())
+                    .with_signature("async fn run()"),
+            )
+            .unwrap();
+        let results = execute(&backend, "signature:*async*").unwrap();
+        assert_eq!(results.len(), 1);
     }
 
     #[test]

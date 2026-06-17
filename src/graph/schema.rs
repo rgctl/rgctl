@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// Current graph schema version (Phase 12.0 enrichment).
+pub const GRAPH_SCHEMA_VERSION: u32 = 2;
+
 /// Node types in the code knowledge graph
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NodeType {
@@ -70,6 +73,41 @@ pub enum EdgeType {
     DependsOn,
 }
 
+/// Function parameter stored on graph nodes (Phase 12.0).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphParameter {
+    /// Parameter name
+    pub name: String,
+    /// Parameter type if known
+    pub param_type: Option<String>,
+    /// Default value if any
+    pub default_value: Option<String>,
+}
+
+/// Call classification for `Calls` edges (Phase 12.0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CallType {
+    /// Direct function call `foo()`
+    Direct,
+    /// Indirect call via function pointer
+    Indirect,
+    /// Virtual / trait / interface dispatch
+    Virtual,
+    /// Macro expansion
+    Macro,
+}
+
+/// Variable access classification for `Uses` / `Modifies` edges (Phase 12.0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AccessType {
+    /// Read access
+    Read,
+    /// Write access
+    Write,
+    /// Read and write
+    ReadWrite,
+}
+
 /// Node in the code knowledge graph
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
@@ -84,6 +122,22 @@ pub struct Node {
 
     /// Fully qualified name
     pub qualified_name: Option<String>,
+
+    /// Full function/method signature (Phase 12.0)
+    #[serde(default)]
+    pub signature: Option<String>,
+
+    /// Return type if known (Phase 12.0)
+    #[serde(default)]
+    pub return_type: Option<String>,
+
+    /// Structured parameters (Phase 12.0)
+    #[serde(default)]
+    pub parameters: Vec<GraphParameter>,
+
+    /// BLAKE3 hash of symbol body for change detection (Phase 12.0)
+    #[serde(default)]
+    pub code_hash: Option<String>,
 
     /// Source file path
     pub file_path: Option<String>,
@@ -109,6 +163,10 @@ impl Node {
             node_type,
             name,
             qualified_name: None,
+            signature: None,
+            return_type: None,
+            parameters: Vec::new(),
+            code_hash: None,
             file_path: None,
             start_line: None,
             end_line: None,
@@ -134,6 +192,44 @@ impl Node {
         self.start_line = Some(start_line);
         self.end_line = Some(end_line);
         self
+    }
+
+    /// Set the function signature.
+    pub fn with_signature(mut self, signature: impl Into<String>) -> Self {
+        self.signature = Some(signature.into());
+        self
+    }
+
+    /// Set the return type.
+    pub fn with_return_type(mut self, return_type: impl Into<String>) -> Self {
+        self.return_type = Some(return_type.into());
+        self
+    }
+
+    /// Set structured parameters.
+    pub fn with_parameters(mut self, parameters: Vec<GraphParameter>) -> Self {
+        self.parameters = parameters;
+        self
+    }
+
+    /// Set the code body hash for change detection.
+    pub fn with_code_hash(mut self, code_hash: impl Into<String>) -> Self {
+        self.code_hash = Some(code_hash.into());
+        self
+    }
+
+    /// Signature text, preferring first-class field over legacy property.
+    pub fn signature_text(&self) -> Option<&str> {
+        self.signature
+            .as_deref()
+            .or_else(|| self.properties.get("signature").map(String::as_str))
+    }
+
+    /// Return type, preferring first-class field over legacy property.
+    pub fn return_type_text(&self) -> Option<&str> {
+        self.return_type
+            .as_deref()
+            .or_else(|| self.properties.get("return_type").map(String::as_str))
     }
 
     /// Add a property
@@ -171,6 +267,14 @@ pub struct Edge {
     /// Edge type
     pub edge_type: EdgeType,
 
+    /// Call kind for `Calls` edges (Phase 12.0)
+    #[serde(default)]
+    pub call_type: Option<CallType>,
+
+    /// Access kind for `Uses` / `Modifies` edges (Phase 12.0)
+    #[serde(default)]
+    pub access_type: Option<AccessType>,
+
     /// Additional properties
     pub properties: HashMap<String, String>,
 
@@ -185,6 +289,8 @@ impl Edge {
             from,
             to,
             edge_type,
+            call_type: None,
+            access_type: None,
             properties: HashMap::new(),
             weight: 1.0,
         }
@@ -193,6 +299,18 @@ impl Edge {
     /// Set the weight
     pub fn with_weight(mut self, weight: f64) -> Self {
         self.weight = weight;
+        self
+    }
+
+    /// Set call type metadata.
+    pub fn with_call_type(mut self, call_type: CallType) -> Self {
+        self.call_type = Some(call_type);
+        self
+    }
+
+    /// Set variable access metadata.
+    pub fn with_access_type(mut self, access_type: AccessType) -> Self {
+        self.access_type = Some(access_type);
         self
     }
 
@@ -218,6 +336,34 @@ mod tests {
         assert_eq!(node.name, "test_function");
         assert_eq!(node.node_type, NodeType::Function);
         assert!(node.qualified_name.is_none());
+    }
+
+    #[test]
+    fn test_node_signature_fields() {
+        let node = Node::new(NodeType::Function, "process".to_string())
+            .with_signature("fn process(data: &[u8]) -> Result<()>")
+            .with_return_type("Result<()>".to_string())
+            .with_parameters(vec![GraphParameter {
+                name: "data".to_string(),
+                param_type: Some("&[u8]".to_string()),
+                default_value: None,
+            }])
+            .with_code_hash("abc123");
+
+        assert_eq!(
+            node.signature_text(),
+            Some("fn process(data: &[u8]) -> Result<()>")
+        );
+        assert_eq!(node.return_type_text(), Some("Result<()>"));
+        assert_eq!(node.parameters.len(), 1);
+        assert_eq!(node.code_hash.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn test_edge_call_type() {
+        let edge = Edge::new(Uuid::new_v4(), Uuid::new_v4(), EdgeType::Calls)
+            .with_call_type(CallType::Virtual);
+        assert_eq!(edge.call_type, Some(CallType::Virtual));
     }
 
     #[test]

@@ -114,6 +114,7 @@ impl CodeGraph {
     pub fn snapshot(&self) -> Result<GraphSnapshot> {
         Ok(GraphSnapshot {
             version: crate::VERSION.to_string(),
+            schema_version: crate::graph::schema::GRAPH_SCHEMA_VERSION,
             nodes: self.backend.all_nodes()?,
             edges: self.backend.all_edges()?,
         })

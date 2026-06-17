@@ -81,13 +81,23 @@ impl Extractor {
     pub fn populate_graph(&self, extractions: &[FileExtraction], builder: &mut GraphBuilder) -> Result<()> {
         for extraction in extractions {
             let file_id = builder.ensure_file_node(&extraction.path);
+            let source = std::fs::read(&extraction.path).ok();
 
             for symbol in &extraction.symbols {
-                builder.add_symbol(symbol, file_id);
+                let body = source
+                    .as_ref()
+                    .and_then(|bytes| symbol_body_from_source(bytes, symbol));
+                if let Some(body) = body.as_deref() {
+                    builder.add_symbol_with_body(symbol, file_id, Some(body));
+                } else {
+                    builder.add_symbol(symbol, file_id);
+                }
 
-                if let Ok(plugin) = self.registry.get_plugin_for_file(&extraction.path) {
-                    let source = std::fs::read(&extraction.path)?;
-                    if let Some(metrics) = plugin.calculate_complexity(symbol, &source)? {
+                if let (Some(bytes), Ok(plugin)) = (
+                    source.as_ref(),
+                    self.registry.get_plugin_for_file(&extraction.path),
+                ) {
+                    if let Some(metrics) = plugin.calculate_complexity(symbol, bytes)? {
                         builder.add_complexity(symbol, &metrics);
                     }
                 }
@@ -111,6 +121,28 @@ impl Extractor {
             }
         }
         Ok(())
+    }
+}
+
+fn symbol_body_from_source(source: &[u8], symbol: &Symbol) -> Option<String> {
+    let text = std::str::from_utf8(source).ok()?;
+    let start = symbol.location.start_line.saturating_sub(1);
+    let line_count = symbol
+        .location
+        .end_line
+        .saturating_sub(symbol.location.start_line)
+        .saturating_add(1)
+        .max(1);
+    let body: String = text
+        .lines()
+        .skip(start)
+        .take(line_count)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if body.is_empty() {
+        None
+    } else {
+        Some(body)
     }
 }
 

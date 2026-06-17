@@ -37,6 +37,9 @@ pub mod languages;
 // Graph layer
 pub mod graph;
 
+// Graph query language (Phase 12.4)
+pub mod gql;
+
 // Analysis layer
 pub mod analysis;
 pub mod config;

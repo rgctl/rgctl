@@ -2,6 +2,8 @@
 
 use crate::error::Result;
 use crate::graph::schema::{Edge, EdgeType, Node, NodeType};
+use crate::graph::code_index::{hash_code, CodeIndex};
+use crate::graph::migration::graph_parameter_from_plugin;
 use crate::languages::plugin_trait::{ComplexityMetrics, ConfigKey, Relation, RelationType, Symbol, SymbolType};
 use std::collections::HashMap;
 use std::path::Path;
@@ -16,6 +18,7 @@ pub struct GraphBuilder {
     env_nodes: HashMap<String, Uuid>,
     nodes: Vec<Node>,
     edges: Vec<Edge>,
+    code_index: Option<CodeIndex>,
 }
 
 impl GraphBuilder {
@@ -48,8 +51,28 @@ impl GraphBuilder {
         id
     }
 
+    /// Attach a code index for body hashing during symbol insertion.
+    pub fn set_code_index(&mut self, index: CodeIndex) {
+        self.code_index = Some(index);
+    }
+
+    /// Mutable access to the optional code index.
+    pub fn code_index_mut(&mut self) -> Option<&mut CodeIndex> {
+        self.code_index.as_mut()
+    }
+
     /// Add a symbol node linked to its file.
     pub fn add_symbol(&mut self, symbol: &Symbol, file_id: Uuid) -> Uuid {
+        self.add_symbol_with_body(symbol, file_id, None)
+    }
+
+    /// Add a symbol node and optionally hash its body for change detection.
+    pub fn add_symbol_with_body(
+        &mut self,
+        symbol: &Symbol,
+        file_id: Uuid,
+        body: Option<&str>,
+    ) -> Uuid {
         let key = symbol_key(&symbol.location.file, &symbol.name, symbol.qualified_name.as_deref());
         if let Some(id) = self.symbol_index.get(&key) {
             return *id;
@@ -63,15 +86,28 @@ impl GraphBuilder {
             node = node.with_qualified_name(qn.clone());
         }
         if let Some(sig) = &symbol.signature {
-            node = node.with_property("signature".to_string(), sig.clone());
+            node = node.with_signature(sig.clone());
         }
         if let Some(ret) = &symbol.return_type {
-            node = node.with_property("return_type".to_string(), ret.clone());
+            node = node.with_return_type(ret.clone());
         }
         if !symbol.parameters.is_empty() {
-            if let Ok(params_json) = serde_json::to_string(&symbol.parameters) {
-                node = node.with_property("parameters".to_string(), params_json);
-            }
+            node = node.with_parameters(
+                symbol
+                    .parameters
+                    .iter()
+                    .cloned()
+                    .map(graph_parameter_from_plugin)
+                    .collect(),
+            );
+        }
+        if let Some(body) = body {
+            let code_hash = if let Some(index) = self.code_index.as_mut() {
+                index.add_code(body, &symbol.location)
+            } else {
+                hash_code(body)
+            };
+            node = node.with_code_hash(code_hash);
         }
         if !symbol.modifiers.is_empty() {
             node = node.with_property("modifiers".to_string(), symbol.modifiers.join(" "));
@@ -206,6 +242,11 @@ impl GraphBuilder {
 
     fn add_edge(&mut self, from: Uuid, to: Uuid, edge_type: EdgeType) {
         self.edges.push(Edge::new(from, to, edge_type));
+    }
+
+    /// Borrow built nodes (testing / inspection).
+    pub fn nodes(&self) -> &[Node] {
+        &self.nodes
     }
 
     /// Consume the builder and return all nodes and edges.

@@ -41,16 +41,31 @@ impl SignatureExtractor {
             return None;
         }
 
-        let params = node
-            .get_property("parameters")
-            .map(|p| parse_params_json(p))
-            .unwrap_or_default();
+        let params = if !node.parameters.is_empty() {
+            node.parameters
+                .iter()
+                .map(|p| Param {
+                    name: p.name.clone(),
+                    type_: p
+                        .param_type
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                })
+                .collect()
+        } else {
+            node
+                .get_property("parameters")
+                .map(|p| parse_params_json(p))
+                .unwrap_or_default()
+        };
 
         Some(FunctionSignature {
             name: node.name.clone(),
             module: node.qualified_name.clone(),
             params,
-            return_type: node.get_property("return_type").cloned(),
+            return_type: node
+                .return_type_text()
+                .map(str::to_string),
             file_path: node.file_path.clone(),
         })
     }

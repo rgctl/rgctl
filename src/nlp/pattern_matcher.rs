@@ -96,6 +96,45 @@ impl PatternMatcher {
         self
     }
 
+    /// Translate using the dual-agent example matcher first, then fall back to templates/cache.
+    #[cfg(feature = "nlp-patterns")]
+    pub fn translate_with_dual_agent(&self, question: &str) -> Result<TranslatedQuery> {
+        use crate::nlp::dual_agent::{DualTranslationMethod, TranslationAgent};
+
+        let agent = TranslationAgent::new(0.82).with_pattern_matcher(self.clone_for_fallback());
+        let (pattern, method, confidence) = agent.translate(question)?;
+
+        let dual_method = match method {
+            DualTranslationMethod::ExampleMatch => TranslationMethod::PatternBased,
+            DualTranslationMethod::PatternMatcherFallback => TranslationMethod::Heuristic,
+            DualTranslationMethod::Llm => TranslationMethod::PatternBased,
+        };
+
+        let (operation, internal_query) = parse_dual_pattern(&pattern);
+        let intent_result = self.classifier.classify(question);
+
+        Ok(TranslatedQuery {
+            question: question.to_string(),
+            operation,
+            internal_query,
+            description: format!("Dual-agent translation ({method:?})"),
+            confidence,
+            method: dual_method,
+            intent: intent_result.intent,
+        })
+    }
+
+    #[cfg(feature = "nlp-patterns")]
+    fn clone_for_fallback(&self) -> Self {
+        Self {
+            classifier: IntentClassifier::new(),
+            extractor: EntityExtractor::new(),
+            templates: QueryTemplates::new(),
+            cache: QueryCache::bootstrap_default(),
+            domain: self.domain.clone(),
+        }
+    }
+
     /// Translate a question to an internal query representation.
     pub fn translate(&self, question: &str) -> Result<TranslatedQuery> {
         let intent_result = self.classifier.classify(question);
@@ -420,6 +459,30 @@ fn normalize_node_type(raw: &str) -> String {
                 Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
             }
         }
+    }
+}
+
+#[cfg(feature = "nlp-patterns")]
+fn parse_dual_pattern(pattern: &str) -> (String, String) {
+    let params: std::collections::HashMap<_, _> = pattern
+        .split('|')
+        .filter_map(|part| part.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+    if let Some(op) = params.get("operation") {
+        let internal = params
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("|");
+        return (op.clone(), internal);
+    }
+
+    if pattern.contains('=') && !pattern.contains(':') {
+        ("find".to_string(), pattern.to_string())
+    } else {
+        ("find".to_string(), format!("query={pattern}"))
     }
 }
 

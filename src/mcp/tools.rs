@@ -1,9 +1,13 @@
 //! MCP tool implementations for AI agent integration.
 
+use crate::analysis::blast_radius::BlastRadiusAnalyzer;
 use crate::analysis::community::{CommunityDetector, CommunityResult};
 use crate::analysis::complexity::{ComplexityAnalyzer, ComplexityReport};
 use crate::analysis::dependency::DependencyAnalyzer;
 use crate::analysis::graph_utils::PetGraphView;
+use crate::analysis::{
+    build_cfg_for_function, BackwardSlicer, ProgramDependenceGraph, SliceCriterion,
+};
 use crate::config::analyzer::ConfigAnalyzer;
 use crate::config::secret_detector::SecretDetector;
 use crate::discovery::FileDiscoverer;
@@ -14,12 +18,14 @@ use crate::graph::schema::Node;
 use crate::graph::CodeGraph;
 use crate::incremental::file_tracker::{git_changed_files, FileTracker};
 use crate::languages::registry::LanguageRegistry;
+use crate::gql::{execute, execute_explain, execute_macro, QueryMacroRegistry};
+use crate::nlp::dual_agent::DualAgentQuerySystem;
 use crate::nlp::pattern_matcher::{PatternMatcher, QueryResult};
 use crate::semantic::signature::SignatureExtractor;
 use petgraph::Direction;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -204,6 +210,48 @@ impl ToolExecutor {
                     }
                 }),
             },
+            ToolDefinition {
+                name: "blast_radius".into(),
+                description: "PDG-enhanced blast radius: score, callers, and data-flow depth for a symbol change".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string", "description": "Function or class name" },
+                        "depth": { "type": "integer", "description": "Max transitive caller depth (default 10)" },
+                        "include_verbose": { "type": "boolean" }
+                    },
+                    "required": ["symbol"]
+                }),
+            },
+            ToolDefinition {
+                name: "backward_slice".into(),
+                description: "Backward program slice: lines that affect a variable at a source line".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "file": { "type": "string", "description": "Source file path" },
+                        "line": { "type": "integer", "description": "Line number (1-based)" },
+                        "variable": { "type": "string", "description": "Variable name" },
+                        "function": { "type": "string", "description": "Function name (optional)" },
+                        "language": { "type": "string", "description": "rust or python (optional)" },
+                        "include_verbose": { "type": "boolean" }
+                    },
+                    "required": ["file", "line", "variable"]
+                }),
+            },
+            ToolDefinition {
+                name: "gql_query".into(),
+                description: "Execute graph query language (GQL) against the code graph".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "GQL query string" },
+                        "macro_name": { "type": "string", "description": "Named macro instead of query" },
+                        "explain": { "type": "boolean", "description": "Include execution plan" },
+                        "include_verbose": { "type": "boolean" }
+                    }
+                }),
+            },
         ]
     }
 
@@ -281,27 +329,109 @@ impl ToolExecutor {
                 let since = args.get("since").and_then(|v| v.as_str());
                 self.diff_analysis(since, verbose)
             }
+            "blast_radius" => {
+                let symbol = args
+                    .get("symbol")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::InvalidQuery("Missing symbol".into()))?;
+                let depth = args
+                    .get("depth")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(10) as usize;
+                self.blast_radius(backend, symbol, depth, verbose)
+            }
+            "backward_slice" => {
+                let file = args
+                    .get("file")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::InvalidQuery("Missing file".into()))?;
+                let line = args
+                    .get("line")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| Error::InvalidQuery("Missing line".into()))?
+                    as usize;
+                let variable = args
+                    .get("variable")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::InvalidQuery("Missing variable".into()))?;
+                let function = args.get("function").and_then(|v| v.as_str());
+                let language = args.get("language").and_then(|v| v.as_str());
+                self.backward_slice(file, line, variable, function, language, verbose)
+            }
+            "gql_query" => {
+                let query = args.get("query").and_then(|v| v.as_str());
+                let macro_name = args.get("macro_name").and_then(|v| v.as_str());
+                let explain = args.get("explain").and_then(|v| v.as_bool()).unwrap_or(false);
+                self.gql_query(backend, query, macro_name, explain, verbose)
+            }
             other => Err(Error::InvalidQuery(format!("Unknown tool: {other}"))),
         }
     }
 
     fn query_codebase(&self, backend: &MemoryBackend, question: &str, verbose: bool) -> Result<Value> {
         let matcher = PatternMatcher::from_graph(backend)?;
-        let translated = matcher.translate(question)?;
-        let result = matcher.execute(&translated, backend)?;
+        let lower = question.to_lowercase();
+        let use_dual = lower.contains(" and ")
+            || lower.contains("security")
+            || lower.contains("authentication")
+            || lower.contains("impact")
+            || lower.contains("callers");
 
-        let answer = format_query_result(&result);
+        let (answer, confidence, sub_query_count, dual, fallback_results) = if use_dual {
+            let dual = DualAgentQuerySystem::new().query(question, backend)?;
+            let answer = dual.answer_lines.join("\n");
+            (
+                answer,
+                dual.confidence,
+                dual.context.sub_queries.len(),
+                Some(dual),
+                None,
+            )
+        } else {
+            let translated = matcher.translate(question)?;
+            let result = matcher.execute(&translated, backend)?;
+            let answer = format_query_result(&result);
+            let results = if verbose {
+                Some(query_result_to_json(&result, true))
+            } else {
+                None
+            };
+            (
+                answer,
+                translated.confidence,
+                0usize,
+                None,
+                results,
+            )
+        };
+
         let mut response = json!({
             "answer": answer,
-            "query": translated.internal_query,
-            "confidence": translated.confidence,
-            "intent": format!("{:?}", translated.intent),
+            "confidence": confidence,
+            "sub_queries": sub_query_count,
         });
 
-        if verbose {
-            response["results"] = query_result_to_json(&result, true);
-        } else {
-            response["results"] = query_result_to_json(&result, false);
+        if let Some(results) = fallback_results {
+            response["results"] = results;
+        }
+
+        if let Some(dual) = dual {
+            if verbose {
+                response["sub_query_details"] = json!(dual
+                    .context
+                    .sub_queries
+                    .iter()
+                    .map(|sq| json!({
+                        "question": sq.natural_language,
+                        "pattern": sq.translated_pattern,
+                        "results": sq.results.len(),
+                    }))
+                    .collect::<Vec<_>>());
+                response["nodes"] = json!(dual.nodes.iter().map(|n| json!({
+                    "name": n.name,
+                    "type": format!("{:?}", n.node_type),
+                })).collect::<Vec<_>>());
+            }
         }
 
         Ok(response)
@@ -329,6 +459,159 @@ impl ToolExecutor {
         if !verbose {
             response["direct_dependencies"] = json!(direct.iter().take(10).collect::<Vec<_>>());
             response["indirect_dependencies"] = json!(indirect.iter().take(10).collect::<Vec<_>>());
+        }
+
+        Ok(response)
+    }
+
+    fn blast_radius(
+        &self,
+        backend: &MemoryBackend,
+        symbol: &str,
+        depth: usize,
+        verbose: bool,
+    ) -> Result<Value> {
+        let report = BlastRadiusAnalyzer::new(backend)
+            .with_max_depth(depth)
+            .analyze(symbol)?;
+
+        let mut response = json!({
+            "symbol": symbol,
+            "score": report.score,
+            "direct_callers": report.direct_callers.len(),
+            "impact_zone_size": report.impact_zone.len(),
+            "data_flow_depth": report.data_flow_depth,
+            "severity": if report.score > 70.0 { "critical" }
+                else if report.score > 40.0 { "high" }
+                else if report.score > 15.0 { "medium" }
+                else { "low" },
+        });
+
+        if verbose {
+            response["direct_callers"] = json!(report.direct_callers);
+            response["impact_zone"] = json!(report.impact_zone);
+            response["data_flow_impact"] = json!(report
+                .data_flow_impact
+                .iter()
+                .map(|d| json!({
+                    "caller": d.caller_name,
+                    "depth": d.depth,
+                }))
+                .collect::<Vec<_>>());
+        } else {
+            response["direct_callers"] = json!(report.direct_callers.iter().take(10).collect::<Vec<_>>());
+            response["impact_zone_sample"] = json!(report.impact_zone.iter().take(10).collect::<Vec<_>>());
+        }
+
+        Ok(response)
+    }
+
+    fn backward_slice(
+        &self,
+        file: &str,
+        line: usize,
+        variable: &str,
+        function: Option<&str>,
+        language: Option<&str>,
+        verbose: bool,
+    ) -> Result<Value> {
+        let path = if std::path::Path::new(file).is_absolute() {
+            std::path::PathBuf::from(file)
+        } else {
+            self.repo_root.join(file)
+        };
+        let source = std::fs::read_to_string(&path)?;
+        let lang = language.map(str::to_string).unwrap_or_else(|| {
+            match path.extension().and_then(|e| e.to_str()) {
+                Some("py") => "python".to_string(),
+                _ => "rust".to_string(),
+            }
+        });
+        let fn_name = function.map(str::to_string).unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("main")
+                .to_string()
+        });
+
+        let cfg = build_cfg_for_function(&lang, &source, &fn_name)?;
+        let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
+        let slice = BackwardSlicer::new(&pdg, &cfg).slice(SliceCriterion {
+            variable: variable.to_string(),
+            line,
+        })?;
+
+        let mut lines: Vec<usize> = slice.lines.into_iter().collect();
+        lines.sort_unstable();
+
+        let mut response = json!({
+            "file": path.display().to_string(),
+            "line": line,
+            "variable": variable,
+            "function": fn_name,
+            "language": lang,
+            "reduction_percent": slice.reduction_percent,
+            "total_lines": lines.len(),
+            "slice_lines": lines,
+        });
+
+        if verbose {
+            response["cfg_dot"] = json!(cfg.to_dot());
+            response["statement_count"] = json!(slice.statements.len());
+        }
+
+        Ok(response)
+    }
+
+    fn gql_query(
+        &self,
+        backend: &MemoryBackend,
+        query: Option<&str>,
+        macro_name: Option<&str>,
+        explain: bool,
+        verbose: bool,
+    ) -> Result<Value> {
+        let registry = QueryMacroRegistry::with_defaults();
+        let result = match (query, macro_name) {
+            (None, Some(name)) => execute_macro(backend, &registry, name)?,
+            (Some(q), None) if explain => execute_explain(backend, q)?,
+            (Some(q), None) => execute(backend, q)?,
+            (Some(_), Some(_)) => {
+                return Err(Error::InvalidQuery(
+                    "Provide either query or macro_name, not both".into(),
+                ));
+            }
+            (None, None) => {
+                return Err(Error::InvalidQuery(
+                    "Missing query or macro_name".into(),
+                ));
+            }
+        };
+
+        let rows: Vec<Value> = result
+            .rows
+            .iter()
+            .map(|row| {
+                json!(row
+                    .iter()
+                    .map(|(var, node)| (var.clone(), node.name.clone()))
+                    .collect::<HashMap<_, _>>())
+            })
+            .collect();
+
+        let mut response = json!({
+            "row_count": result.rows.len(),
+            "rows": if verbose { json!(rows) } else { json!(rows.iter().take(20).collect::<Vec<_>>()) },
+        });
+
+        if explain {
+            if let Some(plan) = result.plan {
+                response["explain"] = json!(plan
+                    .steps
+                    .iter()
+                    .map(|s| json!({ "operation": s.operation, "detail": s.detail }))
+                    .collect::<Vec<_>>());
+            }
         }
 
         Ok(response)

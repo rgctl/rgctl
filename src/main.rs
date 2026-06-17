@@ -78,9 +78,59 @@ enum Commands {
         #[arg(long)]
         explain: bool,
 
+        /// Use dual-agent query decomposition (Phase 12.3)
+        #[arg(long)]
+        dual_agent: bool,
+
         /// Output format
         #[arg(long, value_enum, default_value = "text")]
         format: OutputFormat,
+    },
+
+    /// Backward program slice for a variable at a source line (Phase 12.1)
+    Slice {
+        /// Source file path
+        file: String,
+
+        /// Line number (1-based)
+        #[arg(long)]
+        line: usize,
+
+        /// Variable of interest
+        #[arg(long)]
+        variable: String,
+
+        /// Function name (inferred from file when omitted)
+        #[arg(long)]
+        function: Option<String>,
+
+        /// Language override (rust, python)
+        #[arg(long)]
+        language: Option<String>,
+    },
+
+    /// Execute graph query language (GQL) against the indexed graph (Phase 12.4)
+    Gql {
+        /// GQL query string
+        query: String,
+
+        /// Show execution plan
+        #[arg(long)]
+        explain: bool,
+
+        /// Named query macro (e.g. all_functions, direct_calls)
+        #[arg(long)]
+        macro_name: Option<String>,
+    },
+
+    /// PDG-enhanced blast radius for a symbol (Phase 12.2)
+    BlastRadius {
+        /// Symbol name
+        symbol: String,
+
+        /// Maximum transitive caller depth
+        #[arg(long, default_value = "10")]
+        depth: usize,
     },
 
     /// Interactive conversational mode
@@ -394,6 +444,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Ask {
             question,
             explain,
+            dual_agent,
             format,
         } => {
             use rbuilder::graph::CodeGraph;
@@ -403,7 +454,30 @@ fn main() -> anyhow::Result<()> {
 
             let graph = CodeGraph::load_from_repo(Path::new("."))?;
             let matcher = PatternMatcher::from_graph(graph.backend())?;
-            let translated = matcher.translate(&question)?;
+
+            if dual_agent {
+                use rbuilder::nlp::dual_agent::DualAgentQuerySystem;
+
+                let dual = DualAgentQuerySystem::new().query(&question, graph.backend())?;
+                let answer = dual.answer_lines.join("\n");
+                if explain {
+                    println!("Answer: {answer}");
+                    for sq in &dual.context.sub_queries {
+                        println!(
+                            "  - {} => {} ({} results)",
+                            sq.natural_language,
+                            sq.translated_pattern.as_deref().unwrap_or("?"),
+                            sq.results.len() + sq.text_results.len()
+                        );
+                    }
+                    println!();
+                } else {
+                    println!("{answer}");
+                }
+                return Ok(());
+            }
+
+            let translated = matcher.translate_with_dual_agent(&question)?;
 
             if explain {
                 println!("Intent: {:?}", translated.intent);
@@ -744,6 +818,122 @@ fn main() -> anyhow::Result<()> {
                         println!("  - {} ({score:.4})", node.name);
                     }
                 }
+            }
+            Ok(())
+        }
+
+        Commands::Slice {
+            file,
+            line,
+            variable,
+            function,
+            language,
+        } => {
+            use rbuilder::analysis::{
+                build_cfg_for_function, BackwardSlicer, ProgramDependenceGraph, SliceCriterion,
+            };
+            use std::fs;
+            use std::path::Path;
+
+            let path = Path::new(&file);
+            let source = fs::read_to_string(path)?;
+            let lang = language.unwrap_or_else(|| {
+                match path.extension().and_then(|e| e.to_str()) {
+                    Some("py") => "python".to_string(),
+                    _ => "rust".to_string(),
+                }
+            });
+            let fn_name = function.unwrap_or_else(|| {
+                if lang == "python" {
+                    "process".to_string()
+                } else {
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("main")
+                        .to_string()
+                }
+            });
+
+            let cfg = build_cfg_for_function(&lang, &source, &fn_name)?;
+            let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
+            let slice = BackwardSlicer::new(&pdg, &cfg).slice(SliceCriterion {
+                variable,
+                line,
+            })?;
+
+            println!(
+                "Backward slice for {}:{} (variable: {})",
+                path.display(),
+                slice.criterion.line,
+                slice.criterion.variable
+            );
+            println!("Reduction: {:.1}%", slice.reduction_percent);
+            println!("Relevant lines:");
+            let mut lines: Vec<_> = slice.lines.into_iter().collect();
+            lines.sort_unstable();
+            for ln in lines {
+                println!("  {ln}");
+            }
+            Ok(())
+        }
+
+        Commands::Gql {
+            query,
+            explain,
+            macro_name,
+        } => {
+            use rbuilder::gql::{execute, execute_explain, execute_macro, QueryMacroRegistry};
+            use rbuilder::graph::CodeGraph;
+            use std::path::Path;
+
+            let graph = CodeGraph::load_from_repo(Path::new("."))?;
+            let backend = graph.backend();
+            let registry = QueryMacroRegistry::with_defaults();
+
+            let result = if let Some(name) = macro_name {
+                execute_macro(backend, &registry, &name)?
+            } else if explain {
+                execute_explain(backend, &query)?
+            } else {
+                execute(backend, &query)?
+            };
+
+            if explain {
+                if let Some(plan) = result.plan {
+                    for step in &plan.steps {
+                        println!("{}: {}", step.operation, step.detail);
+                    }
+                    println!();
+                }
+            }
+
+            for row in &result.rows {
+                let names: Vec<_> = row
+                    .values()
+                    .map(|binding| binding.name.clone())
+                    .collect();
+                println!("{}", names.join(" -> "));
+            }
+            Ok(())
+        }
+
+        Commands::BlastRadius { symbol, depth } => {
+            use rbuilder::analysis::BlastRadiusAnalyzer;
+            use rbuilder::graph::CodeGraph;
+            use std::path::Path;
+
+            let graph = CodeGraph::load_from_repo(Path::new("."))?;
+            let report = BlastRadiusAnalyzer::new(graph.backend())
+                .with_max_depth(depth)
+                .analyze(&symbol)?;
+
+            println!("Blast radius for '{symbol}'");
+            println!("  Score: {:.1}/100", report.score);
+            println!("  Direct callers: {}", report.direct_callers.len());
+            println!("  Impact zone: {}", report.impact_zone.len());
+            println!("  Data-flow depth: {}", report.data_flow_depth);
+            if !report.direct_callers.is_empty() {
+                println!("  Callers: {}", report.direct_callers.join(", "));
             }
             Ok(())
         }
