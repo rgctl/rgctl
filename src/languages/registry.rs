@@ -94,6 +94,39 @@ impl LanguageRegistry {
 
     /// Get a language plugin for a file path
     pub fn get_plugin_for_file(&self, file_path: &Path) -> Result<Arc<dyn LanguagePlugin>> {
+        let path_str = file_path.to_string_lossy().replace('\\', "/");
+
+        // Path-sensitive CI plugins (share .yml/.yaml with config handlers).
+        if path_str.contains(".github/workflows/") {
+            if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
+                if ext == "yml" || ext == "yaml" {
+                    if let Some(plugin) = self.language_plugins.get("github_actions") {
+                        return Ok(Arc::clone(plugin));
+                    }
+                }
+            }
+        }
+        if file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n == ".gitlab-ci.yml" || n.ends_with(".gitlab-ci.yml"))
+        {
+            if let Some(plugin) = self.language_plugins.get("gitlab_ci") {
+                return Ok(Arc::clone(plugin));
+            }
+        }
+
+        // Dockerfile has no extension.
+        if file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case("dockerfile"))
+        {
+            if let Some(plugin) = self.language_plugins.get("dockerfile") {
+                return Ok(Arc::clone(plugin));
+            }
+        }
+
         if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
             self.extension_map
                 .get(ext)
@@ -108,6 +141,18 @@ impl LanguageRegistry {
 
     /// Get a config plugin for a file path
     pub fn get_config_plugin_for_file(&self, file_path: &Path) -> Result<Arc<dyn ConfigFormatPlugin>> {
+        let path_str = file_path.to_string_lossy().replace('\\', "/");
+        if path_str.contains(".github/workflows/")
+            || file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.contains("gitlab-ci"))
+        {
+            return Err(Error::UnsupportedLanguage(
+                file_path.to_string_lossy().to_string(),
+            ));
+        }
+
         if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
             self.config_extension_map
                 .get(ext)
@@ -122,11 +167,10 @@ impl LanguageRegistry {
 
     /// Check if a file can be processed (either as code or config)
     pub fn can_process_file(&self, file_path: &Path) -> bool {
-        if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
-            self.extension_map.contains_key(ext) || self.config_extension_map.contains_key(ext)
-        } else {
-            false
+        if self.get_plugin_for_file(file_path).is_ok() {
+            return true;
         }
+        self.get_config_plugin_for_file(file_path).is_ok()
     }
 
     /// List all supported language IDs
@@ -272,18 +316,32 @@ mod tests {
         assert!(registry.can_process_file(Path::new("test.rs")));
     }
 
+    #[cfg(all(feature = "bundle-minimal", not(feature = "bundle-extended")))]
+    #[test]
+    fn test_minimal_bundle_language_count() {
+        let registry = LanguageRegistry::new();
+        assert_eq!(registry.stats().language_plugins, 5);
+    }
+
+    #[cfg(all(feature = "bundle-extended", not(feature = "bundle-full")))]
+    #[test]
+    fn test_extended_bundle_language_count() {
+        let registry = LanguageRegistry::new();
+        assert_eq!(registry.stats().language_plugins, 18);
+    }
+
     #[cfg(all(feature = "bundle-full", not(feature = "bundle-extra")))]
     #[test]
     fn test_full_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        assert_eq!(registry.stats().language_plugins, 9);
+        assert_eq!(registry.stats().language_plugins, 28);
     }
 
     #[cfg(feature = "bundle-extra")]
     #[test]
     fn test_extra_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        assert_eq!(registry.stats().language_plugins, 13);
+        assert_eq!(registry.stats().language_plugins, 41);
     }
 
     #[cfg(feature = "lang-javascript")]

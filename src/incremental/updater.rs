@@ -366,6 +366,7 @@ fn relation_type_to_edge(
         RelationType::References => EdgeType::References,
         RelationType::Instantiates => EdgeType::Instantiates,
         RelationType::Modifies => EdgeType::Modifies,
+        RelationType::DependsOn => EdgeType::DependsOn,
     }
 }
 

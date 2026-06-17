@@ -239,6 +239,10 @@ fn symbol_type_to_node_type(symbol_type: SymbolType) -> NodeType {
         SymbolType::TypeAlias => NodeType::TypeAlias,
         SymbolType::Macro => NodeType::Macro,
         SymbolType::Import => NodeType::Import,
+        SymbolType::Table => NodeType::Table,
+        SymbolType::Dependency => NodeType::Dependency,
+        SymbolType::Job => NodeType::Job,
+        SymbolType::BuildStep => NodeType::BuildStep,
     }
 }
 
@@ -252,6 +256,7 @@ fn relation_type_to_edge_type(relation_type: RelationType) -> EdgeType {
         RelationType::References => EdgeType::References,
         RelationType::Instantiates => EdgeType::Instantiates,
         RelationType::Modifies => EdgeType::Modifies,
+        RelationType::DependsOn => EdgeType::DependsOn,
     }
 }
 

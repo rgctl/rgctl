@@ -72,7 +72,7 @@ impl FileDiscoverer {
 
     /// Recursively discover processable files under `root`.
     ///
-    /// Respects `.gitignore`, skips hidden directories (including `.git`), filters by
+    /// Respects `.gitignore`, indexes dot-directories such as `.github/workflows/`, filters by
     /// supported extensions, and applies size/binary checks.
     pub fn discover(&self, root: &Path) -> Result<Vec<PathBuf>> {
         if !root.exists() {
@@ -93,6 +93,7 @@ impl FileDiscoverer {
         let walker = WalkBuilder::new(root)
             .follow_links(false)
             .require_git(false)
+            .hidden(false)
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)

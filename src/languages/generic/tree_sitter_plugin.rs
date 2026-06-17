@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn test_tree_sitter_c_plugin() {
         let plugin =
-            TreeSitterLanguagePlugin::new("c", tree_sitter_c::language).unwrap();
+            TreeSitterLanguagePlugin::new("c", || tree_sitter_c::LANGUAGE.into()).unwrap();
         let source = b"int add(int a, int b) { return a + b; }";
         let symbols = plugin.extract_symbols(Path::new("test.c"), source).unwrap();
         assert!(!symbols.is_empty());

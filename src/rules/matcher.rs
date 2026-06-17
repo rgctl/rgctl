@@ -133,6 +133,10 @@ fn node_type_name(node_type: NodeType) -> &'static str {
         NodeType::TypeAlias => "TypeAlias",
         NodeType::Macro => "Macro",
         NodeType::Import => "Import",
+        NodeType::Table => "Table",
+        NodeType::Dependency => "Dependency",
+        NodeType::Job => "Job",
+        NodeType::BuildStep => "BuildStep",
     }
 }
 

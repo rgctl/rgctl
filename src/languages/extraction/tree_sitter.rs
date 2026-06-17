@@ -45,24 +45,43 @@ pub fn node_to_location(node: Node, file: &str) -> SourceLocation {
 
 /// Extract symbol name from common tree-sitter child patterns.
 pub fn extract_name_from_node(node: Node, source: &[u8]) -> Result<Option<String>> {
+    for field in ["name", "lhs", "pattern"] {
+        if let Some(field_node) = node.child_by_field_name(field) {
+            if let Some(name) = extract_name_from_node(field_node, source)? {
+                return Ok(Some(name));
+            }
+        }
+    }
+
     let name_kinds = [
         "identifier",
+        "simple_identifier",
         "type_identifier",
         "property_identifier",
         "field_identifier",
+        "variable",
+        "atom",
+        "bareword",
+        "word",
+        "value_name",
         "name",
     ];
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if name_kinds.contains(&child.kind()) {
-            return Ok(Some(child.utf8_text(source)?.to_string()));
+            // Prefer declaration names over nested type identifiers (e.g. Swift return types).
+            if child.kind() != "type_identifier" || node.kind().contains("type") {
+                return Ok(Some(child.utf8_text(source)?.to_string()));
+            }
         }
     }
 
-    // Nested name (e.g., function_declarator > identifier)
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
+        if child.kind() == "type_identifier" {
+            continue;
+        }
         if let Some(name) = extract_name_from_node(child, source)? {
             return Ok(Some(name));
         }
@@ -197,7 +216,7 @@ pub fn parse_source(
     use crate::error::Error;
     let mut parser = Parser::new();
     parser
-        .set_language(grammar)
+        .set_language(&grammar)
         .map_err(|e| Error::PluginError(format!("Failed to set grammar: {e}")))?;
     parser.parse(source, None).ok_or_else(|| Error::ParseError {
         file: file_path.to_string_lossy().to_string().into(),
@@ -217,7 +236,7 @@ mod tests {
     #[test]
     fn test_generic_c_extraction() {
         let source = b"int add(int a, int b) { return a + b; }";
-        let tree = parse_source(source, Path::new("test.c"), tree_sitter_c::language()).unwrap();
+        let tree = parse_source(source, Path::new("test.c"), tree_sitter_c::LANGUAGE.into()).unwrap();
         let symbols = extract_symbols_by_kinds(
             &tree,
             source,

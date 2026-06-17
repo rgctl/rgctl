@@ -33,6 +33,14 @@ pub enum NodeType {
     Macro,
     /// Import statement
     Import,
+    /// SQL table
+    Table,
+    /// External dependency (Docker image, package)
+    Dependency,
+    /// CI/CD job
+    Job,
+    /// Build/pipeline step
+    BuildStep,
 }
 
 /// Edge types representing relationships between nodes
@@ -58,6 +66,8 @@ pub enum EdgeType {
     UsesConfig,
     /// Defined in (symbol defined in file)
     DefinedIn,
+    /// Depends on (CI job dependency, pipeline ordering)
+    DependsOn,
 }
 
 /// Node in the code knowledge graph
@@ -267,8 +277,12 @@ mod tests {
             NodeType::TypeAlias,
             NodeType::Macro,
             NodeType::Import,
+            NodeType::Table,
+            NodeType::Dependency,
+            NodeType::Job,
+            NodeType::BuildStep,
         ];
-        assert_eq!(types.len(), 12);
+        assert_eq!(types.len(), 16);
     }
 
     #[test]
@@ -284,7 +298,8 @@ mod tests {
             EdgeType::Modifies,
             EdgeType::UsesConfig,
             EdgeType::DefinedIn,
+            EdgeType::DependsOn,
         ];
-        assert_eq!(types.len(), 10);
+        assert_eq!(types.len(), 11);
     }
 }

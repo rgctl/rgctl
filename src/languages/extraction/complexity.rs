@@ -100,7 +100,7 @@ mod tests {
         let source = b"fn f(x: i32) { if x > 0 { if x < 10 {} } }";
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_rust::language())
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
         let func = tree.root_node().named_child(0).unwrap();

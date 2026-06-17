@@ -166,6 +166,7 @@ enable_type_inference = false
 [languages.c]
 handler = "tree-sitter"
 crate = "tree-sitter-c"
+grammar_export = "LANGUAGE"
 extensions = ["c", "h"]
 function_kinds = ["function_definition", "function_declarator"]
 class_kinds = ["struct_specifier", "enum_specifier", "type_definition"]
@@ -175,6 +176,7 @@ enable_type_inference = false
 [languages.ruby]
 handler = "tree-sitter"
 crate = "tree-sitter-ruby"
+grammar_export = "LANGUAGE"
 extensions = ["rb", "rake"]
 function_kinds = ["method", "singleton_method"]
 class_kinds = ["class", "module"]
@@ -184,6 +186,7 @@ enable_type_inference = false
 [languages.php]
 handler = "tree-sitter"
 crate = "tree-sitter-php"
+grammar_export = "LANGUAGE_PHP"
 extensions = ["php"]
 function_kinds = ["function_definition", "method_declaration"]
 class_kinds = ["class_declaration", "interface_declaration", "trait_declaration"]
@@ -193,6 +196,7 @@ enable_type_inference = false
 [languages.cpp]
 handler = "tree-sitter"
 crate = "tree-sitter-cpp"
+grammar_export = "LANGUAGE"
 extensions = ["cpp", "cc", "cxx", "hpp", "hxx"]
 function_kinds = ["function_definition", "function_declarator"]
 class_kinds = ["class_specifier", "struct_specifier", "enum_specifier"]
@@ -200,24 +204,358 @@ enable_complexity = true
 enable_type_inference = false
 
 # ---------------------------------------------------------------------------
-# Bundles
+# Tier 2 languages (Phase 11.1.2 — generic tree-sitter handler)
+# ---------------------------------------------------------------------------
+
+[languages.swift]
+handler = "tree-sitter"
+crate = "tree-sitter-swift"
+grammar_export = "LANGUAGE"
+extensions = ["swift"]
+function_kinds = ["function_declaration", "init_declaration", "function"]
+class_kinds = ["class_declaration", "protocol_declaration", "enum_declaration", "struct_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.scala]
+handler = "tree-sitter"
+crate = "tree-sitter-scala"
+grammar_export = "LANGUAGE"
+extensions = ["scala", "sc"]
+function_kinds = ["function_definition", "function_declaration"]
+class_kinds = ["class_definition", "object_definition", "trait_definition", "enum_definition"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.lua]
+handler = "tree-sitter"
+crate = "tree-sitter-lua"
+grammar_export = "LANGUAGE"
+extensions = ["lua"]
+function_kinds = ["function_declaration", "function_definition"]
+class_kinds = []
+enable_complexity = true
+enable_type_inference = false
+
+[languages.elixir]
+handler = "tree-sitter"
+crate = "tree-sitter-elixir"
+grammar_export = "LANGUAGE"
+extensions = ["ex", "exs"]
+function_kinds = ["anonymous_function"]
+class_kinds = ["struct"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.erlang]
+handler = "tree-sitter"
+crate = "tree-sitter-erlang"
+grammar_export = "LANGUAGE"
+extensions = ["erl", "hrl"]
+function_kinds = ["function_clause", "fun_decl"]
+class_kinds = ["module"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.haskell]
+handler = "tree-sitter"
+crate = "tree-sitter-haskell"
+grammar_export = "LANGUAGE"
+extensions = ["hs", "lhs"]
+function_kinds = ["function", "bind", "value_definition"]
+class_kinds = ["data_type", "class_decl", "newtype"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.dart]
+handler = "tree-sitter"
+crate = "tree-sitter-dart"
+grammar_export = "LANGUAGE"
+extensions = ["dart"]
+function_kinds = ["function_signature", "method_signature"]
+class_kinds = ["class_definition", "enum_declaration", "extension_declaration", "mixin_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.r]
+handler = "tree-sitter"
+crate = "tree-sitter-r"
+grammar_export = "LANGUAGE"
+extensions = ["r", "R"]
+function_kinds = ["binary_operator", "function_definition"]
+class_kinds = []
+enable_complexity = true
+enable_type_inference = false
+
+[languages.julia]
+handler = "tree-sitter"
+crate = "tree-sitter-julia"
+grammar_export = "LANGUAGE"
+extensions = ["jl"]
+function_kinds = ["function_definition"]
+class_kinds = ["struct_definition", "module_definition", "macro_definition", "abstract_definition"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.nim]
+handler = "tree-sitter"
+crate = "tree-sitter-nim"
+extensions = ["nim", "nims"]
+function_kinds = ["proc_declaration", "func_declaration", "method_declaration"]
+class_kinds = ["type_declaration", "enum_declaration", "object_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+# ---------------------------------------------------------------------------
+# Tier 2 niche languages (Phase 11.1.2 batch 2)
+# ---------------------------------------------------------------------------
+
+[languages.ocaml]
+handler = "tree-sitter"
+crate = "tree-sitter-ocaml"
+grammar_export = "LANGUAGE_OCAML"
+extensions = ["ml"]
+function_kinds = ["value_definition", "method_definition", "let_binding"]
+class_kinds = ["module_definition", "class_definition", "type_definition"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.perl]
+handler = "tree-sitter"
+crate = "ts-parser-perl"
+grammar_export = "LANGUAGE"
+extensions = ["pl", "pm"]
+function_kinds = ["subroutine_declaration_statement", "method_declaration_statement"]
+class_kinds = ["package_statement"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.fortran]
+handler = "tree-sitter"
+crate = "tree-sitter-fortran"
+grammar_export = "LANGUAGE"
+extensions = ["f", "f90", "f03", "f08"]
+function_kinds = ["function_statement", "subroutine_statement"]
+class_kinds = ["derived_type_definition", "module_statement"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.verilog]
+handler = "tree-sitter"
+crate = "tree-sitter-verilog"
+grammar_export = "LANGUAGE"
+extensions = ["v", "sv"]
+function_kinds = ["function_declaration", "task_declaration"]
+class_kinds = ["module_declaration", "class_declaration"]
+enable_complexity = false
+enable_type_inference = false
+
+[languages.vhdl]
+handler = "tree-sitter"
+crate = "tree-sitter-vhdl"
+grammar_export = "LANGUAGE"
+extensions = ["vhd", "vhdl"]
+function_kinds = ["function_declaration", "procedure_declaration"]
+class_kinds = ["entity_declaration", "package_declaration"]
+enable_complexity = false
+enable_type_inference = false
+
+[languages.cobol]
+handler = "regex"
+crate = ""
+extensions = ["cob", "cbl", "cpy"]
+function_kinds = ["PARAGRAPH", "PROCEDURE"]
+class_kinds = []
+enable_complexity = false
+enable_type_inference = false
+
+[[languages.cobol.regex_patterns]]
+pattern = '(?m)^\s*([A-Z0-9][A-Z0-9-]*)\s*\.'
+symbol_type = "function"
+
+[languages.pascal]
+handler = "tree-sitter"
+crate = "tree-sitter-pascal"
+grammar_export = "LANGUAGE"
+extensions = ["pas", "pp", "dpr"]
+function_kinds = ["declProc"]
+class_kinds = ["declClass", "declEnum"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.scheme]
+handler = "regex"
+crate = ""
+extensions = ["scm", "ss", "sls"]
+function_kinds = ["lambda", "definition"]
+class_kinds = []
+enable_complexity = false
+enable_type_inference = false
+
+[[languages.scheme.regex_patterns]]
+pattern = '(?m)\(define\s+\(([^\s()]+)'
+symbol_type = "function"
+
+[[languages.scheme.regex_patterns]]
+pattern = '(?m)\(define\s+([^\s()]+)'
+symbol_type = "function"
+
+[languages.zig]
+handler = "tree-sitter"
+crate = "tree-sitter-zig"
+grammar_export = "LANGUAGE"
+extensions = ["zig", "zon"]
+function_kinds = ["function_declaration", "fn"]
+class_kinds = ["struct", "enum"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.fsharp]
+handler = "tree-sitter"
+crate = "tree-sitter-fsharp"
+grammar_export = "LANGUAGE_FSHARP"
+extensions = ["fs", "fsx"]
+function_kinds = ["function_or_value_defn", "member_definition"]
+class_kinds = ["class", "enum_type_defn"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.crystal]
+handler = "tree-sitter"
+crate = "tree-sitter-crystal"
+grammar_export = "LANGUAGE"
+extensions = ["cr"]
+function_kinds = ["def", "fun_def", "method_def"]
+class_kinds = ["class_def", "module_def", "struct_def"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.clojure]
+handler = "regex"
+crate = ""
+extensions = ["clj", "cljs", "cljc", "edn"]
+function_kinds = ["defn"]
+class_kinds = []
+enable_complexity = false
+enable_type_inference = false
+
+[[languages.clojure.regex_patterns]]
+pattern = '(?m)\(defn\s+([A-Za-z_][\w\-\?\!\*\+<>=&]*)'
+symbol_type = "function"
+
+[[languages.clojure.regex_patterns]]
+pattern = '(?m)\(defmacro\s+([A-Za-z_][\w\-\?\!\*\+<>=&]*)'
+symbol_type = "macro"
+
+[languages.assembly]
+handler = "regex"
+crate = ""
+extensions = ["asm", "s", "nasm"]
+function_kinds = ["label"]
+class_kinds = []
+enable_complexity = false
+enable_type_inference = false
+
+[[languages.assembly.regex_patterns]]
+pattern = '(?m)^([A-Za-z_][\w]*):'
+symbol_type = "function"
+
+# ---------------------------------------------------------------------------
+# Multi-modal plugins (Phase 11.2)
+# ---------------------------------------------------------------------------
+
+[languages.sql]
+handler = "custom"
+plugin = "SqlPlugin"
+module = "crate::languages::multimodal::sql"
+crate = ""
+extensions = ["sql"]
+function_kinds = []
+class_kinds = []
+enable_complexity = false
+enable_type_inference = false
+
+[languages.dockerfile]
+handler = "custom"
+plugin = "DockerfilePlugin"
+module = "crate::languages::multimodal::dockerfile"
+crate = ""
+extensions = ["dockerfile"]
+function_kinds = []
+class_kinds = []
+enable_complexity = false
+enable_type_inference = false
+
+[languages.github_actions]
+handler = "custom"
+plugin = "GithubActionsPlugin"
+module = "crate::languages::multimodal::github_actions"
+crate = ""
+extensions = ["gha"]
+function_kinds = []
+class_kinds = []
+enable_complexity = false
+enable_type_inference = false
+
+[languages.gitlab_ci]
+handler = "custom"
+plugin = "GitlabCiPlugin"
+module = "crate::languages::multimodal::gitlab_ci"
+crate = ""
+extensions = ["gitlab-ci"]
+function_kinds = []
+class_kinds = []
+enable_complexity = false
+enable_type_inference = false
+
+[languages.bash]
+handler = "custom"
+plugin = "BashPlugin"
+module = "crate::languages::multimodal::bash"
+crate = ""
+extensions = ["sh", "bash"]
+function_kinds = []
+class_kinds = []
+enable_complexity = true
+enable_type_inference = false
+
+# ---------------------------------------------------------------------------
+# Bundles (Phase 11.1.3 — hierarchical feature sets)
 # ---------------------------------------------------------------------------
 
 [bundles.minimal]
-description = "Core languages for backend development"
-languages = ["rust", "python"]
+description = "Core web and systems languages"
+languages = ["rust", "python", "javascript", "typescript", "go"]
 
 [bundles.extended]
-description = "Common web and systems languages"
-languages = ["rust", "python", "typescript", "javascript", "go", "java"]
+description = "Common production languages plus C-family, scripting, and multi-modal"
+languages = [
+    "rust", "python", "javascript", "typescript", "go",
+    "java", "kotlin", "csharp", "markdown",
+    "c", "cpp", "ruby", "php",
+    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci",
+]
 
 [bundles.full]
-description = "All built-in languages"
+description = "Extended bundle plus high-priority Tier 2 languages"
 languages = [
-    "rust", "python", "typescript", "javascript", "go", "java",
-    "kotlin", "csharp", "markdown",
+    "rust", "python", "javascript", "typescript", "go",
+    "java", "kotlin", "csharp", "markdown",
+    "c", "cpp", "ruby", "php",
+    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci",
+    "swift", "scala", "elixir", "erlang", "dart", "lua",
+    "haskell", "julia", "r", "nim",
 ]
 
 [bundles.extra]
-description = "Additional TOML-only languages (Phase 7.4)"
-languages = ["c", "ruby", "php", "cpp"]
+description = "All languages including niche Tier 2 grammars"
+languages = [
+    "rust", "python", "javascript", "typescript", "go",
+    "java", "kotlin", "csharp", "markdown",
+    "c", "cpp", "ruby", "php",
+    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci",
+    "swift", "scala", "elixir", "erlang", "dart", "lua",
+    "haskell", "julia", "r", "nim",
+    "ocaml", "perl", "fortran", "verilog", "vhdl", "cobol",
+    "pascal", "scheme", "zig", "fsharp", "crystal", "clojure", "assembly",
+]

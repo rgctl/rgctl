@@ -74,7 +74,7 @@ pub fn derive_language_plugin(input: TokenStream) -> TokenStream {
                 pub fn new() -> Result<Self, crate::error::Error> {
                     let mut parser = tree_sitter::Parser::new();
                     parser
-                        .set_language(#grammar::language())
+                        .set_language(&#grammar::LANGUAGE.into())
                         .map_err(|e| crate::error::Error::PluginError(
                             format!("Failed to set grammar for {}: {}", #language_id, e)
                         ))?;
@@ -99,7 +99,7 @@ pub fn derive_language_plugin(input: TokenStream) -> TokenStream {
     let grammar_method = if let Some(grammar) = grammar_crate {
         quote! {
             pub fn grammar(&self) -> Option<tree_sitter::Language> {
-                Some(#grammar::language())
+                Some(#grammar::LANGUAGE.into())
             }
         }
     } else {

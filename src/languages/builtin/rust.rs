@@ -325,13 +325,13 @@ impl LanguagePlugin for RustPlugin {
     }
 
     fn grammar(&self) -> Option<tree_sitter::Language> {
-        Some(tree_sitter_rust::language())
+        Some(tree_sitter_rust::LANGUAGE.into())
     }
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_rust::language())
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set Rust grammar: {}", e)))?;
 
         let tree = parser.parse(source, None).ok_or_else(|| Error::ParseError {
@@ -394,7 +394,7 @@ impl LanguagePlugin for RustPlugin {
         // Re-parse to find the function node
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_rust::language())
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set Rust grammar: {}", e)))?;
 
         let tree = parser.parse(source, None).ok_or_else(|| Error::ParseError {

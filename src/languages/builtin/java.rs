@@ -17,7 +17,7 @@ impl JavaPlugin {
     pub fn new() -> Result<Self> {
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_java::language())
+            .set_language(&tree_sitter_java::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set Java grammar: {e}")))?;
         Ok(Self { _parser: parser })
     }
@@ -183,13 +183,13 @@ impl LanguagePlugin for JavaPlugin {
     }
 
     fn grammar(&self) -> Option<tree_sitter::Language> {
-        Some(tree_sitter_java::language())
+        Some(tree_sitter_java::LANGUAGE.into())
     }
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_java::language())
+            .set_language(&tree_sitter_java::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set Java grammar: {e}")))?;
 
         let tree = parser.parse(source, None).ok_or_else(|| Error::ParseError {

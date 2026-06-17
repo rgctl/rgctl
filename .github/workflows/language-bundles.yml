@@ -19,16 +19,16 @@ jobs:
         include:
           - name: bundle-minimal
             features: bundle-minimal,nlp-patterns
-            test_args: --lib
+            test_args: --test phase11_bundles --lib
           - name: bundle-extended
             features: bundle-extended,nlp-patterns,mcp-server
-            test_args: ""
+            test_args: --test phase11_bundles --test phase11_multimodal
           - name: bundle-full
             features: bundle-full,nlp-patterns,mcp-server
-            test_args: ""
+            test_args: --test phase11_bundles --test phase11_tier2_languages --test phase11_multimodal --test phase11_multilang
           - name: bundle-extra
-            features: bundle-full,bundle-extra,nlp-patterns,mcp-server
-            test_args: ""
+            features: bundle-extra,nlp-patterns,mcp-server
+            test_args: --test phase11_bundles --test phase11_tier2_languages --test phase11_tier2_niche_languages --test phase11_multimodal --test phase11_multilang
           - name: custom-rust-go
             features: lang-rust,lang-go,nlp-patterns
             test_args: --lib

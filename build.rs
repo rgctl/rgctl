@@ -21,6 +21,9 @@ struct LanguageEntry {
     module: Option<String>,
     #[serde(rename = "crate", default)]
     crate_field: String,
+    /// Grammar loader: `language` (default) or `LANGUAGE` (tree-sitter-language crates)
+    #[serde(default = "default_grammar_export")]
+    grammar_export: String,
     extensions: Vec<String>,
     #[serde(default)]
     function_kinds: Vec<String>,
@@ -36,6 +39,10 @@ struct LanguageEntry {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_grammar_export() -> String {
+    "language".to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -157,10 +164,19 @@ fn generate_register(config: &LanguagesFile) -> String {
                     lang.crate_field.clone()
                 };
                 let crate_ident = grammar_crate_ident(&crate_name);
+                let loader_fn = format!("load_{}_grammar", id.replace('-', "_"));
+                let loader_body = match lang.grammar_export.as_str() {
+                    "language" => format!("{crate_ident}::language()"),
+                    "LANGUAGE" => format!("{crate_ident}::LANGUAGE.into()"),
+                    symbol => format!("{crate_ident}::{symbol}.into()"),
+                };
                 code.push_str(&format!(
-                    "        use crate::languages::generic::TreeSitterLanguagePlugin;\n\
+                    "        fn {loader_fn}() -> tree_sitter::Language {{\n\
+                     \t    {loader_body}\n\
+                     }}\n\
+                     use crate::languages::generic::TreeSitterLanguagePlugin;\n\
                      registry.register_language_plugin(Arc::new(\n\
-                         TreeSitterLanguagePlugin::new(\"{id}\", {crate_ident}::language)\n\
+                         TreeSitterLanguagePlugin::new(\"{id}\", {loader_fn})\n\
                              .expect(\"init tree-sitter {id}\"),\n\
                      ));\n"
                 ));
@@ -233,6 +249,7 @@ fn generate_lang_configs(config: &LanguagesFile) -> String {
                     "struct" => "SymbolType::Struct",
                     "enum" => "SymbolType::Enum",
                     "interface" => "SymbolType::Interface",
+                    "macro" => "SymbolType::Macro",
                     other => panic!("Unknown symbol_type: {other}"),
                 };
                 code.push_str(&format!(

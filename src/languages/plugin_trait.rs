@@ -67,6 +67,14 @@ pub enum SymbolType {
     Macro,
     /// Import/use statement
     Import,
+    /// SQL table definition (Phase 11.2)
+    Table,
+    /// External dependency (e.g. Docker base image)
+    Dependency,
+    /// CI/CD job definition
+    Job,
+    /// Build or pipeline step
+    BuildStep,
 }
 
 /// Source code location
@@ -152,6 +160,8 @@ pub enum RelationType {
     Instantiates,
     /// Modifies (writes to variable)
     Modifies,
+    /// Job/step depends on another (CI pipelines)
+    DependsOn,
 }
 
 /// Code complexity metrics
@@ -559,8 +569,12 @@ mod tests {
             SymbolType::TypeAlias,
             SymbolType::Macro,
             SymbolType::Import,
+            SymbolType::Table,
+            SymbolType::Dependency,
+            SymbolType::Job,
+            SymbolType::BuildStep,
         ];
-        assert_eq!(types.len(), 10);
+        assert_eq!(types.len(), 14);
     }
 
     #[test]
@@ -574,8 +588,9 @@ mod tests {
             RelationType::References,
             RelationType::Instantiates,
             RelationType::Modifies,
+            RelationType::DependsOn,
         ];
-        assert_eq!(types.len(), 8);
+        assert_eq!(types.len(), 9);
     }
 
     #[test]
