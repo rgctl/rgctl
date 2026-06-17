@@ -113,6 +113,36 @@ impl IncrementalUpdater {
         self.apply_changes(graph, repo_root, &all_files, changes, start)
     }
 
+    /// Update only the given repo-relative file paths.
+    pub fn update_files(
+        &self,
+        graph: &mut CodeGraph,
+        repo_root: &Path,
+        relative_paths: &[String],
+    ) -> Result<UpdateResult> {
+        let start = Instant::now();
+        if relative_paths.is_empty() {
+            return Ok(UpdateResult {
+                duration: start.elapsed(),
+                ..Default::default()
+            });
+        }
+
+        let discoverer =
+            FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
+        let all_files = discoverer.discover(repo_root)?;
+        let changes = crate::incremental::changes_for_paths(repo_root, relative_paths)?;
+
+        if changes.is_empty() {
+            return Ok(UpdateResult {
+                duration: start.elapsed(),
+                ..Default::default()
+            });
+        }
+
+        self.apply_changes(graph, repo_root, &all_files, changes, start)
+    }
+
     fn full_rebuild(
         &self,
         graph: &mut CodeGraph,

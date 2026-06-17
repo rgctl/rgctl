@@ -242,6 +242,35 @@ pub fn resolve_path(repo_root: &Path, rel: &str) -> PathBuf {
     repo_root.join(rel)
 }
 
+/// Build a change set for explicit repo-relative paths (watch / `update --files`).
+pub fn changes_for_paths(repo_root: &Path, relative_paths: &[String]) -> Result<ChangeSet> {
+    let tracker = FileTracker::load(repo_root).unwrap_or_else(|_| FileTracker::new(repo_root));
+    let known = tracker.file_hashes();
+    let mut added = Vec::new();
+    let mut changed = Vec::new();
+    let mut deleted = Vec::new();
+
+    for rel in relative_paths {
+        let normalized = normalize_path_str(rel);
+        let path = resolve_path(repo_root, &normalized);
+        if path.exists() {
+            if known.contains_key(&normalized) {
+                changed.push(normalized);
+            } else {
+                added.push(normalized);
+            }
+        } else if known.contains_key(&normalized) {
+            deleted.push(normalized);
+        }
+    }
+
+    Ok(ChangeSet {
+        added,
+        changed,
+        deleted,
+    })
+}
+
 /// Get changed files from git since a commit ref.
 pub fn git_changed_files(repo_root: &Path, since: &str) -> Result<Vec<PathBuf>> {
     let output = std::process::Command::new("git")

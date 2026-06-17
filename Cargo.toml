@@ -118,6 +118,8 @@ pulldown-cmark = "0.9"
 # Plugin loading
 libloading = { version = "0.8", optional = true }
 
+notify = "6.1"
+
 # Serialization
 bincode = "1.3"
 

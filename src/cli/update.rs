@@ -9,7 +9,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 /// Run the `rbuilder update` command.
-pub fn run_update(repo_root: &Path, since: Option<String>, force: bool, verbose: bool) -> anyhow::Result<()> {
+pub fn run_update(
+    repo_root: &Path,
+    since: Option<String>,
+    force: bool,
+    files: Vec<String>,
+    verbose: bool,
+) -> anyhow::Result<()> {
     if force {
         println!("Force rebuild requested...");
         let pipeline = ProcessingPipeline::with_config(
@@ -88,7 +94,11 @@ pub fn run_update(repo_root: &Path, since: Option<String>, force: bool, verbose:
         },
     );
 
-    let result = updater.update(&mut graph, repo_root)?;
+    let result = if files.is_empty() {
+        updater.update(&mut graph, repo_root)?
+    } else {
+        updater.update_files(&mut graph, repo_root, &files)?
+    };
     print_summary(&result, false);
     Ok(())
 }

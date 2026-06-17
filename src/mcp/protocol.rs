@@ -126,12 +126,20 @@ impl McpHandler {
         self.state.with_graph(|graph| self.executor.execute(graph, name, args))
     }
 
+    /// Shared application state (for watch mode integration).
+    pub fn state(&self) -> &AppState {
+        &self.state
+    }
+
     fn handle_initialize(&mut self, _params: &Value) -> Result<Value> {
         Ok(json!({
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {
                 "tools": {},
-                "resources": {}
+                "resources": {},
+                "notifications": {
+                    "graph_updated": {}
+                }
             },
             "serverInfo": {
                 "name": "rbuilder",
@@ -180,6 +188,16 @@ impl McpHandler {
             }]
         }))
     }
+}
+
+/// Serialize an MCP graph-updated notification.
+pub fn graph_updated_notification(notification: &crate::watch::GraphUpdateNotification) -> Result<String> {
+    let value = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/graph_updated",
+        "params": notification,
+    });
+    serde_json::to_string(&value).map_err(|e| Error::SerdeError(e.to_string()))
 }
 
 fn serialize_response(response: JsonRpcResponse) -> Result<String> {

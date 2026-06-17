@@ -48,6 +48,42 @@ enum Commands {
         /// Force full rebuild
         #[arg(long)]
         force: bool,
+
+        /// Update only these repo-relative files (repeatable)
+        #[arg(long)]
+        files: Vec<String>,
+    },
+
+    /// Watch repository and re-index on file changes (Phase 13.1)
+    Watch {
+        /// Path to repository (default: current directory)
+        #[arg(default_value = ".")]
+        path: String,
+
+        /// Debounce window in milliseconds
+        #[arg(long)]
+        debounce_ms: Option<u64>,
+    },
+
+    /// Install git hooks for pre-commit, post-commit, and post-checkout (Phase 13.2–13.3)
+    InitHooks {
+        /// Path to repository (default: current directory)
+        #[arg(default_value = ".")]
+        path: String,
+
+        /// Overwrite existing hook scripts
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Analyze blast-radius risk for changed files (Phase 13.2)
+    DetectChanges {
+        /// Repo-relative file paths (default: git staged files)
+        files: Vec<String>,
+
+        /// Emit JSON for hook scripts
+        #[arg(long)]
+        json: bool,
     },
 
     /// Run analysis on the graph
@@ -270,6 +306,10 @@ enum McpCommands {
         /// Port for HTTP transport
         #[arg(long, default_value = "3000")]
         port: u16,
+
+        /// Watch repository and notify clients on graph updates (Phase 13.1.2)
+        #[arg(long)]
+        watch: bool,
     },
 }
 
@@ -390,10 +430,95 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
 
-        Commands::Update { since, force } => {
+        Commands::Update { since, force, files } => {
             use rbuilder::cli::update;
             use std::path::Path;
-            update::run_update(Path::new("."), since, force, cli.verbose)?;
+            update::run_update(Path::new("."), since, force, files, cli.verbose)?;
+            Ok(())
+        }
+
+        Commands::Watch { path, debounce_ms } => {
+            use rbuilder::watch::WatchService;
+            use std::path::Path;
+            WatchService::run_blocking(Path::new(&path), debounce_ms)?;
+            Ok(())
+        }
+
+        Commands::InitHooks { path, force } => {
+            use rbuilder::hooks::install_hooks;
+            use std::path::Path;
+            let written = install_hooks(Path::new(&path), force)?;
+            for hook in written {
+                println!("Installed {}", hook.display());
+            }
+            Ok(())
+        }
+
+        Commands::DetectChanges { files, json } => {
+            use rbuilder::changes::ChangeDetector;
+            use rbuilder::config::project::RbuilderConfig;
+            use rbuilder::git_util;
+            use rbuilder::graph::CodeGraph;
+            use std::path::Path;
+
+            let repo = Path::new(".");
+            let paths = if files.is_empty() {
+                git_util::git_staged_files(repo)?
+            } else {
+                files
+            };
+
+            if paths.is_empty() {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "files": [],
+                            "risk_level": "LOW",
+                            "max_score": 0.0,
+                            "details": [],
+                            "summary": {
+                                "files_analyzed": 0,
+                                "symbols_analyzed": 0,
+                                "max_score": 0.0,
+                                "risk_level": "LOW"
+                            }
+                        }))?
+                    );
+                } else {
+                    println!("No files to analyze");
+                }
+                return Ok(());
+            }
+
+            let graph = CodeGraph::load_from_repo(repo)?;
+            let config = RbuilderConfig::load(repo)?;
+            let result = ChangeDetector::new()
+                .with_blast_radius_threshold(config.hooks.blast_radius_threshold)
+                .detect(&graph, &paths)?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!(
+                    "Risk: {:?} (max score {:.1})",
+                    result.risk_level, result.max_score
+                );
+                for detail in result.details.iter().take(10) {
+                    println!(
+                        "  {}:{} score={:.1} callers={} impact={}",
+                        detail.file,
+                        detail.symbol,
+                        detail.blast_radius_score,
+                        detail.direct_callers,
+                        detail.impact_zone_size
+                    );
+                }
+            }
+
+            if config.hooks.block_on_risk.blocks(result.risk_level) {
+                std::process::exit(1);
+            }
             Ok(())
         }
 
@@ -762,8 +887,12 @@ fn main() -> anyhow::Result<()> {
             use rbuilder::cli::mcp;
             use std::path::Path;
             match command {
-                McpCommands::Serve { transport, port } => {
-                    mcp::run_mcp_serve(Path::new("."), &transport, port, cli.verbose)?;
+                McpCommands::Serve {
+                    transport,
+                    port,
+                    watch,
+                } => {
+                    mcp::run_mcp_serve(Path::new("."), &transport, port, cli.verbose, watch)?;
                 }
             }
             Ok(())

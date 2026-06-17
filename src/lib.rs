@@ -58,7 +58,10 @@ pub mod api;
 pub mod mcp;
 
 // Utility modules
+pub mod changes;
 pub mod cli;
+pub mod git_util;
+pub mod hooks;
 pub mod incremental;
 pub mod output;
 pub mod pipeline;
@@ -66,6 +69,7 @@ pub mod parallel;
 pub mod rules;
 pub mod semantic;
 pub mod multi_repo;
+pub mod watch;
 
 // Re-exports for convenience
 pub use error::{Error, Result};
@@ -79,6 +83,9 @@ pub use rules::{RuleApplicationReport, RuleEngine, Ruleset};
 pub use semantic::{FunctionSignature, IdlFormat, IdlGenerator, SignatureExtractor, TypeInferencer};
 pub use incremental::{ChangeSet, FileTracker, IncrementalUpdater, UpdateOptions, UpdateResult};
 pub use config::drift::{compare_configs, format_drift_report, ConfigDiffEntry, ConfigDiffKind, ConfigDriftReport};
+pub use config::project::{HooksConfig, RbuilderConfig, RiskLevel, WatchConfig};
+pub use changes::{ChangeDetectionResult, ChangeDetector, ChangeDetail, ChangeSummary};
+pub use watch::{GraphUpdateNotification, WatchService};
 pub use multi_repo::{
     link_cross_repo, load_workspace_graph, stamp_repo_namespace, sync_workspace, CrossRepoLinkReport,
     RepoEntry, WorkspaceManifest, WorkspaceSyncReport, WORKSPACE_FILE,

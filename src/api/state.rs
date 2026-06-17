@@ -55,4 +55,9 @@ impl AppState {
         inner.graph = CodeGraph::load_from_repo(&inner.repo_root)?;
         Ok(())
     }
+
+    /// Clone handle for background watch threads.
+    pub fn clone_handle(&self) -> Self {
+        self.clone()
+    }
 }

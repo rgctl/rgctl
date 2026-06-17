@@ -38,18 +38,64 @@ impl McpServer {
     }
 
     /// Run the MCP server over stdio (newline-delimited JSON-RPC).
-    pub fn run_stdio(&mut self) -> Result<()> {
-        let stdin = io::stdin();
-        let mut stdout = io::stdout();
+    pub fn run_stdio(&mut self, watch: bool) -> Result<()> {
+        use crate::config::project::RbuilderConfig;
+        use crate::mcp::protocol::graph_updated_notification;
+        use std::sync::mpsc::{self, RecvTimeoutError};
+        use std::thread;
+        use std::time::Duration;
 
-        for line in stdin.lock().lines() {
-            let line = line.map_err(|e| Error::Other(format!("stdin read error: {e}")))?;
-            if let Some(response) = self.handler.handle_message(&line)? {
-                writeln!(stdout, "{response}")
-                    .map_err(|e| Error::Other(format!("stdout write error: {e}")))?;
-                stdout
-                    .flush()
-                    .map_err(|e| Error::Other(format!("stdout flush error: {e}")))?;
+        let notify_rx = if watch {
+            let state = self.handler.state().clone_handle();
+            let repo_root = state.repo_root();
+            let debounce = RbuilderConfig::load(&repo_root)
+                .map(|c| c.watch.debounce_ms)
+                .unwrap_or(500);
+            let (tx, rx) = mpsc::channel();
+            crate::watch::spawn_watch_with_state(state, debounce, tx)?;
+            Some(rx)
+        } else {
+            None
+        };
+
+        let (stdin_tx, stdin_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let stdin = io::stdin();
+            for line in stdin.lock().lines() {
+                match line {
+                    Ok(line) => {
+                        if stdin_tx.send(line).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let mut stdout = io::stdout();
+        loop {
+            if let Some(rx) = &notify_rx {
+                if let Ok(notification) = rx.try_recv() {
+                    let msg = graph_updated_notification(&notification)?;
+                    writeln!(stdout, "{msg}")
+                        .map_err(|e| Error::Other(format!("stdout write error: {e}")))?;
+                    stdout.flush()
+                        .map_err(|e| Error::Other(format!("stdout flush error: {e}")))?;
+                }
+            }
+
+            match stdin_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(line) => {
+                    if let Some(response) = self.handler.handle_message(&line)? {
+                        writeln!(stdout, "{response}")
+                            .map_err(|e| Error::Other(format!("stdout write error: {e}")))?;
+                        stdout.flush()
+                            .map_err(|e| Error::Other(format!("stdout flush error: {e}")))?;
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
         Ok(())
