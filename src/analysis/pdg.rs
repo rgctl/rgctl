@@ -2,6 +2,7 @@
 
 use crate::analysis::cfg::{BlockId, ControlFlowGraph, Statement};
 use crate::analysis::dataflow::{compute_reaching_definitions, ReachingDefs};
+use crate::analysis::dominance::DominatorTree;
 use crate::error::Result;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -148,6 +149,52 @@ impl ProgramDependenceGraph {
     }
 
     fn build_control_dependencies(&mut self, cfg: &ControlFlowGraph) {
+        self.build_control_dependencies_dominance(cfg);
+    }
+
+    /// Precise control dependencies via dominance frontiers (Phase 13.2).
+    fn build_control_dependencies_dominance(&mut self, cfg: &ControlFlowGraph) {
+        let dom_tree = DominatorTree::build(cfg);
+
+        for block_id in cfg.blocks.keys() {
+            for &frontier_block in dom_tree.frontier(*block_id).iter() {
+                let Some(controller_nodes) = self.block_nodes.get(block_id).cloned() else {
+                    continue;
+                };
+                let Some(dependent_nodes) = self.block_nodes.get(&frontier_block).cloned() else {
+                    continue;
+                };
+                let controller = controller_nodes
+                    .iter()
+                    .copied()
+                    .find(|id| {
+                        self.nodes
+                            .get(id)
+                            .map(|n| n.statement.kind == crate::analysis::cfg::StatementKind::Branch)
+                            .unwrap_or(false)
+                    })
+                    .or_else(|| controller_nodes.last().copied());
+
+                if let Some(controller) = controller {
+                    for dependent in dependent_nodes {
+                        if dependent != controller {
+                            self.control_deps.push(ControlDependency {
+                                controller,
+                                dependent,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if self.control_deps.is_empty() {
+            self.build_control_dependencies_postdom(cfg);
+        }
+    }
+
+    /// Fallback post-dominator control dependencies (Phase 12).
+    fn build_control_dependencies_postdom(&mut self, cfg: &ControlFlowGraph) {
         let post_dom = compute_post_dominators(cfg);
 
         for edge in &cfg.edges {

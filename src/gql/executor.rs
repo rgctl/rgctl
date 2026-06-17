@@ -27,6 +27,7 @@ pub struct QueryResult {
 pub struct QueryExecutor<'a> {
     backend: &'a MemoryBackend,
     explain: bool,
+    optimization_report: Option<crate::gql::optimizer::OptimizationReport>,
 }
 
 impl<'a> QueryExecutor<'a> {
@@ -35,6 +36,7 @@ impl<'a> QueryExecutor<'a> {
         Self {
             backend,
             explain: false,
+            optimization_report: None,
         }
     }
 
@@ -44,11 +46,25 @@ impl<'a> QueryExecutor<'a> {
         self
     }
 
+    /// Attach optimizer report to explain output.
+    pub fn with_optimization_report(
+        mut self,
+        report: crate::gql::optimizer::OptimizationReport,
+    ) -> Self {
+        self.optimization_report = Some(report);
+        self
+    }
+
     /// Execute a parsed query.
     pub fn execute(&self, query: &Query) -> Result<QueryResult> {
         let view = PetGraphView::from_backend(self.backend)?;
         let mut plan = if self.explain {
-            Some(ExplainPlan::new())
+            let mut p = ExplainPlan::new();
+            if let Some(ref report) = self.optimization_report {
+                p.optimizer_applied = !report.optimizations.is_empty();
+                p.optimizations = report.optimizations.clone();
+            }
+            Some(p)
         } else {
             None
         };

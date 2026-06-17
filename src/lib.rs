@@ -40,6 +40,9 @@ pub mod graph;
 // Graph query language (Phase 12.4)
 pub mod gql;
 
+// Security analysis (Phase 13.5)
+pub mod security;
+
 // Analysis layer
 pub mod analysis;
 pub mod config;

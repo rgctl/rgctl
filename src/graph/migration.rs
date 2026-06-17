@@ -119,7 +119,7 @@ mod tests {
         let mut nodes = vec![Node::new(NodeType::Function, "main".to_string())];
         let mut edges = vec![];
         let version = migrate_snapshot(1, &mut nodes, &mut edges).unwrap();
-        assert_eq!(version, crate::graph::schema::GRAPH_SCHEMA_VERSION);
+        assert_eq!(version, GRAPH_SCHEMA_VERSION);
     }
 
     #[test]

@@ -6,7 +6,8 @@ use crate::analysis::complexity::{ComplexityAnalyzer, ComplexityReport};
 use crate::analysis::dependency::DependencyAnalyzer;
 use crate::analysis::graph_utils::PetGraphView;
 use crate::analysis::{
-    build_cfg_for_function, BackwardSlicer, ProgramDependenceGraph, SliceCriterion,
+    build_cfg_for_function, BackwardSlicer, InterproceduralCFG, InterproceduralSlicer,
+    ProgramDependenceGraph, SliceCriterion, TaintAnalyzer, TypeInferenceEngine,
 };
 use crate::config::analyzer::ConfigAnalyzer;
 use crate::config::secret_detector::SecretDetector;
@@ -19,6 +20,7 @@ use crate::graph::CodeGraph;
 use crate::incremental::file_tracker::{git_changed_files, FileTracker};
 use crate::languages::registry::LanguageRegistry;
 use crate::gql::{execute, execute_explain, execute_macro, QueryMacroRegistry};
+use crate::security::SecurityAnalyzer;
 use crate::nlp::dual_agent::DualAgentQuerySystem;
 use crate::nlp::pattern_matcher::{PatternMatcher, QueryResult};
 use crate::semantic::signature::SignatureExtractor;
@@ -234,6 +236,7 @@ impl ToolExecutor {
                         "variable": { "type": "string", "description": "Variable name" },
                         "function": { "type": "string", "description": "Function name (optional)" },
                         "language": { "type": "string", "description": "rust or python (optional)" },
+                        "interprocedural": { "type": "boolean", "description": "Follow call graph across functions (Phase 13.1)" },
                         "include_verbose": { "type": "boolean" }
                     },
                     "required": ["file", "line", "variable"]
@@ -250,6 +253,34 @@ impl ToolExecutor {
                         "explain": { "type": "boolean", "description": "Include execution plan" },
                         "include_verbose": { "type": "boolean" }
                     }
+                }),
+            },
+            ToolDefinition {
+                name: "taint_analysis".into(),
+                description: "Forward taint analysis: track untrusted data from sources to security sinks".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "file": { "type": "string", "description": "Source file path" },
+                        "function": { "type": "string", "description": "Function name" },
+                        "language": { "type": "string", "description": "rust, python, or javascript" },
+                        "include_verbose": { "type": "boolean" }
+                    },
+                    "required": ["file", "function"]
+                }),
+            },
+            ToolDefinition {
+                name: "security_scan".into(),
+                description: "Scan a function for CWE/OWASP vulnerabilities using taint analysis".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "file": { "type": "string", "description": "Source file path" },
+                        "function": { "type": "string", "description": "Function name" },
+                        "language": { "type": "string", "description": "rust, python, or javascript" },
+                        "include_verbose": { "type": "boolean" }
+                    },
+                    "required": ["file", "function"]
                 }),
             },
         ]
@@ -356,13 +387,50 @@ impl ToolExecutor {
                     .ok_or_else(|| Error::InvalidQuery("Missing variable".into()))?;
                 let function = args.get("function").and_then(|v| v.as_str());
                 let language = args.get("language").and_then(|v| v.as_str());
-                self.backward_slice(file, line, variable, function, language, verbose)
+                let interprocedural = args
+                    .get("interprocedural")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                self.backward_slice(
+                    graph,
+                    file,
+                    line,
+                    variable,
+                    function,
+                    language,
+                    interprocedural,
+                    verbose,
+                )
             }
             "gql_query" => {
                 let query = args.get("query").and_then(|v| v.as_str());
                 let macro_name = args.get("macro_name").and_then(|v| v.as_str());
                 let explain = args.get("explain").and_then(|v| v.as_bool()).unwrap_or(false);
                 self.gql_query(backend, query, macro_name, explain, verbose)
+            }
+            "taint_analysis" => {
+                let file = args
+                    .get("file")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::InvalidQuery("Missing file".into()))?;
+                let function = args
+                    .get("function")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::InvalidQuery("Missing function".into()))?;
+                let language = args.get("language").and_then(|v| v.as_str());
+                self.taint_analysis(file, function, language, verbose)
+            }
+            "security_scan" => {
+                let file = args
+                    .get("file")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::InvalidQuery("Missing file".into()))?;
+                let function = args
+                    .get("function")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::InvalidQuery("Missing function".into()))?;
+                let language = args.get("language").and_then(|v| v.as_str());
+                self.security_scan(file, function, language, verbose)
             }
             other => Err(Error::InvalidQuery(format!("Unknown tool: {other}"))),
         }
@@ -506,13 +574,16 @@ impl ToolExecutor {
         Ok(response)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn backward_slice(
         &self,
+        graph: &CodeGraph,
         file: &str,
         line: usize,
         variable: &str,
         function: Option<&str>,
         language: Option<&str>,
+        interprocedural: bool,
         verbose: bool,
     ) -> Result<Value> {
         let path = if std::path::Path::new(file).is_absolute() {
@@ -524,6 +595,7 @@ impl ToolExecutor {
         let lang = language.map(str::to_string).unwrap_or_else(|| {
             match path.extension().and_then(|e| e.to_str()) {
                 Some("py") => "python".to_string(),
+                Some("js") | Some("ts") => "javascript".to_string(),
                 _ => "rust".to_string(),
             }
         });
@@ -534,15 +606,51 @@ impl ToolExecutor {
                 .to_string()
         });
 
-        let cfg = build_cfg_for_function(&lang, &source, &fn_name)?;
-        let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
-        let slice = BackwardSlicer::new(&pdg, &cfg).slice(SliceCriterion {
-            variable: variable.to_string(),
-            line,
-        })?;
-
-        let mut lines: Vec<usize> = slice.lines.into_iter().collect();
-        lines.sort_unstable();
+        let (reduction_percent, lines, extra): (f64, Vec<usize>, Value) = if interprocedural {
+            let mut files = std::collections::HashMap::new();
+            files.insert(path.display().to_string(), source.clone());
+            let icfg = InterproceduralCFG::build(graph.backend(), &files)?;
+            let func_id = icfg
+                .call_graph
+                .nodes
+                .values()
+                .find(|n| n.name == fn_name)
+                .map(|n| n.id)
+                .ok_or_else(|| Error::NodeNotFound(fn_name.clone()))?;
+            let slicer = InterproceduralSlicer::new(&icfg, &files)?;
+            let slice = slicer.slice(
+                func_id,
+                SliceCriterion {
+                    variable: variable.to_string(),
+                    line,
+                },
+            )?;
+            let mut lines: Vec<usize> = slice.lines.into_iter().collect();
+            lines.sort_unstable();
+            (
+                slice.reduction_percent,
+                lines,
+                json!({
+                    "interprocedural": true,
+                    "functions_in_slice": slice.functions.len(),
+                }),
+            )
+        } else {
+            let cfg = build_cfg_for_function(&lang, &source, &fn_name)?;
+            let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
+            let slice = BackwardSlicer::new(&pdg, &cfg).slice(SliceCriterion {
+                variable: variable.to_string(),
+                line,
+            })?;
+            let mut lines: Vec<usize> = slice.lines.into_iter().collect();
+            lines.sort_unstable();
+            let mut extra = json!({ "interprocedural": false });
+            if verbose {
+                extra["cfg_dot"] = json!(cfg.to_dot());
+                extra["statement_count"] = json!(slice.statements.len());
+            }
+            (slice.reduction_percent, lines, extra)
+        };
 
         let mut response = json!({
             "file": path.display().to_string(),
@@ -550,17 +658,122 @@ impl ToolExecutor {
             "variable": variable,
             "function": fn_name,
             "language": lang,
-            "reduction_percent": slice.reduction_percent,
+            "reduction_percent": reduction_percent,
             "total_lines": lines.len(),
             "slice_lines": lines,
         });
-
-        if verbose {
-            response["cfg_dot"] = json!(cfg.to_dot());
-            response["statement_count"] = json!(slice.statements.len());
+        if let Some(obj) = extra.as_object() {
+            for (k, v) in obj {
+                response[k] = v.clone();
+            }
         }
-
         Ok(response)
+    }
+
+    fn taint_analysis(
+        &self,
+        file: &str,
+        function: &str,
+        language: Option<&str>,
+        verbose: bool,
+    ) -> Result<Value> {
+        let (path, source, lang) = self.read_source_file(file, language)?;
+        let cfg = build_cfg_for_function(&lang, &source, function)?;
+        let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
+        let mut type_engine = TypeInferenceEngine::new(&pdg, &cfg, &lang);
+        type_engine.infer();
+        let mut analyzer = TaintAnalyzer::new(&pdg, &cfg).with_type_inference(type_engine);
+        analyzer.detect_patterns(&lang);
+        let flows = analyzer.analyze();
+        let vulnerable = flows.iter().filter(|f| f.is_vulnerable()).count();
+
+        let flow_json: Vec<Value> = flows
+            .iter()
+            .map(|f| {
+                json!({
+                    "variable": f.variable,
+                    "severity": f.severity,
+                    "vulnerable": f.is_vulnerable(),
+                    "source_type": format!("{:?}", f.source_type),
+                    "sink_type": format!("{:?}", f.sink_type),
+                    "sanitizers": f.sanitizers.len(),
+                })
+            })
+            .collect();
+
+        let response = json!({
+            "file": path.display().to_string(),
+            "function": function,
+            "language": lang,
+            "total_flows": flows.len(),
+            "vulnerable_flows": vulnerable,
+            "flows": if verbose { json!(flow_json) } else { json!(flow_json.iter().take(10).collect::<Vec<_>>()) },
+        });
+        Ok(response)
+    }
+
+    fn security_scan(
+        &self,
+        file: &str,
+        function: &str,
+        language: Option<&str>,
+        verbose: bool,
+    ) -> Result<Value> {
+        let (path, source, lang) = self.read_source_file(file, language)?;
+        let cfg = build_cfg_for_function(&lang, &source, function)?;
+        let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
+        let mut type_engine = TypeInferenceEngine::new(&pdg, &cfg, &lang);
+        type_engine.infer();
+        let mut analyzer = TaintAnalyzer::new(&pdg, &cfg).with_type_inference(type_engine);
+        analyzer.detect_patterns(&lang);
+        let flows = analyzer.vulnerable_flows();
+        let vulns = SecurityAnalyzer::new().analyze(flows, &pdg, &source);
+
+        let vuln_json: Vec<Value> = vulns
+            .iter()
+            .map(|v| {
+                json!({
+                    "cwe_id": v.cwe_id,
+                    "cwe_name": v.cwe_name,
+                    "severity": v.severity,
+                    "variable": v.taint_flow.variable,
+                    "source_line": v.source_line,
+                    "sink_line": v.sink_line,
+                    "recommendation": v.recommendation,
+                })
+            })
+            .collect();
+
+        let response = json!({
+            "file": path.display().to_string(),
+            "function": function,
+            "total_vulnerabilities": vulns.len(),
+            "critical": vulns.iter().filter(|v| v.severity >= 9).count(),
+            "high": vulns.iter().filter(|v| v.severity >= 7 && v.severity < 9).count(),
+            "vulnerabilities": if verbose { json!(vuln_json) } else { json!(vuln_json.iter().take(10).collect::<Vec<_>>()) },
+        });
+        Ok(response)
+    }
+
+    fn read_source_file(
+        &self,
+        file: &str,
+        language: Option<&str>,
+    ) -> Result<(std::path::PathBuf, String, String)> {
+        let path = if std::path::Path::new(file).is_absolute() {
+            std::path::PathBuf::from(file)
+        } else {
+            self.repo_root.join(file)
+        };
+        let source = std::fs::read_to_string(&path)?;
+        let lang = language.map(str::to_string).unwrap_or_else(|| {
+            match path.extension().and_then(|e| e.to_str()) {
+                Some("py") => "python".to_string(),
+                Some("js") | Some("ts") => "javascript".to_string(),
+                _ => "rust".to_string(),
+            }
+        });
+        Ok((path, source, lang))
     }
 
     fn gql_query(

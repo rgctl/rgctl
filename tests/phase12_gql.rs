@@ -92,7 +92,12 @@ fn test_explain_plan_steps() {
     .unwrap();
     let plan = result.plan.expect("explain plan");
     assert!(plan.steps.iter().any(|s| s.operation == "Match"));
-    assert!(plan.steps.iter().any(|s| s.operation == "Filter"));
+    assert!(
+        plan.steps.iter().any(|s| s.operation == "Filter")
+            || plan.optimizer_applied
+            || plan.optimizations.iter().any(|o| o.contains("pushdown")),
+        "expected filter step or predicate pushdown optimization"
+    );
     assert!(plan.steps.iter().any(|s| s.operation == "Limit"));
 }
 

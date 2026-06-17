@@ -6,6 +6,7 @@ pub mod ast;
 pub mod executor;
 pub mod explain;
 pub mod macros;
+pub mod optimizer;
 pub mod parser;
 
 pub use ast::{
@@ -15,23 +16,27 @@ pub use ast::{
 pub use executor::{Binding, QueryExecutor, QueryResult};
 pub use explain::{ExplainPlan, ExplainStep};
 pub use macros::{QueryMacro, QueryMacroRegistry};
+pub use optimizer::{OptimizationReport, QueryOptimizer};
 pub use parser::parse;
 
 use crate::error::Result;
 use crate::graph::backend::MemoryBackend;
 
-/// Parse and execute a GQL query string against the backend.
+/// Parse, optimize, and execute a GQL query string against the backend.
 pub fn execute(backend: &MemoryBackend, query: &str) -> Result<QueryResult> {
     let parsed = parse(query)?;
-    QueryExecutor::new(backend).execute(&parsed)
+    let (optimized, _) = QueryOptimizer::new(backend).optimize(parsed);
+    QueryExecutor::new(backend).execute(&optimized)
 }
 
-/// Parse and execute with explain plan collection.
+/// Parse, optimize, and execute with explain plan collection.
 pub fn execute_explain(backend: &MemoryBackend, query: &str) -> Result<QueryResult> {
     let parsed = parse(query)?;
+    let (optimized, report) = QueryOptimizer::new(backend).optimize(parsed);
     QueryExecutor::new(backend)
         .with_explain(true)
-        .execute(&parsed)
+        .with_optimization_report(report)
+        .execute(&optimized)
 }
 
 /// Resolve a named macro and execute it.

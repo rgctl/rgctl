@@ -16,21 +16,39 @@ pub struct ExplainStep {
 }
 
 /// Full explain plan for a GQL query.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExplainPlan {
     /// Ordered execution steps
     pub steps: Vec<ExplainStep>,
+    /// Estimated relative cost
+    pub estimated_cost: f64,
+    /// Whether the optimizer ran
+    pub optimizer_applied: bool,
+    /// Optimization decisions
+    pub optimizations: Vec<String>,
 }
 
 impl ExplainPlan {
     /// Create an empty plan.
     pub fn new() -> Self {
-        Self { steps: Vec::new() }
+        Self {
+            steps: Vec::new(),
+            estimated_cost: 0.0,
+            optimizer_applied: false,
+            optimizations: Vec::new(),
+        }
     }
 
     /// Append a step to the plan.
     pub fn push(&mut self, step: ExplainStep) {
+        self.estimated_cost += step.rows_in.max(1) as f64;
         self.steps.push(step);
+    }
+
+    /// Record an optimizer decision.
+    pub fn add_optimization(&mut self, description: String) {
+        self.optimizations.push(description);
+        self.optimizer_applied = true;
     }
 
     /// Total number of steps.
