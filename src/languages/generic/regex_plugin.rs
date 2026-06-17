@@ -2,14 +2,13 @@
 
 use crate::error::Result;
 use crate::languages::generic::config::{get_language_config, LanguageConfig};
+use crate::languages::generic::regex_extract::extract_regex_symbols;
 use crate::languages::plugin_trait::*;
-use regex::Regex;
 use std::path::Path;
 
 /// Generic regex language plugin configured via `languages.toml`.
 pub struct RegexLanguagePlugin {
     config: &'static LanguageConfig,
-    patterns: Vec<(Regex, SymbolType)>,
 }
 
 impl RegexLanguagePlugin {
@@ -18,24 +17,12 @@ impl RegexLanguagePlugin {
         let config = get_language_config(language_id).ok_or_else(|| {
             crate::error::Error::PluginError(format!("Unknown regex language: {language_id}"))
         })?;
-        let regex_patterns = config.regex_patterns.ok_or_else(|| {
-            crate::error::Error::PluginError(format!("No regex patterns for: {language_id}"))
-        })?;
-        let patterns = regex_patterns
-            .iter()
-            .map(|p| {
-                Ok((
-                    Regex::new(p.pattern).map_err(|e| {
-                        crate::error::Error::PluginError(format!(
-                            "Invalid regex for {}: {e}",
-                            language_id
-                        ))
-                    })?,
-                    p.symbol_type,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Self { config, patterns })
+        if config.regex_patterns.is_none() {
+            return Err(crate::error::Error::PluginError(format!(
+                "No regex patterns for: {language_id}"
+            )));
+        }
+        Ok(Self { config })
     }
 }
 
@@ -53,39 +40,12 @@ impl LanguagePlugin for RegexLanguagePlugin {
     }
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
-        let file = file_path.to_string_lossy().to_string();
-        let text = String::from_utf8_lossy(source);
-        let mut symbols = Vec::new();
-
-        for (line_no, line) in text.lines().enumerate() {
-            for (re, symbol_type) in &self.patterns {
-                if let Some(cap) = re.captures(line) {
-                    symbols.push(Symbol {
-                        name: cap[1].to_string(),
-                        symbol_type: *symbol_type,
-                        qualified_name: None,
-                        location: SourceLocation {
-                            file: file.clone(),
-                            start_line: line_no + 1,
-                            end_line: line_no + 1,
-                            start_column: 0,
-                            end_column: 0,
-                        },
-                        signature: Some(line.trim().to_string()),
-                        return_type: None,
-                        parameters: vec![],
-                        fields: vec![],
-                        modifiers: vec![],
-                        documentation: None,
-                        metadata: serde_json::json!({
-                            "language": self.config.id,
-                            "extractor": "regex"
-                        }),
-                    });
-                }
-            }
-        }
-        Ok(symbols)
+        extract_regex_symbols(
+            file_path,
+            source,
+            self.config.regex_patterns.expect("validated at init"),
+            "regex",
+        )
     }
 
     fn extract_relations(

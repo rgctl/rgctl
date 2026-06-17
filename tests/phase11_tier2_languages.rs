@@ -176,18 +176,13 @@ fn test_nim_plugin() {
 
 #[cfg(feature = "lang-elixir")]
 #[test]
-fn test_elixir_plugin_parses() {
-    let plugin = TreeSitterLanguagePlugin::new("elixir", || tree_sitter_elixir::LANGUAGE.into())
-        .unwrap();
-    let source = "def add(a, b), do: a + b";
-    let symbols = plugin
-        .extract_symbols(Path::new("test.ex"), source.as_bytes())
-        .unwrap();
-    // Generic extractor only captures anonymous_function; full def support needs custom handler.
-    assert!(
-        symbols.is_empty() || symbols.iter().all(|s| s.symbol_type == SymbolType::Function),
-        "unexpected symbols: {:?}",
-        symbols
+fn test_elixir_plugin() {
+    assert_extracts_function(
+        "elixir",
+        || tree_sitter_elixir::LANGUAGE.into(),
+        "test.ex",
+        "def add(a, b), do: a + b",
+        "add",
     );
 }
 

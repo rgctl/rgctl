@@ -4,6 +4,7 @@ use crate::error::Result;
 use crate::languages::extraction::tree_sitter::{extract_symbols_by_kinds, parse_source};
 use crate::languages::extraction::ComplexityCalculator;
 use crate::languages::generic::config::{get_language_config, LanguageConfig};
+use crate::languages::generic::regex_extract::{extract_regex_symbols, merge_symbols};
 use crate::languages::plugin_trait::*;
 use std::path::Path;
 use tree_sitter::{Node, Tree};
@@ -58,13 +59,19 @@ impl LanguagePlugin for TreeSitterLanguagePlugin {
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let tree = self.parse(source, file_path)?;
-        extract_symbols_by_kinds(
+        let mut symbols = extract_symbols_by_kinds(
             &tree,
             source,
             file_path,
             self.config.function_kinds,
             self.config.class_kinds,
-        )
+        )?;
+        if let Some(patterns) = self.config.regex_patterns {
+            let supplemental =
+                extract_regex_symbols(file_path, source, patterns, "tree-sitter+regex")?;
+            merge_symbols(&mut symbols, supplemental);
+        }
+        Ok(symbols)
     }
 
     fn extract_relations(

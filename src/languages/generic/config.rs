@@ -26,7 +26,7 @@ pub struct LanguageConfig {
     pub enable_complexity: bool,
     /// Whether type inference is enabled
     pub enable_type_inference: bool,
-    /// Regex patterns (regex handler only)
+    /// Optional supplemental regex patterns (regex handler, or hybrid tree-sitter)
     pub regex_patterns: Option<&'static [RegexPatternConfig]>,
 }
 

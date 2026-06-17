@@ -28,6 +28,9 @@ pub fn symbol_type_for_kind(
         "type_declaration" | "type_definition" | "class_declaration" | "class_specifier" => {
             Some(SymbolType::Class)
         }
+        "module" | "module_definition" | "module_declaration" | "namespace_definition" => {
+            Some(SymbolType::Module)
+        }
         _ => None,
     }
 }

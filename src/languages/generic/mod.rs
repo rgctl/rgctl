@@ -1,6 +1,7 @@
 //! Generic language plugins driven by `languages.toml` (Phase 7)
 
 pub mod config;
+pub mod regex_extract;
 pub mod regex_plugin;
 pub mod tree_sitter_plugin;
 

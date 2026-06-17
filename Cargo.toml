@@ -269,5 +269,10 @@ name = "graph"
 harness = false
 
 [[bench]]
+name = "phase11_polyglot"
+harness = false
+required-features = ["bundle-extended"]
+
+[[bench]]
 name = "nlp"
 harness = false

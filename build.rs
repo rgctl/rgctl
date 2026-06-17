@@ -101,6 +101,9 @@ fn validate(config: &LanguagesFile) {
             "regex" if lang.regex_patterns.is_empty() => {
                 panic!("Regex language '{id}' requires regex_patterns");
             }
+            "tree-sitter" if !lang.regex_patterns.is_empty() => {
+                // Hybrid: tree-sitter node kinds plus supplemental regex patterns.
+            }
             "tree-sitter" | "markdown" | "regex" => {}
             other => panic!("Unknown handler '{other}' for language '{id}'"),
         }
@@ -240,7 +243,7 @@ fn generate_lang_configs(config: &LanguagesFile) -> String {
             }
         ));
 
-        if lang.handler == "regex" {
+        if !lang.regex_patterns.is_empty() {
             code.push_str(&format!("static RE_{const_id}: &[super::RegexPatternConfig] = &[\n"));
             for pat in &lang.regex_patterns {
                 let sym = match pat.symbol_type.as_str() {
@@ -260,6 +263,12 @@ fn generate_lang_configs(config: &LanguagesFile) -> String {
             code.push_str("];\n");
         }
 
+        let regex_patterns_value = if lang.regex_patterns.is_empty() {
+            "None".to_string()
+        } else {
+            format!("Some(RE_{const_id})")
+        };
+
         code.push_str(&format!(
             "pub static CONFIG_{const_id}: super::LanguageConfig = super::LanguageConfig {{\n\
              id: \"{id}\",\n\
@@ -268,15 +277,10 @@ fn generate_lang_configs(config: &LanguagesFile) -> String {
              class_kinds: CLS_{const_id},\n\
              enable_complexity: {},\n\
              enable_type_inference: {},\n\
-             regex_patterns: {},\n\
+             regex_patterns: {regex_patterns_value},\n\
          }};\n\n",
             lang.enable_complexity,
             lang.enable_type_inference,
-            if lang.handler == "regex" {
-                format!("Some(RE_{const_id})")
-            } else {
-                "None".to_string()
-            }
         ));
     }
 

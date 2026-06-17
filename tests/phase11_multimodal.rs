@@ -29,6 +29,20 @@ CREATE TABLE posts (
 }
 
 #[test]
+fn test_sql_view_and_index_in_multimodal() {
+    let plugin = SqlPlugin::new().unwrap();
+    let source = br#"
+CREATE TABLE users (id INTEGER PRIMARY KEY);
+CREATE VIEW active_users AS SELECT id FROM users;
+CREATE INDEX users_id_idx ON users (id);
+"#;
+    let symbols = plugin
+        .extract_symbols(Path::new("schema.sql"), source)
+        .unwrap();
+    assert!(symbols.iter().any(|s| s.name == "active_users"));
+}
+
+#[test]
 fn test_dockerfile_routing_and_extraction() {
     let registry = LanguageRegistry::new();
     let plugin = registry
