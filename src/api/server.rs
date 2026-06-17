@@ -1,14 +1,17 @@
 //! REST API server for web-based graph browser
 
-use crate::analysis::community::CommunityDetector;
+use crate::analysis::centrality::{degree_centrality, identify_hotspots, CentralityAnalyzer};
+use crate::analysis::community::{detect_communities, CommunityDetector};
 use crate::analysis::complexity::ComplexityAnalyzer;
 use crate::api::state::AppState;
 use crate::error::Error;
+use crate::graph::backend::GraphBackend;
 use crate::graph::query;
 use crate::graph::schema::{Edge, Node, NodeType};
 use crate::nlp::pattern_matcher::PatternMatcher;
+use crate::export::select_subgraph;
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -44,6 +47,17 @@ pub struct NodeListParams {
     pub q: Option<String>,
 }
 
+/// Graph query parameters for `/api/graph`.
+#[derive(Debug, Deserialize)]
+pub struct GraphQueryParams {
+    /// DSL query (default: all nodes)
+    pub query: Option<String>,
+    /// Neighborhood expansion depth
+    pub depth: Option<usize>,
+    /// Max nodes returned
+    pub limit: Option<usize>,
+}
+
 /// Start the web API and static file server.
 pub async fn run_server(state: AppState, port: u16, web_dir: Option<std::path::PathBuf>) -> crate::error::Result<()> {
     let app = build_router(state, web_dir);
@@ -66,9 +80,15 @@ pub async fn run_server(state: AppState, port: u16, web_dir: Option<std::path::P
 pub fn build_router(state: AppState, web_dir: Option<std::path::PathBuf>) -> Router {
     let api = Router::new()
         .route("/api/graph/stats", get(graph_stats))
+        .route("/api/stats", get(graph_stats))
+        .route("/api/graph", get(graph_by_query))
         .route("/api/graph/nodes", get(list_nodes))
         .route("/api/graph/edges", get(list_edges))
         .route("/api/graph/search", get(search_nodes))
+        .route("/api/node/{id}", get(get_node))
+        .route("/api/node/{id}/neighbors", get(get_node_neighbors))
+        .route("/api/dashboard", get(dashboard_metrics))
+        .route("/api/dashboard/advanced", get(dashboard_advanced))
         .route("/api/query", post(nlp_query))
         .route("/api/communities", get(list_communities))
         .with_state(state);
@@ -101,6 +121,310 @@ pub async fn graph_stats(State(state): State<AppState>) -> std::result::Result<J
         }))
     })?;
     Ok(Json(stats))
+}
+
+/// Return nodes and edges for a DSL query (Phase 14 web explorer).
+pub async fn graph_by_query(
+    State(state): State<AppState>,
+    Query(params): Query<GraphQueryParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let query = params.query.unwrap_or_else(|| "all".into());
+    let limit = params.limit.unwrap_or(200).min(1000);
+
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let subgraph = select_subgraph(backend, &query, params.depth)?;
+        let nodes: Vec<Value> = subgraph
+            .nodes
+            .iter()
+            .take(limit)
+            .map(node_summary)
+            .collect();
+        let node_ids: std::collections::HashSet<_> =
+            subgraph.nodes.iter().take(limit).map(|n| n.id).collect();
+        let edges: Vec<Value> = subgraph
+            .edges
+            .into_iter()
+            .filter(|e| node_ids.contains(&e.from) && node_ids.contains(&e.to))
+            .map(edge_summary)
+            .collect();
+
+        Ok(json!({
+            "query": query,
+            "nodes": nodes,
+            "edges": edges,
+        }))
+    })?;
+
+    Ok(Json(result))
+}
+
+/// Return details for a single node.
+pub async fn get_node(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let node_id = uuid::Uuid::parse_str(&id)
+        .map_err(|e| Error::InvalidQuery(format!("Invalid node id: {e}")))?;
+
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let node = backend
+            .get_node(node_id)?
+            .ok_or_else(|| Error::InvalidQuery(format!("Node not found: {id}")))?;
+        let mut detail = node_summary(&node);
+        if let Some(obj) = detail.as_object_mut() {
+            obj.insert(
+                "properties".into(),
+                json!(node.properties),
+            );
+            obj.insert("signature".into(), json!(node.signature));
+            obj.insert("return_type".into(), json!(node.return_type));
+        }
+        Ok(detail)
+    })?;
+
+    Ok(Json(result))
+}
+
+/// Return adjacent nodes and connecting edges.
+pub async fn get_node_neighbors(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let node_id = uuid::Uuid::parse_str(&id)
+        .map_err(|e| Error::InvalidQuery(format!("Invalid node id: {e}")))?;
+
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        backend
+            .get_node(node_id)?
+            .ok_or_else(|| Error::InvalidQuery(format!("Node not found: {id}")))?;
+
+        let edges = backend.all_edges()?;
+        let mut neighbor_ids = std::collections::HashSet::new();
+        let mut connecting = Vec::new();
+        for edge in edges {
+            if edge.from == node_id {
+                neighbor_ids.insert(edge.to);
+                connecting.push(edge_summary(edge));
+            } else if edge.to == node_id {
+                neighbor_ids.insert(edge.from);
+                connecting.push(edge_summary(edge));
+            }
+        }
+
+        let neighbors: Vec<Value> = neighbor_ids
+            .iter()
+            .filter_map(|nid| backend.get_node(*nid).ok().flatten())
+            .map(|n| node_summary(&n))
+            .collect();
+
+        Ok(json!({
+            "id": id,
+            "neighbors": neighbors,
+            "edges": connecting,
+        }))
+    })?;
+
+    Ok(Json(result))
+}
+
+/// Dashboard chart data (complexity, languages, node types).
+pub async fn dashboard_metrics(
+    State(state): State<AppState>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let nodes = backend.all_nodes()?;
+        let complexity = ComplexityAnalyzer::analyze(backend).ok();
+
+        let mut type_counts = std::collections::HashMap::<String, usize>::new();
+        let mut lang_counts = std::collections::HashMap::<String, usize>::new();
+        for node in &nodes {
+            let t = format!("{:?}", node.node_type);
+            *type_counts.entry(t).or_default() += 1;
+            if let Some(path) = &node.file_path {
+                let ext = std::path::Path::new(path)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                *lang_counts.entry(ext).or_default() += 1;
+            }
+        }
+
+        let mut top_complex: Vec<Value> = Vec::new();
+        if let Some(ref report) = complexity {
+            let mut ranked: Vec<_> = report.functions.iter().collect();
+            ranked.sort_by(|a, b| b.cyclomatic.cmp(&a.cyclomatic));
+            for func in ranked.into_iter().take(10) {
+                top_complex.push(json!({
+                    "name": func.node.name,
+                    "complexity": func.cyclomatic,
+                    "file": func.node.file_path,
+                }));
+            }
+        }
+
+        let complexity_histogram = complexity
+            .as_ref()
+            .map(|c| {
+                let mut buckets = [0usize; 6];
+                for func in &c.functions {
+                    let idx = match func.cyclomatic {
+                        0..=1 => 0,
+                        2..=5 => 1,
+                        6..=10 => 2,
+                        11..=20 => 3,
+                        21..=50 => 4,
+                        _ => 5,
+                    };
+                    buckets[idx] += 1;
+                }
+                buckets
+            })
+            .unwrap_or([0; 6]);
+
+        let community_data = CommunityDetector::new().detect(backend).ok();
+        let centrality_data = CentralityAnalyzer::new().analyze(backend).ok();
+
+        let mut communities_summary: Vec<Value> = Vec::new();
+        let mut community_sizes: Vec<usize> = Vec::new();
+        let mut modularity = None;
+        let mut community_count = 0usize;
+
+        if let Some(ref detection) = community_data {
+            modularity = Some(detection.modularity);
+            community_count = detection.communities.len();
+            let mut sorted = detection.communities.clone();
+            sorted.sort_by(|a, b| b.members.len().cmp(&a.members.len()));
+            for community in sorted.iter().take(12) {
+                community_sizes.push(community.members.len());
+                let top_members: Vec<String> = community
+                    .members
+                    .iter()
+                    .filter_map(|id| {
+                        backend
+                            .get_node(*id)
+                            .ok()
+                            .flatten()
+                            .map(|n| n.name)
+                    })
+                    .take(5)
+                    .collect();
+                communities_summary.push(json!({
+                    "id": community.id,
+                    "member_count": community.members.len(),
+                    "top_members": top_members,
+                }));
+            }
+        }
+
+        let mut top_connected: Vec<Value> = Vec::new();
+        let mut hotspots: Vec<Value> = Vec::new();
+
+        if let Some(ref centrality) = centrality_data {
+            let mut ranked: Vec<_> = centrality.scores.iter().collect();
+            ranked.sort_by(|a, b| {
+                let da = a.1.in_degree + a.1.out_degree;
+                let db = b.1.in_degree + b.1.out_degree;
+                db.cmp(&da).then_with(|| {
+                    b.1.pagerank
+                        .partial_cmp(&a.1.pagerank)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+            });
+
+            for (id, scores) in ranked.into_iter().take(10) {
+                if let Ok(Some(node)) = backend.get_node(*id) {
+                    top_connected.push(json!({
+                        "name": node.name,
+                        "type": format!("{:?}", node.node_type),
+                        "in_degree": scores.in_degree,
+                        "out_degree": scores.out_degree,
+                        "total_degree": scores.in_degree + scores.out_degree,
+                        "pagerank": scores.pagerank,
+                        "file": node.file_path,
+                    }));
+                }
+            }
+        }
+
+        if let (Some(ref complexity_report), Some(ref centrality)) =
+            (complexity.as_ref(), centrality_data.as_ref())
+        {
+            let mut ranked_hotspots: Vec<(f64, &crate::analysis::complexity::FunctionComplexity)> =
+                complexity_report
+                    .functions
+                    .iter()
+                    .map(|func| {
+                        let degree = centrality
+                            .scores
+                            .get(&func.node.id)
+                            .map(|s| s.in_degree + s.out_degree)
+                            .unwrap_or(0);
+                        let score = func.cyclomatic as f64 * (1.0 + degree as f64);
+                        (score, func)
+                    })
+                    .collect();
+            ranked_hotspots.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            for (score, func) in ranked_hotspots.into_iter().take(10) {
+                let degree = centrality
+                    .scores
+                    .get(&func.node.id)
+                    .map(|s| s.in_degree + s.out_degree)
+                    .unwrap_or(0);
+                hotspots.push(json!({
+                    "name": func.node.name,
+                    "complexity": func.cyclomatic,
+                    "total_degree": degree,
+                    "hotspot_score": score,
+                    "file": func.node.file_path,
+                }));
+            }
+        }
+
+        Ok(json!({
+            "node_count": nodes.len(),
+            "function_count": backend.find_nodes_by_type(NodeType::Function)?.len(),
+            "class_count": backend.find_nodes_by_type(NodeType::Class)?.len(),
+            "file_count": backend.find_nodes_by_type(NodeType::File)?.len(),
+            "avg_complexity": complexity.as_ref().map(|c| c.avg_cyclomatic),
+            "modularity": modularity,
+            "community_count": community_count,
+            "node_types": type_counts,
+            "languages": lang_counts,
+            "top_complex_functions": top_complex,
+            "complexity_histogram": complexity_histogram,
+            "communities": communities_summary,
+            "community_sizes": community_sizes,
+            "top_connected_nodes": top_connected,
+            "hotspots": hotspots,
+        }))
+    })?;
+
+    Ok(Json(result))
+}
+
+/// Advanced dashboard analytics: communities, hotspots, centrality (Phase 14 A+).
+pub async fn dashboard_advanced(
+    State(state): State<AppState>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let communities = detect_communities(backend)?;
+        let hotspots: Vec<_> = identify_hotspots(backend)?.into_iter().take(10).collect();
+        let centrality: Vec<_> = degree_centrality(backend)?.into_iter().take(20).collect();
+
+        Ok(json!({
+            "communities": communities,
+            "hotspots": hotspots,
+            "centrality": centrality,
+        }))
+    })?;
+
+    Ok(Json(result))
 }
 
 async fn list_nodes(

@@ -44,6 +44,8 @@
     </select>
     <button onclick="loadGraph()">Refresh</button>
     <button class="secondary" onclick="askNlp()">Ask NLP</button>
+    <a href="/explorer.html" style="color:#58a6ff;font-size:0.875rem">D3 Explorer</a>
+    <a href="/dashboard.html" style="color:#58a6ff;font-size:0.875rem">Dashboard</a>
   </header>
   <main>
     <aside>
@@ -175,7 +177,7 @@
       }
     }
 
-    async fn askNlp() {
+    async function askNlp() {
       const q = prompt('Ask a natural language question:');
       if (!q) return;
       const r = await fetch('/api/query', {

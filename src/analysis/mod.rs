@@ -22,12 +22,17 @@ pub mod type_inference;
 
 pub use blast_radius::{BlastRadiusAnalyzer, BlastRadiusReport, DataFlowImpact};
 pub use callgraph::{CallGraph, CallGraphEdge, CallGraphNode};
-pub use centrality::{CentralityAnalyzer, CentralityReport, CentralityScores};
+pub use centrality::{
+    degree_centrality, identify_hotspots, CentralityAnalyzer, CentralityReport, CentralityScore,
+    CentralityScores,
+};
 pub use cfg::{
     BasicBlock, BlockId, CfgEdge, CfgEdgeType, ControlFlowGraph, Statement, StatementKind,
 };
 pub use cfg_builder::build_cfg_for_function;
-pub use community::{Community, CommunityDetector, CommunityResult};
+pub use community::{
+    detect_communities, Community, CommunityDetector, CommunityResult, DashboardCommunity,
+};
 pub use complexity::{classify_complexity, ComplexityAnalyzer, ComplexityLevel, ComplexityReport};
 pub use dataflow::{compute_reaching_definitions, Definition, ReachingDefs};
 pub use def_use::{extract_def_use, extract_used_variables};

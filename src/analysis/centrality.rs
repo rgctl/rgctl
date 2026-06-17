@@ -4,8 +4,10 @@
 
 use crate::analysis::graph_utils::PetGraphView;
 use crate::error::Result;
+use crate::graph::backend::GraphBackend;
 use crate::graph::backend::MemoryBackend;
 use petgraph::algo::page_rank;
+use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -178,6 +180,106 @@ impl CentralityAnalyzer {
             })
             .collect()
     }
+}
+
+/// Node centrality score for dashboard widgets (Phase 14 A+).
+#[derive(Debug, Clone, Serialize)]
+pub struct CentralityScore {
+    /// Node identifier
+    pub node_id: Uuid,
+    /// Symbol name
+    pub name: String,
+    /// Source file path
+    pub file_path: Option<String>,
+    /// Total degree (in + out)
+    pub degree: usize,
+    /// Betweenness centrality (0–1)
+    pub betweenness: f64,
+    /// Closeness centrality (0–1, approximate)
+    pub closeness: f64,
+    /// Cyclomatic complexity when known
+    pub complexity: Option<i64>,
+    /// Combined risk: degree × complexity
+    pub risk_score: f64,
+}
+
+const DASHBOARD_CENTRALITY_LIMIT: usize = 500;
+
+/// Degree centrality for dashboard (limited to graphs ≤500 nodes for betweenness).
+pub fn degree_centrality(backend: &MemoryBackend) -> Result<Vec<CentralityScore>> {
+    let nodes = backend.all_nodes()?;
+    if nodes.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let edges = backend.all_edges()?;
+    let mut degree_map: HashMap<Uuid, usize> = HashMap::new();
+    for edge in &edges {
+        *degree_map.entry(edge.from).or_insert(0) += 1;
+        *degree_map.entry(edge.to).or_insert(0) += 1;
+    }
+
+    let betweenness = if nodes.len() <= DASHBOARD_CENTRALITY_LIMIT {
+        CentralityAnalyzer::new()
+            .analyze(backend)
+            .ok()
+            .map(|r| r.scores)
+            .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
+    let mut scores: Vec<CentralityScore> = nodes
+        .iter()
+        .map(|node| {
+            let degree = degree_map.get(&node.id).copied().unwrap_or(0);
+            let complexity = node
+                .get_property("cyclomatic")
+                .and_then(|v| v.parse::<i64>().ok());
+            let bt = betweenness
+                .get(&node.id)
+                .map(|s| s.betweenness)
+                .unwrap_or(0.0);
+            let risk_score = degree as f64 * complexity.unwrap_or(1) as f64;
+
+            CentralityScore {
+                node_id: node.id,
+                name: node.name.clone(),
+                file_path: node.file_path.clone(),
+                degree,
+                betweenness: bt,
+                closeness: closeness_estimate(degree, nodes.len()),
+                complexity,
+                risk_score,
+            }
+        })
+        .collect();
+
+    scores.sort_by(|a, b| b.degree.cmp(&a.degree).then_with(|| {
+        b.risk_score
+            .partial_cmp(&a.risk_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }));
+    Ok(scores)
+}
+
+/// Hotspots: high degree and high complexity nodes.
+pub fn identify_hotspots(backend: &MemoryBackend) -> Result<Vec<CentralityScore>> {
+    let mut scores = degree_centrality(backend)?;
+    scores.retain(|s| s.degree >= 3 && s.complexity.unwrap_or(0) >= 10);
+    scores.sort_by(|a, b| {
+        b.risk_score
+            .partial_cmp(&a.risk_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(scores)
+}
+
+fn closeness_estimate(degree: usize, node_count: usize) -> f64 {
+    if node_count <= 1 || degree == 0 {
+        return 0.0;
+    }
+    (degree as f64 / (node_count - 1) as f64).min(1.0)
 }
 
 #[cfg(test)]

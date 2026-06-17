@@ -4,8 +4,11 @@
 
 use crate::analysis::graph_utils::PetGraphView;
 use crate::error::Result;
+use crate::graph::backend::GraphBackend;
 use crate::graph::backend::MemoryBackend;
+use crate::graph::schema::NodeType;
 use petgraph::graph::NodeIndex;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
@@ -151,6 +154,196 @@ impl CommunityDetector {
         }
         q
     }
+}
+
+/// Dashboard community with inferred metadata (Phase 14 A+).
+#[derive(Debug, Clone, Serialize)]
+pub struct DashboardCommunity {
+    /// Community identifier
+    pub id: usize,
+    /// Member node IDs
+    pub nodes: Vec<Uuid>,
+    /// Member count
+    pub size: usize,
+    /// Most common node type in the cluster
+    pub primary_type: NodeType,
+    /// Average cyclomatic complexity
+    pub avg_complexity: f64,
+    /// Human-readable label (e.g. "auth cluster")
+    pub label: String,
+}
+
+/// Detect communities for the analytics dashboard.
+///
+/// Uses label propagation (via [`CommunityDetector`]) and enriches each cluster
+/// with labels and complexity metadata. Falls back to connected components when
+/// propagation yields a single cluster on disconnected subgraphs.
+pub fn detect_communities(backend: &MemoryBackend) -> Result<Vec<DashboardCommunity>> {
+    let nodes = backend.all_nodes()?;
+    let detection = CommunityDetector::new().detect(backend)?;
+
+    let mut communities: Vec<DashboardCommunity> = detection
+        .communities
+        .into_iter()
+        .filter(|c| c.members.len() >= 2)
+        .map(|c| build_dashboard_community(c.id, &c.members, &nodes))
+        .collect();
+
+    if communities.len() < 2 {
+        let components = connected_components(backend, &nodes)?;
+        if components.len() > communities.len() {
+            communities = components
+                .into_iter()
+                .enumerate()
+                .filter(|(_, members)| members.len() >= 2)
+                .map(|(idx, members)| build_dashboard_community(idx, &members, &nodes))
+                .collect();
+        }
+    }
+
+    communities.sort_by(|a, b| b.size.cmp(&a.size));
+    Ok(communities)
+}
+
+fn build_dashboard_community(
+    id: usize,
+    member_ids: &[Uuid],
+    all_nodes: &[crate::graph::schema::Node],
+) -> DashboardCommunity {
+    let community_nodes: Vec<_> = all_nodes
+        .iter()
+        .filter(|n| member_ids.contains(&n.id))
+        .collect();
+
+    DashboardCommunity {
+        id,
+        nodes: member_ids.to_vec(),
+        size: member_ids.len(),
+        primary_type: most_common_type(&community_nodes),
+        avg_complexity: avg_complexity(&community_nodes),
+        label: infer_community_label(&community_nodes, id),
+    }
+}
+
+fn connected_components(
+    backend: &MemoryBackend,
+    nodes: &[crate::graph::schema::Node],
+) -> Result<Vec<Vec<Uuid>>> {
+    let edges = backend.all_edges()?;
+    let mut adj: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for edge in &edges {
+        adj.entry(edge.from).or_default().push(edge.to);
+        adj.entry(edge.to).or_default().push(edge.from);
+    }
+
+    let mut visited = HashSet::new();
+    let mut components = Vec::new();
+
+    for node in nodes {
+        if visited.contains(&node.id) {
+            continue;
+        }
+        let mut stack = vec![node.id];
+        let mut component = Vec::new();
+        while let Some(current) = stack.pop() {
+            if !visited.insert(current) {
+                continue;
+            }
+            component.push(current);
+            if let Some(neighbors) = adj.get(&current) {
+                for &neighbor in neighbors {
+                    if !visited.contains(&neighbor) {
+                        stack.push(neighbor);
+                    }
+                }
+            }
+        }
+        if !component.is_empty() {
+            components.push(component);
+        }
+    }
+    Ok(components)
+}
+
+fn most_common_type(nodes: &[&crate::graph::schema::Node]) -> NodeType {
+    let mut counts = HashMap::new();
+    for node in nodes {
+        *counts.entry(node.node_type).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(t, _)| t)
+        .unwrap_or(NodeType::Function)
+}
+
+fn avg_complexity(nodes: &[&crate::graph::schema::Node]) -> f64 {
+    if nodes.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = nodes
+        .iter()
+        .map(|n| node_complexity(n) as f64)
+        .sum();
+    sum / nodes.len() as f64
+}
+
+fn node_complexity(node: &crate::graph::schema::Node) -> i64 {
+    node.get_property("cyclomatic")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0)
+}
+
+fn infer_community_label(nodes: &[&crate::graph::schema::Node], idx: usize) -> String {
+    let paths: Vec<_> = nodes
+        .iter()
+        .filter_map(|n| n.file_path.as_ref())
+        .collect();
+
+    if let Some(common) = find_common_path_prefix(&paths) {
+        if !common.is_empty() {
+            return common;
+        }
+    }
+
+    let names: Vec<_> = nodes.iter().map(|n| n.name.as_str()).collect();
+    if names.iter().any(|n| n.contains("auth") || n.contains("Auth")) {
+        return "auth cluster".into();
+    }
+    if names.iter().any(|n| n.contains("api") || n.contains("Api")) {
+        return "API layer".into();
+    }
+    if names
+        .iter()
+        .any(|n| n.contains("db") || n.contains("database") || n.contains("query"))
+    {
+        return "database layer".into();
+    }
+
+    format!("cluster_{idx}")
+}
+
+fn find_common_path_prefix(paths: &[&String]) -> Option<String> {
+    if paths.is_empty() {
+        return None;
+    }
+    let first = paths[0].as_str();
+    let mut prefix_len = first.len();
+    for path in &paths[1..] {
+        prefix_len = first
+            .chars()
+            .zip(path.chars())
+            .take(prefix_len)
+            .take_while(|(a, b)| a == b)
+            .count();
+    }
+    if prefix_len == 0 {
+        return None;
+    }
+    if let Some(last_slash) = first[..prefix_len].rfind('/') {
+        return Some(first[..last_slash].to_string());
+    }
+    Some(first[..prefix_len].to_string())
 }
 
 #[cfg(test)]

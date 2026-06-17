@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rBuilder Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e6edf3; padding: 20px; }
+    header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+    h1 { color: #58a6ff; font-size: 1.25rem; }
+    a { color: #58a6ff; text-decoration: none; font-size: 0.9rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+    .card h2 { font-size: 0.95rem; margin-bottom: 12px; color: #8b949e; }
+    .card p.sub { font-size: 0.85rem; color: #8b949e; margin-bottom: 12px; line-height: 1.4; }
+    .stat-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #21262d; font-size: 0.9rem; }
+    .stat-rows .stat-row strong { color: #58a6ff; }
+    table { width: 100%; font-size: 0.85rem; border-collapse: collapse; }
+    th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #21262d; }
+    th { color: #8b949e; font-weight: 600; }
+    canvas { max-height: 220px; }
+    #centrality-chart { max-height: 400px; }
+    .split { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+    @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+    .risk-critical { background: rgba(248, 81, 73, 0.1); }
+    .risk-high { background: rgba(210, 153, 34, 0.1); }
+    .risk-medium { background: rgba(63, 185, 80, 0.05); }
+    .risk-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-weight: 600; font-size: 0.8rem; }
+    .risk-critical .risk-badge { background: #f85149; color: #fff; }
+    .risk-high .risk-badge { background: #d29922; color: #0d1117; }
+    .risk-medium .risk-badge { background: #3fb950; color: #0d1117; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Repository Dashboard</h1>
+    <a href="/">Graph Browser</a>
+    <a href="/explorer.html">D3 Explorer</a>
+    <button onclick="load()" style="margin-left:auto;background:#238636;border:0;color:#fff;padding:6px 12px;border-radius:6px;cursor:pointer">Refresh</button>
+  </header>
+  <div class="grid">
+    <div class="card" id="stats-card"><h2>Overview</h2><div id="stats">Loading…</div></div>
+    <div class="card"><h2>Complexity Distribution</h2><canvas id="complexity-chart"></canvas></div>
+    <div class="card"><h2>Node Types</h2><canvas id="types-chart"></canvas></div>
+    <div class="card"><h2>Languages (by extension)</h2><canvas id="lang-chart"></canvas></div>
+    <div class="card"><h2>Community Sizes</h2><canvas id="community-chart"></canvas></div>
+    <div class="card"><h2>Graph Modularity</h2><div id="community-stats" class="stat-rows">Loading…</div></div>
+
+    <div class="card" style="grid-column: 1 / -1">
+      <h2>Code Communities</h2>
+      <div class="split">
+        <div><canvas id="communities-chart"></canvas></div>
+        <div>
+          <table>
+            <thead><tr><th>Community</th><th>Size</th><th>Complexity</th><th>Type</th></tr></thead>
+            <tbody id="communities-table"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: 1 / -1">
+      <h2>Critical Hotspots</h2>
+      <p class="sub">Nodes with high connectivity and high complexity — likely architectural bottlenecks.</p>
+      <table>
+        <thead><tr><th>#</th><th>Node</th><th>Degree</th><th>Complexity</th><th>Risk Score</th></tr></thead>
+        <tbody id="hotspots-table"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="grid-column: 1 / -1">
+      <h2>Node Centrality Analysis</h2>
+      <canvas id="centrality-chart"></canvas>
+    </div>
+
+    <div class="card" style="grid-column: 1 / -1"><h2>Top 10 Most Connected Nodes</h2>
+      <table><thead><tr><th>Name</th><th>Type</th><th>In</th><th>Out</th><th>PageRank</th><th>File</th></tr></thead><tbody id="connected-table"></tbody></table>
+    </div>
+    <div class="card" style="grid-column: 1 / -1"><h2>Top 10 Most Complex Functions</h2>
+      <table><thead><tr><th>Function</th><th>Complexity</th><th>File</th></tr></thead><tbody id="top-table"></tbody></table>
+    </div>
+  </div>
+  <script src="/js/dashboard.js"></script>
+</body>
+</html>

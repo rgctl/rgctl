@@ -37,6 +37,9 @@ pub mod languages;
 // Graph layer
 pub mod graph;
 
+// Visualization & export (Phase 14)
+pub mod export;
+
 // Graph query language (Phase 12.4)
 pub mod gql;
 

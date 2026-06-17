@@ -283,6 +283,29 @@ impl ToolExecutor {
                     "required": ["file", "function"]
                 }),
             },
+            ToolDefinition {
+                name: "generate_diagram".into(),
+                description: "Generate a Mermaid or Graphviz diagram for a graph query".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Graph query DSL (e.g. type:Function)" },
+                        "format": {
+                            "type": "string",
+                            "enum": ["mermaid", "dot", "graphml"],
+                            "description": "Output format (default mermaid)"
+                        },
+                        "diagram_type": {
+                            "type": "string",
+                            "enum": ["flowchart", "class", "call-graph"],
+                            "description": "Mermaid diagram style"
+                        },
+                        "depth": { "type": "integer", "description": "Neighborhood expansion depth" },
+                        "include_verbose": { "type": "boolean" }
+                    },
+                    "required": ["query"]
+                }),
+            },
         ]
     }
 
@@ -431,6 +454,22 @@ impl ToolExecutor {
                     .ok_or_else(|| Error::InvalidQuery("Missing function".into()))?;
                 let language = args.get("language").and_then(|v| v.as_str());
                 self.security_scan(file, function, language, verbose)
+            }
+            "generate_diagram" => {
+                let query = args
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::InvalidQuery("Missing query".into()))?;
+                let format = args
+                    .get("format")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("mermaid");
+                let diagram_type = args
+                    .get("diagram_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("flowchart");
+                let depth = args.get("depth").and_then(|v| v.as_u64()).map(|d| d as usize);
+                self.generate_diagram(backend, query, format, diagram_type, depth, verbose)
             }
             other => Err(Error::InvalidQuery(format!("Unknown tool: {other}"))),
         }
@@ -752,6 +791,53 @@ impl ToolExecutor {
             "high": vulns.iter().filter(|v| v.severity >= 7 && v.severity < 9).count(),
             "vulnerabilities": if verbose { json!(vuln_json) } else { json!(vuln_json.iter().take(10).collect::<Vec<_>>()) },
         });
+        Ok(response)
+    }
+
+    fn generate_diagram(
+        &self,
+        backend: &MemoryBackend,
+        query: &str,
+        format: &str,
+        diagram_type: &str,
+        depth: Option<usize>,
+        verbose: bool,
+    ) -> Result<Value> {
+        use crate::export::{
+            export_graphml, generate_dot, generate_mermaid, parse_diagram_type, GraphvizOptions,
+            MermaidOptions,
+        };
+
+        let content = match format.to_ascii_lowercase().as_str() {
+            "dot" | "graphviz" => generate_dot(
+                backend,
+                query,
+                GraphvizOptions::default(),
+                depth,
+            )?,
+            "graphml" => export_graphml(backend, query)?,
+            _ => generate_mermaid(
+                backend,
+                query,
+                MermaidOptions {
+                    diagram_type: parse_diagram_type(diagram_type),
+                    max_depth: depth,
+                    vertical: true,
+                },
+            )?,
+        };
+
+        let mut response = json!({
+            "query": query,
+            "format": format,
+            "diagram_type": diagram_type,
+            "content": content,
+        });
+        if verbose {
+            if let Some(obj) = response.as_object_mut() {
+                obj.insert("length".into(), json!(content.len()));
+            }
+        }
         Ok(response)
     }
 

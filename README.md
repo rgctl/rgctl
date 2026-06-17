@@ -84,7 +84,21 @@ rbuilder analyze --complexity --community
 
 # Start web UI
 rbuilder serve --port 8080 --open
+
+# Analytics dashboard (communities, hotspots, centrality)
+rbuilder serve-web --port 3000 --open
 ```
+
+### Web Dashboard
+
+Interactive analytics at `http://localhost:3000/dashboard.html`:
+
+- Complexity distribution and language breakdown
+- **Community detection** — bubble chart + labeled clusters
+- **Centrality analysis** — top connected nodes
+- **Hotspot table** — risk scores (degree × complexity)
+
+![Dashboard preview](docs/images/dashboard-preview.svg)
 
 ### MCP Integration (Claude Code)
 

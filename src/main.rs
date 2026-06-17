@@ -232,6 +232,40 @@ enum Commands {
         /// Output file
         #[arg(long)]
         output: String,
+
+        /// Query DSL when exporting graphml (default: all)
+        #[arg(long, default_value = "all")]
+        query: String,
+    },
+
+    /// Generate a diagram from a graph query (Phase 14)
+    Diagram {
+        /// Graph query (e.g. `type:Function`, `functions`)
+        query: String,
+
+        /// Output format: mermaid, dot, graphml, png, svg, pdf
+        #[arg(long, default_value = "mermaid")]
+        format: String,
+
+        /// Mermaid diagram type: flowchart, class, call-graph
+        #[arg(long, default_value = "flowchart")]
+        diagram_type: String,
+
+        /// Output file (stdout if omitted for text formats)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Expand call neighborhood depth
+        #[arg(long)]
+        depth: Option<usize>,
+
+        /// Graphviz layout: dot, neato, fdp, circo
+        #[arg(long, default_value = "dot")]
+        layout: String,
+
+        /// Rank direction: TB or LR
+        #[arg(long, default_value = "TB")]
+        rankdir: String,
     },
 
     /// Start web server for graph visualization
@@ -239,6 +273,18 @@ enum Commands {
     Serve {
         /// Port number
         #[arg(long, default_value = "8080")]
+        port: u16,
+
+        /// Open browser automatically
+        #[arg(long)]
+        open: bool,
+    },
+
+    /// Start web server for graph visualization (alias with default port 3000)
+    #[cfg(feature = "mcp-server")]
+    ServeWeb {
+        /// Port number
+        #[arg(long, default_value = "3000")]
         port: u16,
 
         /// Open browser automatically
@@ -855,22 +901,61 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
 
-        Commands::Export { format, output } => {
+        Commands::Export { format, output, query } => {
+            use rbuilder::export::export_graphml;
             use rbuilder::graph::CodeGraph;
             use std::path::Path;
 
-            if !format.eq_ignore_ascii_case("json") {
-                anyhow::bail!("Only json export is supported in Phase 1");
-            }
-
             let graph = CodeGraph::load_from_repo(Path::new("."))?;
-            std::fs::write(&output, graph.export_json()?)?;
+            let content = if format.eq_ignore_ascii_case("graphml") {
+                export_graphml(graph.backend(), &query)?
+            } else if format.eq_ignore_ascii_case("json") {
+                graph.export_json()?
+            } else {
+                anyhow::bail!("Supported export formats: json, graphml");
+            };
+            std::fs::write(&output, content)?;
             println!(
                 "Exported {} nodes and {} edges to {}",
                 graph.node_count(),
                 graph.edge_count(),
                 output
             );
+            Ok(())
+        }
+
+        Commands::Diagram {
+            query,
+            format,
+            diagram_type,
+            output,
+            depth,
+            layout,
+            rankdir,
+        } => {
+            use rbuilder::cli::diagram::{run_diagram, DiagramOptions};
+            use std::path::Path;
+
+            run_diagram(
+                Path::new("."),
+                DiagramOptions {
+                    query,
+                    format,
+                    diagram_type,
+                    output: output.map(Into::into),
+                    depth,
+                    layout,
+                    rankdir,
+                },
+            )?;
+            Ok(())
+        }
+
+        #[cfg(feature = "mcp-server")]
+        Commands::ServeWeb { port, open } => {
+            use rbuilder::cli::serve;
+            use std::path::Path;
+            serve::run_serve(Path::new("."), port, open)?;
             Ok(())
         }
 
