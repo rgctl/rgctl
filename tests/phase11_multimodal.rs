@@ -55,16 +55,12 @@ fn test_dockerfile_routing_and_extraction() {
     let symbols = docker
         .extract_symbols(Path::new("Dockerfile"), source)
         .unwrap();
-    assert!(
-        symbols
-            .iter()
-            .any(|s| s.symbol_type == SymbolType::Dependency && s.name == "rust:1.75")
-    );
-    assert!(
-        symbols
-            .iter()
-            .any(|s| s.symbol_type == SymbolType::BuildStep)
-    );
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::Dependency && s.name == "rust:1.75"));
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::BuildStep));
 }
 
 #[test]
@@ -90,7 +86,9 @@ fn test_github_actions_routing() {
         2
     );
     let relations = plugin.extract_relations(path, source, &symbols).unwrap();
-    assert!(relations.iter().any(|r| r.relation_type == RelationType::DependsOn));
+    assert!(relations
+        .iter()
+        .any(|r| r.relation_type == RelationType::DependsOn));
 }
 
 #[cfg(feature = "lang-chef")]
@@ -100,6 +98,15 @@ fn test_chef_routing() {
     let path = Path::new("cookbooks/nginx/recipes/default.rb");
     let plugin = registry.get_plugin_for_file(path).unwrap();
     assert_eq!(plugin.language_id(), "chef");
+}
+
+#[cfg(feature = "lang-puppet")]
+#[test]
+fn test_puppet_routing() {
+    let registry = LanguageRegistry::new();
+    let path = Path::new("modules/nginx/manifests/init.pp");
+    let plugin = registry.get_plugin_for_file(path).unwrap();
+    assert_eq!(plugin.language_id(), "puppet");
 }
 
 #[cfg(feature = "lang-ansible")]
@@ -129,11 +136,9 @@ build_job:
   script: cargo build
 "#;
     let symbols = gitlab.extract_symbols(path, source).unwrap();
-    assert!(
-        symbols
-            .iter()
-            .any(|s| s.symbol_type == SymbolType::Job && s.name == "test_job")
-    );
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::Job && s.name == "test_job"));
 }
 
 #[cfg(feature = "lang-bash")]

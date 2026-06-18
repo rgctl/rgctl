@@ -4,7 +4,6 @@
 
 use rbuilder::api::state::AppState;
 use rbuilder::config::project::RiskLevel;
-use rbuilder::graph::backend::GraphBackend;
 use rbuilder::incremental::{IncrementalUpdater, UpdateOptions};
 use rbuilder::languages::registry::LanguageRegistry;
 use rbuilder::mcp::protocol::graph_updated_notification;
@@ -44,7 +43,11 @@ fn test_mcp_state_reflects_incremental_update() {
         .with_graph(|g| Ok(g.backend().all_nodes()?.len()))
         .unwrap();
 
-    fs::write(root.join("src/lib.rs"), "pub fn hello() {}\npub fn world() {}\n").unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn hello() {}\npub fn world() {}\n",
+    )
+    .unwrap();
 
     state
         .with_graph_mut(|graph| {
@@ -102,10 +105,7 @@ fn test_graph_saved_before_mcp_load() {
     let reloaded_count = reloaded
         .with_graph(|g| {
             let nodes = g.backend().all_nodes()?;
-            Ok(nodes
-                .iter()
-                .filter(|n| n.name == "hello")
-                .count())
+            Ok(nodes.iter().filter(|n| n.name == "hello").count())
         })
         .unwrap();
     assert_eq!(reloaded_count, 1);

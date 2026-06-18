@@ -50,36 +50,60 @@ impl IntentClassifier {
         let q = question.to_lowercase();
 
         if q.contains("circular") || q.contains("cycle") {
-            return IntentResult { intent: Intent::CircularDeps, confidence: 0.95 };
+            return IntentResult {
+                intent: Intent::CircularDeps,
+                confidence: 0.95,
+            };
         }
         if q.contains("what breaks") || q.contains("what would break") || q.contains("impact of") {
-            return IntentResult { intent: Intent::Impact, confidence: 0.95 };
+            return IntentResult {
+                intent: Intent::Impact,
+                confidence: 0.95,
+            };
         }
         if q.contains("what calls") || q.contains("who calls") || q.contains("callers of") {
-            return IntentResult { intent: Intent::Callers, confidence: 0.95 };
+            return IntentResult {
+                intent: Intent::Callers,
+                confidence: 0.95,
+            };
         }
         if q.contains("depend") || q.contains("dependency") || q.contains("dependencies") {
-            return IntentResult { intent: Intent::Dependencies, confidence: 0.9 };
+            return IntentResult {
+                intent: Intent::Dependencies,
+                confidence: 0.9,
+            };
         }
         if q.contains("complexity") || q.contains("complex") || q.contains("cyclomatic") {
-            return IntentResult { intent: Intent::Complexity, confidence: 0.9 };
+            return IntentResult {
+                intent: Intent::Complexity,
+                confidence: 0.9,
+            };
         }
         if q.contains("config") || q.contains("unused") || q.contains("environment") {
-            return IntentResult { intent: Intent::Config, confidence: 0.85 };
+            return IntentResult {
+                intent: Intent::Config,
+                confidence: 0.85,
+            };
         }
         if q.starts_with("how many")
             || q.starts_with("count ")
             || q.contains("number of")
             || q.contains("total ")
         {
-            return IntentResult { intent: Intent::Count, confidence: 0.95 };
+            return IntentResult {
+                intent: Intent::Count,
+                confidence: 0.95,
+            };
         }
         if q.contains("most ")
             || q.contains("highest")
             || q.contains("top ")
             || q.contains("hotspot")
         {
-            return IntentResult { intent: Intent::Compare, confidence: 0.9 };
+            return IntentResult {
+                intent: Intent::Compare,
+                confidence: 0.9,
+            };
         }
         if q.starts_with("list ")
             || q.starts_with("show me")
@@ -87,10 +111,16 @@ impl IntentClassifier {
             || q.starts_with("give me")
             || q.starts_with("get all")
         {
-            return IntentResult { intent: Intent::List, confidence: 0.9 };
+            return IntentResult {
+                intent: Intent::List,
+                confidence: 0.9,
+            };
         }
         if q.starts_with("find ") || q.contains("with complexity") || q.contains("where ") {
-            return IntentResult { intent: Intent::Find, confidence: 0.85 };
+            return IntentResult {
+                intent: Intent::Find,
+                confidence: 0.85,
+            };
         }
 
         IntentResult {
@@ -113,8 +143,14 @@ mod tests {
     #[test]
     fn test_intent_classification() {
         let classifier = IntentClassifier::new();
-        assert_eq!(classifier.classify("how many functions?").intent, Intent::Count);
-        assert_eq!(classifier.classify("show me all services").intent, Intent::List);
+        assert_eq!(
+            classifier.classify("how many functions?").intent,
+            Intent::Count
+        );
+        assert_eq!(
+            classifier.classify("show me all services").intent,
+            Intent::List
+        );
         assert_eq!(
             classifier.classify("what breaks if I change X?").intent,
             Intent::Impact

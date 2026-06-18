@@ -103,7 +103,10 @@ impl McpHandler {
             "tools/call" => self.handle_tools_call(&request.params),
             "resources/list" => Ok(json!({ "resources": ResourceProvider::list_resources() })),
             "resources/read" => self.handle_resources_read(&request.params),
-            _ => Err(Error::InvalidQuery(format!("Unknown method: {}", request.method))),
+            _ => Err(Error::InvalidQuery(format!(
+                "Unknown method: {}",
+                request.method
+            ))),
         };
 
         match response {
@@ -123,7 +126,8 @@ impl McpHandler {
 
     /// Simplified tool call for testing and HTTP transport.
     pub fn execute_tool(&self, name: &str, args: Value) -> Result<Value> {
-        self.state.with_graph(|graph| self.executor.execute(graph, name, args))
+        self.state
+            .with_graph(|graph| self.executor.execute(graph, name, args))
     }
 
     /// Shared application state (for watch mode integration).
@@ -153,14 +157,13 @@ impl McpHandler {
             .get("name")
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::InvalidQuery("Missing tool name".into()))?;
-        let arguments = params
-            .get("arguments")
-            .cloned()
-            .unwrap_or(json!({}));
+        let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        let result = self.state.with_graph(|graph| self.executor.execute(graph, name, arguments))?;
-        let text = serde_json::to_string_pretty(&result)
-            .map_err(|e| Error::SerdeError(e.to_string()))?;
+        let result = self
+            .state
+            .with_graph(|graph| self.executor.execute(graph, name, arguments))?;
+        let text =
+            serde_json::to_string_pretty(&result).map_err(|e| Error::SerdeError(e.to_string()))?;
 
         Ok(json!({
             "content": [{ "type": "text", "text": text }],
@@ -174,11 +177,11 @@ impl McpHandler {
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::InvalidQuery("Missing resource uri".into()))?;
 
-        let content = self.state.with_graph(|graph| {
-            ResourceProvider::read(graph.backend(), uri)
-        })?;
-        let text = serde_json::to_string_pretty(&content)
-            .map_err(|e| Error::SerdeError(e.to_string()))?;
+        let content = self
+            .state
+            .with_graph(|graph| ResourceProvider::read(graph.backend(), uri))?;
+        let text =
+            serde_json::to_string_pretty(&content).map_err(|e| Error::SerdeError(e.to_string()))?;
 
         Ok(json!({
             "contents": [{
@@ -191,7 +194,9 @@ impl McpHandler {
 }
 
 /// Serialize an MCP graph-updated notification.
-pub fn graph_updated_notification(notification: &crate::watch::GraphUpdateNotification) -> Result<String> {
+pub fn graph_updated_notification(
+    notification: &crate::watch::GraphUpdateNotification,
+) -> Result<String> {
     let value = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "notifications/graph_updated",
@@ -247,9 +252,7 @@ mod tests {
         let request = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query_codebase","arguments":{"question":"how many functions?"}}}"#;
         let response = handler.handle_message(request).unwrap().unwrap();
         let parsed: Value = serde_json::from_str(&response).unwrap();
-        let text = parsed["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap();
+        let text = parsed["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("answer"));
     }
 

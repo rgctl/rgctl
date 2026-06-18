@@ -1,10 +1,8 @@
 //! Phase 12.2 — blast radius integration tests
 
-use rbuilder::analysis::{
-    BlastRadiusAnalyzer, FlowCache, ProgramDependenceGraph,
-};
 use rbuilder::analysis::cfg::{Statement, StatementKind};
-use rbuilder::analysis::pdg::{DataDependency, DataDepType, PdgNode};
+use rbuilder::analysis::pdg::{DataDepType, DataDependency, PdgNode};
+use rbuilder::analysis::{BlastRadiusAnalyzer, FlowCache, ProgramDependenceGraph};
 use rbuilder::graph::backend::{GraphBackend, MemoryBackend};
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};
 

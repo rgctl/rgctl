@@ -46,7 +46,10 @@ pub fn select_subgraph(
                 continue;
             }
             for edge in &all_edges {
-                if !matches!(edge.edge_type, EdgeType::Calls | EdgeType::Contains | EdgeType::Uses) {
+                if !matches!(
+                    edge.edge_type,
+                    EdgeType::Calls | EdgeType::Contains | EdgeType::Uses
+                ) {
                     continue;
                 }
                 if edge.from == id && included.insert(edge.to) {

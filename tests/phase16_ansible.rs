@@ -5,7 +5,6 @@
 use rbuilder::analysis::ansible_roles::{RoleDependencyAnalyzer, RoleDependencyGraph};
 use rbuilder::extraction::extractor::Extractor;
 use rbuilder::extraction::graph_builder::GraphBuilder;
-use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::query::execute;
 use rbuilder::graph::schema::{EdgeType, NodeType};
 use rbuilder::languages::multimodal::ansible::parser::AnsibleParser;
@@ -30,7 +29,9 @@ fn build_fixture_graph() -> rbuilder::graph::backend::MemoryBackend {
 fn test_ansible_path_detection() {
     assert!(AnsibleParser::is_ansible_path("playbooks/site.yml"));
     assert!(AnsibleParser::is_ansible_path("roles/nginx/tasks/main.yml"));
-    assert!(AnsibleParser::is_ansible_path("roles/nginx/templates/app.j2"));
+    assert!(AnsibleParser::is_ansible_path(
+        "roles/nginx/templates/app.j2"
+    ));
     assert!(AnsibleParser::is_ansible_path("group_vars/all.yml"));
     assert!(!AnsibleParser::is_ansible_path(".github/workflows/ci.yml"));
 }
@@ -47,12 +48,16 @@ fn test_playbook_symbol_extraction() {
     let plugin = AnsiblePlugin::new().unwrap();
     let path = fixture_root().join("playbooks/site.yml");
     let source = std::fs::read_to_string(&path).unwrap();
-    let symbols = plugin
-        .extract_symbols(&path, source.as_bytes())
-        .unwrap();
-    assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::AnsiblePlaybook));
-    assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::AnsiblePlay));
-    assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::AnsibleTask));
+    let symbols = plugin.extract_symbols(&path, source.as_bytes()).unwrap();
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::AnsiblePlaybook));
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::AnsiblePlay));
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::AnsibleTask));
 }
 
 #[test]
@@ -64,8 +69,12 @@ fn test_playbook_relation_extraction() {
     let relations = plugin
         .extract_relations(&path, source.as_bytes(), &symbols)
         .unwrap();
-    assert!(relations.iter().any(|r| r.relation_type == RelationType::IncludesRole));
-    assert!(relations.iter().any(|r| r.relation_type == RelationType::ExecutesTask));
+    assert!(relations
+        .iter()
+        .any(|r| r.relation_type == RelationType::IncludesRole));
+    assert!(relations
+        .iter()
+        .any(|r| r.relation_type == RelationType::ExecutesTask));
     assert!(relations
         .iter()
         .any(|r| r.relation_type == RelationType::IncludesPlaybook));
@@ -79,20 +88,23 @@ fn test_role_meta_dependencies() {
     let relations = plugin
         .extract_relations(&path, source.as_bytes(), &[])
         .unwrap();
-    assert!(relations.iter().any(|r| {
-        r.relation_type == RelationType::DependsOnRole && r.to == "common"
-    }));
+    assert!(relations
+        .iter()
+        .any(|r| { r.relation_type == RelationType::DependsOnRole && r.to == "common" }));
 }
 
 #[test]
 fn test_template_variable_extraction() {
     let plugin = AnsiblePlugin::new().unwrap();
-    let path = fixture_root()
-        .join("roles/nginx/templates/nginx.conf.j2");
+    let path = fixture_root().join("roles/nginx/templates/nginx.conf.j2");
     let source = std::fs::read_to_string(&path).unwrap();
     let symbols = plugin.extract_symbols(&path, source.as_bytes()).unwrap();
-    assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::AnsibleTemplate));
-    assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::AnsibleVariable));
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::AnsibleTemplate));
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::AnsibleVariable));
 }
 
 #[test]
@@ -172,7 +184,9 @@ fn test_security_severity_filter() {
     let backend = build_fixture_graph();
     let all = AnsibleSecurityScanner::new().scan_graph(&backend);
     let critical = AnsibleSecurityScanner::filter_by_severity(all, AnsibleSeverity::Critical);
-    assert!(critical.iter().all(|f| f.severity >= AnsibleSeverity::Critical));
+    assert!(critical
+        .iter()
+        .all(|f| f.severity >= AnsibleSeverity::Critical));
 }
 
 #[test]
@@ -274,9 +288,7 @@ fn test_no_cycles_in_fixture_roles() {
 fn test_task_module_property_on_graph() {
     let backend = build_fixture_graph();
     let tasks = backend.find_nodes_by_type(NodeType::AnsibleTask).unwrap();
-    assert!(tasks
-        .iter()
-        .any(|t| t.get_property("module").is_some()));
+    assert!(tasks.iter().any(|t| t.get_property("module").is_some()));
 }
 
 #[test]
@@ -290,7 +302,9 @@ fn test_ansible_handler_extraction() {
     let path = fixture_root().join("roles/nginx/handlers/main.yml");
     let source = std::fs::read_to_string(&path).unwrap();
     let symbols = plugin.extract_symbols(&path, source.as_bytes()).unwrap();
-    assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::AnsibleHandler));
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::AnsibleHandler));
 }
 
 #[test]
@@ -346,7 +360,9 @@ fn test_role_tasks_extraction() {
     let path = fixture_root().join("roles/nginx/tasks/main.yml");
     let source = std::fs::read_to_string(&path).unwrap();
     let symbols = plugin.extract_symbols(&path, source.as_bytes()).unwrap();
-    assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::AnsibleTask));
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::AnsibleTask));
 }
 
 #[test]

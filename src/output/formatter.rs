@@ -55,9 +55,18 @@ pub fn format_impact_report(
     );
 
     let header = match severity {
-        Severity::Critical => format!("{} HIGH IMPACT - affects {total} symbol(s)", Severity::Critical.emoji()),
-        Severity::Warning => format!("{} MEDIUM IMPACT - affects {total} symbol(s)", Severity::Warning.emoji()),
-        Severity::Ok => format!("{} LOW IMPACT - affects {total} symbol(s)", Severity::Ok.emoji()),
+        Severity::Critical => format!(
+            "{} HIGH IMPACT - affects {total} symbol(s)",
+            Severity::Critical.emoji()
+        ),
+        Severity::Warning => format!(
+            "{} MEDIUM IMPACT - affects {total} symbol(s)",
+            Severity::Warning.emoji()
+        ),
+        Severity::Ok => format!(
+            "{} LOW IMPACT - affects {total} symbol(s)",
+            Severity::Ok.emoji()
+        ),
         Severity::Info => format!("Impact affects {total} symbol(s)"),
     };
     let _ = writeln!(out, "{}", severity.style().apply_to(header));

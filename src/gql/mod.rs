@@ -10,8 +10,7 @@ pub mod optimizer;
 pub mod parser;
 
 pub use ast::{
-    EdgePattern, NodePattern, Pattern, Predicate, PropertyMatcher, Query, ReturnClause,
-    WhereClause,
+    EdgePattern, NodePattern, Pattern, Predicate, PropertyMatcher, Query, ReturnClause, WhereClause,
 };
 pub use executor::{Binding, QueryExecutor, QueryResult};
 pub use explain::{ExplainPlan, ExplainStep};

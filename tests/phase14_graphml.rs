@@ -9,8 +9,7 @@ fn test_graphml_header_and_keys() {
     let mut backend = rbuilder::graph::backend::MemoryBackend::new();
     backend
         .insert_node(
-            Node::new(NodeType::Function, "main".into())
-                .with_file_path("src/main.rs".into()),
+            Node::new(NodeType::Function, "main".into()).with_file_path("src/main.rs".into()),
         )
         .unwrap();
 
@@ -24,8 +23,8 @@ fn test_graphml_header_and_keys() {
 #[test]
 fn test_graphml_node_data() {
     let mut backend = rbuilder::graph::backend::MemoryBackend::new();
-    let node = Node::new(NodeType::Function, "main".into())
-        .with_property("cyclomatic".into(), "5".into());
+    let node =
+        Node::new(NodeType::Function, "main".into()).with_property("cyclomatic".into(), "5".into());
     backend.insert_node(node).unwrap();
 
     let xml = export_graphml(&backend, "functions").unwrap();

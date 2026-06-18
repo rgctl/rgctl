@@ -23,7 +23,14 @@ fn bench_query_by_label(c: &mut Criterion) {
     for size in [1_000, 10_000, 100_000] {
         let graph = build_labeled_graph(size);
         group.bench_with_input(BenchmarkId::from_parameter(size), &graph, |b, graph| {
-            b.iter(|| black_box(graph.backend().find_nodes_by_label("react:component").unwrap()));
+            b.iter(|| {
+                black_box(
+                    graph
+                        .backend()
+                        .find_nodes_by_label("react:component")
+                        .unwrap(),
+                )
+            });
         });
     }
     group.finish();

@@ -64,7 +64,14 @@ impl JavaScriptPlugin {
                 start_column: node.start_position().column,
                 end_column: node.end_position().column,
             },
-            signature: Some(node.utf8_text(source)?.lines().next().unwrap_or("").trim().to_string()),
+            signature: Some(
+                node.utf8_text(source)?
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string(),
+            ),
             return_type: None,
             parameters,
             fields: vec![],
@@ -152,8 +159,8 @@ impl JavaScriptPlugin {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 match child.kind() {
-                    "if_statement" | "switch_statement" | "while_statement"
-                    | "for_statement" | "catch_clause" | "ternary_expression" => {
+                    "if_statement" | "switch_statement" | "while_statement" | "for_statement"
+                    | "catch_clause" | "ternary_expression" => {
                         *complexity += 1;
                     }
                     "case" => {
@@ -206,7 +213,10 @@ impl JavaScriptPlugin {
             *max_depth = (*max_depth).max(current_depth);
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                if matches!(child.kind(), "if_statement" | "while_statement" | "for_statement" | "statement_block") {
+                if matches!(
+                    child.kind(),
+                    "if_statement" | "while_statement" | "for_statement" | "statement_block"
+                ) {
                     traverse(child, max_depth, current_depth + 1);
                 } else {
                     traverse(child, max_depth, current_depth);
@@ -261,11 +271,13 @@ impl LanguagePlugin for JavaScriptPlugin {
             .set_language(&tree_sitter_javascript::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set JavaScript grammar: {}", e)))?;
 
-        let tree = parser.parse(source, None).ok_or_else(|| Error::ParseError {
-            file: file_path.to_string_lossy().to_string().into(),
-            line: 0,
-            message: "Failed to parse JavaScript source".to_string(),
-        })?;
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::ParseError {
+                file: file_path.to_string_lossy().to_string().into(),
+                line: 0,
+                message: "Failed to parse JavaScript source".to_string(),
+            })?;
 
         let mut symbols = Vec::new();
         let root_node = tree.root_node();
@@ -309,7 +321,11 @@ impl LanguagePlugin for JavaScriptPlugin {
         Ok(vec![])
     }
 
-    fn calculate_complexity(&self, symbol: &Symbol, source: &[u8]) -> Result<Option<ComplexityMetrics>> {
+    fn calculate_complexity(
+        &self,
+        symbol: &Symbol,
+        source: &[u8],
+    ) -> Result<Option<ComplexityMetrics>> {
         if symbol.symbol_type != SymbolType::Function {
             return Ok(None);
         }
@@ -319,18 +335,23 @@ impl LanguagePlugin for JavaScriptPlugin {
             .set_language(&tree_sitter_javascript::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set JavaScript grammar: {}", e)))?;
 
-        let tree = parser.parse(source, None).ok_or_else(|| Error::ParseError {
-            file: symbol.location.file.clone().into(),
-            line: symbol.location.start_line,
-            message: "Failed to parse source for complexity analysis".to_string(),
-        })?;
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::ParseError {
+                file: symbol.location.file.clone().into(),
+                line: symbol.location.start_line,
+                message: "Failed to parse source for complexity analysis".to_string(),
+            })?;
 
         let root = tree.root_node();
         let target_line = symbol.location.start_line - 1;
 
         fn find_function_at_line(node: Node, line: usize) -> Option<Node> {
-            if matches!(node.kind(), "function_declaration" | "method_definition" | "arrow_function")
-                && node.start_position().row == line {
+            if matches!(
+                node.kind(),
+                "function_declaration" | "method_definition" | "arrow_function"
+            ) && node.start_position().row == line
+            {
                 return Some(node);
             }
             let mut cursor = node.walk();
@@ -377,10 +398,15 @@ mod tests {
     fn test_extract_function() {
         let plugin = JavaScriptPlugin::new().unwrap();
         let source = b"function add(a, b) { return a + b; }";
-        let symbols = plugin.extract_symbols(Path::new("test.js"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.js"), source)
+            .unwrap();
 
         assert!(!symbols.is_empty());
-        let add_fn = symbols.iter().find(|s| s.name == "add").expect("add function not found");
+        let add_fn = symbols
+            .iter()
+            .find(|s| s.name == "add")
+            .expect("add function not found");
         assert_eq!(add_fn.symbol_type, SymbolType::Function);
         assert_eq!(add_fn.parameters.len(), 2);
     }
@@ -389,7 +415,9 @@ mod tests {
     fn test_extract_arrow_function() {
         let plugin = JavaScriptPlugin::new().unwrap();
         let source = b"const multiply = (x, y) => x * y;";
-        let symbols = plugin.extract_symbols(Path::new("test.js"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.js"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].symbol_type, SymbolType::Function);
@@ -399,7 +427,9 @@ mod tests {
     fn test_extract_class() {
         let plugin = JavaScriptPlugin::new().unwrap();
         let source = b"class User { constructor(name) { this.name = name; } }";
-        let symbols = plugin.extract_symbols(Path::new("test.js"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.js"), source)
+            .unwrap();
 
         assert!(!symbols.is_empty());
         assert_eq!(symbols[0].name, "User");

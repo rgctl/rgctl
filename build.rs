@@ -63,8 +63,7 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let toml_path = Path::new(&manifest_dir).join("languages.toml");
     let content = fs::read_to_string(&toml_path).expect("Failed to read languages.toml");
-    let config: LanguagesFile =
-        toml::from_str(&content).expect("Failed to parse languages.toml");
+    let config: LanguagesFile = toml::from_str(&content).expect("Failed to parse languages.toml");
 
     validate(&config);
 
@@ -209,11 +208,7 @@ fn generate_lang_configs(config: &LanguagesFile) -> String {
         }
 
         let const_id = const_name(id);
-        let exts: Vec<String> = lang
-            .extensions
-            .iter()
-            .map(|e| format!("\"{e}\""))
-            .collect();
+        let exts: Vec<String> = lang.extensions.iter().map(|e| format!("\"{e}\"")).collect();
         let fn_kinds: Vec<String> = lang
             .function_kinds
             .iter()
@@ -225,7 +220,10 @@ fn generate_lang_configs(config: &LanguagesFile) -> String {
             .map(|k| format!("\"{k}\""))
             .collect();
 
-        code.push_str(&format!("static EXT_{const_id}: &[&str] = &[{}];\n", exts.join(", ")));
+        code.push_str(&format!(
+            "static EXT_{const_id}: &[&str] = &[{}];\n",
+            exts.join(", ")
+        ));
         code.push_str(&format!(
             "static FN_{const_id}: &[&str] = &[{}];\n",
             if fn_kinds.is_empty() {
@@ -244,7 +242,9 @@ fn generate_lang_configs(config: &LanguagesFile) -> String {
         ));
 
         if !lang.regex_patterns.is_empty() {
-            code.push_str(&format!("static RE_{const_id}: &[super::RegexPatternConfig] = &[\n"));
+            code.push_str(&format!(
+                "static RE_{const_id}: &[super::RegexPatternConfig] = &[\n"
+            ));
             for pat in &lang.regex_patterns {
                 let sym = match pat.symbol_type.as_str() {
                     "function" => "SymbolType::Function",
@@ -279,12 +279,13 @@ fn generate_lang_configs(config: &LanguagesFile) -> String {
              enable_type_inference: {},\n\
              regex_patterns: {regex_patterns_value},\n\
          }};\n\n",
-            lang.enable_complexity,
-            lang.enable_type_inference,
+            lang.enable_complexity, lang.enable_type_inference,
         ));
     }
 
-    code.push_str("pub fn get_language_config(id: &str) -> Option<&'static super::LanguageConfig> {\n");
+    code.push_str(
+        "pub fn get_language_config(id: &str) -> Option<&'static super::LanguageConfig> {\n",
+    );
     code.push_str("    match id {\n");
     for (id, lang) in &config.languages {
         if matches!(lang.handler.as_str(), "regex" | "tree-sitter") {

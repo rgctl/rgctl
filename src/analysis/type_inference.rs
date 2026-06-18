@@ -148,8 +148,8 @@ impl<'a> TypeInferenceEngine<'a> {
 
             self.types.insert(*node_id, node_types.clone());
             for (var, typ) in node_types {
-                let from_method = text.contains(&format!("{var}."))
-                    && !text.contains(&format!("{var} ="));
+                let from_method =
+                    text.contains(&format!("{var}.")) && !text.contains(&format!("{var} ="));
                 results.push(VariableType {
                     variable: var,
                     inferred_type: typ.clone(),
@@ -167,10 +167,7 @@ impl<'a> TypeInferenceEngine<'a> {
             let text = &node.statement.text;
             let mut node_types = HashMap::new();
 
-            if text.contains("const ")
-                || text.contains("let ")
-                || text.contains("var ")
-            {
+            if text.contains("const ") || text.contains("let ") || text.contains("var ") {
                 for var in &node.defined_vars {
                     if text.contains('"') || text.contains('\'') || text.contains('`') {
                         node_types.insert(var.clone(), InferredType::String);
@@ -215,8 +212,8 @@ impl<'a> TypeInferenceEngine<'a> {
 
             self.types.insert(*node_id, node_types.clone());
             for (var, typ) in node_types {
-                let from_method = text.contains(&format!("{var}."))
-                    && !text.contains(&format!("{var} ="));
+                let from_method =
+                    text.contains(&format!("{var}.")) && !text.contains(&format!("{var} ="));
                 results.push(VariableType {
                     variable: var,
                     inferred_type: typ.clone(),
@@ -273,8 +270,8 @@ impl<'a> TypeInferenceEngine<'a> {
 
             self.types.insert(*node_id, node_types.clone());
             for (var, typ) in node_types {
-                let from_method = text.contains(&format!("{var}."))
-                    || text.contains(&format!("{var}<<"));
+                let from_method =
+                    text.contains(&format!("{var}.")) || text.contains(&format!("{var}<<"));
                 results.push(VariableType {
                     variable: var,
                     inferred_type: typ.clone(),
@@ -337,12 +334,12 @@ def example():
         let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
         let mut engine = TypeInferenceEngine::new(&pdg, &cfg, "python");
         let types = engine.infer();
-        assert!(types.iter().any(|t| t.variable == "x" && t.inferred_type == InferredType::Int));
-        assert!(
-            types
-                .iter()
-                .any(|t| t.variable == "y" && t.inferred_type == InferredType::String)
-        );
+        assert!(types
+            .iter()
+            .any(|t| t.variable == "x" && t.inferred_type == InferredType::Int));
+        assert!(types
+            .iter()
+            .any(|t| t.variable == "y" && t.inferred_type == InferredType::String));
     }
 
     #[cfg(feature = "lang-python")]
@@ -358,11 +355,9 @@ def process(data):
         let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
         let mut engine = TypeInferenceEngine::new(&pdg, &cfg, "python");
         let types = engine.infer();
-        assert!(
-            types
-                .iter()
-                .any(|t| t.variable == "data" && t.inferred_type == InferredType::String)
-        );
+        assert!(types
+            .iter()
+            .any(|t| t.variable == "data" && t.inferred_type == InferredType::String));
         assert!(types.iter().any(|t| {
             t.variable == "items" && matches!(t.inferred_type, InferredType::List(_))
         }));

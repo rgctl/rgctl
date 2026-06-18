@@ -130,10 +130,7 @@ fn print_summary(result: &UpdateResult, full: bool) {
         println!("Updated {} node(s)", result.nodes_added);
     }
     if result.edges_added > 0 || result.edges_removed > 0 {
-        println!(
-            "Edges: +{} / -{}",
-            result.edges_added, result.edges_removed
-        );
+        println!("Edges: +{} / -{}", result.edges_added, result.edges_removed);
     }
     println!("Time: {:.2}s", result.duration.as_secs_f64());
 }

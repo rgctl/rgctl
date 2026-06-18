@@ -85,7 +85,14 @@ impl QueryCache {
 }
 
 fn bootstrap_questions() -> Vec<(String, String)> {
-    let types = ["functions", "classes", "structs", "files", "modules", "config keys"];
+    let types = [
+        "functions",
+        "classes",
+        "structs",
+        "files",
+        "modules",
+        "config keys",
+    ];
     let mut pairs = Vec::new();
 
     for t in types {

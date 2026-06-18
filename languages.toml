@@ -542,6 +542,17 @@ class_kinds = []
 enable_complexity = false
 enable_type_inference = false
 
+[languages.puppet]
+handler = "custom"
+plugin = "PuppetPlugin"
+module = "crate::languages::multimodal::puppet"
+crate = ""
+extensions = ["puppet"]
+function_kinds = []
+class_kinds = []
+enable_complexity = false
+enable_type_inference = false
+
 [languages.bash]
 handler = "custom"
 plugin = "BashPlugin"
@@ -567,7 +578,7 @@ languages = [
     "rust", "python", "javascript", "typescript", "go",
     "java", "kotlin", "csharp", "markdown",
     "c", "cpp", "ruby", "php",
-    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci", "ansible", "chef",
+    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci", "ansible", "chef", "puppet",
 ]
 
 [bundles.full]
@@ -576,7 +587,7 @@ languages = [
     "rust", "python", "javascript", "typescript", "go",
     "java", "kotlin", "csharp", "markdown",
     "c", "cpp", "ruby", "php",
-    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci", "ansible", "chef",
+    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci", "ansible", "chef", "puppet",
     "swift", "scala", "elixir", "erlang", "dart", "lua",
     "haskell", "julia", "r", "nim",
 ]
@@ -587,7 +598,7 @@ languages = [
     "rust", "python", "javascript", "typescript", "go",
     "java", "kotlin", "csharp", "markdown",
     "c", "cpp", "ruby", "php",
-    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci", "ansible", "chef",
+    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci", "ansible", "chef", "puppet",
     "swift", "scala", "elixir", "erlang", "dart", "lua",
     "haskell", "julia", "r", "nim",
     "ocaml", "perl", "fortran", "verilog", "vhdl", "cobol",

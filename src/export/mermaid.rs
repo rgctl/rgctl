@@ -45,7 +45,9 @@ pub fn generate_mermaid(
 ) -> Result<String> {
     let subgraph = select_subgraph(backend, query, options.max_depth)?;
     if subgraph.nodes.is_empty() {
-        return Err(Error::InvalidQuery(format!("No nodes matched query: {query}")));
+        return Err(Error::InvalidQuery(format!(
+            "No nodes matched query: {query}"
+        )));
     }
 
     match options.diagram_type {
@@ -113,8 +115,14 @@ fn render_class_diagram(subgraph: &Subgraph) -> Result<String> {
         let (Some(from), Some(to)) = (id_map.get(&edge.from), id_map.get(&edge.to)) else {
             continue;
         };
-        let from_node = subgraph.nodes.iter().find(|n| id_map.get(&n.id) == Some(from));
-        let to_node = subgraph.nodes.iter().find(|n| id_map.get(&n.id) == Some(to));
+        let from_node = subgraph
+            .nodes
+            .iter()
+            .find(|n| id_map.get(&n.id) == Some(from));
+        let to_node = subgraph
+            .nodes
+            .iter()
+            .find(|n| id_map.get(&n.id) == Some(to));
         if let (Some(f), Some(t)) = (from_node, to_node) {
             let rel = match edge.edge_type {
                 EdgeType::Extends => "<|--",
@@ -145,10 +153,7 @@ fn render_call_graph(subgraph: &Subgraph, vertical: bool) -> Result<String> {
 
     for node in &functions {
         let id = id_map.get(&node.id).unwrap();
-        out.push_str(&format!(
-            "    {id}[\"{}\"]\n",
-            escape_label(&node.name)
-        ));
+        out.push_str(&format!("    {id}[\"{}\"]\n", escape_label(&node.name)));
     }
 
     for edge in &subgraph.edges {
@@ -162,11 +167,15 @@ fn render_call_graph(subgraph: &Subgraph, vertical: bool) -> Result<String> {
     Ok(out)
 }
 
-fn build_id_map(nodes: &[crate::graph::schema::Node]) -> std::collections::HashMap<uuid::Uuid, String> {
+fn build_id_map(
+    nodes: &[crate::graph::schema::Node],
+) -> std::collections::HashMap<uuid::Uuid, String> {
     build_id_map_refs(&nodes.iter().collect::<Vec<_>>())
 }
 
-fn build_id_map_refs(nodes: &[&crate::graph::schema::Node]) -> std::collections::HashMap<uuid::Uuid, String> {
+fn build_id_map_refs(
+    nodes: &[&crate::graph::schema::Node],
+) -> std::collections::HashMap<uuid::Uuid, String> {
     nodes
         .iter()
         .enumerate()
@@ -176,7 +185,13 @@ fn build_id_map_refs(nodes: &[&crate::graph::schema::Node]) -> std::collections:
 
 fn sanitize_class_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

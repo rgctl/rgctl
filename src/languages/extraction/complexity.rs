@@ -60,7 +60,12 @@ impl ComplexityCalculator {
     }
 
     fn walk_nested(node: Node, branch_kinds: &[&str], visit: &mut dyn FnMut(&str, usize)) {
-        fn inner(node: Node, branch_kinds: &[&str], visit: &mut dyn FnMut(&str, usize), nesting: usize) {
+        fn inner(
+            node: Node,
+            branch_kinds: &[&str],
+            visit: &mut dyn FnMut(&str, usize),
+            nesting: usize,
+        ) {
             visit(node.kind(), nesting);
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {

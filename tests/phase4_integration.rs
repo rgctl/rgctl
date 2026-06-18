@@ -54,23 +54,25 @@ fn test_signature_and_proto_roundtrip() {
 
 #[test]
 fn test_thrift_generation() {
-    let sig = SignatureExtractor::from_source("fn calculate(price: f64, quantity: i64) -> f64").unwrap();
+    let sig =
+        SignatureExtractor::from_source("fn calculate(price: f64, quantity: i64) -> f64").unwrap();
     let generator = IdlGenerator::new();
     let thrift = generator.generate(IdlFormat::Thrift, &sig).unwrap();
 
     // Verify Thrift-specific type mapping
     assert!(thrift.contains("namespace rs Calculate"));
     assert!(thrift.contains("struct CalculateRequest"));
-    assert!(thrift.contains("double price"));  // f64 -> double
-    assert!(thrift.contains("i64 quantity"));  // i64 -> i64
+    assert!(thrift.contains("double price")); // f64 -> double
+    assert!(thrift.contains("i64 quantity")); // i64 -> i64
     assert!(thrift.contains("struct CalculateResponse"));
-    assert!(thrift.contains("1: double result"));  // return type is double, not int64
+    assert!(thrift.contains("1: double result")); // return type is double, not int64
     assert!(thrift.contains("service CalculateService"));
 }
 
 #[test]
 fn test_openapi_generation() {
-    let sig = SignatureExtractor::from_source("fn get_user(id: i64, active: bool) -> String").unwrap();
+    let sig =
+        SignatureExtractor::from_source("fn get_user(id: i64, active: bool) -> String").unwrap();
     let generator = IdlGenerator::new();
     let openapi = generator.generate(IdlFormat::OpenApi, &sig).unwrap();
 
@@ -79,9 +81,9 @@ fn test_openapi_generation() {
     assert!(openapi.contains("title: GetUser API"));
     assert!(openapi.contains("/get_user:"));
     assert!(openapi.contains("id:"));
-    assert!(openapi.contains("type: integer"));  // i64 -> integer, not int64
+    assert!(openapi.contains("type: integer")); // i64 -> integer, not int64
     assert!(openapi.contains("active:"));
-    assert!(openapi.contains("type: boolean"));  // bool -> boolean
+    assert!(openapi.contains("type: boolean")); // bool -> boolean
     assert!(openapi.contains("result:"));
-    assert!(openapi.contains("type: string"));   // String -> string
+    assert!(openapi.contains("type: string")); // String -> string
 }

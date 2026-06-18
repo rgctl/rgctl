@@ -43,14 +43,20 @@ pub fn run_list(workspace_root: &Path) -> Result<()> {
 pub fn run_sync(workspace_root: &Path, verbose: bool) -> Result<()> {
     let (graph, report) = sync_workspace(workspace_root, verbose)?;
     println!("Synced {} repo(s)", report.repos_indexed);
-    println!("Merged graph: {} nodes, {} edges", report.nodes, report.edges);
+    println!(
+        "Merged graph: {} nodes, {} edges",
+        report.nodes, report.edges
+    );
     println!(
         "Cross-repo links: {} edge(s) across {} pair(s)",
         report.cross_repo.edges_added,
         report.cross_repo.repo_pairs.len()
     );
     println!("Time: {:.2}s", report.duration_secs);
-    println!("Graph saved to {}/.rbuilder/graph.json", workspace_root.display());
+    println!(
+        "Graph saved to {}/.rbuilder/graph.json",
+        workspace_root.display()
+    );
     let _ = graph;
     Ok(())
 }
@@ -71,7 +77,9 @@ pub fn run_remove(workspace_root: &Path, namespace: &str) -> Result<()> {
 
 fn relative_path(base: &Path, target: &Path) -> Result<PathBuf> {
     let base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
-    let target = target.canonicalize().unwrap_or_else(|_| target.to_path_buf());
+    let target = target
+        .canonicalize()
+        .unwrap_or_else(|_| target.to_path_buf());
     Ok(target
         .strip_prefix(&base)
         .map(|p| p.to_path_buf())

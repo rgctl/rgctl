@@ -67,7 +67,9 @@ pub fn generate_dot(
 ) -> Result<String> {
     let subgraph = select_subgraph(backend, query, max_depth)?;
     if subgraph.nodes.is_empty() {
-        return Err(Error::InvalidQuery(format!("No nodes matched query: {query}")));
+        return Err(Error::InvalidQuery(format!(
+            "No nodes matched query: {query}"
+        )));
     }
 
     let rankdir = match options.rankdir {
@@ -100,9 +102,7 @@ pub fn generate_dot(
             continue;
         };
         let (style, color, label) = edge_style(edge.edge_type);
-        let label_attr = label
-            .map(|l| format!(" label=\"{l}\""))
-            .unwrap_or_default();
+        let label_attr = label.map(|l| format!(" label=\"{l}\"")).unwrap_or_default();
         out.push_str(&format!(
             "  \"{from}\" -> \"{to}\" [style={style} color={color}{label_attr}];\n"
         ));

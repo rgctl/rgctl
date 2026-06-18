@@ -3,13 +3,16 @@
 use rbuilder::graph::backend::{GraphBackend, MemoryBackend};
 use rbuilder::graph::schema::{Node, NodeType};
 use rbuilder::nlp::{
-    default_examples, example_count, DualAgentQuerySystem, DualTranslationMethod,
-    TranslationAgent,
+    default_examples, example_count, DualAgentQuerySystem, DualTranslationMethod, TranslationAgent,
 };
 
 #[test]
 fn test_example_library_has_twenty_plus_pairs() {
-    assert!(example_count() >= 20, "expected >= 20 examples, got {}", example_count());
+    assert!(
+        example_count() >= 20,
+        "expected >= 20 examples, got {}",
+        example_count()
+    );
     assert!(!default_examples().is_empty());
 }
 
@@ -62,9 +65,7 @@ fn test_translation_return_type_filter() {
 #[test]
 fn test_translation_compound_multi_hop() {
     let agent = TranslationAgent::new(0.70);
-    let (pattern, method, _) = agent
-        .translate("async functions returning Result")
-        .unwrap();
+    let (pattern, method, _) = agent.translate("async functions returning Result").unwrap();
     assert_eq!(method, DualTranslationMethod::ExampleMatch);
     assert!(pattern.contains("signature:*async*"));
     assert!(pattern.contains("return_type:Result"));
@@ -124,7 +125,10 @@ fn test_dual_agent_decomposition_records_sub_queries() {
         .unwrap();
 
     assert!(result.context.sub_queries.len() >= 2);
-    assert!(result.answer_lines.iter().any(|l| l.contains("Answer for:")));
+    assert!(result
+        .answer_lines
+        .iter()
+        .any(|l| l.contains("Answer for:")));
 }
 
 #[cfg(feature = "nlp-llm")]

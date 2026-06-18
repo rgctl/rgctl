@@ -24,9 +24,7 @@ impl MatchContext {
             .filter(|e| e.from == node_id && e.edge_type == EdgeType::Calls)
             .map(|e| e.to)
             .collect();
-        Ok(Self {
-            outgoing_calls,
-        })
+        Ok(Self { outgoing_calls })
     }
 }
 
@@ -47,19 +45,13 @@ impl RuleMatcher {
         condition: &MatchCondition,
     ) -> Result<bool> {
         match condition {
-            MatchCondition::And { and } => and
-                .iter()
-                .try_fold(true, |acc, c| {
-                    Ok(acc && Self::match_condition(backend, ctx, node, c)?)
-                }),
-            MatchCondition::Or { or } => or
-                .iter()
-                .try_fold(false, |acc, c| {
-                    Ok(acc || Self::match_condition(backend, ctx, node, c)?)
-                }),
-            MatchCondition::Not { not } => {
-                Ok(!Self::match_condition(backend, ctx, node, not)?)
-            }
+            MatchCondition::And { and } => and.iter().try_fold(true, |acc, c| {
+                Ok(acc && Self::match_condition(backend, ctx, node, c)?)
+            }),
+            MatchCondition::Or { or } => or.iter().try_fold(false, |acc, c| {
+                Ok(acc || Self::match_condition(backend, ctx, node, c)?)
+            }),
+            MatchCondition::Not { not } => Ok(!Self::match_condition(backend, ctx, node, not)?),
             MatchCondition::Leaf(leaf) => Self::match_leaf(backend, ctx, node, leaf),
         }
     }
@@ -71,7 +63,9 @@ impl RuleMatcher {
         leaf: &MatchLeaf,
     ) -> Result<bool> {
         match leaf {
-            MatchLeaf::NodeType { value } => Ok(node_type_name(node.node_type).eq_ignore_ascii_case(value)),
+            MatchLeaf::NodeType { value } => {
+                Ok(node_type_name(node.node_type).eq_ignore_ascii_case(value))
+            }
             MatchLeaf::NamePattern { pattern } => {
                 let re = Regex::new(pattern).map_err(|e| {
                     crate::error::Error::ConfigError(format!("Invalid regex '{pattern}': {e}"))
@@ -150,6 +144,12 @@ fn node_type_name(node_type: NodeType) -> &'static str {
         NodeType::ChefAttribute => "ChefAttribute",
         NodeType::ChefTemplate => "ChefTemplate",
         NodeType::ChefCustomResource => "ChefCustomResource",
+        NodeType::PuppetModule => "PuppetModule",
+        NodeType::PuppetClass => "PuppetClass",
+        NodeType::PuppetDefinedType => "PuppetDefinedType",
+        NodeType::PuppetResource => "PuppetResource",
+        NodeType::PuppetVariable => "PuppetVariable",
+        NodeType::PuppetFact => "PuppetFact",
     }
 }
 
@@ -164,7 +164,8 @@ mod tests {
 
     fn auth_node() -> Node {
         let mut node = Node::new(NodeType::Function, "authenticate_user".to_string());
-        node.properties.insert("cyclomatic".to_string(), "12".to_string());
+        node.properties
+            .insert("cyclomatic".to_string(), "12".to_string());
         node
     }
 
@@ -201,9 +202,13 @@ mod tests {
         };
 
         let mut complex = Node::new(NodeType::Function, "complex_test".to_string());
-        complex.properties.insert("cyclomatic".to_string(), "15".to_string());
+        complex
+            .properties
+            .insert("cyclomatic".to_string(), "15".to_string());
         let mut simple = Node::new(NodeType::Function, "simple_test".to_string());
-        simple.properties.insert("cyclomatic".to_string(), "5".to_string());
+        simple
+            .properties
+            .insert("cyclomatic".to_string(), "5".to_string());
 
         let backend = MemoryBackend::new();
         assert!(RuleMatcher::matches(&backend, &rule, &complex).unwrap());

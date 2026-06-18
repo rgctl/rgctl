@@ -4,7 +4,9 @@
 mod phase13;
 
 use phase13::run_taint_security;
-use rbuilder::analysis::{build_cfg_for_function, ProgramDependenceGraph, TaintFlow, TaintSink, TaintSource};
+use rbuilder::analysis::{
+    build_cfg_for_function, ProgramDependenceGraph, TaintFlow, TaintSink, TaintSource,
+};
 use rbuilder::security::{default_cwe_patterns, SecurityAnalyzer};
 use regex::Regex;
 
@@ -26,11 +28,13 @@ macro_rules! cwe_pattern_test {
                 .iter()
                 .find(|p| p.cwe_id == $cwe)
                 .expect("CWE pattern registered");
-            assert!(pattern.source_patterns.iter().any(|pat| {
-                Regex::new(pat)
-                    .map(|re| re.is_match($code))
-                    .unwrap_or(false)
-            }) || pattern.source_patterns.is_empty());
+            assert!(
+                pattern.source_patterns.iter().any(|pat| {
+                    Regex::new(pat)
+                        .map(|re| re.is_match($code))
+                        .unwrap_or(false)
+                }) || pattern.source_patterns.is_empty()
+            );
             if !pattern.sink_patterns.is_empty() {
                 assert!(pattern.sink_patterns.iter().any(|pat| {
                     Regex::new(pat)
@@ -74,12 +78,19 @@ def run(request):
     os.system(cmd)
 "#;
     let flows = phase13::analyze_vulnerable_taint("python", code, "run");
-    assert!(!flows.is_empty(), "expected vulnerable command injection flow");
-    assert!(flows.iter().any(|f| f.sink_type == rbuilder::analysis::TaintSink::ShellCommand));
+    assert!(
+        !flows.is_empty(),
+        "expected vulnerable command injection flow"
+    );
+    assert!(flows
+        .iter()
+        .any(|f| f.sink_type == rbuilder::analysis::TaintSink::ShellCommand));
     let vulns = run_taint_security("python", code, "run");
     assert!(
         vulns.iter().any(|v| v.cwe_id == cwe)
-            || vulns.iter().any(|v| v.taint_flow.sink_type == rbuilder::analysis::TaintSink::ShellCommand),
+            || vulns
+                .iter()
+                .any(|v| v.taint_flow.sink_type == rbuilder::analysis::TaintSink::ShellCommand),
         "expected shell-command CWE mapping"
     );
     assert!(default_cwe_patterns().iter().any(|p| p.cwe_id == cwe));
@@ -103,9 +114,8 @@ api_key = "sk-live-12345"
 def noop():
     pass
 "#;
-    let cfg = build_cfg_for_function("python", code, "noop").unwrap_or_else(|_| {
-        build_cfg_for_function("rust", r#"fn noop() {}"#, "noop").unwrap()
-    });
+    let cfg = build_cfg_for_function("python", code, "noop")
+        .unwrap_or_else(|_| build_cfg_for_function("rust", r#"fn noop() {}"#, "noop").unwrap());
     let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
     let flow = TaintFlow {
         source: *pdg.nodes.keys().next().unwrap(),

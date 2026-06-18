@@ -61,11 +61,13 @@ impl LanguageRegistry {
         let id = plugin.language_id().to_string();
 
         // Register by language ID
-        self.language_plugins.insert(id.clone(), Arc::clone(&plugin));
+        self.language_plugins
+            .insert(id.clone(), Arc::clone(&plugin));
 
         // Register file extensions
         for ext in plugin.file_extensions() {
-            self.extension_map.insert(ext.to_string(), Arc::clone(&plugin));
+            self.extension_map
+                .insert(ext.to_string(), Arc::clone(&plugin));
         }
     }
 
@@ -78,7 +80,8 @@ impl LanguageRegistry {
 
         // Register file extensions
         for ext in plugin.file_extensions() {
-            self.config_extension_map.insert(ext.to_string(), Arc::clone(&plugin));
+            self.config_extension_map
+                .insert(ext.to_string(), Arc::clone(&plugin));
         }
     }
 
@@ -115,12 +118,18 @@ impl LanguageRegistry {
                 return Ok(Arc::clone(plugin));
             }
         }
+        if crate::languages::multimodal::puppet::parser::PuppetParser::is_puppet_path(&path_str) {
+            if let Some(plugin) = self.language_plugins.get("puppet") {
+                return Ok(Arc::clone(plugin));
+            }
+        }
         if crate::languages::multimodal::chef::parser::ChefParser::is_chef_path(&path_str) {
             if let Some(plugin) = self.language_plugins.get("chef") {
                 return Ok(Arc::clone(plugin));
             }
         }
-        if crate::languages::multimodal::ansible::parser::AnsibleParser::is_ansible_path(&path_str) {
+        if crate::languages::multimodal::ansible::parser::AnsibleParser::is_ansible_path(&path_str)
+        {
             if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
                 if ext == "yml" || ext == "yaml" || ext == "j2" {
                     if let Some(plugin) = self.language_plugins.get("ansible") {
@@ -158,15 +167,21 @@ impl LanguageRegistry {
     }
 
     /// Get a config plugin for a file path
-    pub fn get_config_plugin_for_file(&self, file_path: &Path) -> Result<Arc<dyn ConfigFormatPlugin>> {
+    pub fn get_config_plugin_for_file(
+        &self,
+        file_path: &Path,
+    ) -> Result<Arc<dyn ConfigFormatPlugin>> {
         let path_str = file_path.to_string_lossy().replace('\\', "/");
         if path_str.contains(".github/workflows/")
             || file_path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.contains("gitlab-ci"))
+            || crate::languages::multimodal::puppet::parser::PuppetParser::is_puppet_path(&path_str)
             || crate::languages::multimodal::chef::parser::ChefParser::is_chef_path(&path_str)
-            || crate::languages::multimodal::ansible::parser::AnsibleParser::is_ansible_path(&path_str)
+            || crate::languages::multimodal::ansible::parser::AnsibleParser::is_ansible_path(
+                &path_str,
+            )
         {
             return Err(Error::UnsupportedLanguage(
                 file_path.to_string_lossy().to_string(),
@@ -347,21 +362,21 @@ mod tests {
     #[test]
     fn test_extended_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        assert_eq!(registry.stats().language_plugins, 20);
+        assert_eq!(registry.stats().language_plugins, 21);
     }
 
     #[cfg(all(feature = "bundle-full", not(feature = "bundle-extra")))]
     #[test]
     fn test_full_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        assert_eq!(registry.stats().language_plugins, 30);
+        assert_eq!(registry.stats().language_plugins, 31);
     }
 
     #[cfg(feature = "bundle-extra")]
     #[test]
     fn test_extra_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        assert_eq!(registry.stats().language_plugins, 43);
+        assert_eq!(registry.stats().language_plugins, 44);
     }
 
     #[cfg(feature = "lang-javascript")]

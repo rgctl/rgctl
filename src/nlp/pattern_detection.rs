@@ -116,7 +116,13 @@ impl PatternDetector {
     /// Detect common naming suffixes like *Service, *Controller.
     pub fn detect_naming_patterns(&self, nodes: &[Node]) -> Vec<NamingPattern> {
         let suffixes = [
-            "Service", "Controller", "Repository", "Handler", "Manager", "Client", "Provider",
+            "Service",
+            "Controller",
+            "Repository",
+            "Handler",
+            "Manager",
+            "Client",
+            "Provider",
         ];
         let mut patterns = Vec::new();
 
@@ -225,15 +231,24 @@ impl PatternDetector {
         }
 
         // Detect MVC pattern
-        let has_controllers = nodes.iter().any(|n| n.name.to_lowercase().contains("controller"));
-        let has_models = nodes.iter().any(|n| n.name.to_lowercase().contains("model"));
+        let has_controllers = nodes
+            .iter()
+            .any(|n| n.name.to_lowercase().contains("controller"));
+        let has_models = nodes
+            .iter()
+            .any(|n| n.name.to_lowercase().contains("model"));
         let has_views = nodes.iter().any(|n| n.name.to_lowercase().contains("view"));
 
         if has_controllers && has_models {
-            let count = nodes.iter().filter(|n| {
-                let name_lower = n.name.to_lowercase();
-                name_lower.contains("controller") || name_lower.contains("model") || name_lower.contains("view")
-            }).count();
+            let count = nodes
+                .iter()
+                .filter(|n| {
+                    let name_lower = n.name.to_lowercase();
+                    name_lower.contains("controller")
+                        || name_lower.contains("model")
+                        || name_lower.contains("view")
+                })
+                .count();
 
             let description = if has_views {
                 format!("MVC pattern detected with {count} components")
@@ -270,7 +285,8 @@ fn extract_top_level_dir(path: &str) -> Option<String> {
     }
 
     // Fallback: first directory that isn't a common top-level name
-    parts.iter()
+    parts
+        .iter()
         .find(|p| !p.is_empty() && !matches!(**p, "." | ".." | "src" | "lib" | "tests" | "test"))
         .map(|s| s.to_string())
 }
@@ -288,7 +304,12 @@ mod tests {
             node.labels.push("react:component".to_string());
             backend.insert_node(node).unwrap();
         }
-        for name in ["AuthService", "UserService", "OrderService", "PaymentService"] {
+        for name in [
+            "AuthService",
+            "UserService",
+            "OrderService",
+            "PaymentService",
+        ] {
             let node = Node::new(NodeType::Class, name.to_string());
             backend.insert_node(node).unwrap();
         }
@@ -341,9 +362,15 @@ mod tests {
         let patterns = detector.detect_architecture_patterns(&nodes);
 
         // Should detect layers
-        assert!(patterns.iter().any(|p| p.pattern_type == "layer" && p.name == "presentation"));
-        assert!(patterns.iter().any(|p| p.pattern_type == "layer" && p.name == "business"));
-        assert!(patterns.iter().any(|p| p.pattern_type == "layer" && p.name == "data"));
+        assert!(patterns
+            .iter()
+            .any(|p| p.pattern_type == "layer" && p.name == "presentation"));
+        assert!(patterns
+            .iter()
+            .any(|p| p.pattern_type == "layer" && p.name == "business"));
+        assert!(patterns
+            .iter()
+            .any(|p| p.pattern_type == "layer" && p.name == "data"));
 
         // Should detect modules
         assert!(patterns.iter().any(|p| p.pattern_type == "module"));

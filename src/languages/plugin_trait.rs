@@ -101,6 +101,18 @@ pub enum SymbolType {
     ChefTemplate,
     /// Chef custom resource
     ChefCustomResource,
+    /// Puppet module
+    PuppetModule,
+    /// Puppet class
+    PuppetClass,
+    /// Puppet defined type
+    PuppetDefinedType,
+    /// Puppet resource declaration
+    PuppetResource,
+    /// Puppet variable
+    PuppetVariable,
+    /// Puppet fact reference
+    PuppetFact,
 }
 
 /// Source code location
@@ -214,6 +226,16 @@ pub enum RelationType {
     DefinesAttribute,
     /// Resource notifies another resource
     NotifiesResource,
+    /// Puppet module depends on another module
+    DependsOnModule,
+    /// Puppet class includes another class
+    IncludesClass,
+    /// Puppet class inherits from another class
+    InheritsClass,
+    /// Puppet resource requires another resource
+    RequiresResource,
+    /// Puppet class or resource uses a fact
+    UsesFact,
 }
 
 /// Code complexity metrics
@@ -327,7 +349,11 @@ pub trait LanguagePlugin: Send + Sync {
     ///
     /// # Returns
     /// Complexity metrics if calculable
-    fn calculate_complexity(&self, symbol: &Symbol, source: &[u8]) -> Result<Option<ComplexityMetrics>>;
+    fn calculate_complexity(
+        &self,
+        symbol: &Symbol,
+        source: &[u8],
+    ) -> Result<Option<ComplexityMetrics>>;
 
     /// Check if this plugin can handle a file
     fn can_handle(&self, file_path: &Path) -> bool {
@@ -468,7 +494,11 @@ mod tests {
             }])
         }
 
-        fn calculate_complexity(&self, _symbol: &Symbol, _source: &[u8]) -> Result<Option<ComplexityMetrics>> {
+        fn calculate_complexity(
+            &self,
+            _symbol: &Symbol,
+            _source: &[u8],
+        ) -> Result<Option<ComplexityMetrics>> {
             Ok(Some(ComplexityMetrics {
                 cyclomatic: 3,
                 cognitive: 5,
@@ -538,7 +568,10 @@ mod tests {
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "test_function");
         assert_eq!(symbols[0].symbol_type, SymbolType::Function);
-        assert_eq!(symbols[0].qualified_name, Some("mock::test_function".to_string()));
+        assert_eq!(
+            symbols[0].qualified_name,
+            Some("mock::test_function".to_string())
+        );
         assert_eq!(symbols[0].parameters.len(), 1);
         assert_eq!(symbols[0].parameters[0].name, "x");
     }

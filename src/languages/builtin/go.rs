@@ -57,7 +57,14 @@ impl GoPlugin {
                 start_column: node.start_position().column,
                 end_column: node.end_position().column,
             },
-            signature: Some(node.utf8_text(source)?.lines().next().unwrap_or("").trim().to_string()),
+            signature: Some(
+                node.utf8_text(source)?
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string(),
+            ),
             return_type,
             parameters,
             fields: vec![],
@@ -231,8 +238,8 @@ impl GoPlugin {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 match child.kind() {
-                    "if_statement" | "for_statement" | "switch_statement"
-                    | "expression_case" | "default_case" => {
+                    "if_statement" | "for_statement" | "switch_statement" | "expression_case"
+                    | "default_case" => {
                         *complexity += 1;
                     }
                     _ => {}
@@ -337,11 +344,13 @@ impl LanguagePlugin for GoPlugin {
             .set_language(&tree_sitter_go::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set Go grammar: {}", e)))?;
 
-        let tree = parser.parse(source, None).ok_or_else(|| Error::ParseError {
-            file: file_path.to_string_lossy().to_string().into(),
-            line: 0,
-            message: "Failed to parse Go source".to_string(),
-        })?;
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::ParseError {
+                file: file_path.to_string_lossy().to_string().into(),
+                line: 0,
+                message: "Failed to parse Go source".to_string(),
+            })?;
 
         let mut symbols = Vec::new();
         let root_node = tree.root_node();
@@ -367,11 +376,14 @@ impl LanguagePlugin for GoPlugin {
                             for spec_child in child.children(&mut spec_cursor) {
                                 match spec_child.kind() {
                                     "struct_type" => {
-                                        symbols.push(plugin.extract_struct(child, source, file_path)?);
+                                        symbols
+                                            .push(plugin.extract_struct(child, source, file_path)?);
                                         break;
                                     }
                                     "interface_type" => {
-                                        symbols.push(plugin.extract_interface(child, source, file_path)?);
+                                        symbols.push(
+                                            plugin.extract_interface(child, source, file_path)?,
+                                        );
                                         break;
                                     }
                                     _ => {}
@@ -404,7 +416,11 @@ impl LanguagePlugin for GoPlugin {
         Ok(vec![])
     }
 
-    fn calculate_complexity(&self, symbol: &Symbol, source: &[u8]) -> Result<Option<ComplexityMetrics>> {
+    fn calculate_complexity(
+        &self,
+        symbol: &Symbol,
+        source: &[u8],
+    ) -> Result<Option<ComplexityMetrics>> {
         if symbol.symbol_type != SymbolType::Function {
             return Ok(None);
         }
@@ -414,18 +430,21 @@ impl LanguagePlugin for GoPlugin {
             .set_language(&tree_sitter_go::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set Go grammar: {}", e)))?;
 
-        let tree = parser.parse(source, None).ok_or_else(|| Error::ParseError {
-            file: symbol.location.file.clone().into(),
-            line: symbol.location.start_line,
-            message: "Failed to parse source for complexity analysis".to_string(),
-        })?;
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::ParseError {
+                file: symbol.location.file.clone().into(),
+                line: symbol.location.start_line,
+                message: "Failed to parse source for complexity analysis".to_string(),
+            })?;
 
         let root = tree.root_node();
         let target_line = symbol.location.start_line - 1;
 
         fn find_function_at_line(node: Node, line: usize) -> Option<Node> {
             if matches!(node.kind(), "function_declaration" | "method_declaration")
-                && node.start_position().row == line {
+                && node.start_position().row == line
+            {
                 return Some(node);
             }
             let mut cursor = node.walk();
@@ -472,7 +491,9 @@ mod tests {
     fn test_extract_function() {
         let plugin = GoPlugin::new().unwrap();
         let source = b"func Add(a int, b int) int { return a + b }";
-        let symbols = plugin.extract_symbols(Path::new("test.go"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.go"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "Add");
@@ -484,7 +505,9 @@ mod tests {
     fn test_extract_struct() {
         let plugin = GoPlugin::new().unwrap();
         let source = b"type User struct { Name string; Age int }";
-        let symbols = plugin.extract_symbols(Path::new("test.go"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.go"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "User");
@@ -496,7 +519,9 @@ mod tests {
     fn test_extract_interface() {
         let plugin = GoPlugin::new().unwrap();
         let source = b"type Reader interface { Read(p []byte) (n int, err error) }";
-        let symbols = plugin.extract_symbols(Path::new("test.go"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.go"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "Reader");

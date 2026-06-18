@@ -19,9 +19,8 @@ pub fn extract_regex_symbols(
         .iter()
         .map(|p| {
             Ok((
-                Regex::new(p.pattern).map_err(|e| {
-                    crate::error::Error::PluginError(format!("Invalid regex: {e}"))
-                })?,
+                Regex::new(p.pattern)
+                    .map_err(|e| crate::error::Error::PluginError(format!("Invalid regex: {e}")))?,
                 p.symbol_type,
             ))
         })

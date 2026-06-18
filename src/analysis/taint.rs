@@ -173,7 +173,9 @@ impl<'a> TaintAnalyzer<'a> {
     fn detect_js_patterns(&mut self) {
         for (node_id, node) in &self.pdg.nodes {
             let text = &node.statement.text;
-            if text.contains("req.query") || text.contains("req.body") || text.contains("req.params")
+            if text.contains("req.query")
+                || text.contains("req.body")
+                || text.contains("req.params")
             {
                 self.sources.insert(*node_id, TaintSource::HttpParameter);
             } else if text.contains("fs.readFile") {

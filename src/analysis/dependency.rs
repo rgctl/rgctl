@@ -2,12 +2,12 @@
 //!
 //! Task 2.1.4: Circular dependencies and impact radius.
 
-use petgraph::visit::EdgeRef;
 use crate::analysis::graph_utils::PetGraphView;
 use crate::error::{Error, Result};
 use crate::graph::backend::MemoryBackend;
 use crate::graph::schema::EdgeType;
 use petgraph::algo::kosaraju_scc;
+use petgraph::visit::EdgeRef;
 use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
@@ -64,18 +64,29 @@ impl DependencyAnalyzer {
                 .collect();
             let names: Vec<String> = uuids
                 .iter()
-                .filter_map(|id| view.nodes.iter().find(|n| n.id == *id).map(|n| n.name.clone()))
+                .filter_map(|id| {
+                    view.nodes
+                        .iter()
+                        .find(|n| n.id == *id)
+                        .map(|n| n.name.clone())
+                })
                 .collect();
 
             if uuids.len() >= 2 {
-                cycles.push(CircularDependency { nodes: uuids, names });
+                cycles.push(CircularDependency {
+                    nodes: uuids,
+                    names,
+                });
             }
         }
         Ok(cycles)
     }
 
     /// Calculate impact radius: nodes that transitively depend on `symbol_name`.
-    pub fn calculate_impact_radius(backend: &MemoryBackend, symbol_name: &str) -> Result<ImpactResult> {
+    pub fn calculate_impact_radius(
+        backend: &MemoryBackend,
+        symbol_name: &str,
+    ) -> Result<ImpactResult> {
         let view = PetGraphView::from_backend(backend)?;
         let source_node = view
             .find_node_by_name(symbol_name)
@@ -99,7 +110,10 @@ impl DependencyAnalyzer {
             }
             max_depth = max_depth.max(depth);
 
-            for neighbor in view.directed.neighbors_directed(idx, petgraph::Direction::Incoming) {
+            for neighbor in view
+                .directed
+                .neighbors_directed(idx, petgraph::Direction::Incoming)
+            {
                 if let Some(uuid) = view.directed_to_uuid.get(&neighbor) {
                     if *uuid != source && affected.insert(*uuid) {
                         _depths.insert(*uuid, depth + 1);
@@ -111,7 +125,12 @@ impl DependencyAnalyzer {
 
         let affected_names: Vec<String> = affected
             .iter()
-            .filter_map(|id| view.nodes.iter().find(|n| n.id == *id).map(|n| n.name.clone()))
+            .filter_map(|id| {
+                view.nodes
+                    .iter()
+                    .find(|n| n.id == *id)
+                    .map(|n| n.name.clone())
+            })
             .collect();
 
         Ok(ImpactResult {
@@ -135,7 +154,12 @@ impl DependencyAnalyzer {
             .directed
             .neighbors_directed(target_idx, petgraph::Direction::Incoming)
             .filter_map(|idx| view.directed_to_uuid.get(&idx))
-            .filter_map(|uuid| view.nodes.iter().find(|n| n.id == *uuid).map(|n| n.name.clone()))
+            .filter_map(|uuid| {
+                view.nodes
+                    .iter()
+                    .find(|n| n.id == *uuid)
+                    .map(|n| n.name.clone())
+            })
             .collect();
         Ok(callers)
     }
@@ -156,8 +180,12 @@ mod tests {
         let id_b = b.id;
         backend.insert_node(a).unwrap();
         backend.insert_node(b).unwrap();
-        backend.insert_edge(Edge::new(id_a, id_b, EdgeType::Calls)).unwrap();
-        backend.insert_edge(Edge::new(id_b, id_a, EdgeType::Calls)).unwrap();
+        backend
+            .insert_edge(Edge::new(id_a, id_b, EdgeType::Calls))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(id_b, id_a, EdgeType::Calls))
+            .unwrap();
 
         let cycles = DependencyAnalyzer::find_circular_dependencies(&backend).unwrap();
         assert!(!cycles.is_empty());
@@ -173,7 +201,9 @@ mod tests {
         let id_target = target.id;
         backend.insert_node(main).unwrap();
         backend.insert_node(target).unwrap();
-        backend.insert_edge(Edge::new(id_main, id_target, EdgeType::Calls)).unwrap();
+        backend
+            .insert_edge(Edge::new(id_main, id_target, EdgeType::Calls))
+            .unwrap();
 
         let callers = DependencyAnalyzer::find_callers(&backend, "target").unwrap();
         assert!(callers.contains(&"main".to_string()));

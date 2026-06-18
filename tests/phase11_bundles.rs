@@ -18,7 +18,12 @@ macro_rules! bundle_lang_test {
 }
 
 bundle_lang_test!(minimal_includes_rust, "bundle-minimal", "rs", "rust");
-bundle_lang_test!(minimal_includes_typescript, "bundle-minimal", "ts", "typescript");
+bundle_lang_test!(
+    minimal_includes_typescript,
+    "bundle-minimal",
+    "ts",
+    "typescript"
+);
 bundle_lang_test!(extended_includes_java, "bundle-extended", "java", "java");
 bundle_lang_test!(extended_includes_cpp, "bundle-extended", "cpp", "cpp");
 bundle_lang_test!(full_includes_swift, "bundle-full", "swift", "swift");
@@ -29,14 +34,18 @@ bundle_lang_test!(extra_includes_scala, "bundle-extra", "scala", "scala");
 #[test]
 fn test_minimal_excludes_tier2_language() {
     let registry = LanguageRegistry::new();
-    assert!(registry.get_plugin_for_file(Path::new("app.swift")).is_err());
+    assert!(registry
+        .get_plugin_for_file(Path::new("app.swift"))
+        .is_err());
 }
 
 #[cfg(all(feature = "bundle-extended", not(feature = "bundle-full")))]
 #[test]
 fn test_extended_excludes_tier2_language() {
     let registry = LanguageRegistry::new();
-    assert!(registry.get_plugin_for_file(Path::new("app.swift")).is_err());
+    assert!(registry
+        .get_plugin_for_file(Path::new("app.swift"))
+        .is_err());
 }
 
 bundle_lang_test!(extended_includes_sql, "bundle-extended", "sql", "sql");
@@ -46,14 +55,14 @@ bundle_lang_test!(extended_includes_bash, "bundle-extended", "sh", "bash");
 #[test]
 fn test_full_includes_all_bundle_languages() {
     let registry = LanguageRegistry::new();
-    assert_eq!(registry.stats().language_plugins, 30);
+    assert_eq!(registry.stats().language_plugins, 31);
 }
 
 #[cfg(feature = "bundle-extra")]
 #[test]
 fn test_extra_includes_all_bundle_languages() {
     let registry = LanguageRegistry::new();
-    assert_eq!(registry.stats().language_plugins, 43);
+    assert_eq!(registry.stats().language_plugins, 44);
 }
 
 #[cfg(feature = "bundle-extended")]

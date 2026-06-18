@@ -54,7 +54,13 @@ impl RustPlugin {
             if prev_sibling.kind() == "line_comment" {
                 let comment = prev_sibling.utf8_text(source)?;
                 if comment.starts_with("///") || comment.starts_with("//!") {
-                    documentation = Some(comment.trim_start_matches("///").trim_start_matches("//!").trim().to_string());
+                    documentation = Some(
+                        comment
+                            .trim_start_matches("///")
+                            .trim_start_matches("//!")
+                            .trim()
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -76,7 +82,14 @@ impl RustPlugin {
                 start_column: node.start_position().column,
                 end_column: node.end_position().column,
             },
-            signature: Some(node.utf8_text(source)?.split('{').next().unwrap_or("").trim().to_string()),
+            signature: Some(
+                node.utf8_text(source)?
+                    .split('{')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string(),
+            ),
             return_type,
             parameters,
             fields: vec![],
@@ -123,7 +136,13 @@ impl RustPlugin {
     }
 
     /// Extract struct or enum definition
-    fn extract_type_definition(&self, node: Node, source: &[u8], file_path: &str, is_enum: bool) -> Result<Symbol> {
+    fn extract_type_definition(
+        &self,
+        node: Node,
+        source: &[u8],
+        file_path: &str,
+        is_enum: bool,
+    ) -> Result<Symbol> {
         let mut cursor = node.walk();
         let mut name = None;
         let mut fields = Vec::new();
@@ -152,7 +171,11 @@ impl RustPlugin {
 
         Ok(Symbol {
             name: name.clone(),
-            symbol_type: if is_enum { SymbolType::Enum } else { SymbolType::Struct },
+            symbol_type: if is_enum {
+                SymbolType::Enum
+            } else {
+                SymbolType::Struct
+            },
             qualified_name: None,
             location: SourceLocation {
                 file: file_path.to_string(),
@@ -277,8 +300,15 @@ impl RustPlugin {
             *max_depth = (*max_depth).max(current_depth);
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                if matches!(child.kind(), "if_expression" | "match_expression" | "while_expression"
-                    | "for_expression" | "loop_expression" | "block") {
+                if matches!(
+                    child.kind(),
+                    "if_expression"
+                        | "match_expression"
+                        | "while_expression"
+                        | "for_expression"
+                        | "loop_expression"
+                        | "block"
+                ) {
                     traverse(child, max_depth, current_depth + 1);
                 } else {
                     traverse(child, max_depth, current_depth);
@@ -334,11 +364,13 @@ impl LanguagePlugin for RustPlugin {
             .set_language(&tree_sitter_rust::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set Rust grammar: {}", e)))?;
 
-        let tree = parser.parse(source, None).ok_or_else(|| Error::ParseError {
-            file: file_path.to_string_lossy().to_string().into(),
-            line: 0,
-            message: "Failed to parse Rust source".to_string(),
-        })?;
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::ParseError {
+                file: file_path.to_string_lossy().to_string().into(),
+                line: 0,
+                message: "Failed to parse Rust source".to_string(),
+            })?;
 
         let mut symbols = Vec::new();
         let root_node = tree.root_node();
@@ -386,7 +418,11 @@ impl LanguagePlugin for RustPlugin {
         Ok(vec![])
     }
 
-    fn calculate_complexity(&self, symbol: &Symbol, source: &[u8]) -> Result<Option<ComplexityMetrics>> {
+    fn calculate_complexity(
+        &self,
+        symbol: &Symbol,
+        source: &[u8],
+    ) -> Result<Option<ComplexityMetrics>> {
         if symbol.symbol_type != SymbolType::Function {
             return Ok(None);
         }
@@ -397,11 +433,13 @@ impl LanguagePlugin for RustPlugin {
             .set_language(&tree_sitter_rust::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set Rust grammar: {}", e)))?;
 
-        let tree = parser.parse(source, None).ok_or_else(|| Error::ParseError {
-            file: symbol.location.file.clone().into(),
-            line: symbol.location.start_line,
-            message: "Failed to parse source for complexity analysis".to_string(),
-        })?;
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::ParseError {
+                file: symbol.location.file.clone().into(),
+                line: symbol.location.start_line,
+                message: "Failed to parse source for complexity analysis".to_string(),
+            })?;
 
         // Find the function node by location
         let root = tree.root_node();
@@ -463,7 +501,9 @@ mod tests {
     fn test_extract_simple_function() {
         let plugin = RustPlugin::new().unwrap();
         let source = b"fn add(a: i32, b: i32) -> i32 { a + b }";
-        let symbols = plugin.extract_symbols(Path::new("test.rs"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.rs"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "add");
@@ -478,7 +518,9 @@ mod tests {
     fn test_extract_function_with_modifiers() {
         let plugin = RustPlugin::new().unwrap();
         let source = b"pub async fn fetch_data() -> Result<String> { Ok(String::new()) }";
-        let symbols = plugin.extract_symbols(Path::new("test.rs"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.rs"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "fetch_data");
@@ -489,7 +531,9 @@ mod tests {
     fn test_extract_struct() {
         let plugin = RustPlugin::new().unwrap();
         let source = b"pub struct User { pub name: String, age: u32 }";
-        let symbols = plugin.extract_symbols(Path::new("test.rs"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.rs"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "User");
@@ -503,7 +547,9 @@ mod tests {
     fn test_extract_enum() {
         let plugin = RustPlugin::new().unwrap();
         let source = b"enum Status { Active, Inactive, Pending }";
-        let symbols = plugin.extract_symbols(Path::new("test.rs"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.rs"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "Status");
@@ -524,7 +570,9 @@ mod tests {
                 let c = Config { port: 8080 };
             }
         "#;
-        let symbols = plugin.extract_symbols(Path::new("test.rs"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.rs"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 3); // helper, Config, main
         assert_eq!(symbols[0].name, "helper");
@@ -536,7 +584,9 @@ mod tests {
     fn test_calculate_complexity_simple() {
         let plugin = RustPlugin::new().unwrap();
         let source = b"fn simple() { println!(\"hello\"); }";
-        let symbols = plugin.extract_symbols(Path::new("test.rs"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.rs"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         let complexity = plugin.calculate_complexity(&symbols[0], source).unwrap();
@@ -560,7 +610,9 @@ mod tests {
                 false
             }
         "#;
-        let symbols = plugin.extract_symbols(Path::new("test.rs"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.rs"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         let complexity = plugin.calculate_complexity(&symbols[0], source).unwrap();
@@ -584,7 +636,9 @@ mod tests {
                 }
             }
         "#;
-        let symbols = plugin.extract_symbols(Path::new("test.rs"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.rs"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         let complexity = plugin.calculate_complexity(&symbols[0], source).unwrap();
@@ -598,7 +652,9 @@ mod tests {
     fn test_complexity_not_calculated_for_structs() {
         let plugin = RustPlugin::new().unwrap();
         let source = b"struct Data { value: i32 }";
-        let symbols = plugin.extract_symbols(Path::new("test.rs"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.rs"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         let complexity = plugin.calculate_complexity(&symbols[0], source).unwrap();
@@ -613,7 +669,9 @@ fn first() {}
 
 fn second() {}
 "#;
-        let symbols = plugin.extract_symbols(Path::new("test.rs"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.rs"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 2);
         assert_eq!(symbols[0].location.start_line, 2); // first() on line 2

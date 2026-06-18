@@ -1,5 +1,7 @@
 //! Shared Phase 13 integration helpers.
 
+#![allow(dead_code)]
+
 use rbuilder::analysis::{
     build_cfg_for_function, CallGraph, ControlFlowGraph, DominatorTree, InferredType,
     ProgramDependenceGraph, TaintAnalyzer, TaintFlow, TaintSink, TaintSource, TypeInferenceEngine,
@@ -88,7 +90,9 @@ pub fn infer_types(
 
 /// Variable has inferred type in results.
 pub fn has_type(types: &[VariableType], var: &str, expected: InferredType) -> bool {
-    types.iter().any(|t| t.variable == var && t.inferred_type == expected)
+    types
+        .iter()
+        .any(|t| t.variable == var && t.inferred_type == expected)
 }
 
 /// Two-function backend (main -> helper).
@@ -132,7 +136,9 @@ pub fn build_sample_backend_with_chain(depth: usize) -> (MemoryBackend, HashMap<
             let next = format!("f{}", i + 1);
             source.push_str(&format!("fn {name}(v: i32) {{\n    {next}(v);\n}}\n"));
         } else {
-            source.push_str(&format!("fn {name}(input: i32) -> i32 {{\n    input + 1\n}}\n"));
+            source.push_str(&format!(
+                "fn {name}(input: i32) -> i32 {{\n    input + 1\n}}\n"
+            ));
         }
     }
     let mut files = HashMap::new();
@@ -201,7 +207,9 @@ pub fn large_graph(n: usize) -> MemoryBackend {
 /// Assert at least one flow matches source and sink kinds.
 pub fn assert_flow_kind(flows: &[TaintFlow], source: TaintSource, sink: TaintSink) {
     assert!(
-        flows.iter().any(|f| f.source_type == source && f.sink_type == sink),
+        flows
+            .iter()
+            .any(|f| f.source_type == source && f.sink_type == sink),
         "expected flow {:?} -> {:?}, got {:?}",
         source,
         sink,
@@ -216,7 +224,10 @@ pub fn assert_flow_kind(flows: &[TaintFlow], source: TaintSource, sink: TaintSin
 pub fn pdg_statement_texts(lang: &str, code: &str, fn_name: &str) -> Vec<String> {
     let cfg = build_cfg_for_function(lang, code, fn_name).expect("cfg build");
     let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).expect("pdg build");
-    pdg.nodes.values().map(|n| n.statement.text.clone()).collect()
+    pdg.nodes
+        .values()
+        .map(|n| n.statement.text.clone())
+        .collect()
 }
 
 /// Call graph from backend wrapper.

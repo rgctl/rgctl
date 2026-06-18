@@ -26,9 +26,9 @@ pub fn derive_language_plugin(input: TokenStream) -> TokenStream {
     let mut extensions: Vec<String> = Vec::new();
     let mut grammar_crate = None;
 
-    if let Ok(nested) = lang_attr.parse_args_with(
-        syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-    ) {
+    if let Ok(nested) = lang_attr
+        .parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
+    {
         for meta in nested {
             if let syn::Meta::NameValue(nv) = meta {
                 if nv.path.is_ident("id") {
@@ -66,7 +66,8 @@ pub fn derive_language_plugin(input: TokenStream) -> TokenStream {
         .map(|e| LitStr::new(e, proc_macro2::Span::call_site()))
         .collect();
 
-    let has_parser_field = matches!(input.data, Data::Struct(ref ds) if matches!(ds.fields, Fields::Named(_)));
+    let has_parser_field =
+        matches!(input.data, Data::Struct(ref ds) if matches!(ds.fields, Fields::Named(_)));
 
     let new_impl = if let Some(ref grammar) = grammar_crate {
         if has_parser_field {

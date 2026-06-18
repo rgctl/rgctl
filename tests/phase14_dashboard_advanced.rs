@@ -60,11 +60,9 @@ fn test_community_detection_finds_clusters() {
 fn test_community_labels_inferred() {
     let backend = sample_graph();
     let communities = community::detect_communities(&backend).unwrap();
-    assert!(
-        communities
-            .iter()
-            .any(|c| c.label.contains("auth") || c.label.contains("cluster"))
-    );
+    assert!(communities
+        .iter()
+        .any(|c| c.label.contains("auth") || c.label.contains("cluster")));
 }
 
 #[test]
@@ -114,7 +112,9 @@ async fn test_dashboard_advanced_endpoint() {
     assert!(response.get("communities").is_some());
     assert!(response.get("hotspots").is_some());
     assert!(response.get("centrality").is_some());
-    assert!(response["hotspots"].as_array().unwrap().iter().any(|h| {
-        h.get("risk_score").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.0
-    }));
+    assert!(response["hotspots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|h| { h.get("risk_score").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.0 }));
 }

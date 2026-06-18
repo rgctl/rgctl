@@ -1,4 +1,23 @@
 //! Ansible role dependency analysis from the knowledge graph.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use rbuilder::analysis::ansible_roles::RoleDependencyGraph;
+//! use rbuilder::graph::CodeGraph;
+//! use std::path::Path;
+//!
+//! # fn main() -> rbuilder::error::Result<()> {
+//! let graph = CodeGraph::load_from_repo(Path::new("."))?;
+//! let role_graph = RoleDependencyGraph::from_graph(graph.backend())?;
+//!
+//! let sorted = role_graph.topological_sort()?;
+//! println!("Role execution order: {sorted:?}");
+//!
+//! role_graph.validate_no_cycles()?;
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::error::{Error, Result};
 use crate::graph::backend::GraphBackend;
@@ -35,23 +54,23 @@ impl RoleDependencyGraph {
         let role_nodes: Vec<_> = backend
             .find_nodes_by_type(NodeType::AnsibleRole)?
             .into_iter()
-            .filter(|n| {
-                n.get_property("referenced")
-                    .is_none_or(|v| v != "true")
-            })
+            .filter(|n| n.get_property("referenced").is_none_or(|v| v != "true"))
             .collect();
 
         for node in &role_nodes {
-            graph.roles.entry(node.name.clone()).or_insert_with(|| RoleNode {
-                name: node.name.clone(),
-                path: node
-                    .file_path
-                    .clone()
-                    .or_else(|| node.get_property("role_path").cloned())
-                    .unwrap_or_default(),
-                dependencies: vec![],
-                dependents: vec![],
-            });
+            graph
+                .roles
+                .entry(node.name.clone())
+                .or_insert_with(|| RoleNode {
+                    name: node.name.clone(),
+                    path: node
+                        .file_path
+                        .clone()
+                        .or_else(|| node.get_property("role_path").cloned())
+                        .unwrap_or_default(),
+                    dependencies: vec![],
+                    dependents: vec![],
+                });
         }
 
         let edges = backend.all_edges()?;
@@ -59,40 +78,42 @@ impl RoleDependencyGraph {
             if edge.edge_type != EdgeType::DependsOnRole {
                 continue;
             }
-            let from = backend.get_node(edge.from)?.ok_or_else(|| {
-                Error::GraphError(format!("Missing node {}", edge.from))
-            })?;
-            let to = backend.get_node(edge.to)?.ok_or_else(|| {
-                Error::GraphError(format!("Missing node {}", edge.to))
-            })?;
+            let from = backend
+                .get_node(edge.from)?
+                .ok_or_else(|| Error::GraphError(format!("Missing node {}", edge.from)))?;
+            let to = backend
+                .get_node(edge.to)?
+                .ok_or_else(|| Error::GraphError(format!("Missing node {}", edge.to)))?;
             if from.node_type != NodeType::AnsibleRole || to.node_type != NodeType::AnsibleRole {
                 continue;
             }
-            graph
-                .roles
-                .entry(from.name.clone())
-                .or_insert_with(|| RoleNode {
-                    name: from.name.clone(),
-                    path: from.file_path.clone().unwrap_or_default(),
-                    dependencies: vec![],
-                    dependents: vec![],
-                });
-            graph
-                .roles
-                .entry(to.name.clone())
-                .or_insert_with(|| RoleNode {
-                    name: to.name.clone(),
-                    path: to.file_path.clone().unwrap_or_default(),
-                    dependencies: vec![],
-                    dependents: vec![],
-                });
-            let from_entry = graph.roles.get_mut(&from.name).unwrap();
-            if !from_entry.dependencies.contains(&to.name) {
-                from_entry.dependencies.push(to.name.clone());
+            {
+                let from_entry = graph
+                    .roles
+                    .entry(from.name.clone())
+                    .or_insert_with(|| RoleNode {
+                        name: from.name.clone(),
+                        path: from.file_path.clone().unwrap_or_default(),
+                        dependencies: vec![],
+                        dependents: vec![],
+                    });
+                if !from_entry.dependencies.contains(&to.name) {
+                    from_entry.dependencies.push(to.name.clone());
+                }
             }
-            let to_entry = graph.roles.get_mut(&to.name).unwrap();
-            if !to_entry.dependents.contains(&from.name) {
-                to_entry.dependents.push(from.name.clone());
+            {
+                let to_entry = graph
+                    .roles
+                    .entry(to.name.clone())
+                    .or_insert_with(|| RoleNode {
+                        name: to.name.clone(),
+                        path: to.file_path.clone().unwrap_or_default(),
+                        dependencies: vec![],
+                        dependents: vec![],
+                    });
+                if !to_entry.dependents.contains(&from.name) {
+                    to_entry.dependents.push(from.name.clone());
+                }
             }
         }
 
@@ -244,13 +265,10 @@ impl RoleDependencyAnalyzer {
             if meta.exists() {
                 let content = std::fs::read_to_string(&meta)?;
                 let value: serde_yaml::Value = serde_yaml::from_str(&content)?;
-                let (_, relations) = parser.parse(
-                    &meta.to_string_lossy(),
-                    &value,
-                    &content,
-                );
+                let (_, relations) = parser.parse(&meta.to_string_lossy(), &value, &content);
                 for rel in relations {
-                    if rel.relation_type == crate::languages::plugin_trait::RelationType::DependsOnRole
+                    if rel.relation_type
+                        == crate::languages::plugin_trait::RelationType::DependsOnRole
                     {
                         dependencies.push(rel.to);
                     }
@@ -293,9 +311,9 @@ impl Default for RoleDependencyAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::schema::Node;
-    use crate::graph::backend::MemoryBackend;
     use crate::graph::backend::GraphBackend;
+    use crate::graph::backend::MemoryBackend;
+    use crate::graph::schema::Node;
 
     #[test]
     fn test_topological_sort_from_graph() {

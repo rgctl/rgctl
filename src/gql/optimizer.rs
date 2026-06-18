@@ -63,9 +63,9 @@ impl<'a> QueryOptimizer<'a> {
                         }
                     }
                     if pushed {
-                        report
-                            .optimizations
-                            .push(format!("predicate pushdown: {variable}.{property} = {value}"));
+                        report.optimizations.push(format!(
+                            "predicate pushdown: {variable}.{property} = {value}"
+                        ));
                     } else {
                         remaining.push(Predicate::Equals {
                             variable,
@@ -115,12 +115,7 @@ impl<'a> QueryOptimizer<'a> {
             let count = self
                 .backend
                 .all_nodes()
-                .map(|nodes| {
-                    nodes
-                        .iter()
-                        .filter(|n| n.node_type == node_type)
-                        .count() as f64
-                })
+                .map(|nodes| nodes.iter().filter(|n| n.node_type == node_type).count() as f64)
                 .unwrap_or(total)
                 / total;
             count

@@ -6,6 +6,10 @@ use crate::extraction::graph_builder::ConfigUsageKind;
 use regex::Regex;
 use std::path::Path;
 
+fn compile_pattern(pattern: &str) -> Regex {
+    Regex::new(pattern).unwrap()
+}
+
 /// Confidence level for a detected config usage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigConfidence {
@@ -51,8 +55,8 @@ impl ConfigUsageDetector {
     }
 
     fn detect_rust(source: &str, file: &str) -> Vec<ConfigUsage> {
-        let env_re = Regex::new(r#"env::var(?:_os)?\("([^"]+)"\)"#).unwrap();
-        let config_re = Regex::new(r#"\.get\("([^"]+)"\)"#).unwrap();
+        let env_re = compile_pattern(r#"env::var(?:_os)?\("([^"]+)"\)"#);
+        let config_re = compile_pattern(r#"\.get\("([^"]+)"\)"#);
         let mut usages = Vec::new();
 
         for (idx, line) in source.lines().enumerate() {
@@ -79,12 +83,15 @@ impl ConfigUsageDetector {
     }
 
     fn detect_python(source: &str, file: &str) -> Vec<ConfigUsage> {
-        let env_bracket = Regex::new(r#"os\.environ\[['"]([^'"]+)['"]\]"#).unwrap();
-        let env_getenv = Regex::new(r#"os\.getenv\(['"]([^'"]+)['"]\)"#).unwrap();
+        let env_bracket = compile_pattern(r#"os\.environ\[['"]([^'"]+)['"]\]"#);
+        let env_getenv = compile_pattern(r#"os\.getenv\(['"]([^'"]+)['"]\)"#);
         let mut usages = Vec::new();
 
         for (idx, line) in source.lines().enumerate() {
-            for cap in env_bracket.captures_iter(line).chain(env_getenv.captures_iter(line)) {
+            for cap in env_bracket
+                .captures_iter(line)
+                .chain(env_getenv.captures_iter(line))
+            {
                 usages.push(ConfigUsage {
                     key: cap[1].to_string(),
                     file: file.to_string(),
@@ -98,12 +105,15 @@ impl ConfigUsageDetector {
     }
 
     fn detect_javascript(source: &str, file: &str) -> Vec<ConfigUsage> {
-        let dot_re = Regex::new(r#"process\.env\.([A-Z0-9_]+)"#).unwrap();
-        let bracket_re = Regex::new(r#"process\.env\[['"]([^'"]+)['"]\]"#).unwrap();
+        let dot_re = compile_pattern(r#"process\.env\.([A-Z0-9_]+)"#);
+        let bracket_re = compile_pattern(r#"process\.env\[['"]([^'"]+)['"]\]"#);
         let mut usages = Vec::new();
 
         for (idx, line) in source.lines().enumerate() {
-            for cap in dot_re.captures_iter(line).chain(bracket_re.captures_iter(line)) {
+            for cap in dot_re
+                .captures_iter(line)
+                .chain(bracket_re.captures_iter(line))
+            {
                 usages.push(ConfigUsage {
                     key: cap[1].to_string(),
                     file: file.to_string(),
@@ -117,7 +127,7 @@ impl ConfigUsageDetector {
     }
 
     fn detect_go(source: &str, file: &str) -> Vec<ConfigUsage> {
-        let re = Regex::new(r#"os\.Getenv\("([^"]+)"\)"#).unwrap();
+        let re = compile_pattern(r#"os\.Getenv\("([^"]+)"\)"#);
         let mut usages = Vec::new();
 
         for (idx, line) in source.lines().enumerate() {
@@ -150,7 +160,9 @@ mod tests {
         "#;
 
         let usages = ConfigUsageDetector::detect("rust", source, Path::new("main.rs"));
-        assert!(usages.iter().any(|u| u.key == "DB_HOST" && u.usage_type == ConfigUsageKind::EnvVar));
+        assert!(usages
+            .iter()
+            .any(|u| u.key == "DB_HOST" && u.usage_type == ConfigUsageKind::EnvVar));
         assert!(usages.iter().any(|u| u.key == "database.pool_size"));
     }
 

@@ -1,12 +1,12 @@
 //! Graph analysis algorithms
 
-pub mod blast_radius;
 pub mod ansible_roles;
-pub mod chef_cookbooks;
+pub mod blast_radius;
 pub mod callgraph;
 pub mod centrality;
 pub mod cfg;
 pub mod cfg_builder;
+pub mod chef_cookbooks;
 pub mod community;
 pub mod complexity;
 pub mod dataflow;
@@ -18,15 +18,13 @@ pub mod graph_utils;
 pub mod interprocedural_cfg;
 pub mod interprocedural_slicing;
 pub mod pdg;
+pub mod puppet_modules;
 pub mod slicing;
 pub mod taint;
 pub mod type_inference;
 
-pub use blast_radius::{BlastRadiusAnalyzer, BlastRadiusReport, DataFlowImpact};
 pub use ansible_roles::{RoleDependencyAnalyzer, RoleDependencyGraph, RoleNode};
-pub use chef_cookbooks::{
-    CookbookDependencyAnalyzer, CookbookDependencyGraph, CookbookNode,
-};
+pub use blast_radius::{BlastRadiusAnalyzer, BlastRadiusReport, DataFlowImpact};
 pub use callgraph::{CallGraph, CallGraphEdge, CallGraphNode};
 pub use centrality::{
     degree_centrality, identify_hotspots, CentralityAnalyzer, CentralityReport, CentralityScore,
@@ -36,6 +34,7 @@ pub use cfg::{
     BasicBlock, BlockId, CfgEdge, CfgEdgeType, ControlFlowGraph, Statement, StatementKind,
 };
 pub use cfg_builder::build_cfg_for_function;
+pub use chef_cookbooks::{CookbookDependencyAnalyzer, CookbookDependencyGraph, CookbookNode};
 pub use community::{
     detect_communities, Community, CommunityDetector, CommunityResult, DashboardCommunity,
 };
@@ -48,8 +47,9 @@ pub use flow_cache::{CachedAnalysis, CfgPdgCache, FlowCache, NodePdgCache};
 pub use interprocedural_cfg::InterproceduralCFG;
 pub use interprocedural_slicing::{InterproceduralSlice, InterproceduralSlicer};
 pub use pdg::{
-    ControlDependency, DataDependency, DataDepType, PdgNode, PdgNodeId, ProgramDependenceGraph,
+    ControlDependency, DataDepType, DataDependency, PdgNode, PdgNodeId, ProgramDependenceGraph,
 };
+pub use puppet_modules::{ModuleDependencyAnalyzer, ModuleDependencyGraph, ModuleNode};
 pub use slicing::{BackwardSlicer, CodeSlice, SliceCriterion};
 pub use taint::{Sanitizer, TaintAnalyzer, TaintFlow, TaintSink, TaintSource};
 pub use type_inference::{confidence_for, InferredType, TypeInferenceEngine, VariableType};

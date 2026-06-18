@@ -169,7 +169,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn init_git(root: &Path) {
-        Command::new("git").args(["init"]).current_dir(root).output().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(root)
+            .output()
+            .unwrap();
         Command::new("git")
             .args(["config", "user.email", "t@example.com"])
             .current_dir(root)

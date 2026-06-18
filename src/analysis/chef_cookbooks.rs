@@ -1,4 +1,21 @@
 //! Chef cookbook dependency analysis from the knowledge graph.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use rbuilder::analysis::chef_cookbooks::CookbookDependencyGraph;
+//! use rbuilder::graph::CodeGraph;
+//! use std::path::Path;
+//!
+//! # fn main() -> rbuilder::error::Result<()> {
+//! let graph = CodeGraph::load_from_repo(Path::new("."))?;
+//! let cookbook_graph = CookbookDependencyGraph::from_graph(graph.backend())?;
+//!
+//! let sorted = cookbook_graph.topological_sort()?;
+//! println!("Cookbook dependency order: {sorted:?}");
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::error::{Error, Result};
 use crate::graph::backend::GraphBackend;
@@ -70,12 +87,12 @@ impl CookbookDependencyGraph {
             if edge.edge_type != EdgeType::DependsOnCookbook {
                 continue;
             }
-            let from = backend.get_node(edge.from)?.ok_or_else(|| {
-                Error::GraphError(format!("Missing node {}", edge.from))
-            })?;
-            let to = backend.get_node(edge.to)?.ok_or_else(|| {
-                Error::GraphError(format!("Missing node {}", edge.to))
-            })?;
+            let from = backend
+                .get_node(edge.from)?
+                .ok_or_else(|| Error::GraphError(format!("Missing node {}", edge.from)))?;
+            let to = backend
+                .get_node(edge.to)?
+                .ok_or_else(|| Error::GraphError(format!("Missing node {}", edge.to)))?;
             let from_name = from
                 .name
                 .strip_prefix("cookbook::")
@@ -86,39 +103,43 @@ impl CookbookDependencyGraph {
                 .strip_prefix("cookbook::")
                 .unwrap_or(&to.name)
                 .to_string();
-            graph
-                .cookbooks
-                .entry(from_name.clone())
-                .or_insert_with(|| CookbookNode {
-                    name: from_name.clone(),
-                    version: from
-                        .get_property("version")
-                        .cloned()
-                        .unwrap_or_else(|| "0.0.0".to_string()),
-                    path: from.file_path.clone().unwrap_or_default(),
-                    dependencies: vec![],
-                    dependents: vec![],
-                });
-            graph
-                .cookbooks
-                .entry(to_name.clone())
-                .or_insert_with(|| CookbookNode {
-                    name: to_name.clone(),
-                    version: to
-                        .get_property("version")
-                        .cloned()
-                        .unwrap_or_else(|| "0.0.0".to_string()),
-                    path: to.file_path.clone().unwrap_or_default(),
-                    dependencies: vec![],
-                    dependents: vec![],
-                });
-            let from_entry = graph.cookbooks.get_mut(&from_name).unwrap();
-            if !from_entry.dependencies.contains(&to_name) {
-                from_entry.dependencies.push(to_name.clone());
+            {
+                let from_entry =
+                    graph
+                        .cookbooks
+                        .entry(from_name.clone())
+                        .or_insert_with(|| CookbookNode {
+                            name: from_name.clone(),
+                            version: from
+                                .get_property("version")
+                                .cloned()
+                                .unwrap_or_else(|| "0.0.0".to_string()),
+                            path: from.file_path.clone().unwrap_or_default(),
+                            dependencies: vec![],
+                            dependents: vec![],
+                        });
+                if !from_entry.dependencies.contains(&to_name) {
+                    from_entry.dependencies.push(to_name.clone());
+                }
             }
-            let to_entry = graph.cookbooks.get_mut(&to_name).unwrap();
-            if !to_entry.dependents.contains(&from_name) {
-                to_entry.dependents.push(from_name);
+            {
+                let to_entry =
+                    graph
+                        .cookbooks
+                        .entry(to_name.clone())
+                        .or_insert_with(|| CookbookNode {
+                            name: to_name.clone(),
+                            version: to
+                                .get_property("version")
+                                .cloned()
+                                .unwrap_or_else(|| "0.0.0".to_string()),
+                            path: to.file_path.clone().unwrap_or_default(),
+                            dependencies: vec![],
+                            dependents: vec![],
+                        });
+                if !to_entry.dependents.contains(&from_name) {
+                    to_entry.dependents.push(from_name);
+                }
             }
         }
 
@@ -282,13 +303,16 @@ impl CookbookDependencyAnalyzer {
         for name in names {
             let deps = graph.cookbooks.get(&name).unwrap().dependencies.clone();
             for dep in deps {
-                graph.cookbooks.entry(dep.clone()).or_insert_with(|| CookbookNode {
-                    name: dep.clone(),
-                    version: "0.0.0".to_string(),
-                    path: String::new(),
-                    dependencies: vec![],
-                    dependents: vec![],
-                });
+                graph
+                    .cookbooks
+                    .entry(dep.clone())
+                    .or_insert_with(|| CookbookNode {
+                        name: dep.clone(),
+                        version: "0.0.0".to_string(),
+                        path: String::new(),
+                        dependencies: vec![],
+                        dependents: vec![],
+                    });
                 if let Some(dep_node) = graph.cookbooks.get_mut(&dep) {
                     if !dep_node.dependents.contains(&name) {
                         dep_node.dependents.push(name.clone());

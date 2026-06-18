@@ -4,8 +4,7 @@
 
 use axum::extract::{Path, Query, State};
 use rbuilder::api::server::{
-    dashboard_metrics, get_node, get_node_neighbors, graph_by_query, graph_stats,
-    GraphQueryParams,
+    dashboard_metrics, get_node, get_node_neighbors, graph_by_query, graph_stats, GraphQueryParams,
 };
 use rbuilder::api::state::AppState;
 use rbuilder::graph::backend::GraphBackend;
@@ -87,11 +86,7 @@ async fn test_api_get_node_neighbors() {
 #[tokio::test]
 async fn test_api_get_node_not_found() {
     let (_temp, state, _) = setup_graph();
-    let result = get_node(
-        State(state),
-        Path(uuid::Uuid::new_v4().to_string()),
-    )
-    .await;
+    let result = get_node(State(state), Path(uuid::Uuid::new_v4().to_string())).await;
     assert!(result.is_err());
 }
 
@@ -113,7 +108,7 @@ async fn test_api_graph_depth_expansion() {
     let data = graph_by_query(
         State(state),
         Query(GraphQueryParams {
-            query: Some(format!("name:alpha")),
+            query: Some("name:alpha".to_string()),
             depth: Some(2),
             limit: Some(50),
         }),

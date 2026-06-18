@@ -1,7 +1,7 @@
 //! Graph query interface
 
-use crate::graph::backend::GraphBackend;
 use crate::error::{Error, Result};
+use crate::graph::backend::GraphBackend;
 use crate::graph::backend::MemoryBackend;
 use crate::graph::schema::{Node, NodeType};
 
@@ -25,7 +25,11 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
     }
 
     if query.contains('|') {
-        let parts: Vec<&str> = query.split('|').map(str::trim).filter(|s| !s.is_empty()).collect();
+        let parts: Vec<&str> = query
+            .split('|')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
         if parts.is_empty() {
             return backend.all_nodes();
         }
@@ -88,6 +92,8 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
         "ansibleroles" | "roles" => backend.find_nodes_by_type(NodeType::AnsibleRole),
         "cookbooks" | "chefcookbooks" => backend.find_nodes_by_type(NodeType::ChefCookbook),
         "chefrecipes" | "recipes" => backend.find_nodes_by_type(NodeType::ChefRecipe),
+        "puppetmodules" | "modules" => backend.find_nodes_by_type(NodeType::PuppetModule),
+        "puppetclasses" => backend.find_nodes_by_type(NodeType::PuppetClass),
         _ => backend.find_nodes(query),
     }
 }
@@ -139,6 +145,12 @@ fn parse_node_type(value: &str) -> Result<NodeType> {
         "chefattribute" => Ok(NodeType::ChefAttribute),
         "cheftemplate" => Ok(NodeType::ChefTemplate),
         "chefcustomresource" => Ok(NodeType::ChefCustomResource),
+        "puppetmodule" | "puppetmodules" => Ok(NodeType::PuppetModule),
+        "puppetclass" | "puppetclasses" => Ok(NodeType::PuppetClass),
+        "puppetdefinedtype" => Ok(NodeType::PuppetDefinedType),
+        "puppetresource" => Ok(NodeType::PuppetResource),
+        "puppetvariable" => Ok(NodeType::PuppetVariable),
+        "puppetfact" => Ok(NodeType::PuppetFact),
         other => Err(Error::InvalidQuery(format!("Unknown node type: {other}"))),
     }
 }
@@ -148,9 +160,7 @@ fn selectivity_rank(part: &str) -> usize {
         0
     } else if part.starts_with("signature:") {
         1
-    } else if part.starts_with("module:") {
-        2
-    } else if part.starts_with("resource:") {
+    } else if part.starts_with("module:") || part.starts_with("resource:") {
         2
     } else if part.starts_with("return_type:") {
         3
@@ -189,11 +199,7 @@ fn filter_nodes_by_return_type(backend: &MemoryBackend, prefix: &str) -> Result<
         .collect())
 }
 
-fn filter_nodes_by_property(
-    backend: &MemoryBackend,
-    key: &str,
-    value: &str,
-) -> Result<Vec<Node>> {
+fn filter_nodes_by_property(backend: &MemoryBackend, key: &str, value: &str) -> Result<Vec<Node>> {
     Ok(backend
         .all_nodes()?
         .into_iter()
@@ -206,30 +212,30 @@ fn filter_nodes_by_property(
 
 fn signature_wildcard_match(pattern: &str, text: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
-        if parts.len() == 1 {
-            return text.contains(parts[0]);
+    if parts.len() == 1 {
+        return text.contains(parts[0]);
+    }
+    let mut start = 0usize;
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
         }
-        let mut start = 0usize;
-        for (i, part) in parts.iter().enumerate() {
-            if part.is_empty() {
-                continue;
-            }
-            if i == 0 {
-                if !text.starts_with(part) {
-                    return false;
-                }
-                start = part.len();
-            } else if i == parts.len() - 1 {
-                if !text[start..].ends_with(part) {
-                    return false;
-                }
-            } else if let Some(pos) = text[start..].find(part) {
-                start += pos + part.len();
-            } else {
+        if i == 0 {
+            if !text.starts_with(part) {
                 return false;
             }
+            start = part.len();
+        } else if i == parts.len() - 1 {
+            if !text[start..].ends_with(part) {
+                return false;
+            }
+        } else if let Some(pos) = text[start..].find(part) {
+            start += pos + part.len();
+        } else {
+            return false;
         }
-        true
+    }
+    true
 }
 
 #[cfg(test)]
@@ -308,8 +314,7 @@ mod tests {
         let mut backend = MemoryBackend::new();
         backend
             .insert_node(
-                Node::new(NodeType::Function, "run".to_string())
-                    .with_signature("async fn run()"),
+                Node::new(NodeType::Function, "run".to_string()).with_signature("async fn run()"),
             )
             .unwrap();
         let results = execute(&backend, "signature:*async*").unwrap();

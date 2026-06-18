@@ -80,27 +80,24 @@ impl SecurityAnalyzer {
 
     fn matches_cwe(&self, flow: &TaintFlow, pattern: &CwePattern, source: &str) -> bool {
         if pattern.cwe_id == "CWE-798" {
-            return pattern.source_patterns.iter().any(|p| {
-                Regex::new(p)
-                    .map(|re| re.is_match(source))
-                    .unwrap_or(false)
-            });
+            return pattern
+                .source_patterns
+                .iter()
+                .any(|p| Regex::new(p).map(|re| re.is_match(source)).unwrap_or(false));
         }
 
         let source_match = pattern.source_patterns.is_empty()
             || self.flow_matches_source(flow, source)
-            || pattern.source_patterns.iter().any(|p| {
-                Regex::new(p)
-                    .map(|re| re.is_match(source))
-                    .unwrap_or(false)
-            });
+            || pattern
+                .source_patterns
+                .iter()
+                .any(|p| Regex::new(p).map(|re| re.is_match(source)).unwrap_or(false));
 
         let sink_match = pattern.sink_patterns.is_empty()
-            || pattern.sink_patterns.iter().any(|p| {
-                Regex::new(p)
-                    .map(|re| re.is_match(source))
-                    .unwrap_or(false)
-            })
+            || pattern
+                .sink_patterns
+                .iter()
+                .any(|p| Regex::new(p).map(|re| re.is_match(source)).unwrap_or(false))
             || self.flow_matches_sink(flow);
 
         source_match && sink_match
@@ -108,9 +105,7 @@ impl SecurityAnalyzer {
 
     fn flow_matches_source(&self, flow: &TaintFlow, source: &str) -> bool {
         match flow.source_type {
-            TaintSource::HttpParameter => {
-                source.contains("request.") || source.contains("req.")
-            }
+            TaintSource::HttpParameter => source.contains("request.") || source.contains("req."),
             TaintSource::CommandLineArg => {
                 source.contains("sys.argv") || source.contains("process.argv")
             }
@@ -139,9 +134,7 @@ impl SecurityAnalyzer {
                     .into()
             }
             "CWE-79" => "Escape HTML entities before rendering user input.".into(),
-            "CWE-78" => {
-                "Use shell escape functions or avoid shell execution entirely.".into()
-            }
+            "CWE-78" => "Use shell escape functions or avoid shell execution entirely.".into(),
             "CWE-22" => "Validate file paths and restrict to allowed directories.".into(),
             "CWE-798" => "Load secrets from environment variables or a secret manager.".into(),
             _ => "Review and sanitize input before use.".into(),

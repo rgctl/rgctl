@@ -9,7 +9,9 @@ use crate::graph::schema::Node;
 pub fn export_graphml(backend: &MemoryBackend, query: &str) -> Result<String> {
     let subgraph = select_subgraph(backend, query, None)?;
     if subgraph.nodes.is_empty() {
-        return Err(Error::InvalidQuery(format!("No nodes matched query: {query}")));
+        return Err(Error::InvalidQuery(format!(
+            "No nodes matched query: {query}"
+        )));
     }
     Ok(render_graphml(&subgraph.nodes, &subgraph.edges))
 }

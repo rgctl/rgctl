@@ -36,8 +36,8 @@ impl CodeGraph {
 
     /// Build a graph from a repository path.
     pub fn from_repository(root: &Path) -> Result<Self> {
-        use crate::pipeline::ProcessingPipeline;
         use crate::languages::registry::LanguageRegistry;
+        use crate::pipeline::ProcessingPipeline;
         use std::sync::Arc;
 
         let pipeline = ProcessingPipeline::new(Arc::new(LanguageRegistry::new()));

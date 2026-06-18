@@ -12,9 +12,9 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::Arc as StdArc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::sync::Arc as StdArc;
 
 /// Notification payload for MCP clients when the graph changes.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -80,10 +80,7 @@ impl WatchService {
                     ..UpdateOptions::default()
                 },
             ),
-            discoverer: FileDiscoverer::with_config(
-                registry,
-                DiscoveryConfig::default(),
-            ),
+            discoverer: FileDiscoverer::with_config(registry, DiscoveryConfig::default()),
             on_update: None,
         })
     }
@@ -151,10 +148,10 @@ impl WatchService {
                         last_event = Instant::now();
                     }
                 }
-            Err(RecvTimeoutError::Timeout) => {
-                if !debounce_ready(!pending.is_empty(), last_event, self.debounce) {
-                    continue;
-                }
+                Err(RecvTimeoutError::Timeout) => {
+                    if !debounce_ready(!pending.is_empty(), last_event, self.debounce) {
+                        continue;
+                    }
                     let batch: Vec<PathBuf> = pending.drain().collect();
                     let rel_paths: Vec<String> = batch
                         .iter()
@@ -175,10 +172,7 @@ impl WatchService {
                                     result.nodes_removed
                                 );
                                 if let Some(cb) = &self.on_update {
-                                    cb(GraphUpdateNotification::from_result(
-                                        rel_paths,
-                                        &result,
-                                    ));
+                                    cb(GraphUpdateNotification::from_result(rel_paths, &result));
                                 }
                             }
                         }
@@ -241,8 +235,7 @@ pub fn spawn_watch_with_state(
             ..UpdateOptions::default()
         },
     );
-    let discoverer =
-        FileDiscoverer::with_config(registry, DiscoveryConfig::default());
+    let discoverer = FileDiscoverer::with_config(registry, DiscoveryConfig::default());
     let debounce = Duration::from_millis(debounce_ms);
 
     Ok(std::thread::spawn(move || {
@@ -304,17 +297,14 @@ fn run_watch_loop(
                     .filter_map(|p| relative_path(&root, p).ok())
                     .collect();
 
-                let update_result = state.with_graph_mut(|graph| {
-                    updater.update_files(graph, &repo_root, &rel_paths)
-                });
+                let update_result = state
+                    .with_graph_mut(|graph| updater.update_files(graph, &repo_root, &rel_paths));
 
                 match update_result {
                     Ok(result) => {
                         if result.files_affected() > 0 {
-                            let _ = notify_tx.send(GraphUpdateNotification::from_result(
-                                rel_paths,
-                                &result,
-                            ));
+                            let _ = notify_tx
+                                .send(GraphUpdateNotification::from_result(rel_paths, &result));
                         }
                     }
                     Err(e) => eprintln!("Watch update error: {e}"),
@@ -358,10 +348,13 @@ fn watch_paths_from_event(event: &Event) -> Option<Vec<PathBuf>> {
 }
 
 fn is_tracked_path(repo_root: &Path, path: &Path, tracked: &HashSet<PathBuf>) -> bool {
-    if path.starts_with(repo_root.join(".rbuilder")) || path.components().any(|c| c.as_os_str() == ".git") {
+    if path.starts_with(repo_root.join(".rbuilder"))
+        || path.components().any(|c| c.as_os_str() == ".git")
+    {
         return false;
     }
-    tracked.contains(path) || tracked.contains(&path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+    tracked.contains(path)
+        || tracked.contains(&path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
 }
 
 #[cfg(test)]
@@ -421,11 +414,7 @@ mod tests {
     fn test_is_tracked_path_ignores_git_and_rbuilder() {
         let root = PathBuf::from("/repo");
         let tracked: HashSet<PathBuf> = [root.join("src/main.rs")].into_iter().collect();
-        assert!(!is_tracked_path(
-            &root,
-            &root.join(".git/HEAD"),
-            &tracked
-        ));
+        assert!(!is_tracked_path(&root, &root.join(".git/HEAD"), &tracked));
         assert!(!is_tracked_path(
             &root,
             &root.join(".rbuilder/graph.json"),

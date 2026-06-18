@@ -28,7 +28,10 @@ pub struct WorkspaceSyncReport {
 }
 
 /// Index all repos in a workspace and merge into a single graph.
-pub fn sync_workspace(workspace_root: &Path, show_progress: bool) -> Result<(CodeGraph, WorkspaceSyncReport)> {
+pub fn sync_workspace(
+    workspace_root: &Path,
+    show_progress: bool,
+) -> Result<(CodeGraph, WorkspaceSyncReport)> {
     let start = Instant::now();
     let manifest = WorkspaceManifest::load(workspace_root)?;
 

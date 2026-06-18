@@ -240,8 +240,7 @@ impl IncrementalUpdater {
         let progress = if self.config.show_progress && !changes.is_empty() {
             let pb = ProgressBar::new(changes.len() as u64);
             pb.set_style(
-                ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] {msg}")
-                    .unwrap(),
+                ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] {msg}").unwrap(),
             );
             pb.set_message("updating");
             Some(pb)
@@ -383,9 +382,7 @@ fn resolve_symbol(index: &HashMap<String, Uuid>, name: &str, file: &str) -> Opti
         .map(|(_, id)| *id)
 }
 
-fn relation_type_to_edge(
-    relation_type: crate::languages::plugin_trait::RelationType,
-) -> EdgeType {
+fn relation_type_to_edge(relation_type: crate::languages::plugin_trait::RelationType) -> EdgeType {
     use crate::languages::plugin_trait::RelationType;
     match relation_type {
         RelationType::Calls => EdgeType::Calls,
@@ -410,6 +407,11 @@ fn relation_type_to_edge(
         RelationType::UsesTemplate => EdgeType::UsesTemplate,
         RelationType::DefinesAttribute => EdgeType::DefinesAttribute,
         RelationType::NotifiesResource => EdgeType::NotifiesResource,
+        RelationType::DependsOnModule => EdgeType::DependsOnModule,
+        RelationType::IncludesClass => EdgeType::IncludesClass,
+        RelationType::InheritsClass => EdgeType::InheritsClass,
+        RelationType::RequiresResource => EdgeType::RequiresResource,
+        RelationType::UsesFact => EdgeType::UsesFact,
     }
 }
 

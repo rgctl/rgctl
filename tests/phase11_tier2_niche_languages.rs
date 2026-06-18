@@ -191,19 +191,8 @@ fn test_extra_bundle_registers_niche_languages() {
         .collect();
 
     for lang in [
-        "ocaml",
-        "perl",
-        "fortran",
-        "verilog",
-        "vhdl",
-        "cobol",
-        "pascal",
-        "scheme",
-        "zig",
-        "fsharp",
-        "crystal",
-        "clojure",
-        "assembly",
+        "ocaml", "perl", "fortran", "verilog", "vhdl", "cobol", "pascal", "scheme", "zig",
+        "fsharp", "crystal", "clojure", "assembly",
     ] {
         assert!(ids.contains(&lang.to_string()), "missing language: {lang}");
     }

@@ -33,7 +33,10 @@ impl JavaPlugin {
                 "identifier" if name.is_none() => {
                     name = Some(child.utf8_text(source)?.to_string());
                 }
-                "type_identifier" | "void_type" | "integral_type" | "floating_point_type"
+                "type_identifier"
+                | "void_type"
+                | "integral_type"
+                | "floating_point_type"
                 | "boolean_type" => {
                     return_type = Some(child.utf8_text(source)?.to_string());
                 }
@@ -128,7 +131,13 @@ impl JavaPlugin {
         })
     }
 
-    fn traverse(&self, node: Node, source: &[u8], file_path: &str, symbols: &mut Vec<Symbol>) -> Result<()> {
+    fn traverse(
+        &self,
+        node: Node,
+        source: &[u8],
+        file_path: &str,
+        symbols: &mut Vec<Symbol>,
+    ) -> Result<()> {
         match node.kind() {
             "method_declaration" => symbols.push(self.extract_method(node, source, file_path)?),
             "class_declaration" => {
@@ -192,11 +201,13 @@ impl LanguagePlugin for JavaPlugin {
             .set_language(&tree_sitter_java::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set Java grammar: {e}")))?;
 
-        let tree = parser.parse(source, None).ok_or_else(|| Error::ParseError {
-            file: file_path.to_path_buf(),
-            line: 0,
-            message: "Failed to parse Java source".to_string(),
-        })?;
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::ParseError {
+                file: file_path.to_path_buf(),
+                line: 0,
+                message: "Failed to parse Java source".to_string(),
+            })?;
 
         let mut symbols = Vec::new();
         self.traverse(

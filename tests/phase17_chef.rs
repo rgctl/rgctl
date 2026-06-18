@@ -2,9 +2,7 @@
 
 #![cfg(feature = "lang-chef")]
 
-use rbuilder::analysis::chef_cookbooks::{
-    CookbookDependencyAnalyzer, CookbookDependencyGraph,
-};
+use rbuilder::analysis::chef_cookbooks::{CookbookDependencyAnalyzer, CookbookDependencyGraph};
 use rbuilder::extraction::extractor::Extractor;
 use rbuilder::extraction::graph_builder::GraphBuilder;
 use rbuilder::graph::query::execute;
@@ -29,7 +27,9 @@ fn build_fixture_graph() -> rbuilder::graph::backend::MemoryBackend {
 
 #[test]
 fn test_chef_path_detection() {
-    assert!(ChefParser::is_chef_path("cookbooks/nginx/recipes/default.rb"));
+    assert!(ChefParser::is_chef_path(
+        "cookbooks/nginx/recipes/default.rb"
+    ));
     assert!(ChefParser::is_chef_path("cookbooks/nginx/metadata.rb"));
     assert!(!ChefParser::is_chef_path("lib/helper.rb"));
 }
@@ -40,8 +40,12 @@ fn test_recipe_resource_extraction() {
     let path = fixture_root().join("cookbooks/nginx/recipes/default.rb");
     let source = std::fs::read_to_string(&path).unwrap();
     let symbols = plugin.extract_symbols(&path, source.as_bytes()).unwrap();
-    assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::ChefRecipe));
-    assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::ChefResource));
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::ChefRecipe));
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::ChefResource));
 }
 
 #[test]
@@ -49,9 +53,15 @@ fn test_recipe_relations() {
     let plugin = ChefPlugin::new().unwrap();
     let path = fixture_root().join("cookbooks/nginx/recipes/default.rb");
     let source = std::fs::read_to_string(&path).unwrap();
-    let relations = plugin.extract_relations(&path, source.as_bytes(), &[]).unwrap();
-    assert!(relations.iter().any(|r| r.relation_type == RelationType::DeclaresResource));
-    assert!(relations.iter().any(|r| r.relation_type == RelationType::IncludesRecipe));
+    let relations = plugin
+        .extract_relations(&path, source.as_bytes(), &[])
+        .unwrap();
+    assert!(relations
+        .iter()
+        .any(|r| r.relation_type == RelationType::DeclaresResource));
+    assert!(relations
+        .iter()
+        .any(|r| r.relation_type == RelationType::IncludesRecipe));
 }
 
 #[test]
@@ -59,8 +69,12 @@ fn test_metadata_dependencies() {
     let plugin = ChefPlugin::new().unwrap();
     let path = fixture_root().join("cookbooks/nginx/metadata.rb");
     let source = std::fs::read_to_string(&path).unwrap();
-    let relations = plugin.extract_relations(&path, source.as_bytes(), &[]).unwrap();
-    assert!(relations.iter().any(|r| r.relation_type == RelationType::DependsOnCookbook));
+    let relations = plugin
+        .extract_relations(&path, source.as_bytes(), &[])
+        .unwrap();
+    assert!(relations
+        .iter()
+        .any(|r| r.relation_type == RelationType::DependsOnCookbook));
     assert_eq!(relations.len(), 2);
 }
 
@@ -99,7 +113,10 @@ fn test_cookbook_dependency_from_disk() {
     let graph = CookbookDependencyAnalyzer::new()
         .analyze_cookbooks_dir(&fixture_root().join("cookbooks"))
         .unwrap();
-    assert_eq!(graph.get_dependencies("nginx").unwrap(), vec!["common", "apt"]);
+    assert_eq!(
+        graph.get_dependencies("nginx").unwrap(),
+        vec!["common", "apt"]
+    );
 }
 
 #[test]
@@ -147,17 +164,20 @@ fn test_attributes_extraction() {
     let path = fixture_root().join("cookbooks/nginx/attributes/default.rb");
     let source = std::fs::read_to_string(&path).unwrap();
     let symbols = plugin.extract_symbols(&path, source.as_bytes()).unwrap();
-    assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::ChefAttribute));
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::ChefAttribute));
 }
 
 #[test]
 fn test_template_extraction() {
     let plugin = ChefPlugin::new().unwrap();
-    let path = fixture_root()
-        .join("cookbooks/nginx/templates/nginx.conf.erb");
+    let path = fixture_root().join("cookbooks/nginx/templates/nginx.conf.erb");
     let source = std::fs::read_to_string(&path).unwrap();
     let symbols = plugin.extract_symbols(&path, source.as_bytes()).unwrap();
-    assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::ChefTemplate));
+    assert!(symbols
+        .iter()
+        .any(|s| s.symbol_type == SymbolType::ChefTemplate));
 }
 
 #[test]
@@ -226,14 +246,18 @@ fn test_uses_template_edge_in_graph() {
 fn test_includes_recipe_in_graph() {
     let backend = build_fixture_graph();
     let edges = backend.all_edges().unwrap();
-    assert!(edges.iter().any(|e| e.edge_type == EdgeType::IncludesRecipe));
+    assert!(edges
+        .iter()
+        .any(|e| e.edge_type == EdgeType::IncludesRecipe));
 }
 
 #[test]
 fn test_defines_attribute_in_graph() {
     let backend = build_fixture_graph();
     let edges = backend.all_edges().unwrap();
-    assert!(edges.iter().any(|e| e.edge_type == EdgeType::DefinesAttribute));
+    assert!(edges
+        .iter()
+        .any(|e| e.edge_type == EdgeType::DefinesAttribute));
 }
 
 #[test]
@@ -249,7 +273,9 @@ fn test_security_severity_filter() {
     let backend = build_fixture_graph();
     let all = ChefSecurityScanner::new().scan_graph(&backend);
     let critical = ChefSecurityScanner::filter_by_severity(all, ChefSeverity::Critical);
-    assert!(critical.iter().all(|f| f.severity >= ChefSeverity::Critical));
+    assert!(critical
+        .iter()
+        .all(|f| f.severity >= ChefSeverity::Critical));
 }
 
 #[test]
@@ -277,7 +303,9 @@ fn test_notifies_resource_relation() {
     let plugin = ChefPlugin::new().unwrap();
     let path = fixture_root().join("cookbooks/nginx/recipes/default.rb");
     let source = std::fs::read_to_string(&path).unwrap();
-    let relations = plugin.extract_relations(&path, source.as_bytes(), &[]).unwrap();
+    let relations = plugin
+        .extract_relations(&path, source.as_bytes(), &[])
+        .unwrap();
     assert!(relations
         .iter()
         .any(|r| r.relation_type == RelationType::NotifiesResource));
@@ -308,7 +336,7 @@ fn test_service_resource_in_recipe() {
     let path = fixture_root().join("cookbooks/nginx/recipes/default.rb");
     let source = std::fs::read_to_string(&path).unwrap();
     let symbols = plugin.extract_symbols(&path, source.as_bytes()).unwrap();
-    assert!(symbols.iter().any(|s| {
-        s.metadata.get("resource_type").and_then(|v| v.as_str()) == Some("service")
-    }));
+    assert!(symbols
+        .iter()
+        .any(|s| { s.metadata.get("resource_type").and_then(|v| v.as_str()) == Some("service") }));
 }

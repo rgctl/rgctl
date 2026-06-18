@@ -1,7 +1,7 @@
 //! Phase 11.1.2 — Tier 2 high-priority language plugin tests
 
 use rbuilder::languages::generic::TreeSitterLanguagePlugin;
-use rbuilder::languages::plugin_trait::{LanguagePlugin, SymbolType};
+use rbuilder::languages::plugin_trait::LanguagePlugin;
 use std::path::Path;
 
 fn assert_extracts_function(
@@ -117,13 +117,7 @@ fn test_erlang_plugin() {
 #[cfg(feature = "lang-haskell")]
 #[test]
 fn test_haskell_plugin() {
-    assert_extracts_function(
-        "haskell",
-        load_haskell,
-        "test.hs",
-        "add a b = a + b",
-        "add",
-    );
+    assert_extracts_function("haskell", load_haskell, "test.hs", "add a b = a + b", "add");
 }
 
 #[cfg(feature = "lang-dart")]

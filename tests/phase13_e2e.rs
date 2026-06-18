@@ -4,12 +4,11 @@
 mod phase13;
 
 use phase13::{
-    analyze_taint_with_types, build_dominance, build_sample_backend_with_chain,
-    call_graph_from, large_graph, run_taint_security,
+    analyze_taint_with_types, build_dominance, build_sample_backend_with_chain, call_graph_from,
+    large_graph, run_taint_security,
 };
 use rbuilder::analysis::{
-    InterproceduralCFG, InterproceduralSlicer, ProgramDependenceGraph, SliceCriterion,
-    TaintSink,
+    InterproceduralCFG, InterproceduralSlicer, ProgramDependenceGraph, SliceCriterion, TaintSink,
 };
 use rbuilder::gql::execute;
 use rbuilder::security::default_cwe_patterns;
@@ -44,7 +43,13 @@ e2e_test!(e2e_interprocedural_dominance_slice, {
     assert_eq!(cg.topological_order().unwrap().len(), 4);
 
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
-    let leaf = icfg.call_graph.nodes.values().find(|n| n.name == "f3").unwrap().id;
+    let leaf = icfg
+        .call_graph
+        .nodes
+        .values()
+        .find(|n| n.name == "f3")
+        .unwrap()
+        .id;
     let source = files.get("app.rs").unwrap();
 
     let (cfg, dom) = build_dominance("rust", source, "f3");
@@ -53,7 +58,8 @@ e2e_test!(e2e_interprocedural_dominance_slice, {
     }
 
     let slicer = InterproceduralSlicer::new(&icfg, &files).unwrap();
-    let pdg = ProgramDependenceGraph::build(icfg.get_cfg(leaf).unwrap(), source.as_bytes()).unwrap();
+    let pdg =
+        ProgramDependenceGraph::build(icfg.get_cfg(leaf).unwrap(), source.as_bytes()).unwrap();
     let line = pdg
         .nodes
         .values()
@@ -102,7 +108,10 @@ e2e_test!(e2e_gql_optimize_execute_large_graph, {
     };
     let _ = call_graph_from(&chain_backend);
     let mut files = HashMap::new();
-    files.insert("app.rs".into(), "fn f0() { f1(); }\nfn f1() { f2(1); }\nfn f2(input: i32) -> i32 { input }\n".into());
+    files.insert(
+        "app.rs".into(),
+        "fn f0() { f1(); }\nfn f1() { f2(1); }\nfn f2(input: i32) -> i32 { input }\n".into(),
+    );
     #[cfg(feature = "lang-rust")]
     {
         let icfg = InterproceduralCFG::build(&chain_backend, &files).unwrap();

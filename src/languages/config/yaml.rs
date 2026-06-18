@@ -154,19 +154,29 @@ mod tests {
     fn test_extract_simple_yaml() {
         let plugin = YamlPlugin::new().unwrap();
         let source = b"name: test\nport: 8080\nenabled: true";
-        let keys = plugin.extract_config_keys(Path::new("config.yaml"), source).unwrap();
+        let keys = plugin
+            .extract_config_keys(Path::new("config.yaml"), source)
+            .unwrap();
 
         assert!(keys.len() >= 3);
-        assert!(keys.iter().any(|k| k.key_path == "name" && k.value == "test"));
-        assert!(keys.iter().any(|k| k.key_path == "port" && k.value_type == ConfigValueType::Number));
-        assert!(keys.iter().any(|k| k.key_path == "enabled" && k.value_type == ConfigValueType::Boolean));
+        assert!(keys
+            .iter()
+            .any(|k| k.key_path == "name" && k.value == "test"));
+        assert!(keys
+            .iter()
+            .any(|k| k.key_path == "port" && k.value_type == ConfigValueType::Number));
+        assert!(keys
+            .iter()
+            .any(|k| k.key_path == "enabled" && k.value_type == ConfigValueType::Boolean));
     }
 
     #[test]
     fn test_extract_nested_yaml() {
         let plugin = YamlPlugin::new().unwrap();
         let source = b"server:\n  host: localhost\n  port: 8080";
-        let keys = plugin.extract_config_keys(Path::new("config.yaml"), source).unwrap();
+        let keys = plugin
+            .extract_config_keys(Path::new("config.yaml"), source)
+            .unwrap();
 
         assert!(keys.iter().any(|k| k.key_path == "server.host"));
         assert!(keys.iter().any(|k| k.key_path == "server.port"));

@@ -39,19 +39,69 @@ impl Default for QueryTemplates {
             (r"(?i)^find (.+)$", Intent::Find, "find", 0.85),
             (r"(?i)what calls (.+)\??$", Intent::Callers, "callers", 0.95),
             (r"(?i)who calls (.+)\??$", Intent::Callers, "callers", 0.95),
-            (r"(?i)what breaks if (?:i )?change (.+)\??$", Intent::Impact, "impact", 0.95),
-            (r"(?i)impact of changing (.+)$", Intent::Impact, "impact", 0.9),
-            (r"(?i)complexity of (.+)$", Intent::Complexity, "complexity_symbol", 0.9),
-            (r"(?i)high complexity (.+)$", Intent::Complexity, "high_complexity", 0.9),
-            (r"(?i)find (.+) with complexity > (\d+)$", Intent::Find, "complexity_filter", 0.95),
+            (
+                r"(?i)what breaks if (?:i )?change (.+)\??$",
+                Intent::Impact,
+                "impact",
+                0.95,
+            ),
+            (
+                r"(?i)impact of changing (.+)$",
+                Intent::Impact,
+                "impact",
+                0.9,
+            ),
+            (
+                r"(?i)complexity of (.+)$",
+                Intent::Complexity,
+                "complexity_symbol",
+                0.9,
+            ),
+            (
+                r"(?i)high complexity (.+)$",
+                Intent::Complexity,
+                "high_complexity",
+                0.9,
+            ),
+            (
+                r"(?i)find (.+) with complexity > (\d+)$",
+                Intent::Find,
+                "complexity_filter",
+                0.95,
+            ),
             (r"(?i)top (\d+) (.+)$", Intent::Compare, "top_n", 0.9),
-            (r"(?i)most complex (.+)$", Intent::Compare, "most_complex", 0.9),
-            (r"(?i)circular depend", Intent::CircularDeps, "circular_deps", 0.95),
+            (
+                r"(?i)most complex (.+)$",
+                Intent::Compare,
+                "most_complex",
+                0.9,
+            ),
+            (
+                r"(?i)circular depend",
+                Intent::CircularDeps,
+                "circular_deps",
+                0.95,
+            ),
             (r"(?i)unused config", Intent::Config, "unused_config", 0.95),
             (r"(?i)missing env", Intent::Config, "missing_env", 0.95),
-            (r"(?i)what uses config (.+)\??$", Intent::Config, "config_usage", 0.9),
-            (r"(?i)dependencies of (.+)$", Intent::Dependencies, "dependencies", 0.9),
-            (r"(?i)what does (.+) depend on", Intent::Dependencies, "dependencies", 0.9),
+            (
+                r"(?i)what uses config (.+)\??$",
+                Intent::Config,
+                "config_usage",
+                0.9,
+            ),
+            (
+                r"(?i)dependencies of (.+)$",
+                Intent::Dependencies,
+                "dependencies",
+                0.9,
+            ),
+            (
+                r"(?i)what does (.+) depend on",
+                Intent::Dependencies,
+                "dependencies",
+                0.9,
+            ),
             (r"(?i)hotspots?", Intent::Compare, "hotspots", 0.85),
             (r"(?i)functions?$", Intent::List, "list", 0.8),
         ];
@@ -74,7 +124,12 @@ impl QueryTemplates {
     }
 
     /// Find the best matching template for a question.
-    pub fn find_match(&self, question: &str, intent: Intent, entities: &ExtractedEntities) -> Option<MatchedTemplate> {
+    pub fn find_match(
+        &self,
+        question: &str,
+        intent: Intent,
+        entities: &ExtractedEntities,
+    ) -> Option<MatchedTemplate> {
         for (re, template_intent, operation, confidence) in &self.patterns {
             if *template_intent != intent {
                 continue;
@@ -117,13 +172,22 @@ fn fallback_template(intent: Intent, entities: &ExtractedEntities) -> MatchedTem
         Intent::Count => ("count".to_string(), format!("Count {node_type}s")),
         Intent::List => ("list".to_string(), format!("List {node_type}s")),
         Intent::Find => ("find".to_string(), format!("Find {node_type}s")),
-        Intent::Complexity => ("high_complexity".to_string(), "High complexity functions".to_string()),
-        Intent::Compare => ("hotspots".to_string(), "Top complexity hotspots".to_string()),
+        Intent::Complexity => (
+            "high_complexity".to_string(),
+            "High complexity functions".to_string(),
+        ),
+        Intent::Compare => (
+            "hotspots".to_string(),
+            "Top complexity hotspots".to_string(),
+        ),
         Intent::Callers => ("callers".to_string(), "Find callers".to_string()),
         Intent::Impact => ("impact".to_string(), "Impact analysis".to_string()),
         Intent::Dependencies => ("dependencies".to_string(), "Dependencies".to_string()),
         Intent::Config => ("unused_config".to_string(), "Config analysis".to_string()),
-        Intent::CircularDeps => ("circular_deps".to_string(), "Circular dependencies".to_string()),
+        Intent::CircularDeps => (
+            "circular_deps".to_string(),
+            "Circular dependencies".to_string(),
+        ),
     };
 
     let mut params = vec![("node_type".to_string(), node_type)];

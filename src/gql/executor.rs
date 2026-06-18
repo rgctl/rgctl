@@ -161,11 +161,7 @@ impl<'a> QueryExecutor<'a> {
         Ok(out)
     }
 
-    fn match_node_pattern(
-        &self,
-        pattern: &NodePattern,
-        binding: &Binding,
-    ) -> Result<Vec<Node>> {
+    fn match_node_pattern(&self, pattern: &NodePattern, binding: &Binding) -> Result<Vec<Node>> {
         let nodes: Vec<Node> = if let Some(node_type) = pattern.node_type {
             self.backend.find_nodes_by_type(node_type)?
         } else {
@@ -418,8 +414,7 @@ mod tests {
     #[test]
     fn test_execute_multi_hop() {
         let backend = call_chain();
-        let query =
-            parse("MATCH (a:Function)-[:CALLS*1..2]->(b:Function) RETURN a,b").unwrap();
+        let query = parse("MATCH (a:Function)-[:CALLS*1..2]->(b:Function) RETURN a,b").unwrap();
         let result = QueryExecutor::new(&backend).execute(&query).unwrap();
         assert!(!result.rows.is_empty());
     }

@@ -59,11 +59,7 @@ pub fn compute_reaching_definitions(
         let out_b: HashSet<Definition> = gen_b
             .iter()
             .cloned()
-            .chain(
-                in_b.iter()
-                    .filter(|def| !kill_b.contains(def))
-                    .cloned(),
-            )
+            .chain(in_b.iter().filter(|def| !kill_b.contains(def)).cloned())
             .collect();
 
         if out_set.get(&block_id) != Some(&out_b) {

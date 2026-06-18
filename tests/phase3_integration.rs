@@ -3,7 +3,11 @@
 use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::schema::{Node, NodeType};
 use rbuilder::graph::CodeGraph;
-use rbuilder::languages::plugin_loader::{PluginLoader, PluginRegistry, PLUGIN_REGISTRY_FILE};
+#[cfg(feature = "plugin-system")]
+use rbuilder::languages::plugin_abi::{PluginMetadata, PLUGIN_ABI_VERSION};
+#[cfg(not(feature = "plugin-system"))]
+use rbuilder::languages::plugin_loader::PluginLoader;
+use rbuilder::languages::plugin_loader::{PluginRegistry, PLUGIN_REGISTRY_FILE};
 use rbuilder::languages::registry::LanguageRegistry;
 use rbuilder::rules::{RuleEngine, Ruleset};
 use std::fs;
@@ -16,9 +20,12 @@ fn test_rule_engine_integration() {
     let backend = graph.backend_mut();
 
     let mut auth = Node::new(NodeType::Function, "authenticate_user".to_string());
-    auth.properties.insert("cyclomatic".to_string(), "20".to_string());
+    auth.properties
+        .insert("cyclomatic".to_string(), "20".to_string());
     let mut legacy = Node::new(NodeType::Function, "legacy_handler".to_string());
-    legacy.properties.insert("cyclomatic".to_string(), "3".to_string());
+    legacy
+        .properties
+        .insert("cyclomatic".to_string(), "3".to_string());
     backend.insert_node(auth).unwrap();
     backend.insert_node(legacy).unwrap();
 
@@ -46,7 +53,11 @@ fn test_java_plugin_extraction() {
 }
 
 #[test]
-#[cfg(all(feature = "lang-kotlin", feature = "lang-csharp", feature = "lang-java"))]
+#[cfg(all(
+    feature = "lang-kotlin",
+    feature = "lang-csharp",
+    feature = "lang-java"
+))]
 fn test_kotlin_and_csharp_plugins() {
     let registry = LanguageRegistry::new();
     assert!(registry.has_plugin("kotlin"));
@@ -57,17 +68,51 @@ fn test_kotlin_and_csharp_plugins() {
 #[test]
 fn test_plugin_registry_install() {
     let temp = TempDir::new().unwrap();
-    let plugin_path = temp.path().join("libcustom.so");
-    fs::write(&plugin_path, b"fake").unwrap();
 
-    let metadata = PluginLoader::install(temp.path(), &plugin_path).unwrap();
-    assert_eq!(metadata.language_id, "libcustom");
+    #[cfg(feature = "plugin-system")]
+    {
+        // Dynamic plugin inspection requires a valid shared library; test registry API directly.
+        let plugin_path = temp.path().join(format!(
+            "{}{}{}",
+            std::env::consts::DLL_PREFIX,
+            "custom",
+            std::env::consts::DLL_SUFFIX
+        ));
+        let metadata = PluginMetadata {
+            language_id: "custom".to_string(),
+            version: "0.1.0".to_string(),
+            extensions: vec![],
+            abi_version: PLUGIN_ABI_VERSION,
+            path: plugin_path.display().to_string(),
+        };
+        let mut registry = PluginRegistry::load(temp.path()).unwrap();
+        registry.install(metadata).unwrap();
+        registry.save(temp.path()).unwrap();
 
-    let registry = PluginRegistry::load(temp.path()).unwrap();
-    assert_eq!(registry.plugins.len(), 1);
-    assert!(temp
-        .path()
-        .join(".rbuilder")
-        .join(PLUGIN_REGISTRY_FILE)
-        .exists());
+        let loaded = PluginRegistry::load(temp.path()).unwrap();
+        assert_eq!(loaded.plugins.len(), 1);
+        assert_eq!(loaded.plugins[0].language_id, "custom");
+        assert!(temp
+            .path()
+            .join(".rbuilder")
+            .join(PLUGIN_REGISTRY_FILE)
+            .exists());
+    }
+
+    #[cfg(not(feature = "plugin-system"))]
+    {
+        let plugin_path = temp.path().join("libcustom.so");
+        fs::write(&plugin_path, b"fake").unwrap();
+
+        let metadata = PluginLoader::install(temp.path(), &plugin_path).unwrap();
+        assert_eq!(metadata.language_id, "libcustom");
+
+        let registry = PluginRegistry::load(temp.path()).unwrap();
+        assert_eq!(registry.plugins.len(), 1);
+        assert!(temp
+            .path()
+            .join(".rbuilder")
+            .join(PLUGIN_REGISTRY_FILE)
+            .exists());
+    }
 }

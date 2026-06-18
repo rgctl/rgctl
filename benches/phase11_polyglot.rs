@@ -20,7 +20,11 @@ fn write_polyglot_repo(root: &Path, extra_rs_files: usize) {
     fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
     fs::write(root.join("src/util.py"), "def helper(): pass\n").unwrap();
     fs::write(root.join("src/app.ts"), "export function helper() {}\n").unwrap();
-    fs::write(root.join("schema.sql"), "CREATE TABLE users (id INTEGER);\n").unwrap();
+    fs::write(
+        root.join("schema.sql"),
+        "CREATE TABLE users (id INTEGER);\n",
+    )
+    .unwrap();
     fs::write(root.join("Dockerfile"), "FROM alpine:3.19\n").unwrap();
     fs::write(
         root.join(".github/workflows/ci.yml"),
@@ -55,7 +59,11 @@ fn bench_polyglot_repo(c: &mut Criterion) {
             extractor
                 .populate_graph(&extractions, &mut builder)
                 .unwrap();
-            black_box((extractions.len(), builder.node_count(), builder.edge_count()))
+            black_box((
+                extractions.len(),
+                builder.node_count(),
+                builder.edge_count(),
+            ))
         });
     });
 }

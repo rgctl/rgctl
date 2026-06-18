@@ -96,7 +96,9 @@ impl ComplexityAnalyzer {
             });
         }
 
-        report.functions.sort_by(|a, b| b.cyclomatic.cmp(&a.cyclomatic));
+        report
+            .functions
+            .sort_by(|a, b| b.cyclomatic.cmp(&a.cyclomatic));
         if !report.functions.is_empty() {
             report.avg_cyclomatic = total_cyclomatic as f64 / report.functions.len() as f64;
         }
@@ -132,8 +134,10 @@ mod tests {
     fn test_complexity_report() {
         let mut backend = MemoryBackend::new();
         let mut node = Node::new(NodeType::Function, "complex".to_string());
-        node.properties.insert("cyclomatic".to_string(), "15".to_string());
-        node.properties.insert("cognitive".to_string(), "20".to_string());
+        node.properties
+            .insert("cyclomatic".to_string(), "15".to_string());
+        node.properties
+            .insert("cognitive".to_string(), "20".to_string());
         node.properties.insert("loc".to_string(), "100".to_string());
         backend.insert_node(node).unwrap();
 

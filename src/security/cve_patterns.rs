@@ -38,21 +38,14 @@ pub fn default_cwe_patterns() -> Vec<CwePattern> {
                 r"\.query\(".into(),
                 r"cursor\.(execute|executemany)".into(),
             ],
-            sanitizer_patterns: vec![
-                r"int\(".into(),
-                r"parseInt\(".into(),
-                r"prepare\(".into(),
-            ],
+            sanitizer_patterns: vec![r"int\(".into(), r"parseInt\(".into(), r"prepare\(".into()],
         },
         CwePattern {
             cwe_id: "CWE-79".into(),
             name: "Cross-Site Scripting (XSS)".into(),
             description: "Improper neutralization of input during web page generation".into(),
             severity: 9,
-            source_patterns: vec![
-                r"request\.(GET|POST)".into(),
-                r"req\.(query|body)".into(),
-            ],
+            source_patterns: vec![r"request\.(GET|POST)".into(), r"req\.(query|body)".into()],
             sink_patterns: vec![
                 r"innerHTML".into(),
                 r"document\.write".into(),
@@ -79,25 +72,20 @@ pub fn default_cwe_patterns() -> Vec<CwePattern> {
                 r"subprocess\.(call|run|Popen)".into(),
                 r"Command::new".into(),
             ],
-            sanitizer_patterns: vec![
-                r"shlex\.quote".into(),
-                r"shellEscape\(".into(),
-            ],
+            sanitizer_patterns: vec![r"shlex\.quote".into(), r"shellEscape\(".into()],
         },
         CwePattern {
             cwe_id: "CWE-22".into(),
             name: "Path Traversal".into(),
             description: "Improper limitation of pathname to a restricted directory".into(),
             severity: 8,
-            source_patterns: vec![
-                r"request\.(GET|POST)".into(),
-                r"req\.(query|params)".into(),
+            source_patterns: vec![r"request\.(GET|POST)".into(), r"req\.(query|params)".into()],
+            sink_patterns: vec![
+                r"open\(".into(),
+                r"fs\.readFile".into(),
+                r"File::open".into(),
             ],
-            sink_patterns: vec![r"open\(".into(), r"fs\.readFile".into(), r"File::open".into()],
-            sanitizer_patterns: vec![
-                r"os\.path\.basename".into(),
-                r"path\.basename".into(),
-            ],
+            sanitizer_patterns: vec![r"os\.path\.basename".into(), r"path\.basename".into()],
         },
         CwePattern {
             cwe_id: "CWE-798".into(),
@@ -118,7 +106,11 @@ pub fn default_cwe_patterns() -> Vec<CwePattern> {
             description: "Deserialization of untrusted data".into(),
             severity: 9,
             source_patterns: vec![r"request\.(GET|POST|body)".into(), r"req\.body".into()],
-            sink_patterns: vec![r"pickle\.loads".into(), r"yaml\.load".into(), r"serde_json::from_str".into()],
+            sink_patterns: vec![
+                r"pickle\.loads".into(),
+                r"yaml\.load".into(),
+                r"serde_json::from_str".into(),
+            ],
             sanitizer_patterns: vec![r"jsonschema".into(), r"validate\(".into()],
         },
         CwePattern {
@@ -142,7 +134,11 @@ pub fn default_cwe_patterns() -> Vec<CwePattern> {
             severity: 7,
             source_patterns: vec![r"@app\.route".into(), r"router\.post".into()],
             sink_patterns: vec![r"\.post\(".into(), r"POST".into()],
-            sanitizer_patterns: vec![r"csrf".into(), r"csrf_token".into(), r"@csrf\.exempt".into()],
+            sanitizer_patterns: vec![
+                r"csrf".into(),
+                r"csrf_token".into(),
+                r"@csrf\.exempt".into(),
+            ],
         },
         CwePattern {
             cwe_id: "CWE-287".into(),
@@ -150,7 +146,11 @@ pub fn default_cwe_patterns() -> Vec<CwePattern> {
             description: "Authentication bypass or missing verification".into(),
             severity: 9,
             source_patterns: vec![r"login".into(), r"authenticate".into()],
-            sink_patterns: vec![r"bypass".into(), r"skip_auth".into(), r"#\[allow\(unauthenticated\)\]".into()],
+            sink_patterns: vec![
+                r"bypass".into(),
+                r"skip_auth".into(),
+                r"#\[allow\(unauthenticated\)\]".into(),
+            ],
             sanitizer_patterns: vec![r"verify_password".into(), r"check_token".into()],
         },
         CwePattern {

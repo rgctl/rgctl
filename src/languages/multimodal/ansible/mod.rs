@@ -21,11 +21,7 @@ impl AnsiblePlugin {
         })
     }
 
-    fn parse_file(
-        &self,
-        file_path: &Path,
-        source: &[u8],
-    ) -> (Vec<Symbol>, Vec<Relation>) {
+    fn parse_file(&self, file_path: &Path, source: &[u8]) -> (Vec<Symbol>, Vec<Relation>) {
         let file = file_path.to_string_lossy();
         if !AnsibleParser::is_ansible_path(&file) {
             return (vec![], vec![]);

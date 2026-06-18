@@ -216,9 +216,7 @@ mod tests {
 
         std::fs::File::create(&prod)
             .unwrap()
-            .write_all(
-                b"server:\n  port: 8080\n  host: prod.example.com\ndatabase:\n  pool: 10\n",
-            )
+            .write_all(b"server:\n  port: 8080\n  host: prod.example.com\ndatabase:\n  pool: 10\n")
             .unwrap();
         std::fs::File::create(&dev)
             .unwrap()

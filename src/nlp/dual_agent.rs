@@ -7,7 +7,9 @@ use crate::error::Result;
 use crate::graph::backend::MemoryBackend;
 use crate::graph::query;
 use crate::graph::schema::Node;
-use crate::nlp::pattern_matcher::{PatternMatcher, QueryResult, TranslatedQuery, TranslationMethod};
+use crate::nlp::pattern_matcher::{
+    PatternMatcher, QueryResult, TranslatedQuery, TranslationMethod,
+};
 use crate::nlp::query_examples::{default_examples, QueryExample};
 use regex::Regex;
 use std::collections::HashMap;
@@ -157,9 +159,10 @@ impl PrimaryAgent {
     /// Rule-based satisfaction check: done when every sub-query has results.
     pub fn has_sufficient_context(&self, context: &QueryContext) -> bool {
         context.all_translated()
-            && context.sub_queries.iter().any(|sq| {
-                !sq.results.is_empty() || !sq.text_results.is_empty()
-            })
+            && context
+                .sub_queries
+                .iter()
+                .any(|sq| !sq.results.is_empty() || !sq.text_results.is_empty())
     }
 
     /// Build a short textual synthesis from sub-query results.
@@ -167,10 +170,7 @@ impl PrimaryAgent {
         let mut lines = vec![format!("Answer for: {question}")];
 
         for sq in &context.sub_queries {
-            let pattern = sq
-                .translated_pattern
-                .as_deref()
-                .unwrap_or("(untranslated)");
+            let pattern = sq.translated_pattern.as_deref().unwrap_or("(untranslated)");
             lines.push(format!("- {} → `{pattern}`", sq.natural_language));
 
             if !sq.text_results.is_empty() {
@@ -321,9 +321,7 @@ impl DualAgentQuerySystem {
             }
         }
 
-        let answer_lines = self
-            .primary_agent
-            .synthesize_answer(question, &context);
+        let answer_lines = self.primary_agent.synthesize_answer(question, &context);
         let primary_pattern = context
             .sub_queries
             .first()
@@ -470,9 +468,7 @@ fn substitute_symbols(nl: &str, pattern: &str) -> String {
     let symbol = extract_symbol(nl).or_else(|| {
         Regex::new(r"\b([a-z_][a-z0-9_]{2,})\b")
             .ok()
-            .and_then(|re| {
-                re.captures(nl).map(|cap| cap[1].to_string())
-            })
+            .and_then(|re| re.captures(nl).map(|cap| cap[1].to_string()))
     });
 
     if let Some(sym) = symbol {
@@ -513,8 +509,8 @@ pub mod llm {
         /// Attempt LLM translation; fails fast without `RBUILDER_LLM_API_KEY`.
         pub async fn query_with_llm(
             &self,
-            question: &str,
-            backend: &MemoryBackend,
+            _question: &str,
+            _backend: &MemoryBackend,
         ) -> Result<DualAgentResult> {
             let api_key = env::var("RBUILDER_LLM_API_KEY").map_err(|_| {
                 Error::NlpError(
@@ -566,9 +562,7 @@ mod tests {
     #[test]
     fn translation_agent_matches_compound_signature() {
         let agent = TranslationAgent::new(0.75);
-        let (pattern, _, _) = agent
-            .translate("async functions returning Result")
-            .unwrap();
+        let (pattern, _, _) = agent.translate("async functions returning Result").unwrap();
         assert!(pattern.contains("signature:*async*"));
         assert!(pattern.contains("return_type:Result"));
     }

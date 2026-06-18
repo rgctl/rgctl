@@ -1,4 +1,27 @@
 //! Chef security scanning against graph resource nodes.
+//!
+//! This module provides security vulnerability detection for Chef cookbooks
+//! and recipes indexed in the rBuilder knowledge graph.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use rbuilder::graph::CodeGraph;
+//! use rbuilder::security::chef::{ChefSecurityScanner, ChefSeverity};
+//! use std::path::Path;
+//!
+//! # fn main() -> rbuilder::error::Result<()> {
+//! let graph = CodeGraph::load_from_repo(Path::new("."))?;
+//! let scanner = ChefSecurityScanner::new();
+//! let findings = scanner.scan_graph(graph.backend());
+//!
+//! let high = ChefSecurityScanner::filter_by_severity(findings, ChefSeverity::High);
+//! for finding in high {
+//!     println!("[{:?}] {}", finding.severity, finding.message);
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::graph::backend::MemoryBackend;
 use crate::graph::schema::NodeType;
@@ -106,9 +129,7 @@ impl ChefSecurityScanner {
                     message: format!("Potential hardcoded secret in resource '{name}'"),
                     location: name.to_string(),
                     cwe: Some("CWE-798".into()),
-                    remediation: Some(
-                        "Use Chef encrypted data bags or node attributes".into(),
-                    ),
+                    remediation: Some("Use Chef encrypted data bags or node attributes".into()),
                     resource_type: None,
                 });
             }
@@ -164,10 +185,7 @@ impl ChefSecurityScanner {
         findings: Vec<ChefSecurityFinding>,
         min: ChefSeverity,
     ) -> Vec<ChefSecurityFinding> {
-        findings
-            .into_iter()
-            .filter(|f| f.severity >= min)
-            .collect()
+        findings.into_iter().filter(|f| f.severity >= min).collect()
     }
 }
 

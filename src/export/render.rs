@@ -65,10 +65,7 @@ pub fn render_dot_to_file(
         ));
     }
 
-    let temp_dir = std::env::temp_dir().join(format!(
-        "rbuilder-dot-{}",
-        std::process::id()
-    ));
+    let temp_dir = std::env::temp_dir().join(format!("rbuilder-dot-{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir).map_err(|e| Error::Other(e.to_string()))?;
     let dot_path = temp_dir.join("graph.dot");
     std::fs::write(&dot_path, dot_content).map_err(|e| Error::Other(e.to_string()))?;

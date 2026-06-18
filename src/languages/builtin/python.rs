@@ -49,7 +49,9 @@ impl PythonPlugin {
                             for expr_child in block_child.children(&mut expr_cursor) {
                                 if expr_child.kind() == "string" {
                                     let doc = expr_child.utf8_text(source)?;
-                                    documentation = Some(doc.trim_matches(|c| c == '"' || c == '\'').to_string());
+                                    documentation = Some(
+                                        doc.trim_matches(|c| c == '"' || c == '\'').to_string(),
+                                    );
                                     break;
                                 }
                             }
@@ -96,7 +98,14 @@ impl PythonPlugin {
                 start_column: node.start_position().column,
                 end_column: node.end_position().column,
             },
-            signature: Some(node.utf8_text(source)?.lines().next().unwrap_or("").trim().to_string()),
+            signature: Some(
+                node.utf8_text(source)?
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string(),
+            ),
             return_type: None, // Python has optional type hints
             parameters,
             fields: vec![],
@@ -226,8 +235,8 @@ impl PythonPlugin {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 match child.kind() {
-                    "if_statement" | "elif_clause" | "while_statement"
-                    | "for_statement" | "except_clause" => {
+                    "if_statement" | "elif_clause" | "while_statement" | "for_statement"
+                    | "except_clause" => {
                         *complexity += 1;
                     }
                     _ => {}
@@ -278,7 +287,10 @@ impl PythonPlugin {
             *max_depth = (*max_depth).max(current_depth);
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                if matches!(child.kind(), "if_statement" | "while_statement" | "for_statement" | "block") {
+                if matches!(
+                    child.kind(),
+                    "if_statement" | "while_statement" | "for_statement" | "block"
+                ) {
                     traverse(child, max_depth, current_depth + 1);
                 } else {
                     traverse(child, max_depth, current_depth);
@@ -333,11 +345,13 @@ impl LanguagePlugin for PythonPlugin {
             .set_language(&tree_sitter_python::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set Python grammar: {}", e)))?;
 
-        let tree = parser.parse(source, None).ok_or_else(|| Error::ParseError {
-            file: file_path.to_string_lossy().to_string().into(),
-            line: 0,
-            message: "Failed to parse Python source".to_string(),
-        })?;
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::ParseError {
+                file: file_path.to_string_lossy().to_string().into(),
+                line: 0,
+                message: "Failed to parse Python source".to_string(),
+            })?;
 
         let mut symbols = Vec::new();
         let root_node = tree.root_node();
@@ -381,7 +395,11 @@ impl LanguagePlugin for PythonPlugin {
         Ok(vec![])
     }
 
-    fn calculate_complexity(&self, symbol: &Symbol, source: &[u8]) -> Result<Option<ComplexityMetrics>> {
+    fn calculate_complexity(
+        &self,
+        symbol: &Symbol,
+        source: &[u8],
+    ) -> Result<Option<ComplexityMetrics>> {
         if symbol.symbol_type != SymbolType::Function {
             return Ok(None);
         }
@@ -391,11 +409,13 @@ impl LanguagePlugin for PythonPlugin {
             .set_language(&tree_sitter_python::LANGUAGE.into())
             .map_err(|e| Error::PluginError(format!("Failed to set Python grammar: {}", e)))?;
 
-        let tree = parser.parse(source, None).ok_or_else(|| Error::ParseError {
-            file: symbol.location.file.clone().into(),
-            line: symbol.location.start_line,
-            message: "Failed to parse source for complexity analysis".to_string(),
-        })?;
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::ParseError {
+                file: symbol.location.file.clone().into(),
+                line: symbol.location.start_line,
+                message: "Failed to parse source for complexity analysis".to_string(),
+            })?;
 
         let root = tree.root_node();
         let target_line = symbol.location.start_line - 1;
@@ -448,7 +468,9 @@ mod tests {
     fn test_extract_simple_function() {
         let plugin = PythonPlugin::new().unwrap();
         let source = b"def add(a, b):\n    return a + b";
-        let symbols = plugin.extract_symbols(Path::new("test.py"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.py"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "add");
@@ -460,18 +482,25 @@ mod tests {
     fn test_extract_function_with_defaults() {
         let plugin = PythonPlugin::new().unwrap();
         let source = b"def greet(name, greeting='Hello'):\n    return f'{greeting} {name}'";
-        let symbols = plugin.extract_symbols(Path::new("test.py"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.py"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].parameters.len(), 2);
-        assert_eq!(symbols[0].parameters[1].default_value, Some("'Hello'".to_string()));
+        assert_eq!(
+            symbols[0].parameters[1].default_value,
+            Some("'Hello'".to_string())
+        );
     }
 
     #[test]
     fn test_extract_class() {
         let plugin = PythonPlugin::new().unwrap();
         let source = b"class User:\n    def __init__(self):\n        self.name = 'test'";
-        let symbols = plugin.extract_symbols(Path::new("test.py"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.py"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 2); // Class + __init__ method
         assert_eq!(symbols[0].name, "User");
@@ -482,7 +511,9 @@ mod tests {
     fn test_calculate_complexity() {
         let plugin = PythonPlugin::new().unwrap();
         let source = b"def check(x):\n    if x > 0:\n        if x < 100:\n            return True\n    return False";
-        let symbols = plugin.extract_symbols(Path::new("test.py"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.py"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         let complexity = plugin.calculate_complexity(&symbols[0], source).unwrap();
@@ -495,7 +526,9 @@ mod tests {
     fn test_type_inference() {
         let plugin = PythonPlugin::new().unwrap();
         let source = b"def process(name, count):\n    return name.upper() + str(count + 1)";
-        let symbols = plugin.extract_symbols(Path::new("test.py"), source).unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("test.py"), source)
+            .unwrap();
 
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].parameters.len(), 2);

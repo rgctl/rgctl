@@ -102,7 +102,11 @@ impl ProgramDependenceGraph {
 
     fn enrich_def_use_from_text(&mut self, source: &[u8]) {
         for node in self.nodes.values_mut() {
-            infer_def_use(&node.statement.text, &mut node.defined_vars, &mut node.used_vars);
+            infer_def_use(
+                &node.statement.text,
+                &mut node.defined_vars,
+                &mut node.used_vars,
+            );
             let _ = source;
         }
     }
@@ -132,7 +136,8 @@ impl ProgramDependenceGraph {
                     }
 
                     for def_idx in 0..idx {
-                        if let Some(def_node) = self.find_node_by_block_and_index(block.id, def_idx) {
+                        if let Some(def_node) = self.find_node_by_block_and_index(block.id, def_idx)
+                        {
                             if def_node.defined_vars.contains(&var) {
                                 self.data_deps.push(DataDependency {
                                     from: def_node.id,
@@ -170,7 +175,9 @@ impl ProgramDependenceGraph {
                     .find(|id| {
                         self.nodes
                             .get(id)
-                            .map(|n| n.statement.kind == crate::analysis::cfg::StatementKind::Branch)
+                            .map(|n| {
+                                n.statement.kind == crate::analysis::cfg::StatementKind::Branch
+                            })
                             .unwrap_or(false)
                     })
                     .or_else(|| controller_nodes.last().copied());
@@ -335,8 +342,7 @@ fn is_ident(s: &str) -> bool {
 fn is_keyword(token: &str) -> bool {
     matches!(
         token,
-        "fn"
-            | "let"
+        "fn" | "let"
             | "mut"
             | "if"
             | "else"

@@ -67,7 +67,10 @@ impl FileTracker {
         let metadata: FileHashMetadata =
             serde_json::from_str(&json).map_err(|e| Error::SerdeError(e.to_string()))?;
 
-        Ok(Self { repo_root, metadata })
+        Ok(Self {
+            repo_root,
+            metadata,
+        })
     }
 
     /// Compute blake3 hash of a file's contents.
@@ -216,7 +219,10 @@ pub fn build_node_mapping(graph: &CodeGraph) -> HashMap<String, Vec<Uuid>> {
                 None
             };
             if let Some(file) = file {
-                mapping.entry(normalize_path_str(file)).or_default().push(node.id);
+                mapping
+                    .entry(normalize_path_str(file))
+                    .or_default()
+                    .push(node.id);
             }
         }
     }
@@ -364,7 +370,9 @@ mod tests {
         fs::write(&extra, "fn extra() {}\n").unwrap();
         fs::remove_file(&main).unwrap();
 
-        let changes = tracker.detect_changes(std::slice::from_ref(&extra)).unwrap();
+        let changes = tracker
+            .detect_changes(std::slice::from_ref(&extra))
+            .unwrap();
         assert_eq!(changes.added.len(), 1);
         assert_eq!(changes.deleted.len(), 1);
     }
@@ -389,9 +397,7 @@ mod tests {
         fs::write(&file, "fn hello() {}\n").unwrap();
 
         let mut tracker = FileTracker::new(temp.path());
-        tracker
-            .index_files(&[file], &CodeGraph::new())
-            .unwrap();
+        tracker.index_files(&[file], &CodeGraph::new()).unwrap();
         tracker.save().unwrap();
 
         let loaded = FileTracker::load(temp.path()).unwrap();

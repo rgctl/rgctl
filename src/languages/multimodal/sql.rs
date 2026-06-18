@@ -13,8 +13,10 @@ static TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r##"(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:`|\[|")?(\w+)"##).unwrap()
 });
 static VIEW_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r##"(?i)CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:`|\[|")?(\w+)"##)
-        .unwrap()
+    Regex::new(
+        r##"(?i)CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:`|\[|")?(\w+)"##,
+    )
+    .unwrap()
 });
 static INDEX_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -116,7 +118,8 @@ impl LanguagePlugin for SqlPlugin {
                 current_table = cap.get(1).map(|m| m.as_str().to_string());
                 continue;
             }
-            if line.contains(')') && !line.contains('(')
+            if line.contains(')')
+                && !line.contains('(')
                 && (line.trim() == ");" || line.trim().ends_with(");"))
             {
                 current_table = None;
@@ -124,7 +127,11 @@ impl LanguagePlugin for SqlPlugin {
             if let Some(table) = &current_table {
                 if let Some(cap) = COLUMN_RE.captures(line) {
                     let col = cap.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
-                    let col_type = cap.get(2).map(|m| m.as_str().trim()).unwrap_or("").to_string();
+                    let col_type = cap
+                        .get(2)
+                        .map(|m| m.as_str().trim())
+                        .unwrap_or("")
+                        .to_string();
                     if col.eq_ignore_ascii_case("constraint")
                         || col.eq_ignore_ascii_case("primary")
                         || col.eq_ignore_ascii_case("foreign")

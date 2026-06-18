@@ -1,8 +1,6 @@
 //! Chef-specific CLI commands (Phase 17).
 
-use crate::analysis::chef_cookbooks::{
-    CookbookDependencyAnalyzer, CookbookDependencyGraph,
-};
+use crate::analysis::chef_cookbooks::{CookbookDependencyAnalyzer, CookbookDependencyGraph};
 use crate::error::{Error, Result};
 use crate::graph::CodeGraph;
 use crate::languages::multimodal::chef::parser::ChefParser;
@@ -26,24 +24,32 @@ pub enum ChefCommand {
         /// Path to cookbooks directory
         #[arg(default_value = "./cookbooks")]
         path: PathBuf,
+        /// Show dependency relationships between cookbooks
         #[arg(long)]
         show_deps: bool,
+        /// Output format (`text` or `json`)
         #[arg(long, default_value = "text")]
         format: String,
+        /// Build dependency graph from indexed knowledge graph instead of filesystem scan
         #[arg(long)]
         from_graph: bool,
     },
     /// Validate Chef recipes
     Validate {
+        /// Path to recipes or cookbooks directory
         path: PathBuf,
     },
     /// Run security scan on Chef cookbooks
     SecurityScan {
+        /// Path to cookbooks directory
         path: PathBuf,
+        /// Minimum severity to report (`low`, `medium`, `high`, `critical`)
         #[arg(long, default_value = "medium")]
         min_severity: String,
+        /// Output format (`text` or `json`)
         #[arg(long, default_value = "text")]
         format: String,
+        /// Scan indexed graph instead of filesystem
         #[arg(long)]
         from_graph: bool,
     },
@@ -135,9 +141,7 @@ fn validate_chef_path(path: &Path) -> Result<()> {
         let (symbols, _) = parser.parse(&path.to_string_lossy(), &content);
         let recipes = symbols
             .iter()
-            .filter(|s| {
-                s.symbol_type == crate::languages::plugin_trait::SymbolType::ChefRecipe
-            })
+            .filter(|s| s.symbol_type == crate::languages::plugin_trait::SymbolType::ChefRecipe)
             .count();
         if recipes == 0 && !path.to_string_lossy().contains("metadata.rb") {
             return Err(Error::ParseError {

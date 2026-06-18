@@ -5,11 +5,11 @@ use crate::analysis::community::{detect_communities, CommunityDetector};
 use crate::analysis::complexity::ComplexityAnalyzer;
 use crate::api::state::AppState;
 use crate::error::Error;
+use crate::export::select_subgraph;
 use crate::graph::backend::GraphBackend;
 use crate::graph::query;
 use crate::graph::schema::{Edge, Node, NodeType};
 use crate::nlp::pattern_matcher::PatternMatcher;
-use crate::export::select_subgraph;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -59,7 +59,11 @@ pub struct GraphQueryParams {
 }
 
 /// Start the web API and static file server.
-pub async fn run_server(state: AppState, port: u16, web_dir: Option<std::path::PathBuf>) -> crate::error::Result<()> {
+pub async fn run_server(
+    state: AppState,
+    port: u16,
+    web_dir: Option<std::path::PathBuf>,
+) -> crate::error::Result<()> {
     let app = build_router(state, web_dir);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -95,7 +99,9 @@ pub fn build_router(state: AppState, web_dir: Option<std::path::PathBuf>) -> Rou
 
     if let Some(dir) = web_dir {
         if dir.exists() {
-            return api.nest_service("/", ServeDir::new(dir)).layer(CorsLayer::permissive());
+            return api
+                .nest_service("/", ServeDir::new(dir))
+                .layer(CorsLayer::permissive());
         }
     }
 
@@ -103,7 +109,9 @@ pub fn build_router(state: AppState, web_dir: Option<std::path::PathBuf>) -> Rou
 }
 
 /// Get graph statistics including node/edge counts and complexity metrics.
-pub async fn graph_stats(State(state): State<AppState>) -> std::result::Result<Json<Value>, ApiError> {
+pub async fn graph_stats(
+    State(state): State<AppState>,
+) -> std::result::Result<Json<Value>, ApiError> {
     let stats = state.with_graph(|graph| {
         let backend = graph.backend();
         let nodes = backend.all_nodes()?;
@@ -174,10 +182,7 @@ pub async fn get_node(
             .ok_or_else(|| Error::InvalidQuery(format!("Node not found: {id}")))?;
         let mut detail = node_summary(&node);
         if let Some(obj) = detail.as_object_mut() {
-            obj.insert(
-                "properties".into(),
-                json!(node.properties),
-            );
+            obj.insert("properties".into(), json!(node.properties));
             obj.insert("signature".into(), json!(node.signature));
             obj.insert("return_type".into(), json!(node.return_type));
         }
@@ -304,13 +309,7 @@ pub async fn dashboard_metrics(
                 let top_members: Vec<String> = community
                     .members
                     .iter()
-                    .filter_map(|id| {
-                        backend
-                            .get_node(*id)
-                            .ok()
-                            .flatten()
-                            .map(|n| n.name)
-                    })
+                    .filter_map(|id| backend.get_node(*id).ok().flatten().map(|n| n.name))
                     .take(5)
                     .collect();
                 communities_summary.push(json!({
@@ -351,7 +350,7 @@ pub async fn dashboard_metrics(
             }
         }
 
-        if let (Some(ref complexity_report), Some(ref centrality)) =
+        if let (Some(complexity_report), Some(centrality)) =
             (complexity.as_ref(), centrality_data.as_ref())
         {
             let mut ranked_hotspots: Vec<(f64, &crate::analysis::complexity::FunctionComplexity)> =
@@ -368,7 +367,8 @@ pub async fn dashboard_metrics(
                         (score, func)
                     })
                     .collect();
-            ranked_hotspots.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            ranked_hotspots
+                .sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
             for (score, func) in ranked_hotspots.into_iter().take(10) {
                 let degree = centrality
                     .scores
@@ -442,8 +442,7 @@ async fn list_nodes(
                 .into_iter()
                 .filter(|n| {
                     n.name.to_lowercase().contains(&q.to_lowercase())
-                        || n
-                            .file_path
+                        || n.file_path
                             .as_ref()
                             .is_some_and(|f| f.to_lowercase().contains(&q.to_lowercase()))
                 })
@@ -549,7 +548,9 @@ async fn nlp_query(
     Ok(Json(result))
 }
 
-async fn list_communities(State(state): State<AppState>) -> std::result::Result<Json<Value>, ApiError> {
+async fn list_communities(
+    State(state): State<AppState>,
+) -> std::result::Result<Json<Value>, ApiError> {
     let result = state.with_graph(|graph| {
         let detection = CommunityDetector::new().detect(graph.backend())?;
         let communities: Vec<Value> = detection
@@ -610,6 +611,9 @@ fn parse_node_type(value: &str) -> std::result::Result<NodeType, Error> {
         "chefcookbook" | "cookbook" => Ok(NodeType::ChefCookbook),
         "chefrecipe" | "recipe" => Ok(NodeType::ChefRecipe),
         "chefresource" | "resource" => Ok(NodeType::ChefResource),
+        "puppetmodule" | "puppetmodules" => Ok(NodeType::PuppetModule),
+        "puppetclass" | "puppetclasses" => Ok(NodeType::PuppetClass),
+        "puppetresource" => Ok(NodeType::PuppetResource),
         other => Err(Error::InvalidQuery(format!("Unknown node type: {other}"))),
     }
 }
@@ -651,10 +655,10 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::state::AppState;
     use crate::graph::backend::GraphBackend;
     use crate::graph::schema::Node;
     use crate::graph::CodeGraph;
-    use crate::api::state::AppState;
     use tempfile::TempDir;
 
     #[tokio::test]

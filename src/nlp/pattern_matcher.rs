@@ -2,17 +2,17 @@
 //!
 //! Task 2.3.4: Integrate intent, entity extraction, templates, and execution.
 
-use crate::graph::backend::GraphBackend;
 use crate::analysis::{
     CentralityAnalyzer, CommunityDetector, ComplexityAnalyzer, DependencyAnalyzer,
 };
 use crate::config::analyzer::ConfigAnalyzer;
 use crate::error::{Error, Result};
+use crate::graph::backend::GraphBackend;
 use crate::graph::backend::MemoryBackend;
 use crate::graph::schema::Node;
-use crate::nlp::pattern_detection::DomainContext;
 use crate::nlp::entity_extraction::EntityExtractor;
 use crate::nlp::intent::{Intent, IntentClassifier};
+use crate::nlp::pattern_detection::DomainContext;
 use crate::nlp::query_cache::{CachedQuery, QueryCache};
 use crate::nlp::templates::{MatchedTemplate, QueryTemplates};
 
@@ -240,7 +240,11 @@ impl PatternMatcher {
     }
 
     /// Execute a translated query.
-    pub fn execute(&self, translated: &TranslatedQuery, backend: &MemoryBackend) -> Result<QueryResult> {
+    pub fn execute(
+        &self,
+        translated: &TranslatedQuery,
+        backend: &MemoryBackend,
+    ) -> Result<QueryResult> {
         let params: std::collections::HashMap<_, _> = translated
             .internal_query
             .split('|')
@@ -250,7 +254,10 @@ impl PatternMatcher {
 
         match translated.operation.as_str() {
             "count" => {
-                let q = params.get("query").map(String::as_str).unwrap_or("type:Function");
+                let q = params
+                    .get("query")
+                    .map(String::as_str)
+                    .unwrap_or("type:Function");
                 if q.starts_with("label:") {
                     let label = q.strip_prefix("label:").unwrap_or("");
                     let nodes = backend.all_nodes()?;
@@ -262,8 +269,13 @@ impl PatternMatcher {
                 }
             }
             "list" | "find" => {
-                let q = params.get("query").map(String::as_str).unwrap_or("type:Function");
-                Ok(QueryResult::Nodes(crate::graph::query::execute(backend, q)?))
+                let q = params
+                    .get("query")
+                    .map(String::as_str)
+                    .unwrap_or("type:Function");
+                Ok(QueryResult::Nodes(crate::graph::query::execute(
+                    backend, q,
+                )?))
             }
             "callers" => {
                 let symbol = params
@@ -297,7 +309,9 @@ impl PatternMatcher {
             "circular_deps" => {
                 let cycles = DependencyAnalyzer::find_circular_dependencies(backend)?;
                 if cycles.is_empty() {
-                    Ok(QueryResult::Text(vec!["No circular dependencies found.".to_string()]))
+                    Ok(QueryResult::Text(vec![
+                        "No circular dependencies found.".to_string()
+                    ]))
                 } else {
                     let lines: Vec<String> = cycles
                         .iter()
@@ -309,17 +323,27 @@ impl PatternMatcher {
             "unused_config" => {
                 let unused = ConfigAnalyzer::find_unused_keys(backend)?;
                 if unused.is_empty() {
-                    Ok(QueryResult::Text(vec!["No unused config keys found.".to_string()]))
+                    Ok(QueryResult::Text(vec![
+                        "No unused config keys found.".to_string()
+                    ]))
                 } else {
                     Ok(QueryResult::Text(
-                        unused.iter().map(|k| format!("- {} ({})", k.key, k.file.as_deref().unwrap_or("?"))).collect(),
+                        unused
+                            .iter()
+                            .map(|k| format!("- {} ({})", k.key, k.file.as_deref().unwrap_or("?")))
+                            .collect(),
                     ))
                 }
             }
             "missing_env" => {
-                let missing = ConfigAnalyzer::find_missing_env_vars(backend, &[std::path::Path::new(".env")])?;
+                let missing = ConfigAnalyzer::find_missing_env_vars(
+                    backend,
+                    &[std::path::Path::new(".env")],
+                )?;
                 if missing.is_empty() {
-                    Ok(QueryResult::Text(vec!["No missing env vars detected.".to_string()]))
+                    Ok(QueryResult::Text(vec![
+                        "No missing env vars detected.".to_string()
+                    ]))
                 } else {
                     Ok(QueryResult::Text(
                         missing.iter().map(|m| format!("- {}", m.var)).collect(),
@@ -335,9 +359,17 @@ impl PatternMatcher {
                 Ok(QueryResult::Nodes(nodes))
             }
             "top_n" => {
-                let limit: usize = params.get("limit").and_then(|l| l.parse().ok()).unwrap_or(10);
+                let limit: usize = params
+                    .get("limit")
+                    .and_then(|l| l.parse().ok())
+                    .unwrap_or(10);
                 let report = ComplexityAnalyzer::analyze(backend)?;
-                let nodes: Vec<Node> = report.functions.into_iter().take(limit).map(|f| f.node).collect();
+                let nodes: Vec<Node> = report
+                    .functions
+                    .into_iter()
+                    .take(limit)
+                    .map(|f| f.node)
+                    .collect();
                 Ok(QueryResult::Nodes(nodes))
             }
             "complexity_symbol" => {
@@ -364,15 +396,16 @@ impl PatternMatcher {
                     .ok_or_else(|| Error::InvalidQuery("No symbol specified".to_string()))?;
                 let callers = DependencyAnalyzer::find_callers(backend, &symbol)?;
                 Ok(QueryResult::Text(
-                    callers.into_iter().map(|c| format!("- depends via call: {c}")).collect(),
+                    callers
+                        .into_iter()
+                        .map(|c| format!("- depends via call: {c}"))
+                        .collect(),
                 ))
             }
-            _ => {
-                Ok(QueryResult::Nodes(crate::graph::query::execute(
-                    backend,
-                    &translated.internal_query,
-                )?))
-            }
+            _ => Ok(QueryResult::Nodes(crate::graph::query::execute(
+                backend,
+                &translated.internal_query,
+            )?)),
         }
     }
 
@@ -394,7 +427,10 @@ impl PatternMatcher {
             .iter()
             .take(5)
             .filter_map(|(id, score)| {
-                backend.get_node(*id).ok()?.map(|n| format!("{} ({score:.4})", n.name))
+                backend
+                    .get_node(*id)
+                    .ok()?
+                    .map(|n| format!("{} ({score:.4})", n.name))
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -419,17 +455,29 @@ fn operation_to_query(template: &MatchedTemplate) -> String {
 
     let mut parts = vec![format!("query=type:{node_type}")];
 
-    if let Some((_, sym)) = template.parameters.iter().find(|(k, _)| k == "symbol" || k == "arg1") {
+    if let Some((_, sym)) = template
+        .parameters
+        .iter()
+        .find(|(k, _)| k == "symbol" || k == "arg1")
+    {
         if sym.contains('_') {
             parts.push(format!("symbol={sym}"));
         }
     }
-    if let Some((_, threshold)) = template.parameters.iter().find(|(k, _)| k == "arg2" || k == "threshold") {
+    if let Some((_, threshold)) = template
+        .parameters
+        .iter()
+        .find(|(k, _)| k == "arg2" || k == "threshold")
+    {
         if threshold.chars().all(|c| c.is_ascii_digit()) {
             parts.push(format!("threshold={threshold}"));
         }
     }
-    if let Some((_, limit)) = template.parameters.iter().find(|(k, _)| k == "arg1" && k != "node_type") {
+    if let Some((_, limit)) = template
+        .parameters
+        .iter()
+        .find(|(k, _)| k == "arg1" && k != "node_type")
+    {
         if limit.chars().all(|c| c.is_ascii_digit()) {
             parts.push(format!("limit={limit}"));
         }
@@ -487,7 +535,9 @@ fn parse_dual_pattern(pattern: &str) -> (String, String) {
 }
 
 fn extract_symbol_from_question(question: &str) -> Option<String> {
-    if let Ok(re) = regex::Regex::new(r"(?i)(?:calls|change|depend(?:s|encies)?\s+on)\s+([a-zA-Z_][a-zA-Z0-9_]*)") {
+    if let Ok(re) = regex::Regex::new(
+        r"(?i)(?:calls|change|depend(?:s|encies)?\s+on)\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+    ) {
         if let Some(cap) = re.captures(question) {
             return Some(cap[1].to_string());
         }
@@ -516,8 +566,12 @@ mod tests {
     #[test]
     fn test_ask_count() {
         let mut backend = MemoryBackend::new();
-        backend.insert_node(Node::new(NodeType::Function, "main".to_string())).unwrap();
-        backend.insert_node(Node::new(NodeType::Function, "helper".to_string())).unwrap();
+        backend
+            .insert_node(Node::new(NodeType::Function, "main".to_string()))
+            .unwrap();
+        backend
+            .insert_node(Node::new(NodeType::Function, "helper".to_string()))
+            .unwrap();
 
         let matcher = PatternMatcher::new();
         let result = matcher.ask("how many functions?", &backend).unwrap();

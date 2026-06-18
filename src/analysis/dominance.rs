@@ -136,11 +136,8 @@ fn compute_dominance_frontiers(
     cfg: &ControlFlowGraph,
     idom: &HashMap<BlockId, BlockId>,
 ) -> HashMap<BlockId, HashSet<BlockId>> {
-    let mut frontiers: HashMap<BlockId, HashSet<BlockId>> = cfg
-        .blocks
-        .keys()
-        .map(|id| (*id, HashSet::new()))
-        .collect();
+    let mut frontiers: HashMap<BlockId, HashSet<BlockId>> =
+        cfg.blocks.keys().map(|id| (*id, HashSet::new())).collect();
 
     for block in cfg.blocks.keys() {
         let preds = cfg.predecessors(*block);

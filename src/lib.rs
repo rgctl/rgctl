@@ -66,36 +66,40 @@ pub mod cli;
 pub mod git_util;
 pub mod hooks;
 pub mod incremental;
+pub mod multi_repo;
 pub mod output;
-pub mod pipeline;
 pub mod parallel;
+pub mod pipeline;
 pub mod rules;
 pub mod semantic;
-pub mod multi_repo;
 pub mod watch;
 
 // Re-exports for convenience
+pub use changes::{ChangeDetail, ChangeDetectionResult, ChangeDetector, ChangeSummary};
+pub use config::analyzer::{ConfigAnalyzer, MissingEnvVar, UnusedConfigKey};
+pub use config::drift::{
+    compare_configs, format_drift_report, ConfigDiffEntry, ConfigDiffKind, ConfigDriftReport,
+};
+pub use config::project::{HooksConfig, RbuilderConfig, RiskLevel, WatchConfig};
+pub use config::secret_detector::{DetectedSecret, SecretDetector, Severity as SecretSeverity};
 pub use error::{Error, Result};
 pub use graph::CodeGraph;
-pub use pipeline::{PipelineConfig, PipelineStats, ProcessingPipeline};
-pub use config::analyzer::{ConfigAnalyzer, MissingEnvVar, UnusedConfigKey};
-pub use config::secret_detector::{DetectedSecret, SecretDetector, Severity as SecretSeverity};
+pub use incremental::{ChangeSet, FileTracker, IncrementalUpdater, UpdateOptions, UpdateResult};
+pub use multi_repo::{
+    link_cross_repo, load_workspace_graph, stamp_repo_namespace, sync_workspace,
+    CrossRepoLinkReport, RepoEntry, WorkspaceManifest, WorkspaceSyncReport, WORKSPACE_FILE,
+};
 pub use nlp::conversation::ConversationContext;
 pub use nlp::{DomainContext, PatternDetector, PatternMatcher, QueryResult, TranslatedQuery};
+pub use pipeline::{PipelineConfig, PipelineStats, ProcessingPipeline};
 pub use rules::{RuleApplicationReport, RuleEngine, Ruleset};
-pub use semantic::{FunctionSignature, IdlFormat, IdlGenerator, SignatureExtractor, TypeInferencer};
-pub use incremental::{ChangeSet, FileTracker, IncrementalUpdater, UpdateOptions, UpdateResult};
-pub use config::drift::{compare_configs, format_drift_report, ConfigDiffEntry, ConfigDiffKind, ConfigDriftReport};
-pub use config::project::{HooksConfig, RbuilderConfig, RiskLevel, WatchConfig};
-pub use changes::{ChangeDetectionResult, ChangeDetector, ChangeDetail, ChangeSummary};
+pub use semantic::{
+    FunctionSignature, IdlFormat, IdlGenerator, SignatureExtractor, TypeInferencer,
+};
 pub use watch::{debounce_ready, GraphUpdateNotification, WatchService};
 #[cfg(feature = "mcp-server")]
 pub use watch::{
     latest_notification, new_notification_store, record_notification, NotificationStore,
-};
-pub use multi_repo::{
-    link_cross_repo, load_workspace_graph, stamp_repo_namespace, sync_workspace, CrossRepoLinkReport,
-    RepoEntry, WorkspaceManifest, WorkspaceSyncReport, WORKSPACE_FILE,
 };
 
 /// Version information

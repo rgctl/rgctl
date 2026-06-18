@@ -3,8 +3,7 @@
 use crate::error::{Error, Result};
 use crate::export::{
     export_graphml, generate_dot, generate_mermaid, parse_diagram_type, parse_layout,
-    render_dot_to_file, DiagramType, GraphvizOptions, ImageFormat, MermaidOptions,
-    RankDir,
+    render_dot_to_file, DiagramType, GraphvizOptions, ImageFormat, MermaidOptions, RankDir,
 };
 use crate::graph::CodeGraph;
 use std::path::{Path, PathBuf};
@@ -89,12 +88,7 @@ pub fn run_diagram(repo: &Path, options: DiagramOptions) -> Result<()> {
                 .output
                 .clone()
                 .ok_or_else(|| Error::Other("--output required for image formats".into()))?;
-            render_dot_to_file(
-                &dot,
-                &output,
-                image_format,
-                parse_layout(&options.layout),
-            )?;
+            render_dot_to_file(&dot, &output, image_format, parse_layout(&options.layout))?;
             println!("Wrote diagram to {}", output.display());
             return Ok(());
         }

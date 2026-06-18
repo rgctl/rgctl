@@ -37,14 +37,12 @@ impl<'a> InterproceduralSlicer<'a> {
         let mut pdgs = HashMap::new();
         for (func_id, cfg) in &icfg.function_cfgs {
             let func_node = &icfg.call_graph.nodes[func_id];
-            let source = source_files
-                .get(&func_node.file_path)
-                .or_else(|| {
-                    source_files
-                        .iter()
-                        .find(|(k, _)| k.ends_with(&func_node.file_path))
-                        .map(|(_, v)| v)
-                });
+            let source = source_files.get(&func_node.file_path).or_else(|| {
+                source_files
+                    .iter()
+                    .find(|(k, _)| k.ends_with(&func_node.file_path))
+                    .map(|(_, v)| v)
+            });
             if let Some(source) = source {
                 let pdg = ProgramDependenceGraph::build(cfg, source.as_bytes())?;
                 pdgs.insert(*func_id, pdg);
@@ -55,9 +53,10 @@ impl<'a> InterproceduralSlicer<'a> {
 
     /// Compute interprocedural slice starting in `function`.
     pub fn slice(&self, function: Uuid, criterion: SliceCriterion) -> Result<InterproceduralSlice> {
-        let pdg = self.pdgs.get(&function).ok_or_else(|| {
-            Error::NotFound(format!("PDG for function {function}"))
-        })?;
+        let pdg = self
+            .pdgs
+            .get(&function)
+            .ok_or_else(|| Error::NotFound(format!("PDG for function {function}")))?;
         let cfg = self
             .icfg
             .get_cfg(function)
@@ -84,8 +83,7 @@ impl<'a> InterproceduralSlicer<'a> {
                 if self.is_parameter(current_func, var) {
                     for (caller_id, _) in self.icfg.caller_cfgs(current_func) {
                         if let Some(caller_pdg) = self.pdgs.get(&caller_id) {
-                            let call_sites =
-                                self.find_call_site_nodes(caller_pdg, current_func);
+                            let call_sites = self.find_call_site_nodes(caller_pdg, current_func);
                             for call_node in call_sites {
                                 if slice.insert((caller_id, call_node)) {
                                     worklist.push_back((caller_id, call_node));
@@ -185,10 +183,9 @@ mod tests {
     #[test]
     fn test_interprocedural_slice_includes_caller() {
         let mut backend = MemoryBackend::new();
-        let main = Node::new(NodeType::Function, "main".into())
-            .with_file_path("prog.rs".into());
-        let process = Node::new(NodeType::Function, "process".into())
-            .with_file_path("prog.rs".into());
+        let main = Node::new(NodeType::Function, "main".into()).with_file_path("prog.rs".into());
+        let process =
+            Node::new(NodeType::Function, "process".into()).with_file_path("prog.rs".into());
         let id_main = main.id;
         let id_process = process.id;
         backend.insert_node(main).unwrap();
@@ -215,11 +212,9 @@ fn write_output(_: String) {}
         let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
         let slicer = InterproceduralSlicer::new(&icfg, &files).unwrap();
 
-        let pdg = ProgramDependenceGraph::build(
-            icfg.get_cfg(id_process).unwrap(),
-            source.as_bytes(),
-        )
-        .unwrap();
+        let pdg =
+            ProgramDependenceGraph::build(icfg.get_cfg(id_process).unwrap(), source.as_bytes())
+                .unwrap();
         let result_line = pdg
             .nodes
             .values()

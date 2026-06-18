@@ -70,6 +70,18 @@ pub enum NodeType {
     ChefTemplate,
     /// Chef custom resource (LWRP/HWRP)
     ChefCustomResource,
+    /// Puppet module (Phase 18)
+    PuppetModule,
+    /// Puppet class
+    PuppetClass,
+    /// Puppet defined type
+    PuppetDefinedType,
+    /// Puppet resource declaration
+    PuppetResource,
+    /// Puppet variable
+    PuppetVariable,
+    /// Puppet fact reference
+    PuppetFact,
 }
 
 /// Edge types representing relationships between nodes
@@ -121,6 +133,16 @@ pub enum EdgeType {
     DefinesAttribute,
     /// Resource notifies another resource
     NotifiesResource,
+    /// Puppet module depends on another module (Phase 18)
+    DependsOnModule,
+    /// Puppet class includes another class
+    IncludesClass,
+    /// Puppet class inherits from another class
+    InheritsClass,
+    /// Puppet resource requires another resource
+    RequiresResource,
+    /// Puppet class or resource uses a fact
+    UsesFact,
 }
 
 /// Function parameter stored on graph nodes (Phase 12.0).
@@ -490,8 +512,14 @@ mod tests {
             NodeType::ChefAttribute,
             NodeType::ChefTemplate,
             NodeType::ChefCustomResource,
+            NodeType::PuppetModule,
+            NodeType::PuppetClass,
+            NodeType::PuppetDefinedType,
+            NodeType::PuppetResource,
+            NodeType::PuppetVariable,
+            NodeType::PuppetFact,
         ];
-        assert_eq!(types.len(), 29);
+        assert_eq!(types.len(), 35);
     }
 
     #[test]
@@ -520,7 +548,12 @@ mod tests {
             EdgeType::UsesTemplate,
             EdgeType::DefinesAttribute,
             EdgeType::NotifiesResource,
+            EdgeType::DependsOnModule,
+            EdgeType::IncludesClass,
+            EdgeType::InheritsClass,
+            EdgeType::RequiresResource,
+            EdgeType::UsesFact,
         ];
-        assert_eq!(types.len(), 23);
+        assert_eq!(types.len(), 28);
     }
 }

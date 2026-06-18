@@ -52,11 +52,7 @@ fn parse_language(language: &str, source: &[u8]) -> Result<Tree> {
     })
 }
 
-fn find_function_by_name<'a>(
-    node: Node<'a>,
-    source: &[u8],
-    name: &str,
-) -> Option<Node<'a>> {
+fn find_function_by_name<'a>(node: Node<'a>, source: &[u8], name: &str) -> Option<Node<'a>> {
     let function_kinds = ["function_item", "function_definition"];
     if function_kinds.contains(&node.kind()) {
         if let Ok(Some(func_name)) = extract_name_from_node(node, source) {
@@ -109,8 +105,8 @@ impl<'a> CfgBuilder<'a> {
     }
 
     fn build_function(&mut self, func_node: Node, source: &[u8]) -> Result<()> {
-        let body = function_body_node(func_node, self.language)
-            .ok_or_else(|| Error::ParseError {
+        let body =
+            function_body_node(func_node, self.language).ok_or_else(|| Error::ParseError {
                 file: "source".into(),
                 line: func_node.start_position().row + 1,
                 message: "Function has no body".to_string(),
@@ -118,7 +114,8 @@ impl<'a> CfgBuilder<'a> {
         self.visit_block(body, source)?;
         if self.cfg.exits.is_empty() {
             let exit = self.new_block();
-            self.cfg.add_edge(self.current_block, exit, CfgEdgeType::Next);
+            self.cfg
+                .add_edge(self.current_block, exit, CfgEdgeType::Next);
             self.cfg.exits.push(exit);
         }
         Ok(())
@@ -144,7 +141,11 @@ impl<'a> CfgBuilder<'a> {
     }
 
     fn add_statement_to_current(&mut self, stmt: Statement) {
-        let block = self.cfg.blocks.get_mut(&self.current_block).expect("current block");
+        let block = self
+            .cfg
+            .blocks
+            .get_mut(&self.current_block)
+            .expect("current block");
         if block.start_line == 0 || stmt.line < block.start_line {
             block.start_line = stmt.line;
         }
@@ -227,17 +228,11 @@ impl<'a> CfgBuilder<'a> {
     fn visit_expression_stmt(&mut self, node: Node, source: &[u8]) -> Result<()> {
         let inner = node.named_child(0).unwrap_or(node);
         match inner.kind() {
-            "if_statement"
-            | "if_expression"
-            | "while_statement"
-            | "while_expression"
-            | "for_statement"
-            | "for_expression"
-            | "for_in_expression"
-            | "loop_expression"
-            | "match_expression"
-            | "return_statement"
-            | "return_expression" => self.visit_statement(inner, source),
+            "if_statement" | "if_expression" | "while_statement" | "while_expression"
+            | "for_statement" | "for_expression" | "for_in_expression" | "loop_expression"
+            | "match_expression" | "return_statement" | "return_expression" => {
+                self.visit_statement(inner, source)
+            }
             _ => {
                 let kind = Self::classify_expression(inner, source);
                 self.add_statement(inner, source, kind)
@@ -254,9 +249,7 @@ impl<'a> CfgBuilder<'a> {
             "let_declaration" | "let_statement" => StatementKind::Declaration,
             "return_expression" | "return_statement" => StatementKind::Return,
             "if_expression" | "if_statement" => StatementKind::Branch,
-            _ => {
-                StatementKind::Expression
-            }
+            _ => StatementKind::Expression,
         }
     }
 
@@ -313,10 +306,7 @@ impl<'a> CfgBuilder<'a> {
         let exit = self.new_block();
         self.cfg.add_edge(header, exit, CfgEdgeType::IfFalse);
 
-        self.loop_stack.push(LoopContext {
-            header,
-            exit,
-        });
+        self.loop_stack.push(LoopContext { header, exit });
 
         self.current_block = body;
         if let Some(body_node) = node.child_by_field_name("body") {
@@ -345,10 +335,7 @@ impl<'a> CfgBuilder<'a> {
         let exit = self.new_block();
         self.cfg.add_edge(header, exit, CfgEdgeType::IfFalse);
 
-        self.loop_stack.push(LoopContext {
-            header,
-            exit,
-        });
+        self.loop_stack.push(LoopContext { header, exit });
 
         self.current_block = body;
         if let Some(body_node) = node.child_by_field_name("body") {
@@ -371,10 +358,7 @@ impl<'a> CfgBuilder<'a> {
         let exit = self.new_block();
         self.cfg.add_edge(header, exit, CfgEdgeType::IfFalse);
 
-        self.loop_stack.push(LoopContext {
-            header,
-            exit,
-        });
+        self.loop_stack.push(LoopContext { header, exit });
 
         self.current_block = body;
         if let Some(body_node) = node.child_by_field_name("body") {
@@ -450,8 +434,7 @@ impl<'a> CfgBuilder<'a> {
         let default_block = self.new_block();
         self.cfg
             .add_edge(cond_block, default_block, CfgEdgeType::IfFalse);
-        self.cfg
-            .add_edge(default_block, merge, CfgEdgeType::Next);
+        self.cfg.add_edge(default_block, merge, CfgEdgeType::Next);
 
         self.current_block = merge;
         Ok(())

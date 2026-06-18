@@ -15,7 +15,10 @@ fn git_output(repo_root: &Path, args: &[&str]) -> Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Other(format!("git {} failed: {stderr}", args.join(" "))));
+        return Err(Error::Other(format!(
+            "git {} failed: {stderr}",
+            args.join(" ")
+        )));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -35,7 +38,10 @@ pub fn git_dir(repo_root: &Path) -> Result<PathBuf> {
 
 /// Staged file paths relative to the repository root.
 pub fn git_staged_files(repo_root: &Path) -> Result<Vec<String>> {
-    let out = git_output(repo_root, &["diff", "--cached", "--name-only", "--diff-filter=ACMR"])?;
+    let out = git_output(
+        repo_root,
+        &["diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+    )?;
     Ok(parse_name_lines(repo_root, &out))
 }
 

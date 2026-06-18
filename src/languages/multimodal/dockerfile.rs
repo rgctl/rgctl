@@ -16,7 +16,7 @@ static RUN_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^RUN\s+(.+)")
 pub struct DockerfilePlugin;
 
 impl DockerfilePlugin {
-/// Create a new Dockerfile plugin instance.
+    /// Create a new Dockerfile plugin instance.
     pub fn new() -> Result<Self> {
         Ok(Self)
     }
@@ -117,10 +117,7 @@ impl LanguagePlugin for DockerfilePlugin {
             .unwrap_or("Dockerfile");
 
         for sym in symbols {
-            if matches!(
-                sym.symbol_type,
-                SymbolType::Dependency | SymbolType::Import
-            ) {
+            if matches!(sym.symbol_type, SymbolType::Dependency | SymbolType::Import) {
                 relations.push(Relation {
                     from: file_name.to_string(),
                     to: sym.name.clone(),

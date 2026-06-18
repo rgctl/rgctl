@@ -101,7 +101,9 @@ mod tests {
         let id2 = n2.id;
         backend.insert_node(n1).unwrap();
         backend.insert_node(n2).unwrap();
-        backend.insert_edge(Edge::new(id1, id2, EdgeType::Calls)).unwrap();
+        backend
+            .insert_edge(Edge::new(id1, id2, EdgeType::Calls))
+            .unwrap();
 
         let view = PetGraphView::from_backend(&backend).unwrap();
         assert_eq!(view.directed.node_count(), 2);

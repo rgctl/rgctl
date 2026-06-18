@@ -1,10 +1,12 @@
 //! Maps extracted symbols and relations into graph nodes and edges.
 
 use crate::error::Result;
-use crate::graph::schema::{Edge, EdgeType, Node, NodeType};
 use crate::graph::code_index::{hash_code, CodeIndex};
 use crate::graph::migration::graph_parameter_from_plugin;
-use crate::languages::plugin_trait::{ComplexityMetrics, ConfigKey, Relation, RelationType, Symbol, SymbolType};
+use crate::graph::schema::{Edge, EdgeType, Node, NodeType};
+use crate::languages::plugin_trait::{
+    ComplexityMetrics, ConfigKey, Relation, RelationType, Symbol, SymbolType,
+};
 use std::collections::HashMap;
 use std::path::Path;
 use uuid::Uuid;
@@ -73,14 +75,21 @@ impl GraphBuilder {
         file_id: Uuid,
         body: Option<&str>,
     ) -> Uuid {
-        let key = symbol_key(&symbol.location.file, &symbol.name, symbol.qualified_name.as_deref());
+        let key = symbol_key(
+            &symbol.location.file,
+            &symbol.name,
+            symbol.qualified_name.as_deref(),
+        );
         if let Some(id) = self.symbol_index.get(&key) {
             return *id;
         }
 
-        let mut node = Node::new(symbol_type_to_node_type(symbol.symbol_type), symbol.name.clone())
-            .with_file_path(symbol.location.file.clone())
-            .with_location(symbol.location.start_line, symbol.location.end_line);
+        let mut node = Node::new(
+            symbol_type_to_node_type(symbol.symbol_type),
+            symbol.name.clone(),
+        )
+        .with_file_path(symbol.location.file.clone())
+        .with_location(symbol.location.start_line, symbol.location.end_line);
 
         if let Some(qn) = &symbol.qualified_name {
             node = node.with_qualified_name(qn.clone());
@@ -139,16 +148,23 @@ impl GraphBuilder {
 
     /// Attach complexity metrics to an existing symbol node.
     pub fn add_complexity(&mut self, symbol: &Symbol, metrics: &ComplexityMetrics) {
-        let key = symbol_key(&symbol.location.file, &symbol.name, symbol.qualified_name.as_deref());
+        let key = symbol_key(
+            &symbol.location.file,
+            &symbol.name,
+            symbol.qualified_name.as_deref(),
+        );
         if let Some(id) = self.symbol_index.get(&key) {
             if let Some(node) = self.nodes.iter_mut().find(|n| n.id == *id) {
                 node.properties
                     .insert("cyclomatic".to_string(), metrics.cyclomatic.to_string());
                 node.properties
                     .insert("cognitive".to_string(), metrics.cognitive.to_string());
-                node.properties.insert("loc".to_string(), metrics.loc.to_string());
                 node.properties
-                    .insert("nesting_depth".to_string(), metrics.nesting_depth.to_string());
+                    .insert("loc".to_string(), metrics.loc.to_string());
+                node.properties.insert(
+                    "nesting_depth".to_string(),
+                    metrics.nesting_depth.to_string(),
+                );
             }
         }
     }
@@ -185,7 +201,13 @@ impl GraphBuilder {
     }
 
     /// Link code to a configuration key or environment variable usage.
-    pub fn link_config_usage(&mut self, file_path: &str, line: usize, key: &str, usage_type: ConfigUsageKind) {
+    pub fn link_config_usage(
+        &mut self,
+        file_path: &str,
+        line: usize,
+        key: &str,
+        usage_type: ConfigUsageKind,
+    ) {
         let file_id = self.file_nodes.get(file_path).copied();
         let code_node = self.find_symbol_at_line(file_path, line).or(file_id);
 
@@ -222,7 +244,8 @@ impl GraphBuilder {
             return *id;
         }
 
-        let node = Node::new(NodeType::ConfigKey, key.to_string()).with_file_path(file_path.to_string());
+        let node =
+            Node::new(NodeType::ConfigKey, key.to_string()).with_file_path(file_path.to_string());
         let id = node.id;
         self.config_key_nodes.insert(lookup, id);
         self.nodes.push(node);
@@ -310,6 +333,12 @@ fn symbol_type_to_node_type(symbol_type: SymbolType) -> NodeType {
         SymbolType::ChefAttribute => NodeType::ChefAttribute,
         SymbolType::ChefTemplate => NodeType::ChefTemplate,
         SymbolType::ChefCustomResource => NodeType::ChefCustomResource,
+        SymbolType::PuppetModule => NodeType::PuppetModule,
+        SymbolType::PuppetClass => NodeType::PuppetClass,
+        SymbolType::PuppetDefinedType => NodeType::PuppetDefinedType,
+        SymbolType::PuppetResource => NodeType::PuppetResource,
+        SymbolType::PuppetVariable => NodeType::PuppetVariable,
+        SymbolType::PuppetFact => NodeType::PuppetFact,
     }
 }
 
@@ -337,6 +366,11 @@ fn relation_type_to_edge_type(relation_type: RelationType) -> EdgeType {
         RelationType::UsesTemplate => EdgeType::UsesTemplate,
         RelationType::DefinesAttribute => EdgeType::DefinesAttribute,
         RelationType::NotifiesResource => EdgeType::NotifiesResource,
+        RelationType::DependsOnModule => EdgeType::DependsOnModule,
+        RelationType::IncludesClass => EdgeType::IncludesClass,
+        RelationType::InheritsClass => EdgeType::InheritsClass,
+        RelationType::RequiresResource => EdgeType::RequiresResource,
+        RelationType::UsesFact => EdgeType::UsesFact,
     }
 }
 
@@ -407,6 +441,9 @@ mod tests {
         builder.link_config_usage("src/main.rs", 1, "DB_HOST", ConfigUsageKind::EnvVar);
 
         assert!(builder.node_count() >= 3);
-        assert!(builder.edges.iter().any(|e| e.edge_type == EdgeType::UsesConfig));
+        assert!(builder
+            .edges
+            .iter()
+            .any(|e| e.edge_type == EdgeType::UsesConfig));
     }
 }

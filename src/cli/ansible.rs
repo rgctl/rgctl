@@ -4,9 +4,7 @@ use crate::analysis::ansible_roles::{RoleDependencyAnalyzer, RoleDependencyGraph
 use crate::error::{Error, Result};
 use crate::graph::CodeGraph;
 use crate::languages::multimodal::ansible::parser::AnsibleParser;
-use crate::security::ansible::{
-    AnsibleSecurityFinding, AnsibleSecurityScanner, AnsibleSeverity,
-};
+use crate::security::ansible::{AnsibleSecurityFinding, AnsibleSecurityScanner, AnsibleSeverity};
 use clap::{Args, Subcommand};
 use std::path::{Path, PathBuf};
 
@@ -152,9 +150,7 @@ fn validate_ansible_path(path: &Path) -> Result<()> {
         let (symbols, _) = parser.parse(&path.to_string_lossy(), &value, &content);
         let plays = symbols
             .iter()
-            .filter(|s| {
-                s.symbol_type == crate::languages::plugin_trait::SymbolType::AnsiblePlay
-            })
+            .filter(|s| s.symbol_type == crate::languages::plugin_trait::SymbolType::AnsiblePlay)
             .count();
         if plays == 0 && symbols.is_empty() {
             return Err(Error::ParseError {
@@ -177,8 +173,7 @@ fn validate_ansible_path(path: &Path) -> Result<()> {
             let plays = symbols
                 .iter()
                 .filter(|s| {
-                    s.symbol_type
-                        == crate::languages::plugin_trait::SymbolType::AnsiblePlay
+                    s.symbol_type == crate::languages::plugin_trait::SymbolType::AnsiblePlay
                 })
                 .count();
             if plays > 0 {
@@ -217,9 +212,7 @@ fn scan_playbooks_on_disk(path: &Path) -> Result<Vec<AnsibleSecurityFinding>> {
                 continue;
             }
             let mut node = crate::graph::schema::Node::new(
-                if sym.symbol_type
-                    == crate::languages::plugin_trait::SymbolType::AnsibleHandler
-                {
+                if sym.symbol_type == crate::languages::plugin_trait::SymbolType::AnsibleHandler {
                     crate::graph::schema::NodeType::AnsibleHandler
                 } else {
                     crate::graph::schema::NodeType::AnsibleTask

@@ -37,7 +37,10 @@ gql_test!(optimizer_pushdown_report_message, {
     let query = parse("MATCH (n:Function) WHERE n.name = 'foo' RETURN n").unwrap();
     let backend = MemoryBackend::new();
     let (_, report) = QueryOptimizer::new(&backend).optimize(query);
-    assert!(report.optimizations.iter().any(|o| o.contains("predicate pushdown")));
+    assert!(report
+        .optimizations
+        .iter()
+        .any(|o| o.contains("predicate pushdown")));
 });
 
 gql_test!(optimizer_selectivity_rare_node, {
@@ -91,8 +94,11 @@ gql_test!(explain_shows_optimizations, {
     backend
         .insert_node(Node::new(NodeType::Function, "main".into()))
         .unwrap();
-    let result = execute_explain(&backend, "MATCH (f:Function) WHERE f.name = 'main' RETURN f")
-        .unwrap();
+    let result = execute_explain(
+        &backend,
+        "MATCH (f:Function) WHERE f.name = 'main' RETURN f",
+    )
+    .unwrap();
     let plan = result.plan.expect("explain plan");
     assert!(plan.optimizer_applied || !plan.optimizations.is_empty());
 });
@@ -145,7 +151,10 @@ gql_test!(optimizer_type_filter_selectivity, {
         .unwrap();
     let query = parse("MATCH (f:Function) WHERE f.name = 'only_fn' RETURN f").unwrap();
     let (optimized, _) = QueryOptimizer::new(&backend).optimize(query);
-    assert_eq!(optimized.patterns[0].node.node_type, Some(NodeType::Function));
+    assert_eq!(
+        optimized.patterns[0].node.node_type,
+        Some(NodeType::Function)
+    );
 });
 
 gql_test!(optimizer_keeps_non_pushable_predicates, {
@@ -160,7 +169,10 @@ gql_test!(optimizer_single_pattern_no_reorder, {
     let query = parse("MATCH (f:Function) WHERE f.name = 'fn_1' RETURN f").unwrap();
     let (optimized, report) = QueryOptimizer::new(&backend).optimize(query);
     assert_eq!(optimized.patterns.len(), 1);
-    assert!(!report.optimizations.iter().any(|o| o.contains("join reordering")));
+    assert!(!report
+        .optimizations
+        .iter()
+        .any(|o| o.contains("join reordering")));
 });
 
 gql_test!(optimizer_result_equivalence_chain, {
@@ -174,8 +186,12 @@ gql_test!(optimizer_result_equivalence_chain, {
     backend.insert_node(a).unwrap();
     backend.insert_node(b).unwrap();
     backend.insert_node(c).unwrap();
-    backend.insert_edge(Edge::new(id_a, id_b, EdgeType::Calls)).unwrap();
-    backend.insert_edge(Edge::new(id_b, id_c, EdgeType::Calls)).unwrap();
+    backend
+        .insert_edge(Edge::new(id_a, id_b, EdgeType::Calls))
+        .unwrap();
+    backend
+        .insert_edge(Edge::new(id_b, id_c, EdgeType::Calls))
+        .unwrap();
 
     let q = "MATCH (a:Function)-[:CALLS*1..2]->(b:Function) RETURN a,b";
     let opt_rows = execute(&backend, q).unwrap().rows;

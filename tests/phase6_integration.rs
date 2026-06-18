@@ -6,12 +6,12 @@ use rbuilder::api::state::AppState;
 use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::schema::{Node, NodeType};
 use rbuilder::graph::CodeGraph;
+use rbuilder::languages::registry::LanguageRegistry;
 use rbuilder::mcp::protocol::McpHandler;
 use rbuilder::mcp::tools::ToolExecutor;
 use rbuilder::nlp::conversation::ConversationContext;
 use rbuilder::output::formatter::{format_impact_report, Severity};
 use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
-use rbuilder::languages::registry::LanguageRegistry;
 use serde_json::json;
 use std::fs;
 use std::sync::Arc;
@@ -141,7 +141,11 @@ fn test_context_efficient_response() {
         )
         .unwrap();
     let json_str = serde_json::to_string(&result).unwrap();
-    assert!(json_str.len() < 1024, "Response too verbose: {} bytes", json_str.len());
+    assert!(
+        json_str.len() < 1024,
+        "Response too verbose: {} bytes",
+        json_str.len()
+    );
 }
 
 #[test]
@@ -202,11 +206,9 @@ fn test_get_community_info_tool() {
 #[test]
 fn test_mcp_resources() {
     let (_temp, graph) = setup_repo();
-    let stats = rbuilder::mcp::resources::ResourceProvider::read(
-        graph.backend(),
-        "rbuilder://graph/stats",
-    )
-    .unwrap();
+    let stats =
+        rbuilder::mcp::resources::ResourceProvider::read(graph.backend(), "rbuilder://graph/stats")
+            .unwrap();
     assert!(stats["node_count"].as_u64().unwrap() > 0);
 }
 

@@ -51,7 +51,11 @@ impl Default for EntityExtractor {
         ];
         let type_aliases = aliases
             .into_iter()
-            .filter_map(|(pat, label)| Regex::new(&format!("(?i){pat}")).ok().map(|re| (re, label.to_string())))
+            .filter_map(|(pat, label)| {
+                Regex::new(&format!("(?i){pat}"))
+                    .ok()
+                    .map(|re| (re, label.to_string()))
+            })
             .collect();
         Self { type_aliases }
     }
@@ -76,9 +80,32 @@ impl EntityExtractor {
 
         if let Ok(sym_re) = Regex::new(r"\b([a-z_][a-z0-9_]{2,})\b") {
             let stopwords: HashSet<&str> = [
-                "how", "many", "what", "show", "find", "all", "the", "with", "that", "this",
-                "from", "calls", "breaks", "change", "most", "high", "complexity", "functions",
-                "function", "classes", "class", "files", "file", "config", "top", "list",
+                "how",
+                "many",
+                "what",
+                "show",
+                "find",
+                "all",
+                "the",
+                "with",
+                "that",
+                "this",
+                "from",
+                "calls",
+                "breaks",
+                "change",
+                "most",
+                "high",
+                "complexity",
+                "functions",
+                "function",
+                "classes",
+                "class",
+                "files",
+                "file",
+                "config",
+                "top",
+                "list",
             ]
             .into_iter()
             .collect();

@@ -59,7 +59,9 @@ mod tests {
         let id2 = n2.id;
         backend.insert_node(n1).unwrap();
         backend.insert_node(n2).unwrap();
-        backend.insert_edge(Edge::new(id1, id2, EdgeType::DefinedIn)).unwrap();
+        backend
+            .insert_edge(Edge::new(id1, id2, EdgeType::DefinedIn))
+            .unwrap();
 
         let json = export_json(&backend).unwrap();
         let imported = import_json(&json).unwrap();

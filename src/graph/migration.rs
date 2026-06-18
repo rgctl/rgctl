@@ -5,7 +5,11 @@ use crate::graph::schema::{Edge, GraphParameter, Node};
 use crate::languages::plugin_trait::Parameter;
 
 /// Migrate a graph snapshot to the current schema version.
-pub fn migrate_snapshot(schema_version: u32, nodes: &mut [Node], edges: &mut [Edge]) -> Result<u32> {
+pub fn migrate_snapshot(
+    schema_version: u32,
+    nodes: &mut [Node],
+    edges: &mut [Edge],
+) -> Result<u32> {
     let mut version = schema_version;
     if version < 2 {
         migrate_v1_to_v2(nodes, edges);
@@ -31,7 +35,10 @@ pub fn migrate_v1_to_v2(nodes: &mut [Node], edges: &mut [Edge]) {
         if node.parameters.is_empty() {
             if let Some(raw) = node.properties.get("parameters") {
                 if let Ok(params) = serde_json::from_str::<Vec<Parameter>>(raw) {
-                    node.parameters = params.into_iter().map(graph_parameter_from_plugin).collect();
+                    node.parameters = params
+                        .into_iter()
+                        .map(graph_parameter_from_plugin)
+                        .collect();
                 }
             }
         }
@@ -103,15 +110,10 @@ mod tests {
 
     #[test]
     fn test_migrate_v1_signature_from_properties() {
-        let mut nodes = vec![Node::new(NodeType::Function, "add".to_string()).with_property(
-            "signature".to_string(),
-            "fn add(a: i32) -> i32".to_string(),
-        )];
+        let mut nodes = vec![Node::new(NodeType::Function, "add".to_string())
+            .with_property("signature".to_string(), "fn add(a: i32) -> i32".to_string())];
         migrate_v1_to_v2(&mut nodes, &mut []);
-        assert_eq!(
-            nodes[0].signature.as_deref(),
-            Some("fn add(a: i32) -> i32")
-        );
+        assert_eq!(nodes[0].signature.as_deref(), Some("fn add(a: i32) -> i32"));
     }
 
     #[test]

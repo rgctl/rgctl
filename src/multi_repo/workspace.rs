@@ -52,7 +52,8 @@ impl WorkspaceManifest {
         let dir = workspace_root.join(GRAPH_DIR);
         std::fs::create_dir_all(&dir)?;
         let path = dir.join(WORKSPACE_FILE);
-        let json = serde_json::to_string_pretty(self).map_err(|e| Error::SerdeError(e.to_string()))?;
+        let json =
+            serde_json::to_string_pretty(self).map_err(|e| Error::SerdeError(e.to_string()))?;
         std::fs::write(&path, json)?;
         Ok(path)
     }
@@ -108,7 +109,8 @@ pub fn stamp_repo_namespace(graph: &mut CodeGraph, namespace: &str) {
     let ids: Vec<_> = nodes.iter().map(|n| n.id).collect();
     for id in ids {
         if let Ok(Some(mut node)) = graph.backend().get_node(id) {
-            node.properties.insert("repo".to_string(), namespace.to_string());
+            node.properties
+                .insert("repo".to_string(), namespace.to_string());
             let _ = graph.backend_mut().insert_node(node);
         }
     }

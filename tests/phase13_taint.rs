@@ -63,7 +63,9 @@ def q(request):
 "#,
     "q",
     |flows: Vec<TaintFlow>| {
-        assert!(flows.iter().any(|f| f.severity == 10 && f.sink_type == TaintSink::SqlQuery));
+        assert!(flows
+            .iter()
+            .any(|f| f.severity == 10 && f.sink_type == TaintSink::SqlQuery));
     }
 );
 
@@ -78,11 +80,7 @@ fn run() {
 "#,
     "run",
     |flows: Vec<TaintFlow>| {
-        let texts = pdg_statement_texts(
-            "rust",
-            r#"fn run() { db.execute("SELECT 1"); }"#,
-            "run",
-        );
+        let texts = pdg_statement_texts("rust", r#"fn run() { db.execute("SELECT 1"); }"#, "run");
         assert!(texts.iter().any(|t| t.contains("execute")));
         assert!(flows.is_empty() || flows.iter().any(|f| f.sink_type == TaintSink::SqlQuery));
     }
@@ -215,18 +213,26 @@ def handle_request(request):
 "#,
     "handle_request",
     |_flows: Vec<TaintFlow>| {
-        let all = analyze_taint_with_types("python", r#"
+        let all = analyze_taint_with_types(
+            "python",
+            r#"
 def handle_request(request):
     user_id = request.GET['id']
     safe_id = int(user_id)
     cursor.execute(f"SELECT * FROM users WHERE id = {safe_id}")
-"#, "handle_request");
-        let vuln = analyze_vulnerable_taint("python", r#"
+"#,
+            "handle_request",
+        );
+        let vuln = analyze_vulnerable_taint(
+            "python",
+            r#"
 def handle_request(request):
     user_id = request.GET['id']
     safe_id = int(user_id)
     cursor.execute(f"SELECT * FROM users WHERE id = {safe_id}")
-"#, "handle_request");
+"#,
+            "handle_request",
+        );
         assert!(vuln.len() <= all.len());
     }
 );
@@ -243,7 +249,9 @@ def show(request):
 "#,
     "show",
     |flows: Vec<TaintFlow>| {
-        assert!(flows.iter().any(|f| !f.sanitizers.is_empty() || !f.is_vulnerable()));
+        assert!(flows
+            .iter()
+            .any(|f| !f.sanitizers.is_empty() || !f.is_vulnerable()));
     }
 );
 
@@ -259,7 +267,10 @@ def run(request):
 "#,
     "run",
     |flows: Vec<TaintFlow>| {
-        assert!(flows.iter().any(|f| f.sanitizers.iter().any(|s| matches!(s, rbuilder::analysis::Sanitizer::ShellEscape))));
+        assert!(flows.iter().any(|f| f
+            .sanitizers
+            .iter()
+            .any(|s| matches!(s, rbuilder::analysis::Sanitizer::ShellEscape))));
     }
 );
 
@@ -297,7 +308,9 @@ def load():
 "#,
     "load",
     |flows: Vec<TaintFlow>| {
-        assert!(flows.iter().any(|f| f.source_type == TaintSource::FileInput));
+        assert!(flows
+            .iter()
+            .any(|f| f.source_type == TaintSource::FileInput));
     }
 );
 
@@ -312,7 +325,9 @@ def load():
 "#,
     "load",
     |flows: Vec<TaintFlow>| {
-        assert!(flows.iter().any(|f| f.source_type == TaintSource::EnvironmentVar));
+        assert!(flows
+            .iter()
+            .any(|f| f.source_type == TaintSource::EnvironmentVar));
     }
 );
 
@@ -327,7 +342,9 @@ def main():
 "#,
     "main",
     |flows: Vec<TaintFlow>| {
-        assert!(flows.iter().any(|f| f.source_type == TaintSource::CommandLineArg));
+        assert!(flows
+            .iter()
+            .any(|f| f.source_type == TaintSource::CommandLineArg));
         assert!(flows.iter().any(|f| f.sink_type == TaintSink::CodeEval));
     }
 );
@@ -344,7 +361,9 @@ fn run() {
 "#,
     "run",
     |flows: Vec<TaintFlow>| {
-        assert!(flows.iter().any(|f| f.source_type == TaintSource::EnvironmentVar));
+        assert!(flows
+            .iter()
+            .any(|f| f.source_type == TaintSource::EnvironmentVar));
     }
 );
 
@@ -365,7 +384,12 @@ fn run() {
             "run",
         );
         assert!(texts.iter().any(|t| t.contains("File::open")));
-        assert!(flows.is_empty() || flows.iter().any(|f| f.source_type == TaintSource::FileInput));
+        assert!(
+            flows.is_empty()
+                || flows
+                    .iter()
+                    .any(|f| f.source_type == TaintSource::FileInput)
+        );
     }
 );
 
@@ -449,11 +473,15 @@ def handle(request):
 "#,
     "handle",
     |flows: Vec<TaintFlow>| {
-        let all = analyze_taint("python", r#"
+        let all = analyze_taint(
+            "python",
+            r#"
 def handle(request):
     u = request.GET['u']
     cursor.execute(u)
-"#, "handle");
+"#,
+            "handle",
+        );
         assert!(flows.len() <= all.len());
         assert!(!flows.is_empty());
     }
@@ -470,7 +498,9 @@ def forward(request):
 "#,
     "forward",
     |flows: Vec<TaintFlow>| {
-        assert!(flows.iter().any(|f| f.source_type == TaintSource::HttpParameter));
+        assert!(flows
+            .iter()
+            .any(|f| f.source_type == TaintSource::HttpParameter));
     }
 );
 

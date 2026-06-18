@@ -30,7 +30,12 @@ impl TreeSitterLanguagePlugin {
         parse_source(source, file_path, (self.grammar)())
     }
 
-    fn find_node_at_line<'a>(&self, node: Node<'a>, line: usize, kinds: &[&str]) -> Option<Node<'a>> {
+    fn find_node_at_line<'a>(
+        &self,
+        node: Node<'a>,
+        line: usize,
+        kinds: &[&str],
+    ) -> Option<Node<'a>> {
         if kinds.contains(&node.kind()) && node.start_position().row == line {
             return Some(node);
         }
@@ -83,7 +88,11 @@ impl LanguagePlugin for TreeSitterLanguagePlugin {
         Ok(vec![])
     }
 
-    fn calculate_complexity(&self, symbol: &Symbol, source: &[u8]) -> Result<Option<ComplexityMetrics>> {
+    fn calculate_complexity(
+        &self,
+        symbol: &Symbol,
+        source: &[u8],
+    ) -> Result<Option<ComplexityMetrics>> {
         if !self.config.enable_complexity || symbol.symbol_type != SymbolType::Function {
             return Ok(None);
         }
@@ -131,8 +140,7 @@ mod tests {
     #[cfg(feature = "lang-c")]
     #[test]
     fn test_tree_sitter_c_plugin() {
-        let plugin =
-            TreeSitterLanguagePlugin::new("c", || tree_sitter_c::LANGUAGE.into()).unwrap();
+        let plugin = TreeSitterLanguagePlugin::new("c", || tree_sitter_c::LANGUAGE.into()).unwrap();
         let source = b"int add(int a, int b) { return a + b; }";
         let symbols = plugin.extract_symbols(Path::new("test.c"), source).unwrap();
         assert!(!symbols.is_empty());

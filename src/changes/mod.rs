@@ -77,10 +77,7 @@ impl ChangeDetector {
         let mut details = Vec::new();
         let mut max_score = 0.0f64;
 
-        let normalized: Vec<String> = files
-            .iter()
-            .map(|f| normalize_path_str(f))
-            .collect();
+        let normalized: Vec<String> = files.iter().map(|f| normalize_path_str(f)).collect();
 
         let nodes = backend.all_nodes()?;
         for file in &normalized {
@@ -159,17 +156,13 @@ mod tests {
     use super::*;
     use crate::graph::backend::GraphBackend;
     use crate::graph::schema::{Edge, EdgeType, Node};
-    use std::collections::HashSet;
 
     fn chain_graph() -> CodeGraph {
         let mut graph = CodeGraph::new();
         let backend = graph.backend_mut();
-        let a = Node::new(NodeType::Function, "a".into())
-            .with_file_path("src/lib.rs".into());
-        let b = Node::new(NodeType::Function, "b".into())
-            .with_file_path("src/lib.rs".into());
-        let c = Node::new(NodeType::Function, "c".into())
-            .with_file_path("src/lib.rs".into());
+        let a = Node::new(NodeType::Function, "a".into()).with_file_path("src/lib.rs".into());
+        let b = Node::new(NodeType::Function, "b".into()).with_file_path("src/lib.rs".into());
+        let c = Node::new(NodeType::Function, "c".into()).with_file_path("src/lib.rs".into());
         let id_a = a.id;
         let id_b = b.id;
         let id_c = c.id;

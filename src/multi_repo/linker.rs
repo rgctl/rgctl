@@ -114,11 +114,7 @@ pub fn link_cross_repo(backend: &mut MemoryBackend) -> Result<CrossRepoLinkRepor
     Ok(report)
 }
 
-fn find_symbol_in_repo(
-    backend: &MemoryBackend,
-    name: &str,
-    repo: &str,
-) -> Result<Option<Uuid>> {
+fn find_symbol_in_repo(backend: &MemoryBackend, name: &str, repo: &str) -> Result<Option<Uuid>> {
     let candidates = backend.find_nodes_by_name(name)?;
     Ok(candidates
         .into_iter()
@@ -150,6 +146,8 @@ mod tests {
         assert!(backend.edge_count() >= 1);
 
         let edges = backend.all_edges().unwrap();
-        assert!(edges.iter().any(|e| e.from == import_id && e.to == service_id));
+        assert!(edges
+            .iter()
+            .any(|e| e.from == import_id && e.to == service_id));
     }
 }

@@ -75,10 +75,7 @@ fn collect_def_use(
         }
 
         // Shared identifiers
-        "identifier"
-        | "shorthand_field_identifier"
-        | "field_identifier"
-        | "type_identifier" => {
+        "identifier" | "shorthand_field_identifier" | "field_identifier" | "type_identifier" => {
             if is_def_target {
                 if let Ok(name) = node.utf8_text(source) {
                     if kind == "identifier" || kind == "shorthand_field_identifier" {

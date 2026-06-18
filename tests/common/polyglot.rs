@@ -1,5 +1,7 @@
 //! Shared polyglot repository fixtures for Phase 11 integration and benchmark tests.
 
+#![allow(dead_code)]
+
 use std::fs;
 use std::path::Path;
 
@@ -9,11 +11,23 @@ pub fn write_polyglot_repo(root: &Path) {
     fs::create_dir_all(root.join(".github/workflows")).unwrap();
     fs::create_dir_all(root.join("scripts")).unwrap();
 
-    fs::write(root.join("src/main.rs"), "fn main() { helper(); }\nfn helper() {}\n").unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "fn main() { helper(); }\nfn helper() {}\n",
+    )
+    .unwrap();
     fs::write(root.join("src/util.py"), "def helper():\n    return 1\n").unwrap();
-    fs::write(root.join("src/app.ts"), "export function helper(): number { return 1; }\n").unwrap();
+    fs::write(
+        root.join("src/app.ts"),
+        "export function helper(): number { return 1; }\n",
+    )
+    .unwrap();
     fs::write(root.join("src/app.js"), "function helper() { return 1; }\n").unwrap();
-    fs::write(root.join("src/main.go"), "package main\nfunc helper() int { return 1 }\n").unwrap();
+    fs::write(
+        root.join("src/main.go"),
+        "package main\nfunc helper() int { return 1 }\n",
+    )
+    .unwrap();
     fs::write(
         root.join("schema.sql"),
         "CREATE TABLE users (id INTEGER PRIMARY KEY);\nCREATE VIEW active_users AS SELECT id FROM users;\n",

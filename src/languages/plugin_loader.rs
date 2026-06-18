@@ -33,7 +33,9 @@ pub struct PluginRegistry {
 impl PluginRegistry {
     /// Load registry from a repository root.
     pub fn load(repo_root: &Path) -> Result<Self> {
-        let path = repo_root.join(crate::graph::code_graph::GRAPH_DIR).join(PLUGIN_REGISTRY_FILE);
+        let path = repo_root
+            .join(crate::graph::code_graph::GRAPH_DIR)
+            .join(PLUGIN_REGISTRY_FILE);
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -46,7 +48,8 @@ impl PluginRegistry {
         let dir = repo_root.join(crate::graph::code_graph::GRAPH_DIR);
         std::fs::create_dir_all(&dir)?;
         let path = dir.join(PLUGIN_REGISTRY_FILE);
-        let json = serde_json::to_string_pretty(self).map_err(|e| Error::SerdeError(e.to_string()))?;
+        let json =
+            serde_json::to_string_pretty(self).map_err(|e| Error::SerdeError(e.to_string()))?;
         std::fs::write(path, json)?;
         Ok(())
     }
@@ -59,7 +62,8 @@ impl PluginRegistry {
                 metadata.abi_version, PLUGIN_ABI_VERSION
             )));
         }
-        self.plugins.retain(|p| p.language_id != metadata.language_id);
+        self.plugins
+            .retain(|p| p.language_id != metadata.language_id);
         self.plugins.push(InstalledPlugin {
             language_id: metadata.language_id,
             version: metadata.version,
@@ -89,7 +93,10 @@ impl PluginLoader {
     /// Inspect a plugin path and return metadata.
     pub fn inspect(path: &Path) -> Result<PluginMetadata> {
         if !path.exists() {
-            return Err(Error::NotFound(format!("Plugin not found: {}", path.display())));
+            return Err(Error::NotFound(format!(
+                "Plugin not found: {}",
+                path.display()
+            )));
         }
 
         #[cfg(feature = "plugin-system")]
@@ -154,7 +161,9 @@ impl PluginLoader {
 
     /// Copy plugin into `.rbuilder/plugins/` directory.
     pub fn copy_to_plugins_dir(repo_root: &Path, source: &Path) -> Result<PathBuf> {
-        let dir = repo_root.join(crate::graph::code_graph::GRAPH_DIR).join("plugins");
+        let dir = repo_root
+            .join(crate::graph::code_graph::GRAPH_DIR)
+            .join("plugins");
         std::fs::create_dir_all(&dir)?;
         let file_name = source
             .file_name()

@@ -53,17 +53,17 @@ impl RuleEngine {
         }
 
         if !dry_run {
-            report.labels_added = backend
-                .all_nodes()?
-                .iter()
-                .map(|n| n.labels.len())
-                .sum();
+            report.labels_added = backend.all_nodes()?.iter().map(|n| n.labels.len()).sum();
         }
 
         Ok(report)
     }
 
-    fn apply_actions(backend: &mut MemoryBackend, node_id: uuid::Uuid, actions: &[RuleAction]) -> Result<()> {
+    fn apply_actions(
+        backend: &mut MemoryBackend,
+        node_id: uuid::Uuid,
+        actions: &[RuleAction],
+    ) -> Result<()> {
         let Some(mut node) = backend.get_node(node_id)? else {
             return Ok(());
         };

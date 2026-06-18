@@ -152,7 +152,14 @@ fn process(input: String) -> String {
             })
             .unwrap();
 
-        assert!(!slice.lines.contains(&pdg.nodes.values().find(|n| n.defined_vars.contains("a")).unwrap().statement.line));
+        assert!(!slice.lines.contains(
+            &pdg.nodes
+                .values()
+                .find(|n| n.defined_vars.contains("a"))
+                .unwrap()
+                .statement
+                .line
+        ));
         assert!(slice.lines.contains(&y_line));
     }
 }

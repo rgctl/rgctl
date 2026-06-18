@@ -21,12 +21,7 @@ fn sample_backend() -> rbuilder::graph::backend::MemoryBackend {
 #[test]
 fn test_mermaid_flowchart_header() {
     let backend = sample_backend();
-    let out = generate_mermaid(
-        &backend,
-        "all",
-        MermaidOptions::default(),
-    )
-    .unwrap();
+    let out = generate_mermaid(&backend, "all", MermaidOptions::default()).unwrap();
     assert!(out.starts_with("graph TD"));
     assert!(out.contains("authenticate"));
     assert!(out.contains("AuthService"));
@@ -35,12 +30,7 @@ fn test_mermaid_flowchart_header() {
 #[test]
 fn test_mermaid_function_node_shape() {
     let backend = sample_backend();
-    let out = generate_mermaid(
-        &backend,
-        "name:authenticate",
-        MermaidOptions::default(),
-    )
-    .unwrap();
+    let out = generate_mermaid(&backend, "name:authenticate", MermaidOptions::default()).unwrap();
     assert!(out.contains("authenticate"));
     assert!(out.contains('('));
 }
@@ -106,12 +96,7 @@ fn test_mermaid_horizontal_layout() {
 #[test]
 fn test_mermaid_empty_query_errors() {
     let backend = rbuilder::graph::backend::MemoryBackend::new();
-    let err = generate_mermaid(
-        &backend,
-        "name:missing",
-        MermaidOptions::default(),
-    )
-    .unwrap_err();
+    let err = generate_mermaid(&backend, "name:missing", MermaidOptions::default()).unwrap_err();
     assert!(err.to_string().contains("No nodes matched"));
 }
 

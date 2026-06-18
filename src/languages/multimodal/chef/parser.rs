@@ -6,10 +6,41 @@ use serde_json::json;
 use std::collections::HashSet;
 
 const CHEF_RESOURCES: &[&str] = &[
-    "package", "service", "file", "template", "directory", "execute", "bash", "script",
-    "user", "group", "apt_package", "yum_package", "cookbook_file", "remote_file", "cron",
-    "mount", "link", "git", "subversion", "ruby_block", "powershell_script", "windows_service",
+    "package",
+    "service",
+    "file",
+    "template",
+    "directory",
+    "execute",
+    "bash",
+    "script",
+    "user",
+    "group",
+    "apt_package",
+    "yum_package",
+    "cookbook_file",
+    "remote_file",
+    "cron",
+    "mount",
+    "link",
+    "git",
+    "subversion",
+    "ruby_block",
+    "powershell_script",
+    "windows_service",
 ];
+
+type ParsedResource = (
+    String,
+    String,
+    std::collections::HashMap<String, String>,
+    String,
+    Vec<String>,
+);
+
+fn compile_pattern(pattern: &str) -> Regex {
+    Regex::new(pattern).unwrap()
+}
 
 /// Chef Ruby DSL parser producing plugin symbols and relations.
 pub struct ChefParser {
@@ -32,18 +63,15 @@ impl ChefParser {
     /// Create a new Chef parser.
     pub fn new() -> Self {
         Self {
-            resource_regex: Regex::new(r#"(?m)^(\w+)\s+['"]([^'"]+)['"](?:\s+do)?"#)
-                .expect("resource regex"),
-            include_recipe_regex: Regex::new(r#"include_recipe\s+['"]([^'"]+)['"]"#)
-                .expect("include_recipe regex"),
-            depends_regex: Regex::new(r#"depends\s+['"]([^'"]+)['"](?:,\s+['"]([^'"]+)['"])?"#)
-                .expect("depends regex"),
-            name_regex: Regex::new(r#"name\s+['"]([^'"]+)['"]"#).expect("name regex"),
-            version_regex: Regex::new(r#"version\s+['"]([^'"]+)['"]"#).expect("version regex"),
-            attribute_regex: Regex::new(r#"default\['([^']+)'\]\s*=\s*(.+)"#)
-                .expect("attribute regex"),
-            erb_var_regex: Regex::new(r#"(?:#\{([^}]+)\}|<%=?\s*@?node\[['"]([^'"]+)['"]\])"#)
-                .expect("erb regex"),
+            resource_regex: compile_pattern(r#"(?m)^(\w+)\s+['"]([^'"]+)['"](?:\s+do)?"#),
+            include_recipe_regex: compile_pattern(r#"include_recipe\s+['"]([^'"]+)['"]"#),
+            depends_regex: compile_pattern(
+                r#"depends\s+['"]([^'"]+)['"](?:,\s+['"]([^'"]+)['"])?"#,
+            ),
+            name_regex: compile_pattern(r#"name\s+['"]([^'"]+)['"]"#),
+            version_regex: compile_pattern(r#"version\s+['"]([^'"]+)['"]"#),
+            attribute_regex: compile_pattern(r#"default\['([^']+)'\]\s*=\s*(.+)"#),
+            erb_var_regex: compile_pattern(r#"(?:#\{([^}]+)\}|<%=?\s*@?node\[['"]([^'"]+)['"]\])"#),
         }
     }
 
@@ -123,7 +151,10 @@ impl ChefParser {
             }
         }
         if p.ends_with("metadata.rb") {
-            if let Some(parent) = std::path::Path::new(&p).parent().and_then(|x| x.file_name()) {
+            if let Some(parent) = std::path::Path::new(&p)
+                .parent()
+                .and_then(|x| x.file_name())
+            {
                 return parent.to_string_lossy().to_string();
             }
         }
@@ -162,7 +193,10 @@ impl ChefParser {
         });
 
         for cap in self.depends_regex.captures_iter(source) {
-            let dep = cap.get(1).unwrap().as_str().to_string();
+            let Some(dep_match) = cap.get(1) else {
+                continue;
+            };
+            let dep = dep_match.as_str().to_string();
             let dep_id = format!("cookbook::{dep}");
             symbols.push(Symbol {
                 name: dep_id.clone(),
@@ -266,8 +300,7 @@ impl ChefParser {
 
         let resources = self.extract_resources(source);
         for (idx, res) in resources.into_iter().enumerate() {
-            let resource_id =
-                format!("{recipe_id}::resource::{}::{}::{idx}", res.0, res.1);
+            let resource_id = format!("{recipe_id}::resource::{}::{}::{idx}", res.0, res.1);
             let props_json = serde_json::to_string(&res.2).unwrap_or_default();
             symbols.push(Symbol {
                 name: resource_id.clone(),
@@ -356,7 +389,10 @@ impl ChefParser {
         });
 
         for cap in self.attribute_regex.captures_iter(source) {
-            let attr_name = cap.get(1).unwrap().as_str().to_string();
+            let Some(attr_match) = cap.get(1) else {
+                continue;
+            };
+            let attr_name = attr_match.as_str().to_string();
             let value = cap.get(2).map(|m| m.as_str().trim().to_string());
             let attr_id = format!("attribute::{cb_name}::{attr_name}");
             symbols.push(Symbol {
@@ -488,24 +524,19 @@ impl ChefParser {
         CHEF_RESOURCES.contains(&name)
     }
 
-    fn extract_resources(
-        &self,
-        source: &str,
-    ) -> Vec<(
-        String,
-        String,
-        std::collections::HashMap<String, String>,
-        String,
-        Vec<String>,
-    )> {
+    fn extract_resources(&self, source: &str) -> Vec<ParsedResource> {
         let mut resources = Vec::new();
         let lines: Vec<&str> = source.lines().collect();
         let mut i = 0;
         while i < lines.len() {
             let line = lines[i].trim();
             if let Some(cap) = self.resource_regex.captures(line) {
-                let resource_type = cap.get(1).unwrap().as_str();
-                let resource_name = cap.get(2).unwrap().as_str();
+                let (Some(type_match), Some(name_match)) = (cap.get(1), cap.get(2)) else {
+                    i += 1;
+                    continue;
+                };
+                let resource_type = type_match.as_str();
+                let resource_name = name_match.as_str();
                 if self.is_chef_resource(resource_type) {
                     let mut properties = std::collections::HashMap::new();
                     let mut action = String::new();
@@ -550,7 +581,10 @@ impl ChefParser {
         let line = line.trim().trim_end_matches(',');
         if let Some((key, value)) = line.split_once(' ') {
             let key = key.trim().to_string();
-            let value = value.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
+            let value = value
+                .trim()
+                .trim_matches(|c| c == '\'' || c == '"')
+                .to_string();
             Some((key, value))
         } else {
             None
@@ -564,9 +598,13 @@ mod tests {
 
     #[test]
     fn test_chef_path_detection() {
-        assert!(ChefParser::is_chef_path("cookbooks/nginx/recipes/default.rb"));
+        assert!(ChefParser::is_chef_path(
+            "cookbooks/nginx/recipes/default.rb"
+        ));
         assert!(ChefParser::is_chef_path("cookbooks/nginx/metadata.rb"));
-        assert!(ChefParser::is_chef_path("cookbooks/nginx/templates/app.erb"));
+        assert!(ChefParser::is_chef_path(
+            "cookbooks/nginx/templates/app.erb"
+        ));
         assert!(!ChefParser::is_chef_path("lib/helper.rb"));
     }
 
@@ -583,10 +621,13 @@ service 'nginx' do
   notifies :restart, 'service[nginx]'
 end
 "#;
-        let (symbols, relations) =
-            parser.parse("cookbooks/nginx/recipes/default.rb", source);
-        assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::ChefRecipe));
-        assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::ChefResource));
+        let (symbols, relations) = parser.parse("cookbooks/nginx/recipes/default.rb", source);
+        assert!(symbols
+            .iter()
+            .any(|s| s.symbol_type == SymbolType::ChefRecipe));
+        assert!(symbols
+            .iter()
+            .any(|s| s.symbol_type == SymbolType::ChefResource));
         assert!(relations
             .iter()
             .any(|r| r.relation_type == RelationType::DeclaresResource));
@@ -601,12 +642,19 @@ version '1.0.0'
 depends 'apt'
 depends 'build-essential', '~> 5.0'
 "#;
-        let (symbols, relations) =
-            parser.parse("cookbooks/nginx/metadata.rb", source);
+        let (symbols, relations) = parser.parse("cookbooks/nginx/metadata.rb", source);
         assert!(symbols.iter().any(|s| s.name == "cookbook::nginx"));
         assert!(relations
             .iter()
             .any(|r| r.relation_type == RelationType::DependsOnCookbook));
         assert_eq!(relations.len(), 2);
+    }
+
+    #[test]
+    fn test_malformed_input_doesnt_panic() {
+        let parser = ChefParser::new();
+        let malformed = "not valid chef code }{}{";
+        let (symbols, _) = parser.parse("test.rb", malformed);
+        assert!(symbols.is_empty());
     }
 }

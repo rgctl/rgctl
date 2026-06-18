@@ -48,6 +48,23 @@ pub struct AnsibleParser {
     jinja_var_regex: Regex,
 }
 
+struct TaskEntryContext<'a> {
+    file: &'a str,
+    parent_id: &'a str,
+    task_val: &'a Value,
+    task_type: SymbolType,
+    idx: usize,
+}
+
+struct ParseOutput<'a> {
+    symbols: &'a mut Vec<Symbol>,
+    relations: &'a mut Vec<Relation>,
+}
+
+fn compile_pattern(pattern: &str) -> Regex {
+    Regex::new(pattern).unwrap()
+}
+
 impl Default for AnsibleParser {
     fn default() -> Self {
         Self::new()
@@ -58,10 +75,7 @@ impl AnsibleParser {
     /// Create a new parser with Jinja2 variable extraction.
     pub fn new() -> Self {
         Self {
-            jinja_var_regex: Regex::new(
-                r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_\.'\[\]]*)\s*\}\}",
-            )
-            .expect("valid jinja regex"),
+            jinja_var_regex: compile_pattern(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_\.'\[\]]*)\s*\}\}"),
         }
     }
 
@@ -193,13 +207,7 @@ impl AnsibleParser {
                     continue;
                 }
                 if item.get("hosts").is_some() || item.get("tasks").is_some() {
-                    self.parse_play(
-                        file,
-                        &pb_name,
-                        item,
-                        &mut symbols,
-                        &mut relations,
-                    );
+                    self.parse_play(file, &pb_name, item, &mut symbols, &mut relations);
                 }
             }
         } else if value.get("hosts").is_some() || value.get("tasks").is_some() {
@@ -251,14 +259,7 @@ impl AnsibleParser {
             ("post_tasks", SymbolType::AnsibleTask),
         ] {
             if let Some(tasks) = play_value.get(key) {
-                self.parse_task_list(
-                    file,
-                    &play_id,
-                    tasks,
-                    handler,
-                    symbols,
-                    relations,
-                );
+                self.parse_task_list(file, &play_id, tasks, handler, symbols, relations);
             }
         }
 
@@ -333,27 +334,28 @@ impl AnsibleParser {
         };
         for (idx, task_val) in seq.iter().enumerate() {
             self.parse_task_entry(
-                file,
-                parent_id,
-                task_val,
-                task_type,
-                idx,
-                symbols,
-                relations,
+                TaskEntryContext {
+                    file,
+                    parent_id,
+                    task_val,
+                    task_type,
+                    idx,
+                },
+                &mut ParseOutput { symbols, relations },
             );
         }
     }
 
-    fn parse_task_entry(
-        &self,
-        file: &str,
-        parent_id: &str,
-        task_val: &Value,
-        task_type: SymbolType,
-        idx: usize,
-        symbols: &mut Vec<Symbol>,
-        relations: &mut Vec<Relation>,
-    ) {
+    fn parse_task_entry(&self, ctx: TaskEntryContext<'_>, out: &mut ParseOutput<'_>) {
+        let TaskEntryContext {
+            file,
+            parent_id,
+            task_val,
+            task_type,
+            idx,
+        } = ctx;
+        let symbols = &mut out.symbols;
+        let relations = &mut out.relations;
         if let Some(block) = task_val.get("block") {
             self.parse_task_list(file, parent_id, block, task_type, symbols, relations);
             if let Some(rescue) = task_val.get("rescue") {
@@ -767,11 +769,21 @@ mod tests {
         )
         .unwrap();
         let (symbols, relations) = parser.parse("playbooks/site.yml", &yaml, "");
-        assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::AnsiblePlaybook));
-        assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::AnsiblePlay));
-        assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::AnsibleTask));
-        assert!(relations.iter().any(|r| r.relation_type == RelationType::IncludesRole));
-        assert!(relations.iter().any(|r| r.relation_type == RelationType::ExecutesTask));
+        assert!(symbols
+            .iter()
+            .any(|s| s.symbol_type == SymbolType::AnsiblePlaybook));
+        assert!(symbols
+            .iter()
+            .any(|s| s.symbol_type == SymbolType::AnsiblePlay));
+        assert!(symbols
+            .iter()
+            .any(|s| s.symbol_type == SymbolType::AnsibleTask));
+        assert!(relations
+            .iter()
+            .any(|r| r.relation_type == RelationType::IncludesRole));
+        assert!(relations
+            .iter()
+            .any(|r| r.relation_type == RelationType::ExecutesTask));
     }
 
     #[test]
@@ -785,10 +797,11 @@ dependencies:
 "#,
         )
         .unwrap();
-        let (symbols, relations) =
-            parser.parse("roles/nginx/meta/main.yml", &yaml, "");
+        let (symbols, relations) = parser.parse("roles/nginx/meta/main.yml", &yaml, "");
         assert!(symbols.iter().any(|s| s.name == "nginx"));
-        assert!(relations.iter().any(|r| r.relation_type == RelationType::DependsOnRole));
+        assert!(relations
+            .iter()
+            .any(|r| r.relation_type == RelationType::DependsOnRole));
         assert_eq!(relations.len(), 2);
     }
 }

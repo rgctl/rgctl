@@ -252,9 +252,24 @@ type_test!(
     }
 );
 
-conf_test!(confidence_for_string_literal, InferredType::String, false, 0.9);
-conf_test!(confidence_for_method_string, InferredType::String, true, 0.86);
-conf_test!(confidence_for_list_method, InferredType::List(Box::new(InferredType::Unknown)), true, 0.78);
+conf_test!(
+    confidence_for_string_literal,
+    InferredType::String,
+    false,
+    0.9
+);
+conf_test!(
+    confidence_for_method_string,
+    InferredType::String,
+    true,
+    0.86
+);
+conf_test!(
+    confidence_for_list_method,
+    InferredType::List(Box::new(InferredType::Unknown)),
+    true,
+    0.78
+);
 
 conf_test!(confidence_for_int_literal, InferredType::Int, false, 0.92);
 conf_test!(confidence_for_unknown, InferredType::Unknown, false, 0.4);

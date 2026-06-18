@@ -15,7 +15,11 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 fn init_git(root: &Path) {
-    Command::new("git").args(["init"]).current_dir(root).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(root)
+        .output()
+        .unwrap();
     Command::new("git")
         .args(["config", "user.email", "t@example.com"])
         .current_dir(root)
@@ -87,9 +91,7 @@ fn test_detect_changes_risk_on_chain() {
         .unwrap();
 
     let detector = ChangeDetector::new();
-    let result = detector
-        .detect(&graph, &["src/lib.rs".into()])
-        .unwrap();
+    let result = detector.detect(&graph, &["src/lib.rs".into()]).unwrap();
     assert!(!result.details.is_empty());
     assert!(result.details.iter().any(|d| d.symbol == "c"));
 }
@@ -207,7 +209,9 @@ fn test_detect_changes_json_contains_summary() {
     let backend = graph.backend_mut();
     let leaf = Node::new(NodeType::Function, "leaf".into()).with_file_path("f.rs".into());
     backend.insert_node(leaf).unwrap();
-    let result = ChangeDetector::new().detect(&graph, &["f.rs".into()]).unwrap();
+    let result = ChangeDetector::new()
+        .detect(&graph, &["f.rs".into()])
+        .unwrap();
     let json = serde_json::to_string(&result).unwrap();
     assert!(json.contains("summary"));
     assert!(json.contains("files_analyzed"));
@@ -238,10 +242,7 @@ fn test_installed_pre_commit_script_content() {
     let root = temp.path();
     init_git(root);
     let hooks = install_hooks(root, true).unwrap();
-    let pre_commit = hooks
-        .iter()
-        .find(|p| p.ends_with("pre-commit"))
-        .unwrap();
+    let pre_commit = hooks.iter().find(|p| p.ends_with("pre-commit")).unwrap();
     let body = fs::read_to_string(pre_commit).unwrap();
     assert!(body.contains("detect-changes"));
     assert!(body.contains("--no-verify"));

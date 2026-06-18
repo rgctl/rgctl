@@ -20,10 +20,7 @@ pub struct InterproceduralCFG {
 
 impl InterproceduralCFG {
     /// Build from backend and source file contents keyed by path.
-    pub fn build(
-        backend: &MemoryBackend,
-        source_files: &HashMap<String, String>,
-    ) -> Result<Self> {
+    pub fn build(backend: &MemoryBackend, source_files: &HashMap<String, String>) -> Result<Self> {
         let call_graph = CallGraph::from_backend(backend)?;
         let mut function_cfgs = HashMap::new();
 
@@ -79,10 +76,7 @@ fn resolve_source<'a>(
 }
 
 fn detect_language(file_path: &str) -> &str {
-    match Path::new(file_path)
-        .extension()
-        .and_then(|e| e.to_str())
-    {
+    match Path::new(file_path).extension().and_then(|e| e.to_str()) {
         Some("py") => "python",
         Some("js") | Some("mjs") | Some("cjs") => "javascript",
         Some("ts") | Some("tsx") => "typescript",
@@ -101,10 +95,9 @@ mod tests {
     #[test]
     fn test_interprocedural_cfg_build() {
         let mut backend = MemoryBackend::new();
-        let main = Node::new(NodeType::Function, "main".into())
-            .with_file_path("main.rs".into());
-        let helper = Node::new(NodeType::Function, "helper".into())
-            .with_file_path("main.rs".into());
+        let main = Node::new(NodeType::Function, "main".into()).with_file_path("main.rs".into());
+        let helper =
+            Node::new(NodeType::Function, "helper".into()).with_file_path("main.rs".into());
         let id_main = main.id;
         let id_helper = helper.id;
         backend.insert_node(main).unwrap();

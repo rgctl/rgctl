@@ -160,7 +160,10 @@ impl FileDiscoverer {
     }
 }
 
-fn build_overrides(root: &Path, exclude_patterns: &[String]) -> Result<ignore::overrides::Override> {
+fn build_overrides(
+    root: &Path,
+    exclude_patterns: &[String],
+) -> Result<ignore::overrides::Override> {
     let mut builder = OverrideBuilder::new(root);
 
     for pattern in exclude_patterns {
@@ -207,9 +210,15 @@ mod tests {
 
         let files = discoverer().discover(root).unwrap();
 
-        assert!(files.iter().any(|f| f.extension().is_some_and(|e| e == "rs")));
-        assert!(!files.iter().any(|f| f.components().any(|c| c.as_os_str() == ".git")));
-        assert!(!files.iter().any(|f| f.extension().is_some_and(|e| e == "txt")));
+        assert!(files
+            .iter()
+            .any(|f| f.extension().is_some_and(|e| e == "rs")));
+        assert!(!files
+            .iter()
+            .any(|f| f.components().any(|c| c.as_os_str() == ".git")));
+        assert!(!files
+            .iter()
+            .any(|f| f.extension().is_some_and(|e| e == "txt")));
     }
 
     #[test]
@@ -224,7 +233,9 @@ mod tests {
         let files = discoverer().discover(root).unwrap();
 
         assert!(files.iter().any(|f| f.ends_with("src/main.rs")));
-        assert!(!files.iter().any(|f| f.components().any(|c| c.as_os_str() == "target")));
+        assert!(!files
+            .iter()
+            .any(|f| f.components().any(|c| c.as_os_str() == "target")));
     }
 
     #[test]
@@ -244,7 +255,9 @@ mod tests {
             .unwrap();
 
         assert!(files.iter().any(|f| f.ends_with("src/main.rs")));
-        assert!(!files.iter().any(|f| f.components().any(|c| c.as_os_str() == "vendor")));
+        assert!(!files
+            .iter()
+            .any(|f| f.components().any(|c| c.as_os_str() == "vendor")));
     }
 
     #[test]
@@ -341,8 +354,8 @@ mod tests {
             exclude_patterns: vec!["[".to_string()],
             ..DiscoveryConfig::default()
         };
-        let result =
-            FileDiscoverer::with_config(Arc::new(LanguageRegistry::new()), config).discover(temp_dir.path());
+        let result = FileDiscoverer::with_config(Arc::new(LanguageRegistry::new()), config)
+            .discover(temp_dir.path());
         assert!(matches!(result, Err(Error::ConfigError(_))));
     }
 }

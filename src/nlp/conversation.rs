@@ -75,7 +75,10 @@ impl ConversationContext {
         for word in question.split_whitespace() {
             let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
             if clean.len() > 2
-                && clean.chars().next().is_some_and(|c| c.is_uppercase() || c == '_')
+                && clean
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_uppercase() || c == '_')
             {
                 self.add_focused_node(clean);
             }
@@ -118,7 +121,9 @@ impl ConversationContext {
                 }
             } else if let Some(ref community) = self.last_community {
                 if q_lower.contains("those") || q_lower.contains("they") {
-                    resolved = resolved.replace("those", community).replace("they", community);
+                    resolved = resolved
+                        .replace("those", community)
+                        .replace("they", community);
                 }
             }
         }
@@ -139,7 +144,8 @@ impl ConversationContext {
 
 fn extract_symbol_from_line(line: &str) -> Option<String> {
     // Lines like "- main" or "1. AuthenticationService"
-    let trimmed = line.trim_start_matches(|c: char| c == '-' || c == '.' || c.is_numeric() || c.is_whitespace());
+    let trimmed = line
+        .trim_start_matches(|c: char| c == '-' || c == '.' || c.is_numeric() || c.is_whitespace());
     let name = trimmed.split_whitespace().next()?;
     if name.len() > 1 {
         Some(name.to_string())

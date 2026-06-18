@@ -5,8 +5,8 @@ use rbuilder::graph::query::{execute, execute_chunks};
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};
 use rbuilder::graph::CodeGraph;
 use rbuilder::incremental::{FileTracker, IncrementalUpdater, UpdateOptions};
-use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
 use rbuilder::languages::registry::LanguageRegistry;
+use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
 use std::collections::HashSet;
 use std::fs;
 use std::sync::Arc;
@@ -43,10 +43,7 @@ fn test_batch_load_with_edges() {
 
     let mut graph = CodeGraph::new();
     graph
-        .load(
-            vec![n1, n2],
-            vec![Edge::new(id1, id2, EdgeType::Calls)],
-        )
+        .load(vec![n1, n2], vec![Edge::new(id1, id2, EdgeType::Calls)])
         .unwrap();
 
     assert_eq!(graph.node_count(), 2);
@@ -64,7 +61,10 @@ fn test_batch_insert_equivalent_to_individual() {
 
     let mut single_graph = CodeGraph::new();
     for node in &nodes {
-        single_graph.backend_mut().insert_node(node.clone()).unwrap();
+        single_graph
+            .backend_mut()
+            .insert_node(node.clone())
+            .unwrap();
     }
 
     assert_eq!(batch_graph.node_count(), 5_000);
@@ -354,10 +354,7 @@ fn test_compound_query_selectivity_narrow_name_broad_type() {
 fn test_compound_query_via_code_graph_e2e() {
     let graph = build_selectivity_graph();
 
-    let permutations = [
-        "repo:backend|type:Class",
-        "type:Class|repo:backend",
-    ];
+    let permutations = ["repo:backend|type:Class", "type:Class|repo:backend"];
 
     let baseline = name_set(&graph.query(permutations[0]).unwrap());
     assert_eq!(baseline.len(), 500);
@@ -366,7 +363,9 @@ fn test_compound_query_via_code_graph_e2e() {
         assert_eq!(name_set(&graph.query(query).unwrap()), baseline);
     }
 
-    let needle = graph.query("name:needle|repo:backend|type:Function").unwrap();
+    let needle = graph
+        .query("name:needle|repo:backend|type:Function")
+        .unwrap();
     assert_eq!(needle.len(), 1);
     assert_eq!(needle[0].name, "needle");
 }

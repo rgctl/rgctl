@@ -4,7 +4,6 @@
 
 use crate::analysis::graph_utils::PetGraphView;
 use crate::error::Result;
-use crate::graph::backend::GraphBackend;
 use crate::graph::backend::MemoryBackend;
 use petgraph::algo::page_rank;
 use serde::Serialize;
@@ -99,7 +98,8 @@ impl CentralityAnalyzer {
         top_pagerank.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         top_pagerank.truncate(10);
 
-        let mut top_betweenness: Vec<_> = scores.iter().map(|(id, s)| (*id, s.betweenness)).collect();
+        let mut top_betweenness: Vec<_> =
+            scores.iter().map(|(id, s)| (*id, s.betweenness)).collect();
         top_betweenness.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         top_betweenness.truncate(10);
 
@@ -255,11 +255,13 @@ pub fn degree_centrality(backend: &MemoryBackend) -> Result<Vec<CentralityScore>
         })
         .collect();
 
-    scores.sort_by(|a, b| b.degree.cmp(&a.degree).then_with(|| {
-        b.risk_score
-            .partial_cmp(&a.risk_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    }));
+    scores.sort_by(|a, b| {
+        b.degree.cmp(&a.degree).then_with(|| {
+            b.risk_score
+                .partial_cmp(&a.risk_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    });
     Ok(scores)
 }
 
@@ -300,9 +302,27 @@ mod tests {
         backend.insert_node(main).unwrap();
         backend.insert_node(helper).unwrap();
         backend.insert_node(leaf).unwrap();
-        backend.insert_edge(Edge::new(id_main, id_helper, crate::graph::schema::EdgeType::Calls)).unwrap();
-        backend.insert_edge(Edge::new(id_helper, id_leaf, crate::graph::schema::EdgeType::Calls)).unwrap();
-        backend.insert_edge(Edge::new(id_leaf, id_helper, crate::graph::schema::EdgeType::Calls)).unwrap();
+        backend
+            .insert_edge(Edge::new(
+                id_main,
+                id_helper,
+                crate::graph::schema::EdgeType::Calls,
+            ))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(
+                id_helper,
+                id_leaf,
+                crate::graph::schema::EdgeType::Calls,
+            ))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(
+                id_leaf,
+                id_helper,
+                crate::graph::schema::EdgeType::Calls,
+            ))
+            .unwrap();
 
         let report = CentralityAnalyzer::new().analyze(&backend).unwrap();
         assert!(report.scores[&id_main].pagerank > 0.0);

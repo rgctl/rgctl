@@ -42,7 +42,8 @@ impl Default for SecretDetector {
     fn default() -> Self {
         let patterns = vec![
             (
-                Regex::new(r#"(?i)(api[_-]?key|apikey)\s*[:=]\s*["']?([a-zA-Z0-9_\-]{16,})"#).unwrap(),
+                Regex::new(r#"(?i)(api[_-]?key|apikey)\s*[:=]\s*["']?([a-zA-Z0-9_\-]{16,})"#)
+                    .unwrap(),
                 "api_key".to_string(),
                 Severity::Critical,
             ),

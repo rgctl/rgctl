@@ -80,7 +80,8 @@ impl McpServer {
                     let msg = graph_updated_notification(&notification)?;
                     writeln!(stdout, "{msg}")
                         .map_err(|e| Error::Other(format!("stdout write error: {e}")))?;
-                    stdout.flush()
+                    stdout
+                        .flush()
                         .map_err(|e| Error::Other(format!("stdout flush error: {e}")))?;
                 }
             }
@@ -90,7 +91,8 @@ impl McpServer {
                     if let Some(response) = self.handler.handle_message(&line)? {
                         writeln!(stdout, "{response}")
                             .map_err(|e| Error::Other(format!("stdout write error: {e}")))?;
-                        stdout.flush()
+                        stdout
+                            .flush()
                             .map_err(|e| Error::Other(format!("stdout flush error: {e}")))?;
                     }
                 }
@@ -158,10 +160,7 @@ pub async fn run_http(
         }
     }
 
-    async fn call_tool(
-        State(state): State<HttpState>,
-        Json(body): Json<Value>,
-    ) -> Json<Value> {
+    async fn call_tool(State(state): State<HttpState>, Json(body): Json<Value>) -> Json<Value> {
         let name = body
             .get("name")
             .or_else(|| body.get("tool"))
@@ -190,10 +189,7 @@ pub async fn run_http(
         }
     }
 
-    async fn mcp_jsonrpc(
-        State(state): State<HttpState>,
-        Json(body): Json<Value>,
-    ) -> Json<Value> {
+    async fn mcp_jsonrpc(State(state): State<HttpState>, Json(body): Json<Value>) -> Json<Value> {
         let raw = body.to_string();
         match state.handler.lock().unwrap().handle_message(&raw) {
             Ok(Some(response)) => Json(

@@ -10,7 +10,7 @@ pub mod query;
 pub mod schema;
 
 pub use code_graph::CodeGraph;
-pub use code_index::{CodeIndex, CodeLocation, hash_code};
+pub use code_index::{hash_code, CodeIndex, CodeLocation};
 pub use export::{export_json, import_json, GraphSnapshot};
 pub use migration::{migrate_snapshot, migrate_v1_to_v2};
 pub use schema::{AccessType, CallType, GraphParameter, GRAPH_SCHEMA_VERSION};

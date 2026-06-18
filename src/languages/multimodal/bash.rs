@@ -17,13 +17,7 @@ impl BashPlugin {
     #[cfg(feature = "lang-bash")]
     fn extract_symbols_inner(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let tree = parse_source(source, file_path, tree_sitter_bash::LANGUAGE.into())?;
-        extract_symbols_by_kinds(
-            &tree,
-            source,
-            file_path,
-            &["function_definition"],
-            &[],
-        )
+        extract_symbols_by_kinds(&tree, source, file_path, &["function_definition"], &[])
     }
 
     #[cfg(not(feature = "lang-bash"))]
@@ -67,7 +61,11 @@ impl LanguagePlugin for BashPlugin {
         for line in text.lines() {
             let trimmed = line.trim();
             if let Some(rest) = trimmed.strip_prefix("source ") {
-                let target = rest.split_whitespace().next().unwrap_or("").trim_matches('"');
+                let target = rest
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .trim_matches('"');
                 if !target.is_empty() {
                     relations.push(Relation {
                         from: file_path

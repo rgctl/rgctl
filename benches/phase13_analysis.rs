@@ -100,8 +100,9 @@ fn bench_interprocedural_slice(c: &mut Criterion) {
                 .find(|n| n.name == leaf_name)
                 .unwrap()
                 .id;
-            let pdg = ProgramDependenceGraph::build(icfg.get_cfg(leaf_id).unwrap(), source.as_bytes())
-                .unwrap();
+            let pdg =
+                ProgramDependenceGraph::build(icfg.get_cfg(leaf_id).unwrap(), source.as_bytes())
+                    .unwrap();
             let line = pdg
                 .nodes
                 .values()
@@ -141,17 +142,25 @@ fn bench_gql_optimizer_speedup(c: &mut Criterion) {
     for size in [100usize, 500] {
         let backend = large_backend(size);
         let query = "MATCH (f:Function) WHERE f.name = 'target' RETURN f";
-        group.bench_with_input(BenchmarkId::new("unoptimized", size), &backend, |b, backend| {
-            let parsed = parse(query).unwrap();
-            b.iter(|| {
-                black_box(QueryExecutor::new(backend).execute(&parsed).unwrap());
-            });
-        });
-        group.bench_with_input(BenchmarkId::new("optimized", size), &backend, |b, backend| {
-            b.iter(|| {
-                black_box(execute(backend, query).unwrap());
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("unoptimized", size),
+            &backend,
+            |b, backend| {
+                let parsed = parse(query).unwrap();
+                b.iter(|| {
+                    black_box(QueryExecutor::new(backend).execute(&parsed).unwrap());
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("optimized", size),
+            &backend,
+            |b, backend| {
+                b.iter(|| {
+                    black_box(execute(backend, query).unwrap());
+                });
+            },
+        );
     }
     group.finish();
 }

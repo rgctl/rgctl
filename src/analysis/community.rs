@@ -4,7 +4,6 @@
 
 use crate::analysis::graph_utils::PetGraphView;
 use crate::error::Result;
-use crate::graph::backend::GraphBackend;
 use crate::graph::backend::MemoryBackend;
 use crate::graph::schema::NodeType;
 use petgraph::graph::NodeIndex;
@@ -39,9 +38,7 @@ pub struct CommunityResult {
 
 impl Default for CommunityDetector {
     fn default() -> Self {
-        Self {
-            max_iterations: 20,
-        }
+        Self { max_iterations: 20 }
     }
 }
 
@@ -74,11 +71,10 @@ impl CommunityDetector {
             let mut changed = false;
             for node in view.undirected.node_indices() {
                 let mut neighbor_counts: HashMap<usize, usize> = HashMap::new();
-                for neighbor in view
-                    .undirected
-                    .neighbors(node)
-                    .chain(view.undirected.neighbors_directed(node, petgraph::Direction::Incoming))
-                {
+                for neighbor in view.undirected.neighbors(node).chain(
+                    view.undirected
+                        .neighbors_directed(node, petgraph::Direction::Incoming),
+                ) {
                     let label = labels[&neighbor];
                     *neighbor_counts.entry(label).or_default() += 1;
                 }
@@ -110,9 +106,7 @@ impl CommunityDetector {
         let assignments = labels
             .iter()
             .filter_map(|(idx, &label)| {
-                view.undirected
-                    .node_weight(*idx)
-                    .map(|uuid| (*uuid, label))
+                view.undirected.node_weight(*idx).map(|uuid| (*uuid, label))
             })
             .collect();
 
@@ -124,7 +118,11 @@ impl CommunityDetector {
     }
 
     /// Calculate modularity for a partition.
-    pub fn calculate_modularity(&self, view: &PetGraphView, labels: &HashMap<NodeIndex, usize>) -> f64 {
+    pub fn calculate_modularity(
+        &self,
+        view: &PetGraphView,
+        labels: &HashMap<NodeIndex, usize>,
+    ) -> f64 {
         let m = view.undirected.edge_count() as f64;
         if m == 0.0 {
             return 0.0;
@@ -281,10 +279,7 @@ fn avg_complexity(nodes: &[&crate::graph::schema::Node]) -> f64 {
     if nodes.is_empty() {
         return 0.0;
     }
-    let sum: f64 = nodes
-        .iter()
-        .map(|n| node_complexity(n) as f64)
-        .sum();
+    let sum: f64 = nodes.iter().map(|n| node_complexity(n) as f64).sum();
     sum / nodes.len() as f64
 }
 
@@ -295,10 +290,7 @@ fn node_complexity(node: &crate::graph::schema::Node) -> i64 {
 }
 
 fn infer_community_label(nodes: &[&crate::graph::schema::Node], idx: usize) -> String {
-    let paths: Vec<_> = nodes
-        .iter()
-        .filter_map(|n| n.file_path.as_ref())
-        .collect();
+    let paths: Vec<_> = nodes.iter().filter_map(|n| n.file_path.as_ref()).collect();
 
     if let Some(common) = find_common_path_prefix(&paths) {
         if !common.is_empty() {
@@ -307,7 +299,10 @@ fn infer_community_label(nodes: &[&crate::graph::schema::Node], idx: usize) -> S
     }
 
     let names: Vec<_> = nodes.iter().map(|n| n.name.as_str()).collect();
-    if names.iter().any(|n| n.contains("auth") || n.contains("Auth")) {
+    if names
+        .iter()
+        .any(|n| n.contains("auth") || n.contains("Auth"))
+    {
         return "auth cluster".into();
     }
     if names.iter().any(|n| n.contains("api") || n.contains("Api")) {
@@ -369,10 +364,34 @@ mod tests {
             })
             .collect();
 
-        backend.insert_edge(Edge::new(ids[0], ids[1], crate::graph::schema::EdgeType::Calls)).unwrap();
-        backend.insert_edge(Edge::new(ids[2], ids[3], crate::graph::schema::EdgeType::Calls)).unwrap();
-        backend.insert_edge(Edge::new(ids[0], ids[2], crate::graph::schema::EdgeType::Uses)).unwrap();
-        backend.insert_edge(Edge::new(ids[4], ids[0], crate::graph::schema::EdgeType::Calls)).unwrap();
+        backend
+            .insert_edge(Edge::new(
+                ids[0],
+                ids[1],
+                crate::graph::schema::EdgeType::Calls,
+            ))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(
+                ids[2],
+                ids[3],
+                crate::graph::schema::EdgeType::Calls,
+            ))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(
+                ids[0],
+                ids[2],
+                crate::graph::schema::EdgeType::Uses,
+            ))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(
+                ids[4],
+                ids[0],
+                crate::graph::schema::EdgeType::Calls,
+            ))
+            .unwrap();
         backend
     }
 

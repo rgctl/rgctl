@@ -36,7 +36,11 @@ impl Extractor {
     }
 
     /// Discover and extract all processable files under `root`.
-    pub fn extract_repository(&self, root: &Path, discovery: &DiscoveryConfig) -> Result<Vec<FileExtraction>> {
+    pub fn extract_repository(
+        &self,
+        root: &Path,
+        discovery: &DiscoveryConfig,
+    ) -> Result<Vec<FileExtraction>> {
         let discoverer = FileDiscoverer::with_config(Arc::clone(&self.registry), discovery.clone());
         let files = discoverer.discover(root)?;
         Ok(files
@@ -78,7 +82,11 @@ impl Extractor {
     }
 
     /// Merge extracted files into a graph builder.
-    pub fn populate_graph(&self, extractions: &[FileExtraction], builder: &mut GraphBuilder) -> Result<()> {
+    pub fn populate_graph(
+        &self,
+        extractions: &[FileExtraction],
+        builder: &mut GraphBuilder,
+    ) -> Result<()> {
         for extraction in extractions {
             let file_id = builder.ensure_file_node(&extraction.path);
             let source = std::fs::read(&extraction.path).ok();
@@ -112,12 +120,7 @@ impl Extractor {
             }
 
             for usage in &extraction.config_usages {
-                builder.link_config_usage(
-                    &usage.file,
-                    usage.line,
-                    &usage.key,
-                    usage.usage_type,
-                );
+                builder.link_config_usage(&usage.file, usage.line, &usage.key, usage.usage_type);
             }
         }
         Ok(())
@@ -176,7 +179,10 @@ mod tests {
         let extractor = Extractor::new(registry);
         let result = extractor.extract_file(&path).unwrap();
 
-        assert!(result.config_keys.iter().any(|k| k.key_path == "server.port"));
+        assert!(result
+            .config_keys
+            .iter()
+            .any(|k| k.key_path == "server.port"));
     }
 
     #[test]
@@ -190,7 +196,9 @@ mod tests {
         let extraction = extractor.extract_file(&path).unwrap();
 
         let mut builder = GraphBuilder::new();
-        extractor.populate_graph(&[extraction], &mut builder).unwrap();
+        extractor
+            .populate_graph(&[extraction], &mut builder)
+            .unwrap();
 
         assert!(builder.node_count() >= 2);
         assert!(builder.edge_count() >= 2);

@@ -9,7 +9,7 @@ use std::path::Path;
 pub struct GithubActionsPlugin;
 
 impl GithubActionsPlugin {
-/// Create a new GitHub Actions plugin instance.
+    /// Create a new GitHub Actions plugin instance.
     pub fn new() -> Result<Self> {
         Ok(Self)
     }
@@ -180,6 +180,8 @@ jobs:
             .collect();
         assert_eq!(jobs.len(), 2);
         let relations = plugin.extract_relations(path, source, &symbols).unwrap();
-        assert!(relations.iter().any(|r| r.relation_type == RelationType::DependsOn));
+        assert!(relations
+            .iter()
+            .any(|r| r.relation_type == RelationType::DependsOn));
     }
 }

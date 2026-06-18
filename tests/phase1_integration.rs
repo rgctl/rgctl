@@ -2,8 +2,8 @@
 
 use rbuilder::graph::schema::NodeType;
 use rbuilder::graph::CodeGraph;
-use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
 use rbuilder::languages::registry::LanguageRegistry;
+use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
 use std::fs;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -21,7 +21,10 @@ fn test_end_to_end_multi_language_repo() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
 
-    write(&root.join("src/main.rs"), "fn main() { helper(); }\nfn helper() {}\n");
+    write(
+        &root.join("src/main.rs"),
+        "fn main() { helper(); }\nfn helper() {}\n",
+    );
     write(
         &root.join("app.py"),
         "import os\ndef run():\n    host = os.environ['DB_HOST']\n",
@@ -49,7 +52,10 @@ fn test_end_to_end_multi_language_repo() {
 fn test_init_save_and_query() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    write(&root.join("lib.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }\n");
+    write(
+        &root.join("lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+    );
 
     let graph = CodeGraph::from_repository(root).unwrap();
     graph.save_to_repo(root).unwrap();

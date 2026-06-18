@@ -65,10 +65,18 @@ ip_test!(topological_order_diamond, {
     backend.insert_node(b).unwrap();
     backend.insert_node(c).unwrap();
     backend.insert_node(d).unwrap();
-    backend.insert_edge(Edge::new(id_a, id_b, EdgeType::Calls)).unwrap();
-    backend.insert_edge(Edge::new(id_a, id_c, EdgeType::Calls)).unwrap();
-    backend.insert_edge(Edge::new(id_b, id_d, EdgeType::Calls)).unwrap();
-    backend.insert_edge(Edge::new(id_c, id_d, EdgeType::Calls)).unwrap();
+    backend
+        .insert_edge(Edge::new(id_a, id_b, EdgeType::Calls))
+        .unwrap();
+    backend
+        .insert_edge(Edge::new(id_a, id_c, EdgeType::Calls))
+        .unwrap();
+    backend
+        .insert_edge(Edge::new(id_b, id_d, EdgeType::Calls))
+        .unwrap();
+    backend
+        .insert_edge(Edge::new(id_c, id_d, EdgeType::Calls))
+        .unwrap();
     let cg = call_graph_from(&backend);
     let order = cg.topological_order().unwrap();
     assert_eq!(order.len(), 4);
@@ -81,7 +89,9 @@ ip_test!(recursive_self_loop_detected, {
     let f = Node::new(NodeType::Function, "fact".into());
     let id = f.id;
     backend.insert_node(f).unwrap();
-    backend.insert_edge(Edge::new(id, id, EdgeType::Calls)).unwrap();
+    backend
+        .insert_edge(Edge::new(id, id, EdgeType::Calls))
+        .unwrap();
     let cg = call_graph_from(&backend);
     let recursive = cg.recursive_functions();
     assert!(recursive.contains(&id));
@@ -95,8 +105,12 @@ ip_test!(recursive_mutual_pair, {
     let id_b = b.id;
     backend.insert_node(a).unwrap();
     backend.insert_node(b).unwrap();
-    backend.insert_edge(Edge::new(id_a, id_b, EdgeType::Calls)).unwrap();
-    backend.insert_edge(Edge::new(id_b, id_a, EdgeType::Calls)).unwrap();
+    backend
+        .insert_edge(Edge::new(id_a, id_b, EdgeType::Calls))
+        .unwrap();
+    backend
+        .insert_edge(Edge::new(id_b, id_a, EdgeType::Calls))
+        .unwrap();
     let cg = call_graph_from(&backend);
     let recursive = cg.recursive_functions();
     assert!(recursive.contains(&id_a));
@@ -132,7 +146,13 @@ fn helper(x: i32) -> i32 { x + 1 }
     let mut files = HashMap::new();
     files.insert("app.rs".into(), source.to_string());
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
-    let helper_id = icfg.call_graph.nodes.values().find(|n| n.name == "helper").unwrap().id;
+    let helper_id = icfg
+        .call_graph
+        .nodes
+        .values()
+        .find(|n| n.name == "helper")
+        .unwrap()
+        .id;
     assert!(icfg.get_cfg(helper_id).is_some());
 });
 
@@ -146,7 +166,13 @@ fn helper(x: i32) -> i32 { x + 1 }
     let mut files = HashMap::new();
     files.insert("app.rs".into(), source.to_string());
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
-    let helper_id = icfg.call_graph.nodes.values().find(|n| n.name == "helper").unwrap().id;
+    let helper_id = icfg
+        .call_graph
+        .nodes
+        .values()
+        .find(|n| n.name == "helper")
+        .unwrap()
+        .id;
     let callers = icfg.caller_cfgs(helper_id);
     assert_eq!(callers.len(), 1);
 });
@@ -166,10 +192,16 @@ fn helper(input: i32) -> i32 {
     let mut files = HashMap::new();
     files.insert("app.rs".into(), source.to_string());
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
-    let helper_id = icfg.call_graph.nodes.values().find(|n| n.name == "helper").unwrap().id;
+    let helper_id = icfg
+        .call_graph
+        .nodes
+        .values()
+        .find(|n| n.name == "helper")
+        .unwrap()
+        .id;
     let slicer = InterproceduralSlicer::new(&icfg, &files).unwrap();
-    let pdg = ProgramDependenceGraph::build(icfg.get_cfg(helper_id).unwrap(), source.as_bytes())
-        .unwrap();
+    let pdg =
+        ProgramDependenceGraph::build(icfg.get_cfg(helper_id).unwrap(), source.as_bytes()).unwrap();
     let line = pdg
         .nodes
         .values()
@@ -192,10 +224,17 @@ fn helper(input: i32) -> i32 {
 ip_test!(multi_hop_slice_three_deep, {
     let (backend, files) = build_sample_backend_with_chain(4);
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
-    let leaf = icfg.call_graph.nodes.values().find(|n| n.name == "f3").unwrap().id;
+    let leaf = icfg
+        .call_graph
+        .nodes
+        .values()
+        .find(|n| n.name == "f3")
+        .unwrap()
+        .id;
     let source = files.get("app.rs").unwrap();
     let slicer = InterproceduralSlicer::new(&icfg, &files).unwrap();
-    let pdg = ProgramDependenceGraph::build(icfg.get_cfg(leaf).unwrap(), source.as_bytes()).unwrap();
+    let pdg =
+        ProgramDependenceGraph::build(icfg.get_cfg(leaf).unwrap(), source.as_bytes()).unwrap();
     let line = pdg
         .nodes
         .values()
@@ -242,11 +281,17 @@ ip_test!(graph_parameter_stored_on_node, {
 ip_test!(slice_reduction_percent_non_negative, {
     let (backend, files) = build_backend_with_parameters();
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
-    let process_id = icfg.call_graph.nodes.values().find(|n| n.name == "process").unwrap().id;
+    let process_id = icfg
+        .call_graph
+        .nodes
+        .values()
+        .find(|n| n.name == "process")
+        .unwrap()
+        .id;
     let source = files.get("chain.rs").unwrap();
     let slicer = InterproceduralSlicer::new(&icfg, &files).unwrap();
-    let pdg =
-        ProgramDependenceGraph::build(icfg.get_cfg(process_id).unwrap(), source.as_bytes()).unwrap();
+    let pdg = ProgramDependenceGraph::build(icfg.get_cfg(process_id).unwrap(), source.as_bytes())
+        .unwrap();
     let line = pdg
         .nodes
         .values()
@@ -298,11 +343,8 @@ ip_test!(topological_order_preserves_edge_direction, {
     let (backend, _) = build_sample_backend_with_chain(4);
     let cg = call_graph_from(&backend);
     let order = cg.topological_order().unwrap();
-    let pos: std::collections::HashMap<_, _> = order
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (*id, i))
-        .collect();
+    let pos: std::collections::HashMap<_, _> =
+        order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
     for edge in &cg.edges {
         assert!(pos[&edge.from] < pos[&edge.to]);
     }

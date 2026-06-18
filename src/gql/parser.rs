@@ -120,7 +120,9 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_inline_properties(&mut self) -> Result<std::collections::HashMap<String, PropertyMatcher>> {
+    fn parse_inline_properties(
+        &mut self,
+    ) -> Result<std::collections::HashMap<String, PropertyMatcher>> {
         let mut map = std::collections::HashMap::new();
         loop {
             self.skip_whitespace();
@@ -235,7 +237,9 @@ impl<'a> Parser<'a> {
     fn parse_ident(&mut self) -> Result<String> {
         self.skip_whitespace();
         let start = self.pos;
-        let first = self.peek_char().ok_or_else(|| Error::InvalidQuery("expected identifier".into()))?;
+        let first = self
+            .peek_char()
+            .ok_or_else(|| Error::InvalidQuery("expected identifier".into()))?;
         if !first.is_ascii_alphabetic() && first != '_' {
             return Err(Error::InvalidQuery(format!(
                 "expected identifier at position {}",
@@ -264,7 +268,9 @@ impl<'a> Parser<'a> {
 
     fn parse_quoted_string(&mut self) -> Result<String> {
         self.skip_whitespace();
-        let quote = self.peek_char().ok_or_else(|| Error::InvalidQuery("expected quoted string".into()))?;
+        let quote = self
+            .peek_char()
+            .ok_or_else(|| Error::InvalidQuery("expected quoted string".into()))?;
         if quote != '\'' && quote != '"' {
             return Err(Error::InvalidQuery(format!(
                 "expected quoted string at position {}",
@@ -280,7 +286,9 @@ impl<'a> Parser<'a> {
             }
             if ch == '\\' {
                 self.pos += 1;
-                let escaped = self.peek_char().ok_or_else(|| Error::InvalidQuery("bad escape".into()))?;
+                let escaped = self
+                    .peek_char()
+                    .ok_or_else(|| Error::InvalidQuery("bad escape".into()))?;
                 value.push(escaped);
                 self.pos += 1;
             } else {
@@ -390,6 +398,12 @@ fn parse_node_type_name(name: &str) -> Result<NodeType> {
         "chefattribute" | "attribute" => Ok(NodeType::ChefAttribute),
         "cheftemplate" => Ok(NodeType::ChefTemplate),
         "chefcustomresource" => Ok(NodeType::ChefCustomResource),
+        "puppetmodule" | "puppetmodules" => Ok(NodeType::PuppetModule),
+        "puppetclass" | "puppetclasses" => Ok(NodeType::PuppetClass),
+        "puppetdefinedtype" => Ok(NodeType::PuppetDefinedType),
+        "puppetresource" => Ok(NodeType::PuppetResource),
+        "puppetvariable" => Ok(NodeType::PuppetVariable),
+        "puppetfact" => Ok(NodeType::PuppetFact),
         _ => Err(Error::InvalidQuery(format!("unknown node type: {name}"))),
     }
 }

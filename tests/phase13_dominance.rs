@@ -259,20 +259,14 @@ def loop(n):
 dom_cfg_test!(dominance_frontiers_map_size, {
     #[cfg(feature = "lang-rust")]
     {
-        let (flow_cfg, dominator) = build_dominance(
-            "rust",
-            r#"fn g(x: i32) { if x > 0 { let y = 1; } }"#,
-            "g",
-        );
+        let (flow_cfg, dominator) =
+            build_dominance("rust", r#"fn g(x: i32) { if x > 0 { let y = 1; } }"#, "g");
         assert_eq!(dominator.frontiers.len(), flow_cfg.blocks.len());
     }
     #[cfg(all(not(feature = "lang-rust"), feature = "lang-python"))]
     {
-        let (flow_cfg, dominator) = build_dominance(
-            "python",
-            r#"def g(x):\n    if x > 0:\n        y = 1"#,
-            "g",
-        );
+        let (flow_cfg, dominator) =
+            build_dominance("python", r#"def g(x):\n    if x > 0:\n        y = 1"#, "g");
         assert_eq!(dominator.frontiers.len(), flow_cfg.blocks.len());
     }
 });

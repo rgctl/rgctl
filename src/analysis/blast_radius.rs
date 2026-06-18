@@ -108,10 +108,8 @@ impl<'a> BlastRadiusAnalyzer<'a> {
         let direct_callers = uuid_list_to_names(view, &direct_caller_ids);
 
         let mut impact_ids = HashSet::new();
-        let mut queue: VecDeque<(Uuid, usize)> = direct_caller_ids
-            .iter()
-            .map(|id| (*id, 1usize))
-            .collect();
+        let mut queue: VecDeque<(Uuid, usize)> =
+            direct_caller_ids.iter().map(|id| (*id, 1usize)).collect();
 
         while let Some((caller_id, depth)) = queue.pop_front() {
             if depth > self.max_depth {
@@ -207,7 +205,12 @@ fn is_calls_edge(
 fn uuid_list_to_names(view: &PetGraphView, ids: &[Uuid]) -> Vec<String> {
     let mut names: Vec<String> = ids
         .iter()
-        .filter_map(|id| view.nodes.iter().find(|n| n.id == *id).map(|n| n.name.clone()))
+        .filter_map(|id| {
+            view.nodes
+                .iter()
+                .find(|n| n.id == *id)
+                .map(|n| n.name.clone())
+        })
         .collect();
     names.sort();
     names
@@ -216,7 +219,12 @@ fn uuid_list_to_names(view: &PetGraphView, ids: &[Uuid]) -> Vec<String> {
 fn ids_to_names(view: &PetGraphView, ids: &HashSet<Uuid>) -> Vec<String> {
     let mut names: Vec<String> = ids
         .iter()
-        .filter_map(|id| view.nodes.iter().find(|n| n.id == *id).map(|n| n.name.clone()))
+        .filter_map(|id| {
+            view.nodes
+                .iter()
+                .find(|n| n.id == *id)
+                .map(|n| n.name.clone())
+        })
         .collect();
     names.sort();
     names
@@ -269,7 +277,7 @@ fn average_complexity(view: &PetGraphView, ids: &HashSet<Uuid>) -> f64 {
 mod tests {
     use super::*;
     use crate::analysis::cfg::{Statement, StatementKind};
-    use crate::analysis::pdg::{DataDependency, DataDepType, PdgNode, ProgramDependenceGraph};
+    use crate::analysis::pdg::{DataDepType, DataDependency, PdgNode, ProgramDependenceGraph};
     use crate::graph::backend::GraphBackend;
     use crate::graph::schema::{Edge, Node, NodeType};
     use std::collections::HashSet;

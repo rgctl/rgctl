@@ -86,9 +86,11 @@ impl ProcessingPipeline {
         let progress = if self.config.show_progress && files_discovered > 0 {
             let pb = ProgressBar::new(files_discovered as u64);
             pb.set_style(
-                ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-                    .unwrap()
-                    .progress_chars("#>-"),
+                ProgressStyle::with_template(
+                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+                )
+                .unwrap()
+                .progress_chars("#>-"),
             );
             pb.set_message("extracting");
             Some(pb)

@@ -18,11 +18,7 @@ use uuid::Uuid;
 fn test_rust_signature_populates_first_class_fields() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("lib.rs");
-    std::fs::write(
-        &path,
-        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "pub fn add(a: i32, b: i32) -> i32 { a + b }\n").unwrap();
 
     let registry = Arc::new(LanguageRegistry::new());
     let extractor = Extractor::new(registry);
@@ -80,10 +76,8 @@ fn test_graph_export_import_schema_version() {
 
 #[test]
 fn test_migration_promotes_legacy_properties() {
-    let mut nodes = vec![Node::new(NodeType::Function, "legacy".to_string()).with_property(
-        "return_type".to_string(),
-        "i32".to_string(),
-    )];
+    let mut nodes = vec![Node::new(NodeType::Function, "legacy".to_string())
+        .with_property("return_type".to_string(), "i32".to_string())];
     migrate_v1_to_v2(&mut nodes, &mut []);
     assert_eq!(nodes[0].return_type.as_deref(), Some("i32"));
 }
@@ -114,7 +108,7 @@ fn test_signature_extractor_reads_first_class_fields() {
 
 #[test]
 fn test_edge_call_type_roundtrip() {
-    let edge = Edge::new(Uuid::new_v4(), Uuid::new_v4(), EdgeType::Calls)
-        .with_call_type(CallType::Direct);
+    let edge =
+        Edge::new(Uuid::new_v4(), Uuid::new_v4(), EdgeType::Calls).with_call_type(CallType::Direct);
     assert_eq!(edge.call_type, Some(CallType::Direct));
 }

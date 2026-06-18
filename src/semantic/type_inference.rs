@@ -78,7 +78,9 @@ impl TypeInferencer {
                     inferred: InferredType::Numeric,
                     confidence: 0.8,
                 };
-            } else if source.contains(&format!("{name}.upper(")) || source.contains(&format!("{name}.lower(")) {
+            } else if source.contains(&format!("{name}.upper("))
+                || source.contains(&format!("{name}.lower("))
+            {
                 *inference = TypeInference {
                     inferred: InferredType::String,
                     confidence: 0.85,

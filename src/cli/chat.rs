@@ -122,8 +122,7 @@ fn print_result(
     }
 
     // Community follow-up hint
-    if question.to_lowercase().contains("community") || question.to_lowercase().contains("module")
-    {
+    if question.to_lowercase().contains("community") || question.to_lowercase().contains("module") {
         if let Ok(report) = matcher.analyze_communities(backend) {
             if !report.is_empty() {
                 println!("\n{report}");

@@ -53,8 +53,7 @@ impl SignatureExtractor {
                 })
                 .collect()
         } else {
-            node
-                .get_property("parameters")
+            node.get_property("parameters")
                 .map(|p| parse_params_json(p))
                 .unwrap_or_default()
         };
@@ -63,9 +62,7 @@ impl SignatureExtractor {
             name: node.name.clone(),
             module: node.qualified_name.clone(),
             params,
-            return_type: node
-                .return_type_text()
-                .map(str::to_string),
+            return_type: node.return_type_text().map(str::to_string),
             file_path: node.file_path.clone(),
         })
     }
@@ -80,7 +77,10 @@ impl SignatureExtractor {
                 .iter()
                 .map(|p| Param {
                     name: p.name.clone(),
-                    type_: p.param_type.clone().unwrap_or_else(|| "unknown".to_string()),
+                    type_: p
+                        .param_type
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
                 })
                 .collect(),
             return_type: symbol.return_type.clone(),
@@ -180,6 +180,8 @@ mod tests {
 
         let py_sig = SignatureExtractor::from_source("def add(a: int, b: int) -> int").unwrap();
         assert_eq!(py_sig.params.len(), 2);
-        assert!(SignatureExtractor::signatures_equivalent(&rust_sig, &py_sig));
+        assert!(SignatureExtractor::signatures_equivalent(
+            &rust_sig, &py_sig
+        ));
     }
 }

@@ -151,19 +151,29 @@ mod tests {
     fn test_extract_simple_json() {
         let plugin = JsonPlugin::new().unwrap();
         let source = br#"{"name": "test", "port": 8080, "enabled": true}"#;
-        let keys = plugin.extract_config_keys(Path::new("config.json"), source).unwrap();
+        let keys = plugin
+            .extract_config_keys(Path::new("config.json"), source)
+            .unwrap();
 
         assert!(keys.len() >= 3);
-        assert!(keys.iter().any(|k| k.key_path == "name" && k.value == "test"));
-        assert!(keys.iter().any(|k| k.key_path == "port" && k.value_type == ConfigValueType::Number));
-        assert!(keys.iter().any(|k| k.key_path == "enabled" && k.value_type == ConfigValueType::Boolean));
+        assert!(keys
+            .iter()
+            .any(|k| k.key_path == "name" && k.value == "test"));
+        assert!(keys
+            .iter()
+            .any(|k| k.key_path == "port" && k.value_type == ConfigValueType::Number));
+        assert!(keys
+            .iter()
+            .any(|k| k.key_path == "enabled" && k.value_type == ConfigValueType::Boolean));
     }
 
     #[test]
     fn test_extract_nested_json() {
         let plugin = JsonPlugin::new().unwrap();
         let source = br#"{"server": {"host": "localhost", "port": 8080}}"#;
-        let keys = plugin.extract_config_keys(Path::new("config.json"), source).unwrap();
+        let keys = plugin
+            .extract_config_keys(Path::new("config.json"), source)
+            .unwrap();
 
         assert!(keys.iter().any(|k| k.key_path == "server.host"));
         assert!(keys.iter().any(|k| k.key_path == "server.port"));

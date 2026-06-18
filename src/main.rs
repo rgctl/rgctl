@@ -337,6 +337,13 @@ enum Commands {
         #[command(flatten)]
         args: rbuilder::cli::chef::ChefArgs,
     },
+
+    /// Puppet module analysis (Phase 18)
+    #[cfg(feature = "lang-puppet")]
+    Puppet {
+        #[command(flatten)]
+        args: rbuilder::cli::puppet::PuppetArgs,
+    },
 }
 
 #[derive(Subcommand)]
@@ -486,11 +493,18 @@ fn main() -> anyhow::Result<()> {
             println!("Graph saved to {}", saved.display());
 
             let functions = graph.query("functions")?;
-            println!("\nSample query (`functions`): {} result(s)", functions.len());
+            println!(
+                "\nSample query (`functions`): {} result(s)",
+                functions.len()
+            );
             Ok(())
         }
 
-        Commands::Update { since, force, files } => {
+        Commands::Update {
+            since,
+            force,
+            files,
+        } => {
             use rbuilder::cli::update;
             use std::path::Path;
             update::run_update(Path::new("."), since, force, files, cli.verbose)?;
@@ -588,9 +602,7 @@ fn main() -> anyhow::Result<()> {
             centrality,
             all,
         } => {
-            use rbuilder::analysis::{
-                ComplexityAnalyzer, DependencyAnalyzer,
-            };
+            use rbuilder::analysis::{ComplexityAnalyzer, DependencyAnalyzer};
             use rbuilder::graph::CodeGraph;
             use rbuilder::nlp::PatternMatcher;
             use std::path::Path;
@@ -770,7 +782,8 @@ fn main() -> anyhow::Result<()> {
                 )?;
                 println!("Generated IDL: {}", path.display());
             } else {
-                let content = generator.generate_module(graph.backend(), idl_format, &module_name)?;
+                let content =
+                    generator.generate_module(graph.backend(), idl_format, &module_name)?;
                 print!("{content}");
             }
             Ok(())
@@ -861,7 +874,9 @@ fn main() -> anyhow::Result<()> {
                     let metadata = PluginLoader::install(Path::new("."), &dest)?;
                     println!(
                         "Installed plugin '{}' v{} from {}",
-                        metadata.language_id, metadata.version, dest.display()
+                        metadata.language_id,
+                        metadata.version,
+                        dest.display()
                     );
                 }
                 PluginCommands::List => {
@@ -882,7 +897,10 @@ fn main() -> anyhow::Result<()> {
                     } else {
                         println!("\nExternal plugins:");
                         for plugin in &external.plugins {
-                            println!("  - {} v{} at {}", plugin.language_id, plugin.version, plugin.path);
+                            println!(
+                                "  - {} v{} at {}",
+                                plugin.language_id, plugin.version, plugin.path
+                            );
                         }
                     }
                 }
@@ -892,8 +910,12 @@ fn main() -> anyhow::Result<()> {
                         println!("Built-in plugin: {}", plugin.language_id());
                         println!("Extensions: {:?}", plugin.file_extensions());
                         let caps = plugin.capabilities();
-                        println!("Capabilities: functions={}, types={}", caps.extracts_functions, caps.extracts_types);
-                    } else if let Some(ext) = PluginRegistry::load(Path::new("."))?.get(&plugin_id) {
+                        println!(
+                            "Capabilities: functions={}, types={}",
+                            caps.extracts_functions, caps.extracts_types
+                        );
+                    } else if let Some(ext) = PluginRegistry::load(Path::new("."))?.get(&plugin_id)
+                    {
                         println!("External plugin: {}", ext.language_id);
                         println!("Version: {}", ext.version);
                         println!("Path: {}", ext.path);
@@ -915,7 +937,11 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
 
-        Commands::Export { format, output, query } => {
+        Commands::Export {
+            format,
+            output,
+            query,
+        } => {
             use rbuilder::export::export_graphml;
             use rbuilder::graph::CodeGraph;
             use std::path::Path;
@@ -1065,12 +1091,11 @@ fn main() -> anyhow::Result<()> {
 
             let path = Path::new(&file);
             let source = fs::read_to_string(path)?;
-            let lang = language.unwrap_or_else(|| {
-                match path.extension().and_then(|e| e.to_str()) {
+            let lang =
+                language.unwrap_or_else(|| match path.extension().and_then(|e| e.to_str()) {
                     Some("py") => "python".to_string(),
                     _ => "rust".to_string(),
-                }
-            });
+                });
             let fn_name = function.unwrap_or_else(|| {
                 if lang == "python" {
                     "process".to_string()
@@ -1084,10 +1109,7 @@ fn main() -> anyhow::Result<()> {
 
             let cfg = build_cfg_for_function(&lang, &source, &fn_name)?;
             let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
-            let slice = BackwardSlicer::new(&pdg, &cfg).slice(SliceCriterion {
-                variable,
-                line,
-            })?;
+            let slice = BackwardSlicer::new(&pdg, &cfg).slice(SliceCriterion { variable, line })?;
 
             println!(
                 "Backward slice for {}:{} (variable: {})",
@@ -1136,10 +1158,7 @@ fn main() -> anyhow::Result<()> {
             }
 
             for row in &result.rows {
-                let names: Vec<_> = row
-                    .values()
-                    .map(|binding| binding.name.clone())
-                    .collect();
+                let names: Vec<_> = row.values().map(|binding| binding.name.clone()).collect();
                 println!("{}", names.join(" -> "));
             }
             Ok(())
@@ -1177,6 +1196,13 @@ fn main() -> anyhow::Result<()> {
         Commands::Chef { args } => {
             use std::path::Path;
             rbuilder::cli::chef::run_chef_command(Path::new("."), args)?;
+            Ok(())
+        }
+
+        #[cfg(feature = "lang-puppet")]
+        Commands::Puppet { args } => {
+            use std::path::Path;
+            rbuilder::cli::puppet::run_puppet_command(Path::new("."), args)?;
             Ok(())
         }
 

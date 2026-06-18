@@ -1,4 +1,38 @@
 //! Ansible security scanning against graph task nodes.
+//!
+//! This module provides security vulnerability detection for Ansible playbooks
+//! and roles indexed in the rBuilder knowledge graph.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use rbuilder::graph::CodeGraph;
+//! use rbuilder::security::ansible::{AnsibleSecurityScanner, AnsibleSeverity};
+//! use std::path::Path;
+//!
+//! # fn main() -> rbuilder::error::Result<()> {
+//! let graph = CodeGraph::load_from_repo(Path::new("."))?;
+//! let scanner = AnsibleSecurityScanner::new();
+//! let findings = scanner.scan_graph(graph.backend());
+//!
+//! let critical = AnsibleSecurityScanner::filter_by_severity(findings, AnsibleSeverity::High);
+//! for finding in critical {
+//!     println!("[{:?}] {}", finding.severity, finding.message);
+//!     if let Some(cwe) = finding.cwe {
+//!         println!("  CWE: {cwe}");
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Security Checks
+//!
+//! - **CWE-78**: Command injection in shell/command/raw modules
+//! - **CWE-798**: Hardcoded secrets in task variables
+//! - **CWE-732**: Insecure file permissions
+//! - **CWE-250**: Unnecessary privilege escalation
+//! - **CWE-532**: Sensitive data logging
 
 use crate::graph::backend::MemoryBackend;
 use crate::graph::schema::NodeType;
@@ -56,15 +90,10 @@ impl AnsibleSecurityScanner {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let dangerous_modules = [
-            "user",
-            "authorized_key",
-            "mysql_user",
-            "postgresql_user",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+        let dangerous_modules = ["user", "authorized_key", "mysql_user", "postgresql_user"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         Self {
             sensitive_modules,
             dangerous_modules,
@@ -116,7 +145,12 @@ impl AnsibleSecurityScanner {
     fn check_hardcoded_secrets(&self, name: &str, args: &str) -> Option<AnsibleSecurityFinding> {
         let lower = args.to_lowercase();
         let patterns = [
-            "password", "passwd", "secret", "token", "api_key", "private_key",
+            "password",
+            "passwd",
+            "secret",
+            "token",
+            "api_key",
+            "private_key",
         ];
         for pattern in patterns {
             if lower.contains(pattern) && !args.contains("{{") {
@@ -181,14 +215,11 @@ impl AnsibleSecurityScanner {
     ) -> Option<AnsibleSecurityFinding> {
         if self.dangerous_modules.contains(module) {
             let lower = args.to_lowercase();
-            if (lower.contains("password") || lower.contains("secret"))
-                && !lower.contains("no_log")
+            if (lower.contains("password") || lower.contains("secret")) && !lower.contains("no_log")
             {
                 return Some(AnsibleSecurityFinding {
                     severity: AnsibleSeverity::Medium,
-                    message: format!(
-                        "Task '{name}' handles sensitive data but no_log is not set"
-                    ),
+                    message: format!("Task '{name}' handles sensitive data but no_log is not set"),
                     location: name.to_string(),
                     cwe: Some("CWE-532".into()),
                     remediation: Some("Add no_log: true to prevent logging sensitive data".into()),
@@ -211,17 +242,13 @@ impl AnsibleSecurityScanner {
         findings: Vec<AnsibleSecurityFinding>,
         min: AnsibleSeverity,
     ) -> Vec<AnsibleSecurityFinding> {
-        findings
-            .into_iter()
-            .filter(|f| f.severity >= min)
-            .collect()
+        findings.into_iter().filter(|f| f.severity >= min).collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::backend::GraphBackend;
     use crate::graph::schema::Node;
 
     #[test]
@@ -229,8 +256,7 @@ mod tests {
         let scanner = AnsibleSecurityScanner::new();
         let mut node = Node::new(NodeType::AnsibleTask, "set db password".into());
         node.signature = Some("password: supersecret123".into());
-        node.properties
-            .insert("module".into(), "mysql_user".into());
+        node.properties.insert("module".into(), "mysql_user".into());
         let findings = scanner.scan_node(&node);
         assert!(findings.iter().any(|f| f.cwe.as_deref() == Some("CWE-798")));
     }

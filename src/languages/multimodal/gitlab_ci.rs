@@ -52,7 +52,10 @@ impl LanguagePlugin for GitlabCiPlugin {
                 let Some(name) = key.as_str() else {
                     continue;
                 };
-                if matches!(name, "stages" | "variables" | "include" | "default" | "workflow") {
+                if matches!(
+                    name,
+                    "stages" | "variables" | "include" | "default" | "workflow"
+                ) {
                     continue;
                 }
                 if !job_val.is_mapping() {

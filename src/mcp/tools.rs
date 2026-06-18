@@ -13,16 +13,16 @@ use crate::config::analyzer::ConfigAnalyzer;
 use crate::config::secret_detector::SecretDetector;
 use crate::discovery::FileDiscoverer;
 use crate::error::{Error, Result};
+use crate::gql::{execute, execute_explain, execute_macro, QueryMacroRegistry};
 use crate::graph::backend::GraphBackend;
 use crate::graph::backend::MemoryBackend;
 use crate::graph::schema::Node;
 use crate::graph::CodeGraph;
 use crate::incremental::file_tracker::{git_changed_files, FileTracker};
 use crate::languages::registry::LanguageRegistry;
-use crate::gql::{execute, execute_explain, execute_macro, QueryMacroRegistry};
-use crate::security::SecurityAnalyzer;
 use crate::nlp::dual_agent::DualAgentQuerySystem;
 use crate::nlp::pattern_matcher::{PatternMatcher, QueryResult};
+use crate::security::SecurityAnalyzer;
 use crate::semantic::signature::SignatureExtractor;
 use petgraph::Direction;
 use serde::{Deserialize, Serialize};
@@ -381,6 +381,43 @@ impl ToolExecutor {
                     }
                 }),
             },
+            ToolDefinition {
+                name: "analyze_puppet_module".into(),
+                description: "Summarize Puppet modules, classes, and resources from the graph".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "module": { "type": "string", "description": "Filter by module name (optional)" },
+                        "include_verbose": { "type": "boolean" }
+                    }
+                }),
+            },
+            ToolDefinition {
+                name: "find_puppet_classes".into(),
+                description: "List Puppet classes and resource counts from the graph".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "module": { "type": "string", "description": "Filter by module (optional)" },
+                        "include_verbose": { "type": "boolean" }
+                    }
+                }),
+            },
+            ToolDefinition {
+                name: "puppet_security_scan".into(),
+                description: "Scan Puppet resources in the graph for security issues".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "min_severity": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "critical"],
+                            "description": "Minimum severity (default medium)"
+                        },
+                        "include_verbose": { "type": "boolean" }
+                    }
+                }),
+            },
         ]
     }
 
@@ -405,10 +442,7 @@ impl ToolExecutor {
                     .get("symbol")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| Error::InvalidQuery("Missing symbol".into()))?;
-                let depth = args
-                    .get("depth")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(3) as usize;
+                let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
                 self.impact_analysis(backend, symbol, depth, verbose)
             }
             "find_by_complexity" => {
@@ -463,10 +497,7 @@ impl ToolExecutor {
                     .get("symbol")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| Error::InvalidQuery("Missing symbol".into()))?;
-                let depth = args
-                    .get("depth")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(10) as usize;
+                let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
                 self.blast_radius(backend, symbol, depth, verbose)
             }
             "backward_slice" => {
@@ -503,7 +534,10 @@ impl ToolExecutor {
             "gql_query" => {
                 let query = args.get("query").and_then(|v| v.as_str());
                 let macro_name = args.get("macro_name").and_then(|v| v.as_str());
-                let explain = args.get("explain").and_then(|v| v.as_bool()).unwrap_or(false);
+                let explain = args
+                    .get("explain")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 self.gql_query(backend, query, macro_name, explain, verbose)
             }
             "taint_analysis" => {
@@ -543,7 +577,10 @@ impl ToolExecutor {
                     .get("diagram_type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("flowchart");
-                let depth = args.get("depth").and_then(|v| v.as_u64()).map(|d| d as usize);
+                let depth = args
+                    .get("depth")
+                    .and_then(|v| v.as_u64())
+                    .map(|d| d as usize);
                 self.generate_diagram(backend, query, format, diagram_type, depth, verbose)
             }
             "analyze_ansible_playbook" => {
@@ -580,11 +617,31 @@ impl ToolExecutor {
                     .unwrap_or("medium");
                 self.chef_security_scan(backend, min_severity, verbose)
             }
+            "analyze_puppet_module" => {
+                let module = args.get("module").and_then(|v| v.as_str());
+                self.analyze_puppet_module(backend, module, verbose)
+            }
+            "find_puppet_classes" => {
+                let module = args.get("module").and_then(|v| v.as_str());
+                self.find_puppet_classes(backend, module, verbose)
+            }
+            "puppet_security_scan" => {
+                let min_severity = args
+                    .get("min_severity")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("medium");
+                self.puppet_security_scan(backend, min_severity, verbose)
+            }
             other => Err(Error::InvalidQuery(format!("Unknown tool: {other}"))),
         }
     }
 
-    fn query_codebase(&self, backend: &MemoryBackend, question: &str, verbose: bool) -> Result<Value> {
+    fn query_codebase(
+        &self,
+        backend: &MemoryBackend,
+        question: &str,
+        verbose: bool,
+    ) -> Result<Value> {
         let matcher = PatternMatcher::from_graph(backend)?;
         let lower = question.to_lowercase();
         let use_dual = lower.contains(" and ")
@@ -612,13 +669,7 @@ impl ToolExecutor {
             } else {
                 None
             };
-            (
-                answer,
-                translated.confidence,
-                0usize,
-                None,
-                results,
-            )
+            (answer, translated.confidence, 0usize, None, results)
         };
 
         let mut response = json!({
@@ -643,10 +694,14 @@ impl ToolExecutor {
                         "results": sq.results.len(),
                     }))
                     .collect::<Vec<_>>());
-                response["nodes"] = json!(dual.nodes.iter().map(|n| json!({
-                    "name": n.name,
-                    "type": format!("{:?}", n.node_type),
-                })).collect::<Vec<_>>());
+                response["nodes"] = json!(dual
+                    .nodes
+                    .iter()
+                    .map(|n| json!({
+                        "name": n.name,
+                        "type": format!("{:?}", n.node_type),
+                    }))
+                    .collect::<Vec<_>>());
             }
         }
 
@@ -715,8 +770,10 @@ impl ToolExecutor {
                 }))
                 .collect::<Vec<_>>());
         } else {
-            response["direct_callers"] = json!(report.direct_callers.iter().take(10).collect::<Vec<_>>());
-            response["impact_zone_sample"] = json!(report.impact_zone.iter().take(10).collect::<Vec<_>>());
+            response["direct_callers"] =
+                json!(report.direct_callers.iter().take(10).collect::<Vec<_>>());
+            response["impact_zone_sample"] =
+                json!(report.impact_zone.iter().take(10).collect::<Vec<_>>());
         }
 
         Ok(response)
@@ -918,12 +975,7 @@ impl ToolExecutor {
         };
 
         let content = match format.to_ascii_lowercase().as_str() {
-            "dot" | "graphviz" => generate_dot(
-                backend,
-                query,
-                GraphvizOptions::default(),
-                depth,
-            )?,
+            "dot" | "graphviz" => generate_dot(backend, query, GraphvizOptions::default(), depth)?,
             "graphml" => export_graphml(backend, query)?,
             _ => generate_mermaid(
                 backend,
@@ -961,9 +1013,7 @@ impl ToolExecutor {
         let playbooks: Vec<_> = backend
             .find_nodes_by_type(NodeType::AnsiblePlaybook)?
             .into_iter()
-            .filter(|n| {
-                playbook_filter.is_none_or(|f| n.name.contains(f))
-            })
+            .filter(|n| playbook_filter.is_none_or(|f| n.name.contains(f)))
             .collect();
 
         let mut summary = Vec::new();
@@ -974,9 +1024,7 @@ impl ToolExecutor {
                 .filter(|p| {
                     playbook_filter.is_none_or(|f| {
                         p.name.contains(f)
-                            || p
-                                .get_property("playbook")
-                                .is_some_and(|pb| pb.contains(f))
+                            || p.get_property("playbook").is_some_and(|pb| pb.contains(f))
                     })
                 })
                 .count();
@@ -1071,8 +1119,10 @@ impl ToolExecutor {
             other => return Err(Error::InvalidQuery(format!("Unknown severity: {other}"))),
         };
 
-        let findings =
-            AnsibleSecurityScanner::filter_by_severity(AnsibleSecurityScanner::new().scan_graph(backend), min);
+        let findings = AnsibleSecurityScanner::filter_by_severity(
+            AnsibleSecurityScanner::new().scan_graph(backend),
+            min,
+        );
 
         let mut response = json!({
             "finding_count": findings.len(),
@@ -1104,10 +1154,7 @@ impl ToolExecutor {
             .into_iter()
             .filter(|n| {
                 cookbook_filter.is_none_or(|f| {
-                    n.name.contains(f)
-                        || n
-                            .get_property("cookbook")
-                            .is_some_and(|c| c.contains(f))
+                    n.name.contains(f) || n.get_property("cookbook").is_some_and(|c| c.contains(f))
                 })
             })
             .collect();
@@ -1152,10 +1199,7 @@ impl ToolExecutor {
             .into_iter()
             .filter(|r| {
                 cookbook_filter.is_none_or(|f| {
-                    r.name.contains(f)
-                        || r
-                            .get_property("cookbook")
-                            .is_some_and(|c| c.contains(f))
+                    r.name.contains(f) || r.get_property("cookbook").is_some_and(|c| c.contains(f))
                 })
             })
             .map(|r| json!({ "name": r.name, "file": r.file_path }))
@@ -1193,8 +1237,128 @@ impl ToolExecutor {
             other => return Err(Error::InvalidQuery(format!("Unknown severity: {other}"))),
         };
 
-        let findings =
-            ChefSecurityScanner::filter_by_severity(ChefSecurityScanner::new().scan_graph(backend), min);
+        let findings = ChefSecurityScanner::filter_by_severity(
+            ChefSecurityScanner::new().scan_graph(backend),
+            min,
+        );
+
+        let mut response = json!({
+            "finding_count": findings.len(),
+            "findings": findings.iter().map(|f| json!({
+                "severity": format!("{:?}", f.severity),
+                "message": f.message,
+                "location": f.location,
+                "cwe": f.cwe,
+            })).collect::<Vec<_>>(),
+        });
+        if verbose {
+            if let Some(obj) = response.as_object_mut() {
+                obj.insert("details".into(), json!(findings));
+            }
+        }
+        Ok(response)
+    }
+
+    fn analyze_puppet_module(
+        &self,
+        backend: &MemoryBackend,
+        module_filter: Option<&str>,
+        verbose: bool,
+    ) -> Result<Value> {
+        use crate::graph::schema::NodeType;
+
+        let modules: Vec<_> = backend
+            .find_nodes_by_type(NodeType::PuppetModule)?
+            .into_iter()
+            .filter(|n| {
+                module_filter.is_none_or(|f| {
+                    n.name.contains(f) || n.get_property("module").is_some_and(|c| c.contains(f))
+                })
+            })
+            .collect();
+
+        let total_classes = backend.find_nodes_by_type(NodeType::PuppetClass)?.len();
+        let total_resources = backend.find_nodes_by_type(NodeType::PuppetResource)?.len();
+
+        let mut response = json!({
+            "modules": modules.iter().map(|m| json!({
+                "name": m.name,
+                "version": m.get_property("version"),
+                "file": m.file_path,
+            })).collect::<Vec<_>>(),
+            "totals": {
+                "modules": modules.len(),
+                "classes": total_classes,
+                "resources": total_resources,
+            },
+        });
+        if verbose {
+            if let Some(obj) = response.as_object_mut() {
+                obj.insert(
+                    "classes".into(),
+                    json!(backend.find_nodes_by_type(NodeType::PuppetClass)?),
+                );
+            }
+        }
+        Ok(response)
+    }
+
+    fn find_puppet_classes(
+        &self,
+        backend: &MemoryBackend,
+        module_filter: Option<&str>,
+        verbose: bool,
+    ) -> Result<Value> {
+        use crate::analysis::puppet_modules::ModuleDependencyGraph;
+        use crate::graph::schema::NodeType;
+
+        let classes: Vec<_> = backend
+            .find_nodes_by_type(NodeType::PuppetClass)?
+            .into_iter()
+            .filter(|c| {
+                module_filter.is_none_or(|f| {
+                    c.name.contains(f) || c.get_property("class").is_some_and(|m| m.contains(f))
+                })
+            })
+            .map(|c| json!({ "name": c.name, "file": c.file_path }))
+            .collect();
+
+        let graph = ModuleDependencyGraph::from_graph(backend)?;
+        let order = graph.topological_sort().unwrap_or_default();
+
+        let mut response = json!({
+            "classes": classes,
+            "class_count": classes.len(),
+            "module_dependency_order": order,
+        });
+        if verbose {
+            if let Some(obj) = response.as_object_mut() {
+                obj.insert("modules".into(), json!(graph.modules));
+            }
+        }
+        Ok(response)
+    }
+
+    fn puppet_security_scan(
+        &self,
+        backend: &MemoryBackend,
+        min_severity: &str,
+        verbose: bool,
+    ) -> Result<Value> {
+        use crate::security::puppet::{PuppetSecurityScanner, PuppetSeverity};
+
+        let min = match min_severity.to_ascii_lowercase().as_str() {
+            "low" => PuppetSeverity::Low,
+            "medium" => PuppetSeverity::Medium,
+            "high" => PuppetSeverity::High,
+            "critical" => PuppetSeverity::Critical,
+            other => return Err(Error::InvalidQuery(format!("Unknown severity: {other}"))),
+        };
+
+        let findings = PuppetSecurityScanner::filter_by_severity(
+            PuppetSecurityScanner::new().scan_graph(backend),
+            min,
+        );
 
         let mut response = json!({
             "finding_count": findings.len(),
@@ -1253,9 +1417,7 @@ impl ToolExecutor {
                 ));
             }
             (None, None) => {
-                return Err(Error::InvalidQuery(
-                    "Missing query or macro_name".into(),
-                ));
+                return Err(Error::InvalidQuery("Missing query or macro_name".into()));
             }
         };
 
@@ -1357,7 +1519,9 @@ impl ToolExecutor {
             let label = community_label(&names);
             if let Some(filter) = name_filter {
                 if !label.to_lowercase().contains(&filter.to_lowercase())
-                    && !names.iter().any(|n| n.to_lowercase().contains(&filter.to_lowercase()))
+                    && !names
+                        .iter()
+                        .any(|n| n.to_lowercase().contains(&filter.to_lowercase()))
                 {
                     continue;
                 }
@@ -1387,7 +1551,12 @@ impl ToolExecutor {
         }))
     }
 
-    fn config_analysis(&self, backend: &MemoryBackend, analysis_type: &str, verbose: bool) -> Result<Value> {
+    fn config_analysis(
+        &self,
+        backend: &MemoryBackend,
+        analysis_type: &str,
+        verbose: bool,
+    ) -> Result<Value> {
         match analysis_type {
             "unused_keys" => {
                 let keys = ConfigAnalyzer::find_unused_keys(backend)?;
@@ -1449,7 +1618,9 @@ impl ToolExecutor {
                     "findings": found,
                 }))
             }
-            other => Err(Error::InvalidQuery(format!("Unknown analysis_type: {other}"))),
+            other => Err(Error::InvalidQuery(format!(
+                "Unknown analysis_type: {other}"
+            ))),
         }
     }
 
@@ -1470,7 +1641,10 @@ impl ToolExecutor {
             .get_property("cyclomatic")
             .and_then(|v| v.parse().ok())
             .unwrap_or(1usize);
-        let level = format!("{:?}", crate::analysis::complexity::classify_complexity(cyclomatic));
+        let level = format!(
+            "{:?}",
+            crate::analysis::complexity::classify_complexity(cyclomatic)
+        );
 
         let signature = SignatureExtractor::from_node(node).map(|s| {
             let params: Vec<String> = s
@@ -1514,7 +1688,13 @@ impl ToolExecutor {
             let deps: Vec<String> = backend
                 .get_outgoing_edges(node.id)?
                 .iter()
-                .filter_map(|e| backend.get_node(e.to).ok().flatten().map(|n| n.name.clone()))
+                .filter_map(|e| {
+                    backend
+                        .get_node(e.to)
+                        .ok()
+                        .flatten()
+                        .map(|n| n.name.clone())
+                })
                 .collect();
             response["dependencies"] = json!(deps);
         }
@@ -1569,8 +1749,16 @@ fn query_result_to_json(result: &QueryResult, verbose: bool) -> Value {
     match result {
         QueryResult::Count(n) => json!({ "count": n }),
         QueryResult::Nodes(nodes) => {
-            let limit = if verbose { nodes.len() } else { nodes.len().min(10) };
-            json!(nodes.iter().take(limit).map(|n| compress_node(n, verbose)).collect::<Vec<_>>())
+            let limit = if verbose {
+                nodes.len()
+            } else {
+                nodes.len().min(10)
+            };
+            json!(nodes
+                .iter()
+                .take(limit)
+                .map(|n| compress_node(n, verbose))
+                .collect::<Vec<_>>())
         }
         QueryResult::Text(lines) => json!({ "lines": lines }),
     }
@@ -1615,10 +1803,7 @@ fn community_label(names: &[String]) -> String {
 }
 
 fn common_path_prefix(names: &[String]) -> Option<String> {
-    let parts: Vec<Vec<&str>> = names
-        .iter()
-        .map(|n| n.split("::").collect())
-        .collect();
+    let parts: Vec<Vec<&str>> = names.iter().map(|n| n.split("::").collect()).collect();
     if parts.is_empty() {
         return None;
     }
@@ -1659,7 +1844,12 @@ fn impact_at_depth(
         for neighbor in view.directed.neighbors_directed(idx, Direction::Incoming) {
             if let Some(uuid) = view.directed_to_uuid.get(&neighbor) {
                 if seen.insert(*uuid) {
-                    if let Some(name) = view.nodes.iter().find(|n| n.id == *uuid).map(|n| n.name.clone()) {
+                    if let Some(name) = view
+                        .nodes
+                        .iter()
+                        .find(|n| n.id == *uuid)
+                        .map(|n| n.name.clone())
+                    {
                         if depth == 0 {
                             direct.push(name);
                         } else {
@@ -1752,7 +1942,11 @@ mod tests {
             )
             .unwrap();
         let json_str = serde_json::to_string(&result).unwrap();
-        assert!(json_str.len() < 1024, "Response too verbose: {} bytes", json_str.len());
+        assert!(
+            json_str.len() < 1024,
+            "Response too verbose: {} bytes",
+            json_str.len()
+        );
     }
 
     #[test]
@@ -1779,22 +1973,14 @@ mod tests {
         // First call - should compute
         let start = Instant::now();
         let result1 = executor
-            .execute(
-                &graph,
-                "find_by_complexity",
-                json!({ "min_complexity": 1 }),
-            )
+            .execute(&graph, "find_by_complexity", json!({ "min_complexity": 1 }))
             .unwrap();
         let first_duration = start.elapsed();
 
         // Second call - should use cache
         let start = Instant::now();
         let result2 = executor
-            .execute(
-                &graph,
-                "find_by_complexity",
-                json!({ "min_complexity": 1 }),
-            )
+            .execute(&graph, "find_by_complexity", json!({ "min_complexity": 1 }))
             .unwrap();
         let second_duration = start.elapsed();
 
@@ -1813,11 +1999,7 @@ mod tests {
 
         // Populate cache
         executor
-            .execute(
-                &graph,
-                "find_by_complexity",
-                json!({ "min_complexity": 1 }),
-            )
+            .execute(&graph, "find_by_complexity", json!({ "min_complexity": 1 }))
             .unwrap();
 
         // Invalidate cache
@@ -1825,11 +2007,7 @@ mod tests {
 
         // Next call should recompute (not crash)
         let result = executor
-            .execute(
-                &graph,
-                "find_by_complexity",
-                json!({ "min_complexity": 1 }),
-            )
+            .execute(&graph, "find_by_complexity", json!({ "min_complexity": 1 }))
             .unwrap();
 
         assert!(result["count"].is_number());

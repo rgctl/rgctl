@@ -5,9 +5,9 @@
 
 use rbuilder::config::drift::compare_configs;
 use rbuilder::graph::backend::GraphBackend;
+use rbuilder::graph::query;
 use rbuilder::graph::schema::{Node, NodeType};
 use rbuilder::graph::CodeGraph;
-use rbuilder::graph::query;
 use rbuilder::multi_repo::{
     link_cross_repo, stamp_repo_namespace, sync_workspace, WorkspaceManifest,
 };
@@ -27,7 +27,11 @@ fn test_config_drift_cli_paths() {
     write(&temp.path().join("prod.yaml"), "server:\n  port: 8080\n");
     write(&temp.path().join("dev.yaml"), "server:\n  port: 3000\n");
 
-    let report = compare_configs(&temp.path().join("prod.yaml"), &temp.path().join("dev.yaml")).unwrap();
+    let report = compare_configs(
+        &temp.path().join("prod.yaml"),
+        &temp.path().join("dev.yaml"),
+    )
+    .unwrap();
     assert!(!report.is_clean());
     assert!(report.changed.iter().any(|e| e.key == "server.port"));
 }
@@ -42,7 +46,9 @@ fn test_multi_repo_namespace_stamping() {
 
     stamp_repo_namespace(&mut graph, "api");
     let nodes = graph.backend().all_nodes().unwrap();
-    assert!(nodes.iter().all(|n| n.get_property("repo") == Some(&"api".to_string())));
+    assert!(nodes
+        .iter()
+        .all(|n| n.get_property("repo") == Some(&"api".to_string())));
 }
 
 #[test]
@@ -51,13 +57,15 @@ fn test_query_repo_filter() {
     graph
         .backend_mut()
         .insert_node(
-            Node::new(NodeType::Function, "a".into()).with_property("repo".into(), "backend".into()),
+            Node::new(NodeType::Function, "a".into())
+                .with_property("repo".into(), "backend".into()),
         )
         .unwrap();
     graph
         .backend_mut()
         .insert_node(
-            Node::new(NodeType::Function, "b".into()).with_property("repo".into(), "frontend".into()),
+            Node::new(NodeType::Function, "b".into())
+                .with_property("repo".into(), "frontend".into()),
         )
         .unwrap();
 
@@ -93,8 +101,8 @@ fn test_cross_repo_linking() {
     let mut backend = rbuilder::graph::backend::MemoryBackend::new();
     let import = Node::new(NodeType::Import, "SharedLib".into())
         .with_property("repo".into(), "client".into());
-    let lib = Node::new(NodeType::Class, "SharedLib".into())
-        .with_property("repo".into(), "lib".into());
+    let lib =
+        Node::new(NodeType::Class, "SharedLib".into()).with_property("repo".into(), "lib".into());
     backend.insert_node(import).unwrap();
     backend.insert_node(lib).unwrap();
 

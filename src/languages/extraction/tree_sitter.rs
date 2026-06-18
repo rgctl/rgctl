@@ -239,7 +239,8 @@ mod tests {
     #[test]
     fn test_generic_c_extraction() {
         let source = b"int add(int a, int b) { return a + b; }";
-        let tree = parse_source(source, Path::new("test.c"), tree_sitter_c::LANGUAGE.into()).unwrap();
+        let tree =
+            parse_source(source, Path::new("test.c"), tree_sitter_c::LANGUAGE.into()).unwrap();
         let symbols = extract_symbols_by_kinds(
             &tree,
             source,

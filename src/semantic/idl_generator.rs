@@ -29,7 +29,9 @@ impl IdlFormat {
             "proto" | "protobuf" => Ok(Self::Proto),
             "thrift" => Ok(Self::Thrift),
             "openapi" | "swagger" => Ok(Self::OpenApi),
-            other => Err(Error::ConfigError(format!("Unsupported IDL format: {other}"))),
+            other => Err(Error::ConfigError(format!(
+                "Unsupported IDL format: {other}"
+            ))),
         }
     }
 
@@ -186,12 +188,21 @@ fn signature_template_data(signature: &FunctionSignature) -> HashMap<String, ser
     data.insert("name".to_string(), serde_json::json!(signature.name));
     data.insert("service_name".to_string(), serde_json::json!(service_name));
     data.insert("request_name".to_string(), serde_json::json!(request_name));
-    data.insert("response_name".to_string(), serde_json::json!(response_name));
+    data.insert(
+        "response_name".to_string(),
+        serde_json::json!(response_name),
+    );
     data.insert("params".to_string(), serde_json::json!(params));
     data.insert("return_type".to_string(), serde_json::json!(return_proto));
     data.insert("return_proto".to_string(), serde_json::json!(return_proto));
-    data.insert("return_thrift".to_string(), serde_json::json!(return_thrift));
-    data.insert("return_openapi".to_string(), serde_json::json!(return_openapi));
+    data.insert(
+        "return_thrift".to_string(),
+        serde_json::json!(return_thrift),
+    );
+    data.insert(
+        "return_openapi".to_string(),
+        serde_json::json!(return_openapi),
+    );
     data.insert(
         "has_return".to_string(),
         serde_json::json!(signature.return_type.is_some()),

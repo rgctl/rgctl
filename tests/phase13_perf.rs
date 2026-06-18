@@ -6,7 +6,6 @@ mod phase13;
 use phase13::{analyze_taint, build_dominance, build_sample_backend_with_chain, large_graph};
 use rbuilder::analysis::CallGraph;
 use rbuilder::gql::execute;
-use rbuilder::graph::backend::GraphBackend;
 use std::time::Instant;
 
 macro_rules! perf_test {

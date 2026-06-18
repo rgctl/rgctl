@@ -4,6 +4,7 @@ pub mod ansible;
 pub mod bash;
 pub mod chef;
 pub mod dockerfile;
-pub mod gitlab_ci;
 pub mod github_actions;
+pub mod gitlab_ci;
+pub mod puppet;
 pub mod sql;

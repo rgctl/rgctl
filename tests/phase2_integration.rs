@@ -25,7 +25,13 @@ fn sample_graph() -> CodeGraph {
     backend.insert_node(f1).unwrap();
     backend.insert_node(f2).unwrap();
     backend.insert_node(cfg).unwrap();
-    backend.insert_edge(Edge::new(id1, id2, rbuilder::graph::schema::EdgeType::Calls)).unwrap();
+    backend
+        .insert_edge(Edge::new(
+            id1,
+            id2,
+            rbuilder::graph::schema::EdgeType::Calls,
+        ))
+        .unwrap();
     graph
 }
 
@@ -53,7 +59,8 @@ fn test_nlp_callers_query() {
 fn test_complexity_analysis() {
     let mut graph = sample_graph();
     let mut node = Node::new(NodeType::Function, "complex".to_string());
-    node.properties.insert("cyclomatic".to_string(), "18".to_string());
+    node.properties
+        .insert("cyclomatic".to_string(), "18".to_string());
     graph.backend_mut().insert_node(node).unwrap();
 
     let report = ComplexityAnalyzer::analyze(graph.backend()).unwrap();
@@ -71,10 +78,18 @@ fn test_circular_dependency_via_analyzer() {
     backend.insert_node(a).unwrap();
     backend.insert_node(b).unwrap();
     backend
-        .insert_edge(Edge::new(id_a, id_b, rbuilder::graph::schema::EdgeType::Calls))
+        .insert_edge(Edge::new(
+            id_a,
+            id_b,
+            rbuilder::graph::schema::EdgeType::Calls,
+        ))
         .unwrap();
     backend
-        .insert_edge(Edge::new(id_b, id_a, rbuilder::graph::schema::EdgeType::Calls))
+        .insert_edge(Edge::new(
+            id_b,
+            id_a,
+            rbuilder::graph::schema::EdgeType::Calls,
+        ))
         .unwrap();
 
     let cycles = DependencyAnalyzer::find_circular_dependencies(backend).unwrap();
@@ -105,13 +120,19 @@ fn test_secret_scanner_on_file() {
 #[test]
 fn test_end_to_end_repo_with_nlp() {
     let temp = TempDir::new().unwrap();
-    fs::write(temp.path().join("main.rs"), "fn main() {}\nfn helper() {}\n").unwrap();
+    fs::write(
+        temp.path().join("main.rs"),
+        "fn main() {}\nfn helper() {}\n",
+    )
+    .unwrap();
 
     let graph = CodeGraph::from_repository(temp.path()).unwrap();
     graph.save_to_repo(temp.path()).unwrap();
 
     let loaded = CodeGraph::load_from_repo(temp.path()).unwrap();
     let matcher = PatternMatcher::new();
-    let result = matcher.ask("how many functions?", loaded.backend()).unwrap();
+    let result = matcher
+        .ask("how many functions?", loaded.backend())
+        .unwrap();
     assert!(matches!(result, QueryResult::Count(n) if n >= 2));
 }
