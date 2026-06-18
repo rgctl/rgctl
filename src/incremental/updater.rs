@@ -397,6 +397,13 @@ fn relation_type_to_edge(
         RelationType::Instantiates => EdgeType::Instantiates,
         RelationType::Modifies => EdgeType::Modifies,
         RelationType::DependsOn => EdgeType::DependsOn,
+        RelationType::IncludesRole => EdgeType::IncludesRole,
+        RelationType::DependsOnRole => EdgeType::DependsOnRole,
+        RelationType::ExecutesTask => EdgeType::ExecutesTask,
+        RelationType::NotifiesHandler => EdgeType::NotifiesHandler,
+        RelationType::IncludesPlaybook => EdgeType::IncludesPlaybook,
+        RelationType::UsesVariable => EdgeType::Uses,
+        RelationType::RendersTemplate => EdgeType::RendersTemplate,
     }
 }
 

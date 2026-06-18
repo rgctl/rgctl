@@ -70,12 +70,18 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
         return filter_nodes_by_return_type(backend, return_type);
     }
 
+    if let Some(module) = query.strip_prefix("module:") {
+        return filter_nodes_by_property(backend, "module", module);
+    }
+
     match query.to_ascii_lowercase().as_str() {
         "functions" | "function" => backend.find_nodes_by_type(NodeType::Function),
         "classes" | "class" => backend.find_nodes_by_type(NodeType::Class),
         "structs" | "struct" => backend.find_nodes_by_type(NodeType::Struct),
         "files" | "file" => backend.find_nodes_by_type(NodeType::File),
         "config" | "configkeys" => backend.find_nodes_by_type(NodeType::ConfigKey),
+        "playbooks" | "ansibleplaybooks" => backend.find_nodes_by_type(NodeType::AnsiblePlaybook),
+        "ansibleroles" | "roles" => backend.find_nodes_by_type(NodeType::AnsibleRole),
         _ => backend.find_nodes(query),
     }
 }
@@ -110,6 +116,17 @@ fn parse_node_type(value: &str) -> Result<NodeType> {
         "typealias" => Ok(NodeType::TypeAlias),
         "macro" => Ok(NodeType::Macro),
         "import" => Ok(NodeType::Import),
+        "table" => Ok(NodeType::Table),
+        "dependency" => Ok(NodeType::Dependency),
+        "job" => Ok(NodeType::Job),
+        "buildstep" => Ok(NodeType::BuildStep),
+        "ansibleplaybook" | "playbook" => Ok(NodeType::AnsiblePlaybook),
+        "ansibleplay" => Ok(NodeType::AnsiblePlay),
+        "ansibletask" | "task" => Ok(NodeType::AnsibleTask),
+        "ansiblerole" | "role" => Ok(NodeType::AnsibleRole),
+        "ansiblehandler" | "handler" => Ok(NodeType::AnsibleHandler),
+        "ansiblevariable" => Ok(NodeType::AnsibleVariable),
+        "ansibletemplate" => Ok(NodeType::AnsibleTemplate),
         other => Err(Error::InvalidQuery(format!("Unknown node type: {other}"))),
     }
 }
@@ -119,18 +136,20 @@ fn selectivity_rank(part: &str) -> usize {
         0
     } else if part.starts_with("signature:") {
         1
-    } else if part.starts_with("return_type:") {
+    } else if part.starts_with("module:") {
         2
-    } else if part.starts_with("repo:") {
+    } else if part.starts_with("return_type:") {
         3
-    } else if part.starts_with("type:") {
+    } else if part.starts_with("repo:") {
         4
-    } else if part.starts_with("label:") {
+    } else if part.starts_with("type:") {
         5
-    } else if part.starts_with("name_suffix:") {
+    } else if part.starts_with("label:") {
         6
-    } else {
+    } else if part.starts_with("name_suffix:") {
         7
+    } else {
+        8
     }
 }
 
@@ -152,6 +171,21 @@ fn filter_nodes_by_return_type(backend: &MemoryBackend, prefix: &str) -> Result<
         .filter(|node| {
             node.return_type_text()
                 .is_some_and(|ty| ty.starts_with(prefix))
+        })
+        .collect())
+}
+
+fn filter_nodes_by_property(
+    backend: &MemoryBackend,
+    key: &str,
+    value: &str,
+) -> Result<Vec<Node>> {
+    Ok(backend
+        .all_nodes()?
+        .into_iter()
+        .filter(|node| {
+            node.get_property(key)
+                .is_some_and(|v| v.eq_ignore_ascii_case(value))
         })
         .collect())
 }

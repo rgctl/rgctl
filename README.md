@@ -23,7 +23,7 @@ rBuilder builds a queryable knowledge graph of your entire codebase with natural
 - 🎯 **90% of queries** answered without LLM calls (pattern matching + cache)
 - 📊 **Deep insights**: complexity metrics, communities, circular dependencies
 - 🔌 **Native MCP integration** for Claude Code, Cursor, and other AI agents
-- 🌐 **13+ languages** supported (expandable via simple TOML config)
+- 🌐 **35+ languages** + IaC support (Ansible, with Chef/Puppet coming soon)
 
 ---
 
@@ -36,7 +36,9 @@ rBuilder builds a queryable knowledge graph of your entire codebase with natural
 - **Context-Efficient**: Compressed responses optimized for token efficiency
 
 ### For Developers
-- **Multi-Language Support**: Rust, Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Markdown, C, C++, Ruby, PHP
+- **Multi-Language Support**: 35+ languages including Rust, Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, C, C++, Ruby, PHP, Scala, Swift, Lua, Elixir, Haskell, and more
+- **Infrastructure as Code**: Ansible playbooks, roles, and security scanning (Chef & Puppet coming soon)
+- **Multi-Modal Analysis**: SQL DDL, Dockerfiles, CI/CD YAML (GitHub Actions, GitLab CI), Bash scripts
 - **Hybrid NLP System**: 90% queries without LLM (pattern matching → cache → local model → cloud)
 - **Graph Intelligence**: Community detection, complexity metrics, centrality analysis
 - **Configuration Analysis**: Find unused config keys, missing env vars, hardcoded secrets
@@ -87,6 +89,10 @@ rbuilder serve --port 8080 --open
 
 # Analytics dashboard (communities, hotspots, centrality)
 rbuilder serve-web --port 3000 --open
+
+# Ansible-specific commands
+rbuilder ansible roles --show-deps
+rbuilder ansible security-scan . --min-severity high
 ```
 
 ### Web Dashboard
@@ -118,6 +124,8 @@ Now Claude can query your codebase:
 - "What functions are in the auth module?"
 - "Find high-complexity security functions"
 - "What breaks if I refactor this?"
+- "Analyze Ansible playbooks and show role dependencies"
+- "Scan Ansible playbooks for security vulnerabilities"
 
 ---
 
@@ -160,6 +168,51 @@ Community 3: API Handlers (67 functions)
 
 ---
 
+## 🔧 Infrastructure as Code Support
+
+### Ansible
+
+Comprehensive Ansible analysis with security scanning:
+
+```bash
+# Analyze role dependencies
+rbuilder ansible roles --path ./roles --show-deps
+
+# Validate playbooks
+rbuilder ansible validate playbooks/site.yml
+
+# Security scan for common vulnerabilities
+rbuilder ansible security-scan . --min-severity medium
+```
+
+**Security Checks:**
+- **CWE-78**: Command injection (unquoted Jinja2 in shell/command modules)
+- **CWE-798**: Hardcoded secrets detection
+- **CWE-250**: Unnecessary privilege escalation (become)
+- **CWE-532**: Sensitive data logging (missing no_log)
+
+**What's Indexed:**
+- Playbooks, plays, tasks, handlers, roles
+- Role dependencies (meta/main.yml)
+- Jinja2 templates and variable usage
+- Group/host variables
+
+**Query Examples:**
+```bash
+rbuilder gql "type:ansibletask AND module:shell"
+rbuilder gql "playbooks"
+rbuilder gql "ansibleroles"
+```
+
+See [docs/ansible_support.md](docs/ansible_support.md) for complete documentation.
+
+### Coming Soon
+
+- **Chef**: Cookbook analysis, recipe dependencies, resource tracking
+- **Puppet**: Manifest parsing, module dependencies, class inheritance
+
+---
+
 ## 🏗️ Architecture
 
 ```
@@ -187,17 +240,19 @@ Community 3: API Handlers (67 functions)
                 │
                 ▼
 ┌─────────────────────────────────────────┐
-│     Language Plugins (Tree-sitter)      │
-│  Tier 1: Custom (Python, Rust, TS...)  │
-│  Tier 2: Tree-sitter TOML (C, Ruby...)  │
-│  Tier 3: Regex (Kotlin, C#)            │
+│     Language Plugins                    │
+│  Tier 1: Custom (9 core languages)     │
+│  Tier 2: Tree-sitter TOML (22 langs)   │
+│  Multi-Modal: IaC, SQL, Docker, CI/CD   │
 └─────────────────────────────────────────┘
 ```
 
 **Three-Tier Hybrid Language System:**
-- **Tier 1 (Custom)**: Rich extraction with type inference (7 languages)
-- **Tier 2 (Tree-sitter)**: TOML-only config, add in < 30 min (4 languages)
-- **Tier 3 (Regex)**: Pattern-based fallback (2 languages)
+- **Tier 1 (Custom)**: Rich extraction with type inference (9 languages: Rust, Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Markdown)
+- **Tier 2 (Tree-sitter)**: TOML-only config, add in < 30 min (22 languages: C, C++, Ruby, PHP, Scala, Swift, Lua, Elixir, etc.)
+- **Multi-Modal**: Infrastructure as Code (Ansible, Chef*, Puppet*), SQL DDL, Dockerfiles, CI/CD YAML, Bash scripts
+
+*Coming soon
 
 See [LANGUAGE_GUIDE.md](LANGUAGE_GUIDE.md) for adding new languages.
 
@@ -205,10 +260,8 @@ See [LANGUAGE_GUIDE.md](LANGUAGE_GUIDE.md) for adding new languages.
 
 ## 📚 Documentation
 
-- **[LANGUAGE_GUIDE.md](LANGUAGE_GUIDE.md)** - How to add new language support
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Contributing guidelines
-- **[TASK_PLAN.md](TASK_PLAN.md)** - Development roadmap and status
-- **[DEFERRED_TASKS.md](DEFERRED_TASKS.md)** - Future enhancements
+- **[docs/ansible_support.md](docs/ansible_support.md)** - Ansible playbook analysis and security scanning
+- **[LANGUAGE_GUIDE.md](LANGUAGE_GUIDE.md)** - Supported languages and adding new ones
 
 ---
 
@@ -222,17 +275,20 @@ Control which languages are compiled into the binary:
 # Minimal (Rust + Python only)
 cargo build --no-default-features --features bundle-minimal
 
-# Extended (+ TypeScript, JavaScript, Go, Java)
+# Extended (+ TypeScript, JavaScript, Go, Java, Ansible IaC)
 cargo build --features bundle-extended
 
-# Full (+ Kotlin, C#, Markdown)
+# Full (+ Kotlin, C#, Markdown, all multi-modal)
 cargo build --features bundle-full
 
-# Extra (+ C, C++, Ruby, PHP)
+# Extra (+ C, C++, Ruby, PHP, 22 TOML languages)
 cargo build --features "bundle-full,bundle-extra"
 
 # Custom selection
-cargo build --no-default-features --features "lang-rust,lang-go,lang-python"
+cargo build --no-default-features --features "lang-rust,lang-go,lang-python,lang-ansible"
+
+# Infrastructure as Code only
+cargo build --no-default-features --features "lang-ansible"
 ```
 
 ### IDL Generation
@@ -281,41 +337,6 @@ rbuilder update --force
 
 ---
 
-## 🧪 Development
-
-### Build from Source
-
-```bash
-git clone https://github.com/sshaaf/rBuilder.git
-cd rBuilder
-cargo build
-cargo test
-```
-
-### Run Tests
-
-```bash
-# All tests
-cargo test
-
-# With minimal features
-cargo test --no-default-features --features bundle-minimal
-
-# Specific test
-cargo test test_python_extraction
-```
-
-### Linting
-
-```bash
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed development guide.
-
----
-
 ## 📊 Performance
 
 | Metric | Target | Actual |
@@ -328,15 +349,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed development guide.
 
 ---
 
-## 🤝 Contributing
+## 🤝 Community
 
-Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
-
-**Quick contribution ideas:**
-- 🌐 Add language support (see [LANGUAGE_GUIDE.md](LANGUAGE_GUIDE.md))
-- 🐛 Report bugs or suggest features (use issue templates)
-- 📝 Improve documentation
-- ✨ Add query templates for common patterns
+We welcome contributions! Whether you want to:
+- 🐛 [Report a bug](https://github.com/sshaaf/rBuilder/issues/new?template=bug_report.md)
+- ✨ [Request a feature](https://github.com/sshaaf/rBuilder/issues/new?template=feature_request.md)
+- 🌐 [Request language support](https://github.com/sshaaf/rBuilder/issues/new?template=language_request.md)
 
 ---
 
@@ -357,6 +375,3 @@ Built with:
 Inspired by:
 - [Graphify](https://github.com/safishamsi/graphify) - Multi-language knowledge graphs
 - [GitNexus](https://github.com/abhigyanpatwari/GitNexus) - Client-side graph with MCP
-
----
-[Report Bug](https://github.com/sshaaf/rBuilder/issues/new?template=bug_report.md) · [Request Feature](https://github.com/sshaaf/rBuilder/issues/new?template=feature_request.md) · [Add Language](https://github.com/sshaaf/rBuilder/issues/new?template=language_request.md)

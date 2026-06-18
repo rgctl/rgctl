@@ -323,6 +323,13 @@ enum Commands {
         #[command(subcommand)]
         command: WorkspaceCommands,
     },
+
+    /// Ansible playbook and role analysis (Phase 16)
+    #[cfg(feature = "lang-ansible")]
+    Ansible {
+        #[command(flatten)]
+        args: rbuilder::cli::ansible::AnsibleArgs,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1149,6 +1156,13 @@ fn main() -> anyhow::Result<()> {
             if !report.direct_callers.is_empty() {
                 println!("  Callers: {}", report.direct_callers.join(", "));
             }
+            Ok(())
+        }
+
+        #[cfg(feature = "lang-ansible")]
+        Commands::Ansible { args } => {
+            use std::path::Path;
+            rbuilder::cli::ansible::run_ansible_command(Path::new("."), args)?;
             Ok(())
         }
 

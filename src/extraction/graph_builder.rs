@@ -115,6 +115,19 @@ impl GraphBuilder {
         if let Some(doc) = &symbol.documentation {
             node = node.with_property("documentation".to_string(), doc.clone());
         }
+        if let Some(obj) = symbol.metadata.as_object() {
+            for (k, v) in obj {
+                let prop_val = match v {
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    serde_json::Value::Bool(b) => Some(b.to_string()),
+                    serde_json::Value::Number(n) => Some(n.to_string()),
+                    _ => None,
+                };
+                if let Some(s) = prop_val {
+                    node = node.with_property(k.clone(), s);
+                }
+            }
+        }
 
         let id = node.id;
         self.symbol_index.insert(key, id);
@@ -284,6 +297,13 @@ fn symbol_type_to_node_type(symbol_type: SymbolType) -> NodeType {
         SymbolType::Dependency => NodeType::Dependency,
         SymbolType::Job => NodeType::Job,
         SymbolType::BuildStep => NodeType::BuildStep,
+        SymbolType::AnsiblePlaybook => NodeType::AnsiblePlaybook,
+        SymbolType::AnsiblePlay => NodeType::AnsiblePlay,
+        SymbolType::AnsibleTask => NodeType::AnsibleTask,
+        SymbolType::AnsibleRole => NodeType::AnsibleRole,
+        SymbolType::AnsibleHandler => NodeType::AnsibleHandler,
+        SymbolType::AnsibleVariable => NodeType::AnsibleVariable,
+        SymbolType::AnsibleTemplate => NodeType::AnsibleTemplate,
     }
 }
 
@@ -298,6 +318,13 @@ fn relation_type_to_edge_type(relation_type: RelationType) -> EdgeType {
         RelationType::Instantiates => EdgeType::Instantiates,
         RelationType::Modifies => EdgeType::Modifies,
         RelationType::DependsOn => EdgeType::DependsOn,
+        RelationType::IncludesRole => EdgeType::IncludesRole,
+        RelationType::DependsOnRole => EdgeType::DependsOnRole,
+        RelationType::ExecutesTask => EdgeType::ExecutesTask,
+        RelationType::NotifiesHandler => EdgeType::NotifiesHandler,
+        RelationType::IncludesPlaybook => EdgeType::IncludesPlaybook,
+        RelationType::UsesVariable => EdgeType::Uses,
+        RelationType::RendersTemplate => EdgeType::RendersTemplate,
     }
 }
 

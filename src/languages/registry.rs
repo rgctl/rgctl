@@ -115,6 +115,19 @@ impl LanguageRegistry {
                 return Ok(Arc::clone(plugin));
             }
         }
+        if crate::languages::multimodal::ansible::parser::AnsibleParser::is_ansible_path(&path_str) {
+            if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
+                if ext == "yml" || ext == "yaml" || ext == "j2" {
+                    if let Some(plugin) = self.language_plugins.get("ansible") {
+                        return Ok(Arc::clone(plugin));
+                    }
+                }
+            } else if path_str.ends_with(".j2") {
+                if let Some(plugin) = self.language_plugins.get("ansible") {
+                    return Ok(Arc::clone(plugin));
+                }
+            }
+        }
 
         // Dockerfile has no extension.
         if file_path
@@ -147,6 +160,7 @@ impl LanguageRegistry {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.contains("gitlab-ci"))
+            || crate::languages::multimodal::ansible::parser::AnsibleParser::is_ansible_path(&path_str)
         {
             return Err(Error::UnsupportedLanguage(
                 file_path.to_string_lossy().to_string(),
@@ -327,21 +341,21 @@ mod tests {
     #[test]
     fn test_extended_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        assert_eq!(registry.stats().language_plugins, 18);
+        assert_eq!(registry.stats().language_plugins, 19);
     }
 
     #[cfg(all(feature = "bundle-full", not(feature = "bundle-extra")))]
     #[test]
     fn test_full_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        assert_eq!(registry.stats().language_plugins, 28);
+        assert_eq!(registry.stats().language_plugins, 29);
     }
 
     #[cfg(feature = "bundle-extra")]
     #[test]
     fn test_extra_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        assert_eq!(registry.stats().language_plugins, 41);
+        assert_eq!(registry.stats().language_plugins, 42);
     }
 
     #[cfg(feature = "lang-javascript")]

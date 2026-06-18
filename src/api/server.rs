@@ -600,6 +600,13 @@ fn parse_node_type(value: &str) -> std::result::Result<NodeType, Error> {
         "file" => Ok(NodeType::File),
         "module" => Ok(NodeType::Module),
         "configkey" | "config" => Ok(NodeType::ConfigKey),
+        "ansibleplaybook" | "playbook" => Ok(NodeType::AnsiblePlaybook),
+        "ansibleplay" => Ok(NodeType::AnsiblePlay),
+        "ansibletask" | "task" => Ok(NodeType::AnsibleTask),
+        "ansiblerole" | "role" => Ok(NodeType::AnsibleRole),
+        "ansiblehandler" | "handler" => Ok(NodeType::AnsibleHandler),
+        "ansiblevariable" => Ok(NodeType::AnsibleVariable),
+        "ansibletemplate" => Ok(NodeType::AnsibleTemplate),
         other => Err(Error::InvalidQuery(format!("Unknown node type: {other}"))),
     }
 }

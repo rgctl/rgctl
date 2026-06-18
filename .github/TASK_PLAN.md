@@ -77,26 +77,28 @@
 6. ❌ → ✅ CVE/CWE pattern matching with remediation recommendations
 
 ### Current State
-- **Current Phase:** Phase 14 Complete ✅ → Next: Phase 15
-- **Status:** Production-ready with full automation suite
-- **Languages Supported:** 13 (9 core + 4 TOML-only: C, C++, Ruby, PHP)
-- **Test Coverage:** Phase 12A: Exceptional (113/105 = 108%) | Phase 13: Excellent (31/15 = 207%)
+- **Current Phase:** Phase 14 Complete ✅ → Phase 15 Parked → **Phases 16-18 Planned (IaC Focus)**
+- **Status:** Production-ready with full automation suite + visualization, adding infrastructure-as-code support
+- **Languages Supported:** 35+ (13 core + 22 TOML-based)
+- **Test Coverage:** Phase 14: Excellent (48/35 = 137%) | Phase 13: (31/15 = 207%) | Phase 12A: (113/105 = 108%)
 - **Performance:** All targets met, benchmarks validated
 - **Latest Achievements:**
-  - **Phase 12A** Advanced Program Analysis (Grade: A+) ✅ **COMPLETE**
-    - Taint analysis for security vulnerability detection
-    - Interprocedural analysis with call graph and slicing
-    - Dominance analysis for precise control dependencies
-    - Type inference for Python, JavaScript, Ruby
-    - GQL query optimizer with 50%+ speedup
-    - CVE/CWE security pattern matching
-  - **Phase 13** Real-time Updates & Automation (Grade: A) ✅ **95% COMPLETE**
+  - **Phase 14** Visualization & Export (Grade: A+) ✅ **COMPLETE**
+    - Mermaid/Graphviz/GraphML diagram export ✅
+    - PNG/SVG/PDF rendering ✅
+    - Interactive D3.js force graph explorer ✅
+    - Advanced dashboard with community detection, centrality, hotspots ✅
+    - 48 tests (137% of target) ✅
+  - **Phase 13** Real-time Updates & Automation (Grade: A) ✅ **COMPLETE**
     - File system watching with debouncing ✅
     - Git hooks (pre-commit risk blocking, post-commit updates, branch switch) ✅
     - MCP notifications (stdio push + HTTP polling) ✅
     - 31 tests (207% of target) ✅
-    - Full documentation ✅
-- **New Goal:** Achieve total feature parity with Graphify (63K stars) and GitNexus (28K+ stars), then exceed them
+  - **Phase 12A** Advanced Program Analysis (Grade: A+) ✅ **COMPLETE**
+    - Taint analysis, interprocedural analysis, dominance, type inference ✅
+    - GQL query optimizer with 50%+ speedup ✅
+    - CVE/CWE security pattern matching ✅
+- **Next Goal:** Add Tier 1 Infrastructure-as-Code support (Ansible, Chef, Puppet) for comprehensive DevOps coverage
 
 ### Strategic Direction 🚀
 
@@ -186,17 +188,38 @@ We are NOT focusing on open source release yet. Instead:
 - ✅ Test coverage: 31/15 tests (207%)
 - ✅ Documentation: docs/phase13_automation.md (170 lines)
 
-**Phase 14 (Weeks 38-41):** Visualization & Export
-- Mermaid diagram generation
-- Graphviz DOT export + PNG/SVG rendering
-- Interactive D3.js graph explorer
-- Rich web dashboard with metrics
+**Phase 14 (Weeks 38-41):** ✅ COMPLETE (Grade: A+ - 96%) - Visualization & Export
+- ✅ Mermaid diagram generation
+- ✅ Graphviz DOT export + PNG/SVG rendering
+- ✅ Interactive D3.js graph explorer
+- ✅ Rich web dashboard with metrics (community detection, centrality, hotspots)
 
-**Phase 15 (Weeks 42-44):** Server & API Enhancements
+**Phase 15 (Weeks 42-44):** ⏸️ PARKED - Server & API Enhancements
 - HTTP REST API (not just MCP)
 - Remote access + multi-client support
 - Optional authentication
 - Docker + Kubernetes deployment
+
+**Phase 16 (Weeks 45-47):** 🎯 PLANNED - Ansible Support (Tier 1 IaC)
+- Playbook/role parsing (YAML + Jinja2)
+- Role dependency graph
+- Variable tracking and precedence
+- Security scanning (hardcoded secrets, command injection)
+- 35+ tests, full graph integration
+
+**Phase 17 (Weeks 48-50):** 🎯 PLANNED - Chef Support (Tier 1 IaC)
+- Cookbook/recipe parsing (Ruby DSL)
+- Cookbook dependency graph
+- Resource and attribute tracking
+- Security scanning (execute risks, insecure permissions)
+- 35+ tests, leverages existing Ruby parser
+
+**Phase 18 (Weeks 51-53):** 🎯 PLANNED - Puppet Support (Tier 1 IaC)
+- Manifest/module parsing (Puppet DSL)
+- Module dependency graph
+- Class inheritance and resource relationships
+- Security scanning (exec resources, hardcoded secrets)
+- 35+ tests, custom DSL parser
 
 **Phase 9 (Security):** ⏸️ Deferred until after feature parity
 **GitHub Release:** ⏸️ Deferred until Phases 11-15 complete
@@ -7098,15 +7121,31 @@ fn test_graphml_export() {
 
 ---
 
-# Phase 15: Server & API Enhancements (Weeks 42-44)
+# Phase 15: Server & API Enhancements (Weeks 42-44) ⏸️ **PARKED - NEEDS REVIEW**
 
-**Goal**: Match Graphify's deployment flexibility
+**Status**: ⏸️ **ON HOLD** - Requirements incomplete, needs expansion before implementation
 
-**Success Metrics**:
+**Note**: Current scope may not include all desired features. Phase parked pending:
+1. Review of complete server/API requirements
+2. Assessment of additional features needed before release
+3. Prioritization of features vs release timeline
+4. Possible integration with Phase 16+ features
+
+**Original Goal**: Match Graphify's deployment flexibility
+
+**Original Success Metrics**:
 - [ ] HTTP REST API (not just MCP)
 - [ ] Remote access support
 - [ ] Multi-client support (concurrent queries)
 - [ ] API authentication (optional)
+
+**Questions to Address Before Resuming**:
+- Do we need multi-repository management now or later?
+- What authentication/authorization model (JWT, API keys, OAuth)?
+- What deployment targets (Docker, K8s, bare metal, cloud)?
+- Performance requirements (throughput, latency, concurrency)?
+- Monitoring/observability requirements?
+- Additional infrastructure tools (Ansible, Puppet, Chef, Terraform)?
 
 ---
 
@@ -7424,12 +7463,1558 @@ services:
 
 ---
 
-**Last Updated**: June 17, 2026  
-**Document Version**: 3.0 (Added Feature Parity Roadmap - Phases 11-15)  
-**Current Phase**: GitHub Preparation → Phase 11 (Language Expansion)  
-**Next Review**: June 24, 2026  
-**Total Estimated Duration**: 44+ weeks (26 weeks complete, 18 weeks remaining for parity)  
-**Total Tasks**: 200+  
+# Phase 16: Ansible Support (Weeks 45-47) ⬜ **Tier 1 - Infrastructure as Code**
+
+**Implementation Guide:** [PHASE_16_ANSIBLE_IMPLEMENTATION.md](../PHASE_16_ANSIBLE_IMPLEMENTATION.md) ✅
+
+**Goal**: Add comprehensive Ansible playbook, role, and variable analysis following existing Tier 1 architecture
+
+**Success Metrics**:
+- [ ] Parse Ansible playbooks (YAML + Jinja2 templates)
+- [ ] Extract tasks, roles, handlers, variables
+- [ ] Build role dependency graph
+- [ ] Track variable usage and precedence
+- [ ] Detect included files and imports
+- [ ] Integration with existing graph backend (no architecture changes)
+- [ ] 30+ tests with Ansible playbook samples
+- [ ] Documentation with examples
+
+**Estimated Effort**: 3 weeks  
+**Target Grade**: A (90%+) — Tier 1 quality without tree-sitter
+
+**Architecture Note**: Custom plugin using YAML parser + pattern matching (similar to GitLab CI/GitHub Actions approach)
+
+---
+
+## 16.1 Ansible Parser Implementation ⬜
+
+### Task 16.1.1: Ansible YAML Parser ⬜
+**Description**: Parse Ansible playbooks and extract structure
+
+**Effort:** 1 week
+
+**Acceptance Criteria**:
+- [ ] Parse playbook YAML files
+- [ ] Extract plays, tasks, handlers, roles
+- [ ] Handle Jinja2 templates in variables and tasks
+- [ ] Detect `include_tasks`, `import_playbook`, `include_role`
+- [ ] Support inventory variable extraction
+- [ ] Validate against Ansible schema patterns
+
+**Implementation**:
+```rust
+// src/extraction/ansible.rs
+pub struct AnsibleParser {
+    yaml_parser: YamlParser,
+    jinja_extractor: JinjaExtractor,
+}
+
+pub struct AnsiblePlaybook {
+    pub name: String,
+    pub hosts: Vec<String>,
+    pub plays: Vec<Play>,
+    pub roles: Vec<RoleReference>,
+    pub variables: HashMap<String, VariableDefinition>,
+    pub handlers: Vec<Handler>,
+}
+
+pub struct Play {
+    pub name: String,
+    pub tasks: Vec<Task>,
+    pub pre_tasks: Vec<Task>,
+    pub post_tasks: Vec<Task>,
+    pub roles: Vec<RoleReference>,
+}
+
+pub struct Task {
+    pub name: String,
+    pub module: String,
+    pub args: HashMap<String, Value>,
+    pub when: Option<String>,
+    pub loop: Option<LoopSpec>,
+    pub tags: Vec<String>,
+    pub notify: Vec<String>,
+}
+
+impl LanguagePlugin for AnsibleParser {
+    fn parse_file(&self, content: &str, path: &Path) -> Result<ParsedFile> {
+        // Parse YAML
+        let yaml: Value = serde_yaml::from_str(content)?;
+        
+        // Detect file type (playbook, role, vars, inventory)
+        let file_type = self.detect_ansible_file_type(path, &yaml)?;
+        
+        match file_type {
+            AnsibleFileType::Playbook => self.parse_playbook(&yaml, path),
+            AnsibleFileType::Role => self.parse_role(&yaml, path),
+            AnsibleFileType::Vars => self.parse_vars(&yaml, path),
+            AnsibleFileType::Inventory => self.parse_inventory(&yaml, path),
+        }
+    }
+}
+```
+
+**Tests**:
+```rust
+#[test]
+fn test_parse_ansible_playbook() {
+    let yaml = r#"
+---
+- name: Configure web servers
+  hosts: webservers
+  become: yes
+  roles:
+    - common
+    - nginx
+  tasks:
+    - name: Install nginx
+      apt:
+        name: nginx
+        state: present
+      notify: restart nginx
+  handlers:
+    - name: restart nginx
+      service:
+        name: nginx
+        state: restarted
+"#;
+    
+    let parser = AnsibleParser::new();
+    let playbook = parser.parse_playbook_str(yaml).unwrap();
+    
+    assert_eq!(playbook.plays.len(), 1);
+    assert_eq!(playbook.plays[0].tasks.len(), 1);
+    assert_eq!(playbook.plays[0].roles.len(), 2);
+    assert_eq!(playbook.handlers.len(), 1);
+}
+
+#[test]
+fn test_detect_jinja2_variables() {
+    let task = "{{ ansible_user }}/{{ app_name }}/config.yml";
+    let parser = AnsibleParser::new();
+    let vars = parser.extract_jinja_vars(task).unwrap();
+    
+    assert_eq!(vars.len(), 2);
+    assert!(vars.contains(&"ansible_user".to_string()));
+    assert!(vars.contains(&"app_name".to_string()));
+}
+```
+
+**Deliverables**:
+- [ ] `src/extraction/ansible.rs` (500+ lines)
+- [ ] Jinja2 variable extraction utility
+- [ ] Ansible schema validation
+- [ ] 10+ unit tests
+
+---
+
+### Task 16.1.2: Role Dependency Analysis ⬜
+**Description**: Build graph of role dependencies and inclusions
+
+**Effort:** 1 week
+
+**Acceptance Criteria**:
+- [ ] Detect role dependencies in `meta/main.yml`
+- [ ] Track `include_role` and `import_role` calls
+- [ ] Build role hierarchy graph
+- [ ] Detect circular dependencies
+- [ ] Extract role variables and defaults
+
+**Implementation**:
+```rust
+// src/analysis/ansible_roles.rs
+pub struct RoleDependencyAnalyzer {
+    role_graph: HashMap<String, RoleNode>,
+}
+
+pub struct RoleNode {
+    pub name: String,
+    pub path: PathBuf,
+    pub dependencies: Vec<String>,
+    pub variables: HashMap<String, Value>,
+    pub defaults: HashMap<String, Value>,
+    pub tasks: Vec<Task>,
+}
+
+impl RoleDependencyAnalyzer {
+    pub fn analyze_role_dir(&self, roles_path: &Path) -> Result<RoleDependencyGraph> {
+        let mut graph = RoleDependencyGraph::new();
+        
+        for role_dir in fs::read_dir(roles_path)? {
+            let role_path = role_dir?.path();
+            let meta_path = role_path.join("meta/main.yml");
+            
+            if meta_path.exists() {
+                let meta = self.parse_role_meta(&meta_path)?;
+                graph.add_role(meta);
+            }
+        }
+        
+        // Detect circular deps
+        graph.validate_no_cycles()?;
+        
+        Ok(graph)
+    }
+}
+```
+
+**Tests**:
+```rust
+#[test]
+fn test_role_dependency_detection() {
+    let analyzer = RoleDependencyAnalyzer::new();
+    let graph = analyzer.analyze_test_roles().unwrap();
+    
+    assert_eq!(graph.roles.len(), 3);
+    assert_eq!(graph.get_dependencies("nginx").unwrap(), vec!["common"]);
+}
+
+#[test]
+fn test_circular_dependency_detection() {
+    let analyzer = RoleDependencyAnalyzer::new();
+    let result = analyzer.analyze_circular_roles();
+    
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("circular"));
+}
+```
+
+**Deliverables**:
+- [ ] `src/analysis/ansible_roles.rs`
+- [ ] Role graph construction
+- [ ] Circular dependency detection
+- [ ] 5+ tests
+
+---
+
+## 16.2 Graph Integration ⬜
+
+### Task 16.2.1: Ansible Node Types & Edges ⬜
+**Description**: Define Ansible-specific graph schema
+
+**Effort:** 3-4 days
+
+**Node Types**:
+```rust
+pub enum NodeType {
+    // Existing types...
+    
+    // Ansible-specific
+    AnsiblePlaybook,
+    AnsiblePlay,
+    AnsibleTask,
+    AnsibleRole,
+    AnsibleHandler,
+    AnsibleVariable,
+    AnsibleTemplate,
+}
+
+pub enum EdgeType {
+    // Existing types...
+    
+    // Ansible-specific
+    IncludesRole,      // playbook -> role
+    DependsOnRole,     // role -> role (meta deps)
+    ExecutesTask,      // play -> task
+    NotifiesHandler,   // task -> handler
+    UsesVariable,      // task/template -> variable
+    IncludesPlaybook,  // playbook -> playbook
+    RendersTemplate,   // task -> template file
+}
+```
+
+**Acceptance Criteria**:
+- [ ] Add Ansible node types to `src/graph/schema.rs`
+- [ ] Add Ansible edge types
+- [ ] Integration with existing NodeType/EdgeType enums
+- [ ] No breaking changes to existing code
+
+**Deliverables**:
+- [ ] Updated `src/graph/schema.rs`
+- [ ] Schema migration (if needed)
+- [ ] 3+ integration tests
+
+---
+
+### Task 16.2.2: Ansible Graph Construction ⬜
+**Description**: Build graph from parsed Ansible structures
+
+**Effort:** 1 week
+
+**Acceptance Criteria**:
+- [ ] Create nodes for playbooks, plays, tasks, roles, handlers, variables
+- [ ] Create edges for inclusions, dependencies, notifications, variable usage
+- [ ] Link Ansible tasks to templates and files
+- [ ] Track variable precedence and scope
+- [ ] Integration with existing GraphBackend
+
+**Implementation**:
+```rust
+// src/extraction/ansible.rs (continued)
+impl AnsibleParser {
+    pub fn build_graph(&self, playbook: &AnsiblePlaybook, backend: &mut dyn GraphBackend) -> Result<()> {
+        // Create playbook node
+        let playbook_node = Node::new(
+            NodeType::AnsiblePlaybook,
+            playbook.name.clone()
+        );
+        let playbook_id = backend.insert_node(playbook_node)?;
+        
+        // Create role nodes and dependencies
+        for role_ref in &playbook.roles {
+            let role_node = Node::new(NodeType::AnsibleRole, role_ref.name.clone());
+            let role_id = backend.insert_node(role_node)?;
+            
+            backend.insert_edge(Edge::new(
+                playbook_id,
+                role_id,
+                EdgeType::IncludesRole
+            ))?;
+        }
+        
+        // Create task nodes
+        for play in &playbook.plays {
+            let play_node = Node::new(NodeType::AnsiblePlay, play.name.clone());
+            let play_id = backend.insert_node(play_node)?;
+            
+            for task in &play.tasks {
+                let task_node = Node::new(NodeType::AnsibleTask, task.name.clone())
+                    .with_property("module", task.module.clone());
+                let task_id = backend.insert_node(task_node)?;
+                
+                backend.insert_edge(Edge::new(play_id, task_id, EdgeType::ExecutesTask))?;
+                
+                // Link task -> handler notifications
+                for handler_name in &task.notify {
+                    if let Some(handler_id) = self.find_handler(backend, handler_name) {
+                        backend.insert_edge(Edge::new(
+                            task_id,
+                            handler_id,
+                            EdgeType::NotifiesHandler
+                        ))?;
+                    }
+                }
+            }
+        }
+        
+        Ok(())
+    }
+}
+```
+
+**Tests**:
+```rust
+#[test]
+fn test_ansible_graph_construction() {
+    let mut backend = MemoryBackend::new();
+    let parser = AnsibleParser::new();
+    
+    let playbook = parser.parse_test_playbook();
+    parser.build_graph(&playbook, &mut backend).unwrap();
+    
+    let nodes = backend.all_nodes().unwrap();
+    assert!(nodes.iter().any(|n| n.node_type == NodeType::AnsiblePlaybook));
+    assert!(nodes.iter().any(|n| n.node_type == NodeType::AnsibleTask));
+    
+    let edges = backend.all_edges().unwrap();
+    assert!(edges.iter().any(|e| e.edge_type == EdgeType::IncludesRole));
+}
+```
+
+**Deliverables**:
+- [ ] Graph construction logic
+- [ ] Variable tracking
+- [ ] Handler notification linking
+- [ ] 8+ integration tests
+
+---
+
+## 16.3 Query & Analysis ⬜
+
+### Task 16.3.1: Ansible-Specific Queries ⬜
+**Description**: Add query support for Ansible structures
+
+**Effort:** 3-4 days
+
+**Query Examples**:
+```bash
+# Find all playbooks
+rbuilder query "type:AnsiblePlaybook"
+
+# Find tasks that use specific module
+rbuilder query "type:AnsibleTask module:apt"
+
+# Find role dependencies
+rbuilder query "type:AnsibleRole" --with-edges DependsOnRole
+
+# Find variables used in templates
+rbuilder query "type:AnsibleVariable" --used-by AnsibleTemplate
+
+# Blast radius: what's affected if this role changes?
+rbuilder analyze blast-radius "ansible/roles/nginx"
+```
+
+**Deliverables**:
+- [ ] Query pattern support for Ansible types
+- [ ] Blast radius for Ansible changes
+- [ ] 5+ query tests
+
+---
+
+### Task 16.3.2: Ansible Security Analysis ⬜
+**Description**: Detect security issues in Ansible playbooks
+
+**Effort:** 1 week
+
+**Security Checks**:
+- [ ] Detect hardcoded secrets in playbooks
+- [ ] Find tasks running with `become: yes` unnecessarily
+- [ ] Detect deprecated modules
+- [ ] Find tasks with `no_log: false` on sensitive data
+- [ ] Detect command/shell tasks (vs idempotent modules)
+- [ ] Find tasks with `ignore_errors: yes` or `failed_when: false`
+
+**Implementation**:
+```rust
+// src/security/ansible.rs
+pub struct AnsibleSecurityScanner {
+    patterns: Vec<SecurityPattern>,
+}
+
+impl AnsibleSecurityScanner {
+    pub fn scan_playbook(&self, playbook: &AnsiblePlaybook) -> Vec<SecurityFinding> {
+        let mut findings = Vec::new();
+        
+        for play in &playbook.plays {
+            for task in &play.tasks {
+                // Check for hardcoded passwords
+                if self.contains_hardcoded_secret(&task.args) {
+                    findings.push(SecurityFinding {
+                        severity: Severity::High,
+                        message: "Hardcoded secret detected".into(),
+                        location: task.name.clone(),
+                        cwe: "CWE-798",
+                    });
+                }
+                
+                // Check for shell/command with user input
+                if task.module == "shell" || task.module == "command" {
+                    if self.has_user_input(&task.args) {
+                        findings.push(SecurityFinding {
+                            severity: Severity::Critical,
+                            message: "Command injection risk".into(),
+                            location: task.name.clone(),
+                            cwe: "CWE-78",
+                        });
+                    }
+                }
+            }
+        }
+        
+        findings
+    }
+}
+```
+
+**Tests**:
+```rust
+#[test]
+fn test_detect_hardcoded_secrets() {
+    let scanner = AnsibleSecurityScanner::new();
+    let playbook = parse_playbook_with_secret();
+    let findings = scanner.scan_playbook(&playbook);
+    
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].severity, Severity::High);
+    assert!(findings[0].message.contains("secret"));
+}
+```
+
+**Deliverables**:
+- [ ] `src/security/ansible.rs`
+- [ ] 10+ security patterns
+- [ ] 8+ tests
+- [ ] Documentation with remediation
+
+---
+
+## 16.4 CLI & MCP Integration ⬜
+
+### Task 16.4.1: CLI Commands for Ansible ⬜
+**Description**: Add Ansible-specific CLI commands
+
+**Effort:** 2-3 days
+
+**Commands**:
+```bash
+# Index Ansible project
+rbuilder index --type ansible ./ansible-project
+
+# Show role dependencies
+rbuilder ansible roles --show-deps
+
+# Validate playbooks
+rbuilder ansible validate
+
+# Security scan
+rbuilder ansible security-scan
+
+# Export role graph
+rbuilder diagram "type:AnsibleRole" --format mermaid
+```
+
+**Deliverables**:
+- [ ] `src/cli/ansible.rs`
+- [ ] Subcommands integration
+- [ ] 3+ CLI tests
+
+---
+
+### Task 16.4.2: MCP Tools for Ansible ⬜
+**Description**: Add MCP tools for AI agent Ansible analysis
+
+**Effort:** 2-3 days
+
+**MCP Tools**:
+```json
+{
+  "name": "analyze_ansible_playbook",
+  "description": "Analyze Ansible playbook structure and dependencies",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "playbook_path": { "type": "string" }
+    }
+  }
+}
+```
+
+**Deliverables**:
+- [ ] `analyze_ansible_playbook` MCP tool
+- [ ] `find_ansible_roles` MCP tool
+- [ ] `ansible_security_scan` MCP tool
+- [ ] 3+ MCP tests
+
+---
+
+## 16.5 Documentation & Testing ⬜
+
+### Task 16.5.1: Comprehensive Testing ⬜
+**Description**: Full test suite for Ansible support
+
+**Effort:** 1 week
+
+**Test Coverage**:
+- [ ] Unit tests: parser, role analyzer (15+ tests)
+- [ ] Integration tests: graph construction (10+ tests)
+- [ ] Security scanner tests (8+ tests)
+- [ ] CLI tests (3+ tests)
+- [ ] MCP tests (3+ tests)
+- [ ] Real Ansible project samples (3+ repos)
+
+**Target**: 35+ tests total
+
+**Deliverables**:
+- [ ] `tests/phase16_ansible.rs`
+- [ ] Test fixtures (sample playbooks)
+- [ ] Benchmark for large Ansible projects
+
+---
+
+### Task 16.5.2: Documentation ⬜
+**Description**: Complete Ansible support documentation
+
+**Effort:** 3-4 days
+
+**Documents**:
+```markdown
+# docs/ansible_support.md
+- Supported Ansible versions
+- Playbook parsing capabilities
+- Role dependency analysis
+- Security scanning patterns
+- Query examples
+- CLI reference
+- MCP tool reference
+- Limitations and future work
+```
+
+**Deliverables**:
+- [ ] `docs/ansible_support.md`
+- [ ] Update README with Ansible support
+- [ ] Example queries in documentation
+- [ ] Migration guide (if upgrading)
+
+---
+
+# Phase 17: Chef Support (Weeks 48-50) ⬜ **Tier 1 - Infrastructure as Code**
+
+**Implementation Guide:** [PHASE_17_CHEF_IMPLEMENTATION.md](../PHASE_17_CHEF_IMPLEMENTATION.md) ✅
+
+**Goal**: Add comprehensive Chef cookbook, recipe, and resource analysis following existing Tier 1 architecture
+
+**Success Metrics**:
+- [ ] Parse Chef cookbooks (Ruby DSL)
+- [ ] Extract recipes, resources, attributes, templates
+- [ ] Build cookbook dependency graph
+- [ ] Track attribute precedence and overrides
+- [ ] Detect included recipes and dependencies
+- [ ] Integration with existing graph backend (no architecture changes)
+- [ ] 30+ tests with Chef cookbook samples
+- [ ] Documentation with examples
+
+**Estimated Effort**: 3 weeks  
+**Target Grade**: A (90%+) — Tier 1 quality leveraging existing Ruby parser
+
+**Architecture Note**: Extend existing Ruby parser with Chef-specific DSL patterns (similar to Rails detection)
+
+---
+
+## 17.1 Chef Parser Implementation ⬜
+
+### Task 17.1.1: Chef DSL Parser ⬜
+**Description**: Parse Chef cookbooks and extract Chef-specific DSL
+
+**Effort:** 1 week
+
+**Acceptance Criteria**:
+- [ ] Leverage existing Ruby tree-sitter parser
+- [ ] Detect Chef resource declarations (`package`, `service`, `template`, etc.)
+- [ ] Extract recipe definitions
+- [ ] Parse metadata.rb for cookbook dependencies
+- [ ] Extract attributes from `attributes/` directory
+- [ ] Handle `include_recipe` calls
+- [ ] Detect custom resources (LWRP/HWRP)
+
+**Implementation**:
+```rust
+// src/extraction/chef.rs
+pub struct ChefParser {
+    ruby_parser: RubyParser,  // Reuse existing Tier 2 Ruby parser
+}
+
+pub struct ChefCookbook {
+    pub name: String,
+    pub version: String,
+    pub dependencies: Vec<CookbookDependency>,
+    pub recipes: Vec<Recipe>,
+    pub attributes: HashMap<String, AttributeDefinition>,
+    pub templates: Vec<TemplateFile>,
+    pub resources: Vec<CustomResource>,
+}
+
+pub struct Recipe {
+    pub name: String,
+    pub path: PathBuf,
+    pub resources: Vec<ResourceDeclaration>,
+    pub included_recipes: Vec<String>,
+}
+
+pub struct ResourceDeclaration {
+    pub resource_type: String,  // package, service, file, template, etc.
+    pub name: String,
+    pub properties: HashMap<String, Value>,
+    pub action: Vec<String>,  // :install, :start, :create, etc.
+}
+
+impl ChefParser {
+    pub fn parse_cookbook(&self, cookbook_path: &Path) -> Result<ChefCookbook> {
+        let metadata = self.parse_metadata(&cookbook_path.join("metadata.rb"))?;
+        let recipes = self.parse_recipes_dir(&cookbook_path.join("recipes"))?;
+        let attributes = self.parse_attributes_dir(&cookbook_path.join("attributes"))?;
+        let templates = self.discover_templates(&cookbook_path.join("templates"))?;
+        
+        Ok(ChefCookbook {
+            name: metadata.name,
+            version: metadata.version,
+            dependencies: metadata.dependencies,
+            recipes,
+            attributes,
+            templates,
+            resources: vec![],
+        })
+    }
+    
+    fn parse_recipe(&self, recipe_path: &Path) -> Result<Recipe> {
+        // Use Ruby parser to get AST
+        let ast = self.ruby_parser.parse_file(recipe_path)?;
+        
+        let mut resources = Vec::new();
+        let mut included_recipes = Vec::new();
+        
+        // Walk AST looking for Chef patterns
+        for node in ast.walk() {
+            match self.detect_chef_pattern(&node) {
+                ChefPattern::Resource(res) => resources.push(res),
+                ChefPattern::IncludeRecipe(name) => included_recipes.push(name),
+                ChefPattern::None => continue,
+            }
+        }
+        
+        Ok(Recipe {
+            name: recipe_path.file_stem().unwrap().to_string_lossy().to_string(),
+            path: recipe_path.to_path_buf(),
+            resources,
+            included_recipes,
+        })
+    }
+}
+```
+
+**Chef Resource Detection Patterns**:
+```ruby
+# Pattern 1: Standard resource
+package 'nginx' do
+  action :install
+end
+
+# Pattern 2: Template resource
+template '/etc/nginx/nginx.conf' do
+  source 'nginx.conf.erb'
+  owner 'root'
+  mode '0644'
+  notifies :restart, 'service[nginx]'
+end
+
+# Pattern 3: Service resource
+service 'nginx' do
+  action [:enable, :start]
+  supports :restart => true
+end
+
+# Pattern 4: Include recipe
+include_recipe 'apt::default'
+```
+
+**Tests**:
+```rust
+#[test]
+fn test_parse_chef_recipe() {
+    let recipe = r#"
+package 'nginx' do
+  action :install
+end
+
+service 'nginx' do
+  action [:enable, :start]
+end
+
+include_recipe 'apt::default'
+"#;
+    
+    let parser = ChefParser::new();
+    let parsed = parser.parse_recipe_str(recipe).unwrap();
+    
+    assert_eq!(parsed.resources.len(), 2);
+    assert_eq!(parsed.resources[0].resource_type, "package");
+    assert_eq!(parsed.included_recipes.len(), 1);
+}
+
+#[test]
+fn test_parse_metadata_rb() {
+    let metadata = r#"
+name 'nginx'
+version '1.0.0'
+depends 'apt'
+depends 'build-essential'
+"#;
+    
+    let parser = ChefParser::new();
+    let meta = parser.parse_metadata_str(metadata).unwrap();
+    
+    assert_eq!(meta.name, "nginx");
+    assert_eq!(meta.dependencies.len(), 2);
+}
+```
+
+**Deliverables**:
+- [ ] `src/extraction/chef.rs` (500+ lines)
+- [ ] Chef DSL pattern matching
+- [ ] metadata.rb parser
+- [ ] 10+ unit tests
+
+---
+
+### Task 17.1.2: Cookbook Dependency Analysis ⬜
+**Description**: Build graph of cookbook dependencies
+
+**Effort:** 1 week
+
+**Acceptance Criteria**:
+- [ ] Parse `depends` in metadata.rb
+- [ ] Track `include_recipe` calls
+- [ ] Build cookbook hierarchy
+- [ ] Detect circular dependencies
+- [ ] Extract attribute precedence
+
+**Implementation**:
+```rust
+// src/analysis/chef_cookbooks.rs
+pub struct CookbookDependencyAnalyzer {
+    cookbook_graph: HashMap<String, CookbookNode>,
+}
+
+pub struct CookbookNode {
+    pub name: String,
+    pub version: String,
+    pub path: PathBuf,
+    pub dependencies: Vec<CookbookDependency>,
+    pub recipes: Vec<String>,
+    pub attributes: HashMap<String, AttributeLevel>,
+}
+
+pub enum AttributeLevel {
+    Default,
+    Normal,
+    Override,
+    Automatic,
+}
+
+impl CookbookDependencyAnalyzer {
+    pub fn analyze_cookbooks(&self, cookbooks_path: &Path) -> Result<CookbookGraph> {
+        let mut graph = CookbookGraph::new();
+        
+        for cookbook_dir in fs::read_dir(cookbooks_path)? {
+            let cookbook_path = cookbook_dir?.path();
+            let metadata_path = cookbook_path.join("metadata.rb");
+            
+            if metadata_path.exists() {
+                let cookbook = self.parse_cookbook(&cookbook_path)?;
+                graph.add_cookbook(cookbook);
+            }
+        }
+        
+        graph.validate_dependencies()?;
+        
+        Ok(graph)
+    }
+}
+```
+
+**Tests**:
+```rust
+#[test]
+fn test_cookbook_dependency_graph() {
+    let analyzer = CookbookDependencyAnalyzer::new();
+    let graph = analyzer.analyze_test_cookbooks().unwrap();
+    
+    assert_eq!(graph.cookbooks.len(), 3);
+    assert_eq!(graph.get_dependencies("nginx").unwrap(), vec!["apt", "build-essential"]);
+}
+```
+
+**Deliverables**:
+- [ ] `src/analysis/chef_cookbooks.rs`
+- [ ] Cookbook graph construction
+- [ ] Attribute precedence tracking
+- [ ] 5+ tests
+
+---
+
+## 17.2 Graph Integration ⬜
+
+### Task 17.2.1: Chef Node Types & Edges ⬜
+**Description**: Define Chef-specific graph schema
+
+**Effort:** 3-4 days
+
+**Node Types**:
+```rust
+pub enum NodeType {
+    // Existing types...
+    
+    // Chef-specific
+    ChefCookbook,
+    ChefRecipe,
+    ChefResource,
+    ChefAttribute,
+    ChefTemplate,
+    ChefCustomResource,
+}
+
+pub enum EdgeType {
+    // Existing types...
+    
+    // Chef-specific
+    DependsOnCookbook,   // cookbook -> cookbook
+    IncludesRecipe,      // recipe -> recipe
+    DeclaresResource,    // recipe -> resource
+    UsesTemplate,        // resource -> template
+    DefinesAttribute,    // cookbook -> attribute
+    NotifiesResource,    // resource -> resource (notifies/subscribes)
+}
+```
+
+**Deliverables**:
+- [ ] Updated `src/graph/schema.rs`
+- [ ] Schema migration
+- [ ] 3+ integration tests
+
+---
+
+### Task 17.2.2: Chef Graph Construction ⬜
+**Description**: Build graph from parsed Chef structures
+
+**Effort:** 1 week
+
+**Acceptance Criteria**:
+- [ ] Create nodes for cookbooks, recipes, resources, attributes, templates
+- [ ] Create edges for dependencies, inclusions, notifications
+- [ ] Link resources to templates (ERB files)
+- [ ] Track attribute definitions and usage
+- [ ] Integration with existing GraphBackend
+
+**Implementation**:
+```rust
+impl ChefParser {
+    pub fn build_graph(&self, cookbook: &ChefCookbook, backend: &mut dyn GraphBackend) -> Result<()> {
+        // Create cookbook node
+        let cookbook_node = Node::new(NodeType::ChefCookbook, cookbook.name.clone())
+            .with_property("version", cookbook.version.clone());
+        let cookbook_id = backend.insert_node(cookbook_node)?;
+        
+        // Create recipe nodes
+        for recipe in &cookbook.recipes {
+            let recipe_node = Node::new(NodeType::ChefRecipe, recipe.name.clone());
+            let recipe_id = backend.insert_node(recipe_node)?;
+            
+            backend.insert_edge(Edge::new(cookbook_id, recipe_id, EdgeType::Contains))?;
+            
+            // Create resource nodes
+            for resource in &recipe.resources {
+                let resource_node = Node::new(NodeType::ChefResource, resource.name.clone())
+                    .with_property("type", resource.resource_type.clone());
+                let resource_id = backend.insert_node(resource_node)?;
+                
+                backend.insert_edge(Edge::new(recipe_id, resource_id, EdgeType::DeclaresResource))?;
+            }
+        }
+        
+        Ok(())
+    }
+}
+```
+
+**Tests**:
+```rust
+#[test]
+fn test_chef_graph_construction() {
+    let mut backend = MemoryBackend::new();
+    let parser = ChefParser::new();
+    
+    let cookbook = parser.parse_test_cookbook();
+    parser.build_graph(&cookbook, &mut backend).unwrap();
+    
+    let nodes = backend.all_nodes().unwrap();
+    assert!(nodes.iter().any(|n| n.node_type == NodeType::ChefCookbook));
+    assert!(nodes.iter().any(|n| n.node_type == NodeType::ChefResource));
+}
+```
+
+**Deliverables**:
+- [ ] Graph construction logic
+- [ ] Resource notification linking
+- [ ] 8+ integration tests
+
+---
+
+## 17.3 Query & Analysis ⬜
+
+### Task 17.3.1: Chef-Specific Queries ⬜
+**Description**: Add query support for Chef structures
+
+**Effort:** 3-4 days
+
+**Query Examples**:
+```bash
+# Find all cookbooks
+rbuilder query "type:ChefCookbook"
+
+# Find recipes using specific resource
+rbuilder query "type:ChefResource resource_type:package"
+
+# Find cookbook dependencies
+rbuilder query "type:ChefCookbook" --with-edges DependsOnCookbook
+
+# Blast radius: what's affected if this cookbook changes?
+rbuilder analyze blast-radius "cookbooks/nginx"
+```
+
+**Deliverables**:
+- [ ] Query pattern support for Chef types
+- [ ] Blast radius for Chef changes
+- [ ] 5+ query tests
+
+---
+
+### Task 17.3.2: Chef Security Analysis ⬜
+**Description**: Detect security issues in Chef cookbooks
+
+**Effort:** 1 week
+
+**Security Checks**:
+- [ ] Detect hardcoded secrets in recipes/attributes
+- [ ] Find `execute` or `bash` resources with unsanitized input
+- [ ] Detect insecure file permissions
+- [ ] Find deprecated resources
+- [ ] Detect `ignore_failure true` on critical resources
+- [ ] Find template files with embedded secrets
+
+**Implementation**:
+```rust
+// src/security/chef.rs
+pub struct ChefSecurityScanner {
+    patterns: Vec<SecurityPattern>,
+}
+
+impl ChefSecurityScanner {
+    pub fn scan_cookbook(&self, cookbook: &ChefCookbook) -> Vec<SecurityFinding> {
+        let mut findings = Vec::new();
+        
+        for recipe in &cookbook.recipes {
+            for resource in &recipe.resources {
+                if resource.resource_type == "execute" || resource.resource_type == "bash" {
+                    if self.has_command_injection_risk(&resource.properties) {
+                        findings.push(SecurityFinding {
+                            severity: Severity::Critical,
+                            message: "Command injection risk in execute/bash resource".into(),
+                            location: resource.name.clone(),
+                            cwe: "CWE-78",
+                        });
+                    }
+                }
+            }
+        }
+        
+        findings
+    }
+}
+```
+
+**Deliverables**:
+- [ ] `src/security/chef.rs`
+- [ ] 10+ security patterns
+- [ ] 8+ tests
+
+---
+
+## 17.4 CLI & MCP Integration ⬜
+
+### Task 17.4.1: CLI Commands for Chef ⬜
+**Description**: Add Chef-specific CLI commands
+
+**Effort:** 2-3 days
+
+**Commands**:
+```bash
+rbuilder index --type chef ./cookbooks
+rbuilder chef cookbooks --show-deps
+rbuilder chef validate
+rbuilder chef security-scan
+```
+
+**Deliverables**:
+- [ ] `src/cli/chef.rs`
+- [ ] 3+ CLI tests
+
+---
+
+### Task 17.4.2: MCP Tools for Chef ⬜
+**Description**: Add MCP tools for AI agent Chef analysis
+
+**Effort:** 2-3 days
+
+**Deliverables**:
+- [ ] `analyze_chef_cookbook` MCP tool
+- [ ] `find_chef_recipes` MCP tool
+- [ ] `chef_security_scan` MCP tool
+- [ ] 3+ MCP tests
+
+---
+
+## 17.5 Documentation & Testing ⬜
+
+### Task 17.5.1: Comprehensive Testing ⬜
+**Description**: Full test suite for Chef support
+
+**Effort:** 1 week
+
+**Target**: 35+ tests total
+
+**Deliverables**:
+- [ ] `tests/phase17_chef.rs`
+- [ ] Test fixtures (sample cookbooks)
+- [ ] Benchmark for large Chef repos
+
+---
+
+### Task 17.5.2: Documentation ⬜
+**Description**: Complete Chef support documentation
+
+**Effort:** 3-4 days
+
+**Deliverables**:
+- [ ] `docs/chef_support.md`
+- [ ] Update README
+- [ ] Example queries
+- [ ] Migration guide
+
+---
+
+# Phase 18: Puppet Support (Weeks 51-53) ⬜ **Tier 1 - Infrastructure as Code**
+
+**Implementation Guide:** [PHASE_18_PUPPET_IMPLEMENTATION.md](../PHASE_18_PUPPET_IMPLEMENTATION.md) ✅
+
+**Goal**: Add comprehensive Puppet manifest, module, and resource analysis following existing Tier 1 architecture
+
+**Success Metrics**:
+- [ ] Parse Puppet manifests (.pp files)
+- [ ] Extract classes, defined types, resources
+- [ ] Build module dependency graph
+- [ ] Track variable scope and facts
+- [ ] Detect included classes and modules
+- [ ] Integration with existing graph backend (no architecture changes)
+- [ ] 30+ tests with Puppet module samples
+- [ ] Documentation with examples
+
+**Estimated Effort**: 3 weeks  
+**Target Grade**: A (90%+) — Tier 1 quality with custom DSL parser
+
+**Architecture Note**: Custom parser for Puppet DSL (no tree-sitter grammar available)
+
+---
+
+## 18.1 Puppet Parser Implementation ⬜
+
+### Task 18.1.1: Puppet DSL Parser ⬜
+**Description**: Parse Puppet manifests and extract structure
+
+**Effort:** 1.5 weeks
+
+**Acceptance Criteria**:
+- [ ] Parse Puppet manifests (.pp files)
+- [ ] Extract class definitions
+- [ ] Extract defined types
+- [ ] Parse resource declarations
+- [ ] Handle `include`, `require`, `contain` class references
+- [ ] Parse metadata.json for module dependencies
+- [ ] Extract variables, facts, and Hiera lookups
+
+**Implementation**:
+```rust
+// src/extraction/puppet.rs
+pub struct PuppetParser {
+    // Custom regex-based parser (no tree-sitter available)
+}
+
+pub struct PuppetModule {
+    pub name: String,
+    pub version: String,
+    pub dependencies: Vec<ModuleDependency>,
+    pub classes: Vec<PuppetClass>,
+    pub defined_types: Vec<DefinedType>,
+    pub manifests: Vec<Manifest>,
+}
+
+pub struct PuppetClass {
+    pub name: String,
+    pub params: HashMap<String, Parameter>,
+    pub resources: Vec<ResourceDeclaration>,
+    pub included_classes: Vec<String>,
+    pub inherits: Option<String>,
+}
+
+pub struct ResourceDeclaration {
+    pub resource_type: String,  // package, file, service, user, etc.
+    pub title: String,
+    pub attributes: HashMap<String, Value>,
+}
+
+impl PuppetParser {
+    pub fn parse_manifest(&self, content: &str) -> Result<Manifest> {
+        let mut classes = Vec::new();
+        let mut resources = Vec::new();
+        
+        // Parse class definitions
+        for class_match in self.class_regex.find_iter(content) {
+            let class = self.parse_class(class_match.as_str())?;
+            classes.push(class);
+        }
+        
+        // Parse resource declarations
+        for resource_match in self.resource_regex.find_iter(content) {
+            let resource = self.parse_resource(resource_match.as_str())?;
+            resources.push(resource);
+        }
+        
+        Ok(Manifest {
+            classes,
+            resources,
+            defined_types: vec![],
+        })
+    }
+    
+    fn parse_class(&self, class_str: &str) -> Result<PuppetClass> {
+        // Pattern: class name (params) inherits parent { ... }
+        let name = self.extract_class_name(class_str)?;
+        let params = self.extract_parameters(class_str)?;
+        let inherits = self.extract_inheritance(class_str);
+        let resources = self.extract_resources_from_body(class_str)?;
+        let included = self.extract_includes(class_str)?;
+        
+        Ok(PuppetClass {
+            name,
+            params,
+            resources,
+            included_classes: included,
+            inherits,
+        })
+    }
+}
+```
+
+**Puppet Patterns to Detect**:
+```puppet
+# Pattern 1: Class definition
+class nginx (
+  $version = '1.18.0',
+  $port = 80,
+) {
+  package { 'nginx':
+    ensure => $version,
+  }
+  
+  service { 'nginx':
+    ensure => running,
+    enable => true,
+  }
+}
+
+# Pattern 2: Resource declaration
+file { '/etc/nginx/nginx.conf':
+  ensure  => file,
+  content => template('nginx/nginx.conf.erb'),
+  owner   => 'root',
+  mode    => '0644',
+  notify  => Service['nginx'],
+}
+
+# Pattern 3: Include class
+include ::nginx
+include ::firewall
+
+# Pattern 4: Defined type
+define webapp::vhost (
+  $port,
+  $docroot,
+) {
+  file { "/etc/nginx/sites-available/${name}":
+    content => template('webapp/vhost.erb'),
+  }
+}
+```
+
+**Tests**:
+```rust
+#[test]
+fn test_parse_puppet_class() {
+    let manifest = r#"
+class nginx (
+  $version = '1.18.0',
+) {
+  package { 'nginx':
+    ensure => $version,
+  }
+}
+"#;
+    
+    let parser = PuppetParser::new();
+    let parsed = parser.parse_manifest(manifest).unwrap();
+    
+    assert_eq!(parsed.classes.len(), 1);
+    assert_eq!(parsed.classes[0].name, "nginx");
+    assert_eq!(parsed.classes[0].resources.len(), 1);
+}
+
+#[test]
+fn test_parse_metadata_json() {
+    let metadata = r#"{
+  "name": "puppetlabs-nginx",
+  "version": "1.0.0",
+  "dependencies": [
+    {"name": "puppetlabs-stdlib", "version_requirement": ">= 4.0.0"},
+    {"name": "puppetlabs-concat", "version_requirement": ">= 2.0.0"}
+  ]
+}"#;
+    
+    let parser = PuppetParser::new();
+    let meta = parser.parse_metadata(metadata).unwrap();
+    
+    assert_eq!(meta.name, "puppetlabs-nginx");
+    assert_eq!(meta.dependencies.len(), 2);
+}
+```
+
+**Deliverables**:
+- [ ] `src/extraction/puppet.rs` (600+ lines)
+- [ ] Regex-based Puppet DSL parser
+- [ ] metadata.json parser
+- [ ] 12+ unit tests
+
+---
+
+### Task 18.1.2: Module Dependency Analysis ⬜
+**Description**: Build graph of Puppet module dependencies
+
+**Effort:** 1 week
+
+**Acceptance Criteria**:
+- [ ] Parse module dependencies from metadata.json
+- [ ] Track class inclusions (`include`, `require`, `contain`)
+- [ ] Build module hierarchy
+- [ ] Detect circular dependencies
+- [ ] Track class inheritance chains
+
+**Implementation**:
+```rust
+// src/analysis/puppet_modules.rs
+pub struct PuppetModuleDependencyAnalyzer {
+    module_graph: HashMap<String, ModuleNode>,
+}
+
+pub struct ModuleNode {
+    pub name: String,
+    pub version: String,
+    pub path: PathBuf,
+    pub dependencies: Vec<ModuleDependency>,
+    pub classes: Vec<String>,
+    pub defined_types: Vec<String>,
+}
+
+impl PuppetModuleDependencyAnalyzer {
+    pub fn analyze_modules(&self, modules_path: &Path) -> Result<ModuleGraph> {
+        let mut graph = ModuleGraph::new();
+        
+        for module_dir in fs::read_dir(modules_path)? {
+            let module_path = module_dir?.path();
+            let metadata_path = module_path.join("metadata.json");
+            
+            if metadata_path.exists() {
+                let module = self.parse_module(&module_path)?;
+                graph.add_module(module);
+            }
+        }
+        
+        graph.validate_dependencies()?;
+        
+        Ok(graph)
+    }
+}
+```
+
+**Deliverables**:
+- [ ] `src/analysis/puppet_modules.rs`
+- [ ] Module graph construction
+- [ ] Class inheritance tracking
+- [ ] 5+ tests
+
+---
+
+## 18.2 Graph Integration ⬜
+
+### Task 18.2.1: Puppet Node Types & Edges ⬜
+**Description**: Define Puppet-specific graph schema
+
+**Effort:** 3-4 days
+
+**Node Types**:
+```rust
+pub enum NodeType {
+    // Existing types...
+    
+    // Puppet-specific
+    PuppetModule,
+    PuppetClass,
+    PuppetDefinedType,
+    PuppetResource,
+    PuppetVariable,
+    PuppetFact,
+}
+
+pub enum EdgeType {
+    // Existing types...
+    
+    // Puppet-specific
+    DependsOnModule,    // module -> module
+    IncludesClass,      // class -> class
+    InheritsClass,      // class -> class (inheritance)
+    DeclaresResource,   // class -> resource
+    NotifiesResource,   // resource -> resource
+    RequiresResource,   // resource -> resource
+    UsesFact,           // class/resource -> fact
+}
+```
+
+**Deliverables**:
+- [ ] Updated `src/graph/schema.rs`
+- [ ] Schema migration
+- [ ] 3+ integration tests
+
+---
+
+### Task 18.2.2: Puppet Graph Construction ⬜
+**Description**: Build graph from parsed Puppet structures
+
+**Effort:** 1 week
+
+**Acceptance Criteria**:
+- [ ] Create nodes for modules, classes, defined types, resources
+- [ ] Create edges for dependencies, inclusions, notifications
+- [ ] Link resources with notify/require relationships
+- [ ] Track class inheritance chains
+- [ ] Integration with existing GraphBackend
+
+**Tests**:
+```rust
+#[test]
+fn test_puppet_graph_construction() {
+    let mut backend = MemoryBackend::new();
+    let parser = PuppetParser::new();
+    
+    let module = parser.parse_test_module();
+    parser.build_graph(&module, &mut backend).unwrap();
+    
+    let nodes = backend.all_nodes().unwrap();
+    assert!(nodes.iter().any(|n| n.node_type == NodeType::PuppetModule));
+    assert!(nodes.iter().any(|n| n.node_type == NodeType::PuppetClass));
+}
+```
+
+**Deliverables**:
+- [ ] Graph construction logic
+- [ ] Resource relationship linking
+- [ ] 8+ integration tests
+
+---
+
+## 18.3 Query & Analysis ⬜
+
+### Task 18.3.1: Puppet-Specific Queries ⬜
+**Description**: Add query support for Puppet structures
+
+**Effort:** 3-4 days
+
+**Query Examples**:
+```bash
+# Find all Puppet modules
+rbuilder query "type:PuppetModule"
+
+# Find classes using specific resource
+rbuilder query "type:PuppetResource resource_type:package"
+
+# Find module dependencies
+rbuilder query "type:PuppetModule" --with-edges DependsOnModule
+
+# Blast radius: what's affected if this module changes?
+rbuilder analyze blast-radius "modules/nginx"
+```
+
+**Deliverables**:
+- [ ] Query pattern support for Puppet types
+- [ ] Blast radius for Puppet changes
+- [ ] 5+ query tests
+
+---
+
+### Task 18.3.2: Puppet Security Analysis ⬜
+**Description**: Detect security issues in Puppet manifests
+
+**Effort:** 1 week
+
+**Security Checks**:
+- [ ] Detect hardcoded secrets in manifests
+- [ ] Find `exec` resources with unsanitized commands
+- [ ] Detect insecure file permissions (world-writable files)
+- [ ] Find deprecated resource types
+- [ ] Detect resources with `noop => false` override
+- [ ] Find template files with embedded secrets
+
+**Deliverables**:
+- [ ] `src/security/puppet.rs`
+- [ ] 10+ security patterns
+- [ ] 8+ tests
+
+---
+
+## 18.4 CLI & MCP Integration ⬜
+
+### Task 18.4.1: CLI Commands for Puppet ⬜
+**Description**: Add Puppet-specific CLI commands
+
+**Effort:** 2-3 days
+
+**Commands**:
+```bash
+rbuilder index --type puppet ./modules
+rbuilder puppet modules --show-deps
+rbuilder puppet validate
+rbuilder puppet security-scan
+```
+
+**Deliverables**:
+- [ ] `src/cli/puppet.rs`
+- [ ] 3+ CLI tests
+
+---
+
+### Task 18.4.2: MCP Tools for Puppet ⬜
+**Description**: Add MCP tools for AI agent Puppet analysis
+
+**Effort:** 2-3 days
+
+**Deliverables**:
+- [ ] `analyze_puppet_module` MCP tool
+- [ ] `find_puppet_classes` MCP tool
+- [ ] `puppet_security_scan` MCP tool
+- [ ] 3+ MCP tests
+
+---
+
+## 18.5 Documentation & Testing ⬜
+
+### Task 18.5.1: Comprehensive Testing ⬜
+**Description**: Full test suite for Puppet support
+
+**Effort:** 1 week
+
+**Target**: 35+ tests total
+
+**Deliverables**:
+- [ ] `tests/phase18_puppet.rs`
+- [ ] Test fixtures (sample modules)
+- [ ] Benchmark for large Puppet codebases
+
+---
+
+### Task 18.5.2: Documentation ⬜
+**Description**: Complete Puppet support documentation
+
+**Effort:** 3-4 days
+
+**Deliverables**:
+- [ ] `docs/puppet_support.md`
+- [ ] Update README
+- [ ] Example queries
+- [ ] Migration guide
+
+---
+
+**Last Updated**: June 18, 2026  
+**Document Version**: 4.0 (Added Phases 16-18: Ansible, Chef, Puppet Support)  
+**Current Phase**: Phase 14 Complete → Phase 15 Parked → Phases 16-18 Planned  
+**Next Review**: June 25, 2026  
+**Total Estimated Duration**: 53+ weeks (41 weeks complete, 12 weeks planned for IaC tools)  
+**Total Tasks**: 240+  
 
 ---
 

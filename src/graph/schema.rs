@@ -44,6 +44,20 @@ pub enum NodeType {
     Job,
     /// Build/pipeline step
     BuildStep,
+    /// Ansible playbook (Phase 16)
+    AnsiblePlaybook,
+    /// Ansible play
+    AnsiblePlay,
+    /// Ansible task
+    AnsibleTask,
+    /// Ansible role
+    AnsibleRole,
+    /// Ansible handler
+    AnsibleHandler,
+    /// Ansible variable reference
+    AnsibleVariable,
+    /// Ansible Jinja2 template
+    AnsibleTemplate,
 }
 
 /// Edge types representing relationships between nodes
@@ -71,6 +85,18 @@ pub enum EdgeType {
     DefinedIn,
     /// Depends on (CI job dependency, pipeline ordering)
     DependsOn,
+    /// Playbook or play includes a role (Phase 16)
+    IncludesRole,
+    /// Role depends on another role via meta/main.yml
+    DependsOnRole,
+    /// Play executes a task
+    ExecutesTask,
+    /// Task notifies a handler
+    NotifiesHandler,
+    /// Playbook imports another playbook
+    IncludesPlaybook,
+    /// Task renders a template file
+    RendersTemplate,
 }
 
 /// Function parameter stored on graph nodes (Phase 12.0).
@@ -427,8 +453,15 @@ mod tests {
             NodeType::Dependency,
             NodeType::Job,
             NodeType::BuildStep,
+            NodeType::AnsiblePlaybook,
+            NodeType::AnsiblePlay,
+            NodeType::AnsibleTask,
+            NodeType::AnsibleRole,
+            NodeType::AnsibleHandler,
+            NodeType::AnsibleVariable,
+            NodeType::AnsibleTemplate,
         ];
-        assert_eq!(types.len(), 16);
+        assert_eq!(types.len(), 23);
     }
 
     #[test]
@@ -445,7 +478,13 @@ mod tests {
             EdgeType::UsesConfig,
             EdgeType::DefinedIn,
             EdgeType::DependsOn,
+            EdgeType::IncludesRole,
+            EdgeType::DependsOnRole,
+            EdgeType::ExecutesTask,
+            EdgeType::NotifiesHandler,
+            EdgeType::IncludesPlaybook,
+            EdgeType::RendersTemplate,
         ];
-        assert_eq!(types.len(), 11);
+        assert_eq!(types.len(), 17);
     }
 }

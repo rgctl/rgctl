@@ -75,6 +75,20 @@ pub enum SymbolType {
     Job,
     /// Build or pipeline step
     BuildStep,
+    /// Ansible playbook
+    AnsiblePlaybook,
+    /// Ansible play within a playbook
+    AnsiblePlay,
+    /// Ansible task or handler step
+    AnsibleTask,
+    /// Ansible role
+    AnsibleRole,
+    /// Ansible handler
+    AnsibleHandler,
+    /// Ansible variable usage
+    AnsibleVariable,
+    /// Ansible template file
+    AnsibleTemplate,
 }
 
 /// Source code location
@@ -162,6 +176,20 @@ pub enum RelationType {
     Modifies,
     /// Job/step depends on another (CI pipelines)
     DependsOn,
+    /// Playbook/play includes a role
+    IncludesRole,
+    /// Role meta dependency
+    DependsOnRole,
+    /// Play runs a task
+    ExecutesTask,
+    /// Task notifies handler
+    NotifiesHandler,
+    /// Playbook imports another playbook
+    IncludesPlaybook,
+    /// Task uses a Jinja2 variable
+    UsesVariable,
+    /// Task renders template
+    RendersTemplate,
 }
 
 /// Code complexity metrics

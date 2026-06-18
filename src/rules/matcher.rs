@@ -137,6 +137,13 @@ fn node_type_name(node_type: NodeType) -> &'static str {
         NodeType::Dependency => "Dependency",
         NodeType::Job => "Job",
         NodeType::BuildStep => "BuildStep",
+        NodeType::AnsiblePlaybook => "AnsiblePlaybook",
+        NodeType::AnsiblePlay => "AnsiblePlay",
+        NodeType::AnsibleTask => "AnsibleTask",
+        NodeType::AnsibleRole => "AnsibleRole",
+        NodeType::AnsibleHandler => "AnsibleHandler",
+        NodeType::AnsibleVariable => "AnsibleVariable",
+        NodeType::AnsibleTemplate => "AnsibleTemplate",
     }
 }
 

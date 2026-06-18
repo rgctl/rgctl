@@ -306,6 +306,44 @@ impl ToolExecutor {
                     "required": ["query"]
                 }),
             },
+            ToolDefinition {
+                name: "analyze_ansible_playbook".into(),
+                description: "Summarize Ansible playbooks, plays, tasks, and roles from the graph".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "playbook": { "type": "string", "description": "Filter by playbook name (optional)" },
+                        "include_verbose": { "type": "boolean" }
+                    }
+                }),
+            },
+            ToolDefinition {
+                name: "find_ansible_roles".into(),
+                description: "List Ansible roles and dependency order from the graph".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "role": { "type": "string", "description": "Filter by role name (optional)" },
+                        "include_deps": { "type": "boolean", "description": "Include dependency lists" },
+                        "include_verbose": { "type": "boolean" }
+                    }
+                }),
+            },
+            ToolDefinition {
+                name: "ansible_security_scan".into(),
+                description: "Scan Ansible tasks in the graph for security issues".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "min_severity": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "critical"],
+                            "description": "Minimum severity (default medium)"
+                        },
+                        "include_verbose": { "type": "boolean" }
+                    }
+                }),
+            },
         ]
     }
 
@@ -470,6 +508,25 @@ impl ToolExecutor {
                     .unwrap_or("flowchart");
                 let depth = args.get("depth").and_then(|v| v.as_u64()).map(|d| d as usize);
                 self.generate_diagram(backend, query, format, diagram_type, depth, verbose)
+            }
+            "analyze_ansible_playbook" => {
+                let playbook = args.get("playbook").and_then(|v| v.as_str());
+                self.analyze_ansible_playbook(backend, playbook, verbose)
+            }
+            "find_ansible_roles" => {
+                let role = args.get("role").and_then(|v| v.as_str());
+                let include_deps = args
+                    .get("include_deps")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                self.find_ansible_roles(backend, role, include_deps, verbose)
+            }
+            "ansible_security_scan" => {
+                let min_severity = args
+                    .get("min_severity")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("medium");
+                self.ansible_security_scan(backend, min_severity, verbose)
             }
             other => Err(Error::InvalidQuery(format!("Unknown tool: {other}"))),
         }
@@ -836,6 +893,147 @@ impl ToolExecutor {
         if verbose {
             if let Some(obj) = response.as_object_mut() {
                 obj.insert("length".into(), json!(content.len()));
+            }
+        }
+        Ok(response)
+    }
+
+    fn analyze_ansible_playbook(
+        &self,
+        backend: &MemoryBackend,
+        playbook_filter: Option<&str>,
+        verbose: bool,
+    ) -> Result<Value> {
+        use crate::graph::schema::NodeType;
+
+        let playbooks: Vec<_> = backend
+            .find_nodes_by_type(NodeType::AnsiblePlaybook)?
+            .into_iter()
+            .filter(|n| {
+                playbook_filter.is_none_or(|f| n.name.contains(f))
+            })
+            .collect();
+
+        let mut summary = Vec::new();
+        for pb in &playbooks {
+            let plays = backend
+                .find_nodes_by_type(NodeType::AnsiblePlay)?
+                .into_iter()
+                .filter(|p| {
+                    playbook_filter.is_none_or(|f| {
+                        p.name.contains(f)
+                            || p
+                                .get_property("playbook")
+                                .is_some_and(|pb| pb.contains(f))
+                    })
+                })
+                .count();
+            let tasks = backend.find_nodes_by_type(NodeType::AnsibleTask)?.len();
+            summary.push(json!({
+                "playbook": pb.name,
+                "plays": plays,
+                "file": pb.file_path,
+            }));
+            let _ = tasks;
+        }
+
+        let total_plays = backend.find_nodes_by_type(NodeType::AnsiblePlay)?.len();
+        let total_tasks = backend.find_nodes_by_type(NodeType::AnsibleTask)?.len();
+        let total_roles = backend.find_nodes_by_type(NodeType::AnsibleRole)?.len();
+
+        let mut response = json!({
+            "playbooks": summary,
+            "totals": {
+                "playbooks": playbooks.len(),
+                "plays": total_plays,
+                "tasks": total_tasks,
+                "roles": total_roles,
+            },
+        });
+        if verbose {
+            if let Some(obj) = response.as_object_mut() {
+                obj.insert(
+                    "plays".into(),
+                    json!(backend.find_nodes_by_type(NodeType::AnsiblePlay)?),
+                );
+            }
+        }
+        Ok(response)
+    }
+
+    fn find_ansible_roles(
+        &self,
+        backend: &MemoryBackend,
+        role_filter: Option<&str>,
+        include_deps: bool,
+        verbose: bool,
+    ) -> Result<Value> {
+        use crate::analysis::ansible_roles::RoleDependencyGraph;
+
+        let graph = RoleDependencyGraph::from_graph(backend)?;
+        let roles: Vec<_> = graph
+            .roles
+            .values()
+            .filter(|r| role_filter.is_none_or(|f| r.name.contains(f)))
+            .map(|r| {
+                if include_deps {
+                    json!({
+                        "name": r.name,
+                        "path": r.path,
+                        "dependencies": r.dependencies,
+                        "dependents": r.dependents,
+                    })
+                } else {
+                    json!({ "name": r.name, "path": r.path })
+                }
+            })
+            .collect();
+
+        let order = graph.topological_sort().unwrap_or_default();
+        let mut response = json!({
+            "roles": roles,
+            "dependency_order": order,
+            "count": roles.len(),
+        });
+        if verbose {
+            if let Some(obj) = response.as_object_mut() {
+                obj.insert("graph".into(), json!(graph.roles));
+            }
+        }
+        Ok(response)
+    }
+
+    fn ansible_security_scan(
+        &self,
+        backend: &MemoryBackend,
+        min_severity: &str,
+        verbose: bool,
+    ) -> Result<Value> {
+        use crate::security::ansible::{AnsibleSecurityScanner, AnsibleSeverity};
+
+        let min = match min_severity.to_ascii_lowercase().as_str() {
+            "low" => AnsibleSeverity::Low,
+            "medium" => AnsibleSeverity::Medium,
+            "high" => AnsibleSeverity::High,
+            "critical" => AnsibleSeverity::Critical,
+            other => return Err(Error::InvalidQuery(format!("Unknown severity: {other}"))),
+        };
+
+        let findings =
+            AnsibleSecurityScanner::filter_by_severity(AnsibleSecurityScanner::new().scan_graph(backend), min);
+
+        let mut response = json!({
+            "finding_count": findings.len(),
+            "findings": findings.iter().map(|f| json!({
+                "severity": format!("{:?}", f.severity),
+                "message": f.message,
+                "location": f.location,
+                "cwe": f.cwe,
+            })).collect::<Vec<_>>(),
+        });
+        if verbose {
+            if let Some(obj) = response.as_object_mut() {
+                obj.insert("details".into(), json!(findings));
             }
         }
         Ok(response)

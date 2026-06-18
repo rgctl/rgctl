@@ -1,6 +1,7 @@
 //! Graph analysis algorithms
 
 pub mod blast_radius;
+pub mod ansible_roles;
 pub mod callgraph;
 pub mod centrality;
 pub mod cfg;
@@ -21,6 +22,7 @@ pub mod taint;
 pub mod type_inference;
 
 pub use blast_radius::{BlastRadiusAnalyzer, BlastRadiusReport, DataFlowImpact};
+pub use ansible_roles::{RoleDependencyAnalyzer, RoleDependencyGraph, RoleNode};
 pub use callgraph::{CallGraph, CallGraphEdge, CallGraphNode};
 pub use centrality::{
     degree_centrality, identify_hotspots, CentralityAnalyzer, CentralityReport, CentralityScore,

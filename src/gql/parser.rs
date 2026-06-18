@@ -377,6 +377,13 @@ fn parse_node_type_name(name: &str) -> Result<NodeType> {
         "dependency" => Ok(NodeType::Dependency),
         "job" => Ok(NodeType::Job),
         "buildstep" => Ok(NodeType::BuildStep),
+        "ansibleplaybook" | "playbook" => Ok(NodeType::AnsiblePlaybook),
+        "ansibleplay" => Ok(NodeType::AnsiblePlay),
+        "ansibletask" | "task" => Ok(NodeType::AnsibleTask),
+        "ansiblerole" => Ok(NodeType::AnsibleRole),
+        "ansiblehandler" => Ok(NodeType::AnsibleHandler),
+        "ansiblevariable" => Ok(NodeType::AnsibleVariable),
+        "ansibletemplate" => Ok(NodeType::AnsibleTemplate),
         _ => Err(Error::InvalidQuery(format!("unknown node type: {name}"))),
     }
 }
