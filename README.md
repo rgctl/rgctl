@@ -23,7 +23,7 @@ rBuilder builds a queryable knowledge graph of your entire codebase with natural
 - 🎯 **90% of queries** answered without LLM calls (pattern matching + cache)
 - 📊 **Deep insights**: complexity metrics, communities, circular dependencies
 - 🔌 **Native MCP integration** for Claude Code, Cursor, and other AI agents
-- 🌐 **35+ languages** + IaC support (Ansible, with Chef/Puppet coming soon)
+- 🌐 **35+ languages** + IaC support (Ansible, Chef; Puppet coming soon)
 
 ---
 
@@ -37,7 +37,7 @@ rBuilder builds a queryable knowledge graph of your entire codebase with natural
 
 ### For Developers
 - **Multi-Language Support**: 35+ languages including Rust, Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, C, C++, Ruby, PHP, Scala, Swift, Lua, Elixir, Haskell, and more
-- **Infrastructure as Code**: Ansible playbooks, roles, and security scanning (Chef & Puppet coming soon)
+- **Infrastructure as Code**: Ansible playbooks/roles and Chef cookbook analysis with security scanning (Puppet coming soon)
 - **Multi-Modal Analysis**: SQL DDL, Dockerfiles, CI/CD YAML (GitHub Actions, GitLab CI), Bash scripts
 - **Hybrid NLP System**: 90% queries without LLM (pattern matching → cache → local model → cloud)
 - **Graph Intelligence**: Community detection, complexity metrics, centrality analysis
@@ -206,9 +206,32 @@ rbuilder gql "ansibleroles"
 
 See [docs/ansible_support.md](docs/ansible_support.md) for complete documentation.
 
+### Chef
+
+Chef cookbook analysis via the same LanguagePlugin pipeline:
+
+```bash
+# Analyze cookbook dependencies
+rbuilder chef cookbooks --path ./cookbooks --show-deps
+
+# Validate recipes
+rbuilder chef validate cookbooks/nginx/recipes/default.rb
+
+# Security scan
+rbuilder chef security-scan . --min-severity medium
+```
+
+**Query Examples:**
+```bash
+rbuilder gql "cookbooks"
+rbuilder gql "type:chefrecipe"
+rbuilder gql "resource:execute"
+```
+
+See [docs/chef_support.md](docs/chef_support.md) for complete documentation.
+
 ### Coming Soon
 
-- **Chef**: Cookbook analysis, recipe dependencies, resource tracking
 - **Puppet**: Manifest parsing, module dependencies, class inheritance
 
 ---
@@ -250,7 +273,7 @@ See [docs/ansible_support.md](docs/ansible_support.md) for complete documentatio
 **Three-Tier Hybrid Language System:**
 - **Tier 1 (Custom)**: Rich extraction with type inference (9 languages: Rust, Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Markdown)
 - **Tier 2 (Tree-sitter)**: TOML-only config, add in < 30 min (22 languages: C, C++, Ruby, PHP, Scala, Swift, Lua, Elixir, etc.)
-- **Multi-Modal**: Infrastructure as Code (Ansible, Chef*, Puppet*), SQL DDL, Dockerfiles, CI/CD YAML, Bash scripts
+- **Multi-Modal**: Infrastructure as Code (Ansible, Chef, Puppet*), SQL DDL, Dockerfiles, CI/CD YAML, Bash scripts
 
 *Coming soon
 
@@ -289,6 +312,7 @@ cargo build --no-default-features --features "lang-rust,lang-go,lang-python,lang
 
 # Infrastructure as Code only
 cargo build --no-default-features --features "lang-ansible"
+cargo build --no-default-features --features "lang-chef"
 ```
 
 ### IDL Generation

@@ -330,6 +330,13 @@ enum Commands {
         #[command(flatten)]
         args: rbuilder::cli::ansible::AnsibleArgs,
     },
+
+    /// Chef cookbook analysis (Phase 17)
+    #[cfg(feature = "lang-chef")]
+    Chef {
+        #[command(flatten)]
+        args: rbuilder::cli::chef::ChefArgs,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1163,6 +1170,13 @@ fn main() -> anyhow::Result<()> {
         Commands::Ansible { args } => {
             use std::path::Path;
             rbuilder::cli::ansible::run_ansible_command(Path::new("."), args)?;
+            Ok(())
+        }
+
+        #[cfg(feature = "lang-chef")]
+        Commands::Chef { args } => {
+            use std::path::Path;
+            rbuilder::cli::chef::run_chef_command(Path::new("."), args)?;
             Ok(())
         }
 

@@ -1,6 +1,7 @@
 //! CLI command implementations
 
 pub mod ansible;
+pub mod chef;
 pub mod chat;
 pub mod diagram;
 pub mod update;

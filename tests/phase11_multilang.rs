@@ -73,6 +73,6 @@ fn test_polyglot_repo_extraction() {
 #[test]
 fn test_extra_bundle_language_count() {
     let registry = LanguageRegistry::new();
-    assert_eq!(registry.stats().language_plugins, 42);
+    assert_eq!(registry.stats().language_plugins, 43);
     assert!(registry.supported_languages().len() >= 35);
 }

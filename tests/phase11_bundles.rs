@@ -46,14 +46,14 @@ bundle_lang_test!(extended_includes_bash, "bundle-extended", "sh", "bash");
 #[test]
 fn test_full_includes_all_bundle_languages() {
     let registry = LanguageRegistry::new();
-    assert_eq!(registry.stats().language_plugins, 29);
+    assert_eq!(registry.stats().language_plugins, 30);
 }
 
 #[cfg(feature = "bundle-extra")]
 #[test]
 fn test_extra_includes_all_bundle_languages() {
     let registry = LanguageRegistry::new();
-    assert_eq!(registry.stats().language_plugins, 42);
+    assert_eq!(registry.stats().language_plugins, 43);
 }
 
 #[cfg(feature = "bundle-extended")]

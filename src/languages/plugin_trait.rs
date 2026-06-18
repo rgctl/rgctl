@@ -89,6 +89,18 @@ pub enum SymbolType {
     AnsibleVariable,
     /// Ansible template file
     AnsibleTemplate,
+    /// Chef cookbook
+    ChefCookbook,
+    /// Chef recipe
+    ChefRecipe,
+    /// Chef resource declaration
+    ChefResource,
+    /// Chef attribute
+    ChefAttribute,
+    /// Chef ERB template
+    ChefTemplate,
+    /// Chef custom resource
+    ChefCustomResource,
 }
 
 /// Source code location
@@ -190,6 +202,18 @@ pub enum RelationType {
     UsesVariable,
     /// Task renders template
     RendersTemplate,
+    /// Cookbook depends on another cookbook
+    DependsOnCookbook,
+    /// Recipe includes another recipe
+    IncludesRecipe,
+    /// Recipe declares a resource
+    DeclaresResource,
+    /// Resource uses ERB template
+    UsesTemplate,
+    /// Cookbook defines attribute
+    DefinesAttribute,
+    /// Resource notifies another resource
+    NotifiesResource,
 }
 
 /// Code complexity metrics

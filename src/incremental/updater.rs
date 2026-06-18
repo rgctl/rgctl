@@ -404,6 +404,12 @@ fn relation_type_to_edge(
         RelationType::IncludesPlaybook => EdgeType::IncludesPlaybook,
         RelationType::UsesVariable => EdgeType::Uses,
         RelationType::RendersTemplate => EdgeType::RendersTemplate,
+        RelationType::DependsOnCookbook => EdgeType::DependsOnCookbook,
+        RelationType::IncludesRecipe => EdgeType::IncludesRecipe,
+        RelationType::DeclaresResource => EdgeType::DeclaresResource,
+        RelationType::UsesTemplate => EdgeType::UsesTemplate,
+        RelationType::DefinesAttribute => EdgeType::DefinesAttribute,
+        RelationType::NotifiesResource => EdgeType::NotifiesResource,
     }
 }
 

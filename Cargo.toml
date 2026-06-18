@@ -185,6 +185,7 @@ lang-dockerfile = []
 lang-github_actions = []
 lang-gitlab_ci = []
 lang-ansible = []
+lang-chef = []
 lang-bash = ["tree-sitter-bash"]
 
 # Bundles (from languages.toml — Phase 11.1.3)
@@ -211,6 +212,7 @@ bundle-extended = [
     "lang-github_actions",
     "lang-gitlab_ci",
     "lang-ansible",
+    "lang-chef",
 ]
 bundle-full = [
     "bundle-extended",

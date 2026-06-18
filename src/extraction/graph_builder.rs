@@ -304,6 +304,12 @@ fn symbol_type_to_node_type(symbol_type: SymbolType) -> NodeType {
         SymbolType::AnsibleHandler => NodeType::AnsibleHandler,
         SymbolType::AnsibleVariable => NodeType::AnsibleVariable,
         SymbolType::AnsibleTemplate => NodeType::AnsibleTemplate,
+        SymbolType::ChefCookbook => NodeType::ChefCookbook,
+        SymbolType::ChefRecipe => NodeType::ChefRecipe,
+        SymbolType::ChefResource => NodeType::ChefResource,
+        SymbolType::ChefAttribute => NodeType::ChefAttribute,
+        SymbolType::ChefTemplate => NodeType::ChefTemplate,
+        SymbolType::ChefCustomResource => NodeType::ChefCustomResource,
     }
 }
 
@@ -325,6 +331,12 @@ fn relation_type_to_edge_type(relation_type: RelationType) -> EdgeType {
         RelationType::IncludesPlaybook => EdgeType::IncludesPlaybook,
         RelationType::UsesVariable => EdgeType::Uses,
         RelationType::RendersTemplate => EdgeType::RendersTemplate,
+        RelationType::DependsOnCookbook => EdgeType::DependsOnCookbook,
+        RelationType::IncludesRecipe => EdgeType::IncludesRecipe,
+        RelationType::DeclaresResource => EdgeType::DeclaresResource,
+        RelationType::UsesTemplate => EdgeType::UsesTemplate,
+        RelationType::DefinesAttribute => EdgeType::DefinesAttribute,
+        RelationType::NotifiesResource => EdgeType::NotifiesResource,
     }
 }
 

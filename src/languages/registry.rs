@@ -115,6 +115,11 @@ impl LanguageRegistry {
                 return Ok(Arc::clone(plugin));
             }
         }
+        if crate::languages::multimodal::chef::parser::ChefParser::is_chef_path(&path_str) {
+            if let Some(plugin) = self.language_plugins.get("chef") {
+                return Ok(Arc::clone(plugin));
+            }
+        }
         if crate::languages::multimodal::ansible::parser::AnsibleParser::is_ansible_path(&path_str) {
             if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
                 if ext == "yml" || ext == "yaml" || ext == "j2" {
@@ -160,6 +165,7 @@ impl LanguageRegistry {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.contains("gitlab-ci"))
+            || crate::languages::multimodal::chef::parser::ChefParser::is_chef_path(&path_str)
             || crate::languages::multimodal::ansible::parser::AnsibleParser::is_ansible_path(&path_str)
         {
             return Err(Error::UnsupportedLanguage(
@@ -341,21 +347,21 @@ mod tests {
     #[test]
     fn test_extended_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        assert_eq!(registry.stats().language_plugins, 19);
+        assert_eq!(registry.stats().language_plugins, 20);
     }
 
     #[cfg(all(feature = "bundle-full", not(feature = "bundle-extra")))]
     #[test]
     fn test_full_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        assert_eq!(registry.stats().language_plugins, 29);
+        assert_eq!(registry.stats().language_plugins, 30);
     }
 
     #[cfg(feature = "bundle-extra")]
     #[test]
     fn test_extra_bundle_language_count() {
         let registry = LanguageRegistry::new();
-        assert_eq!(registry.stats().language_plugins, 42);
+        assert_eq!(registry.stats().language_plugins, 43);
     }
 
     #[cfg(feature = "lang-javascript")]

@@ -607,6 +607,9 @@ fn parse_node_type(value: &str) -> std::result::Result<NodeType, Error> {
         "ansiblehandler" | "handler" => Ok(NodeType::AnsibleHandler),
         "ansiblevariable" => Ok(NodeType::AnsibleVariable),
         "ansibletemplate" => Ok(NodeType::AnsibleTemplate),
+        "chefcookbook" | "cookbook" => Ok(NodeType::ChefCookbook),
+        "chefrecipe" | "recipe" => Ok(NodeType::ChefRecipe),
+        "chefresource" | "resource" => Ok(NodeType::ChefResource),
         other => Err(Error::InvalidQuery(format!("Unknown node type: {other}"))),
     }
 }

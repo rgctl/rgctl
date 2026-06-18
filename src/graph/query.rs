@@ -74,6 +74,10 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
         return filter_nodes_by_property(backend, "module", module);
     }
 
+    if let Some(resource_type) = query.strip_prefix("resource:") {
+        return filter_nodes_by_property(backend, "resource_type", resource_type);
+    }
+
     match query.to_ascii_lowercase().as_str() {
         "functions" | "function" => backend.find_nodes_by_type(NodeType::Function),
         "classes" | "class" => backend.find_nodes_by_type(NodeType::Class),
@@ -82,6 +86,8 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
         "config" | "configkeys" => backend.find_nodes_by_type(NodeType::ConfigKey),
         "playbooks" | "ansibleplaybooks" => backend.find_nodes_by_type(NodeType::AnsiblePlaybook),
         "ansibleroles" | "roles" => backend.find_nodes_by_type(NodeType::AnsibleRole),
+        "cookbooks" | "chefcookbooks" => backend.find_nodes_by_type(NodeType::ChefCookbook),
+        "chefrecipes" | "recipes" => backend.find_nodes_by_type(NodeType::ChefRecipe),
         _ => backend.find_nodes(query),
     }
 }
@@ -127,6 +133,12 @@ fn parse_node_type(value: &str) -> Result<NodeType> {
         "ansiblehandler" | "handler" => Ok(NodeType::AnsibleHandler),
         "ansiblevariable" => Ok(NodeType::AnsibleVariable),
         "ansibletemplate" => Ok(NodeType::AnsibleTemplate),
+        "chefcookbook" | "cookbook" => Ok(NodeType::ChefCookbook),
+        "chefrecipe" | "recipe" => Ok(NodeType::ChefRecipe),
+        "chefresource" | "resource" => Ok(NodeType::ChefResource),
+        "chefattribute" => Ok(NodeType::ChefAttribute),
+        "cheftemplate" => Ok(NodeType::ChefTemplate),
+        "chefcustomresource" => Ok(NodeType::ChefCustomResource),
         other => Err(Error::InvalidQuery(format!("Unknown node type: {other}"))),
     }
 }
@@ -137,6 +149,8 @@ fn selectivity_rank(part: &str) -> usize {
     } else if part.starts_with("signature:") {
         1
     } else if part.starts_with("module:") {
+        2
+    } else if part.starts_with("resource:") {
         2
     } else if part.starts_with("return_type:") {
         3

@@ -144,6 +144,12 @@ fn node_type_name(node_type: NodeType) -> &'static str {
         NodeType::AnsibleHandler => "AnsibleHandler",
         NodeType::AnsibleVariable => "AnsibleVariable",
         NodeType::AnsibleTemplate => "AnsibleTemplate",
+        NodeType::ChefCookbook => "ChefCookbook",
+        NodeType::ChefRecipe => "ChefRecipe",
+        NodeType::ChefResource => "ChefResource",
+        NodeType::ChefAttribute => "ChefAttribute",
+        NodeType::ChefTemplate => "ChefTemplate",
+        NodeType::ChefCustomResource => "ChefCustomResource",
     }
 }
 

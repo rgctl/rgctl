@@ -531,6 +531,17 @@ class_kinds = []
 enable_complexity = false
 enable_type_inference = false
 
+[languages.chef]
+handler = "custom"
+plugin = "ChefPlugin"
+module = "crate::languages::multimodal::chef"
+crate = ""
+extensions = ["chef"]
+function_kinds = []
+class_kinds = []
+enable_complexity = false
+enable_type_inference = false
+
 [languages.bash]
 handler = "custom"
 plugin = "BashPlugin"
@@ -556,7 +567,7 @@ languages = [
     "rust", "python", "javascript", "typescript", "go",
     "java", "kotlin", "csharp", "markdown",
     "c", "cpp", "ruby", "php",
-    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci", "ansible",
+    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci", "ansible", "chef",
 ]
 
 [bundles.full]
@@ -565,7 +576,7 @@ languages = [
     "rust", "python", "javascript", "typescript", "go",
     "java", "kotlin", "csharp", "markdown",
     "c", "cpp", "ruby", "php",
-    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci", "ansible",
+    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci", "ansible", "chef",
     "swift", "scala", "elixir", "erlang", "dart", "lua",
     "haskell", "julia", "r", "nim",
 ]
@@ -576,7 +587,7 @@ languages = [
     "rust", "python", "javascript", "typescript", "go",
     "java", "kotlin", "csharp", "markdown",
     "c", "cpp", "ruby", "php",
-    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci", "ansible",
+    "sql", "bash", "dockerfile", "github_actions", "gitlab_ci", "ansible", "chef",
     "swift", "scala", "elixir", "erlang", "dart", "lua",
     "haskell", "julia", "r", "nim",
     "ocaml", "perl", "fortran", "verilog", "vhdl", "cobol",

@@ -58,6 +58,18 @@ pub enum NodeType {
     AnsibleVariable,
     /// Ansible Jinja2 template
     AnsibleTemplate,
+    /// Chef cookbook (Phase 17)
+    ChefCookbook,
+    /// Chef recipe
+    ChefRecipe,
+    /// Chef resource declaration
+    ChefResource,
+    /// Chef node attribute
+    ChefAttribute,
+    /// Chef ERB template
+    ChefTemplate,
+    /// Chef custom resource (LWRP/HWRP)
+    ChefCustomResource,
 }
 
 /// Edge types representing relationships between nodes
@@ -97,6 +109,18 @@ pub enum EdgeType {
     IncludesPlaybook,
     /// Task renders a template file
     RendersTemplate,
+    /// Cookbook depends on another cookbook (Phase 17)
+    DependsOnCookbook,
+    /// Recipe includes another recipe
+    IncludesRecipe,
+    /// Recipe declares a Chef resource
+    DeclaresResource,
+    /// Resource uses an ERB template
+    UsesTemplate,
+    /// Cookbook defines an attribute
+    DefinesAttribute,
+    /// Resource notifies another resource
+    NotifiesResource,
 }
 
 /// Function parameter stored on graph nodes (Phase 12.0).
@@ -460,8 +484,14 @@ mod tests {
             NodeType::AnsibleHandler,
             NodeType::AnsibleVariable,
             NodeType::AnsibleTemplate,
+            NodeType::ChefCookbook,
+            NodeType::ChefRecipe,
+            NodeType::ChefResource,
+            NodeType::ChefAttribute,
+            NodeType::ChefTemplate,
+            NodeType::ChefCustomResource,
         ];
-        assert_eq!(types.len(), 23);
+        assert_eq!(types.len(), 29);
     }
 
     #[test]
@@ -484,7 +514,13 @@ mod tests {
             EdgeType::NotifiesHandler,
             EdgeType::IncludesPlaybook,
             EdgeType::RendersTemplate,
+            EdgeType::DependsOnCookbook,
+            EdgeType::IncludesRecipe,
+            EdgeType::DeclaresResource,
+            EdgeType::UsesTemplate,
+            EdgeType::DefinesAttribute,
+            EdgeType::NotifiesResource,
         ];
-        assert_eq!(types.len(), 17);
+        assert_eq!(types.len(), 23);
     }
 }

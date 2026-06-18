@@ -344,6 +344,43 @@ impl ToolExecutor {
                     }
                 }),
             },
+            ToolDefinition {
+                name: "analyze_chef_cookbook".into(),
+                description: "Summarize Chef cookbooks, recipes, and resources from the graph".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "cookbook": { "type": "string", "description": "Filter by cookbook name (optional)" },
+                        "include_verbose": { "type": "boolean" }
+                    }
+                }),
+            },
+            ToolDefinition {
+                name: "find_chef_recipes".into(),
+                description: "List Chef recipes and resource counts from the graph".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "cookbook": { "type": "string", "description": "Filter by cookbook (optional)" },
+                        "include_verbose": { "type": "boolean" }
+                    }
+                }),
+            },
+            ToolDefinition {
+                name: "chef_security_scan".into(),
+                description: "Scan Chef resources in the graph for security issues".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "min_severity": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "critical"],
+                            "description": "Minimum severity (default medium)"
+                        },
+                        "include_verbose": { "type": "boolean" }
+                    }
+                }),
+            },
         ]
     }
 
@@ -527,6 +564,21 @@ impl ToolExecutor {
                     .and_then(|v| v.as_str())
                     .unwrap_or("medium");
                 self.ansible_security_scan(backend, min_severity, verbose)
+            }
+            "analyze_chef_cookbook" => {
+                let cookbook = args.get("cookbook").and_then(|v| v.as_str());
+                self.analyze_chef_cookbook(backend, cookbook, verbose)
+            }
+            "find_chef_recipes" => {
+                let cookbook = args.get("cookbook").and_then(|v| v.as_str());
+                self.find_chef_recipes(backend, cookbook, verbose)
+            }
+            "chef_security_scan" => {
+                let min_severity = args
+                    .get("min_severity")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("medium");
+                self.chef_security_scan(backend, min_severity, verbose)
             }
             other => Err(Error::InvalidQuery(format!("Unknown tool: {other}"))),
         }
@@ -1021,6 +1073,128 @@ impl ToolExecutor {
 
         let findings =
             AnsibleSecurityScanner::filter_by_severity(AnsibleSecurityScanner::new().scan_graph(backend), min);
+
+        let mut response = json!({
+            "finding_count": findings.len(),
+            "findings": findings.iter().map(|f| json!({
+                "severity": format!("{:?}", f.severity),
+                "message": f.message,
+                "location": f.location,
+                "cwe": f.cwe,
+            })).collect::<Vec<_>>(),
+        });
+        if verbose {
+            if let Some(obj) = response.as_object_mut() {
+                obj.insert("details".into(), json!(findings));
+            }
+        }
+        Ok(response)
+    }
+
+    fn analyze_chef_cookbook(
+        &self,
+        backend: &MemoryBackend,
+        cookbook_filter: Option<&str>,
+        verbose: bool,
+    ) -> Result<Value> {
+        use crate::graph::schema::NodeType;
+
+        let cookbooks: Vec<_> = backend
+            .find_nodes_by_type(NodeType::ChefCookbook)?
+            .into_iter()
+            .filter(|n| {
+                cookbook_filter.is_none_or(|f| {
+                    n.name.contains(f)
+                        || n
+                            .get_property("cookbook")
+                            .is_some_and(|c| c.contains(f))
+                })
+            })
+            .collect();
+
+        let total_recipes = backend.find_nodes_by_type(NodeType::ChefRecipe)?.len();
+        let total_resources = backend.find_nodes_by_type(NodeType::ChefResource)?.len();
+
+        let mut response = json!({
+            "cookbooks": cookbooks.iter().map(|c| json!({
+                "name": c.name,
+                "version": c.get_property("version"),
+                "file": c.file_path,
+            })).collect::<Vec<_>>(),
+            "totals": {
+                "cookbooks": cookbooks.len(),
+                "recipes": total_recipes,
+                "resources": total_resources,
+            },
+        });
+        if verbose {
+            if let Some(obj) = response.as_object_mut() {
+                obj.insert(
+                    "recipes".into(),
+                    json!(backend.find_nodes_by_type(NodeType::ChefRecipe)?),
+                );
+            }
+        }
+        Ok(response)
+    }
+
+    fn find_chef_recipes(
+        &self,
+        backend: &MemoryBackend,
+        cookbook_filter: Option<&str>,
+        verbose: bool,
+    ) -> Result<Value> {
+        use crate::analysis::chef_cookbooks::CookbookDependencyGraph;
+        use crate::graph::schema::NodeType;
+
+        let recipes: Vec<_> = backend
+            .find_nodes_by_type(NodeType::ChefRecipe)?
+            .into_iter()
+            .filter(|r| {
+                cookbook_filter.is_none_or(|f| {
+                    r.name.contains(f)
+                        || r
+                            .get_property("cookbook")
+                            .is_some_and(|c| c.contains(f))
+                })
+            })
+            .map(|r| json!({ "name": r.name, "file": r.file_path }))
+            .collect();
+
+        let graph = CookbookDependencyGraph::from_graph(backend)?;
+        let order = graph.topological_sort().unwrap_or_default();
+
+        let mut response = json!({
+            "recipes": recipes,
+            "recipe_count": recipes.len(),
+            "cookbook_dependency_order": order,
+        });
+        if verbose {
+            if let Some(obj) = response.as_object_mut() {
+                obj.insert("cookbooks".into(), json!(graph.cookbooks));
+            }
+        }
+        Ok(response)
+    }
+
+    fn chef_security_scan(
+        &self,
+        backend: &MemoryBackend,
+        min_severity: &str,
+        verbose: bool,
+    ) -> Result<Value> {
+        use crate::security::chef::{ChefSecurityScanner, ChefSeverity};
+
+        let min = match min_severity.to_ascii_lowercase().as_str() {
+            "low" => ChefSeverity::Low,
+            "medium" => ChefSeverity::Medium,
+            "high" => ChefSeverity::High,
+            "critical" => ChefSeverity::Critical,
+            other => return Err(Error::InvalidQuery(format!("Unknown severity: {other}"))),
+        };
+
+        let findings =
+            ChefSecurityScanner::filter_by_severity(ChefSecurityScanner::new().scan_graph(backend), min);
 
         let mut response = json!({
             "finding_count": findings.len(),

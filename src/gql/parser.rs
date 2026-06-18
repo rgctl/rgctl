@@ -384,6 +384,12 @@ fn parse_node_type_name(name: &str) -> Result<NodeType> {
         "ansiblehandler" => Ok(NodeType::AnsibleHandler),
         "ansiblevariable" => Ok(NodeType::AnsibleVariable),
         "ansibletemplate" => Ok(NodeType::AnsibleTemplate),
+        "chefcookbook" | "cookbook" => Ok(NodeType::ChefCookbook),
+        "chefrecipe" | "recipe" => Ok(NodeType::ChefRecipe),
+        "chefresource" | "resource" => Ok(NodeType::ChefResource),
+        "chefattribute" | "attribute" => Ok(NodeType::ChefAttribute),
+        "cheftemplate" => Ok(NodeType::ChefTemplate),
+        "chefcustomresource" => Ok(NodeType::ChefCustomResource),
         _ => Err(Error::InvalidQuery(format!("unknown node type: {name}"))),
     }
 }

@@ -93,6 +93,15 @@ fn test_github_actions_routing() {
     assert!(relations.iter().any(|r| r.relation_type == RelationType::DependsOn));
 }
 
+#[cfg(feature = "lang-chef")]
+#[test]
+fn test_chef_routing() {
+    let registry = LanguageRegistry::new();
+    let path = Path::new("cookbooks/nginx/recipes/default.rb");
+    let plugin = registry.get_plugin_for_file(path).unwrap();
+    assert_eq!(plugin.language_id(), "chef");
+}
+
 #[cfg(feature = "lang-ansible")]
 #[test]
 fn test_ansible_routing() {
