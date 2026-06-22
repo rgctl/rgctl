@@ -8,15 +8,15 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields, LitStr};
 ///
 /// Implement `LanguagePlugin` manually, delegating `language_id`, `file_extensions`,
 /// and `grammar` to the generated inherent methods.
-#[proc_macro_derive(LanguagePlugin, attributes(lang))]
+#[proc_macro_derive(LanguagePlugin, attributes(language_plugin))]
 pub fn derive_language_plugin(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
 
-    let lang_attr = match input.attrs.iter().find(|a| a.path().is_ident("lang")) {
+    let lang_attr = match input.attrs.iter().find(|a| a.path().is_ident("language_plugin")) {
         Some(a) => a,
         None => {
-            return syn::Error::new_spanned(&input.ident, "Missing #[lang(...)] attribute")
+            return syn::Error::new_spanned(&input.ident, "Missing #[language_plugin(...)] attribute")
                 .to_compile_error()
                 .into();
         }
