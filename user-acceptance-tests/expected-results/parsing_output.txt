@@ -1,0 +1,96 @@
+# Expected Parsing Results
+
+## Test: Parse webserver module
+
+Command: rbuilder puppet validate user-acceptance-tests/test-data/puppet-sample/modules/webserver/manifests/init.pp
+
+Expected Output:
+---
+Valid Puppet manifest: 1 class symbol(s)
+---
+
+## Test: Parse all modules
+
+Command: rbuilder puppet validate user-acceptance-tests/test-data/puppet-sample/modules/
+
+Expected Output (partial):
+---
+user-acceptance-tests/test-data/puppet-sample/modules/webserver/manifests/init.pp: 6 symbol(s)
+user-acceptance-tests/test-data/puppet-sample/modules/database/manifests/init.pp: 7 symbol(s)
+user-acceptance-tests/test-data/puppet-sample/modules/common/manifests/init.pp: 4 symbol(s)
+---
+
+Note: Symbol counts may vary slightly based on parser implementation.
+Expected range: 4-8 symbols per module manifest.
+
+## Test: Query for classes
+
+Command: rbuilder query "type:PuppetClass"
+
+Expected Output (partial):
+---
+Found 4 results:
+
+1. class::webserver (PuppetClass)
+   Location: user-acceptance-tests/test-data/puppet-sample/modules/webserver/manifests/init.pp:4
+   Metadata: {"class": "webserver"}
+
+2. class::database (PuppetClass)
+   Location: user-acceptance-tests/test-data/puppet-sample/modules/database/manifests/init.pp:3
+   Metadata: {"class": "database"}
+
+3. class::database::base (PuppetClass)
+   Metadata: {"referenced": true}
+
+4. class::common (PuppetClass)
+   Location: user-acceptance-tests/test-data/puppet-sample/modules/common/manifests/init.pp:3
+   Metadata: {"class": "common"}
+---
+
+## Test: Query for resources
+
+Command: rbuilder query "type:PuppetResource"
+
+Expected Resources (partial list):
+- package::httpd (webserver)
+- service::httpd (webserver)
+- file::/etc/webserver/config.conf (webserver)
+- exec::restart-webserver (webserver)
+- package::postgresql (database)
+- service::postgresql (database)
+- package::vim (common)
+- package::curl (common)
+
+Expected count: 15+ resources across all modules
+
+## Test: Query for variables
+
+Command: rbuilder query "type:PuppetVariable"
+
+Expected Variables:
+- var::webserver::document_root
+- var::webserver::ssl_enabled
+- var::database::backup_enabled
+
+Expected count: 3+ variables
+
+## Test: Query for facts
+
+Command: rbuilder query "type:PuppetFact"
+
+Expected Facts:
+- fact::hostname
+- fact::os
+
+Expected count: 2+ facts
+
+## Accuracy Metrics
+
+| Metric | Expected Value |
+|--------|----------------|
+| Classes extracted | 4 |
+| Resources extracted | 15+ |
+| Variables extracted | 3+ |
+| Facts extracted | 2+ |
+| Modules indexed | 3 |
+| Parse errors | 0 |

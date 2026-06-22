@@ -1,0 +1,26 @@
+[
+  {
+    "severity": "critical",
+    "message": "Potential command injection in exec resource 'class::webserver::resource::exec::restart-webserver'",
+    "location": "class::webserver::resource::exec::restart-webserver",
+    "cwe": "CWE-78",
+    "remediation": "Use shellquote() for variable interpolation in commands",
+    "resource_type": "exec"
+  },
+  {
+    "severity": "high",
+    "message": "Potential hardcoded secret in resource 'class::webserver::resource::file::/etc/webserver/config.conf'",
+    "location": "class::webserver::resource::file::/etc/webserver/config.conf",
+    "cwe": "CWE-798",
+    "remediation": "Use Hiera lookup() or encrypted data instead",
+    "resource_type": null
+  },
+  {
+    "severity": "medium",
+    "message": "Insecure file permissions in file resource 'class::webserver::resource::file::/etc/webserver/config.conf'",
+    "location": "class::webserver::resource::file::/etc/webserver/config.conf",
+    "cwe": "CWE-732",
+    "remediation": "Use restrictive file modes (e.g. 0644 or 0600)",
+    "resource_type": "file"
+  }
+]

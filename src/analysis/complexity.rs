@@ -98,7 +98,7 @@ impl ComplexityAnalyzer {
 
         report
             .functions
-            .sort_by(|a, b| b.cyclomatic.cmp(&a.cyclomatic));
+            .sort_by_key(|b| std::cmp::Reverse(b.cyclomatic));
         if !report.functions.is_empty() {
             report.avg_cyclomatic = total_cyclomatic as f64 / report.functions.len() as f64;
         }

@@ -199,7 +199,7 @@ pub fn detect_communities(backend: &MemoryBackend) -> Result<Vec<DashboardCommun
         }
     }
 
-    communities.sort_by(|a, b| b.size.cmp(&a.size));
+    communities.sort_by_key(|b| std::cmp::Reverse(b.size));
     Ok(communities)
 }
 

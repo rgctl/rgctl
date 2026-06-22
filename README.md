@@ -3,6 +3,7 @@
 **Transform code repositories into queryable knowledge graphs for AI agents.**
 
 [![CI](https://github.com/sshaaf/rBuilder/workflows/CI/badge.svg)](https://github.com/sshaaf/rBuilder/actions)
+[![Code Quality](https://github.com/sshaaf/rBuilder/workflows/Code%20Quality/badge.svg)](https://github.com/sshaaf/rBuilder/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
@@ -23,7 +24,7 @@ rBuilder builds a queryable knowledge graph of your entire codebase with natural
 - 🎯 **90% of queries** answered without LLM calls (pattern matching + cache)
 - 📊 **Deep insights**: complexity metrics, communities, circular dependencies
 - 🔌 **Native MCP integration** for Claude Code, Cursor, and other AI agents
-- 🌐 **35+ languages** + IaC support (Ansible, Chef; Puppet coming soon)
+- 🌐 **35+ languages** + IaC support (Ansible, Chef, Puppet)
 
 ---
 
@@ -37,7 +38,7 @@ rBuilder builds a queryable knowledge graph of your entire codebase with natural
 
 ### For Developers
 - **Multi-Language Support**: 35+ languages including Rust, Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, C, C++, Ruby, PHP, Scala, Swift, Lua, Elixir, Haskell, and more
-- **Infrastructure as Code**: Ansible playbooks/roles and Chef cookbook analysis with security scanning (Puppet coming soon)
+- **Infrastructure as Code**: Ansible playbooks/roles, Chef cookbooks, and Puppet modules with security scanning
 - **Multi-Modal Analysis**: SQL DDL, Dockerfiles, CI/CD YAML (GitHub Actions, GitLab CI), Bash scripts
 - **Hybrid NLP System**: 90% queries without LLM (pattern matching → cache → local model → cloud)
 - **Graph Intelligence**: Community detection, complexity metrics, centrality analysis
@@ -230,9 +231,29 @@ rbuilder gql "resource:execute"
 
 See [docs/chef_support.md](docs/chef_support.md) for complete documentation.
 
-### Coming Soon
+### Puppet
 
-- **Puppet**: Manifest parsing, module dependencies, class inheritance
+Puppet module and manifest analysis via the same LanguagePlugin pipeline:
+
+```bash
+# Analyze module dependencies
+rbuilder puppet modules --path ./modules --show-deps
+
+# Validate manifests
+rbuilder puppet validate modules/nginx/manifests/init.pp
+
+# Security scan
+rbuilder puppet security-scan . --min-severity medium
+```
+
+**Query Examples:**
+```bash
+rbuilder gql "puppetmodules"
+rbuilder gql "type:puppetclass"
+rbuilder gql "type:puppetresource"
+```
+
+See [docs/puppet_support.md](docs/puppet_support.md) for complete documentation.
 
 ---
 
@@ -273,7 +294,7 @@ See [docs/chef_support.md](docs/chef_support.md) for complete documentation.
 **Three-Tier Hybrid Language System:**
 - **Tier 1 (Custom)**: Rich extraction with type inference (9 languages: Rust, Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Markdown)
 - **Tier 2 (Tree-sitter)**: TOML-only config, add in < 30 min (22 languages: C, C++, Ruby, PHP, Scala, Swift, Lua, Elixir, etc.)
-- **Multi-Modal**: Infrastructure as Code (Ansible, Chef, Puppet*), SQL DDL, Dockerfiles, CI/CD YAML, Bash scripts
+- **Multi-Modal**: Infrastructure as Code (Ansible, Chef, Puppet), SQL DDL, Dockerfiles, CI/CD YAML, Bash scripts
 
 *Coming soon
 
@@ -284,6 +305,8 @@ See [LANGUAGE_GUIDE.md](LANGUAGE_GUIDE.md) for adding new languages.
 ## 📚 Documentation
 
 - **[docs/ansible_support.md](docs/ansible_support.md)** - Ansible playbook analysis and security scanning
+- **[docs/chef_support.md](docs/chef_support.md)** - Chef cookbook analysis
+- **[docs/puppet_support.md](docs/puppet_support.md)** - Puppet module analysis
 - **[LANGUAGE_GUIDE.md](LANGUAGE_GUIDE.md)** - Supported languages and adding new ones
 
 ---
@@ -313,6 +336,7 @@ cargo build --no-default-features --features "lang-rust,lang-go,lang-python,lang
 # Infrastructure as Code only
 cargo build --no-default-features --features "lang-ansible"
 cargo build --no-default-features --features "lang-chef"
+cargo build --no-default-features --features "lang-puppet"
 ```
 
 ### IDL Generation
@@ -385,6 +409,98 @@ We welcome contributions! Whether you want to:
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 📚 Research & Academic Foundation
+
+rBuilder's implementation is built on proven academic research in program analysis and code knowledge graphs.
+
+### Code Property Graphs & Program Analysis
+
+**[Codebadger: Bridging Code Property Graphs and Language Models](https://arxiv.org/abs/2603.24837)** (ICSE 2026)  
+Integration of Joern's CPG engine with LLMs via MCP for semantic code analysis. **90% code reduction** through backward slicing while preserving semantics.
+
+**Implemented in rBuilder**:
+- Control Flow Graph (CFG) construction from tree-sitter AST → [`src/analysis/cfg_builder.rs`](src/analysis/cfg_builder.rs), [`src/analysis/cfg.rs`](src/analysis/cfg.rs)
+- Program Dependence Graph (PDG) with data/control dependencies → [`src/analysis/pdg.rs`](src/analysis/pdg.rs)
+- Forward taint propagation for vulnerability detection → [`src/analysis/taint.rs`](src/analysis/taint.rs)
+- Backward slicing for impact analysis → [`src/analysis/slicing.rs`](src/analysis/slicing.rs), [`src/analysis/interprocedural_slicing.rs`](src/analysis/interprocedural_slicing.rs)
+- Cross-function CFG for interprocedural analysis → [`src/analysis/interprocedural_cfg.rs`](src/analysis/interprocedural_cfg.rs)
+- Def-use chains for data flow tracking → [`src/analysis/def_use.rs`](src/analysis/def_use.rs)
+
+**[CodexGraph: Bridging LLMs and Code Repositories via Code Graph Databases](https://arxiv.org/abs/2408.03910)** (NAACL 2025)  
+Dual-agent system with **3.4x accuracy improvement** (27.9% vs 8.3%). Graph database with rich node attributes and Cypher-style queries.
+
+**Implemented in rBuilder**:
+- Function signatures as first-class schema fields → [`src/graph/schema.rs`](src/graph/schema.rs)
+- Indexed code storage for efficient retrieval → [`src/extraction/graph_builder.rs`](src/extraction/graph_builder.rs)
+- Cross-file import resolution via DFS → [`src/extraction/extractor.rs`](src/extraction/extractor.rs)
+- Rich edge attributes (call type, access patterns) → [`src/graph/schema.rs`](src/graph/schema.rs)
+
+### Classic Program Analysis Algorithms
+
+**Cooper-Harvey-Kennedy Algorithm** (Software Practice & Experience, 2001)  
+"A Simple, Fast Dominance Algorithm" - efficient dominator tree construction for control dependency analysis.
+
+**Implemented in rBuilder**:
+- Iterative dataflow algorithm for immediate dominators → [`src/analysis/dominance.rs`](src/analysis/dominance.rs)
+- Dominance frontiers computation → [`src/analysis/dominance.rs`](src/analysis/dominance.rs)
+- Control dependency tracking for PDG construction → [`src/analysis/pdg.rs`](src/analysis/pdg.rs)
+
+**Weiser's Program Slicing** (ICSE 1981)  
+Original program slicing concept for backward dependency analysis.
+
+**Implemented in rBuilder**:
+- Criterion-based backward slicing → [`src/analysis/slicing.rs`](src/analysis/slicing.rs)
+- Interprocedural slicing across function boundaries → [`src/analysis/interprocedural_slicing.rs`](src/analysis/interprocedural_slicing.rs)
+
+**Ferrante et al. Program Dependence Graph** (ACM TOPLAS 1987)  
+Foundation for modern program analysis with data and control dependencies.
+
+**Implemented in rBuilder**:
+- PDG construction with data/control edges → [`src/analysis/pdg.rs`](src/analysis/pdg.rs)
+- Data dependency via def-use analysis → [`src/analysis/def_use.rs`](src/analysis/def_use.rs)
+- Control dependency via dominance analysis → [`src/analysis/dominance.rs`](src/analysis/dominance.rs)
+
+### Graph Analysis & Community Detection
+
+**Label Propagation Algorithm** (Raghavan et al., 2007)  
+Fast community detection through iterative label propagation with modularity optimization.
+
+**Implemented in rBuilder**:
+- Label propagation with Leiden-style heuristics → [`src/analysis/community.rs`](src/analysis/community.rs)
+- Modularity scoring for partition quality → [`src/analysis/community.rs`](src/analysis/community.rs)
+- Enriched community metadata (complexity, file types) → [`src/analysis/community.rs`](src/analysis/community.rs)
+
+**PageRank & Centrality Metrics** (Brin & Page, 1998)  
+Graph centrality algorithms for identifying important code components.
+
+**Implemented in rBuilder**:
+- PageRank for code importance scoring → [`src/analysis/centrality.rs`](src/analysis/centrality.rs)
+- Betweenness centrality for architectural bottlenecks → [`src/analysis/centrality.rs`](src/analysis/centrality.rs)
+- Degree centrality for connectivity analysis → [`src/analysis/centrality.rs`](src/analysis/centrality.rs)
+
+### Security Standards & Vulnerability Detection
+
+**OWASP Top 10** (2021, Updated 2024) + **CWE Database** (MITRE)  
+Industry-standard vulnerability classifications mapped to taint analysis sources/sinks.
+
+**Implemented in rBuilder**:
+- SQL Injection (CWE-89), XSS (CWE-79), Command Injection (CWE-78) → [`src/analysis/taint.rs`](src/analysis/taint.rs)
+- Hardcoded Secrets (CWE-798), Path Traversal (CWE-22) → Security scanners in [`src/security/`](src/security/)
+- Source-to-sink tracking with sanitizer detection → [`src/analysis/taint.rs`](src/analysis/taint.rs)
+- IaC-specific security patterns (Ansible, Chef, Puppet) → [`src/security/ansible.rs`](src/security/ansible.rs), [`src/security/chef.rs`](src/security/chef.rs), [`src/security/puppet.rs`](src/security/puppet.rs)
+
+### Tools & Infrastructure
+
+**[Tree-sitter](https://tree-sitter.github.io/)** - Incremental parsing for 35+ languages  
+**[Model Context Protocol (MCP)](https://modelcontextprotocol.io/)** - LLM-tool integration standard
+
+**See Also**:
+- [RESEARCH_CITATIONS.md](RESEARCH_CITATIONS.md) - Complete list of 25+ papers with detailed citations
+- [RESEARCH_GAP_ANALYSIS.md](RESEARCH_GAP_ANALYSIS.md) - Comparison with Codebadger and CodexGraph
+- [RESEARCH_GRAPH_LABELING.md](RESEARCH_GRAPH_LABELING.md) - Future work on label propagation and migration tracking
 
 ---
 

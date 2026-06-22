@@ -109,7 +109,7 @@ impl PatternDetector {
             })
             .collect();
 
-        patterns.sort_by(|a, b| b.count.cmp(&a.count));
+        patterns.sort_by_key(|b| std::cmp::Reverse(b.count));
         patterns
     }
 
@@ -141,7 +141,7 @@ impl PatternDetector {
             }
         }
 
-        patterns.sort_by(|a, b| b.count.cmp(&a.count));
+        patterns.sort_by_key(|b| std::cmp::Reverse(b.count));
         patterns
     }
 
@@ -264,7 +264,7 @@ impl PatternDetector {
             });
         }
 
-        patterns.sort_by(|a, b| b.node_count.cmp(&a.node_count));
+        patterns.sort_by_key(|b| std::cmp::Reverse(b.node_count));
         patterns
     }
 }

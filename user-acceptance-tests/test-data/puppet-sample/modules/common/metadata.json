@@ -1,0 +1,20 @@
+{
+  "name": "common",
+  "version": "1.2.0",
+  "author": "UAT Test Suite",
+  "summary": "Common utilities and base configuration",
+  "license": "MIT",
+  "source": "https://github.com/example/puppet-common",
+  "dependencies": [],
+  "operatingsystem_support": [
+    {
+      "operatingsystem": "RedHat"
+    },
+    {
+      "operatingsystem": "Ubuntu"
+    },
+    {
+      "operatingsystem": "Debian"
+    }
+  ]
+}

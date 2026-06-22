@@ -1,0 +1,20 @@
+{
+  "name": "database",
+  "version": "1.5.2",
+  "author": "UAT Test Suite",
+  "summary": "PostgreSQL database module",
+  "license": "MIT",
+  "source": "https://github.com/example/puppet-database",
+  "dependencies": [
+    {
+      "name": "common",
+      "version_requirement": ">= 1.0.0"
+    }
+  ],
+  "operatingsystem_support": [
+    {
+      "operatingsystem": "Ubuntu",
+      "operatingsystemrelease": ["18.04", "20.04", "22.04"]
+    }
+  ]
+}

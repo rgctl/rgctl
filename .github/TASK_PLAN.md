@@ -9009,16 +9009,874 @@ rbuilder puppet security-scan
 
 ---
 
+# Phase 19: Code Review & Quality Assurance 🔄
+
+**Status**: In Progress  
+**Timeline**: 2-3 weeks  
+**Priority**: High  
+**Dependencies**: Phases 16-18 (IaC implementations)
+
+## Overview
+
+Systematic code review of the entire rBuilder codebase to ensure:
+- Adherence to Rust idioms and best practices
+- Consistent architecture patterns across all language plugins
+- Security best practices in all security scanning modules
+- Comprehensive test coverage (30+ tests per phase minimum)
+- Clear documentation and examples
+- Performance optimization opportunities
+- Error handling consistency
+
+**Success Criteria**:
+- [ ] All modules reviewed against CODE_REVIEW_GUIDE.md
+- [ ] No clippy warnings in CI
+- [ ] 95%+ code coverage for critical paths
+- [ ] All public APIs documented with examples
+- [ ] Performance benchmarks established
+- [ ] Security audit complete
+
+---
+
+## 19.1 Core Infrastructure Review ✅
+
+### Task 19.1.1: Graph Backend Review ⬜
+**Description**: Review graph storage and query implementation
+
+**Effort:** 3-4 days
+
+**Review Checklist**:
+- [ ] `src/graph/backend.rs` - Memory backend efficiency
+- [ ] `src/graph/schema.rs` - Node/Edge type completeness
+- [ ] `src/graph/query.rs` - Query performance and correctness
+- [ ] Check for unnecessary clones in graph operations
+- [ ] Verify error handling in graph mutations
+- [ ] Benchmark query performance on large graphs (10k+ nodes)
+
+**Code Patterns to Check**:
+```rust
+// ✅ Good: Borrow instead of clone
+pub fn find_nodes(&self, predicate: impl Fn(&Node) -> bool) -> Vec<&Node> {
+    self.nodes.iter().filter(|n| predicate(n)).collect()
+}
+
+// ❌ Bad: Unnecessary clones
+pub fn find_nodes(&self, predicate: impl Fn(&Node) -> bool) -> Vec<Node> {
+    self.nodes.iter().filter(|n| predicate(n)).cloned().collect()
+}
+```
+
+**Deliverables**:
+- [ ] Review report: `reviews/graph_backend_review.md`
+- [ ] Performance benchmark results
+- [ ] Refactoring tasks identified (if any)
+
+---
+
+### Task 19.1.2: Language Plugin Architecture Review ⬜
+**Description**: Review LanguagePlugin trait and registry implementation
+
+**Effort:** 3-4 days
+
+**Review Scope**:
+- [ ] `src/languages/plugin_trait.rs` - Trait design
+- [ ] `src/languages/registry.rs` - Plugin registration
+- [ ] `src/languages/tree_sitter_plugin.rs` - Base implementation
+- [ ] Consistency across all language plugins
+- [ ] Path-based routing efficiency
+- [ ] Symbol extraction patterns
+
+**Architecture Validation**:
+```rust
+// All plugins should follow this pattern
+impl LanguagePlugin for XPlugin {
+    fn language_id(&self) -> &str { "x" }
+    fn extract_symbols(&self, path: &Path, source: &[u8]) -> Result<Vec<Symbol>>
+    fn extract_relations(&self, path: &Path, source: &[u8], symbols: &[Symbol]) -> Result<Vec<Relation>>
+}
+```
+
+**Deliverables**:
+- [ ] Review report: `reviews/plugin_architecture_review.md`
+- [ ] Consistency issues identified
+- [ ] Architecture improvement proposals
+
+---
+
+### Task 19.1.3: Error Handling Review ⬜
+**Description**: Review error types and propagation across codebase
+
+**Effort:** 2-3 days
+
+**Review Focus**:
+- [ ] `src/error.rs` - Error enum completeness
+- [ ] Consistent use of `?` operator
+- [ ] No `unwrap()` or `expect()` in production code
+- [ ] Error messages are actionable
+- [ ] Error context preserved through call stack
+
+**Anti-Patterns to Find**:
+```rust
+// ❌ Bad: Loses error context
+let content = std::fs::read_to_string(path).unwrap();
+
+// ❌ Bad: Generic error
+Err("failed".into())
+
+// ✅ Good: Specific error with context
+Err(Error::ParseError {
+    file: path.to_path_buf(),
+    line: line_num,
+    message: format!("Expected token, found {}", actual),
+})
+```
+
+**Deliverables**:
+- [ ] Error handling audit report
+- [ ] List of risky `unwrap()` calls
+- [ ] Refactoring tasks for error improvements
+
+---
+
+## 19.2 Multi-Modal Plugin Review 🔍
+
+### Task 19.2.1: Ansible Plugin Review ⬜
+**Description**: Code review of Phase 16 (Ansible) implementation
+
+**Effort:** 2-3 days
+
+**Files to Review**:
+- [ ] `src/languages/multimodal/ansible/mod.rs` (102 lines)
+- [ ] `src/languages/multimodal/ansible/parser.rs` (794 lines)
+- [ ] `src/analysis/ansible_roles.rs` (323 lines)
+- [ ] `src/security/ansible.rs` (247 lines)
+- [ ] `src/cli/ansible.rs` (242 lines)
+- [ ] `tests/phase16_ansible.rs` (360 lines)
+
+**Review Against**:
+- [ ] CODE_REVIEW_GUIDE.md standards
+- [ ] Rust idioms (iterators, pattern matching, error handling)
+- [ ] Security pattern correctness (CWE mappings)
+- [ ] Test coverage (target: 30+ tests) ✅ 34 tests
+- [ ] Documentation completeness
+
+**Specific Checks**:
+```rust
+// Verify YAML parsing is safe
+// Verify Jinja2 variable extraction is correct
+// Check for hardcoded paths
+// Verify security scanner catches all CWE patterns
+```
+
+**Deliverables**:
+- [ ] Review report: `reviews/ansible_plugin_review.md`
+- [ ] Issues found (with severity)
+- [ ] Refactoring recommendations
+
+---
+
+### Task 19.2.2: Chef Plugin Review ⬜
+**Description**: Code review of Phase 17 (Chef) implementation
+
+**Effort:** 2-3 days
+
+**Files to Review**:
+- [ ] `src/languages/multimodal/chef/mod.rs` (86 lines)
+- [ ] `src/languages/multimodal/chef/parser.rs` (612 lines)
+- [ ] `src/analysis/chef_cookbooks.rs` (309 lines)
+- [ ] `src/security/chef.rs` (189 lines)
+- [ ] `src/cli/chef.rs` (241 lines)
+- [ ] `tests/phase17_chef.rs` (314 lines)
+
+**Review Focus**:
+- [ ] Regex pattern correctness in DSL parsing
+- [ ] Chef Ruby DSL coverage completeness
+- [ ] Resource detection accuracy
+- [ ] Security scanning effectiveness
+- [ ] Test coverage (target: 30+ tests) ✅ 33 tests
+
+**Chef-Specific Validation**:
+```ruby
+# Ensure parser handles:
+package 'nginx' do
+  action :install
+end
+
+execute 'cmd' do
+  command "#{interpolation}"
+end
+
+template '/path' do
+  mode '0666'  # Should trigger security warning
+end
+```
+
+**Deliverables**:
+- [ ] Review report: `reviews/chef_plugin_review.md`
+- [ ] Regex pattern validation results
+- [ ] Security pattern completeness check
+
+---
+
+### Task 19.2.3: Puppet Plugin Review ⬜
+**Description**: Code review of Phase 18 (Puppet) implementation
+
+**Effort:** 2-3 days
+
+**Status**: Pending implementation (Phase 18 not yet complete)
+
+**Files to Review** (once implemented):
+- [ ] `src/languages/multimodal/puppet/mod.rs`
+- [ ] `src/languages/multimodal/puppet/parser.rs`
+- [ ] `src/analysis/puppet_modules.rs`
+- [ ] `src/security/puppet.rs`
+- [ ] `src/cli/puppet.rs`
+- [ ] `tests/phase18_puppet.rs`
+
+**Deliverables**:
+- [ ] Review report: `reviews/puppet_plugin_review.md`
+- [ ] Comparison with Ansible/Chef patterns
+- [ ] Consistency recommendations
+
+---
+
+## 19.3 Security Module Review 🔒
+
+### Task 19.3.1: Security Scanner Architecture Review ⬜
+**Description**: Review security scanning framework and patterns
+
+**Effort:** 3-4 days
+
+**Review Scope**:
+- [ ] `src/security/mod.rs` - Base security module
+- [ ] `src/security/ansible.rs` - Ansible security scanner
+- [ ] `src/security/chef.rs` - Chef security scanner
+- [ ] `src/security/puppet.rs` - Puppet security scanner (when implemented)
+- [ ] CWE mapping accuracy
+- [ ] Severity level consistency
+- [ ] False positive/negative analysis
+
+**Security Pattern Validation**:
+```rust
+// Verify all scanners check for:
+// - CWE-78: Command injection
+// - CWE-798: Hardcoded secrets
+// - CWE-732: Insecure permissions
+// - CWE-250: Unnecessary privilege escalation
+// - CWE-532: Sensitive data logging
+```
+
+**Testing Requirements**:
+- [ ] Each security pattern has dedicated test
+- [ ] Test cases cover edge cases
+- [ ] No false positives in test suite
+- [ ] Real-world CVE examples tested
+
+**Deliverables**:
+- [ ] Security review report: `reviews/security_scanners_review.md`
+- [ ] CWE coverage matrix
+- [ ] False positive/negative analysis
+- [ ] Additional security patterns recommended
+
+---
+
+### Task 19.3.2: Remediation Guidance Review ⬜
+**Description**: Review quality of security remediation recommendations
+
+**Effort:** 1-2 days
+
+**Review Criteria**:
+- [ ] All security findings include remediation
+- [ ] Remediation is actionable and specific
+- [ ] Links to documentation where applicable
+- [ ] Code examples for fixes provided
+
+**Good vs Bad Examples**:
+```rust
+// ✅ Good: Specific, actionable
+remediation: Some("Use Shellwords.escape for variable interpolation in commands".into())
+
+// ❌ Bad: Generic, not helpful
+remediation: Some("Fix security issue".into())
+```
+
+**Deliverables**:
+- [ ] Remediation quality audit
+- [ ] Improved remediation messages (PR)
+
+---
+
+## 19.4 CLI & MCP Review 🔧
+
+### Task 19.4.1: CLI Design Review ⬜
+**Description**: Review command-line interface consistency and usability
+
+**Effort:** 2-3 days
+
+**Files to Review**:
+- [ ] `src/cli/mod.rs` - CLI root
+- [ ] `src/cli/ansible.rs`
+- [ ] `src/cli/chef.rs`
+- [ ] `src/cli/puppet.rs` (when implemented)
+
+**Consistency Checks**:
+- [ ] All subcommands follow same pattern
+- [ ] Flag names are consistent (`--show-deps`, `--format`, `--min-severity`)
+- [ ] Help text is clear and complete
+- [ ] Default values are sensible
+- [ ] Error messages are user-friendly
+
+**CLI Pattern Validation**:
+```rust
+// All IaC tools should support:
+rbuilder <tool> cookbooks/roles/modules --show-deps
+rbuilder <tool> validate <path>
+rbuilder <tool> security-scan <path> --min-severity <level> --format <format>
+```
+
+**Deliverables**:
+- [ ] CLI consistency report
+- [ ] User experience improvements identified
+- [ ] Documentation updates needed
+
+---
+
+### Task 19.4.2: MCP Tools Review ⬜
+**Description**: Review Model Context Protocol tool implementations
+
+**Effort:** 2-3 days
+
+**Review Scope**:
+- [ ] `src/mcp/tools.rs` - MCP tool registry
+- [ ] All `analyze_*` tools (ansible, chef, puppet)
+- [ ] All `find_*` tools
+- [ ] All `*_security_scan` tools
+- [ ] Tool input/output schema consistency
+- [ ] Error handling in MCP context
+
+**MCP Tool Pattern**:
+```rust
+// All MCP tools should:
+// 1. Validate input
+// 2. Load graph (if needed)
+// 3. Perform analysis
+// 4. Return structured output
+// 5. Handle errors gracefully
+```
+
+**Deliverables**:
+- [ ] MCP tools review report
+- [ ] Schema consistency improvements
+- [ ] Documentation for AI agents
+
+---
+
+## 19.5 Test Coverage & Quality 🧪
+
+### Task 19.5.1: Test Coverage Analysis ⬜
+**Description**: Analyze test coverage across entire codebase
+
+**Effort:** 2-3 days
+
+**Tools**:
+```bash
+cargo install cargo-tarpaulin
+cargo tarpaulin --out Html --output-dir coverage/
+```
+
+**Coverage Goals**:
+- [ ] Overall: 80%+ coverage
+- [ ] Core modules (graph, extraction): 90%+ coverage
+- [ ] Language plugins: 85%+ coverage
+- [ ] Security scanners: 95%+ coverage
+- [ ] CLI commands: 70%+ coverage
+
+**Test Quality Checks**:
+- [ ] All tests follow AAA pattern (Arrange-Act-Assert)
+- [ ] No flaky tests
+- [ ] Tests are independent
+- [ ] Test names are descriptive
+- [ ] Edge cases are covered
+
+**Deliverables**:
+- [ ] Coverage report: `coverage/index.html`
+- [ ] Coverage gaps identified
+- [ ] New test cases to write
+
+---
+
+### Task 19.5.2: Integration Test Review ⬜
+**Description**: Review integration test suite completeness
+
+**Effort:** 2-3 days
+
+**Files to Review**:
+- [ ] `tests/phase11_bundles.rs`
+- [ ] `tests/phase11_multilang.rs`
+- [ ] `tests/phase11_multimodal.rs`
+- [ ] `tests/phase16_ansible.rs` ✅ 34 tests
+- [ ] `tests/phase17_chef.rs` ✅ 33 tests
+- [ ] `tests/phase18_puppet.rs` (when implemented)
+
+**Integration Test Validation**:
+- [ ] End-to-end workflows tested
+- [ ] Graph construction from real files
+- [ ] Query execution against populated graphs
+- [ ] Security scanning on real-world examples
+- [ ] CLI command execution tests
+
+**Test Count Goals** (per phase):
+- [ ] Minimum: 30 tests ✅
+- [ ] Target: 35+ tests
+- [ ] Complex phases: 40+ tests
+
+**Deliverables**:
+- [ ] Integration test audit
+- [ ] Missing test scenarios identified
+- [ ] Test fixture improvements
+
+---
+
+## 19.6 Performance & Optimization 🚀
+
+### Task 19.6.1: Performance Profiling ⬜
+**Description**: Profile performance bottlenecks in critical paths
+
+**Effort:** 1 week
+
+**Profiling Tools**:
+```bash
+cargo install cargo-flamegraph
+cargo flamegraph --bin rbuilder -- init ./large-repo
+
+# Or use perf
+perf record target/release/rbuilder init ./large-repo
+perf report
+```
+
+**Critical Paths to Profile**:
+- [ ] Graph indexing (file traversal + parsing)
+- [ ] Query execution (complex graph queries)
+- [ ] Security scanning (pattern matching)
+- [ ] CLI response time
+- [ ] Memory usage during large repo indexing
+
+**Performance Targets**:
+- [ ] Index 1000 files in < 10 seconds
+- [ ] Query response in < 100ms (for 10k nodes)
+- [ ] Memory usage < 500MB for 10k node graph
+- [ ] Security scan < 5 seconds per 1000 files
+
+**Deliverables**:
+- [ ] Performance profile report
+- [ ] Bottlenecks identified
+- [ ] Optimization opportunities
+- [ ] Benchmark suite established
+
+---
+
+### Task 19.6.2: Memory Optimization Review ⬜
+**Description**: Review memory usage and identify optimization opportunities
+
+**Effort:** 3-4 days
+
+**Memory Review Focus**:
+- [ ] Unnecessary clones in hot paths
+- [ ] Large string allocations
+- [ ] Graph node storage efficiency
+- [ ] Parser intermediate allocations
+- [ ] Cache effectiveness
+
+**Tools**:
+```bash
+cargo install cargo-bloat
+cargo bloat --release --crates
+
+# Memory profiling
+valgrind --tool=massif target/release/rbuilder init ./repo
+```
+
+**Patterns to Find**:
+```rust
+// ❌ Bad: Cloning in loops
+for node in &nodes {
+    process(node.clone());  // Unnecessary clone
+}
+
+// ✅ Good: Borrow
+for node in &nodes {
+    process(node);
+}
+```
+
+**Deliverables**:
+- [ ] Memory usage report
+- [ ] Clone elimination opportunities
+- [ ] Memory optimization PR
+
+---
+
+## 19.7 Documentation Review 📚
+
+### Task 19.7.1: API Documentation Review ⬜
+**Description**: Review rustdoc completeness and quality
+
+**Effort:** 3-4 days
+
+**Documentation Standards**:
+- [ ] All public modules have module-level docs
+- [ ] All public functions documented with:
+  - [ ] Purpose description
+  - [ ] Parameter descriptions
+  - [ ] Return value description
+  - [ ] Example usage (with doctests)
+  - [ ] Error conditions
+- [ ] All public structs/enums documented
+- [ ] Examples compile and pass
+
+**Check**:
+```bash
+cargo doc --no-deps --open
+# Review for missing docs warnings
+cargo doc 2>&1 | grep "missing documentation"
+```
+
+**Good Documentation Example**:
+```rust
+/// Scans Chef resource nodes for security vulnerabilities.
+///
+/// Detects common security anti-patterns in Chef cookbooks and maps
+/// them to CWE identifiers for standardized reporting.
+///
+/// # Examples
+///
+/// ```
+/// use rbuilder::security::chef::ChefSecurityScanner;
+/// use rbuilder::graph::schema::{Node, NodeType};
+///
+/// let scanner = ChefSecurityScanner::new();
+/// let node = Node::new(NodeType::ChefResource, "test".into());
+/// let findings = scanner.scan_node(&node);
+/// ```
+///
+/// # Security Checks
+///
+/// - CWE-78: Command injection
+/// - CWE-798: Hardcoded secrets
+/// - CWE-732: Insecure file permissions
+pub fn scan_node(&self, node: &Node) -> Vec<ChefSecurityFinding>
+```
+
+**Deliverables**:
+- [ ] Documentation audit report
+- [ ] Missing docs identified
+- [ ] Documentation improvement PR
+
+---
+
+### Task 19.7.2: User Documentation Review ⬜
+**Description**: Review user-facing documentation for completeness
+
+**Effort:** 2-3 days
+
+**Files to Review**:
+- [ ] `README.md` - Up-to-date, user-focused ✅
+- [ ] `docs/ansible_support.md` ✅
+- [ ] `docs/chef_support.md` ✅
+- [ ] `docs/puppet_support.md` (when implemented)
+- [ ] `docs/LANGUAGE_GUIDE.md`
+- [ ] `CODE_REVIEW_GUIDE.md` ✅
+
+**User Doc Requirements**:
+- [ ] Installation instructions clear
+- [ ] Quick start examples work
+- [ ] All features documented
+- [ ] CLI examples are accurate
+- [ ] Query examples are tested
+- [ ] Security patterns explained
+- [ ] Troubleshooting section
+
+**Deliverables**:
+- [ ] User documentation audit
+- [ ] Examples validated
+- [ ] Documentation updates
+
+---
+
+## 19.8 Code Quality Automation 🤖
+
+### Task 19.8.1: CI/CD Pipeline Enhancement ⬜
+**Description**: Enhance automated code quality checks in CI
+
+**Effort:** 2-3 days
+
+**CI Checks to Add/Improve**:
+```yaml
+# .github/workflows/quality.yml
+- name: Clippy (strict)
+  run: cargo clippy --all-targets --all-features -- -D warnings
+
+- name: Format check
+  run: cargo fmt -- --check
+
+- name: Test coverage
+  run: cargo tarpaulin --all-features --workspace --timeout 300 --out Lcov
+
+- name: Security audit
+  run: cargo audit
+
+- name: Unused dependencies
+  run: cargo udeps
+
+- name: Documentation check
+  run: cargo doc --no-deps --all-features
+```
+
+**Quality Gates**:
+- [ ] All tests must pass
+- [ ] No clippy warnings allowed
+- [ ] Code must be formatted
+- [ ] Coverage > 80%
+- [ ] No known security vulnerabilities
+- [ ] Documentation builds without warnings
+
+**Deliverables**:
+- [ ] Enhanced CI pipeline
+- [ ] Quality gates enforced
+- [ ] Badge updates in README
+
+---
+
+### Task 19.8.2: Pre-commit Hooks ⬜
+**Description**: Setup pre-commit hooks for local quality checks
+
+**Effort:** 1-2 days
+
+**Pre-commit Checks**:
+```bash
+#!/bin/bash
+# .git/hooks/pre-commit
+
+echo "Running pre-commit checks..."
+
+# Format check
+cargo fmt -- --check || {
+    echo "❌ Format check failed. Run: cargo fmt"
+    exit 1
+}
+
+# Clippy
+cargo clippy --all-targets -- -D warnings || {
+    echo "❌ Clippy failed"
+    exit 1
+}
+
+# Tests
+cargo test --all-features || {
+    echo "❌ Tests failed"
+    exit 1
+}
+
+echo "✅ All pre-commit checks passed"
+```
+
+**Deliverables**:
+- [ ] Pre-commit hook script
+- [ ] Setup instructions
+- [ ] Developer documentation
+
+---
+
+## 19.9 Cross-Phase Consistency 🔄
+
+### Task 19.9.1: Architecture Pattern Consistency ⬜
+**Description**: Ensure all phases follow consistent architecture patterns
+
+**Effort:** 1 week
+
+**Consistency Review**:
+- [ ] All multimodal plugins follow same structure
+- [ ] Graph integration is consistent
+- [ ] Security scanners use same patterns
+- [ ] CLI commands follow same conventions
+- [ ] MCP tools follow same schema
+- [ ] Error handling is consistent
+- [ ] Testing approaches are aligned
+
+**Architecture Checklist**:
+```
+For each language plugin:
+  ✅ Implements LanguagePlugin trait
+  ✅ Has dedicated parser module
+  ✅ Has analysis module (if needed)
+  ✅ Has security scanner module
+  ✅ Has CLI subcommands
+  ✅ Has MCP tools
+  ✅ Has 30+ tests
+  ✅ Has user documentation
+```
+
+**Deliverables**:
+- [ ] Architecture consistency report
+- [ ] Inconsistencies identified
+- [ ] Refactoring plan for alignment
+
+---
+
+### Task 19.9.2: Naming Convention Review ⬜
+**Description**: Review and standardize naming across codebase
+
+**Effort:** 2-3 days
+
+**Naming Standards**:
+- [ ] Modules: `snake_case`
+- [ ] Structs/Enums: `PascalCase`
+- [ ] Functions: `snake_case` (verbs)
+- [ ] Constants: `SCREAMING_SNAKE_CASE`
+- [ ] Generics: Single uppercase letter or `PascalCase`
+- [ ] Lifetimes: Descriptive lowercase (`'graph`, `'node`)
+
+**Pattern Validation**:
+```rust
+// ✅ Good naming
+struct ChefSecurityScanner { }
+fn scan_node(&self, node: &Node) -> Vec<Finding>
+const MAX_RECURSION_DEPTH: usize = 100;
+
+// ❌ Bad naming
+struct chef_scanner { }
+fn NodeScanner(&self, n: &Node) -> Vec<Finding>
+const maxDepth: usize = 100;
+```
+
+**Deliverables**:
+- [ ] Naming audit report
+- [ ] Inconsistencies identified
+- [ ] Refactoring PR (if needed)
+
+---
+
+## 19.10 Final Quality Audit 📋
+
+### Task 19.10.1: Comprehensive Quality Report ⬜
+**Description**: Compile comprehensive code quality report
+
+**Effort:** 1 week
+
+**Report Sections**:
+1. **Code Quality Metrics**
+   - Test coverage percentage
+   - Clippy compliance
+   - Documentation coverage
+   - Code complexity metrics
+
+2. **Architecture Assessment**
+   - Pattern consistency score
+   - Plugin implementation completeness
+   - Graph integration quality
+
+3. **Security Posture**
+   - Security scanner coverage
+   - CWE mapping completeness
+   - Security test coverage
+
+4. **Performance Benchmarks**
+   - Indexing speed (files/second)
+   - Query performance (ms)
+   - Memory usage (MB)
+
+5. **Documentation Quality**
+   - API documentation coverage
+   - User guide completeness
+   - Example validation results
+
+6. **Issues Found**
+   - Critical issues (must fix)
+   - High priority issues
+   - Medium priority issues
+   - Low priority / nice-to-have
+
+**Deliverables**:
+- [ ] `QUALITY_REPORT.md`
+- [ ] Prioritized issue backlog
+- [ ] Refactoring roadmap
+
+---
+
+### Task 19.10.2: Refactoring Task Plan ⬜
+**Description**: Create prioritized plan for addressing quality issues
+
+**Effort:** 2-3 days
+
+**Task Categories**:
+1. **Critical** (must fix before release)
+   - Security vulnerabilities
+   - Data corruption risks
+   - API breaking changes needed
+
+2. **High Priority** (should fix soon)
+   - Performance bottlenecks
+   - Major inconsistencies
+   - Missing critical features
+
+3. **Medium Priority** (can defer)
+   - Minor inconsistencies
+   - Documentation improvements
+   - Test coverage gaps
+
+4. **Low Priority** (nice-to-have)
+   - Code style improvements
+   - Optimization opportunities
+   - Additional features
+
+**Deliverables**:
+- [ ] `REFACTORING_PLAN.md`
+- [ ] GitHub issues created
+- [ ] Milestones defined
+
+---
+
+**Phase 19 Total Estimated Duration**: 2-3 weeks  
+**Phase 19 Total Tasks**: 27 tasks  
+**Success Metrics**:
+- [ ] 95%+ test coverage
+- [ ] Zero clippy warnings
+- [ ] 100% public API documentation
+- [ ] Performance benchmarks established
+- [ ] Security audit complete
+- [ ] All IaC plugins consistent
+
+---
+
 **Last Updated**: June 18, 2026  
-**Document Version**: 4.0 (Added Phases 16-18: Ansible, Chef, Puppet Support)  
-**Current Phase**: Phase 14 Complete → Phase 15 Parked → Phases 16-18 Planned  
+**Document Version**: 5.0 (Added Phase 19: Code Review & Quality Assurance)  
+**Current Phase**: Phase 16 ✅ → Phase 17 ✅ → Phase 18 ⬜ → Phase 19 🔄  
 **Next Review**: June 25, 2026  
-**Total Estimated Duration**: 53+ weeks (41 weeks complete, 12 weeks planned for IaC tools)  
-**Total Tasks**: 240+  
+**Total Estimated Duration**: 56+ weeks (41 weeks complete, 15 weeks planned for IaC + QA)  
+**Total Tasks**: 267+ (27 new tasks in Phase 19)  
 
 ---
 
 ## Document History
+
+- **v5.0** (June 18, 2026): Phase 19 Addition
+  - Added Phase 19: Code Review & Quality Assurance (27 tasks)
+  - Comprehensive review plan across all modules
+  - Performance profiling and optimization tasks
+  - Test coverage analysis and improvement
+  - Documentation quality review
+  - CI/CD enhancement tasks
+  - Updated task count: 267+ tasks total
+
+- **v4.0** (June 18, 2026): Infrastructure as Code phases
+  - Added Phase 16: Ansible Support ✅
+  - Added Phase 17: Chef Support ✅
+  - Added Phase 18: Puppet Support ⬜
+  - Multi-modal language plugin architecture
+
+- **v3.0** (June 17, 2026): MCP and Advanced Analysis
+  - Completed Phase 13: MCP integration
+  - Completed Phase 14: Dashboard and visualization
+  - Updated status for completed phases 11-14
 
 - **v2.0** (June 17, 2026): Major update
   - Consolidated ROADMAP.md and PHASE7_PLAN.md into single source of truth

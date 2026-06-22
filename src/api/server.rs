@@ -262,7 +262,7 @@ pub async fn dashboard_metrics(
         let mut top_complex: Vec<Value> = Vec::new();
         if let Some(ref report) = complexity {
             let mut ranked: Vec<_> = report.functions.iter().collect();
-            ranked.sort_by(|a, b| b.cyclomatic.cmp(&a.cyclomatic));
+            ranked.sort_by_key(|b| std::cmp::Reverse(b.cyclomatic));
             for func in ranked.into_iter().take(10) {
                 top_complex.push(json!({
                     "name": func.node.name,
@@ -303,7 +303,7 @@ pub async fn dashboard_metrics(
             modularity = Some(detection.modularity);
             community_count = detection.communities.len();
             let mut sorted = detection.communities.clone();
-            sorted.sort_by(|a, b| b.members.len().cmp(&a.members.len()));
+            sorted.sort_by_key(|b| std::cmp::Reverse(b.members.len()));
             for community in sorted.iter().take(12) {
                 community_sizes.push(community.members.len());
                 let top_members: Vec<String> = community

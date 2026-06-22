@@ -1,0 +1,110 @@
+# Expected Dependency Graph Results
+
+## Test: Module dependency analysis
+
+Command: rbuilder puppet modules user-acceptance-tests/test-data/puppet-sample/modules/ --show-deps
+
+Expected Output:
+---
+Puppet Modules: 3
+
+Module: webserver (v2.1.0)
+  Path: user-acceptance-tests/test-data/puppet-sample/modules/webserver
+  Dependencies:
+    - common
+    - firewall
+
+Module: database (v1.5.2)
+  Path: user-acceptance-tests/test-data/puppet-sample/modules/database
+  Dependencies:
+    - common
+
+Module: common (v1.2.0)
+  Path: user-acceptance-tests/test-data/puppet-sample/modules/common
+
+Dependency order:
+  1. common
+  2. firewall
+  3. database
+  4. webserver
+---
+
+Note:
+- "firewall" appears as external dependency (not in modules/)
+- Order may vary for database/firewall (both depend only on common)
+
+## Test: JSON format
+
+Command: rbuilder puppet modules user-acceptance-tests/test-data/puppet-sample/modules/ --format json
+
+Expected Structure:
+```json
+{
+  "common": {
+    "name": "common",
+    "version": "1.2.0",
+    "path": "user-acceptance-tests/test-data/puppet-sample/modules/common",
+    "dependencies": [],
+    "dependents": ["webserver", "database"]
+  },
+  "database": {
+    "name": "database",
+    "version": "1.5.2",
+    "path": "user-acceptance-tests/test-data/puppet-sample/modules/database",
+    "dependencies": ["common"],
+    "dependents": []
+  },
+  "webserver": {
+    "name": "webserver",
+    "version": "2.1.0",
+    "path": "user-acceptance-tests/test-data/puppet-sample/modules/webserver",
+    "dependencies": ["common", "firewall"],
+    "dependents": []
+  },
+  "firewall": {
+    "name": "firewall",
+    "version": "0.0.0",
+    "path": "",
+    "dependencies": [],
+    "dependents": ["webserver"]
+  }
+}
+```
+
+## Test: Mermaid format
+
+Command: rbuilder puppet modules user-acceptance-tests/test-data/puppet-sample/modules/ --format mermaid
+
+Expected Output:
+```mermaid
+graph TD
+    webserver[webserver] --> common[common]
+    webserver[webserver] --> firewall[firewall]
+    database[database] --> common[common]
+```
+
+## Test: Topological sort validation
+
+Expected topological orders (all valid):
+1. common, firewall, database, webserver
+2. common, database, firewall, webserver
+3. firewall, common, database, webserver
+
+All three are valid because:
+- common has no dependencies (can be first)
+- firewall has no dependencies (can be anywhere before webserver)
+- database only depends on common
+- webserver depends on both common and firewall
+
+Key constraint: common must come before database and webserver
+
+## Graph Metrics
+
+| Metric | Expected Value |
+|--------|----------------|
+| Total modules | 3 (in modules/) + 1 (external ref) |
+| Dependency edges | 3 (webserver→common, webserver→firewall, database→common) |
+| Leaf nodes | 2 (common, firewall) |
+| Root nodes | 2 (database, webserver) |
+| Max depth | 2 (common → webserver) |
+| Circular dependencies | 0 |
