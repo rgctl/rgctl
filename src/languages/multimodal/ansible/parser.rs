@@ -166,10 +166,8 @@ impl AnsibleParser {
         let p = file.replace('\\', "/");
         let rest = if let Some(idx) = p.find("/roles/") {
             &p[idx + 7..]
-        } else if let Some(stripped) = p.strip_prefix("roles/") {
-            stripped
         } else {
-            return None;
+            p.strip_prefix("roles/")?
         };
         let end = rest.find('/')?;
         Some(rest[..end].to_string())
