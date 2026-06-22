@@ -27,10 +27,10 @@ error_count=0
 echo "📋 Checking code format..."
 if cargo fmt -- --check > /dev/null 2>&1; then
     echo -e "${GREEN}✅ Format check passed${NC}"
-    ((success_count++))
+    success_count=$((success_count + 1))
 else
     echo -e "${RED}❌ Format check failed. Run: cargo fmt${NC}"
-    ((error_count++))
+    error_count=$((error_count + 1))
 fi
 echo ""
 
@@ -38,10 +38,10 @@ echo ""
 echo "📋 Running clippy..."
 if cargo clippy --all-targets --all-features -- -D warnings 2>&1 | tee /tmp/clippy_output.txt | tail -5; then
     echo -e "${GREEN}✅ Clippy passed${NC}"
-    ((success_count++))
+    success_count=$((success_count + 1))
 else
     echo -e "${RED}❌ Clippy found issues (see output above)${NC}"
-    ((error_count++))
+    error_count=$((error_count + 1))
 fi
 echo ""
 
@@ -49,10 +49,10 @@ echo ""
 echo "📋 Building project..."
 if cargo build --all-features > /dev/null 2>&1; then
     echo -e "${GREEN}✅ Build successful${NC}"
-    ((success_count++))
+    success_count=$((success_count + 1))
 else
     echo -e "${RED}❌ Build failed${NC}"
-    ((error_count++))
+    error_count=$((error_count + 1))
 fi
 echo ""
 
@@ -60,10 +60,10 @@ echo ""
 echo "📋 Running tests..."
 if cargo test --all-features 2>&1 | tail -10; then
     echo -e "${GREEN}✅ All tests passed${NC}"
-    ((success_count++))
+    success_count=$((success_count + 1))
 else
     echo -e "${RED}❌ Tests failed${NC}"
-    ((error_count++))
+    error_count=$((error_count + 1))
 fi
 echo ""
 
@@ -76,13 +76,13 @@ for test_file in tests/phase{16,17,18}_*.rs; do
         echo "  $basename_file: $count tests"
         if [ $count -ge 30 ]; then
             echo -e "    ${GREEN}✅ Meets minimum (30+)${NC}"
-            ((success_count++))
+            success_count=$((success_count + 1))
         elif [ $count -ge 25 ]; then
             echo -e "    ${YELLOW}⚠️  Close to target: $count/30${NC}"
-            ((warning_count++))
+            warning_count=$((warning_count + 1))
         else
             echo -e "    ${RED}❌ Below minimum: $count/30${NC}"
-            ((error_count++))
+            error_count=$((error_count + 1))
         fi
     fi
 done
@@ -97,10 +97,10 @@ for scanner in src/security/{ansible,chef,puppet}.rs; do
         echo "  $basename_scanner: $cwe_count CWE patterns"
         if [ $cwe_count -ge 3 ]; then
             echo -e "    ${GREEN}✅ Good CWE coverage${NC}"
-            ((success_count++))
+            success_count=$((success_count + 1))
         else
             echo -e "    ${YELLOW}⚠️  Limited CWE coverage: $cwe_count${NC}"
-            ((warning_count++))
+            warning_count=$((warning_count + 1))
         fi
     fi
 done
@@ -111,10 +111,10 @@ echo "📋 Checking documentation build..."
 doc_warnings=$(cargo doc --no-deps --all-features 2>&1 | grep -i "warning" | wc -l)
 if [ $doc_warnings -gt 0 ]; then
     echo -e "  ${YELLOW}⚠️  Found $doc_warnings documentation warnings${NC}"
-    ((warning_count++))
+    warning_count=$((warning_count + 1))
 else
     echo -e "  ${GREEN}✅ Documentation builds cleanly${NC}"
-    ((success_count++))
+    success_count=$((success_count + 1))
 fi
 echo ""
 
@@ -148,13 +148,13 @@ total_dangerous=$((unwrap_count + expect_count + panic_count))
 if [ $total_dangerous -gt 100 ]; then
     echo -e "  ${RED}❌ High count of unwrap/expect/panic: $total_dangerous${NC}"
     echo "     Review error handling patterns"
-    ((error_count++))
+    error_count=$((error_count + 1))
 elif [ $total_dangerous -gt 50 ]; then
     echo -e "  ${YELLOW}⚠️  Moderate count of unwrap/expect/panic: $total_dangerous${NC}"
-    ((warning_count++))
+    warning_count=$((warning_count + 1))
 else
     echo -e "  ${GREEN}✅ Reasonable unwrap/expect/panic usage: $total_dangerous${NC}"
-    ((success_count++))
+    success_count=$((success_count + 1))
 fi
 echo ""
 
@@ -171,35 +171,35 @@ for plugin_dir in src/languages/multimodal/{ansible,chef,puppet}; do
             echo -e "    ${GREEN}✅ Has mod.rs${NC}"
         else
             echo -e "    ${RED}❌ Missing mod.rs${NC}"
-            ((plugin_errors++))
+            plugin_errors=$((plugin_errors + 1))
         fi
 
         if [ -f "$plugin_dir/parser.rs" ]; then
             echo -e "    ${GREEN}✅ Has parser.rs${NC}"
         else
             echo -e "    ${RED}❌ Missing parser.rs${NC}"
-            ((plugin_errors++))
+            plugin_errors=$((plugin_errors + 1))
         fi
 
         if [ -f "src/analysis/${plugin_name}_"*.rs ] || [ -f "src/analysis/${plugin_name}.rs" ]; then
             echo -e "    ${GREEN}✅ Has analysis module${NC}"
         else
             echo -e "    ${YELLOW}⚠️  No analysis module found${NC}"
-            ((warning_count++))
+            warning_count=$((warning_count + 1))
         fi
 
         if [ -f "src/security/$plugin_name.rs" ]; then
             echo -e "    ${GREEN}✅ Has security scanner${NC}"
         else
             echo -e "    ${RED}❌ Missing security scanner${NC}"
-            ((plugin_errors++))
+            plugin_errors=$((plugin_errors + 1))
         fi
 
         if [ -f "src/cli/$plugin_name.rs" ]; then
             echo -e "    ${GREEN}✅ Has CLI commands${NC}"
         else
             echo -e "    ${RED}❌ Missing CLI commands${NC}"
-            ((plugin_errors++))
+            plugin_errors=$((plugin_errors + 1))
         fi
 
         test_file=$(find tests -name "phase*_$plugin_name.rs" 2>/dev/null | head -1)
@@ -207,20 +207,20 @@ for plugin_dir in src/languages/multimodal/{ansible,chef,puppet}; do
             echo -e "    ${GREEN}✅ Has test file: $(basename "$test_file")${NC}"
         else
             echo -e "    ${RED}❌ Missing test file${NC}"
-            ((plugin_errors++))
+            plugin_errors=$((plugin_errors + 1))
         fi
 
         if [ -f "docs/${plugin_name}_support.md" ]; then
             echo -e "    ${GREEN}✅ Has documentation${NC}"
         else
             echo -e "    ${RED}❌ Missing documentation${NC}"
-            ((plugin_errors++))
+            plugin_errors=$((plugin_errors + 1))
         fi
 
         if [ $plugin_errors -eq 0 ]; then
-            ((success_count++))
+            success_count=$((success_count + 1))
         else
-            ((error_count++))
+            error_count=$((error_count + 1))
         fi
         echo ""
     fi
@@ -235,18 +235,18 @@ for cli in src/cli/{ansible,chef,puppet}.rs; do
 
         cli_issues=0
 
-        grep -q "show_deps" "$cli" && echo -e "    ${GREEN}✅ Has --show-deps flag${NC}" || { echo -e "    ${YELLOW}⚠️  Missing --show-deps flag${NC}"; ((cli_issues++)); }
-        grep -q "format" "$cli" && echo -e "    ${GREEN}✅ Has --format flag${NC}" || { echo -e "    ${YELLOW}⚠️  Missing --format flag${NC}"; ((cli_issues++)); }
-        grep -q "from_graph" "$cli" && echo -e "    ${GREEN}✅ Has --from-graph flag${NC}" || { echo -e "    ${YELLOW}⚠️  Missing --from-graph flag${NC}"; ((cli_issues++)); }
+        grep -q "show_deps" "$cli" && echo -e "    ${GREEN}✅ Has --show-deps flag${NC}" || { echo -e "    ${YELLOW}⚠️  Missing --show-deps flag${NC}"; cli_issues=$((cli_issues + 1)); }
+        grep -q "format" "$cli" && echo -e "    ${GREEN}✅ Has --format flag${NC}" || { echo -e "    ${YELLOW}⚠️  Missing --format flag${NC}"; cli_issues=$((cli_issues + 1)); }
+        grep -q "from_graph" "$cli" && echo -e "    ${GREEN}✅ Has --from-graph flag${NC}" || { echo -e "    ${YELLOW}⚠️  Missing --from-graph flag${NC}"; cli_issues=$((cli_issues + 1)); }
 
         if grep -q "SecurityScan" "$cli"; then
-            grep -q "min_severity" "$cli" && echo -e "    ${GREEN}✅ Has --min-severity flag${NC}" || { echo -e "    ${YELLOW}⚠️  Missing --min-severity flag${NC}"; ((cli_issues++)); }
+            grep -q "min_severity" "$cli" && echo -e "    ${GREEN}✅ Has --min-severity flag${NC}" || { echo -e "    ${YELLOW}⚠️  Missing --min-severity flag${NC}"; cli_issues=$((cli_issues + 1)); }
         fi
 
         if [ $cli_issues -eq 0 ]; then
-            ((success_count++))
+            success_count=$((success_count + 1))
         else
-            ((warning_count++))
+            warning_count=$((warning_count + 1))
         fi
         echo ""
     fi
@@ -267,7 +267,7 @@ for file in "${required_files[@]}"; do
         echo -e "  ${GREEN}✅ $file exists${NC}"
     else
         echo -e "  ${RED}❌ $file missing${NC}"
-        ((error_count++))
+        error_count=$((error_count + 1))
     fi
 done
 echo ""
