@@ -13,12 +13,19 @@ pub fn derive_language_plugin(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
 
-    let lang_attr = match input.attrs.iter().find(|a| a.path().is_ident("language_plugin")) {
+    let lang_attr = match input
+        .attrs
+        .iter()
+        .find(|a| a.path().is_ident("language_plugin"))
+    {
         Some(a) => a,
         None => {
-            return syn::Error::new_spanned(&input.ident, "Missing #[language_plugin(...)] attribute")
-                .to_compile_error()
-                .into();
+            return syn::Error::new_spanned(
+                &input.ident,
+                "Missing #[language_plugin(...)] attribute",
+            )
+            .to_compile_error()
+            .into();
         }
     };
 
