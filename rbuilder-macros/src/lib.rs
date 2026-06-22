@@ -79,11 +79,11 @@ pub fn derive_language_plugin(input: TokenStream) -> TokenStream {
     let new_impl = if let Some(ref grammar) = grammar_crate {
         if has_parser_field {
             quote! {
-                pub fn new() -> Result<Self, crate::error::Error> {
+                pub fn new() -> Result<Self, rbuilder_plugin_api::Error> {
                     let mut parser = tree_sitter::Parser::new();
                     parser
                         .set_language(&#grammar::LANGUAGE.into())
-                        .map_err(|e| crate::error::Error::PluginError(
+                        .map_err(|e| rbuilder_plugin_api::Error::PluginError(
                             format!("Failed to set grammar for {}: {}", #language_id, e)
                         ))?;
                     Ok(Self { _parser: parser })
@@ -91,7 +91,7 @@ pub fn derive_language_plugin(input: TokenStream) -> TokenStream {
             }
         } else {
             quote! {
-                pub fn new() -> Result<Self, crate::error::Error> {
+                pub fn new() -> Result<Self, rbuilder_plugin_api::Error> {
                     Ok(Self)
                 }
             }

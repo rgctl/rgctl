@@ -1,27 +1,25 @@
 //! Phase 17 — Chef cookbook, recipe, security, and graph integration tests.
 
-#![cfg(feature = "lang-chef")]
+#![cfg(feature = "iac-langs")]
 
 use rbuilder::analysis::chef_cookbooks::{CookbookDependencyAnalyzer, CookbookDependencyGraph};
 use rbuilder::extraction::extractor::Extractor;
 use rbuilder::extraction::graph_builder::GraphBuilder;
 use rbuilder::graph::query::execute;
 use rbuilder::graph::schema::{EdgeType, NodeType};
-use rbuilder::languages::multimodal::chef::parser::ChefParser;
-use rbuilder::languages::multimodal::chef::ChefPlugin;
 use rbuilder::languages::plugin_trait::{LanguagePlugin, RelationType, SymbolType};
 use rbuilder::languages::registry::LanguageRegistry;
 use rbuilder::security::chef::{ChefSecurityScanner, ChefSeverity};
+use rbuilder_lang_chef::parser::ChefParser;
+use rbuilder_lang_chef::ChefPlugin;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chef")
 }
 
 fn build_fixture_graph() -> rbuilder::graph::backend::MemoryBackend {
     let root = fixture_root();
-    let graph = rbuilder::graph::CodeGraph::from_repository(&root).expect("build graph");
+    let graph = rbuilder::code_graph_from_repository(&root).expect("build graph");
     graph.backend().clone()
 }
 
@@ -136,7 +134,7 @@ fn test_security_scan_insecure_permissions() {
 #[test]
 fn test_graph_builder_chef_nodes() {
     let path = fixture_root().join("cookbooks/nginx/recipes/default.rb");
-    let registry = Arc::new(LanguageRegistry::new());
+    let registry = LanguageRegistry::new().into();
     let extractor = Extractor::new(registry);
     let extraction = extractor.extract_file(&path).unwrap();
     let mut builder = GraphBuilder::new();

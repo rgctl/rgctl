@@ -1,15 +1,15 @@
 //! Phase 18 — Puppet module, manifest, security, and graph integration tests.
 
-#![cfg(feature = "lang-puppet")]
+#![cfg(feature = "iac-langs")]
 
 use rbuilder::analysis::puppet_modules::{ModuleDependencyAnalyzer, ModuleDependencyGraph};
 use rbuilder::graph::query::execute;
 use rbuilder::graph::schema::{EdgeType, NodeType};
-use rbuilder::languages::multimodal::puppet::parser::PuppetParser;
-use rbuilder::languages::multimodal::puppet::PuppetPlugin;
 use rbuilder::languages::plugin_trait::{LanguagePlugin, RelationType, SymbolType};
 use rbuilder::languages::registry::LanguageRegistry;
 use rbuilder::security::puppet::{PuppetSecurityScanner, PuppetSeverity};
+use rbuilder_lang_puppet::parser::PuppetParser;
+use rbuilder_lang_puppet::PuppetPlugin;
 use std::path::{Path, PathBuf};
 
 fn fixture_root() -> PathBuf {
@@ -18,7 +18,7 @@ fn fixture_root() -> PathBuf {
 
 fn build_fixture_graph() -> rbuilder::graph::backend::MemoryBackend {
     let root = fixture_root();
-    let graph = rbuilder::graph::CodeGraph::from_repository(&root).expect("build graph");
+    let graph = rbuilder::code_graph_from_repository(&root).expect("build graph");
     graph.backend().clone()
 }
 

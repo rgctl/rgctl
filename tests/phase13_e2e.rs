@@ -23,7 +23,7 @@ macro_rules! e2e_test {
     };
 }
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 e2e_test!(e2e_taint_security_sql_pipeline, {
     let code = r#"
 def handle(request):
@@ -36,7 +36,7 @@ def handle(request):
     assert!(vulns[0].recommendation.contains("parameterized"));
 });
 
-#[cfg(feature = "lang-rust")]
+#[cfg(feature = "bundle-minimal")]
 e2e_test!(e2e_interprocedural_dominance_slice, {
     let (backend, files) = build_sample_backend_with_chain(4);
     let cg = call_graph_from(&backend);
@@ -78,7 +78,7 @@ e2e_test!(e2e_interprocedural_dominance_slice, {
     assert!(slice.functions.contains(&leaf));
 });
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 e2e_test!(e2e_type_inference_taint_sanitized, {
     let code = r#"
 def handle(request):
@@ -107,12 +107,12 @@ e2e_test!(e2e_gql_optimize_execute_large_graph, {
         b
     };
     let _ = call_graph_from(&chain_backend);
-    let mut files = HashMap::new();
+    let mut files: HashMap<String, String> = HashMap::new();
     files.insert(
         "app.rs".into(),
         "fn f0() { f1(); }\nfn f1() { f2(1); }\nfn f2(input: i32) -> i32 { input }\n".into(),
     );
-    #[cfg(feature = "lang-rust")]
+    #[cfg(feature = "bundle-minimal")]
     {
         let icfg = InterproceduralCFG::build(&chain_backend, &files).unwrap();
         assert!(!icfg.function_cfgs.is_empty());

@@ -72,7 +72,7 @@ fn test_batch_insert_equivalent_to_individual() {
     // Throughput comparison lives in benches/graph.rs (insert_nodes single vs batch).
 }
 
-#[cfg(feature = "lang-rust")]
+#[cfg(feature = "bundle-minimal")]
 #[test]
 fn test_parallel_pipeline_many_files() {
     let temp = TempDir::new().unwrap();
@@ -85,7 +85,7 @@ fn test_parallel_pipeline_many_files() {
         );
     }
 
-    let registry = Arc::new(LanguageRegistry::new());
+    let registry = LanguageRegistry::new().into();
     let pipeline = ProcessingPipeline::with_config(
         Arc::clone(&registry),
         PipelineConfig {
@@ -116,7 +116,7 @@ fn test_parallel_pipeline_many_files() {
     );
 }
 
-#[cfg(feature = "lang-rust")]
+#[cfg(feature = "bundle-minimal")]
 #[test]
 fn test_parallel_incremental_update_many_files() {
     let temp = TempDir::new().unwrap();
@@ -129,7 +129,7 @@ fn test_parallel_incremental_update_many_files() {
         );
     }
 
-    let registry = Arc::new(LanguageRegistry::new());
+    let registry = LanguageRegistry::new().into();
     let pipeline = ProcessingPipeline::with_config(
         Arc::clone(&registry),
         PipelineConfig {

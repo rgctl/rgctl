@@ -325,21 +325,21 @@ enum Commands {
     },
 
     /// Ansible playbook and role analysis (Phase 16)
-    #[cfg(feature = "lang-ansible")]
+    #[cfg(feature = "iac-langs")]
     Ansible {
         #[command(flatten)]
         args: rbuilder::cli::ansible::AnsibleArgs,
     },
 
     /// Chef cookbook analysis (Phase 17)
-    #[cfg(feature = "lang-chef")]
+    #[cfg(feature = "iac-langs")]
     Chef {
         #[command(flatten)]
         args: rbuilder::cli::chef::ChefArgs,
     },
 
     /// Puppet module analysis (Phase 18)
-    #[cfg(feature = "lang-puppet")]
+    #[cfg(feature = "iac-langs")]
     Puppet {
         #[command(flatten)]
         args: rbuilder::cli::puppet::PuppetArgs,
@@ -419,6 +419,8 @@ fn main() -> anyhow::Result<()> {
     // Parse CLI arguments
     let cli = Cli::parse();
 
+    rbuilder::init();
+
     // Initialize logging
     let log_level = if cli.verbose { "debug" } else { "info" };
     tracing_subscriber::fmt().with_env_filter(log_level).init();
@@ -458,7 +460,7 @@ fn main() -> anyhow::Result<()> {
             }
 
             let discovery_config = discovery.clone();
-            let registry = Arc::new(LanguageRegistry::new());
+            let registry = LanguageRegistry::new().into();
             let pipeline = ProcessingPipeline::with_config(
                 Arc::clone(&registry),
                 PipelineConfig {
@@ -532,7 +534,7 @@ fn main() -> anyhow::Result<()> {
             use rbuilder::changes::ChangeDetector;
             use rbuilder::config::project::RbuilderConfig;
             use rbuilder::git_util;
-            use rbuilder::graph::CodeGraph;
+            use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
             let repo = Path::new(".");
@@ -603,8 +605,8 @@ fn main() -> anyhow::Result<()> {
             all,
         } => {
             use rbuilder::analysis::{ComplexityAnalyzer, DependencyAnalyzer};
-            use rbuilder::graph::CodeGraph;
             use rbuilder::nlp::PatternMatcher;
+            use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
             let graph = CodeGraph::load_from_repo(Path::new("."))?;
@@ -644,9 +646,9 @@ fn main() -> anyhow::Result<()> {
             dual_agent,
             format,
         } => {
-            use rbuilder::graph::CodeGraph;
             use rbuilder::nlp::PatternMatcher;
             use rbuilder::nlp::QueryResult;
+            use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
             let graph = CodeGraph::load_from_repo(Path::new("."))?;
@@ -735,8 +737,8 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Label { ruleset, dry_run } => {
-            use rbuilder::graph::CodeGraph;
             use rbuilder::rules::{RuleEngine, Ruleset};
+            use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
             let ruleset = Ruleset::from_file(Path::new(&ruleset))?;
@@ -764,8 +766,8 @@ fn main() -> anyhow::Result<()> {
             module,
             output_dir,
         } => {
-            use rbuilder::graph::CodeGraph;
             use rbuilder::semantic::{IdlFormat, IdlGenerator};
+            use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
             let idl_format = IdlFormat::parse(&format)?;
@@ -798,10 +800,9 @@ fn main() -> anyhow::Result<()> {
             use rbuilder::config::analyzer::ConfigAnalyzer;
             use rbuilder::config::secret_detector::SecretDetector;
             use rbuilder::discovery::FileDiscoverer;
-            use rbuilder::graph::CodeGraph;
             use rbuilder::languages::registry::LanguageRegistry;
+            use rbuilder_graph::CodeGraph;
             use std::path::Path;
-            use std::sync::Arc;
 
             let graph = CodeGraph::load_from_repo(Path::new("."))?;
             let run_all = !unused && !missing_env && !secrets && drift.is_none();
@@ -822,7 +823,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             if secrets || run_all {
-                let discoverer = FileDiscoverer::new(Arc::new(LanguageRegistry::new()));
+                let discoverer = FileDiscoverer::new(LanguageRegistry::new().into());
                 let files = discoverer.discover(Path::new("."))?;
                 let detector = SecretDetector::new();
                 let mut total = 0usize;
@@ -943,7 +944,7 @@ fn main() -> anyhow::Result<()> {
             query,
         } => {
             use rbuilder::export::export_graphml;
-            use rbuilder::graph::CodeGraph;
+            use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
             let graph = CodeGraph::load_from_repo(Path::new("."))?;
@@ -1031,9 +1032,9 @@ fn main() -> anyhow::Result<()> {
         } => {
             use rbuilder::analysis::{CentralityAnalyzer, ComplexityAnalyzer};
             use rbuilder::graph::backend::GraphBackend;
-            use rbuilder::graph::CodeGraph;
             use rbuilder::multi_repo::load_workspace_graph;
             use rbuilder::nlp::PatternMatcher;
+            use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
             let graph = load_workspace_graph(Path::new("."))
@@ -1133,7 +1134,7 @@ fn main() -> anyhow::Result<()> {
             macro_name,
         } => {
             use rbuilder::gql::{execute, execute_explain, execute_macro, QueryMacroRegistry};
-            use rbuilder::graph::CodeGraph;
+            use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
             let graph = CodeGraph::load_from_repo(Path::new("."))?;
@@ -1166,7 +1167,7 @@ fn main() -> anyhow::Result<()> {
 
         Commands::BlastRadius { symbol, depth } => {
             use rbuilder::analysis::BlastRadiusAnalyzer;
-            use rbuilder::graph::CodeGraph;
+            use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
             let graph = CodeGraph::load_from_repo(Path::new("."))?;
@@ -1185,21 +1186,21 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
 
-        #[cfg(feature = "lang-ansible")]
+        #[cfg(feature = "iac-langs")]
         Commands::Ansible { args } => {
             use std::path::Path;
             rbuilder::cli::ansible::run_ansible_command(Path::new("."), args)?;
             Ok(())
         }
 
-        #[cfg(feature = "lang-chef")]
+        #[cfg(feature = "iac-langs")]
         Commands::Chef { args } => {
             use std::path::Path;
             rbuilder::cli::chef::run_chef_command(Path::new("."), args)?;
             Ok(())
         }
 
-        #[cfg(feature = "lang-puppet")]
+        #[cfg(feature = "iac-langs")]
         Commands::Puppet { args } => {
             use std::path::Path;
             rbuilder::cli::puppet::run_puppet_command(Path::new("."), args)?;

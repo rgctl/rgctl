@@ -4,7 +4,7 @@ use rbuilder::analysis::{
     build_cfg_for_function, BackwardSlicer, ProgramDependenceGraph, SliceCriterion,
 };
 
-#[cfg(feature = "lang-rust")]
+#[cfg(feature = "bundle-minimal")]
 #[test]
 fn test_rust_backward_slice_excludes_dead_assignments() {
     let code = r#"
@@ -48,7 +48,7 @@ fn process(input: String) -> String {
     assert!(slice.reduction_percent > 0.0);
 }
 
-#[cfg(feature = "lang-rust")]
+#[cfg(feature = "bundle-minimal")]
 #[test]
 fn test_cfg_has_entry_and_exit() {
     let code = r#"
@@ -62,7 +62,7 @@ fn simple() {
     assert!(!cfg.blocks.is_empty());
 }
 
-#[cfg(feature = "lang-rust")]
+#[cfg(feature = "bundle-minimal")]
 #[test]
 fn test_pdg_builds_data_dependencies() {
     let code = r#"
@@ -78,7 +78,7 @@ fn flow() {
     assert!(!pdg.nodes.is_empty());
 }
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 #[test]
 fn test_python_cfg_builds() {
     let code = r#"

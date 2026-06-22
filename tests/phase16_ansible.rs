@@ -1,27 +1,25 @@
 //! Phase 16 — Ansible playbook, role, security, and graph integration tests.
 
-#![cfg(feature = "lang-ansible")]
+#![cfg(feature = "iac-langs")]
 
 use rbuilder::analysis::ansible_roles::{RoleDependencyAnalyzer, RoleDependencyGraph};
 use rbuilder::extraction::extractor::Extractor;
 use rbuilder::extraction::graph_builder::GraphBuilder;
 use rbuilder::graph::query::execute;
 use rbuilder::graph::schema::{EdgeType, NodeType};
-use rbuilder::languages::multimodal::ansible::parser::AnsibleParser;
-use rbuilder::languages::multimodal::ansible::AnsiblePlugin;
 use rbuilder::languages::plugin_trait::{LanguagePlugin, RelationType, SymbolType};
 use rbuilder::languages::registry::LanguageRegistry;
 use rbuilder::security::ansible::{AnsibleSecurityScanner, AnsibleSeverity};
+use rbuilder_lang_ansible::parser::AnsibleParser;
+use rbuilder_lang_ansible::AnsiblePlugin;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ansible")
 }
 
 fn build_fixture_graph() -> rbuilder::graph::backend::MemoryBackend {
     let root = fixture_root();
-    let graph = rbuilder::graph::CodeGraph::from_repository(&root).expect("build graph");
+    let graph = rbuilder::code_graph_from_repository(&root).expect("build graph");
     graph.backend().clone()
 }
 
@@ -119,7 +117,7 @@ fn test_ansible_registry_routing() {
 #[test]
 fn test_graph_builder_ansible_node_types() {
     let path = fixture_root().join("playbooks/site.yml");
-    let registry = Arc::new(LanguageRegistry::new());
+    let registry = LanguageRegistry::new().into();
     let extractor = Extractor::new(registry);
     let extraction = extractor.extract_file(&path).unwrap();
     let mut builder = GraphBuilder::new();

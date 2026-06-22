@@ -1,0 +1,37 @@
+[package]
+name = "rbuilder-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP server and HTTP API for rBuilder"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-analysis = { path = "../rbuilder-analysis" }
+rbuilder-error = { path = "../rbuilder-error" }
+rbuilder-export = { path = "../rbuilder-export" }
+rbuilder-extraction = { path = "../rbuilder-extraction" }
+rbuilder-graph = { path = "../rbuilder-graph" }
+rbuilder-gql = { path = "../rbuilder-gql" }
+rbuilder-incremental = { path = "../rbuilder-incremental" }
+rbuilder-nlp = { path = "../rbuilder-nlp" }
+rbuilder-pipeline = { path = "../rbuilder-pipeline" }
+rbuilder-project-config = { path = "../rbuilder-project-config" }
+rbuilder-registry = { path = "../rbuilder-registry" }
+rbuilder-security = { path = "../rbuilder-security" }
+rbuilder-semantic = { path = "../rbuilder-semantic" }
+petgraph = "0.6"
+uuid = { version = "1", features = ["v4", "serde"] }
+axum = { version = "0.7", optional = true }
+notify = "6.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", optional = true, features = ["fs", "cors"] }
+tracing = "0.1"
+
+[features]
+default = []
+mcp-server = ["axum", "tower-http"]
+
+[dev-dependencies]
+tempfile = { workspace = true }

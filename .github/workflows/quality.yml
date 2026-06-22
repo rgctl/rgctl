@@ -39,6 +39,9 @@ jobs:
       - name: Documentation Check
         run: cargo doc --no-deps --all-features
 
+      - name: Shipped integration tests
+        run: cargo test -p rbuilder --tests
+
       - name: Test Suite
         run: cargo test --all-features
 

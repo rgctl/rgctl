@@ -5,7 +5,6 @@ use rbuilder::graph::CodeGraph;
 use rbuilder::languages::registry::LanguageRegistry;
 use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
 use std::fs;
-use std::sync::Arc;
 use tempfile::TempDir;
 
 fn write(path: &std::path::Path, contents: &str) {
@@ -16,7 +15,7 @@ fn write(path: &std::path::Path, contents: &str) {
 }
 
 #[test]
-#[cfg(feature = "lang-markdown")]
+#[cfg(feature = "bundle-extended")]
 fn test_end_to_end_multi_language_repo() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -33,7 +32,7 @@ fn test_end_to_end_multi_language_repo() {
     write(&root.join("README.md"), "# Demo\n\n## Setup\n");
 
     let pipeline = ProcessingPipeline::with_config(
-        Arc::new(LanguageRegistry::new()),
+        LanguageRegistry::new().into(),
         PipelineConfig {
             show_progress: false,
             ..PipelineConfig::default()
@@ -57,7 +56,7 @@ fn test_init_save_and_query() {
         "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
     );
 
-    let graph = CodeGraph::from_repository(root).unwrap();
+    let graph = rbuilder::code_graph_from_repository(root).unwrap();
     graph.save_to_repo(root).unwrap();
 
     let loaded = CodeGraph::load_from_repo(root).unwrap();
@@ -73,7 +72,7 @@ fn test_gitignore_excluded_from_graph() {
     write(&root.join("target/generated.rs"), "pub fn skipped() {}\n");
     write(&root.join(".gitignore"), "target/\n");
 
-    let graph = CodeGraph::from_repository(root).unwrap();
+    let graph = rbuilder::code_graph_from_repository(root).unwrap();
     let functions: Vec<_> = graph
         .find_by_type(NodeType::Function)
         .unwrap()

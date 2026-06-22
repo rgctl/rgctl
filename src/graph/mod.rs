@@ -1,16 +1,12 @@
-//! Graph storage and query layer
+//! Code graph types and helpers (re-exported from `rbuilder-graph`).
 
-pub mod backend;
-pub mod code_graph;
-pub mod code_index;
-pub mod export;
-pub mod intern;
-pub mod migration;
-pub mod query;
-pub mod schema;
+pub use rbuilder_graph::CodeGraph;
+pub use rbuilder_graph::*;
 
-pub use code_graph::CodeGraph;
-pub use code_index::{hash_code, CodeIndex, CodeLocation};
-pub use export::{export_json, import_json, GraphSnapshot};
-pub use migration::{migrate_snapshot, migrate_v1_to_v2};
-pub use schema::{AccessType, CallType, GraphParameter, GRAPH_SCHEMA_VERSION};
+use rbuilder_error::Result;
+use std::path::Path;
+
+/// Build a code graph from a repository (workspace entry point).
+pub fn from_repository(root: &Path) -> Result<CodeGraph> {
+    crate::code_graph_from_repository(root)
+}

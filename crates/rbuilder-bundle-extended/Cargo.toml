@@ -1,0 +1,31 @@
+[package]
+name = "rbuilder-bundle-extended"
+version = "0.1.0"
+edition = "2021"
+description = "rBuilder language bundle: extended"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-registry = { workspace = true }
+rbuilder-config-formats = { workspace = true }
+rbuilder-lang-rust = { workspace = true }
+rbuilder-lang-python = { workspace = true }
+rbuilder-lang-javascript = { workspace = true }
+rbuilder-lang-typescript = { workspace = true }
+rbuilder-lang-go = { workspace = true }
+rbuilder-lang-java = { workspace = true }
+rbuilder-lang-kotlin = { workspace = true }
+rbuilder-lang-csharp = { workspace = true }
+rbuilder-lang-markdown = { workspace = true }
+rbuilder-lang-c = { workspace = true }
+rbuilder-lang-cpp = { workspace = true }
+rbuilder-lang-ruby = { workspace = true }
+rbuilder-lang-php = { workspace = true }
+rbuilder-lang-sql = { workspace = true }
+rbuilder-lang-bash = { workspace = true }
+rbuilder-lang-dockerfile = { workspace = true }
+rbuilder-lang-github-actions = { workspace = true }
+rbuilder-lang-gitlab-ci = { workspace = true }
+rbuilder-lang-ansible = { workspace = true }
+rbuilder-lang-chef = { workspace = true }
+rbuilder-lang-puppet = { workspace = true }

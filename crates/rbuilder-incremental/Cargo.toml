@@ -1,0 +1,25 @@
+[package]
+name = "rbuilder-incremental"
+version = "0.1.0"
+edition = "2021"
+description = "Incremental graph updates for rBuilder"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-analysis = { path = "../rbuilder-analysis" }
+rbuilder-error = { path = "../rbuilder-error" }
+rbuilder-extraction = { path = "../rbuilder-extraction" }
+rbuilder-graph = { path = "../rbuilder-graph" }
+rbuilder-pipeline = { path = "../rbuilder-pipeline" }
+rbuilder-plugin-api = { path = "../rbuilder-plugin-api" }
+rbuilder-project-config = { path = "../rbuilder-project-config" }
+rbuilder-registry = { path = "../rbuilder-registry" }
+blake3 = "1"
+indicatif = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+rbuilder-bundle-full = { workspace = true }

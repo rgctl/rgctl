@@ -1,0 +1,29 @@
+[package]
+name = "rbuilder-core"
+version = "0.1.0"
+edition = "2021"
+description = "Facade crate for rBuilder library consumers"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-analysis = { path = "../rbuilder-analysis" }
+rbuilder-cli = { path = "../rbuilder-cli" }
+rbuilder-error = { path = "../rbuilder-error" }
+rbuilder-export = { path = "../rbuilder-export" }
+rbuilder-extraction = { path = "../rbuilder-extraction" }
+rbuilder-gql = { path = "../rbuilder-gql" }
+rbuilder-graph = { path = "../rbuilder-graph" }
+rbuilder-incremental = { path = "../rbuilder-incremental" }
+rbuilder-mcp = { path = "../rbuilder-mcp" }
+rbuilder-nlp = { path = "../rbuilder-nlp" }
+rbuilder-pipeline = { path = "../rbuilder-pipeline" }
+rbuilder-plugin-api = { path = "../rbuilder-plugin-api" }
+rbuilder-project-config = { path = "../rbuilder-project-config" }
+rbuilder-registry = { path = "../rbuilder-registry" }
+rbuilder-rules = { path = "../rbuilder-rules" }
+rbuilder-security = { path = "../rbuilder-security" }
+rbuilder-semantic = { path = "../rbuilder-semantic" }
+
+[features]
+default = ["mcp-server"]
+mcp-server = ["rbuilder-mcp/mcp-server"]

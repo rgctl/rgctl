@@ -126,7 +126,7 @@ fn test_end_to_end_repo_with_nlp() {
     )
     .unwrap();
 
-    let graph = CodeGraph::from_repository(temp.path()).unwrap();
+    let graph = rbuilder::code_graph_from_repository(temp.path()).unwrap();
     graph.save_to_repo(temp.path()).unwrap();
 
     let loaded = CodeGraph::load_from_repo(temp.path()).unwrap();

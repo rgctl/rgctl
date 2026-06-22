@@ -1,0 +1,13 @@
+[package]
+name = "rbuilder-lang-haskell"
+version = "0.1.0"
+edition = "2021"
+description = "rBuilder language plugin: haskell"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-plugin-api = { workspace = true }
+rbuilder-registry = { workspace = true }
+rbuilder-lang-runtime = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-haskell = "0.23"

@@ -1,0 +1,19 @@
+[advisories]
+ignore = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+deny = []
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+
+[sources.allow-org]
+github = ["*"]
+
+[licenses]
+unlicensed = "deny"
+allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0"]
+confidence-threshold = 0.8

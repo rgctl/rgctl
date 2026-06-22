@@ -46,7 +46,7 @@ fn bench_polyglot_repo(c: &mut Criterion) {
     let temp = TempDir::new().unwrap();
     write_polyglot_repo(temp.path(), 100);
 
-    let registry = Arc::new(LanguageRegistry::new());
+    let registry = LanguageRegistry::new().into();
     let discovery = DiscoveryConfig::default();
 
     c.bench_function("phase11_polyglot_extract_100_files", |b| {

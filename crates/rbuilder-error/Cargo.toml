@@ -1,0 +1,17 @@
+[package]
+name = "rbuilder-error"
+version = "0.1.0"
+edition = "2021"
+description = "Error types for rBuilder"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-plugin-api = { path = "../rbuilder-plugin-api" }
+serde_json = "1"
+serde_yaml = "0.9"
+thiserror = "1"
+toml = "0.8"
+
+[features]
+default = []
+mcp-server = []

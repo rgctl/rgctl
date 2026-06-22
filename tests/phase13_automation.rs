@@ -11,7 +11,6 @@ use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
 use tempfile::TempDir;
 
 fn init_git(root: &Path) {
@@ -42,7 +41,7 @@ fn chain_graph_repo(temp: &TempDir) -> rbuilder::CodeGraph {
     .unwrap();
 
     let pipeline = ProcessingPipeline::with_config(
-        Arc::new(LanguageRegistry::new()),
+        LanguageRegistry::new().into(),
         PipelineConfig {
             show_progress: false,
             ..PipelineConfig::default()
@@ -109,7 +108,7 @@ fn test_update_files_incremental() {
     .unwrap();
 
     let updater = IncrementalUpdater::with_options(
-        Arc::new(LanguageRegistry::new()),
+        LanguageRegistry::new().into(),
         UpdateOptions {
             show_progress: false,
             ..Default::default()
@@ -263,7 +262,7 @@ fn test_full_workflow_modify_and_update() {
     .unwrap();
 
     let updater = IncrementalUpdater::with_options(
-        Arc::new(LanguageRegistry::new()),
+        LanguageRegistry::new().into(),
         UpdateOptions {
             show_progress: false,
             ..Default::default()

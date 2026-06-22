@@ -19,7 +19,7 @@ fn test_polyglot_repo_extraction() {
     let tmp = TempDir::new().unwrap();
     write_polyglot_repo(tmp.path());
 
-    let registry = Arc::new(LanguageRegistry::new());
+    let registry = LanguageRegistry::new().into();
     let extractor = Extractor::new(Arc::clone(&registry));
     let start = Instant::now();
     let extractions = extractor

@@ -112,6 +112,7 @@ fn test_cross_repo_linking() {
 
 #[test]
 fn test_workspace_sync() {
+    rbuilder::init();
     let workspace = TempDir::new().unwrap();
     let repo_a = TempDir::new().unwrap();
     let repo_b = TempDir::new().unwrap();

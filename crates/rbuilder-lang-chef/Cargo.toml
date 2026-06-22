@@ -1,0 +1,20 @@
+[package]
+name = "rbuilder-lang-chef"
+version = "0.1.0"
+edition = "2021"
+description = "rBuilder language plugin: chef"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-plugin-api = { workspace = true }
+rbuilder-registry = { workspace = true }
+rbuilder-plugin-helpers = { workspace = true }
+serde_yaml = "0.9"
+regex = "1"
+rbuilder-error = { workspace = true }
+rbuilder-graph = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+comfy-table = "7"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+tree-sitter = { workspace = true }

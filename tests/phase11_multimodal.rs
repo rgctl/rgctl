@@ -1,15 +1,36 @@
 //! Phase 11.2 — multi-modal plugin integration tests
 
-use rbuilder::languages::multimodal::{
-    bash::BashPlugin, dockerfile::DockerfilePlugin, gitlab_ci::GitlabCiPlugin, sql::SqlPlugin,
-};
 use rbuilder::languages::plugin_trait::{LanguagePlugin, RelationType, SymbolType};
 use rbuilder::languages::registry::LanguageRegistry;
 use std::path::Path;
+use std::sync::Arc;
+fn sql_plugin() -> Arc<dyn LanguagePlugin> {
+    LanguageRegistry::new()
+        .get_language_plugin("sql")
+        .expect("sql plugin")
+}
+
+fn dockerfile_plugin() -> Arc<dyn LanguagePlugin> {
+    LanguageRegistry::new()
+        .get_language_plugin("dockerfile")
+        .expect("dockerfile plugin")
+}
+
+fn gitlab_plugin() -> Arc<dyn LanguagePlugin> {
+    LanguageRegistry::new()
+        .get_language_plugin("gitlab_ci")
+        .expect("gitlab_ci plugin")
+}
+
+fn bash_plugin() -> Arc<dyn LanguagePlugin> {
+    LanguageRegistry::new()
+        .get_language_plugin("bash")
+        .expect("bash plugin")
+}
 
 #[test]
 fn test_sql_ddl_extraction() {
-    let plugin = SqlPlugin::new().unwrap();
+    let plugin = sql_plugin();
     let source = br#"
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
@@ -30,7 +51,7 @@ CREATE TABLE posts (
 
 #[test]
 fn test_sql_view_and_index_in_multimodal() {
-    let plugin = SqlPlugin::new().unwrap();
+    let plugin = sql_plugin();
     let source = br#"
 CREATE TABLE users (id INTEGER PRIMARY KEY);
 CREATE VIEW active_users AS SELECT id FROM users;
@@ -50,7 +71,7 @@ fn test_dockerfile_routing_and_extraction() {
         .unwrap();
     assert_eq!(plugin.language_id(), "dockerfile");
 
-    let docker = DockerfilePlugin::new().unwrap();
+    let docker = dockerfile_plugin();
     let source = b"FROM rust:1.75\nCOPY Cargo.toml .\nRUN cargo build";
     let symbols = docker
         .extract_symbols(Path::new("Dockerfile"), source)
@@ -91,7 +112,7 @@ fn test_github_actions_routing() {
         .any(|r| r.relation_type == RelationType::DependsOn));
 }
 
-#[cfg(feature = "lang-chef")]
+#[cfg(feature = "iac-langs")]
 #[test]
 fn test_chef_routing() {
     let registry = LanguageRegistry::new();
@@ -100,7 +121,7 @@ fn test_chef_routing() {
     assert_eq!(plugin.language_id(), "chef");
 }
 
-#[cfg(feature = "lang-puppet")]
+#[cfg(feature = "iac-langs")]
 #[test]
 fn test_puppet_routing() {
     let registry = LanguageRegistry::new();
@@ -109,7 +130,7 @@ fn test_puppet_routing() {
     assert_eq!(plugin.language_id(), "puppet");
 }
 
-#[cfg(feature = "lang-ansible")]
+#[cfg(feature = "iac-langs")]
 #[test]
 fn test_ansible_routing() {
     let registry = LanguageRegistry::new();
@@ -125,7 +146,7 @@ fn test_gitlab_ci_routing() {
     let plugin = registry.get_plugin_for_file(path).unwrap();
     assert_eq!(plugin.language_id(), "gitlab_ci");
 
-    let gitlab = GitlabCiPlugin::new().unwrap();
+    let gitlab = gitlab_plugin();
     let source = br#"stages: [test, build]
 test_job:
   stage: test
@@ -141,7 +162,7 @@ build_job:
         .any(|s| s.symbol_type == SymbolType::Job && s.name == "test_job"));
 }
 
-#[cfg(feature = "lang-bash")]
+#[cfg(feature = "bundle-extended")]
 #[test]
 fn test_bash_shell_extraction() {
     let registry = LanguageRegistry::new();
@@ -150,7 +171,7 @@ fn test_bash_shell_extraction() {
         .unwrap();
     assert_eq!(plugin.language_id(), "bash");
 
-    let bash = BashPlugin::new().unwrap();
+    let bash = bash_plugin();
     let source = b"deploy() {\n  echo 'Deploying...'\n}\nsource ./lib/common.sh";
     let symbols = bash
         .extract_symbols(Path::new("deploy.sh"), source)

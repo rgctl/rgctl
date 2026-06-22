@@ -10,7 +10,6 @@ use rbuilder::graph::query;
 use rbuilder::graph::schema::{CallType, Edge, EdgeType, Node, NodeType, GRAPH_SCHEMA_VERSION};
 use rbuilder::languages::registry::LanguageRegistry;
 use rbuilder::semantic::signature::SignatureExtractor;
-use std::sync::Arc;
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -20,7 +19,7 @@ fn test_rust_signature_populates_first_class_fields() {
     let path = tmp.path().join("lib.rs");
     std::fs::write(&path, "pub fn add(a: i32, b: i32) -> i32 { a + b }\n").unwrap();
 
-    let registry = Arc::new(LanguageRegistry::new());
+    let registry = LanguageRegistry::new().into();
     let extractor = Extractor::new(registry);
     let extraction = extractor.extract_file(&path).unwrap();
 

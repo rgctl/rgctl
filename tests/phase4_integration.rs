@@ -17,7 +17,7 @@ fn test_idl_generation_pipeline() {
     )
     .unwrap();
 
-    let graph = CodeGraph::from_repository(temp.path()).unwrap();
+    let graph = rbuilder::code_graph_from_repository(temp.path()).unwrap();
     let generator = IdlGenerator::new();
     let output_dir = temp.path().join("idl");
     let path = generator

@@ -1,0 +1,20 @@
+[package]
+name = "rbuilder-analysis"
+version = "0.1.0"
+edition = "2021"
+description = "Graph analysis algorithms for rBuilder"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-error = { path = "../rbuilder-error" }
+rbuilder-graph = { path = "../rbuilder-graph" }
+rbuilder-plugin-api = { path = "../rbuilder-plugin-api" }
+rbuilder-plugin-helpers = { path = "../rbuilder-plugin-helpers" }
+petgraph = "0.6"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.25"
+uuid = { version = "1", features = ["v4", "serde"] }

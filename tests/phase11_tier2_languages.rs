@@ -1,17 +1,13 @@
 //! Phase 11.1.2 — Tier 2 high-priority language plugin tests
 
-use rbuilder::languages::generic::TreeSitterLanguagePlugin;
-use rbuilder::languages::plugin_trait::LanguagePlugin;
+use rbuilder::languages::registry::LanguageRegistry;
 use std::path::Path;
 
-fn assert_extracts_function(
-    lang: &str,
-    loader: fn() -> tree_sitter::Language,
-    file: &str,
-    source: &str,
-    expected_fn: &str,
-) {
-    let plugin = TreeSitterLanguagePlugin::new(lang, loader).unwrap();
+fn assert_extracts_function(lang: &str, file: &str, source: &str, expected_fn: &str) {
+    let registry = LanguageRegistry::new();
+    let plugin = registry
+        .get_language_plugin(lang)
+        .unwrap_or_else(|| panic!("missing language plugin: {lang}"));
     let symbols = plugin
         .extract_symbols(Path::new(file), source.as_bytes())
         .unwrap();
@@ -26,165 +22,99 @@ fn assert_extracts_function(
     );
 }
 
-#[cfg(feature = "lang-swift")]
-fn load_swift() -> tree_sitter::Language {
-    tree_sitter_swift::LANGUAGE.into()
-}
-
-#[cfg(feature = "lang-scala")]
-fn load_scala() -> tree_sitter::Language {
-    tree_sitter_scala::LANGUAGE.into()
-}
-
-#[cfg(feature = "lang-lua")]
-fn load_lua() -> tree_sitter::Language {
-    tree_sitter_lua::LANGUAGE.into()
-}
-
-#[cfg(feature = "lang-erlang")]
-fn load_erlang() -> tree_sitter::Language {
-    tree_sitter_erlang::LANGUAGE.into()
-}
-
-#[cfg(feature = "lang-haskell")]
-fn load_haskell() -> tree_sitter::Language {
-    tree_sitter_haskell::LANGUAGE.into()
-}
-
-#[cfg(feature = "lang-dart")]
-fn load_dart() -> tree_sitter::Language {
-    tree_sitter_dart::LANGUAGE.into()
-}
-
-#[cfg(feature = "lang-r")]
-fn load_r() -> tree_sitter::Language {
-    tree_sitter_r::LANGUAGE.into()
-}
-
-#[cfg(feature = "lang-julia")]
-fn load_julia() -> tree_sitter::Language {
-    tree_sitter_julia::LANGUAGE.into()
-}
-
-#[cfg(feature = "lang-swift")]
+#[cfg(feature = "bundle-full")]
 #[test]
 fn test_swift_plugin() {
     assert_extracts_function(
         "swift",
-        load_swift,
         "test.swift",
         "func add(a: Int, b: Int) -> Int { return a + b }",
         "add",
     );
 }
 
-#[cfg(feature = "lang-scala")]
+#[cfg(feature = "bundle-full")]
 #[test]
 fn test_scala_plugin() {
     assert_extracts_function(
         "scala",
-        load_scala,
         "test.scala",
         "object Demo { def add(a: Int, b: Int): Int = a + b }",
         "add",
     );
 }
 
-#[cfg(feature = "lang-lua")]
+#[cfg(feature = "bundle-full")]
 #[test]
 fn test_lua_plugin() {
     assert_extracts_function(
         "lua",
-        load_lua,
         "test.lua",
         "function add(a, b)\n  return a + b\nend",
         "add",
     );
 }
 
-#[cfg(feature = "lang-erlang")]
+#[cfg(feature = "bundle-full")]
 #[test]
 fn test_erlang_plugin() {
     assert_extracts_function(
         "erlang",
-        load_erlang,
         "test.erl",
         "-module(demo).\nadd(A, B) -> A + B.",
         "add",
     );
 }
 
-#[cfg(feature = "lang-haskell")]
+#[cfg(feature = "bundle-full")]
 #[test]
 fn test_haskell_plugin() {
-    assert_extracts_function("haskell", load_haskell, "test.hs", "add a b = a + b", "add");
+    assert_extracts_function("haskell", "test.hs", "add a b = a + b", "add");
 }
 
-#[cfg(feature = "lang-dart")]
+#[cfg(feature = "bundle-full")]
 #[test]
 fn test_dart_plugin() {
     assert_extracts_function(
         "dart",
-        load_dart,
         "test.dart",
         "int add(int a, int b) => a + b;",
         "add",
     );
 }
 
-#[cfg(feature = "lang-r")]
+#[cfg(feature = "bundle-full")]
 #[test]
 fn test_r_plugin() {
-    assert_extracts_function(
-        "r",
-        load_r,
-        "test.r",
-        "add <- function(a, b) { a + b }",
-        "add",
-    );
+    assert_extracts_function("r", "test.r", "add <- function(a, b) { a + b }", "add");
 }
 
-#[cfg(feature = "lang-julia")]
+#[cfg(feature = "bundle-full")]
 #[test]
 fn test_julia_plugin() {
     assert_extracts_function(
         "julia",
-        load_julia,
         "test.jl",
         "function add(a, b)\n    a + b\nend",
         "add",
     );
 }
 
-#[cfg(feature = "lang-nim")]
+#[cfg(feature = "bundle-full")]
 #[test]
 fn test_nim_plugin() {
-    assert_extracts_function(
-        "nim",
-        tree_sitter_nim::language,
-        "test.nim",
-        "proc add(a, b: int): int = a + b",
-        "add",
-    );
+    assert_extracts_function("nim", "test.nim", "proc add(a, b: int): int = a + b", "add");
 }
 
-#[cfg(feature = "lang-elixir")]
+#[cfg(feature = "bundle-full")]
 #[test]
 fn test_elixir_plugin() {
-    assert_extracts_function(
-        "elixir",
-        || tree_sitter_elixir::LANGUAGE.into(),
-        "test.ex",
-        "def add(a, b), do: a + b",
-        "add",
-    );
+    assert_extracts_function("elixir", "test.ex", "def add(a, b), do: a + b", "add");
 }
 
 #[cfg(feature = "bundle-full")]
 #[test]
 fn test_full_bundle_registers_tier2_languages() {
-    use rbuilder::languages::registry::LanguageRegistry;
-
     let registry = LanguageRegistry::new();
     let ids: Vec<_> = registry
         .supported_languages()

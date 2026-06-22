@@ -1,0 +1,30 @@
+name: Language Crates
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lang-crates:
+    name: ${{ matrix.crate }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          - rbuilder-lang-rust
+          - rbuilder-lang-python
+          - rbuilder-lang-ansible
+          - rbuilder-lang-c
+          - rbuilder-lang-kotlin
+          - rbuilder-lang-markdown
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p ${{ matrix.crate }}
+      - run: cargo clippy -p ${{ matrix.crate }} -- -D warnings

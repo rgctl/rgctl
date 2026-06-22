@@ -1,5 +1,6 @@
 # rBuilder tree-sitter language configuration
-# Single source of truth for built-in language plugins (Phase 7)
+# Source of truth for language metadata and bundles.
+# Per-crate `src/config.rs` for regex/tree-sitter plugins: run `scripts/generate_lang_configs.py`.
 
 [metadata]
 version = "1.0"

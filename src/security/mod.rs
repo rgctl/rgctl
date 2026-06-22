@@ -1,13 +1,28 @@
-//! Security analysis: CWE patterns and vulnerability reporting (Phase 13.5).
+//! Security analysis (monolith re-exports + IaC from lang crates)
 
-pub mod analyzer;
-pub mod ansible;
-pub mod chef;
-pub mod cve_patterns;
-pub mod puppet;
+pub use rbuilder_security::*;
 
-pub use analyzer::{SecurityAnalyzer, SecurityVulnerability};
+#[cfg(feature = "iac-langs")]
+pub mod ansible {
+    //! Ansible security scanning.
+    pub use rbuilder_lang_ansible::security::*;
+}
+
+#[cfg(feature = "iac-langs")]
+pub mod chef {
+    //! Chef security scanning.
+    pub use rbuilder_lang_chef::security::*;
+}
+
+#[cfg(feature = "iac-langs")]
+pub mod puppet {
+    //! Puppet security scanning.
+    pub use rbuilder_lang_puppet::security::*;
+}
+
+#[cfg(feature = "iac-langs")]
 pub use ansible::{AnsibleSecurityFinding, AnsibleSecurityScanner, AnsibleSeverity};
+#[cfg(feature = "iac-langs")]
 pub use chef::{ChefSecurityFinding, ChefSecurityScanner, ChefSeverity};
-pub use cve_patterns::{default_cwe_patterns, CwePattern};
+#[cfg(feature = "iac-langs")]
 pub use puppet::{PuppetSecurityFinding, PuppetSecurityScanner, PuppetSeverity};

@@ -118,7 +118,7 @@ ip_test!(recursive_mutual_pair, {
     assert!(cg.topological_order().is_err());
 });
 
-#[cfg(feature = "lang-rust")]
+#[cfg(feature = "bundle-minimal")]
 ip_test!(icfg_builds_per_function_cfg, {
     let backend = sample_backend();
     let source = r#"
@@ -136,7 +136,7 @@ fn helper(input: i32) -> i32 {
     assert_eq!(icfg.function_cfgs.len(), 2);
 });
 
-#[cfg(feature = "lang-rust")]
+#[cfg(feature = "bundle-minimal")]
 ip_test!(icfg_get_cfg_by_id, {
     let backend = sample_backend();
     let source = r#"
@@ -156,7 +156,7 @@ fn helper(x: i32) -> i32 { x + 1 }
     assert!(icfg.get_cfg(helper_id).is_some());
 });
 
-#[cfg(feature = "lang-rust")]
+#[cfg(feature = "bundle-minimal")]
 ip_test!(icfg_caller_cfgs, {
     let backend = sample_backend();
     let source = r#"
@@ -177,7 +177,7 @@ fn helper(x: i32) -> i32 { x + 1 }
     assert_eq!(callers.len(), 1);
 });
 
-#[cfg(feature = "lang-rust")]
+#[cfg(feature = "bundle-minimal")]
 ip_test!(interprocedural_slice_helper, {
     let backend = sample_backend();
     let source = r#"
@@ -220,7 +220,7 @@ fn helper(input: i32) -> i32 {
     assert!(slice.functions.contains(&helper_id));
 });
 
-#[cfg(feature = "lang-rust")]
+#[cfg(feature = "bundle-minimal")]
 ip_test!(multi_hop_slice_three_deep, {
     let (backend, files) = build_sample_backend_with_chain(4);
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
@@ -277,7 +277,7 @@ ip_test!(graph_parameter_stored_on_node, {
     assert_eq!(cg.parameter_names(*id), &["x"]);
 });
 
-#[cfg(feature = "lang-rust")]
+#[cfg(feature = "bundle-minimal")]
 ip_test!(slice_reduction_percent_non_negative, {
     let (backend, files) = build_backend_with_parameters();
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();

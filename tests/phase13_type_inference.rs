@@ -25,7 +25,7 @@ macro_rules! conf_test {
     };
 }
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_int_literal,
     "python",
@@ -39,7 +39,7 @@ def example():
     }
 );
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_string_literal,
     "python",
@@ -53,7 +53,7 @@ def example():
     }
 );
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_float_literal,
     "python",
@@ -67,7 +67,7 @@ def example():
     }
 );
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_list_literal,
     "python",
@@ -83,7 +83,7 @@ def example():
     }
 );
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_dict_literal,
     "python",
@@ -99,7 +99,7 @@ def example():
     }
 );
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_string_method,
     "python",
@@ -113,7 +113,7 @@ def process(data):
     }
 );
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_append_method,
     "python",
@@ -130,7 +130,7 @@ def process():
     }
 );
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_literal_confidence,
     "python",
@@ -145,7 +145,7 @@ def example():
     }
 );
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_method_confidence,
     "python",
@@ -160,7 +160,7 @@ def process(data):
     }
 );
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_chained_assignment,
     "python",
@@ -175,7 +175,7 @@ def example():
     }
 );
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_strip_method_confidence,
     "python",

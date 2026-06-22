@@ -1,0 +1,40 @@
+[package]
+name = "rbuilder-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI command implementations for rBuilder"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-analysis = { path = "../rbuilder-analysis" }
+rbuilder-error = { path = "../rbuilder-error" }
+rbuilder-export = { path = "../rbuilder-export" }
+rbuilder-extraction = { path = "../rbuilder-extraction" }
+rbuilder-gql = { path = "../rbuilder-gql" }
+rbuilder-graph = { path = "../rbuilder-graph" }
+rbuilder-incremental = { path = "../rbuilder-incremental" }
+rbuilder-mcp = { path = "../rbuilder-mcp" }
+rbuilder-nlp = { path = "../rbuilder-nlp" }
+rbuilder-pipeline = { path = "../rbuilder-pipeline" }
+rbuilder-project-config = { path = "../rbuilder-project-config" }
+rbuilder-registry = { path = "../rbuilder-registry" }
+rbuilder-rules = { path = "../rbuilder-rules" }
+rbuilder-semantic = { path = "../rbuilder-semantic" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+comfy-table = "7"
+console = "0.15"
+indicatif = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[features]
+default = []
+mcp-server = ["rbuilder-mcp/mcp-server"]
+
+[dev-dependencies]
+tempfile = { workspace = true }

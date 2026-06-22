@@ -24,7 +24,7 @@ fn test_incremental_update_workflow() {
     let root = temp.path();
     write(&root.join("src/main.rs"), "fn main() {}\n");
 
-    let registry = Arc::new(LanguageRegistry::new());
+    let registry = LanguageRegistry::new().into();
     let pipeline = ProcessingPipeline::with_config(
         Arc::clone(&registry),
         PipelineConfig {
@@ -133,7 +133,7 @@ fn test_incremental_update_ten_files() {
         );
     }
 
-    let registry = Arc::new(LanguageRegistry::new());
+    let registry = LanguageRegistry::new().into();
     let pipeline = ProcessingPipeline::with_config(
         Arc::clone(&registry),
         PipelineConfig {

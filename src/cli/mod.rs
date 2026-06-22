@@ -1,15 +1,11 @@
 //! CLI command implementations
 
-pub mod ansible;
-pub mod chat;
-pub mod chef;
-pub mod diagram;
-pub mod puppet;
-pub mod update;
-pub mod workspace;
+pub use rbuilder_cli::cli::*;
+pub use rbuilder_cli::{git_util, hooks, multi_repo, output};
 
-#[cfg(feature = "mcp-server")]
-pub mod mcp;
-
-#[cfg(feature = "mcp-server")]
-pub mod serve;
+#[cfg(feature = "iac-langs")]
+pub use rbuilder_lang_ansible::cli as ansible;
+#[cfg(feature = "iac-langs")]
+pub use rbuilder_lang_chef::cli as chef;
+#[cfg(feature = "iac-langs")]
+pub use rbuilder_lang_puppet::cli as puppet;

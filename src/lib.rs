@@ -1,109 +1,18 @@
 //! rBuilder - AI-Powered Code Knowledge Graph
-//!
-//! rBuilder transforms code repositories into queryable knowledge graphs that AI agents
-//! can interrogate via natural language, enabling accurate impact analysis, architecture
-//! review, and refactoring.
-//!
-//! # Architecture
-//!
-//! - **Extraction**: Tree-sitter based AST parsing for 36+ languages
-//! - **Graph**: IndraDB-backed graph storage with pluggable backends
-//! - **Analysis**: Community detection, complexity metrics, centrality analysis
-//! - **NLP**: Hybrid query system (pattern matching + optional LLM)
-//! - **MCP**: Model Context Protocol server for AI agent integration
-//!
-//! # Example
-//!
-//! ```ignore
-//! use rbuilder::CodeGraph;
-//!
-//! let graph = CodeGraph::from_repository("./my-project")?;
-//! let functions = graph.query("functions")?;
-//! println!("Found {} functions", functions.len());
-//! # Ok::<(), rbuilder::Error>(())
-//! ```
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-// Core modules
-pub mod error;
+pub use rbuilder_core::*;
 
-// Extraction layer
-pub mod discovery;
-pub mod extraction;
-pub mod languages;
-
-// Graph layer
+pub mod analysis;
+pub mod cli;
 pub mod graph;
-
-// Visualization & export (Phase 14)
-pub mod export;
-
-// Graph query language (Phase 12.4)
-pub mod gql;
-
-// Security analysis (Phase 13.5)
+pub mod languages;
 pub mod security;
 
-// Analysis layer
-pub mod analysis;
-pub mod config;
-
-// NLP & Query layer
-pub mod nlp;
-
-// Integration layer
-#[cfg(feature = "mcp-server")]
-pub mod api;
-
-#[cfg(feature = "mcp-server")]
-pub mod mcp;
-
-// Utility modules
-pub mod changes;
-pub mod cli;
-pub mod git_util;
-pub mod hooks;
-pub mod incremental;
-pub mod multi_repo;
-pub mod output;
-pub mod parallel;
-pub mod pipeline;
-pub mod rules;
-pub mod semantic;
-pub mod watch;
-
-// Re-exports for convenience
-pub use changes::{ChangeDetail, ChangeDetectionResult, ChangeDetector, ChangeSummary};
-pub use config::analyzer::{ConfigAnalyzer, MissingEnvVar, UnusedConfigKey};
-pub use config::drift::{
-    compare_configs, format_drift_report, ConfigDiffEntry, ConfigDiffKind, ConfigDriftReport,
-};
-pub use config::project::{HooksConfig, RbuilderConfig, RiskLevel, WatchConfig};
-pub use config::secret_detector::{DetectedSecret, SecretDetector, Severity as SecretSeverity};
-pub use error::{Error, Result};
-pub use graph::CodeGraph;
-pub use incremental::{ChangeSet, FileTracker, IncrementalUpdater, UpdateOptions, UpdateResult};
-pub use multi_repo::{
-    link_cross_repo, load_workspace_graph, stamp_repo_namespace, sync_workspace,
-    CrossRepoLinkReport, RepoEntry, WorkspaceManifest, WorkspaceSyncReport, WORKSPACE_FILE,
-};
-pub use nlp::conversation::ConversationContext;
-pub use nlp::{DomainContext, PatternDetector, PatternMatcher, QueryResult, TranslatedQuery};
-pub use pipeline::{PipelineConfig, PipelineStats, ProcessingPipeline};
-pub use rules::{RuleApplicationReport, RuleEngine, Ruleset};
-pub use semantic::{
-    FunctionSignature, IdlFormat, IdlGenerator, SignatureExtractor, TypeInferencer,
-};
-pub use watch::{debounce_ready, GraphUpdateNotification, WatchService};
-#[cfg(feature = "mcp-server")]
-pub use watch::{
-    latest_notification, new_notification_store, record_notification, NotificationStore,
-};
-
-/// Version information
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub use rbuilder_error::{Error, Result};
+pub use rbuilder_graph::CodeGraph;
 
 /// Build information
 pub const BUILD_INFO: &str = concat!(
@@ -113,6 +22,23 @@ pub const BUILD_INFO: &str = concat!(
     env!("CARGO_PKG_REPOSITORY"),
     ")"
 );
+
+/// Initialize workspace hooks (language registry builder).
+pub fn init() {
+    languages::ensure_registry_initialized();
+}
+
+/// Build a code graph from a repository using the active language bundle.
+pub fn code_graph_from_repository(root: &std::path::Path) -> Result<CodeGraph> {
+    use rbuilder_pipeline::ProcessingPipeline;
+    use std::sync::Arc;
+
+    languages::ensure_registry_initialized();
+    let pipeline =
+        ProcessingPipeline::new(Arc::new(languages::LanguageRegistry::new().into_inner()));
+    let (graph, _) = pipeline.process_repository(root)?;
+    Ok(graph)
+}
 
 #[cfg(test)]
 mod tests {

@@ -19,7 +19,7 @@ fn bench_parallel_parsing(c: &mut Criterion) {
         .unwrap();
     }
 
-    let registry = Arc::new(LanguageRegistry::new());
+    let registry = LanguageRegistry::new().into();
     c.bench_function("parse_100_files", |b| {
         b.iter(|| {
             let pipeline = ProcessingPipeline::with_config(

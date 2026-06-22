@@ -26,7 +26,7 @@ macro_rules! perf_test {
 }
 
 perf_test!(perf_taint_large_function, 5000, {
-    #[cfg(feature = "lang-python")]
+    #[cfg(feature = "bundle-minimal")]
     {
         let mut body = String::from("def big(request):\n    x = request.GET['a']\n");
         for i in 0..200 {
@@ -36,7 +36,7 @@ perf_test!(perf_taint_large_function, 5000, {
         let flows = analyze_taint("python", &body, "big");
         assert!(!flows.is_empty());
     }
-    #[cfg(not(feature = "lang-python"))]
+    #[cfg(not(feature = "bundle-minimal"))]
     {
         let code = r#"
 fn big(x: i32) {
@@ -50,7 +50,7 @@ fn big(x: i32) {
 });
 
 perf_test!(perf_dominance_large_cfg, 3000, {
-    #[cfg(feature = "lang-rust")]
+    #[cfg(feature = "bundle-minimal")]
     {
         let mut code = String::from("fn big(mut x: i32) -> i32 {\n");
         for i in 0..100 {
@@ -60,7 +60,7 @@ perf_test!(perf_dominance_large_cfg, 3000, {
         let (_cfg, dom) = build_dominance("rust", &code, "big");
         assert!(!dom.idom.is_empty());
     }
-    #[cfg(not(feature = "lang-rust"))]
+    #[cfg(not(feature = "bundle-minimal"))]
     {
         let mut code = String::from("def big(x):\n");
         for i in 0..100 {

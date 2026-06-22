@@ -1,4 +1,4 @@
-name: Language Feature Matrix
+name: Bundle Testing
 
 on:
   push:
@@ -10,6 +10,39 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  test-bundles:
+    name: ${{ matrix.bundle }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - bundle: minimal
+            test: phase11_bundles
+          - bundle: extended
+            test: phase11_multimodal
+          - bundle: full
+            test: phase11_tier2_languages
+          - bundle: extra
+            test: phase11_tier2_niche_languages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bundle-${{ matrix.bundle }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: Test bundle crate
+        run: cargo test -p rbuilder-bundle-${{ matrix.bundle }}
+      - name: Integration test
+        run: |
+          cargo test -p rbuilder --no-default-features \
+            --features bundle-${{ matrix.bundle }},nlp-patterns,mcp-server \
+            --test ${{ matrix.test }}
+
   feature-matrix:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -29,34 +62,21 @@ jobs:
           - name: bundle-extra
             features: bundle-extra,nlp-patterns,mcp-server
             test_args: --test phase11_bundles --test phase11_tier2_languages --test phase11_tier2_niche_languages --test phase11_multimodal --test phase11_multilang --test phase11_polyglot_bench
-          - name: custom-rust-go
-            features: lang-rust,lang-go,nlp-patterns
-            test_args: --lib
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
           key: ${{ runner.os }}-bundles-${{ matrix.name }}-${{ hashFiles('**/Cargo.lock') }}
-
       - name: Build
         run: cargo build --no-default-features --features "${{ matrix.features }}"
-
       - name: Test
         run: cargo test --no-default-features --features "${{ matrix.features }}" ${{ matrix.test_args }}
-
       - name: Clippy
         run: cargo clippy --no-default-features --features "${{ matrix.features }}" -- -D warnings
-
-      - name: Binary size
-        run: ls -lh target/debug/rbuilder

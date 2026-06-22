@@ -12,7 +12,6 @@ use rbuilder::watch::{
     latest_notification, new_notification_store, record_notification, GraphUpdateNotification,
 };
 use std::fs;
-use std::sync::Arc;
 use tempfile::TempDir;
 
 fn sample_repo() -> (TempDir, AppState) {
@@ -22,7 +21,7 @@ fn sample_repo() -> (TempDir, AppState) {
     fs::write(root.join("src/lib.rs"), "pub fn hello() {}\n").unwrap();
 
     let pipeline = ProcessingPipeline::with_config(
-        Arc::new(LanguageRegistry::new()),
+        LanguageRegistry::new().into(),
         PipelineConfig {
             show_progress: false,
             ..PipelineConfig::default()
@@ -52,7 +51,7 @@ fn test_mcp_state_reflects_incremental_update() {
     state
         .with_graph_mut(|graph| {
             let updater = IncrementalUpdater::with_options(
-                Arc::new(LanguageRegistry::new()),
+                LanguageRegistry::new().into(),
                 UpdateOptions {
                     show_progress: false,
                     ..Default::default()

@@ -1,0 +1,18 @@
+[package]
+name = "rbuilder-pipeline"
+version = "0.1.0"
+edition = "2021"
+description = "Parallel processing pipeline for rBuilder"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-error = { path = "../rbuilder-error" }
+rbuilder-extraction = { path = "../rbuilder-extraction" }
+rbuilder-graph = { path = "../rbuilder-graph" }
+rbuilder-registry = { path = "../rbuilder-registry" }
+indicatif = "0.17"
+rayon = "1.7"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+rbuilder-bundle-full = { workspace = true }

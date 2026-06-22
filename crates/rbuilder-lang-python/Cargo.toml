@@ -1,0 +1,15 @@
+[package]
+name = "rbuilder-lang-python"
+version = "0.1.0"
+edition = "2021"
+description = "rBuilder language plugin: python"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-plugin-api = { workspace = true }
+rbuilder-registry = { workspace = true }
+rbuilder-plugin-helpers = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-python = "0.25"
+rbuilder-semantic = { workspace = true }
+serde_json = "1"

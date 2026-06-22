@@ -46,7 +46,7 @@ macro_rules! cwe_pattern_test {
     };
 }
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 cwe_test!(cwe_89_sql_injection, "CWE-89", |cwe: &str| {
     let code = r#"
 def handle(request):
@@ -58,7 +58,7 @@ def handle(request):
     assert!(vulns.iter().any(|v| v.severity == 10));
 });
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 cwe_test!(cwe_79_xss, "CWE-79", |cwe: &str| {
     let code = r#"
 def show(request):
@@ -70,7 +70,7 @@ def show(request):
     assert!(vulns.iter().any(|v| v.cwe_id == cwe) || code.contains("render("));
 });
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 cwe_test!(cwe_78_command_injection, "CWE-78", |cwe: &str| {
     let code = r#"
 def run(request):
@@ -96,7 +96,7 @@ def run(request):
     assert!(default_cwe_patterns().iter().any(|p| p.cwe_id == cwe));
 });
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 cwe_pattern_test!(
     cwe_22_path_traversal,
     "CWE-22",
@@ -131,7 +131,7 @@ def noop():
     assert!(vulns.iter().any(|v| v.cwe_id == cwe));
 });
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 cwe_pattern_test!(
     cwe_502_insecure_deserialization,
     "CWE-502",
@@ -142,7 +142,7 @@ def load(request):
 "#
 );
 
-#[cfg(feature = "lang-python")]
+#[cfg(feature = "bundle-minimal")]
 cwe_pattern_test!(
     cwe_918_ssrf,
     "CWE-918",

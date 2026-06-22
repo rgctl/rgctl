@@ -40,7 +40,7 @@ fn verify_token(token: &str) -> bool {
 "#,
     );
 
-    let registry = Arc::new(LanguageRegistry::new());
+    let registry = LanguageRegistry::new().into();
     let pipeline = ProcessingPipeline::with_config(
         Arc::clone(&registry),
         PipelineConfig {

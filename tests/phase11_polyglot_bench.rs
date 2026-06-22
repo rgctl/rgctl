@@ -24,7 +24,7 @@ fn test_polyglot_benchmark_threshold() {
     let tmp = TempDir::new().unwrap();
     write_scaled_polyglot_repo(tmp.path(), POLYGLOT_BENCH_FILE_COUNT);
 
-    let registry = Arc::new(LanguageRegistry::new());
+    let registry = LanguageRegistry::new().into();
     let extractor = Extractor::new(Arc::clone(&registry));
     let start = Instant::now();
     let extractions = extractor
