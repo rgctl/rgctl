@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>rBuilder Graph Browser</title>
-  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e6edf3; height: 100vh; display: flex; flex-direction: column; }
@@ -17,7 +17,11 @@
     main { flex: 1; display: grid; grid-template-columns: 280px 1fr 300px; overflow: hidden; }
     aside, .panel { background: #161b22; border-right: 1px solid #30363d; overflow-y: auto; padding: 12px; }
     .panel { border-right: none; border-left: 1px solid #30363d; }
-    #graph { background: #0d1117; width: 100%; height: 100%; position: relative; }
+    #graph { background: #0d1117; width: 100%; height: 100%; }
+    .node { cursor: pointer; }
+    .node circle { stroke: #30363d; stroke-width: 2px; }
+    .node text { font-size: 10px; pointer-events: none; user-select: none; }
+    .link { stroke: #30363d; stroke-width: 1.5px; }
     .stat { padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 0.85rem; }
     .stat span { color: #8b949e; }
     .stat strong { float: right; color: #58a6ff; }
@@ -56,7 +60,7 @@
       <h2 style="font-size:0.9rem;margin:12px 0 8px">Communities</h2>
       <div id="communities"><div class="loading">Loading...</div></div>
     </aside>
-    <div id="graph"></div>
+    <svg id="graph"></svg>
     <div class="panel">
       <div id="node-detail"><p>Select a node to view details.</p></div>
       <div id="search-results"></div>
@@ -64,15 +68,31 @@
   </main>
   <script>
     const API = '';
-    let network = null;
+    let svg, g, simulation, linkSel, nodeSel;
     let allNodes = [];
     let allEdges = [];
 
     const typeColors = {
       Function: '#58a6ff', Class: '#bc8cff', Struct: '#79c0ff',
       File: '#8b949e', Module: '#3fb950', ConfigKey: '#d29922',
-      default: '#484f58'
+      default: '#6e7681'
     };
+
+    function initSvg() {
+      const container = document.getElementById('graph');
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+
+      const el = d3.select('#graph');
+      el.selectAll('*').remove();
+      svg = el.attr('viewBox', [0, 0, width, height]);
+      g = svg.append('g');
+
+      svg.call(d3.zoom()
+        .scaleExtent([0.1, 4])
+        .on('zoom', (e) => g.attr('transform', e.transform))
+      );
+    }
 
     async function fetchJson(path) {
       const r = await fetch(API + path);
@@ -100,11 +120,9 @@
 
     async function loadGraph() {
       const typeFilter = document.getElementById('type-filter').value;
-      // Start with fewer nodes for better performance
-      const nodeParams = new URLSearchParams({ limit: '200' });
+      const nodeParams = new URLSearchParams({ limit: '300' });
       if (typeFilter) nodeParams.set('node_type', typeFilter);
 
-      // Load nodes and ALL their edges
       const [nodeData, edgeData] = await Promise.all([
         fetchJson('/api/graph/nodes?' + nodeParams),
         fetchJson('/api/graph/edges?limit=5000')
@@ -121,86 +139,87 @@
       }
 
       const nodeIds = new Set(allNodes.map(n => n.id));
-
-      // Filter edges to only those connecting our loaded nodes
       allEdges = allEdgesRaw.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to));
 
       console.log(`After filtering: ${allEdges.length} edges between loaded nodes`);
 
-      const visNodes = new vis.DataSet(allNodes.map(n => ({
-        id: n.id,
-        label: n.name.length > 20 ? n.name.slice(0, 18) + '…' : n.name,
-        title: `${n.name} (${n.type})`,
-        color: typeColors[n.type] || typeColors.default,
-        font: { color: '#e6edf3', size: 11 }
-      })));
-
-      const visEdges = new vis.DataSet(
-        allEdges.map((e, i) => ({
-          id: i,
-          from: e.from,
-          to: e.to,
-          arrows: 'to',
-          color: { color: '#30363d' },
-          width: 1
-        }))
-      );
-
-      console.log(`Rendering ${visNodes.length} nodes, ${visEdges.length} edges`);
-
-      const container = document.getElementById('graph');
-      if (!container) {
-        console.error('Graph container not found!');
-        return;
-      }
-
-      if (network) network.destroy();
-
-      try {
-        network = new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
-          physics: {
-            enabled: true,
-            barnesHut: {
-              gravitationalConstant: -2000,
-              centralGravity: 0.3,
-              springLength: 95,
-              springConstant: 0.04,
-              damping: 0.09,
-              avoidOverlap: 0.1
-            },
-            stabilization: {
-              enabled: true,
-              iterations: 200,
-              updateInterval: 25
-            }
-          },
-          interaction: {
-            hover: true,
-            tooltipDelay: 100,
-            zoomView: true,
-            dragView: true
-          },
-          layout: {
-            improvedLayout: false
-          }
-        });
-
-        network.on('click', params => {
-          if (params.nodes.length) showNodeDetail(params.nodes[0]);
-        });
-
-        network.once('stabilizationIterationsDone', () => {
-          console.log('Graph stabilized and rendered successfully');
-        });
-
-        console.log('Graph initialization complete');
-      } catch (err) {
-        console.error('Error rendering graph:', err);
-        alert('Error rendering graph: ' + err.message);
-      }
-
+      initSvg();
+      renderGraph();
       loadStats();
       loadCommunities();
+    }
+
+    function renderGraph() {
+      const container = document.getElementById('graph');
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+
+      // Prepare data
+      const nodes = allNodes.map(n => ({ ...n }));
+      const links = allEdges.map(e => ({ source: e.from, target: e.to, ...e }));
+
+      // Create links
+      linkSel = g.selectAll('.link').data(links, d => `${d.source}-${d.target}`);
+      linkSel.exit().remove();
+      linkSel = linkSel.enter()
+        .append('line')
+        .attr('class', 'link')
+        .merge(linkSel);
+
+      // Create nodes
+      nodeSel = g.selectAll('.node').data(nodes, d => d.id);
+      nodeSel.exit().remove();
+
+      const nodeEnter = nodeSel.enter()
+        .append('g')
+        .attr('class', 'node')
+        .on('click', (_, d) => showNodeDetail(d.id))
+        .call(d3.drag()
+          .on('start', (e, d) => {
+            if (!e.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+          })
+          .on('drag', (e, d) => {
+            d.fx = e.x;
+            d.fy = e.y;
+          })
+          .on('end', (e, d) => {
+            if (!e.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+          })
+        );
+
+      nodeEnter.append('circle').attr('r', 8);
+      nodeEnter.append('text')
+        .attr('x', 12)
+        .attr('y', 4)
+        .attr('fill', '#e6edf3');
+
+      nodeSel = nodeEnter.merge(nodeSel);
+      nodeSel.select('circle')
+        .attr('fill', d => typeColors[d.type] || typeColors.default);
+      nodeSel.select('text')
+        .text(d => d.name.length > 18 ? d.name.slice(0, 16) + '…' : d.name);
+
+      // Create simulation
+      simulation = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(links).id(d => d.id).distance(60))
+        .force('charge', d3.forceManyBody().strength(-200))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide().radius(20))
+        .on('tick', () => {
+          linkSel
+            .attr('x1', d => d.source.x)
+            .attr('y1', d => d.source.y)
+            .attr('x2', d => d.target.x)
+            .attr('y2', d => d.target.y);
+
+          nodeSel.attr('transform', d => `translate(${d.x},${d.y})`);
+        });
+
+      console.log('D3 graph initialized with', nodes.length, 'nodes and', links.length, 'links');
     }
 
     function showNodeDetail(nodeId) {
@@ -247,10 +266,22 @@
     }
 
     function focusNode(id) {
-      if (network) {
-        network.selectNodes([id]);
-        network.focus(id, { scale: 1.5, animation: true });
-        showNodeDetail(id);
+      showNodeDetail(id);
+
+      // Highlight the node
+      if (nodeSel) {
+        nodeSel.select('circle')
+          .attr('stroke', d => d.id === id ? '#58a6ff' : '#30363d')
+          .attr('stroke-width', d => d.id === id ? 3 : 2);
+
+        // Find the node and zoom to it
+        const node = allNodes.find(n => n.id === id);
+        if (node && node.x && node.y) {
+          const transform = d3.zoomIdentity
+            .translate(svg.node().clientWidth / 2 - node.x * 1.5, svg.node().clientHeight / 2 - node.y * 1.5)
+            .scale(1.5);
+          svg.transition().duration(750).call(d3.zoom().transform, transform);
+        }
       }
     }
 
@@ -289,7 +320,38 @@
     document.getElementById('search').addEventListener('keydown', e => {
       if (e.key === 'Enter') searchNodes();
     });
+
+    // Live search filter
+    document.getElementById('search').addEventListener('input', e => {
+      const q = e.target.value.toLowerCase().trim();
+      if (!q) {
+        if (nodeSel) nodeSel.style('opacity', 1);
+        if (linkSel) linkSel.style('opacity', 1);
+        return;
+      }
+
+      if (nodeSel) {
+        nodeSel.style('opacity', d => d.name.toLowerCase().includes(q) ? 1 : 0.15);
+      }
+      if (linkSel) {
+        linkSel.style('opacity', d => {
+          const sourceName = typeof d.source === 'object' ? d.source.name : '';
+          const targetName = typeof d.target === 'object' ? d.target.name : '';
+          return sourceName.toLowerCase().includes(q) || targetName.toLowerCase().includes(q) ? 1 : 0.1;
+        });
+      }
+    });
+
     document.getElementById('type-filter').addEventListener('change', loadGraph);
+
+    window.addEventListener('resize', () => {
+      if (simulation) {
+        const container = document.getElementById('graph');
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+        simulation.force('center', d3.forceCenter(width / 2, height / 2)).alpha(0.3).restart();
+      }
+    });
 
     loadGraph().catch(err => {
       document.getElementById('stats').innerHTML = `<p class="loading">Error: ${err.message}. Run \`rbuilder init\` first.</p>`;
