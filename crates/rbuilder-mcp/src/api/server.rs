@@ -221,6 +221,9 @@ pub fn build_router(state: AppState, web_dir: Option<std::path::PathBuf>) -> Rou
         // Export and diff endpoints
         .route("/api/export", get(export_diagram))
         .route("/api/diff", get(diff_analysis))
+        // Analytics endpoints
+        .route("/api/top-complex", get(top_complex))
+        .route("/api/centrality", get(centrality))
         .with_state(state)
         .layer(CorsLayer::permissive());
 
@@ -1294,6 +1297,77 @@ async fn diff_analysis(
         },
         "changed_count": git_files.len(),
     })))
+}
+
+async fn top_complex(
+    State(state): State<AppState>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let complexity = ComplexityAnalyzer::analyze(backend)
+            .map_err(|e| Error::Other(format!("Complexity analysis failed: {e}")))?;
+
+        let mut functions: Vec<_> = complexity.functions.into_iter().collect();
+        functions.sort_by(|a, b| b.1.cyclomatic.cmp(&a.1.cyclomatic));
+
+        let top_functions: Vec<Value> = functions
+            .iter()
+            .take(50)
+            .map(|(name, metrics)| {
+                json!({
+                    "name": name,
+                    "complexity": metrics.cyclomatic,
+                    "file": metrics.file.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
+                    "line": metrics.line,
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "functions": top_functions,
+        }))
+    })?;
+    Ok(Json(result))
+}
+
+async fn centrality(
+    State(state): State<AppState>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let analyzer = CentralityAnalyzer::new(backend);
+        let centrality_results = analyzer.analyze()
+            .map_err(|e| Error::Other(format!("Centrality analysis failed: {e}")))?;
+
+        let mut nodes_data: Vec<Value> = centrality_results
+            .into_iter()
+            .map(|(node_id, metrics)| {
+                let node = backend.get_node(&node_id).ok();
+                json!({
+                    "id": node_id,
+                    "name": node.as_ref().map(|n| &n.name).unwrap_or(&node_id),
+                    "type": node.as_ref().map(|n| format!("{:?}", n.node_type)).unwrap_or_default(),
+                    "in_degree": metrics.in_degree,
+                    "out_degree": metrics.out_degree,
+                    "betweenness": metrics.betweenness_centrality,
+                    "pagerank": metrics.pagerank,
+                    "file": node.and_then(|n| n.file.as_ref().map(|p| p.display().to_string())),
+                })
+            })
+            .collect();
+
+        // Sort by PageRank descending
+        nodes_data.sort_by(|a, b| {
+            let a_pr = a["pagerank"].as_f64().unwrap_or(0.0);
+            let b_pr = b["pagerank"].as_f64().unwrap_or(0.0);
+            b_pr.partial_cmp(&a_pr).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(json!({
+            "nodes": nodes_data.into_iter().take(100).collect::<Vec<_>>(),
+        }))
+    })?;
+    Ok(Json(result))
 }
 
 #[cfg(test)]
