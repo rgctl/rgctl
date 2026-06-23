@@ -267,18 +267,6 @@ enum Commands {
     #[cfg(feature = "mcp-server")]
     Serve {
         /// Port number
-        #[arg(long, default_value = "8080")]
-        port: u16,
-
-        /// Open browser automatically
-        #[arg(long)]
-        open: bool,
-    },
-
-    /// Start web server for graph visualization (alias with default port 3000)
-    #[cfg(feature = "mcp-server")]
-    ServeWeb {
-        /// Port number
         #[arg(long, default_value = "3000")]
         port: u16,
 
@@ -933,14 +921,6 @@ fn main() -> anyhow::Result<()> {
                     rankdir,
                 },
             )?;
-            Ok(())
-        }
-
-        #[cfg(feature = "mcp-server")]
-        Commands::ServeWeb { port, open } => {
-            use rbuilder::cli::serve;
-            use std::path::Path;
-            serve::run_serve(Path::new("."), port, open)?;
             Ok(())
         }
 
