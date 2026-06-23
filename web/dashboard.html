@@ -37,6 +37,7 @@
   <header>
     <h1>Repository Dashboard</h1>
     <a href="/">Graph Browser</a>
+    <a href="/security.html">Security</a>
     <a href="/explorer.html">D3 Explorer</a>
     <button onclick="load()" style="margin-left:auto;background:#238636;border:0;color:#fff;padding:6px 12px;border-radius:6px;cursor:pointer">Refresh</button>
   </header>
@@ -80,6 +81,42 @@
     </div>
     <div class="card" style="grid-column: 1 / -1"><h2>Top 10 Most Complex Functions</h2>
       <table><thead><tr><th>Function</th><th>Complexity</th><th>File</th></tr></thead><tbody id="top-table"></tbody></table>
+    </div>
+
+    <div class="card" style="grid-column: 1 / -1">
+      <h2>Configuration Analysis</h2>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 12px;">
+        <div class="card" style="margin: 0;">
+          <h3 style="font-size: 0.9rem; margin-bottom: 8px;">Unused Config Keys</h3>
+          <div id="config-unused" style="max-height: 200px; overflow-y: auto; font-size: 0.85rem;">Loading...</div>
+        </div>
+        <div class="card" style="margin: 0;">
+          <h3 style="font-size: 0.9rem; margin-bottom: 8px;">Detected Secrets</h3>
+          <div id="config-secrets" style="max-height: 200px; overflow-y: auto; font-size: 0.85rem;">Loading...</div>
+        </div>
+        <div class="card" style="margin: 0;">
+          <h3 style="font-size: 0.9rem; margin-bottom: 8px;">Missing Env Vars</h3>
+          <div id="config-missing-env" style="max-height: 200px; overflow-y: auto; font-size: 0.85rem;">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: 1 / -1">
+      <h2>Infrastructure as Code Inventory</h2>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 12px;">
+        <div class="card" style="margin: 0;">
+          <h3 style="font-size: 0.9rem; margin-bottom: 8px;">Ansible</h3>
+          <div id="iac-ansible" class="stat-rows">Loading...</div>
+        </div>
+        <div class="card" style="margin: 0;">
+          <h3 style="font-size: 0.9rem; margin-bottom: 8px;">Chef</h3>
+          <div id="iac-chef" class="stat-rows">Loading...</div>
+        </div>
+        <div class="card" style="margin: 0;">
+          <h3 style="font-size: 0.9rem; margin-bottom: 8px;">Puppet</h3>
+          <div id="iac-puppet" class="stat-rows">Loading...</div>
+        </div>
+      </div>
     </div>
   </div>
   <script src="/js/dashboard.js"></script>

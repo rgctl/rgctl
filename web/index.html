@@ -43,7 +43,9 @@
       <option value="Module">Module</option>
     </select>
     <button onclick="loadGraph()">Refresh</button>
+    <button class="secondary" onclick="exportDiagram()">Export</button>
     <button class="secondary" onclick="askNlp()">Ask NLP</button>
+    <a href="/security.html" style="color:#58a6ff;font-size:0.875rem">Security</a>
     <a href="/explorer.html" style="color:#58a6ff;font-size:0.875rem">D3 Explorer</a>
     <a href="/dashboard.html" style="color:#58a6ff;font-size:0.875rem">Dashboard</a>
   </header>
@@ -157,7 +159,27 @@
         <p><strong>Line:</strong> ${node.line || '?'}</p>
         ${node.complexity ? `<p><strong>Complexity:</strong> ${node.complexity}</p>` : ''}
         ${labels ? `<p><strong>Labels:</strong> ${labels}</p>` : ''}
+        <button style="margin-top:8px;width:100%;background:#238636;border:1px solid #238636;color:#fff;padding:6px;border-radius:6px;cursor:pointer"
+          onclick="loadSymbolInfo('${node.name}')">Load Symbol Info</button>
       `;
+    }
+
+    async function loadSymbolInfo(name) {
+      try {
+        const data = await fetchJson(`/api/symbol/${encodeURIComponent(name)}`);
+        document.getElementById('node-detail').innerHTML = `
+          <h3>${data.name}</h3>
+          <p><strong>Type:</strong> ${data.type}</p>
+          <p><strong>File:</strong> ${data.file || '?'}</p>
+          <p><strong>Line:</strong> ${data.start_line || '?'}</p>
+          ${data.complexity ? `<p><strong>Complexity:</strong> ${data.complexity}</p>` : ''}
+          ${data.signature ? `<p><strong>Signature:</strong> <code style="font-size:0.75rem">${data.signature}</code></p>` : ''}
+          ${data.callers && data.callers.length ? `<p><strong>Callers (${data.callers.length}):</strong> ${data.callers.slice(0,5).join(', ')}${data.callers.length > 5 ? '...' : ''}</p>` : ''}
+          ${data.callees && data.callees.length ? `<p><strong>Callees (${data.callees.length}):</strong> ${data.callees.slice(0,5).join(', ')}${data.callees.length > 5 ? '...' : ''}</p>` : ''}
+        `;
+      } catch (err) {
+        alert('Error loading symbol info: ' + err.message);
+      }
     }
 
     async function searchNodes() {
@@ -187,6 +209,26 @@
       });
       const result = await r.json();
       alert(result.answer || JSON.stringify(result));
+    }
+
+    async function exportDiagram() {
+      const format = prompt('Export format (mermaid/dot/graphml):', 'mermaid');
+      if (!format) return;
+      const typeFilter = document.getElementById('type-filter').value;
+      const query = typeFilter ? `type:${typeFilter}` : 'all';
+
+      try {
+        const data = await fetchJson(`/api/export?query=${encodeURIComponent(query)}&format=${format}&depth=2`);
+        const blob = new Blob([data.content], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `graph.${format === 'dot' ? 'dot' : format === 'graphml' ? 'graphml' : 'mmd'}`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        alert('Export failed: ' + err.message);
+      }
     }
 
     document.getElementById('search').addEventListener('keydown', e => {

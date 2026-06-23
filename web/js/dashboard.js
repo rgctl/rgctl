@@ -198,6 +198,10 @@ async function load() {
   renderHotspots(advanced.hotspots);
   renderCentralityChart(advanced.centrality);
 
+  // Load config and IaC data
+  loadConfigAnalysis();
+  loadIacInventory();
+
   const hist = data.complexity_histogram || [];
   complexityChart = upsertChart('complexity-chart', complexityChart, {
     type: 'bar',
@@ -237,6 +241,76 @@ async function load() {
     },
     options: { ...chartDefaults, plugins: { legend: { display: false } } }
   });
+}
+
+async function loadConfigAnalysis() {
+  try {
+    const [unused, secrets, missingEnv] = await Promise.all([
+      fetchJson('/api/config/unused'),
+      fetchJson('/api/config/secrets'),
+      fetchJson('/api/config/missing-env')
+    ]);
+
+    // Unused keys
+    document.getElementById('config-unused').innerHTML = unused.count === 0
+      ? '<p style="color:#8b949e">No unused keys found</p>'
+      : `<p style="margin-bottom:8px"><strong>${unused.count}</strong> unused key(s)</p>` +
+        unused.keys.map(k => `<div style="padding:4px 0;border-bottom:1px solid #21262d">${k.key}<br><small style="color:#8b949e">${k.file}</small></div>`).join('');
+
+    // Secrets
+    document.getElementById('config-secrets').innerHTML = secrets.count === 0
+      ? '<p style="color:#3fb950">No secrets detected</p>'
+      : `<p style="margin-bottom:8px;color:#f85149"><strong>${secrets.count}</strong> finding(s)</p>` +
+        secrets.findings.map(f => `<div style="padding:4px 0;border-bottom:1px solid #21262d;color:#f85149">${f.type} (line ${f.line})<br><small style="color:#8b949e">${f.file}</small></div>`).join('');
+
+    // Missing env
+    document.getElementById('config-missing-env').innerHTML = missingEnv.count === 0
+      ? '<p style="color:#3fb950">All env vars defined</p>'
+      : `<p style="margin-bottom:8px"><strong>${missingEnv.count}</strong> missing</p>` +
+        missingEnv.variables.map(v => `<div style="padding:4px 0;border-bottom:1px solid #21262d">${v}</div>`).join('');
+  } catch (err) {
+    console.error('Config analysis error:', err);
+    document.getElementById('config-unused').textContent = 'Error loading';
+    document.getElementById('config-secrets').textContent = 'Error loading';
+    document.getElementById('config-missing-env').textContent = 'Error loading';
+  }
+}
+
+async function loadIacInventory() {
+  try {
+    const [ansible, chef, puppet] = await Promise.all([
+      fetchJson('/api/iac/ansible'),
+      fetchJson('/api/iac/chef'),
+      fetchJson('/api/iac/puppet')
+    ]);
+
+    // Ansible
+    document.getElementById('iac-ansible').innerHTML = ansible.totals.playbooks === 0
+      ? '<p style="color:#8b949e">No Ansible found</p>'
+      : `<div class="stat-row"><span>Playbooks</span><strong>${ansible.totals.playbooks}</strong></div>
+         <div class="stat-row"><span>Plays</span><strong>${ansible.totals.plays}</strong></div>
+         <div class="stat-row"><span>Tasks</span><strong>${ansible.totals.tasks}</strong></div>
+         <div class="stat-row"><span>Roles</span><strong>${ansible.totals.roles}</strong></div>`;
+
+    // Chef
+    document.getElementById('iac-chef').innerHTML = chef.totals.cookbooks === 0
+      ? '<p style="color:#8b949e">No Chef found</p>'
+      : `<div class="stat-row"><span>Cookbooks</span><strong>${chef.totals.cookbooks}</strong></div>
+         <div class="stat-row"><span>Recipes</span><strong>${chef.totals.recipes}</strong></div>
+         <div class="stat-row"><span>Resources</span><strong>${chef.totals.resources}</strong></div>`;
+
+    // Puppet
+    document.getElementById('iac-puppet').innerHTML = puppet.totals.modules === 0
+      ? '<p style="color:#8b949e">No Puppet found</p>'
+      : `<div class="stat-row"><span>Modules</span><strong>${puppet.totals.modules}</strong></div>
+         <div class="stat-row"><span>Classes</span><strong>${puppet.totals.classes}</strong></div>
+         <div class="stat-row"><span>Resources</span><strong>${puppet.totals.resources}</strong></div>`;
+  } catch (err) {
+    console.error('IaC inventory error:', err);
+    document.getElementById('iac-ansible').textContent = 'Error loading';
+    document.getElementById('iac-chef').textContent = 'Error loading';
+    document.getElementById('iac-puppet').textContent = 'Error loading';
+  }
 }
 
 load().catch(err => {

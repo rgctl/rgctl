@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rBuilder Security Analysis</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e6edf3; padding: 20px; }
+    header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+    h1 { color: #58a6ff; font-size: 1.25rem; }
+    a { color: #58a6ff; text-decoration: none; font-size: 0.9rem; }
+    input, button { background: #21262d; border: 1px solid #30363d; color: #e6edf3; padding: 8px 12px; border-radius: 6px; font-size: 0.875rem; }
+    button { cursor: pointer; background: #238636; border-color: #238636; color: #fff; }
+    button:hover { background: #2ea043; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 16px; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+    .card h2 { font-size: 0.95rem; margin-bottom: 12px; color: #8b949e; }
+    .card p.sub { font-size: 0.85rem; color: #8b949e; margin-bottom: 12px; line-height: 1.4; }
+    .finding { padding: 12px; margin: 8px 0; border-radius: 6px; border-left: 4px solid; }
+    .finding-critical { background: rgba(248, 81, 73, 0.1); border-color: #f85149; }
+    .finding-high { background: rgba(210, 153, 34, 0.1); border-color: #d29922; }
+    .finding-medium { background: rgba(63, 185, 80, 0.05); border-color: #3fb950; }
+    .finding h3 { font-size: 0.9rem; margin-bottom: 6px; }
+    .finding p { font-size: 0.8rem; color: #8b949e; margin: 4px 0; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-weight: 600; font-size: 0.75rem; margin-left: 8px; }
+    .badge-critical { background: #f85149; color: #fff; }
+    .badge-high { background: #d29922; color: #0d1117; }
+    .badge-medium { background: #3fb950; color: #0d1117; }
+    table { width: 100%; font-size: 0.85rem; border-collapse: collapse; margin-top: 12px; }
+    th, td { text-align: left; padding: 8px 4px; border-bottom: 1px solid #21262d; }
+    th { color: #8b949e; font-weight: 600; }
+    .input-row { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; }
+    .input-row input { flex: 1; }
+    #results { margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Security Analysis</h1>
+    <a href="/">← Graph Browser</a>
+    <a href="/dashboard.html">Dashboard</a>
+  </header>
+
+  <div class="card" style="margin-bottom: 16px;">
+    <h2>Taint Analysis & Vulnerability Scan</h2>
+    <p class="sub">Track untrusted data flows from sources to security-sensitive sinks</p>
+    <div class="input-row">
+      <input type="text" id="file" placeholder="File path (e.g., src/auth.py)" />
+      <input type="text" id="function" placeholder="Function name" />
+      <input type="text" id="language" placeholder="Language (optional: python, rust, javascript)" />
+      <button onclick="runTaintAnalysis()">Run Taint Analysis</button>
+      <button onclick="runSecurityScan()" style="background:#d29922;border-color:#d29922">Security Scan</button>
+    </div>
+  </div>
+
+  <div id="results"></div>
+
+  <div class="card" style="margin-top: 16px;">
+    <h2>Backward Program Slice</h2>
+    <p class="sub">Find all code that affects a variable at a specific line</p>
+    <div class="input-row">
+      <input type="text" id="slice-file" placeholder="File path" />
+      <input type="number" id="slice-line" placeholder="Line number" />
+      <input type="text" id="slice-var" placeholder="Variable name" />
+      <button onclick="runSlice()">Run Slice</button>
+    </div>
+    <div id="slice-results"></div>
+  </div>
+
+  <script>
+    async function fetchJson(path) {
+      const r = await fetch(path);
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
+
+    async function runTaintAnalysis() {
+      const file = document.getElementById('file').value;
+      const fn = document.getElementById('function').value;
+      const lang = document.getElementById('language').value;
+
+      if (!file || !fn) {
+        alert('Please provide file and function name');
+        return;
+      }
+
+      try {
+        const params = new URLSearchParams({ file, function: fn, verbose: 'true' });
+        if (lang) params.set('language', lang);
+        const data = await fetchJson('/api/taint?' + params);
+
+        const html = `
+          <div class="card">
+            <h2>Taint Analysis Results</h2>
+            <p><strong>File:</strong> ${data.file} | <strong>Function:</strong> ${data.function}</p>
+            <p style="margin-top:8px"><strong>Total Flows:</strong> ${data.total_flows} | <strong>Vulnerable:</strong> <span style="color:${data.vulnerable_flows > 0 ? '#f85149' : '#3fb950'}">${data.vulnerable_flows}</span></p>
+            ${data.flows.length === 0 ? '<p style="margin-top:12px;color:#8b949e">No taint flows detected</p>' : ''}
+            ${data.flows.map(f => `
+              <div class="finding ${f.severity >= 9 ? 'finding-critical' : f.severity >= 7 ? 'finding-high' : 'finding-medium'}">
+                <h3>${f.variable} <span class="badge ${f.severity >= 9 ? 'badge-critical' : f.severity >= 7 ? 'badge-high' : 'badge-medium'}">${f.severity}/10</span></h3>
+                <p><strong>Source:</strong> ${f.source_type} → <strong>Sink:</strong> ${f.sink_type}</p>
+                <p><strong>Sanitizers:</strong> ${f.sanitizers} | <strong>Vulnerable:</strong> ${f.vulnerable ? '⚠️ YES' : '✓ No'}</p>
+              </div>
+            `).join('')}
+          </div>
+        `;
+        document.getElementById('results').innerHTML = html;
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+    }
+
+    async function runSecurityScan() {
+      const file = document.getElementById('file').value;
+      const fn = document.getElementById('function').value;
+      const lang = document.getElementById('language').value;
+
+      if (!file || !fn) {
+        alert('Please provide file and function name');
+        return;
+      }
+
+      try {
+        const params = new URLSearchParams({ file, function: fn, verbose: 'true' });
+        if (lang) params.set('language', lang);
+        const data = await fetchJson('/api/security-scan?' + params);
+
+        const html = `
+          <div class="card">
+            <h2>Security Vulnerability Scan</h2>
+            <p><strong>File:</strong> ${data.file} | <strong>Function:</strong> ${data.function}</p>
+            <p style="margin-top:8px"><strong>Total Vulnerabilities:</strong> ${data.total_vulnerabilities} | <strong>Critical:</strong> <span style="color:#f85149">${data.critical}</span> | <strong>High:</strong> <span style="color:#d29922">${data.high}</span></p>
+            ${data.vulnerabilities.length === 0 ? '<p style="margin-top:12px;color:#3fb950">✓ No vulnerabilities detected</p>' : ''}
+            ${data.vulnerabilities.map(v => `
+              <div class="finding ${v.severity >= 9 ? 'finding-critical' : v.severity >= 7 ? 'finding-high' : 'finding-medium'}">
+                <h3>${v.cwe_name} <span class="badge ${v.severity >= 9 ? 'badge-critical' : v.severity >= 7 ? 'badge-high' : 'badge-medium'}">CWE-${v.cwe_id}</span></h3>
+                <p><strong>Variable:</strong> ${v.variable} | <strong>Severity:</strong> ${v.severity}/10</p>
+                <p><strong>Source Line:</strong> ${v.source_line} → <strong>Sink Line:</strong> ${v.sink_line}</p>
+                <p style="margin-top:4px"><strong>Recommendation:</strong> ${v.recommendation}</p>
+              </div>
+            `).join('')}
+          </div>
+        `;
+        document.getElementById('results').innerHTML = html;
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+    }
+
+    async function runSlice() {
+      const file = document.getElementById('slice-file').value;
+      const line = document.getElementById('slice-line').value;
+      const variable = document.getElementById('slice-var').value;
+
+      if (!file || !line || !variable) {
+        alert('Please provide file, line, and variable name');
+        return;
+      }
+
+      try {
+        const params = new URLSearchParams({ file, line, variable });
+        const data = await fetchJson('/api/slice?' + params);
+
+        const html = `
+          <div style="margin-top:12px;padding:12px;background:#161b22;border-radius:6px">
+            <p><strong>File:</strong> ${data.file} | <strong>Line:</strong> ${data.line} | <strong>Variable:</strong> ${data.variable}</p>
+            <p style="margin-top:8px"><strong>Slice Size:</strong> ${data.slice_lines.length} lines | <strong>Reduction:</strong> ${data.reduction_percent.toFixed(1)}%</p>
+            <div style="margin-top:12px;max-height:300px;overflow-y:auto;background:#0d1117;padding:12px;border-radius:4px;font-family:monospace;font-size:0.8rem">
+              ${data.slice_lines.map(l => `<div style="padding:2px 0">${l}</div>`).join('')}
+            </div>
+          </div>
+        `;
+        document.getElementById('slice-results').innerHTML = html;
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+    }
+  </script>
+</body>
+</html>
