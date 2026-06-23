@@ -1,10 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>web-app</title>
+    <title>rBuilder - AI Code Knowledge Graph</title>
+    <script>
+      // Force dark mode before page render to avoid flash
+      const theme = localStorage.getItem('rbuilder-theme') || 'dark';
+      if (theme === 'dark' || (!localStorage.getItem('rbuilder-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark');
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
