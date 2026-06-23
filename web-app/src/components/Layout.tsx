@@ -25,7 +25,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex flex-col h-screen bg-background text-foreground">
       <header className="flex items-center gap-3 px-5 py-3 bg-card border-b flex-wrap">
-        <h1 className="text-lg font-semibold text-primary mr-auto">rBuilder</h1>
+        <div className="mr-auto flex items-center gap-2">
+          <img src="/logo.png" alt="rBuilder" className="h-8" />
+        </div>
 
         <nav className="flex items-center gap-1 text-sm">
           {navLinks.map((link) => (
