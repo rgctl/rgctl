@@ -100,18 +100,23 @@
 
     async function loadGraph() {
       const typeFilter = document.getElementById('type-filter').value;
-      const params = new URLSearchParams({ limit: '500' });
-      if (typeFilter) params.set('node_type', typeFilter);
 
-      const [nodeData, edgeData] = await Promise.all([
-        fetchJson('/api/graph/nodes?' + params),
-        fetchJson('/api/graph/edges?limit=5000')
-      ]);
+      // Use the graph query endpoint which returns a proper connected subgraph
+      const query = typeFilter ? `type:${typeFilter}` : 'all';
+      const params = new URLSearchParams({ query, limit: '800', depth: '1' });
 
-      allNodes = nodeData.nodes;
-      allEdges = edgeData.edges;
+      const data = await fetchJson('/api/graph?' + params);
 
-      const nodeIds = new Set(allNodes.map(n => n.id));
+      allNodes = data.nodes;
+      allEdges = data.edges;
+
+      console.log(`Loaded ${allNodes.length} nodes, ${allEdges.length} edges`);
+
+      if (allNodes.length === 0) {
+        document.getElementById('stats').innerHTML = '<p style="color:#d29922">No nodes found. Try a different filter.</p>';
+        return;
+      }
+
       const visNodes = new vis.DataSet(allNodes.map(n => ({
         id: n.id,
         label: n.name.length > 20 ? n.name.slice(0, 18) + '…' : n.name,
@@ -121,23 +126,33 @@
       })));
 
       const visEdges = new vis.DataSet(
-        allEdges
-          .filter(e => nodeIds.has(e.from) && nodeIds.has(e.to))
-          .map((e, i) => ({
-            id: i,
-            from: e.from,
-            to: e.to,
-            arrows: 'to',
-            color: { color: '#30363d' },
-            width: 1
-          }))
+        allEdges.map((e, i) => ({
+          id: i,
+          from: e.from,
+          to: e.to,
+          arrows: 'to',
+          color: { color: '#30363d' },
+          width: 1
+        }))
       );
+
+      console.log(`Rendering ${visNodes.length} nodes, ${visEdges.length} edges`);
 
       const container = document.getElementById('graph');
       if (network) network.destroy();
       network = new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
-        physics: { barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
-        interaction: { hover: true, tooltipDelay: 100 }
+        physics: {
+          barnesHut: {
+            gravitationalConstant: -8000,
+            springLength: 120,
+            avoidOverlap: 0.5
+          },
+          stabilization: { iterations: 150 }
+        },
+        interaction: { hover: true, tooltipDelay: 100 },
+        layout: {
+          improvedLayout: true
+        }
       });
 
       network.on('click', params => {
