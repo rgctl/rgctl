@@ -10,6 +10,8 @@ pub fn run_serve(repo_root: &Path, port: u16, open: bool) -> Result<()> {
     let state = AppState::from_repo(repo_root)?;
     let web_dir = find_web_dir();
 
+    eprintln!("Serving repository: {}", repo_root.display());
+
     if let Some(ref dir) = web_dir {
         eprintln!("Serving static files from: {}", dir.display());
     } else {

@@ -928,7 +928,8 @@ fn main() -> anyhow::Result<()> {
         Commands::Serve { port, open } => {
             use rbuilder::cli::serve;
             use std::path::Path;
-            serve::run_serve(Path::new("."), port, open)?;
+            let path = cli.path.as_deref().unwrap_or(".");
+            serve::run_serve(Path::new(path), port, open)?;
             Ok(())
         }
 
