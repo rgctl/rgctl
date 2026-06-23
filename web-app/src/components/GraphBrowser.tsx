@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
-import { api, GraphNode, GraphEdge } from '../utils/api';
+import { api, GraphNode, GraphEdge } from '@/utils/api';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Badge } from '@/components/ui/badge';
 
 const TYPE_COLORS: Record<string, string> = {
   Function: '#58a6ff',
@@ -61,7 +72,6 @@ export function GraphBrowser() {
     const height = svgRef.current.clientHeight;
 
     svg.selectAll('*').remove();
-
     svg.attr('viewBox', [0, 0, width, height]);
 
     const g = svg.append('g');
@@ -92,7 +102,7 @@ export function GraphBrowser() {
       .data(edges)
       .join('line')
       .attr('class', 'link')
-      .attr('stroke', '#30363d')
+      .attr('stroke', 'hsl(var(--border))')
       .attr('stroke-width', 1.5);
 
     const node = g
@@ -124,14 +134,14 @@ export function GraphBrowser() {
       .append('circle')
       .attr('r', 8)
       .attr('fill', (d) => TYPE_COLORS[d.type] || TYPE_COLORS.default)
-      .attr('stroke', '#30363d')
+      .attr('stroke', 'hsl(var(--border))')
       .attr('stroke-width', 2);
 
     node
       .append('text')
       .attr('x', 12)
       .attr('y', 4)
-      .attr('fill', '#e6edf3')
+      .attr('fill', 'hsl(var(--foreground))')
       .attr('font-size', 10)
       .style('pointer-events', 'none')
       .style('user-select', 'none')
@@ -167,95 +177,97 @@ export function GraphBrowser() {
   return (
     <div className="grid grid-cols-[280px_1fr_300px] h-full">
       {/* Left Sidebar - Stats */}
-      <aside className="bg-[#161b22] border-r border-[#30363d] overflow-y-auto p-3">
-        <h2 className="text-sm font-medium mb-2">Statistics</h2>
+      <aside className="bg-card border-r overflow-y-auto p-3">
+        <h2 className="text-sm font-semibold mb-3">Statistics</h2>
         {stats ? (
           <div className="space-y-2">
-            <div className="flex justify-between py-2 border-b border-[#21262d] text-sm">
-              <span className="text-[#8b949e]">Nodes</span>
-              <strong className="text-[#58a6ff]">{stats.node_count}</strong>
+            <div className="flex justify-between py-2 border-b text-sm">
+              <span className="text-muted-foreground">Nodes</span>
+              <strong className="text-primary">{stats.node_count}</strong>
             </div>
-            <div className="flex justify-between py-2 border-b border-[#21262d] text-sm">
-              <span className="text-[#8b949e]">Edges</span>
-              <strong className="text-[#58a6ff]">{stats.edge_count}</strong>
+            <div className="flex justify-between py-2 border-b text-sm">
+              <span className="text-muted-foreground">Edges</span>
+              <strong className="text-primary">{stats.edge_count}</strong>
             </div>
-            <div className="flex justify-between py-2 border-b border-[#21262d] text-sm">
-              <span className="text-[#8b949e]">Functions</span>
-              <strong className="text-[#58a6ff]">{stats.function_count}</strong>
+            <div className="flex justify-between py-2 border-b text-sm">
+              <span className="text-muted-foreground">Functions</span>
+              <strong className="text-primary">{stats.function_count}</strong>
             </div>
-            <div className="flex justify-between py-2 border-b border-[#21262d] text-sm">
-              <span className="text-[#8b949e]">Avg Complexity</span>
-              <strong className="text-[#58a6ff]">
+            <div className="flex justify-between py-2 border-b text-sm">
+              <span className="text-muted-foreground">Avg Complexity</span>
+              <strong className="text-primary">
                 {(stats.avg_complexity || 0).toFixed(1)}
               </strong>
             </div>
           </div>
         ) : (
-          <div className="text-[#8b949e] text-sm">Loading...</div>
+          <div className="text-muted-foreground text-sm">Loading...</div>
         )}
 
-        <div className="mt-4">
-          <label className="block text-sm mb-2">Type Filter</label>
-          <select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-            className="w-full bg-[#21262d] border border-[#30363d] text-[#e6edf3] px-2 py-1 rounded text-sm"
-          >
-            <option value="">All types</option>
-            <option value="Function">Function</option>
-            <option value="Class">Class</option>
-            <option value="Struct">Struct</option>
-            <option value="File">File</option>
-            <option value="Module">Module</option>
-          </select>
-        </div>
+        <div className="mt-4 space-y-3">
+          <div>
+            <label className="block text-sm mb-2 font-medium">Type Filter</label>
+            <Select value={typeFilter} onValueChange={setTypeFilter}>
+              <SelectTrigger>
+                <SelectValue placeholder="All types" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">All types</SelectItem>
+                <SelectItem value="Function">Function</SelectItem>
+                <SelectItem value="Class">Class</SelectItem>
+                <SelectItem value="Struct">Struct</SelectItem>
+                <SelectItem value="File">File</SelectItem>
+                <SelectItem value="Module">Module</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-        <button
-          onClick={loadGraph}
-          disabled={loading}
-          className="mt-4 w-full bg-[#238636] text-white px-3 py-2 rounded text-sm hover:bg-[#2ea043] disabled:opacity-50"
-        >
-          {loading ? 'Loading...' : 'Refresh'}
-        </button>
+          <Button onClick={loadGraph} disabled={loading} className="w-full">
+            {loading ? 'Loading...' : 'Refresh'}
+          </Button>
+        </div>
       </aside>
 
       {/* Center - Graph */}
-      <div className="relative bg-[#0d1117]">
+      <div className="relative bg-background">
         <svg ref={svgRef} className="w-full h-full" />
       </div>
 
       {/* Right Sidebar - Node Detail */}
-      <aside className="bg-[#161b22] border-l border-[#30363d] overflow-y-auto p-3">
-        <input
+      <aside className="bg-card border-l overflow-y-auto p-3">
+        <Input
           type="text"
           placeholder="Search nodes..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full bg-[#21262d] border border-[#30363d] text-[#e6edf3] px-3 py-2 rounded text-sm mb-4"
+          className="mb-4"
         />
 
         {selectedNode ? (
-          <div>
-            <h3 className="text-sm font-medium mb-2 text-[#58a6ff]">
-              {selectedNode.name}
-            </h3>
-            <p className="text-xs text-[#8b949e] mb-1">
-              <strong>Type:</strong> {selectedNode.type}
-            </p>
-            <p className="text-xs text-[#8b949e] mb-1">
-              <strong>File:</strong> {selectedNode.file || '?'}
-            </p>
-            <p className="text-xs text-[#8b949e] mb-1">
-              <strong>Line:</strong> {selectedNode.line || '?'}
-            </p>
-            {selectedNode.complexity && (
-              <p className="text-xs text-[#8b949e] mb-1">
-                <strong>Complexity:</strong> {selectedNode.complexity}
+          <Card>
+            <CardHeader className="p-4 pb-3">
+              <CardTitle className="text-sm">{selectedNode.name}</CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 pt-0 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Type:</span>
+                <Badge variant="secondary">{selectedNode.type}</Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                <strong>File:</strong> {selectedNode.file || '?'}
               </p>
-            )}
-          </div>
+              <p className="text-xs text-muted-foreground">
+                <strong>Line:</strong> {selectedNode.line || '?'}
+              </p>
+              {selectedNode.complexity && (
+                <p className="text-xs text-muted-foreground">
+                  <strong>Complexity:</strong> {selectedNode.complexity}
+                </p>
+              )}
+            </CardContent>
+          </Card>
         ) : (
-          <p className="text-[#8b949e] text-sm">
+          <p className="text-muted-foreground text-sm">
             Select a node to view details.
           </p>
         )}

@@ -1,40 +1,37 @@
 import { Link, useLocation } from 'react-router-dom';
+import { cn } from '@/lib/utils';
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
 
   const isActive = (path: string) => location.pathname === path;
 
-  return (
-    <div className="flex flex-col h-screen bg-[#0f1117] text-[#e6edf3]">
-      <header className="flex items-center gap-3 px-5 py-3 bg-[#161b22] border-b border-[#30363d] flex-wrap">
-        <h1 className="text-lg font-medium text-[#58a6ff] mr-auto">rBuilder</h1>
+  const navLinks = [
+    { path: '/', label: 'Graph Browser' },
+    { path: '/dashboard', label: 'Dashboard' },
+    { path: '/security', label: 'Security' },
+  ];
 
-        <nav className="flex items-center gap-4 text-sm">
-          <Link
-            to="/"
-            className={`${
-              isActive('/') ? 'text-[#58a6ff]' : 'text-[#e6edf3] hover:text-[#58a6ff]'
-            } transition-colors`}
-          >
-            Graph Browser
-          </Link>
-          <Link
-            to="/dashboard"
-            className={`${
-              isActive('/dashboard') ? 'text-[#58a6ff]' : 'text-[#e6edf3] hover:text-[#58a6ff]'
-            } transition-colors`}
-          >
-            Dashboard
-          </Link>
-          <Link
-            to="/security"
-            className={`${
-              isActive('/security') ? 'text-[#58a6ff]' : 'text-[#e6edf3] hover:text-[#58a6ff]'
-            } transition-colors`}
-          >
-            Security
-          </Link>
+  return (
+    <div className="flex flex-col h-screen bg-background text-foreground">
+      <header className="flex items-center gap-3 px-5 py-3 bg-card border-b flex-wrap">
+        <h1 className="text-lg font-semibold text-primary mr-auto">rBuilder</h1>
+
+        <nav className="flex items-center gap-1 text-sm">
+          {navLinks.map((link) => (
+            <Link
+              key={link.path}
+              to={link.path}
+              className={cn(
+                'px-3 py-1.5 rounded-md transition-colors',
+                isActive(link.path)
+                  ? 'bg-secondary text-secondary-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+              )}
+            >
+              {link.label}
+            </Link>
+          ))}
         </nav>
       </header>
 
