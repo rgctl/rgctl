@@ -4,41 +4,39 @@
 
 use clap::{Parser, Subcommand};
 use rbuilder::BUILD_INFO;
+use rbuilder_graph::backend::GraphBackend;
 
 #[derive(Parser)]
 #[command(name = "rbuilder")]
 #[command(about = "AI-powered code knowledge graph", long_about = None)]
 #[command(version = BUILD_INFO)]
 struct Cli {
+    /// Repository path (default: current directory)
+    #[arg(default_value = ".", global = true)]
+    path: Option<String>,
+
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 
     /// Enable verbose output
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    /// Include only specific languages (comma-separated)
+    #[arg(short, long, global = true)]
+    languages: Option<String>,
+
+    /// Exclude patterns (comma-separated)
+    #[arg(short, long, global = true)]
+    exclude: Option<String>,
+
+    /// Watch for file changes and auto-update
+    #[arg(short, long, global = true)]
+    watch: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize graph for a repository
-    Init {
-        /// Path to repository (default: current directory)
-        #[arg(default_value = ".")]
-        path: String,
-
-        /// Repository namespace for multi-repo workspaces
-        #[arg(long)]
-        namespace: Option<String>,
-
-        /// Languages to include (comma-separated)
-        #[arg(short, long)]
-        languages: Option<String>,
-
-        /// Exclude patterns (comma-separated)
-        #[arg(short, long)]
-        exclude: Option<String>,
-    },
-
     /// Update graph incrementally
     Update {
         /// Update since git commit
@@ -54,39 +52,20 @@ enum Commands {
         files: Vec<String>,
     },
 
-    /// Watch repository and re-index on file changes (Phase 13.1)
+    /// Watch repository and re-index on file changes
     Watch {
-        /// Path to repository (default: current directory)
-        #[arg(default_value = ".")]
-        path: String,
-
         /// Debounce window in milliseconds
         #[arg(long)]
         debounce_ms: Option<u64>,
     },
 
-    /// Install git hooks for pre-commit, post-commit, and post-checkout (Phase 13.2–13.3)
-    InitHooks {
-        /// Path to repository (default: current directory)
-        #[arg(default_value = ".")]
-        path: String,
-
-        /// Overwrite existing hook scripts
-        #[arg(long)]
-        force: bool,
+    /// Git hooks management
+    Hooks {
+        #[command(subcommand)]
+        command: HooksCommands,
     },
 
-    /// Analyze blast-radius risk for changed files (Phase 13.2)
-    DetectChanges {
-        /// Repo-relative file paths (default: git staged files)
-        files: Vec<String>,
-
-        /// Emit JSON for hook scripts
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Run analysis on the graph
+    /// Run specific analyses on existing graph
     Analyze {
         /// Run community detection
         #[arg(long)]
@@ -99,6 +78,22 @@ enum Commands {
         /// Compute centrality scores
         #[arg(long)]
         centrality: bool,
+
+        /// Analyze dependencies (works for all languages)
+        #[arg(long)]
+        dependencies: bool,
+
+        /// Run security analysis (secrets, vulnerabilities, misconfigurations)
+        #[arg(long)]
+        security: bool,
+
+        /// Filter by language (ansible, chef, puppet, python, rust, etc.)
+        #[arg(long)]
+        language: Option<String>,
+
+        /// Output format
+        #[arg(long, default_value = "text")]
+        format: String,
 
         /// Run all analyses
         #[arg(long)]
@@ -114,7 +109,7 @@ enum Commands {
         #[arg(long)]
         explain: bool,
 
-        /// Use dual-agent query decomposition (Phase 12.3)
+        /// Use dual-agent query decomposition
         #[arg(long)]
         dual_agent: bool,
 
@@ -123,7 +118,7 @@ enum Commands {
         format: OutputFormat,
     },
 
-    /// Backward program slice for a variable at a source line (Phase 12.1)
+    /// Backward program slice for a variable at a source line
     Slice {
         /// Source file path
         file: String,
@@ -145,7 +140,7 @@ enum Commands {
         language: Option<String>,
     },
 
-    /// Execute graph query language (GQL) against the indexed graph (Phase 12.4)
+    /// Execute graph query language against the indexed graph
     Gql {
         /// GQL query string
         query: String,
@@ -159,7 +154,7 @@ enum Commands {
         macro_name: Option<String>,
     },
 
-    /// PDG-enhanced blast radius for a symbol (Phase 12.2)
+    /// Impact analysis for a symbol
     BlastRadius {
         /// Symbol name
         symbol: String,
@@ -238,7 +233,7 @@ enum Commands {
         query: String,
     },
 
-    /// Generate a diagram from a graph query (Phase 14)
+    /// Generate a diagram from a graph query
     Diagram {
         /// Graph query (e.g. `type:Function`, `functions`)
         query: String,
@@ -323,27 +318,6 @@ enum Commands {
         #[command(subcommand)]
         command: WorkspaceCommands,
     },
-
-    /// Ansible playbook and role analysis (Phase 16)
-    #[cfg(feature = "iac-langs")]
-    Ansible {
-        #[command(flatten)]
-        args: rbuilder::cli::ansible::AnsibleArgs,
-    },
-
-    /// Chef cookbook analysis (Phase 17)
-    #[cfg(feature = "iac-langs")]
-    Chef {
-        #[command(flatten)]
-        args: rbuilder::cli::chef::ChefArgs,
-    },
-
-    /// Puppet module analysis (Phase 18)
-    #[cfg(feature = "iac-langs")]
-    Puppet {
-        #[command(flatten)]
-        args: rbuilder::cli::puppet::PuppetArgs,
-    },
 }
 
 #[derive(Subcommand)]
@@ -361,6 +335,22 @@ enum PluginCommands {
     Uninstall { plugin_id: String },
 }
 
+#[derive(Subcommand)]
+enum HooksCommands {
+    /// Install git hooks for pre-commit, post-commit, and post-checkout
+    Install {
+        /// Overwrite existing hook scripts
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Uninstall git hooks
+    Uninstall,
+
+    /// List installed hooks
+    List,
+}
+
 #[cfg(feature = "mcp-server")]
 #[derive(Subcommand)]
 enum McpCommands {
@@ -374,7 +364,7 @@ enum McpCommands {
         #[arg(long, default_value = "3000")]
         port: u16,
 
-        /// Watch repository and notify clients on graph updates (Phase 13.1.2)
+        /// Watch repository and notify clients on graph updates
         #[arg(long)]
         watch: bool,
     },
@@ -425,83 +415,14 @@ fn main() -> anyhow::Result<()> {
     let log_level = if cli.verbose { "debug" } else { "info" };
     tracing_subscriber::fmt().with_env_filter(log_level).init();
 
+    // If no subcommand, run full analysis
+    if cli.command.is_none() {
+        let path = cli.path.as_deref().unwrap_or(".");
+        return run_full_analysis(path, cli.languages, cli.exclude, cli.watch, cli.verbose);
+    }
+
     // Route to appropriate command handler
-    match cli.command {
-        Commands::Init {
-            path,
-            namespace,
-            languages,
-            exclude,
-        } => {
-            use rbuilder::discovery::DiscoveryConfig;
-            use rbuilder::languages::registry::LanguageRegistry;
-            use rbuilder::multi_repo::stamp_repo_namespace;
-            use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
-            use std::path::Path;
-            use std::sync::Arc;
-
-            let root = Path::new(&path);
-            let mut discovery = DiscoveryConfig::default();
-            if let Some(langs) = languages {
-                discovery.languages = Some(
-                    langs
-                        .split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect(),
-                );
-            }
-            if let Some(excludes) = exclude {
-                discovery.exclude_patterns = excludes
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-            }
-
-            let discovery_config = discovery.clone();
-            let registry = LanguageRegistry::new().into();
-            let pipeline = ProcessingPipeline::with_config(
-                Arc::clone(&registry),
-                PipelineConfig {
-                    discovery,
-                    show_progress: true,
-                    ..PipelineConfig::default()
-                },
-            );
-
-            let (mut graph, stats) = pipeline.process_repository(root)?;
-            if let Some(ns) = namespace {
-                stamp_repo_namespace(&mut graph, &ns);
-                println!("Tagged graph with repo namespace: {ns}");
-            }
-
-            let saved = graph.save_to_repo(root)?;
-
-            let mut tracker = rbuilder::incremental::FileTracker::new(root);
-            let discoverer =
-                rbuilder::discovery::FileDiscoverer::with_config(registry, discovery_config);
-            let files = discoverer.discover(root)?;
-            tracker.index_files(&files, &graph)?;
-            tracker.save()?;
-
-            println!("Processed {} files", stats.files_processed);
-            if stats.files_failed > 0 {
-                println!("Skipped {} files due to errors", stats.files_failed);
-            }
-            println!("Created {} nodes", stats.nodes_created);
-            println!("Created {} edges", stats.edges_created);
-            println!("Time: {:.2}s", stats.duration.as_secs_f64());
-            println!("Graph saved to {}", saved.display());
-
-            let functions = graph.query("functions")?;
-            println!(
-                "\nSample query (`functions`): {} result(s)",
-                functions.len()
-            );
-            Ok(())
-        }
-
+    match cli.command.unwrap() {
         Commands::Update {
             since,
             force,
@@ -509,91 +430,45 @@ fn main() -> anyhow::Result<()> {
         } => {
             use rbuilder::cli::update;
             use std::path::Path;
-            update::run_update(Path::new("."), since, force, files, cli.verbose)?;
+            let path = cli.path.as_deref().unwrap_or(".");
+            update::run_update(Path::new(path), since, force, files, cli.verbose)?;
             Ok(())
         }
 
-        Commands::Watch { path, debounce_ms } => {
+        Commands::Watch { debounce_ms } => {
             use rbuilder::watch::WatchService;
             use std::path::Path;
-            WatchService::run_blocking(Path::new(&path), debounce_ms)?;
+            let path = cli.path.as_deref().unwrap_or(".");
+            WatchService::run_blocking(Path::new(path), debounce_ms)?;
             Ok(())
         }
 
-        Commands::InitHooks { path, force } => {
-            use rbuilder::hooks::install_hooks;
+        Commands::Hooks { command } => {
+            use rbuilder::hooks::{install_hooks, list_hooks, uninstall_hooks};
             use std::path::Path;
-            let written = install_hooks(Path::new(&path), force)?;
-            for hook in written {
-                println!("Installed {}", hook.display());
-            }
-            Ok(())
-        }
-
-        Commands::DetectChanges { files, json } => {
-            use rbuilder::changes::ChangeDetector;
-            use rbuilder::config::project::RbuilderConfig;
-            use rbuilder::git_util;
-            use rbuilder_graph::CodeGraph;
-            use std::path::Path;
-
-            let repo = Path::new(".");
-            let paths = if files.is_empty() {
-                git_util::git_staged_files(repo)?
-            } else {
-                files
-            };
-
-            if paths.is_empty() {
-                if json {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&serde_json::json!({
-                            "files": [],
-                            "risk_level": "LOW",
-                            "max_score": 0.0,
-                            "details": [],
-                            "summary": {
-                                "files_analyzed": 0,
-                                "symbols_analyzed": 0,
-                                "max_score": 0.0,
-                                "risk_level": "LOW"
-                            }
-                        }))?
-                    );
-                } else {
-                    println!("No files to analyze");
+            let path = cli.path.as_deref().unwrap_or(".");
+            match command {
+                HooksCommands::Install { force } => {
+                    let written = install_hooks(Path::new(path), force)?;
+                    for hook in written {
+                        println!("Installed {}", hook.display());
+                    }
                 }
-                return Ok(());
-            }
-
-            let graph = CodeGraph::load_from_repo(repo)?;
-            let config = RbuilderConfig::load(repo)?;
-            let result = ChangeDetector::new()
-                .with_blast_radius_threshold(config.hooks.blast_radius_threshold)
-                .detect(&graph, &paths)?;
-
-            if json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
-                println!(
-                    "Risk: {:?} (max score {:.1})",
-                    result.risk_level, result.max_score
-                );
-                for detail in result.details.iter().take(10) {
-                    println!(
-                        "  {}:{} score={:.1} callers={} impact={}",
-                        detail.file,
-                        detail.symbol,
-                        detail.blast_radius_score,
-                        detail.direct_callers,
-                        detail.impact_zone_size
-                    );
+                HooksCommands::Uninstall => {
+                    uninstall_hooks(Path::new(path))?;
+                    println!("Uninstalled git hooks");
                 }
-            }
-
-            if config.hooks.block_on_risk.blocks(result.risk_level) {
-                std::process::exit(1);
+                HooksCommands::List => {
+                    let hooks = list_hooks(Path::new(path))?;
+                    if hooks.is_empty() {
+                        println!("No hooks installed");
+                    } else {
+                        println!("Installed hooks:");
+                        for hook in hooks {
+                            println!("  - {}", hook.display());
+                        }
+                    }
+                }
             }
             Ok(())
         }
@@ -602,18 +477,26 @@ fn main() -> anyhow::Result<()> {
             community,
             complexity,
             centrality,
+            dependencies,
+            security,
+            language,
+            format: _,
             all,
         } => {
             use rbuilder::analysis::{ComplexityAnalyzer, DependencyAnalyzer};
+            use rbuilder::config::secret_detector::SecretDetector;
+            use rbuilder::discovery::FileDiscoverer;
+            use rbuilder::languages::registry::LanguageRegistry;
             use rbuilder::nlp::PatternMatcher;
             use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
-            let graph = CodeGraph::load_from_repo(Path::new("."))?;
+            let path = cli.path.as_deref().unwrap_or(".");
+            let graph = CodeGraph::load_from_repo(Path::new(path))?;
             let backend = graph.backend();
             let matcher = PatternMatcher::new();
 
-            let run_all = all || (!community && !complexity && !centrality);
+            let run_all = all || (!community && !complexity && !centrality && !dependencies && !security);
 
             if community || run_all {
                 println!("{}", matcher.analyze_communities(backend)?);
@@ -633,9 +516,53 @@ fn main() -> anyhow::Result<()> {
             if centrality || run_all {
                 println!("{}", matcher.analyze_centrality(backend)?);
             }
-            if run_all {
+            if dependencies || run_all {
                 let cycles = DependencyAnalyzer::find_circular_dependencies(backend)?;
                 println!("Circular dependencies: {}", cycles.len());
+
+                // Show dependencies filtered by language if specified
+                if let Some(ref lang) = language {
+                    let query = format!("type:{}", lang);
+                    let nodes = graph.query(&query)?;
+                    println!("\n{} dependencies for {} nodes:", lang, nodes.len());
+                    for node in nodes.iter().take(10) {
+                        println!("  - {}", node.name);
+                    }
+                }
+            }
+            if security || run_all {
+                // Run secret detection
+                let discoverer = FileDiscoverer::new(LanguageRegistry::new().into());
+                let files = discoverer.discover(Path::new(path))?;
+                let detector = SecretDetector::new();
+                let mut total = 0usize;
+
+                for file in files.iter().take(100) {
+                    if let Ok(content) = std::fs::read_to_string(file) {
+                        let found = detector.scan(&content);
+                        for secret in &found {
+                            println!(
+                                "  [{}] {}:{} - {} ({:?})",
+                                file.display(),
+                                secret.line,
+                                secret.secret_type,
+                                secret.value,
+                                secret.severity
+                            );
+                        }
+                        total += found.len();
+                    }
+                }
+                println!("Potential secrets found: {total}");
+
+                // Query security findings from graph if any
+                let security_findings = graph.query("type:SecurityFinding")?;
+                if !security_findings.is_empty() {
+                    println!("\nSecurity findings in graph: {}", security_findings.len());
+                    for finding in security_findings.iter().take(10) {
+                        println!("  - {}", finding.name);
+                    }
+                }
             }
             Ok(())
         }
@@ -1186,27 +1113,6 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
 
-        #[cfg(feature = "iac-langs")]
-        Commands::Ansible { args } => {
-            use std::path::Path;
-            rbuilder::cli::ansible::run_ansible_command(Path::new("."), args)?;
-            Ok(())
-        }
-
-        #[cfg(feature = "iac-langs")]
-        Commands::Chef { args } => {
-            use std::path::Path;
-            rbuilder::cli::chef::run_chef_command(Path::new("."), args)?;
-            Ok(())
-        }
-
-        #[cfg(feature = "iac-langs")]
-        Commands::Puppet { args } => {
-            use std::path::Path;
-            rbuilder::cli::puppet::run_puppet_command(Path::new("."), args)?;
-            Ok(())
-        }
-
         Commands::Workspace { command } => {
             use rbuilder::cli::workspace;
             use std::path::Path;
@@ -1223,4 +1129,160 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// Run full analysis on a repository (default behavior when no subcommand is given)
+fn run_full_analysis(
+    path: &str,
+    languages: Option<String>,
+    exclude: Option<String>,
+    watch: bool,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    use rbuilder::analysis::{CentralityAnalyzer, ComplexityAnalyzer, DependencyAnalyzer};
+    use rbuilder::config::secret_detector::SecretDetector;
+    use rbuilder::discovery::{DiscoveryConfig, FileDiscoverer};
+    use rbuilder::incremental::FileTracker;
+    use rbuilder::languages::registry::LanguageRegistry;
+    use rbuilder::nlp::PatternMatcher;
+    use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
+    use rbuilder::watch::WatchService;
+    use std::path::Path;
+    use std::sync::Arc;
+
+    let root = Path::new(path);
+    let mut discovery = DiscoveryConfig::default();
+
+    if let Some(langs) = languages {
+        discovery.languages = Some(
+            langs
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        );
+    }
+
+    if let Some(excludes) = exclude {
+        discovery.exclude_patterns = excludes
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+
+    println!("Analyzing repository: {}", root.display());
+
+    let discovery_config = discovery.clone();
+    let registry = LanguageRegistry::new().into();
+    let pipeline = ProcessingPipeline::with_config(
+        Arc::clone(&registry),
+        PipelineConfig {
+            discovery,
+            show_progress: true,
+            ..PipelineConfig::default()
+        },
+    );
+
+    // Index the repository
+    let (graph, stats) = pipeline.process_repository(root)?;
+    let saved = graph.save_to_repo(root)?;
+
+    // Update file tracker
+    let mut tracker = FileTracker::new(root);
+    let discoverer = FileDiscoverer::with_config(Arc::clone(&registry), discovery_config);
+    let files = discoverer.discover(root)?;
+    tracker.index_files(&files, &graph)?;
+    tracker.save()?;
+
+    println!("\n=== Indexing Complete ===");
+    println!("Processed {} files", stats.files_processed);
+    if stats.files_failed > 0 {
+        println!("Skipped {} files due to errors", stats.files_failed);
+    }
+    println!("Created {} nodes", stats.nodes_created);
+    println!("Created {} edges", stats.edges_created);
+    println!("Time: {:.2}s", stats.duration.as_secs_f64());
+    println!("Graph saved to {}", saved.display());
+
+    // Run all analyses
+    let backend = graph.backend();
+    let matcher = PatternMatcher::new();
+
+    println!("\n=== Running Analyses ===");
+
+    // Community detection
+    if verbose {
+        println!("\nCommunity detection:");
+        println!("{}", matcher.analyze_communities(backend)?);
+    } else {
+        matcher.analyze_communities(backend)?;
+        println!("✓ Community detection complete");
+    }
+
+    // Complexity analysis
+    let complexity_report = ComplexityAnalyzer::analyze(backend)?;
+    println!("\n✓ Complexity analysis:");
+    println!("  Functions: {}", complexity_report.functions.len());
+    println!("  Avg cyclomatic: {:.1}", complexity_report.avg_cyclomatic);
+    println!("  Max cyclomatic: {}", complexity_report.max_cyclomatic);
+    for (level, count) in &complexity_report.by_level {
+        println!("    {:?}: {}", level, count);
+    }
+
+    // Centrality analysis
+    let centrality_report = CentralityAnalyzer::new().analyze(backend)?;
+    println!("\n✓ Centrality analysis:");
+    println!("  Top hotspots by PageRank:");
+    for (id, score) in centrality_report.top_pagerank.iter().take(5) {
+        if let Ok(Some(node)) = backend.get_node(*id) {
+            println!("    - {} ({:.4})", node.name, score);
+        }
+    }
+
+    // Dependency analysis
+    let cycles = DependencyAnalyzer::find_circular_dependencies(backend)?;
+    println!("\n✓ Dependency analysis:");
+    println!("  Circular dependencies: {}", cycles.len());
+
+    // Security analysis
+    println!("\n✓ Security analysis:");
+    let detector = SecretDetector::new();
+    let mut total_secrets = 0usize;
+
+    for file in files.iter().take(100) {
+        if let Ok(content) = std::fs::read_to_string(file) {
+            let found = detector.scan(&content);
+            total_secrets += found.len();
+
+            if verbose {
+                for secret in &found {
+                    println!(
+                        "  [{}] {}:{} - {} ({:?})",
+                        file.display(),
+                        secret.line,
+                        secret.secret_type,
+                        secret.value,
+                        secret.severity
+                    );
+                }
+            }
+        }
+    }
+    println!("  Potential secrets found: {total_secrets}");
+
+    println!("\n=== Analysis Complete ===");
+    println!("\nNext steps:");
+    println!("  - Query: rbuilder ask \"your question\"");
+    println!("  - GQL: rbuilder gql \"your query\"");
+    println!("  - Stats: rbuilder stats");
+    println!("  - Chat: rbuilder chat");
+
+    // Enter watch mode if requested
+    if watch {
+        println!("\nEntering watch mode...");
+        WatchService::run_blocking(root, None)?;
+    }
+
+    Ok(())
 }

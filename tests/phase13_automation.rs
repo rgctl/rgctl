@@ -243,8 +243,8 @@ fn test_installed_pre_commit_script_content() {
     let hooks = install_hooks(root, true).unwrap();
     let pre_commit = hooks.iter().find(|p| p.ends_with("pre-commit")).unwrap();
     let body = fs::read_to_string(pre_commit).unwrap();
-    assert!(body.contains("detect-changes"));
-    assert!(body.contains("--no-verify"));
+    assert!(body.contains("rbuilder update"));
+    assert!(body.contains("STAGED"));
 }
 
 #[test]
