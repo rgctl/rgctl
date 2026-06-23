@@ -1307,18 +1307,18 @@ async fn top_complex(
         let complexity = ComplexityAnalyzer::analyze(backend)
             .map_err(|e| Error::Other(format!("Complexity analysis failed: {e}")))?;
 
-        let mut functions: Vec<_> = complexity.functions.into_iter().collect();
-        functions.sort_by(|a, b| b.1.cyclomatic.cmp(&a.1.cyclomatic));
+        let mut functions = complexity.functions;
+        functions.sort_by(|a, b| b.cyclomatic.cmp(&a.cyclomatic));
 
         let top_functions: Vec<Value> = functions
             .iter()
             .take(50)
-            .map(|(name, metrics)| {
+            .map(|func| {
                 json!({
-                    "name": name,
-                    "complexity": metrics.cyclomatic,
-                    "file": metrics.file.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
-                    "line": metrics.line,
+                    "name": func.node.name,
+                    "complexity": func.cyclomatic,
+                    "file": func.node.file_path.clone().unwrap_or_default(),
+                    "line": func.node.start_line,
                 })
             })
             .collect();
@@ -1335,23 +1335,24 @@ async fn centrality(
 ) -> std::result::Result<Json<Value>, ApiError> {
     let result = state.with_graph(|graph| {
         let backend = graph.backend();
-        let analyzer = CentralityAnalyzer::new(backend);
-        let centrality_results = analyzer.analyze()
+        let report = CentralityAnalyzer::new().analyze(backend)
             .map_err(|e| Error::Other(format!("Centrality analysis failed: {e}")))?;
 
-        let mut nodes_data: Vec<Value> = centrality_results
+        let mut nodes_data: Vec<Value> = report
+            .scores
             .into_iter()
-            .map(|(node_id, metrics)| {
-                let node = backend.get_node(&node_id).ok();
-                json!({
-                    "id": node_id,
-                    "name": node.as_ref().map(|n| &n.name).unwrap_or(&node_id),
-                    "type": node.as_ref().map(|n| format!("{:?}", n.node_type)).unwrap_or_default(),
-                    "in_degree": metrics.in_degree,
-                    "out_degree": metrics.out_degree,
-                    "betweenness": metrics.betweenness_centrality,
-                    "pagerank": metrics.pagerank,
-                    "file": node.and_then(|n| n.file.as_ref().map(|p| p.display().to_string())),
+            .filter_map(|(node_id, metrics)| {
+                backend.get_node(node_id).ok().flatten().map(|node| {
+                    json!({
+                        "id": node_id,
+                        "name": node.name,
+                        "type": format!("{:?}", node.node_type),
+                        "in_degree": metrics.in_degree,
+                        "out_degree": metrics.out_degree,
+                        "betweenness": metrics.betweenness,
+                        "pagerank": metrics.pagerank,
+                        "file": node.file_path,
+                    })
                 })
             })
             .collect();
