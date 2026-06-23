@@ -10,6 +10,12 @@ pub fn run_serve(repo_root: &Path, port: u16, open: bool) -> Result<()> {
     let state = AppState::from_repo(repo_root)?;
     let web_dir = find_web_dir();
 
+    if let Some(ref dir) = web_dir {
+        eprintln!("Serving static files from: {}", dir.display());
+    } else {
+        eprintln!("Warning: web directory not found - only API endpoints will work");
+    }
+
     if open {
         let url = format!("http://127.0.0.1:{port}/");
         open_browser(&url);
@@ -22,11 +28,12 @@ pub fn run_serve(repo_root: &Path, port: u16, open: bool) -> Result<()> {
 
 fn find_web_dir() -> Option<PathBuf> {
     // Check relative to current working directory
-    let candidates = ["web", "../web"];
+    let candidates = ["web", "../web", "./web"];
     for candidate in candidates {
         let path = PathBuf::from(candidate);
         if path.join("index.html").exists() {
-            return Some(path);
+            eprintln!("Found web directory at: {}", path.display());
+            return Some(path.canonicalize().ok()?);
         }
     }
 
@@ -35,11 +42,23 @@ fn find_web_dir() -> Option<PathBuf> {
         if let Some(dir) = exe.parent() {
             let path = dir.join("web");
             if path.join("index.html").exists() {
+                eprintln!("Found web directory at: {}", path.display());
                 return Some(path);
+            }
+            // Also check in parent dirs (for target/release/rbuilder -> ../../web)
+            if let Some(parent) = dir.parent() {
+                if let Some(grandparent) = parent.parent() {
+                    let path = grandparent.join("web");
+                    if path.join("index.html").exists() {
+                        eprintln!("Found web directory at: {}", path.display());
+                        return Some(path);
+                    }
+                }
             }
         }
     }
 
+    eprintln!("Warning: Could not find web directory");
     None
 }
 
