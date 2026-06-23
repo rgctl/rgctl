@@ -51,6 +51,25 @@ export interface Community {
   member_count: number;
 }
 
+export interface CentralityData {
+  nodes: Array<{
+    name: string;
+    type: string;
+    in_degree: number;
+    out_degree: number;
+    betweenness: number;
+    pagerank: number;
+    file?: string;
+  }>;
+}
+
+export interface ComplexFunction {
+  name: string;
+  complexity: number;
+  file: string;
+  line?: number;
+}
+
 export const api = {
   async getNodes(params?: { limit?: number; node_type?: string }) {
     const query = new URLSearchParams();
@@ -69,6 +88,14 @@ export const api = {
 
   async getCommunities() {
     return fetchJson<{ communities: Community[] }>('/api/communities');
+  },
+
+  async getCentrality() {
+    return fetchJson<CentralityData>('/api/centrality');
+  },
+
+  async getTopComplex() {
+    return fetchJson<{ functions: ComplexFunction[] }>('/api/top-complex');
   },
 
   async searchNodes(query: string, limit = 20) {

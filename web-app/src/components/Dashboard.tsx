@@ -1,53 +1,287 @@
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { api } from '@/utils/api';
+
+const TYPE_COLORS = ['hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))', 'hsl(var(--chart-4))', 'hsl(var(--chart-5))'];
 
 export function Dashboard() {
+  const [stats, setStats] = useState<any>(null);
+  const [communities, setCommunities] = useState<any[]>([]);
+  const [centrality, setCentrality] = useState<any[]>([]);
+  const [topComplex, setTopComplex] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadDashboard();
+  }, []);
+
+  const loadDashboard = async () => {
+    setLoading(true);
+    try {
+      const [statsData, communitiesData, centralityData, complexData] = await Promise.all([
+        api.getStats(),
+        api.getCommunities(),
+        api.getCentrality(),
+        api.getTopComplex(),
+      ]);
+
+      setStats(statsData);
+      setCommunities(communitiesData.communities || []);
+      setCentrality(centralityData.nodes || []);
+      setTopComplex(complexData.functions || []);
+    } catch (error) {
+      console.error('Error loading dashboard:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Prepare chart data
+  const typeDistribution = stats
+    ? [
+        { name: 'Functions', value: stats.function_count },
+        { name: 'Classes', value: stats.class_count },
+        { name: 'Files', value: stats.node_count - stats.function_count - stats.class_count },
+      ]
+    : [];
+
+  const complexityData = topComplex.slice(0, 10).map((f) => ({
+    name: f.name.length > 15 ? f.name.slice(0, 13) + '...' : f.name,
+    complexity: f.complexity,
+  }));
+
+  const communityData = communities.slice(0, 5).map((c, i) => ({
+    name: `Community ${c.id}`,
+    size: c.member_count,
+  }));
+
+  if (loading) {
+    return (
+      <div className="p-6 overflow-y-auto h-full">
+        <div className="max-w-7xl mx-auto">
+          <p className="text-muted-foreground">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 overflow-y-auto h-full">
       <div className="max-w-7xl mx-auto space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-primary mb-2">Repository Dashboard</h1>
-          <p className="text-muted-foreground">
-            Analytics and insights for your codebase
-          </p>
+          <p className="text-muted-foreground">Analytics and insights for your codebase</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* Overview Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card>
-            <CardHeader>
-              <CardTitle>Overview</CardTitle>
-              <CardDescription>Repository statistics</CardDescription>
+            <CardHeader className="pb-2">
+              <CardDescription>Total Nodes</CardDescription>
+              <CardTitle className="text-3xl">{stats?.node_count || 0}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Dashboard implementation coming soon...
-              </p>
+              <p className="text-xs text-muted-foreground">Graph entities</p>
             </CardContent>
           </Card>
 
           <Card>
-            <CardHeader>
-              <CardTitle>Complexity</CardTitle>
-              <CardDescription>Code complexity metrics</CardDescription>
+            <CardHeader className="pb-2">
+              <CardDescription>Total Edges</CardDescription>
+              <CardTitle className="text-3xl">{stats?.edge_count || 0}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Complexity charts coming soon...
-              </p>
+              <p className="text-xs text-muted-foreground">Relationships</p>
             </CardContent>
           </Card>
 
           <Card>
-            <CardHeader>
-              <CardTitle>Communities</CardTitle>
-              <CardDescription>Code module clusters</CardDescription>
+            <CardHeader className="pb-2">
+              <CardDescription>Functions</CardDescription>
+              <CardTitle className="text-3xl">{stats?.function_count || 0}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Community analysis coming soon...
-              </p>
+              <p className="text-xs text-muted-foreground">Total functions</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Avg Complexity</CardDescription>
+              <CardTitle className="text-3xl">{(stats?.avg_complexity || 0).toFixed(1)}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">Cyclomatic complexity</p>
             </CardContent>
           </Card>
         </div>
+
+        {/* Charts Row */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Complexity Distribution</CardTitle>
+              <CardDescription>Top 10 most complex functions</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ChartContainer
+                config={{
+                  complexity: {
+                    label: 'Complexity',
+                    color: 'hsl(var(--chart-1))',
+                  },
+                }}
+                className="h-[300px]"
+              >
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={complexityData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                    <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                    <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <Bar dataKey="complexity" fill="hsl(var(--chart-1))" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartContainer>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Node Type Distribution</CardTitle>
+              <CardDescription>Breakdown by entity type</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ChartContainer
+                config={{
+                  value: {
+                    label: 'Count',
+                  },
+                }}
+                className="h-[300px]"
+              >
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={typeDistribution}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                      outerRadius={80}
+                      fill="hsl(var(--chart-1))"
+                      dataKey="value"
+                    >
+                      {typeDistribution.map((_, index) => (
+                        <Cell key={`cell-${index}`} fill={TYPE_COLORS[index % TYPE_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </ChartContainer>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Communities */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Code Communities</CardTitle>
+            <CardDescription>Module clusters detected by graph analysis</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {communities.length > 0 ? (
+              <div className="space-y-2">
+                {communities.slice(0, 10).map((c) => (
+                  <div key={c.id} className="flex items-center justify-between py-2 border-b last:border-0">
+                    <span className="text-sm font-medium">Community {c.id}</span>
+                    <Badge variant="secondary">{c.member_count} members</Badge>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No communities detected</p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Top Complex Functions Table */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Most Complex Functions</CardTitle>
+            <CardDescription>Functions with highest cyclomatic complexity</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Function</TableHead>
+                  <TableHead>Complexity</TableHead>
+                  <TableHead>File</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {topComplex.slice(0, 10).map((fn, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="font-mono text-sm">{fn.name}</TableCell>
+                    <TableCell>
+                      <Badge variant={fn.complexity > 15 ? 'destructive' : fn.complexity > 10 ? 'default' : 'secondary'}>
+                        {fn.complexity}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{fn.file}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+
+        {/* Top Connected Nodes Table */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Most Connected Nodes</CardTitle>
+            <CardDescription>Nodes with highest degree centrality</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Node</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>In Degree</TableHead>
+                  <TableHead>Out Degree</TableHead>
+                  <TableHead>PageRank</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {centrality.slice(0, 10).map((node, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="font-mono text-sm">{node.name}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{node.type}</Badge>
+                    </TableCell>
+                    <TableCell>{node.in_degree}</TableCell>
+                    <TableCell>{node.out_degree}</TableCell>
+                    <TableCell>{node.pagerank.toFixed(4)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
