@@ -17,7 +17,11 @@ use rbuilder_analysis::{
     TypeInferenceEngine,
 };
 use rbuilder_error::Error;
-use rbuilder_export::select_subgraph;
+use rbuilder_export::{
+    export_graphml, generate_dot, generate_mermaid, parse_diagram_type, select_subgraph,
+    GraphvizOptions, MermaidOptions,
+};
+use rbuilder_incremental::file_tracker::{git_changed_files, FileTracker};
 use rbuilder_extraction::discovery::FileDiscoverer;
 use rbuilder_graph::backend::GraphBackend;
 use rbuilder_graph::query;
@@ -141,6 +145,28 @@ pub struct IacParams {
     pub min_severity: Option<String>,
 }
 
+/// Export/diagram parameters.
+#[derive(Debug, Deserialize)]
+pub struct ExportParams {
+    /// Graph query DSL
+    pub query: String,
+    /// Output format: mermaid, dot, graphml
+    pub format: Option<String>,
+    /// Diagram type for mermaid: flowchart, class, call-graph
+    pub diagram_type: Option<String>,
+    /// Depth for neighborhood expansion
+    pub depth: Option<usize>,
+}
+
+/// Diff analysis parameters.
+#[derive(Debug, Deserialize)]
+pub struct DiffParams {
+    /// Git commit ref to compare against
+    pub since: Option<String>,
+    /// Include verbose output
+    pub verbose: Option<bool>,
+}
+
 /// Start the web API and static file server.
 pub async fn run_server(
     state: AppState,
@@ -192,6 +218,9 @@ pub fn build_router(state: AppState, web_dir: Option<std::path::PathBuf>) -> Rou
         .route("/api/iac/ansible", get(iac_ansible))
         .route("/api/iac/chef", get(iac_chef))
         .route("/api/iac/puppet", get(iac_puppet))
+        // Export and diff endpoints
+        .route("/api/export", get(export_diagram))
+        .route("/api/diff", get(diff_analysis))
         .with_state(state)
         .layer(CorsLayer::permissive());
 
@@ -1192,6 +1221,79 @@ async fn iac_puppet(
     })?;
 
     Ok(Json(result))
+}
+
+/// Export diagram endpoint - generate Mermaid, DOT, or GraphML.
+async fn export_diagram(
+    State(state): State<AppState>,
+    Query(params): Query<ExportParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let format = params.format.as_deref().unwrap_or("mermaid");
+        let diagram_type = params.diagram_type.as_deref().unwrap_or("flowchart");
+
+        let content = match format.to_ascii_lowercase().as_str() {
+            "dot" | "graphviz" => {
+                generate_dot(backend, &params.query, GraphvizOptions::default(), params.depth)?
+            }
+            "graphml" => export_graphml(backend, &params.query)?,
+            _ => generate_mermaid(
+                backend,
+                &params.query,
+                MermaidOptions {
+                    diagram_type: parse_diagram_type(diagram_type),
+                    max_depth: params.depth,
+                    vertical: true,
+                },
+            )?,
+        };
+
+        Ok(json!({
+            "query": params.query,
+            "format": format,
+            "diagram_type": diagram_type,
+            "content": content,
+            "length": content.len(),
+        }))
+    })?;
+
+    Ok(Json(result))
+}
+
+/// Diff analysis endpoint - analyze changes since a git commit.
+async fn diff_analysis(
+    State(state): State<AppState>,
+    Query(params): Query<DiffParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let repo_root = state.repo_root();
+    let tracker = FileTracker::load(&repo_root)
+        .map_err(|e| Error::Other(format!("Failed to load file tracker: {e}")))?;
+    let since_ref = params
+        .since
+        .or_else(|| tracker.last_commit().map(String::from));
+
+    let git_files: Vec<String> = if let Some(ref commit) = since_ref {
+        git_changed_files(&repo_root, commit)?
+            .into_iter()
+            .filter_map(|p| {
+                rbuilder_incremental::file_tracker::relative_path(&repo_root, &p).ok()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let verbose = params.verbose.unwrap_or(false);
+    Ok(Json(json!({
+        "since": since_ref,
+        "changed_files": if verbose {
+            json!(git_files)
+        } else {
+            json!(git_files.iter().take(20).collect::<Vec<_>>())
+        },
+        "changed_count": git_files.len(),
+    })))
 }
 
 #[cfg(test)]
