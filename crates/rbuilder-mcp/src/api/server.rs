@@ -8,15 +8,21 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use rbuilder_analysis::blast_radius::BlastRadiusAnalyzer;
 use rbuilder_analysis::centrality::{degree_centrality, identify_hotspots, CentralityAnalyzer};
 use rbuilder_analysis::community::{detect_communities, CommunityDetector};
 use rbuilder_analysis::complexity::ComplexityAnalyzer;
+use rbuilder_analysis::{
+    build_cfg_for_function, BackwardSlicer, ProgramDependenceGraph, SliceCriterion, TaintAnalyzer,
+    TypeInferenceEngine,
+};
 use rbuilder_error::Error;
 use rbuilder_export::select_subgraph;
 use rbuilder_graph::backend::GraphBackend;
 use rbuilder_graph::query;
 use rbuilder_graph::schema::{Edge, Node, NodeType};
 use rbuilder_nlp::pattern_matcher::PatternMatcher;
+use rbuilder_security::SecurityAnalyzer;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -58,6 +64,58 @@ pub struct GraphQueryParams {
     pub limit: Option<usize>,
 }
 
+/// Taint analysis parameters.
+#[derive(Debug, Deserialize)]
+pub struct TaintParams {
+    /// Source file path (relative to repo root)
+    pub file: String,
+    /// Function name to analyze
+    pub function: String,
+    /// Language override (rust, python, javascript, typescript)
+    pub language: Option<String>,
+    /// Include verbose output
+    pub verbose: Option<bool>,
+}
+
+/// Security scan parameters.
+#[derive(Debug, Deserialize)]
+pub struct SecurityScanParams {
+    /// Source file path (relative to repo root)
+    pub file: String,
+    /// Function name to analyze
+    pub function: String,
+    /// Language override
+    pub language: Option<String>,
+    /// Include verbose output
+    pub verbose: Option<bool>,
+}
+
+/// Backward slice parameters.
+#[derive(Debug, Deserialize)]
+pub struct SliceParams {
+    /// Source file path (relative to repo root)
+    pub file: String,
+    /// Line number (1-based)
+    pub line: usize,
+    /// Variable of interest
+    pub variable: String,
+    /// Function name (optional)
+    pub function: Option<String>,
+    /// Language override
+    pub language: Option<String>,
+    /// Interprocedural analysis
+    pub interprocedural: Option<bool>,
+}
+
+/// Blast radius parameters.
+#[derive(Debug, Deserialize)]
+pub struct BlastRadiusParams {
+    /// Symbol name
+    pub symbol: String,
+    /// Max depth
+    pub depth: Option<usize>,
+}
+
 /// Start the web API and static file server.
 pub async fn run_server(
     state: AppState,
@@ -95,6 +153,12 @@ pub fn build_router(state: AppState, web_dir: Option<std::path::PathBuf>) -> Rou
         .route("/api/dashboard/advanced", get(dashboard_advanced))
         .route("/api/query", post(nlp_query))
         .route("/api/communities", get(list_communities))
+        // Security and analysis endpoints
+        .route("/api/taint", get(taint_analysis))
+        .route("/api/security-scan", get(security_scan))
+        .route("/api/slice", get(backward_slice))
+        .route("/api/blast-radius", get(blast_radius))
+        .route("/api/symbol/:name", get(symbol_info))
         .with_state(state)
         .layer(CorsLayer::permissive());
 
@@ -482,7 +546,7 @@ async fn list_edges(
     State(state): State<AppState>,
     Query(params): Query<NodeListParams>,
 ) -> std::result::Result<Json<Value>, ApiError> {
-    let limit = params.limit.unwrap_or(100).min(500);
+    let limit = params.limit.unwrap_or(1000).min(10000);
     let page = params.page.unwrap_or(0);
 
     let result = state.with_graph(|graph| {
@@ -652,6 +716,232 @@ impl IntoResponse for ApiError {
         )
             .into_response()
     }
+}
+
+/// Taint analysis endpoint - track untrusted data from sources to sinks.
+async fn taint_analysis(
+    State(state): State<AppState>,
+    Query(params): Query<TaintParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let file_path = state.repo_root().join(&params.file);
+    let source = std::fs::read_to_string(&file_path)
+        .map_err(|e| Error::Other(format!("Failed to read {}: {}", params.file, e)))?;
+
+    let lang = params.language.unwrap_or_else(|| {
+        file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    });
+
+    let cfg = build_cfg_for_function(&lang, &source, &params.function)?;
+    let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
+    let mut type_engine = TypeInferenceEngine::new(&pdg, &cfg, &lang);
+    type_engine.infer();
+    let mut analyzer = TaintAnalyzer::new(&pdg, &cfg).with_type_inference(type_engine);
+    analyzer.detect_patterns(&lang);
+    let flows = analyzer.analyze();
+    let vulnerable = flows.iter().filter(|f| f.is_vulnerable()).count();
+
+    let verbose = params.verbose.unwrap_or(false);
+    let flow_json: Vec<Value> = flows
+        .iter()
+        .map(|f| {
+            json!({
+                "variable": f.variable,
+                "severity": f.severity,
+                "vulnerable": f.is_vulnerable(),
+                "source_type": format!("{:?}", f.source_type),
+                "sink_type": format!("{:?}", f.sink_type),
+                "sanitizers": f.sanitizers.len(),
+            })
+        })
+        .collect();
+
+    let response = json!({
+        "file": params.file,
+        "function": params.function,
+        "language": lang,
+        "total_flows": flows.len(),
+        "vulnerable_flows": vulnerable,
+        "flows": if verbose { json!(flow_json) } else { json!(flow_json.iter().take(10).collect::<Vec<_>>()) },
+    });
+    Ok(Json(response))
+}
+
+/// Security scan endpoint - detect CWE/OWASP vulnerabilities.
+async fn security_scan(
+    State(state): State<AppState>,
+    Query(params): Query<SecurityScanParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let file_path = state.repo_root().join(&params.file);
+    let source = std::fs::read_to_string(&file_path)
+        .map_err(|e| Error::Other(format!("Failed to read {}: {}", params.file, e)))?;
+
+    let lang = params.language.unwrap_or_else(|| {
+        file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    });
+
+    let cfg = build_cfg_for_function(&lang, &source, &params.function)?;
+    let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
+    let mut type_engine = TypeInferenceEngine::new(&pdg, &cfg, &lang);
+    type_engine.infer();
+    let mut analyzer = TaintAnalyzer::new(&pdg, &cfg).with_type_inference(type_engine);
+    analyzer.detect_patterns(&lang);
+    let flows = analyzer.vulnerable_flows();
+    let vulns = SecurityAnalyzer::new().analyze(flows, &pdg, &source);
+
+    let verbose = params.verbose.unwrap_or(false);
+    let vuln_json: Vec<Value> = vulns
+        .iter()
+        .map(|v| {
+            json!({
+                "cwe_id": v.cwe_id,
+                "cwe_name": v.cwe_name,
+                "severity": v.severity,
+                "variable": v.taint_flow.variable,
+                "source_line": v.source_line,
+                "sink_line": v.sink_line,
+                "recommendation": v.recommendation,
+            })
+        })
+        .collect();
+
+    let response = json!({
+        "file": params.file,
+        "function": params.function,
+        "total_vulnerabilities": vulns.len(),
+        "critical": vulns.iter().filter(|v| v.severity >= 9).count(),
+        "high": vulns.iter().filter(|v| v.severity >= 7 && v.severity < 9).count(),
+        "vulnerabilities": if verbose { json!(vuln_json) } else { json!(vuln_json.iter().take(10).collect::<Vec<_>>()) },
+    });
+    Ok(Json(response))
+}
+
+/// Backward slice endpoint - track variable dependencies.
+async fn backward_slice(
+    State(state): State<AppState>,
+    Query(params): Query<SliceParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let file_path = state.repo_root().join(&params.file);
+    let source = std::fs::read_to_string(&file_path)
+        .map_err(|e| Error::Other(format!("Failed to read {}: {}", params.file, e)))?;
+
+    let lang = params.language.unwrap_or_else(|| {
+        file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    });
+
+    let fn_name = params.function.as_deref().unwrap_or("");
+    let cfg = build_cfg_for_function(&lang, &source, fn_name)?;
+    let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
+    let slice = BackwardSlicer::new(&pdg, &cfg).slice(SliceCriterion {
+        variable: params.variable.clone(),
+        line: params.line,
+    })?;
+
+    let total_lines = source.lines().count();
+    let reduction_percent = if total_lines > 0 {
+        ((total_lines - slice.lines.len()) as f64 / total_lines as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let response = json!({
+        "file": params.file,
+        "line": params.line,
+        "variable": params.variable,
+        "function": fn_name,
+        "language": lang,
+        "reduction_percent": reduction_percent,
+        "total_lines": total_lines,
+        "slice_lines": slice.lines,
+    });
+    Ok(Json(response))
+}
+
+/// Blast radius endpoint - PDG-enhanced impact analysis.
+async fn blast_radius(
+    State(state): State<AppState>,
+    Query(params): Query<BlastRadiusParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let analyzer = BlastRadiusAnalyzer::new(backend);
+        let impact = analyzer.analyze(&params.symbol)?;
+
+        Ok(json!({
+            "symbol": params.symbol,
+            "score": impact.score,
+            "direct_callers": impact.direct_callers.len(),
+            "impact_zone": impact.impact_zone.len(),
+            "data_flow_depth": impact.data_flow_depth,
+            "callers": impact.direct_callers.iter().take(20).collect::<Vec<_>>(),
+        }))
+    })?;
+
+    Ok(Json(result))
+}
+
+/// Symbol info endpoint - detailed information about a symbol.
+async fn symbol_info(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let nodes = backend.all_nodes()?;
+        let symbol = nodes
+            .iter()
+            .find(|n| n.name == name || n.qualified_name.as_deref() == Some(&name))
+            .ok_or_else(|| Error::InvalidQuery(format!("Symbol not found: {}", name)))?;
+
+        let edges = backend.all_edges()?;
+        let callers: Vec<String> = edges
+            .iter()
+            .filter(|e| e.to == symbol.id && format!("{:?}", e.edge_type).contains("Calls"))
+            .filter_map(|e| {
+                nodes
+                    .iter()
+                    .find(|n| n.id == e.from)
+                    .map(|n| n.name.clone())
+            })
+            .collect();
+
+        let callees: Vec<String> = edges
+            .iter()
+            .filter(|e| e.from == symbol.id && format!("{:?}", e.edge_type).contains("Calls"))
+            .filter_map(|e| {
+                nodes
+                    .iter()
+                    .find(|n| n.id == e.to)
+                    .map(|n| n.name.clone())
+            })
+            .collect();
+
+        Ok(json!({
+            "name": symbol.name,
+            "type": format!("{:?}", symbol.node_type),
+            "qualified_name": symbol.qualified_name,
+            "file": symbol.file_path,
+            "start_line": symbol.start_line,
+            "end_line": symbol.end_line,
+            "signature": symbol.signature,
+            "complexity": symbol.get_property("cyclomatic"),
+            "callers": callers,
+            "callees": callees,
+        }))
+    })?;
+
+    Ok(Json(result))
 }
 
 #[cfg(test)]

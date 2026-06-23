@@ -98,12 +98,12 @@
 
     async function loadGraph() {
       const typeFilter = document.getElementById('type-filter').value;
-      const params = new URLSearchParams({ limit: '200' });
+      const params = new URLSearchParams({ limit: '500' });
       if (typeFilter) params.set('node_type', typeFilter);
 
       const [nodeData, edgeData] = await Promise.all([
         fetchJson('/api/graph/nodes?' + params),
-        fetchJson('/api/graph/edges?limit=300')
+        fetchJson('/api/graph/edges?limit=5000')
       ]);
 
       allNodes = nodeData.nodes;
