@@ -100,13 +100,14 @@
 
     async function loadGraph() {
       const typeFilter = document.getElementById('type-filter').value;
-      const nodeParams = new URLSearchParams({ limit: '1000' });
+      // Start with fewer nodes for better performance
+      const nodeParams = new URLSearchParams({ limit: '200' });
       if (typeFilter) nodeParams.set('node_type', typeFilter);
 
       // Load nodes and ALL their edges
       const [nodeData, edgeData] = await Promise.all([
         fetchJson('/api/graph/nodes?' + nodeParams),
-        fetchJson('/api/graph/edges?limit=10000')
+        fetchJson('/api/graph/edges?limit=5000')
       ]);
 
       allNodes = nodeData.nodes;
@@ -158,14 +159,27 @@
       try {
         network = new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
           physics: {
+            enabled: true,
             barnesHut: {
-              gravitationalConstant: -8000,
-              springLength: 120,
-              avoidOverlap: 0.5
+              gravitationalConstant: -2000,
+              centralGravity: 0.3,
+              springLength: 95,
+              springConstant: 0.04,
+              damping: 0.09,
+              avoidOverlap: 0.1
             },
-            stabilization: { iterations: 150 }
+            stabilization: {
+              enabled: true,
+              iterations: 200,
+              updateInterval: 25
+            }
           },
-          interaction: { hover: true, tooltipDelay: 100 },
+          interaction: {
+            hover: true,
+            tooltipDelay: 100,
+            zoomView: true,
+            dragView: true
+          },
           layout: {
             improvedLayout: false
           }
@@ -175,9 +189,14 @@
           if (params.nodes.length) showNodeDetail(params.nodes[0]);
         });
 
-        console.log('Graph rendered successfully');
+        network.once('stabilizationIterationsDone', () => {
+          console.log('Graph stabilized and rendered successfully');
+        });
+
+        console.log('Graph initialization complete');
       } catch (err) {
         console.error('Error rendering graph:', err);
+        alert('Error rendering graph: ' + err.message);
       }
 
       loadStats();
