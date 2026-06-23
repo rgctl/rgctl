@@ -11,8 +11,8 @@ use rbuilder_graph::backend::GraphBackend;
 #[command(about = "AI-powered code knowledge graph", long_about = None)]
 #[command(version = BUILD_INFO)]
 struct Cli {
-    /// Repository path (default: current directory)
-    #[arg(default_value = ".", global = true)]
+    /// Repository path to analyze
+    #[arg(global = true)]
     path: Option<String>,
 
     #[command(subcommand)]
@@ -417,7 +417,24 @@ fn main() -> anyhow::Result<()> {
 
     // If no subcommand, run full analysis
     if cli.command.is_none() {
-        let path = cli.path.as_deref().unwrap_or(".");
+        let path = match cli.path.as_deref() {
+            Some(p) => p,
+            None => {
+                eprintln!("Error: PATH argument required for analysis");
+                eprintln!();
+                eprintln!("Usage: rbuilder <PATH> [OPTIONS]");
+                eprintln!("       rbuilder . [OPTIONS]          # Analyze current directory");
+                eprintln!("       rbuilder /path/to/repo        # Analyze specific directory");
+                eprintln!();
+                eprintln!("Or use a subcommand:");
+                eprintln!("       rbuilder update               # Update existing graph");
+                eprintln!("       rbuilder ask \"question\"       # Query the graph");
+                eprintln!("       rbuilder stats                # Show statistics");
+                eprintln!();
+                eprintln!("Run 'rbuilder --help' for more information");
+                std::process::exit(1);
+            }
+        };
         return run_full_analysis(path, cli.languages, cli.exclude, cli.watch, cli.verbose);
     }
 
