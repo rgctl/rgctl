@@ -1,12 +1,20 @@
 const API_BASE = '';
 
 export async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(API_BASE + path);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `HTTP ${response.status}`);
+  const url = API_BASE + path;
+  console.log('Fetching:', url);
+  try {
+    const response = await fetch(url);
+    console.log('Response:', response.status, response.statusText);
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `HTTP ${response.status}`);
+    }
+    return response.json();
+  } catch (error) {
+    console.error('Fetch error for', url, error);
+    throw error;
   }
-  return response.json();
 }
 
 export async function postJson<T>(path: string, body: unknown): Promise<T> {

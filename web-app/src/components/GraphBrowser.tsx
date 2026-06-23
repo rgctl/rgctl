@@ -85,12 +85,15 @@ export function GraphBrowser() {
         })
     );
 
+    // Create links array to share between simulation and rendering
+    const links = edges.map((e) => ({ source: e.from, target: e.to }));
+
     const simulation = d3
       .forceSimulation(nodes as any)
       .force(
         'link',
         d3
-          .forceLink(edges.map((e) => ({ source: e.from, target: e.to })))
+          .forceLink(links)
           .id((d: any) => d.id)
           .distance(60)
       )
@@ -100,7 +103,7 @@ export function GraphBrowser() {
 
     const link = g
       .selectAll('.link')
-      .data(edges)
+      .data(links)
       .join('line')
       .attr('class', 'link')
       .attr('stroke', 'hsl(var(--border))')
