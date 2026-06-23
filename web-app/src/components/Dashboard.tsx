@@ -13,7 +13,7 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { api } from '@/utils/api';
 
-const TYPE_COLORS = ['hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))', 'hsl(var(--chart-4))', 'hsl(var(--chart-5))'];
+const TYPE_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
 
 export function Dashboard() {
   const [stats, setStats] = useState<any>(null);
@@ -81,7 +81,7 @@ export function Dashboard() {
   if (loading) {
     return (
       <div className="p-6 overflow-y-auto h-full">
-        <div className="max-w-7xl mx-auto">
+        <div>
           <p className="text-muted-foreground">Loading dashboard...</p>
         </div>
       </div>
@@ -90,7 +90,7 @@ export function Dashboard() {
 
   return (
     <div className="p-6 overflow-y-auto h-full">
-      <div className="max-w-7xl mx-auto space-y-6">
+      <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-primary mb-2">Repository Dashboard</h1>
           <p className="text-muted-foreground">Analytics and insights for your codebase</p>
@@ -99,42 +99,42 @@ export function Dashboard() {
         {/* Overview Stats */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card>
-            <CardHeader className="pb-2">
+            <CardHeader>
               <CardDescription>Total Nodes</CardDescription>
               <CardTitle className="text-3xl">{stats?.node_count || 0}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-xs text-muted-foreground">Graph entities</p>
+              <div className="text-xs text-muted-foreground">Graph entities</div>
             </CardContent>
           </Card>
 
           <Card>
-            <CardHeader className="pb-2">
+            <CardHeader>
               <CardDescription>Total Edges</CardDescription>
               <CardTitle className="text-3xl">{stats?.edge_count || 0}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-xs text-muted-foreground">Relationships</p>
+              <div className="text-xs text-muted-foreground">Relationships</div>
             </CardContent>
           </Card>
 
           <Card>
-            <CardHeader className="pb-2">
+            <CardHeader>
               <CardDescription>Functions</CardDescription>
               <CardTitle className="text-3xl">{stats?.function_count || 0}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-xs text-muted-foreground">Total functions</p>
+              <div className="text-xs text-muted-foreground">Total functions</div>
             </CardContent>
           </Card>
 
           <Card>
-            <CardHeader className="pb-2">
+            <CardHeader>
               <CardDescription>Avg Complexity</CardDescription>
               <CardTitle className="text-3xl">{(stats?.avg_complexity || 0).toFixed(1)}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-xs text-muted-foreground">Cyclomatic complexity</p>
+              <div className="text-xs text-muted-foreground">Cyclomatic complexity</div>
             </CardContent>
           </Card>
         </div>
@@ -151,18 +151,18 @@ export function Dashboard() {
                 config={{
                   complexity: {
                     label: 'Complexity',
-                    color: 'hsl(var(--chart-1))',
+                    color: 'var(--chart-1)',
                   },
                 }}
                 className="h-[300px]"
               >
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={complexityData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                    <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="name" stroke="var(--muted-foreground)" fontSize={12} />
+                    <YAxis stroke="var(--muted-foreground)" fontSize={12} />
                     <ChartTooltip content={<ChartTooltipContent />} />
-                    <Bar dataKey="complexity" fill="hsl(var(--chart-1))" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="complexity" fill="var(--chart-1)" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </ChartContainer>
@@ -192,7 +192,7 @@ export function Dashboard() {
                       labelLine={false}
                       label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                       outerRadius={80}
-                      fill="hsl(var(--chart-1))"
+                      fill="var(--chart-1)"
                       dataKey="value"
                     >
                       {typeDistribution.map((_, index) => (
@@ -214,18 +214,20 @@ export function Dashboard() {
             <CardDescription>Module clusters detected by graph analysis</CardDescription>
           </CardHeader>
           <CardContent>
-            {communities.length > 0 ? (
-              <div className="space-y-2">
-                {communities.slice(0, 10).map((c) => (
-                  <div key={c.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                    <span className="text-sm font-medium">Community {c.id}</span>
-                    <Badge variant="secondary">{c.member_count} members</Badge>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">No communities detected</p>
-            )}
+            <div className="flex flex-col gap-2">
+              {communities.length > 0 ? (
+                <>
+                  {communities.slice(0, 10).map((c) => (
+                    <div key={c.id} className="flex items-center justify-between py-2 border-b last:border-0">
+                      <span className="text-sm font-medium">Community {c.id}</span>
+                      <Badge variant="secondary">{c.member_count} members</Badge>
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <div className="text-sm text-muted-foreground">No communities detected</div>
+              )}
+            </div>
           </CardContent>
         </Card>
 
@@ -236,7 +238,8 @@ export function Dashboard() {
             <CardDescription>Functions with highest cyclomatic complexity</CardDescription>
           </CardHeader>
           <CardContent>
-            <Table>
+            <div className="overflow-x-auto">
+              <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Function</TableHead>
@@ -257,7 +260,8 @@ export function Dashboard() {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
+              </Table>
+            </div>
           </CardContent>
         </Card>
 
@@ -268,30 +272,32 @@ export function Dashboard() {
             <CardDescription>Nodes with highest degree centrality</CardDescription>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Node</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>In Degree</TableHead>
-                  <TableHead>Out Degree</TableHead>
-                  <TableHead>PageRank</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {centrality.slice(0, 10).map((node, i) => (
-                  <TableRow key={i}>
-                    <TableCell className="font-mono text-sm">{node.name}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{node.type}</Badge>
-                    </TableCell>
-                    <TableCell>{node.in_degree}</TableCell>
-                    <TableCell>{node.out_degree}</TableCell>
-                    <TableCell>{node.pagerank.toFixed(4)}</TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Node</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>In Degree</TableHead>
+                    <TableHead>Out Degree</TableHead>
+                    <TableHead>PageRank</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {centrality.slice(0, 10).map((node, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="font-mono text-sm">{node.name}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{node.type}</Badge>
+                      </TableCell>
+                      <TableCell>{node.in_degree}</TableCell>
+                      <TableCell>{node.out_degree}</TableCell>
+                      <TableCell>{node.pagerank.toFixed(4)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
         </Card>
       </div>

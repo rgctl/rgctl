@@ -1,8 +1,0 @@
-# Ignore test execution artifacts
-*.log
-*.tmp
-/test-results/
-/test-artifacts/
-
-# But keep the directory structure
-!.gitkeep

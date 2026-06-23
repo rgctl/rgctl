@@ -77,13 +77,13 @@ export function GraphBrowser() {
 
     const g = svg.append('g');
 
-    svg.call(
-      d3.zoom<SVGSVGElement, unknown>()
+    const zoom = d3.zoom<SVGSVGElement, unknown>()
         .scaleExtent([0.1, 4])
         .on('zoom', (event) => {
           g.attr('transform', event.transform.toString());
-        })
-    );
+        });
+
+    svg.call(zoom);
 
     // Create links array to share between simulation and rendering
     const links = edges.map((e) => ({ source: e.from, target: e.to }));
@@ -106,7 +106,7 @@ export function GraphBrowser() {
       .data(links)
       .join('line')
       .attr('class', 'link')
-      .attr('stroke', 'hsl(var(--border))')
+      .attr('stroke', 'var(--border)')
       .attr('stroke-width', 1.5);
 
     const node = g
@@ -138,14 +138,14 @@ export function GraphBrowser() {
       .append('circle')
       .attr('r', 8)
       .attr('fill', (d) => TYPE_COLORS[d.type] || TYPE_COLORS.default)
-      .attr('stroke', 'hsl(var(--border))')
+      .attr('stroke', 'var(--border)')
       .attr('stroke-width', 2);
 
     node
       .append('text')
       .attr('x', 12)
       .attr('y', 4)
-      .attr('fill', 'hsl(var(--foreground))')
+      .attr('fill', 'var(--foreground)')
       .attr('font-size', 10)
       .style('pointer-events', 'none')
       .style('user-select', 'none')
@@ -159,6 +159,45 @@ export function GraphBrowser() {
         .attr('y2', (d: any) => d.target.y);
 
       node.attr('transform', (d: any) => `translate(${d.x},${d.y})`);
+    });
+
+    // Zoom to fit all nodes after initial simulation settles
+    simulation.on('end', () => {
+      if (nodes.length === 0) return;
+
+      // Calculate bounding box of all nodes
+      const bounds = nodes.reduce(
+        (acc, d: any) => ({
+          minX: Math.min(acc.minX, d.x),
+          maxX: Math.max(acc.maxX, d.x),
+          minY: Math.min(acc.minY, d.y),
+          maxY: Math.max(acc.maxY, d.y),
+        }),
+        { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
+      );
+
+      const graphWidth = bounds.maxX - bounds.minX;
+      const graphHeight = bounds.maxY - bounds.minY;
+      const padding = 50;
+
+      // Calculate scale to fit with padding
+      const scale = Math.min(
+        (width - padding * 2) / graphWidth,
+        (height - padding * 2) / graphHeight,
+        1 // Don't zoom in, only zoom out
+      );
+
+      // Calculate translation to center the graph
+      const translateX = width / 2 - (bounds.minX + bounds.maxX) / 2 * scale;
+      const translateY = height / 2 - (bounds.minY + bounds.maxY) / 2 * scale;
+
+      // Apply the transform
+      svg.transition()
+        .duration(750)
+        .call(
+          zoom.transform as any,
+          d3.zoomIdentity.translate(translateX, translateY).scale(scale)
+        );
     });
 
     // Live search filter
