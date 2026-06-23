@@ -82,7 +82,7 @@ pub async fn run_server(
 
 /// Build the axum router (for testing).
 pub fn build_router(state: AppState, web_dir: Option<std::path::PathBuf>) -> Router {
-    let api = Router::new()
+    let mut router = Router::new()
         .route("/api/graph/stats", get(graph_stats))
         .route("/api/stats", get(graph_stats))
         .route("/api/graph", get(graph_by_query))
@@ -95,17 +95,17 @@ pub fn build_router(state: AppState, web_dir: Option<std::path::PathBuf>) -> Rou
         .route("/api/dashboard/advanced", get(dashboard_advanced))
         .route("/api/query", post(nlp_query))
         .route("/api/communities", get(list_communities))
-        .with_state(state);
+        .with_state(state)
+        .layer(CorsLayer::permissive());
 
+    // Serve static files as fallback (after API routes)
     if let Some(dir) = web_dir {
         if dir.exists() {
-            return api
-                .nest_service("/", ServeDir::new(dir))
-                .layer(CorsLayer::permissive());
+            router = router.fallback_service(ServeDir::new(dir));
         }
     }
 
-    api.layer(CorsLayer::permissive())
+    router
 }
 
 /// Get graph statistics including node/edge counts and complexity metrics.
