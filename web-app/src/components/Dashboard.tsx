@@ -29,17 +29,29 @@ export function Dashboard() {
   const loadDashboard = async () => {
     setLoading(true);
     try {
-      const [statsData, communitiesData, centralityData, complexData] = await Promise.all([
+      // Load stats and communities (these exist)
+      const [statsData, communitiesData] = await Promise.all([
         api.getStats(),
         api.getCommunities(),
-        api.getCentrality(),
-        api.getTopComplex(),
       ]);
 
       setStats(statsData);
       setCommunities(communitiesData.communities || []);
-      setCentrality(centralityData.nodes || []);
-      setTopComplex(complexData.functions || []);
+
+      // Try to load optional endpoints (may not exist yet)
+      try {
+        const centralityData = await api.getCentrality();
+        setCentrality(centralityData.nodes || []);
+      } catch (e) {
+        console.log('Centrality endpoint not available');
+      }
+
+      try {
+        const complexData = await api.getTopComplex();
+        setTopComplex(complexData.functions || []);
+      } catch (e) {
+        console.log('Top-complex endpoint not available');
+      }
     } catch (error) {
       console.error('Error loading dashboard:', error);
     } finally {
