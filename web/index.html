@@ -17,7 +17,7 @@
     main { flex: 1; display: grid; grid-template-columns: 280px 1fr 300px; overflow: hidden; }
     aside, .panel { background: #161b22; border-right: 1px solid #30363d; overflow-y: auto; padding: 12px; }
     .panel { border-right: none; border-left: 1px solid #30363d; }
-    #graph { background: #0d1117; }
+    #graph { background: #0d1117; width: 100%; height: 100%; position: relative; }
     .stat { padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 0.85rem; }
     .stat span { color: #8b949e; }
     .stat strong { float: right; color: #58a6ff; }
@@ -100,22 +100,31 @@
 
     async function loadGraph() {
       const typeFilter = document.getElementById('type-filter').value;
+      const nodeParams = new URLSearchParams({ limit: '1000' });
+      if (typeFilter) nodeParams.set('node_type', typeFilter);
 
-      // Use the graph query endpoint which returns a proper connected subgraph
-      const query = typeFilter ? `type:${typeFilter}` : 'all';
-      const params = new URLSearchParams({ query, limit: '800', depth: '1' });
+      // Load nodes and ALL their edges
+      const [nodeData, edgeData] = await Promise.all([
+        fetchJson('/api/graph/nodes?' + nodeParams),
+        fetchJson('/api/graph/edges?limit=10000')
+      ]);
 
-      const data = await fetchJson('/api/graph?' + params);
+      allNodes = nodeData.nodes;
+      const allEdgesRaw = edgeData.edges;
 
-      allNodes = data.nodes;
-      allEdges = data.edges;
-
-      console.log(`Loaded ${allNodes.length} nodes, ${allEdges.length} edges`);
+      console.log(`Loaded ${allNodes.length} nodes, ${allEdgesRaw.length} total edges`);
 
       if (allNodes.length === 0) {
         document.getElementById('stats').innerHTML = '<p style="color:#d29922">No nodes found. Try a different filter.</p>';
         return;
       }
+
+      const nodeIds = new Set(allNodes.map(n => n.id));
+
+      // Filter edges to only those connecting our loaded nodes
+      allEdges = allEdgesRaw.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to));
+
+      console.log(`After filtering: ${allEdges.length} edges between loaded nodes`);
 
       const visNodes = new vis.DataSet(allNodes.map(n => ({
         id: n.id,
@@ -139,25 +148,37 @@
       console.log(`Rendering ${visNodes.length} nodes, ${visEdges.length} edges`);
 
       const container = document.getElementById('graph');
-      if (network) network.destroy();
-      network = new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
-        physics: {
-          barnesHut: {
-            gravitationalConstant: -8000,
-            springLength: 120,
-            avoidOverlap: 0.5
-          },
-          stabilization: { iterations: 150 }
-        },
-        interaction: { hover: true, tooltipDelay: 100 },
-        layout: {
-          improvedLayout: true
-        }
-      });
+      if (!container) {
+        console.error('Graph container not found!');
+        return;
+      }
 
-      network.on('click', params => {
-        if (params.nodes.length) showNodeDetail(params.nodes[0]);
-      });
+      if (network) network.destroy();
+
+      try {
+        network = new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
+          physics: {
+            barnesHut: {
+              gravitationalConstant: -8000,
+              springLength: 120,
+              avoidOverlap: 0.5
+            },
+            stabilization: { iterations: 150 }
+          },
+          interaction: { hover: true, tooltipDelay: 100 },
+          layout: {
+            improvedLayout: true
+          }
+        });
+
+        network.on('click', params => {
+          if (params.nodes.length) showNodeDetail(params.nodes[0]);
+        });
+
+        console.log('Graph rendered successfully');
+      } catch (err) {
+        console.error('Error rendering graph:', err);
+      }
 
       loadStats();
       loadCommunities();
