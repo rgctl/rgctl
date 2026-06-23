@@ -18,11 +18,16 @@ use rbuilder_analysis::{
 };
 use rbuilder_error::Error;
 use rbuilder_export::select_subgraph;
+use rbuilder_extraction::discovery::FileDiscoverer;
 use rbuilder_graph::backend::GraphBackend;
 use rbuilder_graph::query;
 use rbuilder_graph::schema::{Edge, Node, NodeType};
 use rbuilder_nlp::pattern_matcher::PatternMatcher;
+use rbuilder_project_config::analyzer::ConfigAnalyzer;
+use rbuilder_project_config::secret_detector::SecretDetector;
+use rbuilder_registry;
 use rbuilder_security::SecurityAnalyzer;
+use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -116,6 +121,13 @@ pub struct BlastRadiusParams {
     pub depth: Option<usize>,
 }
 
+/// Config analysis parameters.
+#[derive(Debug, Deserialize)]
+pub struct ConfigParams {
+    /// Include verbose output
+    pub verbose: Option<bool>,
+}
+
 /// Start the web API and static file server.
 pub async fn run_server(
     state: AppState,
@@ -159,6 +171,10 @@ pub fn build_router(state: AppState, web_dir: Option<std::path::PathBuf>) -> Rou
         .route("/api/slice", get(backward_slice))
         .route("/api/blast-radius", get(blast_radius))
         .route("/api/symbol/:name", get(symbol_info))
+        // Config analysis endpoints
+        .route("/api/config/unused", get(config_unused_keys))
+        .route("/api/config/secrets", get(config_secrets))
+        .route("/api/config/missing-env", get(config_missing_env))
         .with_state(state)
         .layer(CorsLayer::permissive());
 
@@ -938,6 +954,101 @@ async fn symbol_info(
             "complexity": symbol.get_property("cyclomatic"),
             "callers": callers,
             "callees": callees,
+        }))
+    })?;
+
+    Ok(Json(result))
+}
+
+/// Config analysis - unused keys endpoint.
+async fn config_unused_keys(
+    State(state): State<AppState>,
+    Query(params): Query<ConfigParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let keys = ConfigAnalyzer::find_unused_keys(backend)?;
+        let verbose = params.verbose.unwrap_or(false);
+
+        Ok(json!({
+            "analysis_type": "unused_keys",
+            "count": keys.len(),
+            "keys": if verbose {
+                json!(keys.iter().map(|k| json!({
+                    "key": k.key,
+                    "file": k.file,
+                    "confidence": k.confidence,
+                })).collect::<Vec<_>>())
+            } else {
+                json!(keys.iter().take(20).map(|k| json!({
+                    "key": k.key,
+                    "file": k.file,
+                })).collect::<Vec<_>>())
+            },
+        }))
+    })?;
+
+    Ok(Json(result))
+}
+
+/// Config analysis - secret detection endpoint.
+async fn config_secrets(
+    State(state): State<AppState>,
+    Query(params): Query<ConfigParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let repo_root = state.repo_root();
+    let discoverer = FileDiscoverer::new(Arc::new(rbuilder_registry::full_registry()));
+    let files = discoverer
+        .discover(&repo_root)
+        .map_err(|e| Error::Other(format!("Failed to discover files: {e}")))?;
+    let detector = SecretDetector::new();
+    let verbose = params.verbose.unwrap_or(false);
+
+    let mut found = Vec::new();
+    for file in files {
+        if let Ok(content) = std::fs::read_to_string(&file) {
+            for secret in detector.scan(&content) {
+                found.push(json!({
+                    "file": file.display().to_string(),
+                    "line": secret.line,
+                    "type": secret.secret_type,
+                    "severity": format!("{:?}", secret.severity),
+                    "value": if verbose { secret.value.clone() } else { "[redacted]".into() },
+                }));
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "analysis_type": "secrets",
+        "count": found.len(),
+        "findings": found,
+    })))
+}
+
+/// Config analysis - missing environment variables endpoint.
+async fn config_missing_env(
+    State(state): State<AppState>,
+    Query(params): Query<ConfigParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let repo_root = state.repo_root();
+        let env_path = repo_root.join(".env");
+        let missing = ConfigAnalyzer::find_missing_env_vars(backend, &[env_path.as_path()])?;
+        let verbose = params.verbose.unwrap_or(false);
+
+        Ok(json!({
+            "analysis_type": "missing_env",
+            "count": missing.len(),
+            "variables": if verbose {
+                json!(missing.iter().map(|v| json!({
+                    "var": v.var,
+                    "files": v.referenced_in,
+                })).collect::<Vec<_>>())
+            } else {
+                json!(missing.iter().map(|v| &v.var).collect::<Vec<_>>())
+            },
         }))
     })?;
 
