@@ -128,6 +128,19 @@ pub struct ConfigParams {
     pub verbose: Option<bool>,
 }
 
+/// IaC analysis parameters.
+#[derive(Debug, Deserialize)]
+pub struct IacParams {
+    /// Filter by name (playbook, cookbook, module)
+    pub filter: Option<String>,
+    /// Include verbose output
+    pub verbose: Option<bool>,
+    /// Include security scan
+    pub security: Option<bool>,
+    /// Minimum severity for security scan
+    pub min_severity: Option<String>,
+}
+
 /// Start the web API and static file server.
 pub async fn run_server(
     state: AppState,
@@ -175,6 +188,10 @@ pub fn build_router(state: AppState, web_dir: Option<std::path::PathBuf>) -> Rou
         .route("/api/config/unused", get(config_unused_keys))
         .route("/api/config/secrets", get(config_secrets))
         .route("/api/config/missing-env", get(config_missing_env))
+        // IaC analysis endpoints
+        .route("/api/iac/ansible", get(iac_ansible))
+        .route("/api/iac/chef", get(iac_chef))
+        .route("/api/iac/puppet", get(iac_puppet))
         .with_state(state)
         .layer(CorsLayer::permissive());
 
@@ -1049,6 +1066,128 @@ async fn config_missing_env(
             } else {
                 json!(missing.iter().map(|v| &v.var).collect::<Vec<_>>())
             },
+        }))
+    })?;
+
+    Ok(Json(result))
+}
+
+/// IaC analysis - Ansible endpoint.
+async fn iac_ansible(
+    State(state): State<AppState>,
+    Query(params): Query<IacParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let playbooks: Vec<_> = backend
+            .find_nodes_by_type(NodeType::AnsiblePlaybook)?
+            .into_iter()
+            .filter(|n| params.filter.as_ref().map_or(true, |f| n.name.contains(f)))
+            .collect();
+
+        let total_plays = backend.find_nodes_by_type(NodeType::AnsiblePlay)?.len();
+        let total_tasks = backend.find_nodes_by_type(NodeType::AnsibleTask)?.len();
+        let total_roles = backend.find_nodes_by_type(NodeType::AnsibleRole)?.len();
+
+        let playbook_summary: Vec<Value> = playbooks
+            .iter()
+            .map(|pb| {
+                json!({
+                    "name": pb.name,
+                    "file": pb.file_path,
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "type": "ansible",
+            "playbooks": playbook_summary,
+            "totals": {
+                "playbooks": playbooks.len(),
+                "plays": total_plays,
+                "tasks": total_tasks,
+                "roles": total_roles,
+            }
+        }))
+    })?;
+
+    Ok(Json(result))
+}
+
+/// IaC analysis - Chef endpoint.
+async fn iac_chef(
+    State(state): State<AppState>,
+    Query(params): Query<IacParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let cookbooks: Vec<_> = backend
+            .find_nodes_by_type(NodeType::ChefCookbook)?
+            .into_iter()
+            .filter(|n| params.filter.as_ref().map_or(true, |f| n.name.contains(f)))
+            .collect();
+
+        let total_recipes = backend.find_nodes_by_type(NodeType::ChefRecipe)?.len();
+        let total_resources = backend.find_nodes_by_type(NodeType::ChefResource)?.len();
+
+        let cookbook_summary: Vec<Value> = cookbooks
+            .iter()
+            .map(|cb| {
+                json!({
+                    "name": cb.name,
+                    "file": cb.file_path,
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "type": "chef",
+            "cookbooks": cookbook_summary,
+            "totals": {
+                "cookbooks": cookbooks.len(),
+                "recipes": total_recipes,
+                "resources": total_resources,
+            }
+        }))
+    })?;
+
+    Ok(Json(result))
+}
+
+/// IaC analysis - Puppet endpoint.
+async fn iac_puppet(
+    State(state): State<AppState>,
+    Query(params): Query<IacParams>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let modules: Vec<_> = backend
+            .find_nodes_by_type(NodeType::PuppetModule)?
+            .into_iter()
+            .filter(|n| params.filter.as_ref().map_or(true, |f| n.name.contains(f)))
+            .collect();
+
+        let total_classes = backend.find_nodes_by_type(NodeType::PuppetClass)?.len();
+        let total_resources = backend.find_nodes_by_type(NodeType::PuppetResource)?.len();
+
+        let module_summary: Vec<Value> = modules
+            .iter()
+            .map(|m| {
+                json!({
+                    "name": m.name,
+                    "file": m.file_path,
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "type": "puppet",
+            "modules": module_summary,
+            "totals": {
+                "modules": modules.len(),
+                "classes": total_classes,
+                "resources": total_resources,
+            }
         }))
     })?;
 
