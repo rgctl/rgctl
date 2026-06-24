@@ -1,28 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60">
-  <defs>
-    <linearGradient id="redGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:oklch(0.577 0.245 27.325);stop-opacity:1" />
-      <stop offset="100%" style="stop-color:oklch(0.637 0.237 25.331);stop-opacity:1" />
-    </linearGradient>
-  </defs>
-
-  <!-- Graph nodes icon -->
-  <g transform="translate(10, 20)">
-    <circle cx="10" cy="10" r="4" fill="url(#redGrad)"/>
-    <circle cx="25" cy="5" r="4" fill="url(#redGrad)"/>
-    <circle cx="25" cy="20" r="4" fill="url(#redGrad)"/>
-    <line x1="10" y1="10" x2="25" y2="5" stroke="url(#redGrad)" stroke-width="1.5" opacity="0.6"/>
-    <line x1="10" y1="10" x2="25" y2="20" stroke="url(#redGrad)" stroke-width="1.5" opacity="0.6"/>
-  </g>
-
-  <!-- Text -->
-  <text x="50" y="38" font-family="Inter Variable, system-ui, -apple-system, sans-serif" font-size="28" font-weight="700" letter-spacing="-0.5">
-    <tspan fill="url(#redGrad)">R</tspan><tspan fill="white" class="dark-text">builder</tspan>
-  </text>
-
-  <style>
-    @media (prefers-color-scheme: light) {
-      .dark-text { fill: black !important; }
-    }
-  </style>
-</svg>
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 176.89999914169312 116.90000000000003" width="353.79999828338623" height="233.80000000000007"><!-- svg-source:excalidraw --><metadata></metadata><defs><style class="style-fonts">
+      @font-face { font-family: Excalifont; src: url(data:font/woff2;base64,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); }
+      @font-face { font-family: Lilita One; src: url(data:font/woff2;base64,d09GMgABAAAAAAJEAA4AAAAABGwAAAH1AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGhQbDBwYBmAANBEIClxvCwYAATYCJAMIBCAFgyQHIBuIA8g+DjeuVMMgkRynbEzMVdgHxqJuCpT7UKQSd3oU0zccD1/7sT939yHm2TOe8aaNSGkMCbKXQCgWtVIJlel82T/2c+9PLaQ31bRbEpEqLnUeB1wndAuRUDiuE8kEADjk6DsGGAjmVl7lKucCBHAifNV3idUXs07QeKmSK7nRqeCk1yo4irWSpOTZcqcP/sA3f9fX3y/zgNoCTCFuCzTMAkvaIgpEchujo7fXaIk0HFUEmgEBplESaNTbS5wWxl1gAFK8xh2V9JiOwOUsFt8W/hMABADs7CdTYJeUzHclkO/9ICB+0xgnISGjmyzQTTEOKpXAXikQ5QEB34lSBCRQIWEUTAGoAKmXPesY1EMT+2L/5Q/rIStD00Ucnv21VJ5/OcWLX8udfG7e33L8Xa/IxWTrGgCBcHZ+qviLQ/6Fz2muxlKRyy9AvQSCfF+A/GPoqRAAgOSVtAUWAskmGggAANQ5QBYVE3h0XYTuJZJWp8hW6dLKo8ag6L21OsGGhraGsYKYroqsiqGRhp4uNBtMJkvQREFXRE/XWM9QRUFXjw0zjlR1t8VkNidV1Ey0FQyP5116+haGGmrqxlBVog4E/JBH6tmb1uxqXEdPW0FJXYGhqGFJrcOZhrE6TKoYqRiaqihDbzjCqIIOV0bJ600SMlBmaQ==); }</style></defs><g transform="translate(54.366666316986084 43.94999999999999) rotate(0 56.266666412353516 22.5)"><text x="0" y="31.716" font-family="Excalifont, Xiaolai, sans-serif, Segoe UI Emoji" font-size="36px" fill="#ffffff" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">builder</text></g><g transform="translate(10 10) rotate(0 28.55507201733795 48.45000000000002)"><text x="0" y="78.06769565217388" font-family="Lilita One, sans-serif, Segoe UI Emoji" font-size="84.26086956521736px" fill="#e03131" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">R</text></g></svg>

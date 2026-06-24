@@ -26,25 +26,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex flex-col h-screen bg-background text-foreground">
       <header className="flex items-center gap-3 px-5 py-3 bg-card border-b flex-wrap">
         <div className="mr-auto flex items-center gap-2">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60" className="h-10">
-            <defs>
-              <linearGradient id="redGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" style={{stopColor: 'oklch(0.577 0.245 27.325)', stopOpacity: 1}} />
-                <stop offset="100%" style={{stopColor: 'oklch(0.637 0.237 25.331)', stopOpacity: 1}} />
-              </linearGradient>
-            </defs>
-            <g transform="translate(10, 20)">
-              <circle cx="10" cy="10" r="4" fill="url(#redGrad)"/>
-              <circle cx="25" cy="5" r="4" fill="url(#redGrad)"/>
-              <circle cx="25" cy="20" r="4" fill="url(#redGrad)"/>
-              <line x1="10" y1="10" x2="25" y2="5" stroke="url(#redGrad)" strokeWidth="1.5" opacity="0.6"/>
-              <line x1="10" y1="10" x2="25" y2="20" stroke="url(#redGrad)" strokeWidth="1.5" opacity="0.6"/>
-            </g>
-            <text x="50" y="38" fontFamily="Inter Variable, system-ui, -apple-system, sans-serif" fontWeight="700" letterSpacing="-0.5">
-              <tspan fill="url(#redGrad)" fontSize="36">R</tspan>
-              <tspan className="fill-foreground" fontSize="22">builder</tspan>
-            </text>
-          </svg>
+          <img src="/logo.svg" alt="Rbuilder" className="h-12" />
         </div>
 
         <nav className="flex items-center gap-1 text-sm">
