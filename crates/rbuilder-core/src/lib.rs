@@ -7,7 +7,6 @@ pub use rbuilder_extraction as extraction;
 pub use rbuilder_gql as gql;
 pub use rbuilder_graph as graph;
 pub use rbuilder_incremental as incremental;
-pub use rbuilder_mcp as mcp;
 pub use rbuilder_nlp as nlp;
 pub use rbuilder_pipeline as pipeline;
 pub use rbuilder_plugin_api as plugin;
@@ -25,7 +24,7 @@ pub use rbuilder_incremental::{
     ChangeDetail, ChangeDetectionResult, ChangeDetector, ChangeSet, ChangeSummary, FileTracker,
     IncrementalUpdater, UpdateOptions, UpdateResult,
 };
-pub use rbuilder_mcp::watch;
+pub use rbuilder_incremental::watch;
 pub use rbuilder_nlp::conversation::ConversationContext;
 pub use rbuilder_nlp::{
     DomainContext, PatternDetector, PatternMatcher, QueryResult, TranslatedQuery,
@@ -44,14 +43,6 @@ pub use rbuilder_registry::LanguageRegistry;
 pub use rbuilder_rules::{RuleApplicationReport, RuleEngine, Ruleset};
 pub use rbuilder_semantic::{
     FunctionSignature, IdlFormat, IdlGenerator, SignatureExtractor, TypeInferencer,
-};
-
-#[cfg(feature = "mcp-server")]
-pub use rbuilder_mcp::api;
-#[cfg(feature = "mcp-server")]
-pub use rbuilder_mcp::watch::{
-    debounce_ready, latest_notification, new_notification_store, record_notification,
-    GraphUpdateNotification, NotificationStore, WatchService,
 };
 
 /// Version information

@@ -14,4 +14,3 @@ toml = "0.8"
 
 [features]
 default = []
-mcp-server = []

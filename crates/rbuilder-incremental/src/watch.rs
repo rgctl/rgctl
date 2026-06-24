@@ -1,21 +1,21 @@
 //! File system watch service for incremental graph updates (Phase 13.1).
 
+use crate::file_tracker::relative_path;
+use crate::{IncrementalUpdater, UpdateOptions, UpdateResult};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rbuilder_error::{Error, Result};
 use rbuilder_extraction::discovery::{DiscoveryConfig, FileDiscoverer};
 use rbuilder_graph::CodeGraph;
-use rbuilder_incremental::file_tracker::relative_path;
-use rbuilder_incremental::{IncrementalUpdater, UpdateOptions, UpdateResult};
 use rbuilder_project_config::project::RbuilderConfig;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc as StdArc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Notification payload for MCP clients when the graph changes.
+/// Notification payload when the graph changes during watch mode.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct GraphUpdateNotification {
     /// Unix timestamp (seconds).
@@ -185,134 +185,9 @@ impl WatchService {
     }
 }
 
-/// Notification channel for MCP graph-update events.
-#[cfg(feature = "mcp-server")]
-pub type NotificationSender = Sender<GraphUpdateNotification>;
-
-/// Shared store for the latest graph-update notification (HTTP MCP clients).
-#[cfg(feature = "mcp-server")]
-pub type NotificationStore = std::sync::Arc<std::sync::Mutex<Option<GraphUpdateNotification>>>;
-
-/// Create an empty notification store for HTTP polling clients.
-#[cfg(feature = "mcp-server")]
-pub fn new_notification_store() -> NotificationStore {
-    std::sync::Arc::new(std::sync::Mutex::new(None))
-}
-
-/// Record the latest notification for polling clients.
-#[cfg(feature = "mcp-server")]
-pub fn record_notification(store: &NotificationStore, notification: GraphUpdateNotification) {
-    if let Ok(mut guard) = store.lock() {
-        *guard = Some(notification);
-    }
-}
-
-/// Read the latest notification, if any.
-#[cfg(feature = "mcp-server")]
-pub fn latest_notification(store: &NotificationStore) -> Option<GraphUpdateNotification> {
-    store.lock().ok().and_then(|guard| guard.clone())
-}
-
 /// Returns true when a debounced batch is ready to flush.
 pub fn debounce_ready(pending: bool, last_event: Instant, debounce: Duration) -> bool {
     pending && last_event.elapsed() >= debounce
-}
-
-/// Spawn watch mode updating shared MCP state, sending notifications.
-#[cfg(feature = "mcp-server")]
-pub fn spawn_watch_with_state(
-    state: crate::api::state::AppState,
-    debounce_ms: u64,
-    notify_tx: NotificationSender,
-) -> Result<std::thread::JoinHandle<()>> {
-    let _repo_root = state.repo_root();
-    let registry = StdArc::new(rbuilder_registry::full_registry());
-    let updater = IncrementalUpdater::with_options(
-        StdArc::clone(&registry),
-        UpdateOptions {
-            show_progress: false,
-            ..UpdateOptions::default()
-        },
-    );
-    let discoverer = FileDiscoverer::with_config(registry, DiscoveryConfig::default());
-    let debounce = Duration::from_millis(debounce_ms);
-
-    Ok(std::thread::spawn(move || {
-        if let Err(e) = run_watch_loop(state, updater, discoverer, debounce, notify_tx) {
-            eprintln!("Watch service stopped: {e}");
-        }
-    }))
-}
-
-#[cfg(feature = "mcp-server")]
-fn run_watch_loop(
-    state: crate::api::state::AppState,
-    updater: IncrementalUpdater,
-    discoverer: FileDiscoverer,
-    debounce: Duration,
-    notify_tx: NotificationSender,
-) -> Result<()> {
-    let repo_root = state.repo_root();
-    let (event_tx, event_rx) = mpsc::channel();
-    let root = repo_root.clone();
-    let mut watcher = RecommendedWatcher::new(
-        move |res: std::result::Result<Event, notify::Error>| {
-            if let Ok(event) = res {
-                if let Some(paths) = watch_paths_from_event(&event) {
-                    for path in paths {
-                        let _ = event_tx.send(path);
-                    }
-                }
-            }
-        },
-        Config::default(),
-    )
-    .map_err(|e| Error::Other(format!("Failed to create watcher: {e}")))?;
-
-    watcher
-        .watch(&repo_root, RecursiveMode::Recursive)
-        .map_err(|e| Error::Other(format!("Failed to watch repo: {e}")))?;
-
-    let tracked = discoverer.discover(&repo_root)?;
-    let tracked_set: HashSet<PathBuf> = tracked.into_iter().collect();
-    let mut pending: HashSet<PathBuf> = HashSet::new();
-    let mut last_event = Instant::now();
-
-    loop {
-        match event_rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(path) => {
-                if is_tracked_path(&root, &path, &tracked_set) {
-                    pending.insert(path);
-                    last_event = Instant::now();
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                if !debounce_ready(!pending.is_empty(), last_event, debounce) {
-                    continue;
-                }
-                let batch: Vec<PathBuf> = pending.drain().collect();
-                let rel_paths: Vec<String> = batch
-                    .iter()
-                    .filter_map(|p| relative_path(&root, p).ok())
-                    .collect();
-
-                let update_result = state
-                    .with_graph_mut(|graph| updater.update_files(graph, &repo_root, &rel_paths));
-
-                match update_result {
-                    Ok(result) => {
-                        if result.files_affected() > 0 {
-                            let _ = notify_tx
-                                .send(GraphUpdateNotification::from_result(rel_paths, &result));
-                        }
-                    }
-                    Err(e) => eprintln!("Watch update error: {e}"),
-                }
-            }
-            Err(RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    Ok(())
 }
 
 fn load_or_init_graph(repo_root: &Path) -> Result<CodeGraph> {
@@ -419,21 +294,5 @@ mod tests {
             &root.join(".rbuilder/graph.json"),
             &tracked
         ));
-    }
-
-    #[cfg(feature = "mcp-server")]
-    #[test]
-    fn test_notification_store_roundtrip() {
-        let store = new_notification_store();
-        assert!(latest_notification(&store).is_none());
-        let notification = GraphUpdateNotification {
-            timestamp: 1,
-            files_changed: vec!["a.rs".into()],
-            nodes_added: 2,
-            nodes_removed: 0,
-            edges_changed: 1,
-        };
-        record_notification(&store, notification.clone());
-        assert_eq!(latest_notification(&store), Some(notification));
     }
 }

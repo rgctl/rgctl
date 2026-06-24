@@ -20,7 +20,6 @@ members = [
     "crates/rbuilder-incremental",
     "crates/rbuilder-semantic",
     "crates/rbuilder-rules",
-    "crates/rbuilder-mcp",
     "crates/rbuilder-cli",
     "crates/rbuilder-core",
     "crates/rbuilder-lang-ansible",
@@ -93,7 +92,6 @@ rbuilder-project-config = { path = "crates/rbuilder-project-config", version = "
 rbuilder-incremental = { path = "crates/rbuilder-incremental", version = "0.1.0" }
 rbuilder-semantic = { path = "crates/rbuilder-semantic", version = "0.1.0" }
 rbuilder-rules = { path = "crates/rbuilder-rules", version = "0.1.0" }
-rbuilder-mcp = { path = "crates/rbuilder-mcp", version = "0.1.0" }
 rbuilder-cli = { path = "crates/rbuilder-cli", version = "0.1.0" }
 rbuilder-core = { path = "crates/rbuilder-core", version = "0.1.0" }
 tempfile = "3"
@@ -156,7 +154,7 @@ description = "A Code knowledge graph system"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/sshaaf/rbuilder"
 readme = "README.md"
-keywords = ["code-analysis", "graph", "ai", "mcp", "knowledge-graph"]
+keywords = ["code-analysis", "graph", "ai", "knowledge-graph"]
 categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
@@ -180,7 +178,6 @@ rbuilder-project-config = { workspace = true }
 rbuilder-incremental = { workspace = true }
 rbuilder-semantic = { workspace = true }
 rbuilder-rules = { workspace = true }
-rbuilder-mcp = { workspace = true }
 rbuilder-cli = { workspace = true }
 
 rbuilder-bundle-minimal = { workspace = true, optional = true }
@@ -204,8 +201,6 @@ pathfinding = "4.0"
 rayon = "1.7"
 tokio = { version = "1", features = ["full"] }
 crossbeam = "0.8"
-axum = { version = "0.7", optional = true }
-tower-http = { version = "0.5", optional = true, features = ["fs", "cors"] }
 regex = "1"
 aho-corasick = "1"
 fancy-regex = "0.11"
@@ -242,7 +237,7 @@ rbuilder-lang-puppet = { workspace = true }
 
 
 [features]
-default = ["bundle-full", "nlp-patterns", "mcp-server"]
+default = ["bundle-full", "nlp-patterns"]
 
 all-languages = ["bundle-extra"]
 
@@ -256,7 +251,6 @@ nlp-patterns = ["rbuilder-nlp/nlp-patterns"]
 nlp-cache = ["nlp-patterns", "ndarray", "rbuilder-nlp/nlp-cache"]
 nlp-llm = ["nlp-cache", "reqwest", "rbuilder-nlp/nlp-llm"]
 
-mcp-server = ["axum", "tower-http", "rbuilder-mcp/mcp-server", "rbuilder-cli/mcp-server", "rbuilder-core/mcp-server", "rbuilder-error/mcp-server"]
 proc-macros = ["rbuilder-macros"]
 
 [profile.release]

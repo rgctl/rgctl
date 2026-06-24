@@ -48,11 +48,6 @@ pub enum Error {
     #[error("Plugin error: {0}")]
     PluginError(String),
 
-    /// MCP server error
-    #[cfg(feature = "mcp-server")]
-    #[error("MCP error: {0}")]
-    McpError(String),
-
     /// Invalid syntax in source code
     #[error("Invalid syntax in {file} at line {line}")]
     InvalidSyntax {

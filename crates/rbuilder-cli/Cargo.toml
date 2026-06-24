@@ -13,7 +13,6 @@ rbuilder-extraction = { path = "../rbuilder-extraction" }
 rbuilder-gql = { path = "../rbuilder-gql" }
 rbuilder-graph = { path = "../rbuilder-graph" }
 rbuilder-incremental = { path = "../rbuilder-incremental" }
-rbuilder-mcp = { path = "../rbuilder-mcp" }
 rbuilder-nlp = { path = "../rbuilder-nlp" }
 rbuilder-pipeline = { path = "../rbuilder-pipeline" }
 rbuilder-project-config = { path = "../rbuilder-project-config" }
@@ -34,7 +33,6 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [features]
 default = []
-mcp-server = ["rbuilder-mcp/mcp-server"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

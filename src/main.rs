@@ -263,25 +263,6 @@ enum Commands {
         rankdir: String,
     },
 
-    /// Start web server for graph visualization
-    #[cfg(feature = "mcp-server")]
-    Serve {
-        /// Port number
-        #[arg(long, default_value = "3000")]
-        port: u16,
-
-        /// Open browser automatically
-        #[arg(long)]
-        open: bool,
-    },
-
-    /// Start MCP server for AI agent integration
-    #[cfg(feature = "mcp-server")]
-    Mcp {
-        #[command(subcommand)]
-        command: McpCommands,
-    },
-
     /// Show statistics
     Stats {
         /// Community structure report
@@ -337,25 +318,6 @@ enum HooksCommands {
 
     /// List installed hooks
     List,
-}
-
-#[cfg(feature = "mcp-server")]
-#[derive(Subcommand)]
-enum McpCommands {
-    /// Start MCP server
-    Serve {
-        /// Transport type (stdio, http)
-        #[arg(long, default_value = "stdio")]
-        transport: String,
-
-        /// Port for HTTP transport
-        #[arg(long, default_value = "3000")]
-        port: u16,
-
-        /// Watch repository and notify clients on graph updates
-        #[arg(long)]
-        watch: bool,
-    },
 }
 
 #[derive(Subcommand)]
@@ -921,31 +883,6 @@ fn main() -> anyhow::Result<()> {
                     rankdir,
                 },
             )?;
-            Ok(())
-        }
-
-        #[cfg(feature = "mcp-server")]
-        Commands::Serve { port, open } => {
-            use rbuilder::cli::serve;
-            use std::path::Path;
-            let path = cli.path.as_deref().unwrap_or(".");
-            serve::run_serve(Path::new(path), port, open)?;
-            Ok(())
-        }
-
-        #[cfg(feature = "mcp-server")]
-        Commands::Mcp { command } => {
-            use rbuilder::cli::mcp;
-            use std::path::Path;
-            match command {
-                McpCommands::Serve {
-                    transport,
-                    port,
-                    watch,
-                } => {
-                    mcp::run_mcp_serve(Path::new("."), &transport, port, cli.verbose, watch)?;
-                }
-            }
             Ok(())
         }
 
