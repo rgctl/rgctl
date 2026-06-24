@@ -89,49 +89,49 @@ export function Dashboard() {
   }
 
   return (
-    <div className="p-6 overflow-y-auto h-full">
-      <div className="space-y-6">
+    <div className="p-8 overflow-y-auto h-full bg-background">
+      <div className="space-y-8">
         <div>
-          <h1 className="text-2xl font-bold text-primary mb-2">Repository Dashboard</h1>
-          <p className="text-muted-foreground">Analytics and insights for your codebase</p>
+          <h1 className="text-3xl font-bold tracking-tight">Repository Dashboard</h1>
+          <p className="text-muted-foreground mt-2">Analytics and insights for your codebase</p>
         </div>
 
         {/* Overview Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <Card size="sm">
             <CardHeader>
               <CardDescription>Total Nodes</CardDescription>
-              <CardTitle className="text-3xl">{stats?.node_count || 0}</CardTitle>
+              <CardTitle className="text-3xl font-bold">{stats?.node_count || 0}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-xs text-muted-foreground">Graph entities</div>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card size="sm">
             <CardHeader>
               <CardDescription>Total Edges</CardDescription>
-              <CardTitle className="text-3xl">{stats?.edge_count || 0}</CardTitle>
+              <CardTitle className="text-3xl font-bold">{stats?.edge_count || 0}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-xs text-muted-foreground">Relationships</div>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card size="sm">
             <CardHeader>
               <CardDescription>Functions</CardDescription>
-              <CardTitle className="text-3xl">{stats?.function_count || 0}</CardTitle>
+              <CardTitle className="text-3xl font-bold">{stats?.function_count || 0}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-xs text-muted-foreground">Total functions</div>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card size="sm">
             <CardHeader>
               <CardDescription>Avg Complexity</CardDescription>
-              <CardTitle className="text-3xl">{(stats?.avg_complexity || 0).toFixed(1)}</CardTitle>
+              <CardTitle className="text-3xl font-bold">{(stats?.avg_complexity || 0).toFixed(1)}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-xs text-muted-foreground">Cyclomatic complexity</div>
@@ -140,7 +140,7 @@ export function Dashboard() {
         </div>
 
         {/* Charts Row */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card>
             <CardHeader>
               <CardTitle>Complexity Distribution</CardTitle>

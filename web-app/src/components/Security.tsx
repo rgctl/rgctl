@@ -5,11 +5,11 @@ import { Badge } from '@/components/ui/badge';
 
 export function Security() {
   return (
-    <div className="p-6 overflow-y-auto h-full">
-      <div className="space-y-6">
+    <div className="p-8 overflow-y-auto h-full bg-background">
+      <div className="space-y-8">
         <div>
-          <h1 className="text-2xl font-bold text-primary mb-2">Security Analysis</h1>
-          <p className="text-muted-foreground">
+          <h1 className="text-3xl font-bold tracking-tight">Security Analysis</h1>
+          <p className="text-muted-foreground mt-2">
             Taint analysis, vulnerability scanning, and program slicing
           </p>
         </div>
@@ -55,10 +55,10 @@ export function Security() {
           </CardContent>
         </Card>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <Card size="sm">
             <CardHeader>
-              <CardTitle className="text-sm">Severity Levels</CardTitle>
+              <CardTitle className="text-sm font-semibold">Severity Levels</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex flex-col gap-2">
@@ -78,9 +78,9 @@ export function Security() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card size="sm">
             <CardHeader>
-              <CardTitle className="text-sm">Common Vulnerabilities</CardTitle>
+              <CardTitle className="text-sm font-semibold">Common Vulnerabilities</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex flex-col gap-1">
@@ -92,9 +92,9 @@ export function Security() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card size="sm">
             <CardHeader>
-              <CardTitle className="text-sm">Analysis Status</CardTitle>
+              <CardTitle className="text-sm font-semibold">Analysis Status</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-sm text-muted-foreground">
