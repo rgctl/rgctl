@@ -272,6 +272,59 @@ export function GraphBrowser() {
             {loading ? 'Loading...' : 'Refresh'}
           </Button>
         </div>
+
+        <div className="mt-6 pt-6 border-t">
+          <h3 className="text-sm font-semibold mb-3">GQL Query</h3>
+          <div className="space-y-2">
+            <Input
+              placeholder="type:Function"
+              value={gqlQuery}
+              onChange={(e) => setGqlQuery(e.target.value)}
+              className="text-xs font-mono"
+            />
+            <Button
+              onClick={async () => {
+                setGqlLoading(true);
+                try {
+                  const result = await api.executeGqlQuery({ query: gqlQuery });
+                  setGqlResult(result);
+                } catch (error) {
+                  console.error('GQL error:', error);
+                  setGqlResult({ error: String(error) });
+                } finally {
+                  setGqlLoading(false);
+                }
+              }}
+              disabled={!gqlQuery || gqlLoading}
+              className="w-full"
+              size="sm"
+            >
+              {gqlLoading ? 'Running...' : 'Execute'}
+            </Button>
+            {gqlResult && (
+              <div className="mt-2 p-2 bg-muted rounded text-xs">
+                {gqlResult.error ? (
+                  <div className="text-destructive">{gqlResult.error}</div>
+                ) : (
+                  <div>
+                    <div className="font-semibold mb-1">{gqlResult.row_count} results</div>
+                    <div className="max-h-40 overflow-y-auto">
+                      {gqlResult.rows.slice(0, 10).map((row: any, i: number) => (
+                        <div key={i} className="border-b py-1 last:border-0">
+                          {Object.entries(row).map(([key, val]: [string, any]) => (
+                            <div key={key}>
+                              <span className="text-muted-foreground">{key}:</span> {val.name}
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </aside>
 
       {/* Center - Graph */}
