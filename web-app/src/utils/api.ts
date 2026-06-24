@@ -113,4 +113,17 @@ export const api = {
   async getSymbol(name: string) {
     return fetchJson<any>(`/api/symbol/${encodeURIComponent(name)}`);
   },
+
+  async executeGqlQuery(params: {
+    query?: string;
+    macro_name?: string;
+    explain?: boolean;
+    verbose?: boolean;
+  }) {
+    return postJson<{
+      row_count: number;
+      rows: Array<Record<string, { name: string; type: string; id: string }>>;
+      explain?: Array<{ operation: string; detail: string }>;
+    }>('/api/gql', params);
+  },
 };

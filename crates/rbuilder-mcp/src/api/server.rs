@@ -26,6 +26,7 @@ use rbuilder_extraction::discovery::FileDiscoverer;
 use rbuilder_graph::backend::GraphBackend;
 use rbuilder_graph::query;
 use rbuilder_graph::schema::{Edge, Node, NodeType};
+use rbuilder_gql::{execute, execute_explain, execute_macro, QueryMacroRegistry};
 use rbuilder_nlp::pattern_matcher::PatternMatcher;
 use rbuilder_project_config::analyzer::ConfigAnalyzer;
 use rbuilder_project_config::secret_detector::SecretDetector;
@@ -167,6 +168,19 @@ pub struct DiffParams {
     pub verbose: Option<bool>,
 }
 
+/// GQL query parameters.
+#[derive(Debug, Deserialize)]
+pub struct GqlQueryRequest {
+    /// GQL query string
+    pub query: Option<String>,
+    /// Named macro to execute
+    pub macro_name: Option<String>,
+    /// Include execution plan
+    pub explain: Option<bool>,
+    /// Include verbose output
+    pub verbose: Option<bool>,
+}
+
 /// Start the web API and static file server.
 pub async fn run_server(
     state: AppState,
@@ -203,6 +217,7 @@ pub fn build_router(state: AppState, web_dir: Option<std::path::PathBuf>) -> Rou
         .route("/api/dashboard", get(dashboard_metrics))
         .route("/api/dashboard/advanced", get(dashboard_advanced))
         .route("/api/query", post(nlp_query))
+        .route("/api/gql", post(gql_query))
         .route("/api/communities", get(list_communities))
         // Security and analysis endpoints
         .route("/api/taint", get(taint_analysis))
@@ -674,6 +689,66 @@ async fn nlp_query(
             "answer": format_query_result(&query_result),
             "intent": format!("{:?}", translated.intent),
         }))
+    })?;
+
+    Ok(Json(result))
+}
+
+async fn gql_query(
+    State(state): State<AppState>,
+    Json(req): Json<GqlQueryRequest>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let result = state.with_graph(|graph| {
+        let backend = graph.backend();
+        let registry = QueryMacroRegistry::with_defaults();
+        let verbose = req.verbose.unwrap_or(false);
+        let explain = req.explain.unwrap_or(false);
+
+        let result = match (req.query.as_deref(), req.macro_name.as_deref()) {
+            (None, Some(name)) => execute_macro(backend, &registry, name)?,
+            (Some(q), None) if explain => execute_explain(backend, q)?,
+            (Some(q), None) => execute(backend, q)?,
+            (Some(_), Some(_)) => {
+                return Err(Error::InvalidQuery(
+                    "Provide either query or macro_name, not both".into(),
+                ));
+            }
+            (None, None) => {
+                return Err(Error::InvalidQuery("Missing query or macro_name".into()));
+            }
+        };
+
+        let rows: Vec<Value> = result
+            .rows
+            .iter()
+            .map(|row| {
+                json!(row
+                    .iter()
+                    .map(|(var, node)| (var.clone(), json!({
+                        "name": node.name,
+                        "type": format!("{:?}", node.node_type),
+                        "id": node.id,
+                    })))
+                    .collect::<std::collections::HashMap<_, _>>())
+            })
+            .collect();
+
+        let mut response = json!({
+            "row_count": result.rows.len(),
+            "rows": if verbose { json!(rows) } else { json!(rows.iter().take(20).collect::<Vec<_>>()) },
+        });
+
+        if explain {
+            if let Some(plan) = result.plan {
+                response["explain"] = json!(plan
+                    .steps
+                    .iter()
+                    .map(|s| json!({ "operation": s.operation, "detail": s.detail }))
+                    .collect::<Vec<_>>());
+            }
+        }
+
+        Ok(response)
     })?;
 
     Ok(Json(result))

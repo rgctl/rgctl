@@ -33,6 +33,9 @@ export function GraphBrowser() {
   const [typeFilter, setTypeFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
+  const [gqlQuery, setGqlQuery] = useState('');
+  const [gqlResult, setGqlResult] = useState<any>(null);
+  const [gqlLoading, setGqlLoading] = useState(false);
 
   const loadGraph = async () => {
     setLoading(true);
