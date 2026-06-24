@@ -10,10 +10,8 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie } from 'recharts';
 import { api } from '@/utils/api';
-
-const TYPE_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
 
 export function Dashboard() {
   const [stats, setStats] = useState<any>(null);
@@ -194,11 +192,7 @@ export function Dashboard() {
                       outerRadius={80}
                       fill="var(--chart-1)"
                       dataKey="value"
-                    >
-                      {typeDistribution.map((_, index) => (
-                        <Cell key={`cell-${index}`} fill={TYPE_COLORS[index % TYPE_COLORS.length]} />
-                      ))}
-                    </Pie>
+                    />
                     <ChartTooltip content={<ChartTooltipContent />} />
                   </PieChart>
                 </ResponsiveContainer>
