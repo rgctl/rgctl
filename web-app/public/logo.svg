@@ -16,5 +16,13 @@
   </g>
 
   <!-- Text -->
-  <text x="50" y="38" font-family="Inter Variable, system-ui, -apple-system, sans-serif" font-size="28" font-weight="700" fill="currentColor" letter-spacing="-0.5">rBuilder</text>
+  <text x="50" y="38" font-family="Inter Variable, system-ui, -apple-system, sans-serif" font-size="28" font-weight="700" letter-spacing="-0.5">
+    <tspan fill="url(#redGrad)">R</tspan><tspan fill="white" class="dark-text">builder</tspan>
+  </text>
+
+  <style>
+    @media (prefers-color-scheme: light) {
+      .dark-text { fill: black !important; }
+    }
+  </style>
 </svg>
