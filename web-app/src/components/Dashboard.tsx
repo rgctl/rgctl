@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+
 import {
   Table,
   TableBody,
@@ -78,10 +79,8 @@ export function Dashboard() {
 
   if (loading) {
     return (
-      <div className="p-6 overflow-y-auto h-full">
-        <div>
-          <p className="text-muted-foreground">Loading dashboard...</p>
-        </div>
+      <div className="p-8 overflow-y-auto h-full bg-background">
+        <p className="text-muted-foreground">Loading dashboard...</p>
       </div>
     );
   }
@@ -101,8 +100,8 @@ export function Dashboard() {
               <CardDescription>Total Nodes</CardDescription>
               <CardTitle className="text-3xl font-bold">{stats?.node_count || 0}</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="text-xs text-muted-foreground">Graph entities</div>
+            <CardContent className="text-xs text-muted-foreground">
+              Graph entities
             </CardContent>
           </Card>
 
@@ -111,8 +110,8 @@ export function Dashboard() {
               <CardDescription>Total Edges</CardDescription>
               <CardTitle className="text-3xl font-bold">{stats?.edge_count || 0}</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="text-xs text-muted-foreground">Relationships</div>
+            <CardContent className="text-xs text-muted-foreground">
+              Relationships
             </CardContent>
           </Card>
 
@@ -121,8 +120,8 @@ export function Dashboard() {
               <CardDescription>Functions</CardDescription>
               <CardTitle className="text-3xl font-bold">{stats?.function_count || 0}</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="text-xs text-muted-foreground">Total functions</div>
+            <CardContent className="text-xs text-muted-foreground">
+              Total functions
             </CardContent>
           </Card>
 
@@ -131,8 +130,8 @@ export function Dashboard() {
               <CardDescription>Avg Complexity</CardDescription>
               <CardTitle className="text-3xl font-bold">{(stats?.avg_complexity || 0).toFixed(1)}</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="text-xs text-muted-foreground">Cyclomatic complexity</div>
+            <CardContent className="text-xs text-muted-foreground">
+              Cyclomatic complexity
             </CardContent>
           </Card>
         </div>
@@ -207,21 +206,17 @@ export function Dashboard() {
             <CardTitle>Code Communities</CardTitle>
             <CardDescription>Module clusters detected by graph analysis</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="flex flex-col gap-2">
-              {communities.length > 0 ? (
-                <>
-                  {communities.slice(0, 10).map((c) => (
-                    <div key={c.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                      <span className="text-sm font-medium">Community {c.id}</span>
-                      <Badge variant="secondary">{c.member_count} members</Badge>
-                    </div>
-                  ))}
-                </>
-              ) : (
-                <div className="text-sm text-muted-foreground">No communities detected</div>
-              )}
-            </div>
+          <CardContent className="flex flex-col gap-2">
+            {communities.length > 0 ? (
+              communities.slice(0, 10).map((c) => (
+                <div key={c.id} className="flex items-center justify-between py-2 border-b last:border-0">
+                  <span className="text-sm font-medium">Community {c.id}</span>
+                  <Badge variant="secondary">{c.member_count} members</Badge>
+                </div>
+              ))
+            ) : (
+              <div className="text-sm text-muted-foreground">No communities detected</div>
+            )}
           </CardContent>
         </Card>
 
