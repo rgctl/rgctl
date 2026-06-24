@@ -34,6 +34,10 @@ export function GraphBrowser() {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [gqlQuery, setGqlQuery] = useState('');
+  const [gqlMacro, setGqlMacro] = useState('');
+  const [gqlMode, setGqlMode] = useState<'query' | 'macro'>('query');
+  const [gqlExplain, setGqlExplain] = useState(false);
+  const [gqlVerbose, setGqlVerbose] = useState(false);
   const [gqlResult, setGqlResult] = useState<any>(null);
   const [gqlLoading, setGqlLoading] = useState(false);
 
@@ -275,18 +279,65 @@ export function GraphBrowser() {
 
         <div className="mt-6 pt-6 border-t">
           <h3 className="text-sm font-semibold mb-3">GQL Query</h3>
-          <div className="space-y-2">
-            <Input
-              placeholder="type:Function"
-              value={gqlQuery}
-              onChange={(e) => setGqlQuery(e.target.value)}
-              className="text-xs font-mono"
-            />
+          <div className="space-y-3">
+            <Select value={gqlMode} onValueChange={(v) => setGqlMode(v as 'query' | 'macro')}>
+              <SelectTrigger className="text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="query">Direct Query</SelectItem>
+                <SelectItem value="macro">Named Macro</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {gqlMode === 'query' ? (
+              <Input
+                placeholder="type:Function AND label:public"
+                value={gqlQuery}
+                onChange={(e) => setGqlQuery(e.target.value)}
+                className="text-xs font-mono"
+              />
+            ) : (
+              <Input
+                placeholder="Macro name"
+                value={gqlMacro}
+                onChange={(e) => setGqlMacro(e.target.value)}
+                className="text-xs"
+              />
+            )}
+
+            <div className="flex items-center gap-3 text-xs">
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={gqlExplain}
+                  onChange={(e) => setGqlExplain(e.target.checked)}
+                  className="rounded"
+                />
+                <span>Explain</span>
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={gqlVerbose}
+                  onChange={(e) => setGqlVerbose(e.target.checked)}
+                  className="rounded"
+                />
+                <span>Verbose</span>
+              </label>
+            </div>
+
             <Button
               onClick={async () => {
                 setGqlLoading(true);
                 try {
-                  const result = await api.executeGqlQuery({ query: gqlQuery });
+                  const params: any = {
+                    query: gqlMode === 'query' ? gqlQuery : undefined,
+                    macro_name: gqlMode === 'macro' ? gqlMacro : undefined,
+                    explain: gqlExplain,
+                    verbose: gqlVerbose,
+                  };
+                  const result = await api.executeGqlQuery(params);
                   setGqlResult(result);
                 } catch (error) {
                   console.error('GQL error:', error);
@@ -295,31 +346,46 @@ export function GraphBrowser() {
                   setGqlLoading(false);
                 }
               }}
-              disabled={!gqlQuery || gqlLoading}
+              disabled={(gqlMode === 'query' ? !gqlQuery : !gqlMacro) || gqlLoading}
               className="w-full"
               size="sm"
             >
               {gqlLoading ? 'Running...' : 'Execute'}
             </Button>
+
             {gqlResult && (
-              <div className="mt-2 p-2 bg-muted rounded text-xs">
+              <div className="mt-2 p-2 bg-muted rounded text-xs space-y-2">
                 {gqlResult.error ? (
                   <div className="text-destructive">{gqlResult.error}</div>
                 ) : (
-                  <div>
-                    <div className="font-semibold mb-1">{gqlResult.row_count} results</div>
-                    <div className="max-h-40 overflow-y-auto">
-                      {gqlResult.rows.slice(0, 10).map((row: any, i: number) => (
+                  <>
+                    <div className="font-semibold">{gqlResult.row_count} results</div>
+
+                    {gqlResult.explain && (
+                      <div className="border-t pt-2">
+                        <div className="font-semibold mb-1">Execution Plan:</div>
+                        <div className="space-y-1">
+                          {gqlResult.explain.map((step: any, i: number) => (
+                            <div key={i} className="text-muted-foreground">
+                              {i + 1}. {step.operation}: {step.detail}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="max-h-40 overflow-y-auto border-t pt-2">
+                      {gqlResult.rows.map((row: any, i: number) => (
                         <div key={i} className="border-b py-1 last:border-0">
                           {Object.entries(row).map(([key, val]: [string, any]) => (
                             <div key={key}>
-                              <span className="text-muted-foreground">{key}:</span> {val.name}
+                              <span className="text-muted-foreground">{key}:</span> {val}
                             </div>
                           ))}
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </>
                 )}
               </div>
             )}
