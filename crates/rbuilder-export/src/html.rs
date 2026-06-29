@@ -69,17 +69,14 @@ pub fn export_html_dashboard(
                         analysis_data = json!(summaries);
 
                         // Also extract functions with interesting dataflows for visualization
-                        dataflow_functions = analyses.iter()
+                        // Collect functions with taint first, then others
+                        let mut taint_funcs: Vec<_> = analyses.iter()
                             .filter(|a| {
-                                let has_data = a.get("pdg")
-                                    .and_then(|p| p.get("data_deps"))
-                                    .and_then(|d| d.as_array())
-                                    .map(|d| !d.is_empty())
-                                    .unwrap_or(false);
-                                let has_cfg = a.get("cfg").is_some();
-                                has_data || has_cfg
+                                a.get("taint")
+                                    .and_then(|t| t.as_array())
+                                    .map(|t| !t.is_empty())
+                                    .unwrap_or(false)
                             })
-                            .take(50) // Limit to first 50 functions with dataflows
                             .map(|a| {
                                 json!({
                                     "function_id": a.get("function_id"),
@@ -92,6 +89,41 @@ pub fn export_html_dashboard(
                                 })
                             })
                             .collect();
+
+                        // Add functions with PDG/CFG data (up to 100 total)
+                        let remaining = 100 - taint_funcs.len().min(100);
+                        let mut other_funcs: Vec<_> = analyses.iter()
+                            .filter(|a| {
+                                let has_taint = a.get("taint")
+                                    .and_then(|t| t.as_array())
+                                    .map(|t| !t.is_empty())
+                                    .unwrap_or(false);
+                                if has_taint { return false; } // Skip already added
+
+                                let has_data = a.get("pdg")
+                                    .and_then(|p| p.get("data_deps"))
+                                    .and_then(|d| d.as_array())
+                                    .map(|d| !d.is_empty())
+                                    .unwrap_or(false);
+                                let has_cfg = a.get("cfg").is_some();
+                                has_data || has_cfg
+                            })
+                            .take(remaining)
+                            .map(|a| {
+                                json!({
+                                    "function_id": a.get("function_id"),
+                                    "function_name": a.get("function_name"),
+                                    "file_path": a.get("file_path"),
+                                    "cfg": a.get("cfg"),
+                                    "pdg": a.get("pdg"),
+                                    "dominance": a.get("dominance"),
+                                    "taint": a.get("taint"),
+                                })
+                            })
+                            .collect();
+
+                        taint_funcs.append(&mut other_funcs);
+                        dataflow_functions = taint_funcs;
                     }
                 }
             }
@@ -996,7 +1028,7 @@ fn generate_html_template(
         }};
 
         const analysisData = {analysis_json};
-        const dataflowData = {dataflow_json};
+        const dataflowFunctions = {dataflow_json};
 
         // Initialize visualization
         let simulation;
