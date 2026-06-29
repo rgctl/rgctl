@@ -1367,6 +1367,120 @@ fn run_full_analysis(
     }
     println!("  Potential secrets found: {total_secrets}");
 
+    // CFG/PDG/Dominance analysis (default)
+    println!("\n✓ Control flow analysis:");
+    use rbuilder::analysis::{
+        build_cfg_for_function, AnalysisStorage, DominatorTree, FunctionAnalysis,
+        ProgramDependenceGraph,
+    };
+    use rbuilder_graph::schema::NodeType;
+
+    let output_dir = root.join(".rbuilder/analysis");
+    let storage = AnalysisStorage::new(&output_dir);
+    storage.ensure_dir()?;
+
+    // Find all function nodes
+    let backend = graph.backend();
+    let functions: Vec<_> = backend
+        .all_nodes()?
+        .into_iter()
+        .filter(|n| n.node_type == NodeType::Function)
+        .collect();
+
+    let mut success_count = 0;
+    let mut error_count = 0;
+
+    for func_node in &functions {
+        // Get function source
+        let file_path = match &func_node.file_path {
+            Some(p) => p,
+            None => {
+                error_count += 1;
+                continue;
+            }
+        };
+
+        let source = match std::fs::read_to_string(file_path) {
+            Ok(s) => s,
+            Err(_) => {
+                error_count += 1;
+                continue;
+            }
+        };
+
+        // Determine language from file extension
+        let lang = if file_path.ends_with(".rs") {
+            "rust"
+        } else if file_path.ends_with(".py") {
+            "python"
+        } else {
+            // Skip unsupported languages for CFG
+            error_count += 1;
+            continue;
+        };
+
+        // Build CFG
+        let cfg_result = build_cfg_for_function(lang, &source, &func_node.name);
+
+        let cfg_data = match cfg_result {
+            Ok(c) => Some(c),
+            Err(_) => {
+                error_count += 1;
+                continue;
+            }
+        };
+
+        // Build PDG
+        let pdg_data = if let Some(ref cfg) = cfg_data {
+            match ProgramDependenceGraph::build(cfg, source.as_bytes()) {
+                Ok(p) => Some(p),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        // Build Dominance
+        let dom_data = if let Some(ref cfg) = cfg_data {
+            Some(DominatorTree::build(cfg))
+        } else {
+            None
+        };
+
+        // Store analysis
+        let analysis = FunctionAnalysis {
+            function_id: func_node.id,
+            function_name: func_node.name.clone(),
+            file_path: file_path.clone(),
+            cfg: cfg_data,
+            pdg: pdg_data,
+            dominance: dom_data,
+        };
+
+        if storage.save_function(&analysis).is_ok() {
+            success_count += 1;
+        } else {
+            error_count += 1;
+        }
+    }
+
+    if success_count > 0 {
+        println!("  CFG/PDG/Dominance: {} functions analyzed", success_count);
+        if error_count > 0 {
+            println!("  Skipped: {} functions (unsupported language or parse error)", error_count);
+        }
+
+        // Export consolidated file
+        let export_path = output_dir.join("all_analyses.json");
+        if storage.export_all(&export_path).is_ok() {
+            if verbose {
+                println!("  Exported to {}", export_path.display());
+            }
+        }
+    } else if !functions.is_empty() {
+        println!("  No functions analyzed (Rust/Python only)");
+    }
+
     println!("\n=== Analysis Complete ===");
 
     // Save graph with analysis results
