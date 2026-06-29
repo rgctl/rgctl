@@ -1074,7 +1074,7 @@ fn run_full_analysis(
     watch: bool,
     verbose: bool,
 ) -> anyhow::Result<()> {
-    use rbuilder::analysis::{CentralityAnalyzer, ComplexityAnalyzer, DependencyAnalyzer};
+    use rbuilder::analysis::{CentralityAnalyzer, CommunityDetector, ComplexityAnalyzer, DependencyAnalyzer};
     use rbuilder::config::secret_detector::SecretDetector;
     use rbuilder::discovery::{DiscoveryConfig, FileDiscoverer};
     use rbuilder::incremental::FileTracker;
@@ -1120,15 +1120,7 @@ fn run_full_analysis(
     );
 
     // Index the repository
-    let (graph, stats) = pipeline.process_repository(root)?;
-    let saved = graph.save_to_repo(root)?;
-
-    // Update file tracker
-    let mut tracker = FileTracker::new(root);
-    let discoverer = FileDiscoverer::with_config(Arc::clone(&registry), discovery_config);
-    let files = discoverer.discover(root)?;
-    tracker.index_files(&files, &graph)?;
-    tracker.save()?;
+    let (mut graph, stats) = pipeline.process_repository(root)?;
 
     println!("\n=== Indexing Complete ===");
     println!("Processed {} files", stats.files_processed);
@@ -1138,25 +1130,40 @@ fn run_full_analysis(
     println!("Created {} nodes", stats.nodes_created);
     println!("Created {} edges", stats.edges_created);
     println!("Time: {:.2}s", stats.duration.as_secs_f64());
-    println!("Graph saved to {}", saved.display());
 
-    // Run all analyses
-    let backend = graph.backend();
-    let matcher = PatternMatcher::new();
-
+    // Run analyses and persist results BEFORE saving
     println!("\n=== Running Analyses ===");
 
     // Community detection
+    let community_result = CommunityDetector::new().detect(graph.backend_mut())?;
+    // Persist community assignments
+    for (node_id, community_id) in &community_result.assignments {
+        if let Ok(Some(mut node)) = graph.backend().get_node(*node_id) {
+            node.properties
+                .insert("community".to_string(), community_id.to_string());
+            graph.backend_mut().insert_node(node)?;
+        }
+    }
     if verbose {
         println!("\nCommunity detection:");
-        println!("{}", matcher.analyze_communities(backend)?);
+        println!("  Communities: {}", community_result.communities.len());
+        println!("  Modularity: {:.3}", community_result.modularity);
     } else {
-        matcher.analyze_communities(backend)?;
-        println!("✓ Community detection complete");
+        println!("✓ Community detection complete ({} communities)", community_result.communities.len());
     }
 
     // Complexity analysis
-    let complexity_report = ComplexityAnalyzer::analyze(backend)?;
+    let complexity_report = ComplexityAnalyzer::analyze(graph.backend())?;
+    // Persist complexity metrics
+    for func in &complexity_report.functions {
+        if let Ok(Some(mut node)) = graph.backend().get_node(func.node.id) {
+            node.properties
+                .insert("cyclomatic".to_string(), func.cyclomatic.to_string());
+            node.properties
+                .insert("cognitive".to_string(), func.cognitive.to_string());
+            graph.backend_mut().insert_node(node)?;
+        }
+    }
     println!("\n✓ Complexity analysis:");
     println!("  Functions: {}", complexity_report.functions.len());
     println!("  Avg cyclomatic: {:.1}", complexity_report.avg_cyclomatic);
@@ -1166,19 +1173,33 @@ fn run_full_analysis(
     }
 
     // Centrality analysis
-    let centrality_report = CentralityAnalyzer::new().analyze(backend)?;
+    let centrality_report = CentralityAnalyzer::new().analyze(graph.backend_mut())?;
+    // Persist centrality scores
+    for (node_id, scores) in &centrality_report.scores {
+        if let Ok(Some(mut node)) = graph.backend().get_node(*node_id) {
+            node.properties
+                .insert("pagerank".to_string(), scores.pagerank.to_string());
+            node.properties
+                .insert("betweenness".to_string(), scores.betweenness.to_string());
+            graph.backend_mut().insert_node(node)?;
+        }
+    }
     println!("\n✓ Centrality analysis:");
     println!("  Top hotspots by PageRank:");
     for (id, score) in centrality_report.top_pagerank.iter().take(5) {
-        if let Ok(Some(node)) = backend.get_node(*id) {
+        if let Ok(Some(node)) = graph.backend().get_node(*id) {
             println!("    - {} ({:.4})", node.name, score);
         }
     }
 
     // Dependency analysis
-    let cycles = DependencyAnalyzer::find_circular_dependencies(backend)?;
+    let cycles = DependencyAnalyzer::find_circular_dependencies(graph.backend())?;
     println!("\n✓ Dependency analysis:");
     println!("  Circular dependencies: {}", cycles.len());
+
+    // Discover files for security analysis and later tracking
+    let discoverer = FileDiscoverer::with_config(Arc::clone(&registry), discovery_config);
+    let files = discoverer.discover(root)?;
 
     // Security analysis
     println!("\n✓ Security analysis:");
@@ -1207,6 +1228,14 @@ fn run_full_analysis(
     println!("  Potential secrets found: {total_secrets}");
 
     println!("\n=== Analysis Complete ===");
+
+    // Save graph with analysis results
+    let mut tracker = FileTracker::new(root);
+    tracker.index_files(&files, &graph)?;
+    tracker.save()?;
+
+    let saved = graph.save_to_repo(root)?;
+    println!("\nGraph with analysis results saved to {}", saved.display());
     println!("\nNext steps:");
     println!("  - Query: rbuilder ask \"your question\"");
     println!("  - GQL: rbuilder gql \"your query\"");
