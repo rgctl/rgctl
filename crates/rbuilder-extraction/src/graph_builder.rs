@@ -191,8 +191,16 @@ impl GraphBuilder {
 
     /// Add a relation between symbols if both endpoints exist.
     pub fn add_relation(&mut self, relation: &Relation) -> Result<()> {
-        let from_id = self.resolve_symbol(&relation.from, &relation.location.file);
-        let to_id = self.resolve_symbol(&relation.to, &relation.location.file);
+        let from_id = self.resolve_symbol(&relation.from, &relation.location.file, None, None);
+
+        // Use hints for cross-file resolution (best-effort)
+        // Hints are language plugin's best guess at the qualified name based on local context
+        let to_id = self.resolve_symbol(
+            &relation.to,
+            &relation.location.file,
+            relation.to_qualified_hint.as_deref(),
+            relation.to_type_hint.as_deref(),
+        );
 
         if let (Some(from), Some(to)) = (from_id, to_id) {
             self.add_edge(from, to, relation_type_to_edge_type(relation.relation_type));
@@ -265,14 +273,62 @@ impl GraphBuilder {
             .map(|n| n.id)
     }
 
-    fn resolve_symbol(&self, name: &str, file: &str) -> Option<Uuid> {
+    /// Resolve a symbol name to its UUID.
+    ///
+    /// Resolution strategy (in order):
+    /// 1. Try exact match in current file: `{file}::{name}`
+    /// 2. If qualified_hint provided, try: `*::{qualified_hint}` (e.g., "Helper.transform")
+    /// 3. If type_hint provided, try: `*::{type_hint}.{simple_name}` (e.g., "Helper.transform")
+    /// 4. Fallback to fuzzy match: any key ending with `::{name}`
+    ///
+    /// Hints are best-effort guesses from language plugins based on local context
+    /// (variable types, field declarations, etc.) and may not always be accurate.
+    fn resolve_symbol(
+        &self,
+        name: &str,
+        file: &str,
+        qualified_hint: Option<&str>,
+        type_hint: Option<&str>,
+    ) -> Option<Uuid> {
+        // 1. Try exact match in current file
         let qualified = format!("{file}::{name}");
         if let Some(id) = self.symbol_index.get(&qualified) {
             return Some(*id);
         }
+
+        // 2. Try qualified hint (e.g., "Helper.transform")
+        if let Some(hint) = qualified_hint {
+            // Look for any key ending with the hint
+            let hint_suffix = format!("::{hint}");
+            if let Some((_, id)) = self
+                .symbol_index
+                .iter()
+                .find(|(k, _)| k.ends_with(&hint_suffix))
+            {
+                return Some(*id);
+            }
+        }
+
+        // 3. Try type hint + simple name
+        if let Some(type_name) = type_hint {
+            // Extract simple name from qualified name if needed
+            let simple_name = name.split('.').last().unwrap_or(name);
+            let type_qualified = format!("{type_name}.{simple_name}");
+            let hint_suffix = format!("::{type_qualified}");
+            if let Some((_, id)) = self
+                .symbol_index
+                .iter()
+                .find(|(k, _)| k.ends_with(&hint_suffix))
+            {
+                return Some(*id);
+            }
+        }
+
+        // 4. Fallback: fuzzy match any key ending with the name
+        let fuzzy_suffix = format!("::{name}");
         self.symbol_index
             .iter()
-            .find(|(k, _)| k.ends_with(&format!("::{name}")))
+            .find(|(k, _)| k.ends_with(&fuzzy_suffix))
             .map(|(_, id)| *id)
     }
 

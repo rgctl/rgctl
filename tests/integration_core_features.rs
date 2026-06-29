@@ -412,7 +412,6 @@ fn test_analysis_persistence_complexity() {
 }
 
 #[test]
-#[ignore] // TODO: Cross-file method call resolution needs qualified name support in symbol_index
 fn test_call_graph_usability() {
     let repo = create_java_test_repo();
     let registry = Arc::new(rbuilder_bundle_full::default_registry());

@@ -240,7 +240,9 @@ impl PuppetParser {
                     relation_type: RelationType::DependsOnModule,
                     location: Self::loc(file, 1),
                     metadata: json!({}),
-                });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
             }
         }
 
@@ -329,7 +331,9 @@ impl PuppetParser {
                 relation_type: RelationType::Defines,
                 location: Self::loc(file, line),
                 metadata: json!({}),
-            });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
 
             self.extract_resources_from_body(
                 file,
@@ -376,7 +380,9 @@ impl PuppetParser {
             relation_type: RelationType::Defines,
             location: Self::loc(file, line),
             metadata: json!({}),
-        });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
 
         if let Some(parent) = inherits {
             let parent_id = Self::class_id(parent);
@@ -399,7 +405,9 @@ impl PuppetParser {
                 relation_type: RelationType::InheritsClass,
                 location: Self::loc(file, line),
                 metadata: json!({}),
-            });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
         }
 
         for included in self.extract_includes(body) {
@@ -423,7 +431,9 @@ impl PuppetParser {
                 relation_type: RelationType::IncludesClass,
                 location: Self::loc(file, line),
                 metadata: json!({}),
-            });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
         }
 
         for cap in self.variable_regex.captures_iter(body) {
@@ -513,6 +523,8 @@ impl PuppetParser {
                         relation_type: RelationType::DeclaresResource,
                         location: Self::loc(file, base_line + i),
                         metadata: json!({}),
+                        to_qualified_hint: None,
+                        to_type_hint: None,
                     });
                     for n in notify {
                         if let Some(target) = self.parse_resource_ref(&n, owner_id) {
@@ -522,7 +534,9 @@ impl PuppetParser {
                                 relation_type: RelationType::NotifiesResource,
                                 location: Self::loc(file, base_line + i),
                                 metadata: json!({}),
-                            });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
                         }
                     }
                     for r in require {
@@ -533,7 +547,9 @@ impl PuppetParser {
                                 relation_type: RelationType::RequiresResource,
                                 location: Self::loc(file, base_line + i),
                                 metadata: json!({}),
-                            });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
                         }
                     }
                 }
@@ -581,7 +597,9 @@ impl PuppetParser {
                 relation_type: RelationType::UsesFact,
                 location: Self::loc(file, line),
                 metadata: json!({}),
-            });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
         }
     }
 
@@ -744,3 +762,4 @@ class nginx ($port = 80) {
         let (_symbols, _relations) = parser.parse("test.pp", malformed);
     }
 }
+

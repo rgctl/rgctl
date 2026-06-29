@@ -289,18 +289,25 @@ impl JavaPlugin {
                     let simple_name = method_name_node.utf8_text(source).unwrap_or("").to_string();
 
                     if !simple_name.is_empty() {
-                        // Try to find the qualified name from symbols
-                        // Look for any method with this simple name
-                        let to_method = symbols
+                        // Try to find the qualified name from symbols in this file
+                        let local_qualified = symbols
                             .iter()
                             .find(|s| s.name == simple_name && s.symbol_type == SymbolType::Function)
                             .and_then(|s| s.qualified_name.as_ref())
-                            .cloned()
-                            .unwrap_or(simple_name.clone());
+                            .cloned();
+
+                        // Best-effort: try to infer the target class from the object
+                        // For example: helper.transform() → infer "Helper" class
+                        let (to_qualified_hint, to_type_hint) = if let Some(object_node) = node.child_by_field_name("object") {
+                            let result = self.infer_method_target(object_node, &simple_name, source, node);
+                            result
+                        } else {
+                            (None, None)
+                        };
 
                         relations.push(Relation {
                             from: from_method.clone(),
-                            to: to_method,
+                            to: local_qualified.unwrap_or(simple_name.clone()),
                             relation_type: RelationType::Calls,
                             location: SourceLocation {
                                 file: file_path.to_string_lossy().to_string(),
@@ -310,6 +317,8 @@ impl JavaPlugin {
                                 end_column: node.end_position().column,
                             },
                             metadata: serde_json::json!({ "language": "java" }),
+                            to_qualified_hint,
+                            to_type_hint,
                         });
                     }
                 }
@@ -359,6 +368,8 @@ impl JavaPlugin {
                                     end_column: child.end_position().column,
                                 },
                                 metadata: serde_json::json!({ "language": "java" }),
+                                to_qualified_hint: None,
+                                to_type_hint: None,
                             });
                         }
                     }
@@ -388,6 +399,8 @@ impl JavaPlugin {
                                             end_column: type_node.end_position().column,
                                         },
                                         metadata: serde_json::json!({ "language": "java" }),
+                                        to_qualified_hint: None,
+                                        to_type_hint: None,
                                     });
                                 }
                             }
@@ -412,6 +425,8 @@ impl JavaPlugin {
                                     end_column: interface_node.end_position().column,
                                 },
                                 metadata: serde_json::json!({ "language": "java" }),
+                                to_qualified_hint: None,
+                                to_type_hint: None,
                             });
                         }
                     }
@@ -494,6 +509,178 @@ impl JavaPlugin {
             line: node.start_position().row + 1,
             message: "Class missing name".to_string(),
         })
+    }
+
+    /// Best-effort attempt to infer the target class for a method call.
+    ///
+    /// For example, given `helper.transform()`:
+    /// - Looks for a field/variable named "helper"
+    /// - Extracts its type (e.g., "Helper")
+    /// - Returns ("Helper.transform", "Helper")
+    ///
+    /// This is a heuristic and may not always be accurate:
+    /// - Doesn't follow type inference through assignments
+    /// - Doesn't resolve imports to fully qualified names
+    /// - Assumes simple field/variable declarations
+    fn infer_method_target(
+        &self,
+        object_node: Node,
+        method_name: &str,
+        source: &[u8],
+        call_site: Node,
+    ) -> (Option<String>, Option<String>) {
+        // Get the object name (e.g., "helper" from "helper.transform()")
+        let object_name = match object_node.utf8_text(source) {
+            Ok(name) => name,
+            Err(_) => {
+                return (None, None);
+            }
+        };
+
+        // Look for field declaration or variable declaration with this name
+        // Walk up to the containing class
+        let containing_class = self.find_containing_class_node(call_site);
+
+        if let Some(class_node) = containing_class {
+            // Look for field declarations in the class
+            if let Some(type_name) = self.find_field_type(class_node, object_name, source) {
+                let qualified_hint = format!("{}.{}", type_name, method_name);
+                return (Some(qualified_hint), Some(type_name));
+            } else {
+            }
+        }
+
+        // Fallback: check for local variable declarations
+        if let Some(type_name) = self.find_local_variable_type(call_site, object_name, source) {
+            let qualified_hint = format!("{}.{}", type_name, method_name);
+            return (Some(qualified_hint), Some(type_name));
+        }
+
+        (None, None)
+    }
+
+    /// Find the class_declaration node containing the given node
+    fn find_containing_class_node<'a>(&self, node: Node<'a>) -> Option<Node<'a>> {
+        let mut current = node;
+        while let Some(parent) = current.parent() {
+            if parent.kind() == "class_declaration" {
+                return Some(parent);
+            }
+            current = parent;
+        }
+        None
+    }
+
+    /// Find the type of a field in a class
+    /// For example: `private Helper helper = new Helper();` → returns "Helper"
+    fn find_field_type(&self, class_node: Node, field_name: &str, source: &[u8]) -> Option<String> {
+
+        // Find the class_body node first
+        let mut cursor = class_node.walk();
+        let class_body = class_node.children(&mut cursor).find(|child| child.kind() == "class_body");
+
+        let Some(class_body) = class_body else {
+            return None;
+        };
+
+
+        // Now search inside the class_body for field_declaration nodes
+        let mut body_cursor = class_body.walk();
+        for child in class_body.children(&mut body_cursor) {
+            if child.kind() == "field_declaration" {
+                // Look for the type and declarator
+                let mut field_cursor = child.walk();
+                let mut type_name = None;
+                let mut found_field = false;
+
+                for field_child in child.children(&mut field_cursor) {
+
+                    // Extract the type
+                    if field_child.kind() == "type_identifier" || field_child.kind() == "generic_type" {
+                        type_name = field_child.utf8_text(source).ok().map(|s| {
+                            // Remove generics if present (e.g., "List<String>" → "List")
+                            s.split('<').next().unwrap_or(s).to_string()
+                        });
+                    }
+
+                    // Check if this is the field we're looking for
+                    if field_child.kind() == "variable_declarator" {
+                        if let Some(name_node) = field_child.child_by_field_name("name") {
+                            if let Ok(name) = name_node.utf8_text(source) {
+                                if name == field_name {
+                                    found_field = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if found_field && type_name.is_some() {
+                    return type_name;
+                }
+            }
+        }
+        None
+    }
+
+    /// Find the type of a local variable
+    /// For example: `Helper h = ...; h.transform()` → returns "Helper"
+    fn find_local_variable_type(&self, start_node: Node, var_name: &str, source: &[u8]) -> Option<String> {
+        // Walk up to find the containing method
+        let mut current = start_node;
+        while let Some(parent) = current.parent() {
+            if parent.kind() == "method_declaration" || parent.kind() == "constructor_declaration" {
+                // Search for local_variable_declaration in this method
+                return self.search_local_variables(parent, var_name, source);
+            }
+            current = parent;
+        }
+        None
+    }
+
+    /// Search for local variable declarations in a method
+    fn search_local_variables(&self, method_node: Node, var_name: &str, source: &[u8]) -> Option<String> {
+        fn search_recursive(node: Node, var_name: &str, source: &[u8]) -> Option<String> {
+            if node.kind() == "local_variable_declaration" {
+                let mut type_name = None;
+                let mut found_var = false;
+
+                let mut local_cursor = node.walk();
+                for child in node.children(&mut local_cursor) {
+                    if child.kind() == "type_identifier" || child.kind() == "generic_type" {
+                        type_name = child.utf8_text(source).ok().map(|s| {
+                            s.split('<').next().unwrap_or(s).to_string()
+                        });
+                    }
+
+                    if child.kind() == "variable_declarator" {
+                        if let Some(name_node) = child.child_by_field_name("name") {
+                            if let Ok(name) = name_node.utf8_text(source) {
+                                if name == var_name {
+                                    found_var = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if found_var && type_name.is_some() {
+                    return type_name;
+                }
+            }
+
+            // Recurse into children
+            let mut child_cursor = node.walk();
+            for child in node.children(&mut child_cursor) {
+                if let Some(result) = search_recursive(child, var_name, source) {
+                    return Some(result);
+                }
+            }
+
+            None
+        }
+
+        search_recursive(method_node, var_name, source)
     }
 }
 
@@ -601,3 +788,4 @@ public class Example {
         );
     }
 }
+

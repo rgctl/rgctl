@@ -181,6 +181,19 @@ pub struct Relation {
 
     /// Additional metadata
     pub metadata: serde_json::Value,
+
+    /// Best-effort hint for target's qualified name (e.g., "Helper.transform")
+    /// Used for cross-file symbol resolution when `to` is a simple name.
+    /// This is a best-effort guess based on local context (variable types, imports, etc.)
+    /// and may not always be accurate. The graph builder will fall back to fuzzy matching
+    /// if the hint doesn't resolve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_qualified_hint: Option<String>,
+
+    /// Best-effort hint for target's containing type/class (e.g., "Helper")
+    /// Used when we can infer the class from variable type but not the full qualified name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_type_hint: Option<String>,
 }
 
 /// Type of relationship between symbols

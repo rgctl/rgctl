@@ -201,6 +201,8 @@ impl AnsibleParser {
                         relation_type: RelationType::IncludesPlaybook,
                         location: Self::loc(file, 1),
                         metadata: json!({}),
+                        to_qualified_hint: None,
+                        to_type_hint: None,
                     });
                     continue;
                 }
@@ -314,7 +316,9 @@ impl AnsibleParser {
                 relation_type: RelationType::IncludesRole,
                 location: Self::loc(file, 1),
                 metadata: json!({}),
-            });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
         }
     }
 
@@ -390,7 +394,9 @@ impl AnsibleParser {
                     relation_type: RelationType::IncludesRole,
                     location: Self::loc(file, 1),
                     metadata: json!({}),
-                });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
             }
             return;
         }
@@ -434,7 +440,9 @@ impl AnsibleParser {
             relation_type: RelationType::ExecutesTask,
             location: Self::loc(file, 1),
             metadata: json!({}),
-        });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
 
         let notify_targets = collect_notify(task_val);
         for handler in notify_targets {
@@ -444,6 +452,8 @@ impl AnsibleParser {
                 relation_type: RelationType::NotifiesHandler,
                 location: Self::loc(file, 1),
                 metadata: json!({ "handler": handler }),
+                to_qualified_hint: None,
+                to_type_hint: None,
             });
         }
 
@@ -471,7 +481,9 @@ impl AnsibleParser {
                 relation_type: RelationType::UsesVariable,
                 location: Self::loc(file, 1),
                 metadata: json!({}),
-            });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
         }
 
         if module == "template" {
@@ -486,7 +498,9 @@ impl AnsibleParser {
                     relation_type: RelationType::RendersTemplate,
                     location: Self::loc(file, 1),
                     metadata: json!({}),
-                });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
             }
         }
     }
@@ -548,7 +562,9 @@ impl AnsibleParser {
                     relation_type: RelationType::DependsOnRole,
                     location: Self::loc(file, 1),
                     metadata: json!({}),
-                });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
             }
         }
 
@@ -628,7 +644,9 @@ impl AnsibleParser {
                 relation_type: RelationType::Defines,
                 location: Self::loc(file, 1),
                 metadata: json!({}),
-            });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
         }
         (symbols, relations)
     }
@@ -679,7 +697,9 @@ impl AnsibleParser {
                 relation_type: RelationType::UsesVariable,
                 location: Self::loc(file, 1),
                 metadata: json!({}),
-            });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
         }
 
         (symbols, relations)
@@ -803,3 +823,4 @@ dependencies:
         assert_eq!(relations.len(), 2);
     }
 }
+

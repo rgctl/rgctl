@@ -180,6 +180,8 @@ impl LanguagePlugin for SqlPlugin {
                         relation_type: RelationType::References,
                         location: Self::loc(&file, line_no + 1),
                         metadata: serde_json::json!({}),
+                        to_qualified_hint: None,
+                        to_type_hint: None,
                     });
                 }
             }
@@ -255,3 +257,4 @@ CREATE UNIQUE INDEX users_email_idx ON users (email);
         assert!(users.fields.iter().any(|f| f.name == "users_email_idx"));
     }
 }
+

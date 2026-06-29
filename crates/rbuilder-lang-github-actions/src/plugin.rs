@@ -89,6 +89,8 @@ impl GithubActionsPlugin {
                         relation_type: RelationType::DependsOn,
                         location: Self::loc(file, 1),
                         metadata: serde_json::json!({}),
+                        to_qualified_hint: None,
+                        to_type_hint: None,
                     });
                 }
             }
@@ -190,3 +192,4 @@ jobs:
             .any(|r| r.relation_type == RelationType::DependsOn));
     }
 }
+

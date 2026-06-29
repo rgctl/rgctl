@@ -124,7 +124,9 @@ impl LanguagePlugin for DockerfilePlugin {
                     relation_type: RelationType::Uses,
                     location: sym.location.clone(),
                     metadata: serde_json::json!({}),
-                });
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
             }
         }
         let _ = (file, text, symbols);
@@ -164,3 +166,4 @@ mod tests {
         assert_eq!(deps[0].name, "rust:1.75");
     }
 }
+

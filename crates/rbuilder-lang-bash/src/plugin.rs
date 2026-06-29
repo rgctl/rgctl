@@ -75,6 +75,8 @@ impl LanguagePlugin for BashPlugin {
                             end_column: 0,
                         },
                         metadata: serde_json::json!({ "kind": "source" }),
+                        to_qualified_hint: None,
+                        to_type_hint: None,
                     });
                 }
             }
@@ -107,3 +109,4 @@ mod tests {
         assert_eq!(symbols[0].name, "deploy");
     }
 }
+
