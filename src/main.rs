@@ -1618,6 +1618,16 @@ fn run_full_analysis(
                 report.data_flow_depth.to_string(),
             );
 
+            // Store caller IDs as JSON arrays for visualization
+            node.properties.insert(
+                "blast_radius_direct_caller_ids".to_string(),
+                serde_json::to_string(&report.direct_caller_ids).unwrap_or_else(|_| "[]".to_string()),
+            );
+            node.properties.insert(
+                "blast_radius_impact_zone_ids".to_string(),
+                serde_json::to_string(&report.impact_zone_ids).unwrap_or_else(|_| "[]".to_string()),
+            );
+
             if graph.backend_mut().insert_node(node).is_ok() {
                 analyzed_functions += 1;
             }

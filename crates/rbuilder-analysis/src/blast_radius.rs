@@ -34,8 +34,12 @@ pub struct BlastRadiusReport {
     pub score: f64,
     /// Direct callers of the symbol
     pub direct_callers: Vec<String>,
+    /// Direct caller node IDs
+    pub direct_caller_ids: Vec<Uuid>,
     /// Transitive callers (impact zone), excluding the symbol itself
     pub impact_zone: Vec<String>,
+    /// Transitive caller node IDs
+    pub impact_zone_ids: Vec<Uuid>,
     /// Maximum data-flow depth observed across direct callers
     pub data_flow_depth: usize,
     /// Per-caller data-flow details
@@ -158,6 +162,7 @@ impl<'a> BlastRadiusAnalyzer<'a> {
         }
 
         let impact_zone = ids_to_names(view, &impact_ids);
+        let impact_zone_ids: Vec<Uuid> = impact_ids.iter().copied().collect();
         let score = calculate_score(
             direct_callers.len(),
             impact_zone.len(),
@@ -171,7 +176,9 @@ impl<'a> BlastRadiusAnalyzer<'a> {
             symbol_name: symbol_name.to_string(),
             score,
             direct_callers,
+            direct_caller_ids: direct_caller_ids.clone(),
             impact_zone,
+            impact_zone_ids,
             data_flow_depth: max_data_flow,
             data_flow_impact,
         })
