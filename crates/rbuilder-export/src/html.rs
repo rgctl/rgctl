@@ -2086,14 +2086,19 @@ fn generate_html_template(
             const targetNode = graphData.nodes.find(n => n.id === nodeId);
             if (!targetNode) return;
 
+            // Use pre-computed blast radius data from backend, fallback to client-side computation
+            const directCallersCount = parseInt(targetNode.properties?.blast_radius_direct_callers || 0);
+            const impactZoneCount = parseInt(targetNode.properties?.blast_radius_impact_zone || 0);
+
+            // Compute for visualization (even if counts are from backend)
             const blastData = computeBlastRadius(nodeId);
 
-            // Show metrics
+            // Show metrics - use backend data if available, otherwise use computed
             document.getElementById('blastResults').style.display = 'block';
             const score = parseFloat(targetNode.properties?.blast_radius_score || 0);
             document.getElementById('blastScore').textContent = score.toFixed(1);
-            document.getElementById('blastDirectCallers').textContent = blastData.directCallers.length;
-            document.getElementById('blastImpactZone').textContent = blastData.impactZone.length;
+            document.getElementById('blastDirectCallers').textContent = directCallersCount || blastData.directCallers.length;
+            document.getElementById('blastImpactZone').textContent = impactZoneCount || blastData.impactZone.length;
             document.getElementById('blastDataFlowDepth').textContent = targetNode.properties?.blast_radius_data_flow_depth || 0;
 
             // Color code the score
