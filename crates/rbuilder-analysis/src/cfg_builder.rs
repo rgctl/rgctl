@@ -32,6 +32,11 @@ fn parse_language(language: &str, source: &[u8]) -> Result<Tree> {
                 .set_language(&tree_sitter_python::LANGUAGE.into())
                 .map_err(|e| Error::PluginError(format!("Python grammar: {e}")))?;
         }
+        "java" => {
+            parser
+                .set_language(&tree_sitter_java::LANGUAGE.into())
+                .map_err(|e| Error::PluginError(format!("Java grammar: {e}")))?;
+        }
         other => return Err(Error::UnsupportedLanguage(other.to_string())),
     }
 
@@ -43,7 +48,7 @@ fn parse_language(language: &str, source: &[u8]) -> Result<Tree> {
 }
 
 fn find_function_by_name<'a>(node: Node<'a>, source: &[u8], name: &str) -> Option<Node<'a>> {
-    let function_kinds = ["function_item", "function_definition"];
+    let function_kinds = ["function_item", "function_definition", "method_declaration"];
     if function_kinds.contains(&node.kind()) {
         if let Ok(Some(func_name)) = extract_name_from_node(node, source) {
             if func_name == name {

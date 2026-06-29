@@ -236,7 +236,7 @@ enum Commands {
 
     /// Export graph
     Export {
-        /// Export format (json, graphml, cypher)
+        /// Export format (json, graphml, html)
         #[arg(long)]
         format: String,
 
@@ -977,25 +977,41 @@ fn main() -> anyhow::Result<()> {
             output,
             query,
         } => {
-            use rbuilder::export::export_graphml;
+            use rbuilder::export::{export_graphml, export_html_dashboard};
             use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
             let graph = CodeGraph::load_from_repo(Path::new("."))?;
-            let content = if format.eq_ignore_ascii_case("graphml") {
-                export_graphml(graph.backend(), &query)?
-            } else if format.eq_ignore_ascii_case("json") {
-                graph.export_json()?
+
+            if format.eq_ignore_ascii_case("html") {
+                let analysis_dir = Path::new(".rbuilder/analysis");
+                export_html_dashboard(
+                    graph.backend(),
+                    if analysis_dir.exists() { Some(analysis_dir) } else { None },
+                    Path::new(&output),
+                ).map_err(|e| anyhow::anyhow!(e))?;
+                println!(
+                    "Exported {} nodes and {} edges to HTML dashboard: {}",
+                    graph.node_count(),
+                    graph.edge_count(),
+                    output
+                );
             } else {
-                anyhow::bail!("Supported export formats: json, graphml");
-            };
-            std::fs::write(&output, content)?;
-            println!(
-                "Exported {} nodes and {} edges to {}",
-                graph.node_count(),
-                graph.edge_count(),
-                output
-            );
+                let content = if format.eq_ignore_ascii_case("graphml") {
+                    export_graphml(graph.backend(), &query)?
+                } else if format.eq_ignore_ascii_case("json") {
+                    graph.export_json()?
+                } else {
+                    anyhow::bail!("Supported export formats: json, graphml, html");
+                };
+                std::fs::write(&output, content)?;
+                println!(
+                    "Exported {} nodes and {} edges to {}",
+                    graph.node_count(),
+                    graph.edge_count(),
+                    output
+                );
+            }
             Ok(())
         }
 
@@ -1219,7 +1235,6 @@ fn run_full_analysis(
     use rbuilder::discovery::{DiscoveryConfig, FileDiscoverer};
     use rbuilder::incremental::FileTracker;
     use rbuilder::languages::registry::LanguageRegistry;
-    use rbuilder::nlp::PatternMatcher;
     use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
     use rbuilder::watch::WatchService;
     use std::path::Path;
@@ -1413,6 +1428,8 @@ fn run_full_analysis(
             "rust"
         } else if file_path.ends_with(".py") {
             "python"
+        } else if file_path.ends_with(".java") {
+            "java"
         } else {
             // Skip unsupported languages for CFG
             error_count += 1;
@@ -1566,11 +1583,26 @@ fn run_full_analysis(
 
     let saved = graph.save_to_repo(root)?;
     println!("\nGraph with analysis results saved to {}", saved.display());
+
+    // Export HTML dashboard
+    use rbuilder::export::export_html_dashboard;
+    let html_path = root.join(".rbuilder/dashboard.html");
+    if let Err(e) = export_html_dashboard(
+        graph.backend(),
+        Some(&output_dir),
+        &html_path,
+    ) {
+        eprintln!("Warning: Failed to export HTML dashboard: {}", e);
+    } else {
+        println!("HTML dashboard exported to {}", html_path.display());
+    }
+
     println!("\nNext steps:");
     println!("  - Query: rbuilder ask \"your question\"");
     println!("  - GQL: rbuilder gql \"your query\"");
     println!("  - Stats: rbuilder stats");
     println!("  - Chat: rbuilder chat");
+    println!("  - View: open {}", html_path.display());
 
     // Enter watch mode if requested
     if watch {
