@@ -2002,6 +2002,7 @@ fn generate_html_template(
                 .map(f => ({{
                     id: f.id,
                     name: f.name,
+                    file_path: f.file_path,
                     score: parseFloat(f.properties?.blast_radius_score || 0),
                     directCallers: parseInt(f.properties?.blast_radius_direct_callers || 0),
                     impactZone: parseInt(f.properties?.blast_radius_impact_zone || 0)
@@ -2030,11 +2031,14 @@ fn generate_html_template(
                 if (func.score >= 50) scoreClass = 'text-danger';
                 else if (func.score >= 25) scoreClass = 'text-warning';
 
+                const fileName = func.file_path ? func.file_path.split('/').pop() : '';
+
                 item.innerHTML = `
                     <div class="d-flex justify-content-between align-items-start">
                         <div class="flex-grow-1" style="min-width: 0;">
                             <div class="fw-bold text-truncate" style="font-size: 0.9em;">${{func.name}}</div>
                             <div class="small text-muted">
+                                ${{fileName ? `<span>${{fileName}}</span> · ` : ''}}
                                 <span class="${{scoreClass}}">Score: ${{func.score.toFixed(1)}}</span>
                                 <span class="ms-2">Callers: ${{func.directCallers}}</span>
                                 <span class="ms-2">Impact: ${{func.impactZone}}</span>
@@ -2317,6 +2321,7 @@ fn generate_html_template(
                 .map(f => ({{
                     function_id: f.function_id,
                     function_name: f.function_name,
+                    file_path: f.file_path,
                     flowCount: f.taint.length,
                     vulnerableCount: f.taint.filter(flow => flow.sanitizers.length === 0).length,
                     maxSeverity: Math.max(...f.taint.map(flow => flow.severity || 0))
@@ -2345,11 +2350,14 @@ fn generate_html_template(
                 if (func.maxSeverity >= 9) severityClass = 'text-danger';
                 else if (func.maxSeverity >= 7) severityClass = 'text-warning';
 
+                const fileName = func.file_path ? func.file_path.split('/').pop() : '';
+
                 item.innerHTML = `
                     <div class="d-flex justify-content-between align-items-start">
                         <div class="flex-grow-1" style="min-width: 0;">
                             <div class="fw-bold text-truncate" style="font-size: 0.9em;">${{func.function_name}}</div>
                             <div class="small text-muted">
+                                ${{fileName ? `<span>${{fileName}}</span> · ` : ''}}
                                 <span>${{func.flowCount}} flow${{func.flowCount !== 1 ? 's' : ''}}</span>
                                 <span class="ms-2 text-danger">${{func.vulnerableCount}} vulnerable</span>
                                 <span class="${{severityClass}} ms-2">Max: ${{func.maxSeverity}}/10</span>
@@ -2513,6 +2521,7 @@ fn generate_html_template(
                 .map(f => ({{
                     function_id: f.function_id,
                     function_name: f.function_name,
+                    file_path: f.file_path,
                     flowCount: f.pdg?.data_deps?.length || 0,
                     cfgBlocks: f.cfg?.blocks?.length || 0
                 }}))
@@ -2536,11 +2545,14 @@ fn generate_html_template(
                 item.style.cursor = 'pointer';
                 item.dataset.functionId = func.function_id;
 
+                const fileName = func.file_path ? func.file_path.split('/').pop() : '';
+
                 item.innerHTML = `
                     <div class="d-flex justify-content-between align-items-start">
                         <div class="flex-grow-1" style="min-width: 0;">
                             <div class="fw-bold text-truncate" style="font-size: 0.9em;">${{func.function_name}}</div>
                             <div class="small text-muted">
+                                ${{fileName ? `<span>${{fileName}}</span> · ` : ''}}
                                 <span>${{func.flowCount}} data flow${{func.flowCount !== 1 ? 's' : ''}}</span>
                                 <span class="ms-2">${{func.cfgBlocks}} block${{func.cfgBlocks !== 1 ? 's' : ''}}</span>
                             </div>
@@ -2601,6 +2613,7 @@ fn generate_html_template(
                 .map(f => ({{
                     function_id: f.function_id,
                     function_name: f.function_name,
+                    file_path: f.file_path,
                     nodeCount: Object.keys(f.pdg.nodes || {{}}).length
                 }}))
                 .sort((a, b) => a.function_name.localeCompare(b.function_name));
@@ -2623,11 +2636,14 @@ fn generate_html_template(
                 item.style.cursor = 'pointer';
                 item.dataset.functionId = func.function_id;
 
+                const fileName = func.file_path ? func.file_path.split('/').pop() : '';
+
                 item.innerHTML = `
                     <div class="d-flex justify-content-between align-items-start">
                         <div class="flex-grow-1" style="min-width: 0;">
                             <div class="fw-bold text-truncate" style="font-size: 0.9em;">${{func.function_name}}</div>
                             <div class="small text-muted">
+                                ${{fileName ? `<span>${{fileName}}</span> · ` : ''}}
                                 <span>${{func.nodeCount}} node${{func.nodeCount !== 1 ? 's' : ''}}</span>
                             </div>
                         </div>
