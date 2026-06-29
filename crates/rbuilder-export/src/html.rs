@@ -2516,7 +2516,6 @@ fn generate_html_template(
                     flowCount: f.pdg?.data_deps?.length || 0,
                     cfgBlocks: f.cfg?.blocks?.length || 0
                 }}))
-                .filter(f => f.cfgBlocks > 0)
                 .sort((a, b) => b.flowCount - a.flowCount);
 
             renderDataflowFunctionList(allDataflowFunctions);
