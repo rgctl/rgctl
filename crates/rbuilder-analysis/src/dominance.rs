@@ -1,10 +1,11 @@
 //! Dominator tree and dominance frontiers (Phase 13.2).
 
 use crate::cfg::{BlockId, ControlFlowGraph};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 /// Dominator tree with immediate dominators and dominance frontiers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DominatorTree {
     /// Immediate dominator for each block.
     pub idom: HashMap<BlockId, BlockId>,

@@ -4,6 +4,7 @@ use crate::cfg::{BlockId, ControlFlowGraph, Statement};
 use crate::dataflow::{compute_reaching_definitions, ReachingDefs};
 use crate::dominance::DominatorTree;
 use rbuilder_error::Result;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
@@ -11,7 +12,7 @@ use uuid::Uuid;
 pub type PdgNodeId = Uuid;
 
 /// Program dependence graph combining data and control dependencies.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProgramDependenceGraph {
     /// PDG nodes keyed by id.
     pub nodes: HashMap<PdgNodeId, PdgNode>,
@@ -24,7 +25,7 @@ pub struct ProgramDependenceGraph {
 }
 
 /// A PDG node representing one statement.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PdgNode {
     /// Node id.
     pub id: PdgNodeId,
@@ -39,7 +40,7 @@ pub struct PdgNode {
 }
 
 /// Data dependence between two statements.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DataDependency {
     /// Definition node.
     pub from: PdgNodeId,
@@ -52,7 +53,7 @@ pub struct DataDependency {
 }
 
 /// Data dependence classification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DataDepType {
     /// True (flow) dependence: def then use.
     Flow,
@@ -63,7 +64,7 @@ pub enum DataDepType {
 }
 
 /// Control dependence between statements.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlDependency {
     /// Controlling statement.
     pub controller: PdgNodeId,

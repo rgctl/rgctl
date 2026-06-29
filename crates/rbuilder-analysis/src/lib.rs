@@ -19,6 +19,7 @@ pub mod interprocedural_cfg;
 pub mod interprocedural_slicing;
 pub mod pdg;
 pub mod slicing;
+pub mod storage;
 pub mod taint;
 pub mod type_inference;
 
@@ -47,5 +48,6 @@ pub use pdg::{
     ControlDependency, DataDepType, DataDependency, PdgNode, PdgNodeId, ProgramDependenceGraph,
 };
 pub use slicing::{BackwardSlicer, CodeSlice, SliceCriterion};
+pub use storage::{AnalysisStorage, FunctionAnalysis};
 pub use taint::{Sanitizer, TaintAnalyzer, TaintFlow, TaintSink, TaintSource};
 pub use type_inference::{confidence_for, InferredType, TypeInferenceEngine, VariableType};

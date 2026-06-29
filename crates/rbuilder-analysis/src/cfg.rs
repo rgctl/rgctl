@@ -1,5 +1,6 @@
 //! Control flow graph representation and queries.
 
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
@@ -7,7 +8,7 @@ use uuid::Uuid;
 pub type BlockId = Uuid;
 
 /// A control-flow graph for a single function body.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ControlFlowGraph {
     /// Basic blocks keyed by id.
     pub blocks: HashMap<BlockId, BasicBlock>,
@@ -20,7 +21,7 @@ pub struct ControlFlowGraph {
 }
 
 /// A sequence of statements with no internal branches.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BasicBlock {
     /// Block id.
     pub id: BlockId,
@@ -33,7 +34,7 @@ pub struct BasicBlock {
 }
 
 /// A single statement in a basic block.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Statement {
     /// Statement classification.
     pub kind: StatementKind,
@@ -44,7 +45,7 @@ pub struct Statement {
 }
 
 /// High-level statement categories for CFG/PDG analysis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StatementKind {
     /// General expression.
     Expression,
@@ -63,7 +64,7 @@ pub enum StatementKind {
 }
 
 /// Directed edge in the CFG.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CfgEdge {
     /// Source block.
     pub from: BlockId,
@@ -74,7 +75,7 @@ pub struct CfgEdge {
 }
 
 /// Classification of control-flow edges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CfgEdgeType {
     /// Sequential fall-through.
     Next,

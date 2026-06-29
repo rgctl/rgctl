@@ -87,6 +87,18 @@ enum Commands {
         #[arg(long)]
         security: bool,
 
+        /// Build control flow graphs for all functions
+        #[arg(long)]
+        cfg: bool,
+
+        /// Build program dependence graphs for all functions (implies --cfg)
+        #[arg(long)]
+        pdg: bool,
+
+        /// Compute dominance trees for all functions (implies --cfg)
+        #[arg(long)]
+        dominance: bool,
+
         /// Filter by language (ansible, chef, puppet, python, rust, etc.)
         #[arg(long)]
         language: Option<String>,
@@ -94,6 +106,10 @@ enum Commands {
         /// Output format
         #[arg(long, default_value = "text")]
         format: String,
+
+        /// Output directory for CFG/PDG/Dominance results
+        #[arg(long)]
+        output: Option<String>,
 
         /// Run all analyses
         #[arg(long)]
@@ -446,8 +462,12 @@ fn main() -> anyhow::Result<()> {
             centrality,
             dependencies,
             security,
+            cfg,
+            pdg,
+            dominance,
             language,
             format: _,
+            output,
             all,
         } => {
             use rbuilder::analysis::{ComplexityAnalyzer, DependencyAnalyzer};
@@ -523,14 +543,134 @@ fn main() -> anyhow::Result<()> {
                 println!("Potential secrets found: {total}");
 
                 // Query security findings from graph if any
-                let security_findings = graph.query("type:SecurityFinding")?;
-                if !security_findings.is_empty() {
-                    println!("\nSecurity findings in graph: {}", security_findings.len());
-                    for finding in security_findings.iter().take(10) {
-                        println!("  - {}", finding.name);
+                if let Ok(security_findings) = graph.query("type:SecurityFinding") {
+                    if !security_findings.is_empty() {
+                        println!("\nSecurity findings in graph: {}", security_findings.len());
+                        for finding in security_findings.iter().take(10) {
+                            println!("  - {}", finding.name);
+                        }
                     }
                 }
             }
+
+            // CFG/PDG/Dominance analysis
+            if cfg || pdg || dominance {
+                use rbuilder::analysis::{
+                    build_cfg_for_function, AnalysisStorage, DominatorTree, FunctionAnalysis,
+                    ProgramDependenceGraph,
+                };
+                use rbuilder_graph::schema::NodeType;
+
+                let output_dir = output
+                    .as_deref()
+                    .unwrap_or(".rbuilder/analysis");
+                let storage = AnalysisStorage::new(output_dir);
+                storage.ensure_dir()?;
+
+                // Find all function nodes
+                let functions: Vec<_> = backend
+                    .all_nodes()?
+                    .into_iter()
+                    .filter(|n| n.node_type == NodeType::Function)
+                    .collect();
+
+                println!("\nBuilding analysis for {} functions...", functions.len());
+                let mut success_count = 0;
+                let mut error_count = 0;
+
+                for func_node in &functions {
+                    // Get function source
+                    let file_path = match &func_node.file_path {
+                        Some(p) => p,
+                        None => {
+                            error_count += 1;
+                            continue;
+                        }
+                    };
+
+                    let source = match std::fs::read_to_string(file_path) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            error_count += 1;
+                            continue;
+                        }
+                    };
+
+                    // Determine language from file extension
+                    let lang = if file_path.ends_with(".rs") {
+                        "rust"
+                    } else if file_path.ends_with(".py") {
+                        "python"
+                    } else {
+                        error_count += 1;
+                        continue;
+                    };
+
+                    // Build CFG
+                    let cfg_result = if cfg || pdg || dominance {
+                        build_cfg_for_function(lang, &source, &func_node.name)
+                    } else {
+                        error_count += 1;
+                        continue;
+                    };
+
+                    let cfg_data = match cfg_result {
+                        Ok(c) => Some(c),
+                        Err(_) => {
+                            error_count += 1;
+                            continue;
+                        }
+                    };
+
+                    // Build PDG if requested
+                    let pdg_data = if pdg && cfg_data.is_some() {
+                        match ProgramDependenceGraph::build(
+                            cfg_data.as_ref().unwrap(),
+                            source.as_bytes(),
+                        ) {
+                            Ok(p) => Some(p),
+                            Err(_) => None,
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Build Dominance if requested
+                    let dom_data = if dominance && cfg_data.is_some() {
+                        Some(DominatorTree::build(cfg_data.as_ref().unwrap()))
+                    } else {
+                        None
+                    };
+
+                    // Store analysis
+                    let analysis = FunctionAnalysis {
+                        function_id: func_node.id,
+                        function_name: func_node.name.clone(),
+                        file_path: file_path.clone(),
+                        cfg: cfg_data,
+                        pdg: pdg_data,
+                        dominance: dom_data,
+                    };
+
+                    if storage.save_function(&analysis).is_ok() {
+                        success_count += 1;
+                    } else {
+                        error_count += 1;
+                    }
+                }
+
+                println!(
+                    "✓ Analysis complete: {} functions analyzed, {} errors",
+                    success_count, error_count
+                );
+                println!("Results saved to {}", output_dir);
+
+                // Export to consolidated JSON
+                let export_path = Path::new(output_dir).join("all_analyses.json");
+                storage.export_all(&export_path)?;
+                println!("Exported to {}", export_path.display());
+            }
+
             Ok(())
         }
 
