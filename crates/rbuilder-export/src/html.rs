@@ -374,6 +374,19 @@ fn generate_html_template(
             font-size: 12px;
             z-index: 1000;
         }}
+
+        .blast-function-item {{
+            transition: background-color 0.2s;
+        }}
+
+        .blast-function-item:hover {{
+            background-color: #f8f9fa !important;
+        }}
+
+        .blast-function-item.selected {{
+            background-color: #e3f2fd !important;
+            border-left: 3px solid #2196f3;
+        }}
     </style>
 </head>
 <body>
@@ -703,58 +716,80 @@ fn generate_html_template(
                         <h5 class="card-title">Blast Radius Analysis</h5>
                         <p class="text-muted">Visualize the impact zone of changing a function - shows transitive callers and affected code</p>
 
-                        <div class="mb-3">
-                            <label class="form-label">Select Function</label>
-                            <select class="form-select" id="blastFunctionSelect">
-                                <option value="">-- Select a function --</option>
-                            </select>
-                        </div>
+                        <div class="row">
+                            <!-- Left: Visualization -->
+                            <div class="col-md-8">
+                                <div id="blastResults" style="display:none;">
+                                    <div class="row mb-3">
+                                        <div class="col-md-3">
+                                            <div class="card text-center">
+                                                <div class="card-body p-2">
+                                                    <h4 id="blastScore" class="text-danger mb-0">0</h4>
+                                                    <small class="text-muted">Blast Radius Score</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="card text-center">
+                                                <div class="card-body p-2">
+                                                    <h4 id="blastDirectCallers" class="mb-0">0</h4>
+                                                    <small class="text-muted">Direct Callers</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="card text-center">
+                                                <div class="card-body p-2">
+                                                    <h4 id="blastImpactZone" class="mb-0">0</h4>
+                                                    <small class="text-muted">Impact Zone Size</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="card text-center">
+                                                <div class="card-body p-2">
+                                                    <h4 id="blastDataFlowDepth" class="mb-0">0</h4>
+                                                    <small class="text-muted">Data Flow Depth</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
 
-                        <div id="blastResults" class="mt-4" style="display:none;">
-                            <div class="row">
-                                <div class="col-md-3">
-                                    <div class="card text-center">
-                                        <div class="card-body">
-                                            <h3 id="blastScore" class="text-danger">0</h3>
-                                            <small class="text-muted">Blast Radius Score</small>
+                                    <div id="blastViz" style="border: 1px solid #dee2e6; border-radius: 4px; background: white; min-height: 600px;">
+                                    </div>
+
+                                    <div class="mt-3">
+                                        <h6>Legend</h6>
+                                        <div class="d-flex gap-3 flex-wrap">
+                                            <div><span style="display: inline-block; width: 16px; height: 16px; background: #ff6b6b; border-radius: 50%;"></span> Target Function (High Impact)</div>
+                                            <div><span style="display: inline-block; width: 16px; height: 16px; background: #ffa94d; border-radius: 50%;"></span> Direct Caller</div>
+                                            <div><span style="display: inline-block; width: 16px; height: 16px; background: #fab005; border-radius: 50%;"></span> Transitive Caller (Impact Zone)</div>
                                         </div>
                                     </div>
                                 </div>
-                                <div class="col-md-3">
-                                    <div class="card text-center">
-                                        <div class="card-body">
-                                            <h3 id="blastDirectCallers">0</h3>
-                                            <small class="text-muted">Direct Callers</small>
-                                        </div>
-                                    </div>
+
+                                <div id="blastEmptyState" class="text-center text-muted py-5">
+                                    <i class="fas fa-network-wired fa-3x mb-3"></i>
+                                    <p>Select a function from the list to view its blast radius</p>
                                 </div>
-                                <div class="col-md-3">
-                                    <div class="card text-center">
-                                        <div class="card-body">
-                                            <h3 id="blastImpactZone">0</h3>
-                                            <small class="text-muted">Impact Zone Size</small>
-                                        </div>
+                            </div>
+
+                            <!-- Right: Function List -->
+                            <div class="col-md-4">
+                                <div class="card">
+                                    <div class="card-header bg-light">
+                                        <h6 class="mb-0">Functions</h6>
                                     </div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="card text-center">
-                                        <div class="card-body">
-                                            <h3 id="blastDataFlowDepth">0</h3>
-                                            <small class="text-muted">Data Flow Depth</small>
+                                    <div class="card-body p-0">
+                                        <div class="p-2">
+                                            <input type="text" id="blastSearchInput" class="form-control form-control-sm" placeholder="Search functions...">
+                                        </div>
+                                        <div id="blastFunctionList" style="max-height: 700px; overflow-y: auto;">
+                                            <!-- Function list populated by JS -->
                                         </div>
                                     </div>
                                 </div>
                             </div>
-
-                            <div id="blastViz" class="mt-4" style="border: 1px solid #dee2e6; border-radius: 4px; background: white; min-height: 600px;">
-                            </div>
-
-                            <div class="mt-3">
-                                <h6>Legend</h6>
-                                <div class="d-flex gap-3">
-                                    <div><span style="display: inline-block; width: 20px; height: 20px; background: #ff6b6b; border-radius: 50%;"></span> Target Function (High Impact)</div>
-                                    <div><span style="display: inline-block; width: 20px; height: 20px; background: #ffa94d; border-radius: 50%;"></span> Direct Caller</div>
-                                    <div><span style="display: inline-block; width: 20px; height: 20px; background: #fab005; border-radius: 50%;"></span> Transitive Caller (Impact Zone)</div>
                                     <div><span style="display: inline-block; width: 20px; height: 20px; background: #dee2e6; border-radius: 50%;"></span> Other</div>
                                 </div>
                             </div>
@@ -1919,16 +1954,122 @@ fn generate_html_template(
         populateSliceFunctionSelect();
 
         // Blast Radius Visualization
-        function populateBlastFunctionSelect() {{
-            const select = document.getElementById('blastFunctionSelect');
-            const functions = graphData.nodes.filter(n => n.type === 'Function');
+        let allBlastFunctions = [];
+
+        function populateBlastFunctionList() {{
+            const listContainer = document.getElementById('blastFunctionList');
+            allBlastFunctions = graphData.nodes
+                .filter(n => n.type === 'Function')
+                .map(f => ({{
+                    id: f.id,
+                    name: f.name,
+                    score: parseFloat(f.properties?.blast_radius_score || 0),
+                    directCallers: parseInt(f.properties?.blast_radius_direct_callers || 0),
+                    impactZone: parseInt(f.properties?.blast_radius_impact_zone || 0)
+                }}))
+                .sort((a, b) => b.score - a.score); // Sort by score descending
+
+            renderBlastFunctionList(allBlastFunctions);
+        }}
+
+        function renderBlastFunctionList(functions) {{
+            const listContainer = document.getElementById('blastFunctionList');
+            listContainer.innerHTML = '';
+
+            if (functions.length === 0) {{
+                listContainer.innerHTML = '<div class="p-3 text-muted text-center">No functions found</div>';
+                return;
+            }}
+
             functions.forEach(func => {{
-                const option = document.createElement('option');
-                option.value = func.id;
-                option.textContent = func.name;
-                select.appendChild(option);
+                const item = document.createElement('div');
+                item.className = 'blast-function-item p-2 border-bottom';
+                item.style.cursor = 'pointer';
+                item.dataset.functionId = func.id;
+
+                let scoreClass = 'text-muted';
+                if (func.score >= 50) scoreClass = 'text-danger';
+                else if (func.score >= 25) scoreClass = 'text-warning';
+
+                item.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div class="flex-grow-1" style="min-width: 0;">
+                            <div class="fw-bold text-truncate" style="font-size: 0.9em;">${{func.name}}</div>
+                            <div class="small text-muted">
+                                <span class="${{scoreClass}}">Score: ${{func.score.toFixed(1)}}</span>
+                                <span class="ms-2">Callers: ${{func.directCallers}}</span>
+                                <span class="ms-2">Impact: ${{func.impactZone}}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                item.addEventListener('click', () => selectBlastFunction(func.id));
+                item.addEventListener('mouseenter', () => {{
+                    item.style.backgroundColor = '#f8f9fa';
+                }});
+                item.addEventListener('mouseleave', () => {{
+                    if (!item.classList.contains('selected')) {{
+                        item.style.backgroundColor = '';
+                    }}
+                }});
+
+                listContainer.appendChild(item);
             }});
         }}
+
+        function selectBlastFunction(nodeId) {{
+            // Remove previous selection
+            document.querySelectorAll('.blast-function-item').forEach(item => {{
+                item.classList.remove('selected');
+                item.style.backgroundColor = '';
+            }});
+
+            // Mark as selected
+            const selectedItem = document.querySelector(`.blast-function-item[data-function-id="${{nodeId}}"]`);
+            if (selectedItem) {{
+                selectedItem.classList.add('selected');
+                selectedItem.style.backgroundColor = '#e3f2fd';
+            }}
+
+            const targetNode = graphData.nodes.find(n => n.id === nodeId);
+            if (!targetNode) return;
+
+            // Get blast radius data (from backend or computed)
+            const blastData = computeBlastRadius(targetNode);
+
+            // Hide empty state, show results
+            document.getElementById('blastEmptyState').style.display = 'none';
+            document.getElementById('blastResults').style.display = 'block';
+
+            // Show metrics
+            const score = parseFloat(targetNode.properties?.blast_radius_score || 0);
+            document.getElementById('blastScore').textContent = score.toFixed(1);
+            document.getElementById('blastDirectCallers').textContent = blastData.directCallers.length;
+            document.getElementById('blastImpactZone').textContent = blastData.impactZone.length;
+            document.getElementById('blastDataFlowDepth').textContent = targetNode.properties?.blast_radius_data_flow_depth || 0;
+
+            // Color code the score
+            const scoreElem = document.getElementById('blastScore');
+            if (score >= 50) {{
+                scoreElem.className = 'text-danger mb-0';
+            }} else if (score >= 25) {{
+                scoreElem.className = 'text-warning mb-0';
+            }} else {{
+                scoreElem.className = 'text-success mb-0';
+            }}
+
+            renderBlastRadius(targetNode, blastData);
+        }}
+
+        // Search functionality
+        document.getElementById('blastSearchInput').addEventListener('input', (e) => {{
+            const searchTerm = e.target.value.toLowerCase();
+            const filtered = allBlastFunctions.filter(f =>
+                f.name.toLowerCase().includes(searchTerm)
+            );
+            renderBlastFunctionList(filtered);
+        }});
 
         function computeBlastRadius(targetNode) {{
             // Use pre-computed IDs from backend if available
@@ -1987,10 +2128,14 @@ fn generate_html_template(
             const width = container.node().getBoundingClientRect().width;
             const height = 600;
 
-            // Build subgraph
+            // Build subgraph - only include Calls edges
             const relevantNodes = new Set([targetNode.id, ...blastData.directCallers, ...blastData.impactZone]);
             const nodes = graphData.nodes.filter(n => relevantNodes.has(n.id));
-            const edges = graphData.edges.filter(e => relevantNodes.has(e.source) && relevantNodes.has(e.target));
+            const edges = graphData.edges.filter(e =>
+                e.type === 'Calls' &&
+                relevantNodes.has(e.source) &&
+                relevantNodes.has(e.target)
+            );
 
             const svg = container.append('svg')
                 .attr('width', width)
@@ -2096,38 +2241,7 @@ fn generate_html_template(
             }});
         }}
 
-        document.getElementById('blastFunctionSelect').addEventListener('change', (e) => {{
-            const nodeId = e.target.value;
-            if (!nodeId) return;
-
-            const targetNode = graphData.nodes.find(n => n.id === nodeId);
-            if (!targetNode) return;
-
-            // Get blast radius data (from backend or computed)
-            const blastData = computeBlastRadius(targetNode);
-
-            // Show metrics
-            document.getElementById('blastResults').style.display = 'block';
-            const score = parseFloat(targetNode.properties?.blast_radius_score || 0);
-            document.getElementById('blastScore').textContent = score.toFixed(1);
-            document.getElementById('blastDirectCallers').textContent = blastData.directCallers.length;
-            document.getElementById('blastImpactZone').textContent = blastData.impactZone.length;
-            document.getElementById('blastDataFlowDepth').textContent = targetNode.properties?.blast_radius_data_flow_depth || 0;
-
-            // Color code the score
-            const scoreElem = document.getElementById('blastScore');
-            if (score >= 50) {{
-                scoreElem.className = 'text-danger';
-            }} else if (score >= 25) {{
-                scoreElem.className = 'text-warning';
-            }} else {{
-                scoreElem.className = 'text-success';
-            }}
-
-            renderBlastRadius(targetNode, blastData);
-        }});
-
-        populateBlastFunctionSelect();
+        populateBlastFunctionList();
 
         // Taint Analysis
         function populateTaintFunctionSelect() {{
