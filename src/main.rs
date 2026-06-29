@@ -1481,6 +1481,82 @@ fn run_full_analysis(
         println!("  No functions analyzed (Rust/Python only)");
     }
 
+    // Blast radius analysis (default)
+    println!("\n✓ Blast radius analysis:");
+    use rbuilder::analysis::{BlastRadiusAnalyzer, FlowCache};
+
+    // Build FlowCache from stored PDG analyses for enriched blast radius
+    let mut flow_cache = FlowCache::new();
+    let all_analyses = storage.load_all().unwrap_or_default();
+    for analysis in &all_analyses {
+        if let Some(ref pdg) = analysis.pdg {
+            flow_cache.insert_pdg(analysis.function_id, pdg.clone());
+        }
+    }
+
+    // Compute blast radius for all functions (collect updates first)
+    let mut blast_updates = Vec::new();
+    let mut high_impact_count = 0;
+    let mut max_impact_score = 0.0f64;
+    let mut max_impact_function = String::new();
+
+    for func_node in &functions {
+        let analyzer = BlastRadiusAnalyzer::new(backend)
+            .with_flow_cache(&flow_cache)
+            .with_max_depth(10);
+
+        if let Ok(report) = analyzer.analyze(&func_node.name) {
+            blast_updates.push((func_node.id, report.clone()));
+
+            if report.score > 50.0 {
+                high_impact_count += 1;
+            }
+
+            if report.score > max_impact_score {
+                max_impact_score = report.score;
+                max_impact_function = func_node.name.clone();
+            }
+        }
+    }
+
+    // Apply blast radius updates to graph
+    let mut analyzed_functions = 0;
+    for (node_id, report) in blast_updates {
+        if let Ok(Some(mut node)) = graph.backend().get_node(node_id) {
+            node.properties
+                .insert("blast_radius_score".to_string(), report.score.to_string());
+            node.properties.insert(
+                "blast_radius_direct_callers".to_string(),
+                report.direct_callers.len().to_string(),
+            );
+            node.properties.insert(
+                "blast_radius_impact_zone".to_string(),
+                report.impact_zone.len().to_string(),
+            );
+            node.properties.insert(
+                "blast_radius_data_flow_depth".to_string(),
+                report.data_flow_depth.to_string(),
+            );
+
+            if graph.backend_mut().insert_node(node).is_ok() {
+                analyzed_functions += 1;
+            }
+        }
+    }
+
+    if analyzed_functions > 0 {
+        println!("  Functions: {} analyzed", analyzed_functions);
+        println!("  High impact (>50): {}", high_impact_count);
+        if !max_impact_function.is_empty() {
+            println!(
+                "  Max impact: {} (score: {:.1})",
+                max_impact_function, max_impact_score
+            );
+        }
+    } else {
+        println!("  No blast radius data computed");
+    }
+
     println!("\n=== Analysis Complete ===");
 
     // Save graph with analysis results
