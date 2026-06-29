@@ -375,15 +375,24 @@ fn generate_html_template(
             z-index: 1000;
         }}
 
-        .blast-function-item {{
+        .blast-function-item,
+        .dataflow-function-item,
+        .taint-function-item,
+        .slice-function-item {{
             transition: background-color 0.2s;
         }}
 
-        .blast-function-item:hover {{
+        .blast-function-item:hover,
+        .dataflow-function-item:hover,
+        .taint-function-item:hover,
+        .slice-function-item:hover {{
             background-color: #f8f9fa !important;
         }}
 
-        .blast-function-item.selected {{
+        .blast-function-item.selected,
+        .dataflow-function-item.selected,
+        .taint-function-item.selected,
+        .slice-function-item.selected {{
             background-color: #e3f2fd !important;
             border-left: 3px solid #2196f3;
         }}
@@ -624,40 +633,63 @@ fn generate_html_template(
 
             <!-- Dataflow Visualization Tab -->
             <div class="tab-pane fade" id="dataflow-pane">
-                <div class="row mb-3">
-                    <div class="col-md-8">
-                        <label class="form-label">Select Function</label>
-                        <select class="form-select" id="dataflowFunctionSelect">
-                            <option value="">-- Select a function with dataflows --</option>
-                        </select>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label">View</label>
-                        <select class="form-select" id="dataflowViewSelect">
-                            <option value="dataflow">Data Flow (CFG + PDG)</option>
-                            <option value="dominator">Dominator Tree</option>
-                            <option value="combined">Combined View</option>
-                        </select>
-                    </div>
-                </div>
-                <div id="dataflowViz" style="border: 1px solid #dee2e6; border-radius: 4px; background: white; min-height: 600px; position: relative;">
-                    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: #6c757d;">
-                        <i class="fas fa-project-diagram fa-3x mb-3"></i>
-                        <p>Select a function to visualize its dataflow</p>
-                    </div>
-                </div>
-                <div class="mt-3">
-                    <h6>Legend</h6>
-                    <div id="dataflowLegend" class="d-flex gap-3">
-                        <div><span style="display: inline-block; width: 20px; height: 20px; background: #667eea; border-radius: 50%;"></span> Statement/Block</div>
-                        <div><span style="display: inline-block; width: 20px; height: 2px; background: #999; margin: 9px 0;"></span> Control Flow</div>
-                        <div><span style="display: inline-block; width: 20px; height: 2px; background: #f093fb; margin: 9px 0;"></span> Data Flow</div>
-                        <div><span style="display: inline-block; width: 20px; height: 2px; background: #4facfe; margin: 9px 0;"></span> Control Dependency</div>
-                    </div>
-                    <div id="dominatorLegend" class="d-flex gap-3" style="display:none;">
-                        <div><span style="display: inline-block; width: 16px; height: 16px; background: #667eea; border-radius: 50%;"></span> Regular Block</div>
-                        <div><span style="display: inline-block; width: 24px; height: 24px; background: #f093fb; border-radius: 50%;"></span> Has Dominance Frontier</div>
-                        <div><span style="display: inline-block; width: 20px; height: 2px; background: #999; margin: 9px 0;"></span> Dominates</div>
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Dataflow Visualization</h5>
+                        <p class="text-muted">Visualize control flow, data dependencies, and dominance relationships</p>
+
+                        <div class="row">
+                            <!-- Left: Visualization -->
+                            <div class="col-md-8">
+                                <div class="mb-3">
+                                    <label class="form-label">View</label>
+                                    <select class="form-select" id="dataflowViewSelect">
+                                        <option value="dataflow">Data Flow (CFG + PDG)</option>
+                                        <option value="dominator">Dominator Tree</option>
+                                        <option value="combined">Combined View</option>
+                                    </select>
+                                </div>
+
+                                <div id="dataflowViz" style="border: 1px solid #dee2e6; border-radius: 4px; background: white; min-height: 600px; position: relative;">
+                                    <div id="dataflowEmptyState" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: #6c757d;">
+                                        <i class="fas fa-project-diagram fa-3x mb-3"></i>
+                                        <p>Select a function to visualize its dataflow</p>
+                                    </div>
+                                </div>
+
+                                <div class="mt-3">
+                                    <h6>Legend</h6>
+                                    <div id="dataflowLegend" class="d-flex gap-3 flex-wrap">
+                                        <div><span style="display: inline-block; width: 16px; height: 16px; background: #667eea; border-radius: 50%;"></span> Statement/Block</div>
+                                        <div><span style="display: inline-block; width: 16px; height: 2px; background: #999; margin: 7px 0;"></span> Control Flow</div>
+                                        <div><span style="display: inline-block; width: 16px; height: 2px; background: #f093fb; margin: 7px 0;"></span> Data Flow</div>
+                                        <div><span style="display: inline-block; width: 16px; height: 2px; background: #4facfe; margin: 7px 0;"></span> Control Dependency</div>
+                                    </div>
+                                    <div id="dominatorLegend" class="d-flex gap-3 flex-wrap" style="display:none;">
+                                        <div><span style="display: inline-block; width: 14px; height: 14px; background: #667eea; border-radius: 50%;"></span> Regular Block</div>
+                                        <div><span style="display: inline-block; width: 20px; height: 20px; background: #f093fb; border-radius: 50%;"></span> Has Dominance Frontier</div>
+                                        <div><span style="display: inline-block; width: 16px; height: 2px; background: #999; margin: 7px 0;"></span> Dominates</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Right: Function List -->
+                            <div class="col-md-4">
+                                <div class="card">
+                                    <div class="card-header bg-light">
+                                        <h6 class="mb-0">Functions</h6>
+                                    </div>
+                                    <div class="card-body p-0">
+                                        <div class="p-2">
+                                            <input type="text" id="dataflowSearchInput" class="form-control form-control-sm" placeholder="Search functions...">
+                                        </div>
+                                        <div id="dataflowFunctionList" style="max-height: 700px; overflow-y: auto;">
+                                            <!-- Function list populated by JS -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -669,41 +701,63 @@ fn generate_html_template(
                         <h5 class="card-title">Backward Program Slicing</h5>
                         <p class="text-muted">Compute backward slices to see which statements affect a variable at a given point</p>
 
-                        <div class="row g-3 mb-3">
-                            <div class="col-md-4">
-                                <label class="form-label">Function</label>
-                                <select class="form-select" id="sliceFunctionSelect">
-                                    <option value="">-- Select function --</option>
-                                </select>
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Line Number</label>
-                                <input type="number" class="form-control" id="sliceLineInput" placeholder="e.g., 42" min="1">
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Variable</label>
-                                <input type="text" class="form-control" id="sliceVariableInput" placeholder="e.g., result">
-                            </div>
-                        </div>
-                        <button class="btn btn-primary" id="computeSliceBtn">
-                            <i class="fas fa-calculator"></i> Compute Slice
-                        </button>
+                        <div class="row">
+                            <!-- Left: Visualization -->
+                            <div class="col-md-8">
+                                <div id="sliceControls" style="display:none;">
+                                    <div class="row g-3 mb-3">
+                                        <div class="col-md-6">
+                                            <label class="form-label">Line Number</label>
+                                            <input type="number" class="form-control" id="sliceLineInput" placeholder="e.g., 42" min="1">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Variable</label>
+                                            <input type="text" class="form-control" id="sliceVariableInput" placeholder="e.g., result">
+                                        </div>
+                                    </div>
+                                    <button class="btn btn-primary" id="computeSliceBtn">
+                                        <i class="fas fa-calculator"></i> Compute Slice
+                                    </button>
+                                </div>
 
-                        <div id="sliceResults" class="mt-4" style="display:none;">
-                            <h6>Slice Results</h6>
-                            <div class="alert alert-info">
-                                <strong>Criterion:</strong> <span id="sliceCriterion"></span><br>
-                                <strong>Slice Size:</strong> <span id="sliceSize"></span> statements<br>
-                                <strong>Reduction:</strong> <span id="sliceReduction"></span>% of code excluded
-                            </div>
-                            <div id="sliceViz" style="border: 1px solid #dee2e6; border-radius: 4px; background: white; min-height: 500px;">
-                            </div>
-                        </div>
+                                <div id="sliceResults" class="mt-4" style="display:none;">
+                                    <h6>Slice Results</h6>
+                                    <div class="alert alert-info">
+                                        <strong>Criterion:</strong> <span id="sliceCriterion"></span><br>
+                                        <strong>Slice Size:</strong> <span id="sliceSize"></span> statements<br>
+                                        <strong>Reduction:</strong> <span id="sliceReduction"></span>% of code excluded
+                                    </div>
+                                    <div id="sliceViz" style="border: 1px solid #dee2e6; border-radius: 4px; background: white; min-height: 500px;">
+                                    </div>
+                                </div>
 
-                        <div class="alert alert-secondary mt-3">
-                            <strong><i class="fas fa-info-circle"></i> How it works:</strong>
-                            Backward slicing traverses data and control dependencies to find all statements that could affect the selected variable.
-                            Highlighted nodes show the computed slice.
+                                <div id="sliceEmptyState" style="text-align: center; color: #6c757d; padding: 50px;">
+                                    <i class="fas fa-cut fa-3x mb-3"></i>
+                                    <p>Select a function to compute program slices</p>
+                                    <div class="alert alert-secondary mt-3">
+                                        <strong><i class="fas fa-info-circle"></i> How it works:</strong>
+                                        Backward slicing traverses data and control dependencies to find all statements that could affect the selected variable.
+                                        Highlighted nodes show the computed slice.
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Right: Function List -->
+                            <div class="col-md-4">
+                                <div class="card">
+                                    <div class="card-header bg-light">
+                                        <h6 class="mb-0">Functions</h6>
+                                    </div>
+                                    <div class="card-body p-0">
+                                        <div class="p-2">
+                                            <input type="text" id="sliceSearchInput" class="form-control form-control-sm" placeholder="Search functions...">
+                                        </div>
+                                        <div id="sliceFunctionList" style="max-height: 700px; overflow-y: auto;">
+                                            <!-- Function list populated by JS -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -805,35 +859,50 @@ fn generate_html_template(
                         <h5 class="card-title">Taint Analysis</h5>
                         <p class="text-muted">Track data flow from sources (user input) to sinks (sensitive operations)</p>
 
-                        <div class="row mb-3">
-                            <div class="col-md-12">
-                                <label for="taint-function-select" class="form-label">Select Function:</label>
-                                <select class="form-select" id="taint-function-select">
-                                    <option value="">-- Choose a function --</option>
-                                </select>
+                        <div class="row">
+                            <!-- Left: Visualization -->
+                            <div class="col-md-8">
+                                <div id="taintResults" style="display:none;">
+                                    <div id="taint-summary" class="alert alert-secondary">
+                                        <h6><i class="fas fa-chart-bar"></i> Summary</h6>
+                                        <div id="taint-summary-content"></div>
+                                    </div>
+
+                                    <div id="taint-flows-container">
+                                        <h6>Taint Flows</h6>
+                                        <div id="taint-flows-list"></div>
+                                    </div>
+                                </div>
+
+                                <div id="taintEmptyState" style="text-align: center; color: #6c757d; padding: 50px;">
+                                    <i class="fas fa-shield-alt fa-3x mb-3"></i>
+                                    <p>Select a function to view taint analysis</p>
+                                    <p class="text-muted small"><strong>What taint analysis detects:</strong></p>
+                                    <ul class="list-unstyled text-muted small">
+                                        <li>SQL Injection risks (user input → database queries)</li>
+                                        <li>XSS vulnerabilities (user input → HTML output)</li>
+                                        <li>Command Injection (user input → system commands)</li>
+                                        <li>Code Execution (user input → eval/exec)</li>
+                                    </ul>
+                                </div>
                             </div>
-                        </div>
 
-                        <div id="taint-summary" class="alert alert-secondary" style="display: none;">
-                            <h6><i class="fas fa-chart-bar"></i> Summary</h6>
-                            <div id="taint-summary-content"></div>
-                        </div>
-
-                        <div id="taint-flows-container" style="display: none;">
-                            <h6>Taint Flows</h6>
-                            <div id="taint-flows-list"></div>
-                        </div>
-
-                        <div id="taint-empty" class="alert alert-info">
-                            <h6><i class="fas fa-info-circle"></i> No Taint Flows Detected</h6>
-                            <p>No vulnerable data flows were found in the analyzed functions.</p>
-                            <p><strong>What taint analysis detects:</strong></p>
-                            <ul>
-                                <li>SQL Injection risks (user input → database queries)</li>
-                                <li>XSS vulnerabilities (user input → HTML output)</li>
-                                <li>Command Injection (user input → system commands)</li>
-                                <li>Code Execution (user input → eval/exec)</li>
-                            </ul>
+                            <!-- Right: Function List -->
+                            <div class="col-md-4">
+                                <div class="card">
+                                    <div class="card-header bg-light">
+                                        <h6 class="mb-0">Functions</h6>
+                                    </div>
+                                    <div class="card-body p-0">
+                                        <div class="p-2">
+                                            <input type="text" id="taintSearchInput" class="form-control form-control-sm" placeholder="Search functions...">
+                                        </div>
+                                        <div id="taintFunctionList" style="max-height: 700px; overflow-y: auto;">
+                                            <!-- Function list populated by JS -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1330,16 +1399,6 @@ fn generate_html_template(
         document.getElementById('selected-count').textContent = graphData.nodes.length;
 
         // Dataflow visualization
-        function populateDataflowSelect() {{
-            const select = document.getElementById('dataflowFunctionSelect');
-            dataflowFunctions.forEach(func => {{
-                const option = document.createElement('option');
-                option.value = func.function_id;
-                option.textContent = `${{func.function_name}} (${{func.pdg?.data_deps?.length || 0}} flows)`;
-                select.appendChild(option);
-            }});
-        }}
-
         function renderDataflow(functionId) {{
             const func = dataflowFunctions.find(f => f.function_id === functionId);
             if (!func) return;
@@ -1684,39 +1743,21 @@ fn generate_html_template(
             renderDataflow(func.function_id);
         }}
 
-        document.getElementById('dataflowFunctionSelect').addEventListener('change', (e) => {{
-            if (e.target.value) {{
-                renderDataflow(e.target.value);
-            }}
-        }});
-
         document.getElementById('dataflowViewSelect').addEventListener('change', (e) => {{
             const viewType = e.target.value;
             // Update legend visibility
             document.getElementById('dataflowLegend').style.display = viewType === 'dominator' ? 'none' : 'flex';
             document.getElementById('dominatorLegend').style.display = viewType === 'dominator' ? 'flex' : 'none';
 
-            const selected = document.getElementById('dataflowFunctionSelect').value;
-            if (selected) {{
-                renderDataflow(selected);
+            // Re-render current selection if any
+            const selectedItem = document.querySelector('.dataflow-function-item.selected');
+            if (selectedItem) {{
+                const functionId = selectedItem.dataset.functionId;
+                renderDataflow(functionId);
             }}
         }});
 
-        populateDataflowSelect();
-
         // Program Slicing
-        function populateSliceFunctionSelect() {{
-            const select = document.getElementById('sliceFunctionSelect');
-            dataflowFunctions.forEach(func => {{
-                const pdg = func.pdg || {{}};
-                if (Object.keys(pdg.nodes || {{}}).length > 0) {{
-                    const option = document.createElement('option');
-                    option.value = func.function_id;
-                    option.textContent = func.function_name;
-                    select.appendChild(option);
-                }}
-            }});
-        }}
 
         function computeBackwardSlice(func, line, variable) {{
             const pdg = func.pdg || {{}};
@@ -1915,12 +1956,12 @@ fn generate_html_template(
         }}
 
         document.getElementById('computeSliceBtn').addEventListener('click', () => {{
-            const functionId = document.getElementById('sliceFunctionSelect').value;
+            const functionId = selectedSliceFunction;
             const line = parseInt(document.getElementById('sliceLineInput').value);
             const variable = document.getElementById('sliceVariableInput').value.trim();
 
             if (!functionId) {{
-                alert('Please select a function');
+                alert('Please select a function from the list');
                 return;
             }}
             if (!line || line < 1) {{
@@ -1950,8 +1991,6 @@ fn generate_html_template(
 
             renderSlice(func, result);
         }});
-
-        populateSliceFunctionSelect();
 
         // Blast Radius Visualization
         let allBlastFunctions = [];
@@ -2269,26 +2308,102 @@ fn generate_html_template(
         populateBlastFunctionList();
 
         // Taint Analysis
-        function populateTaintFunctionSelect() {{
-            const select = document.getElementById('taint-function-select');
-            select.innerHTML = '<option value="">-- Choose a function --</option>';
+        let allTaintFunctions = [];
 
-            const functionsWithTaint = dataflowFunctions.filter(f => f.taint && f.taint.length > 0);
+        function populateTaintFunctionList() {{
+            const listContainer = document.getElementById('taintFunctionList');
+            allTaintFunctions = dataflowFunctions
+                .filter(f => f.taint && f.taint.length > 0)
+                .map(f => ({{
+                    function_id: f.function_id,
+                    function_name: f.function_name,
+                    flowCount: f.taint.length,
+                    vulnerableCount: f.taint.filter(flow => flow.sanitizers.length === 0).length,
+                    maxSeverity: Math.max(...f.taint.map(flow => flow.severity || 0))
+                }}))
+                .sort((a, b) => b.maxSeverity - a.maxSeverity);
 
-            if (functionsWithTaint.length === 0) {{
-                document.getElementById('taint-empty').style.display = 'block';
+            renderTaintFunctionList(allTaintFunctions);
+        }}
+
+        function renderTaintFunctionList(functions) {{
+            const listContainer = document.getElementById('taintFunctionList');
+            listContainer.innerHTML = '';
+
+            if (functions.length === 0) {{
+                listContainer.innerHTML = '<div class="p-3 text-muted text-center">No taint flows found</div>';
                 return;
             }}
 
-            document.getElementById('taint-empty').style.display = 'none';
+            functions.forEach(func => {{
+                const item = document.createElement('div');
+                item.className = 'taint-function-item p-2 border-bottom';
+                item.style.cursor = 'pointer';
+                item.dataset.functionId = func.function_id;
 
-            functionsWithTaint.forEach(func => {{
-                const option = document.createElement('option');
-                option.value = func.function_id;
-                option.textContent = `${{func.function_name}} (${{func.taint.length}} flows)`;
-                select.appendChild(option);
+                let severityClass = 'text-muted';
+                if (func.maxSeverity >= 9) severityClass = 'text-danger';
+                else if (func.maxSeverity >= 7) severityClass = 'text-warning';
+
+                item.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div class="flex-grow-1" style="min-width: 0;">
+                            <div class="fw-bold text-truncate" style="font-size: 0.9em;">${{func.function_name}}</div>
+                            <div class="small text-muted">
+                                <span>${{func.flowCount}} flow${{func.flowCount !== 1 ? 's' : ''}}</span>
+                                <span class="ms-2 text-danger">${{func.vulnerableCount}} vulnerable</span>
+                                <span class="${{severityClass}} ms-2">Max: ${{func.maxSeverity}}/10</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                item.addEventListener('click', () => selectTaintFunction(func.function_id));
+                item.addEventListener('mouseenter', () => {{
+                    item.style.backgroundColor = '#f8f9fa';
+                }});
+                item.addEventListener('mouseleave', () => {{
+                    if (!item.classList.contains('selected')) {{
+                        item.style.backgroundColor = '';
+                    }}
+                }});
+
+                listContainer.appendChild(item);
             }});
         }}
+
+        function selectTaintFunction(functionId) {{
+            // Remove previous selection
+            document.querySelectorAll('.taint-function-item').forEach(item => {{
+                item.classList.remove('selected');
+                item.style.backgroundColor = '';
+            }});
+
+            // Mark as selected
+            const selectedItem = document.querySelector(`.taint-function-item[data-function-id="${{functionId}}"]`);
+            if (selectedItem) {{
+                selectedItem.classList.add('selected');
+                selectedItem.style.backgroundColor = '#e3f2fd';
+            }}
+
+            const func = dataflowFunctions.find(f => f.function_id === functionId);
+            if (!func) return;
+
+            // Hide empty state, show results
+            document.getElementById('taintEmptyState').style.display = 'none';
+            document.getElementById('taintResults').style.display = 'block';
+
+            renderTaintAnalysis(func);
+        }}
+
+        // Search functionality
+        document.getElementById('taintSearchInput').addEventListener('input', (e) => {{
+            const searchTerm = e.target.value.toLowerCase();
+            const filtered = allTaintFunctions.filter(f =>
+                f.function_name.toLowerCase().includes(searchTerm)
+            );
+            renderTaintFunctionList(filtered);
+        }});
 
         function renderTaintAnalysis(func) {{
             const flows = func.taint || [];
@@ -2387,17 +2502,185 @@ fn generate_html_template(
             document.getElementById('taint-flows-container').style.display = 'block';
         }}
 
-        document.getElementById('taint-function-select').addEventListener('change', (e) => {{
-            const funcId = e.target.value;
-            if (!funcId) return;
+        populateTaintFunctionList();
 
-            const func = dataflowFunctions.find(f => f.function_id === funcId);
-            if (!func) return;
+        // Dataflow Visualization Lists
+        let allDataflowFunctions = [];
 
-            renderTaintAnalysis(func);
+        function populateDataflowFunctionList() {{
+            const listContainer = document.getElementById('dataflowFunctionList');
+            allDataflowFunctions = dataflowFunctions
+                .map(f => ({{
+                    function_id: f.function_id,
+                    function_name: f.function_name,
+                    flowCount: f.pdg?.data_deps?.length || 0,
+                    cfgBlocks: f.cfg?.blocks?.length || 0
+                }}))
+                .filter(f => f.cfgBlocks > 0)
+                .sort((a, b) => b.flowCount - a.flowCount);
+
+            renderDataflowFunctionList(allDataflowFunctions);
+        }}
+
+        function renderDataflowFunctionList(functions) {{
+            const listContainer = document.getElementById('dataflowFunctionList');
+            listContainer.innerHTML = '';
+
+            if (functions.length === 0) {{
+                listContainer.innerHTML = '<div class="p-3 text-muted text-center">No analyzed functions</div>';
+                return;
+            }}
+
+            functions.forEach(func => {{
+                const item = document.createElement('div');
+                item.className = 'dataflow-function-item p-2 border-bottom';
+                item.style.cursor = 'pointer';
+                item.dataset.functionId = func.function_id;
+
+                item.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div class="flex-grow-1" style="min-width: 0;">
+                            <div class="fw-bold text-truncate" style="font-size: 0.9em;">${{func.function_name}}</div>
+                            <div class="small text-muted">
+                                <span>${{func.flowCount}} data flow${{func.flowCount !== 1 ? 's' : ''}}</span>
+                                <span class="ms-2">${{func.cfgBlocks}} block${{func.cfgBlocks !== 1 ? 's' : ''}}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                item.addEventListener('click', () => selectDataflowFunction(func.function_id));
+                item.addEventListener('mouseenter', () => {{
+                    item.style.backgroundColor = '#f8f9fa';
+                }});
+                item.addEventListener('mouseleave', () => {{
+                    if (!item.classList.contains('selected')) {{
+                        item.style.backgroundColor = '';
+                    }}
+                }});
+
+                listContainer.appendChild(item);
+            }});
+        }}
+
+        function selectDataflowFunction(functionId) {{
+            // Remove previous selection
+            document.querySelectorAll('.dataflow-function-item').forEach(item => {{
+                item.classList.remove('selected');
+                item.style.backgroundColor = '';
+            }});
+
+            // Mark as selected
+            const selectedItem = document.querySelector(`.dataflow-function-item[data-function-id="${{functionId}}"]`);
+            if (selectedItem) {{
+                selectedItem.classList.add('selected');
+                selectedItem.style.backgroundColor = '#e3f2fd';
+            }}
+
+            renderDataflow(functionId);
+        }}
+
+        // Search functionality
+        document.getElementById('dataflowSearchInput').addEventListener('input', (e) => {{
+            const searchTerm = e.target.value.toLowerCase();
+            const filtered = allDataflowFunctions.filter(f =>
+                f.function_name.toLowerCase().includes(searchTerm)
+            );
+            renderDataflowFunctionList(filtered);
         }});
 
-        populateTaintFunctionSelect();
+        populateDataflowFunctionList();
+
+        // Program Slicing Lists
+        let allSliceFunctions = [];
+        let selectedSliceFunction = null;
+
+        function populateSliceFunctionList() {{
+            const listContainer = document.getElementById('sliceFunctionList');
+            allSliceFunctions = dataflowFunctions
+                .filter(f => f.pdg && f.cfg)
+                .map(f => ({{
+                    function_id: f.function_id,
+                    function_name: f.function_name,
+                    nodeCount: Object.keys(f.pdg.nodes || {{}}).length
+                }}))
+                .sort((a, b) => a.function_name.localeCompare(b.function_name));
+
+            renderSliceFunctionList(allSliceFunctions);
+        }}
+
+        function renderSliceFunctionList(functions) {{
+            const listContainer = document.getElementById('sliceFunctionList');
+            listContainer.innerHTML = '';
+
+            if (functions.length === 0) {{
+                listContainer.innerHTML = '<div class="p-3 text-muted text-center">No sliceable functions</div>';
+                return;
+            }}
+
+            functions.forEach(func => {{
+                const item = document.createElement('div');
+                item.className = 'slice-function-item p-2 border-bottom';
+                item.style.cursor = 'pointer';
+                item.dataset.functionId = func.function_id;
+
+                item.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div class="flex-grow-1" style="min-width: 0;">
+                            <div class="fw-bold text-truncate" style="font-size: 0.9em;">${{func.function_name}}</div>
+                            <div class="small text-muted">
+                                <span>${{func.nodeCount}} node${{func.nodeCount !== 1 ? 's' : ''}}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                item.addEventListener('click', () => selectSliceFunction(func.function_id));
+                item.addEventListener('mouseenter', () => {{
+                    item.style.backgroundColor = '#f8f9fa';
+                }});
+                item.addEventListener('mouseleave', () => {{
+                    if (!item.classList.contains('selected')) {{
+                        item.style.backgroundColor = '';
+                    }}
+                }});
+
+                listContainer.appendChild(item);
+            }});
+        }}
+
+        function selectSliceFunction(functionId) {{
+            // Remove previous selection
+            document.querySelectorAll('.slice-function-item').forEach(item => {{
+                item.classList.remove('selected');
+                item.style.backgroundColor = '';
+            }});
+
+            // Mark as selected
+            const selectedItem = document.querySelector(`.slice-function-item[data-function-id="${{functionId}}"]`);
+            if (selectedItem) {{
+                selectedItem.classList.add('selected');
+                selectedItem.style.backgroundColor = '#e3f2fd';
+            }}
+
+            selectedSliceFunction = functionId;
+
+            // Hide empty state, show controls
+            document.getElementById('sliceEmptyState').style.display = 'none';
+            document.getElementById('sliceControls').style.display = 'block';
+            document.getElementById('sliceResults').style.display = 'none';
+        }}
+
+        // Search functionality
+        document.getElementById('sliceSearchInput').addEventListener('input', (e) => {{
+            const searchTerm = e.target.value.toLowerCase();
+            const filtered = allSliceFunctions.filter(f =>
+                f.function_name.toLowerCase().includes(searchTerm)
+            );
+            renderSliceFunctionList(filtered);
+        }});
+
+        populateSliceFunctionList();
 
     </script>
 </body>
