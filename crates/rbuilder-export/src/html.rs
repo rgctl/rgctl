@@ -1297,7 +1297,7 @@ fn generate_html_template(
         // Dataflow visualization
         function populateDataflowSelect() {{
             const select = document.getElementById('dataflowFunctionSelect');
-            dataflowData.forEach(func => {{
+            dataflowFunctions.forEach(func => {{
                 const option = document.createElement('option');
                 option.value = func.function_id;
                 option.textContent = `${{func.function_name}} (${{func.pdg?.data_deps?.length || 0}} flows)`;
@@ -1306,7 +1306,7 @@ fn generate_html_template(
         }}
 
         function renderDataflow(functionId) {{
-            const func = dataflowData.find(f => f.function_id === functionId);
+            const func = dataflowFunctions.find(f => f.function_id === functionId);
             if (!func) return;
 
             const viewType = document.getElementById('dataflowViewSelect').value;
@@ -1672,7 +1672,7 @@ fn generate_html_template(
         // Program Slicing
         function populateSliceFunctionSelect() {{
             const select = document.getElementById('sliceFunctionSelect');
-            dataflowData.forEach(func => {{
+            dataflowFunctions.forEach(func => {{
                 const pdg = func.pdg || {{}};
                 if (Object.keys(pdg.nodes || {{}}).length > 0) {{
                     const option = document.createElement('option');
@@ -1897,7 +1897,7 @@ fn generate_html_template(
                 return;
             }}
 
-            const func = dataflowData.find(f => f.function_id === functionId);
+            const func = dataflowFunctions.find(f => f.function_id === functionId);
             if (!func) return;
 
             const result = computeBackwardSlice(func, line, variable);
