@@ -1296,6 +1296,11 @@ fn run_full_analysis(
 
     println!("Analyzing repository: {}", root.display());
 
+    // Initialize memory monitoring
+    use rbuilder_core::memory::MemoryMonitor;
+    let mem_monitor = MemoryMonitor::new();
+    println!("Starting analysis... {}", mem_monitor.report());
+
     let discovery_config = discovery.clone();
     let registry = LanguageRegistry::new().into();
     let pipeline = ProcessingPipeline::with_config(
@@ -1318,6 +1323,7 @@ fn run_full_analysis(
     println!("Created {} nodes", stats.nodes_created);
     println!("Created {} edges", stats.edges_created);
     println!("Time: {:.2}s", stats.duration.as_secs_f64());
+    println!("{}", mem_monitor.report());
 
     // Run analyses and persist results BEFORE saving
     println!("\n=== Running Analyses ===");
@@ -1339,6 +1345,9 @@ fn run_full_analysis(
     } else {
         println!("✓ Community detection complete ({} communities)", community_result.communities.len());
     }
+    if verbose {
+        println!("{}", mem_monitor.report());
+    }
 
     // Complexity analysis
     let complexity_report = ComplexityAnalyzer::analyze(graph.backend())?;
@@ -1359,6 +1368,9 @@ fn run_full_analysis(
     for (level, count) in &complexity_report.by_level {
         println!("    {:?}: {}", level, count);
     }
+    if verbose {
+        println!("{}", mem_monitor.report());
+    }
 
     // Centrality analysis
     let centrality_report = CentralityAnalyzer::new().analyze(graph.backend_mut())?;
@@ -1378,6 +1390,9 @@ fn run_full_analysis(
         if let Ok(Some(node)) = graph.backend().get_node(*id) {
             println!("    - {} ({:.4})", node.name, score);
         }
+    }
+    if verbose {
+        println!("{}", mem_monitor.report());
     }
 
     // Dependency analysis
@@ -1560,6 +1575,9 @@ fn run_full_analysis(
     } else if !functions.is_empty() {
         println!("  No functions analyzed (Rust/Python only)");
     }
+    if verbose {
+        println!("{}", mem_monitor.report());
+    }
 
     // Blast radius analysis (default)
     println!("\n✓ Blast radius analysis:");
@@ -1646,6 +1664,9 @@ fn run_full_analysis(
     } else {
         println!("  No blast radius data computed");
     }
+    if verbose {
+        println!("{}", mem_monitor.report());
+    }
 
     println!("\n=== Analysis Complete ===");
 
@@ -1656,6 +1677,9 @@ fn run_full_analysis(
 
     let saved = graph.save_to_repo(root)?;
     println!("\nGraph with analysis results saved to {}", saved.display());
+    if verbose {
+        println!("{}", mem_monitor.report());
+    }
 
     // Export HTML dashboard
     use rbuilder::export::export_html_dashboard;
@@ -1669,6 +1693,9 @@ fn run_full_analysis(
     } else {
         println!("HTML dashboard exported to {}", html_path.display());
     }
+
+    println!("\n=== Performance Summary ===");
+    println!("{}", mem_monitor.report());
 
     println!("\nNext steps:");
     println!("  - Query: rbuilder ask \"your question\"");

@@ -1,5 +1,7 @@
 //! rBuilder core library facade
 
+pub mod memory;
+
 pub use rbuilder_analysis as analysis;
 pub use rbuilder_error::{Error, Result};
 pub use rbuilder_export as export;

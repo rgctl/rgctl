@@ -220,6 +220,7 @@ thiserror = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sysinfo = "0.30"
 pulldown-cmark = "0.9"
 notify = "6.1"
 bincode = "1.3"
