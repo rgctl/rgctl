@@ -3,10 +3,11 @@
 use crate::cfg::ControlFlowGraph;
 use crate::pdg::{PdgNodeId, ProgramDependenceGraph};
 use crate::type_inference::{InferredType, TypeInferenceEngine};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Classification of taint sources.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TaintSource {
     /// HTTP request parameter.
     HttpParameter,
@@ -23,7 +24,7 @@ pub enum TaintSource {
 }
 
 /// Classification of taint sinks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TaintSink {
     /// SQL execution.
     SqlQuery,
@@ -42,7 +43,7 @@ pub enum TaintSink {
 }
 
 /// Sanitizer that may break taint flow.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Sanitizer {
     /// Prepared statement / parameter binding.
     SqlParameterize,
@@ -57,7 +58,7 @@ pub enum Sanitizer {
 }
 
 /// A taint flow path from source to sink.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaintFlow {
     /// Source PDG node.
     pub source: PdgNodeId,

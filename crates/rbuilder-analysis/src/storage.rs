@@ -3,6 +3,7 @@
 use crate::cfg::ControlFlowGraph;
 use crate::dominance::DominatorTree;
 use crate::pdg::ProgramDependenceGraph;
+use crate::taint::TaintFlow;
 use rbuilder_error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -25,6 +26,9 @@ pub struct FunctionAnalysis {
     pub pdg: Option<ProgramDependenceGraph>,
     /// Dominator tree
     pub dominance: Option<DominatorTree>,
+    /// Taint flows (source→sink paths)
+    #[serde(default)]
+    pub taint: Option<Vec<TaintFlow>>,
 }
 
 /// Storage manager for analysis results.
@@ -155,6 +159,7 @@ mod tests {
             cfg: None,
             pdg: None,
             dominance: None,
+            taint: None,
         };
 
         storage.save_function(&analysis).unwrap();
@@ -177,6 +182,7 @@ mod tests {
                 cfg: None,
                 pdg: None,
                 dominance: None,
+                taint: None,
             };
             storage.save_function(&analysis).unwrap();
         }

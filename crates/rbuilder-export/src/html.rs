@@ -88,6 +88,7 @@ pub fn export_html_dashboard(
                                     "cfg": a.get("cfg"),
                                     "pdg": a.get("pdg"),
                                     "dominance": a.get("dominance"),
+                                    "taint": a.get("taint"),
                                 })
                             })
                             .collect();
@@ -737,56 +738,34 @@ fn generate_html_template(
                         <h5 class="card-title">Taint Analysis</h5>
                         <p class="text-muted">Track data flow from sources (user input) to sinks (sensitive operations)</p>
 
-                        <div class="alert alert-info">
-                            <h6><i class="fas fa-info-circle"></i> Taint Analysis Coming Soon</h6>
-                            <p>Taint analysis tracks how untrusted data flows through your code to identify potential security vulnerabilities.</p>
+                        <div class="row mb-3">
+                            <div class="col-md-12">
+                                <label for="taint-function-select" class="form-label">Select Function:</label>
+                                <select class="form-select" id="taint-function-select">
+                                    <option value="">-- Choose a function --</option>
+                                </select>
+                            </div>
+                        </div>
 
-                            <p><strong>What it detects:</strong></p>
+                        <div id="taint-summary" class="alert alert-secondary" style="display: none;">
+                            <h6><i class="fas fa-chart-bar"></i> Summary</h6>
+                            <div id="taint-summary-content"></div>
+                        </div>
+
+                        <div id="taint-flows-container" style="display: none;">
+                            <h6>Taint Flows</h6>
+                            <div id="taint-flows-list"></div>
+                        </div>
+
+                        <div id="taint-empty" class="alert alert-info">
+                            <h6><i class="fas fa-info-circle"></i> No Taint Flows Detected</h6>
+                            <p>No vulnerable data flows were found in the analyzed functions.</p>
+                            <p><strong>What taint analysis detects:</strong></p>
                             <ul>
                                 <li>SQL Injection risks (user input → database queries)</li>
                                 <li>XSS vulnerabilities (user input → HTML output)</li>
                                 <li>Command Injection (user input → system commands)</li>
-                                <li>Path Traversal (user input → file operations)</li>
-                            </ul>
-
-                            <p><strong>How to enable:</strong></p>
-                            <pre class="bg-light p-3 rounded"><code>rbuilder analyze --taint</code></pre>
-
-                            <p class="mb-0"><strong>Configuration:</strong> Define custom sources, sinks, and sanitizers in <code>.rbuilder/taint_config.json</code></p>
-                        </div>
-
-                        <div class="card">
-                            <div class="card-header bg-light">
-                                <h6 class="mb-0">Example Configuration</h6>
-                            </div>
-                            <div class="card-body">
-                                <pre class="bg-dark text-light p-3 rounded" style="font-size: 0.85em;"><code>{{
-  "sources": [
-    {{ "pattern": "*HttpRequest*", "label": "http_input" }},
-    {{ "pattern": "*getUserInput*", "label": "user_input" }},
-    {{ "pattern": "*readFile*", "label": "file_input" }}
-  ],
-  "sinks": [
-    {{ "pattern": "*executeQuery*", "label": "sql_sink", "severity": "high" }},
-    {{ "pattern": "*system*", "label": "command_sink", "severity": "critical" }},
-    {{ "pattern": "*innerHTML*", "label": "xss_sink", "severity": "high" }}
-  ],
-  "sanitizers": [
-    {{ "pattern": "*escape*", "label": "escaping" }},
-    {{ "pattern": "*validate*", "label": "validation" }},
-    {{ "pattern": "*sanitize*", "label": "sanitization" }}
-  ]
-}}</code></pre>
-                            </div>
-                        </div>
-
-                        <div class="mt-3">
-                            <h6>Related Tools</h6>
-                            <p>While taint analysis visualization is in development, you can use:</p>
-                            <ul>
-                                <li><strong>Program Slicing</strong> - Trace backward from sensitive operations to see what data affects them</li>
-                                <li><strong>Dataflow View</strong> - Visualize how variables flow through functions</li>
-                                <li><strong>Security Analysis</strong> - Available via <code>rbuilder analyze --security</code> for secret detection</li>
+                                <li>Code Execution (user input → eval/exec)</li>
                             </ul>
                         </div>
                     </div>
@@ -2099,6 +2078,137 @@ fn generate_html_template(
         }});
 
         populateBlastFunctionSelect();
+
+        // Taint Analysis
+        function populateTaintFunctionSelect() {{
+            const select = document.getElementById('taint-function-select');
+            select.innerHTML = '<option value="">-- Choose a function --</option>';
+
+            const functionsWithTaint = dataflowFunctions.filter(f => f.taint && f.taint.length > 0);
+
+            if (functionsWithTaint.length === 0) {{
+                document.getElementById('taint-empty').style.display = 'block';
+                return;
+            }}
+
+            document.getElementById('taint-empty').style.display = 'none';
+
+            functionsWithTaint.forEach(func => {{
+                const option = document.createElement('option');
+                option.value = func.function_id;
+                option.textContent = `${{func.function_name}} (${{func.taint.length}} flows)`;
+                select.appendChild(option);
+            }});
+        }}
+
+        function renderTaintAnalysis(func) {{
+            const flows = func.taint || [];
+
+            if (flows.length === 0) {{
+                document.getElementById('taint-summary').style.display = 'none';
+                document.getElementById('taint-flows-container').style.display = 'none';
+                return;
+            }}
+
+            const vulnerable = flows.filter(f => f.sanitizers.length === 0);
+
+            // Summary
+            const summaryHtml = `
+                <div class="row">
+                    <div class="col-md-4">
+                        <strong>Total Flows:</strong> ${{flows.length}}
+                    </div>
+                    <div class="col-md-4">
+                        <strong class="text-danger">Vulnerable:</strong> ${{vulnerable.length}}
+                    </div>
+                    <div class="col-md-4">
+                        <strong class="text-success">Sanitized:</strong> ${{flows.length - vulnerable.length}}
+                    </div>
+                </div>
+            `;
+            document.getElementById('taint-summary-content').innerHTML = summaryHtml;
+            document.getElementById('taint-summary').style.display = 'block';
+
+            // Flows list
+            const flowsHtml = flows.map((flow, idx) => {{
+                const isVulnerable = flow.sanitizers.length === 0;
+                const severityClass = flow.severity >= 9 ? 'danger' : flow.severity >= 7 ? 'warning' : 'info';
+                const sourceType = flow.source_type.replace(/([A-Z])/g, ' $1').trim();
+                const sinkType = flow.sink_type.replace(/([A-Z])/g, ' $1').trim();
+
+                return `
+                    <div class="card mb-3 border-${{severityClass}}">
+                        <div class="card-header bg-${{severityClass}} bg-opacity-10">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <h6 class="mb-0">
+                                    Flow #${{idx + 1}}: ${{flow.variable || 'data'}}
+                                    ${{isVulnerable ? '<span class="badge bg-danger ms-2">Vulnerable</span>' : '<span class="badge bg-success ms-2">Sanitized</span>'}}
+                                </h6>
+                                <span class="badge bg-${{severityClass}}">Severity: ${{flow.severity}}/10</span>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="row mb-2">
+                                <div class="col-md-6">
+                                    <strong><i class="fas fa-sign-in-alt text-primary"></i> Source:</strong> ${{sourceType}}
+                                </div>
+                                <div class="col-md-6">
+                                    <strong><i class="fas fa-sign-out-alt text-danger"></i> Sink:</strong> ${{sinkType}}
+                                </div>
+                            </div>
+
+                            ${{flow.sanitizers.length > 0 ? `
+                            <div class="alert alert-success mb-2 py-2">
+                                <strong><i class="fas fa-shield-alt"></i> Sanitizers:</strong>
+                                ${{flow.sanitizers.map(s => {{
+                                    if (typeof s === 'string') return s;
+                                    if (s.TypeCast) return `TypeCast(${{s.TypeCast}})`;
+                                    if (s.Validation) return `Validation(${{s.Validation}})`;
+                                    if (s.HtmlEscape) return 'HTML Escape';
+                                    if (s.ShellEscape) return 'Shell Escape';
+                                    if (s.SqlParameterize) return 'SQL Parameterize';
+                                    return JSON.stringify(s);
+                                }}).join(', ')}}
+                            </div>
+                            ` : ''}}
+
+                            <div>
+                                <strong><i class="fas fa-route"></i> Flow Path:</strong>
+                                <div class="mt-2 small">
+                                    ${{flow.path.map((nodeId, i) => {{
+                                        const node = func.pdg?.nodes?.[nodeId];
+                                        const stmt = node?.statement;
+                                        const arrow = i < flow.path.length - 1 ? '<i class="fas fa-arrow-down ms-2"></i>' : '';
+                                        return `
+                                            <div class="mb-2 p-2 bg-light rounded">
+                                                <code class="small">${{stmt?.text || nodeId}}</code>
+                                                <span class="text-muted ms-2">(line ${{stmt?.line || '?'}})</span>
+                                                ${{arrow}}
+                                            </div>
+                                        `;
+                                    }}).join('')}}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }}).join('');
+
+            document.getElementById('taint-flows-list').innerHTML = flowsHtml;
+            document.getElementById('taint-flows-container').style.display = 'block';
+        }}
+
+        document.getElementById('taint-function-select').addEventListener('change', (e) => {{
+            const funcId = e.target.value;
+            if (!funcId) return;
+
+            const func = dataflowFunctions.find(f => f.function_id === funcId);
+            if (!func) return;
+
+            renderTaintAnalysis(func);
+        }});
+
+        populateTaintFunctionSelect();
 
     </script>
 </body>

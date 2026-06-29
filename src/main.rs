@@ -642,6 +642,21 @@ fn main() -> anyhow::Result<()> {
                         None
                     };
 
+                    // Run Taint Analysis (always enabled)
+                    use rbuilder::analysis::TaintAnalyzer;
+                    let taint_data = if let (Some(ref cfg), Some(ref pdg)) = (&cfg_data, &pdg_data) {
+                        let mut analyzer = TaintAnalyzer::new(pdg, cfg);
+                        analyzer.detect_patterns(lang);
+                        let flows = analyzer.analyze();
+                        if flows.is_empty() {
+                            None
+                        } else {
+                            Some(flows)
+                        }
+                    } else {
+                        None
+                    };
+
                     // Store analysis
                     let analysis = FunctionAnalysis {
                         function_id: func_node.id,
@@ -650,6 +665,7 @@ fn main() -> anyhow::Result<()> {
                         cfg: cfg_data,
                         pdg: pdg_data,
                         dominance: dom_data,
+                        taint: taint_data,
                     };
 
                     if storage.save_function(&analysis).is_ok() {
@@ -669,6 +685,23 @@ fn main() -> anyhow::Result<()> {
                 let export_path = Path::new(output_dir).join("all_analyses.json");
                 storage.export_all(&export_path)?;
                 println!("Exported to {}", export_path.display());
+
+                // Taint analysis summary
+                let all_analyses = storage.load_all().unwrap_or_default();
+                let mut total_flows = 0;
+                let mut vulnerable_flows = 0;
+                for analysis in &all_analyses {
+                    if let Some(ref flows) = analysis.taint {
+                        total_flows += flows.len();
+                        vulnerable_flows += flows.iter().filter(|f| f.is_vulnerable()).count();
+                    }
+                }
+                if total_flows > 0 {
+                    println!("\n✓ Taint analysis:");
+                    println!("  Total flows: {}", total_flows);
+                    println!("  Vulnerable flows: {}", vulnerable_flows);
+                    println!("  Sanitized flows: {}", total_flows - vulnerable_flows);
+                }
             }
 
             Ok(())
@@ -1464,6 +1497,21 @@ fn run_full_analysis(
             None
         };
 
+        // Run Taint Analysis
+        use rbuilder::analysis::TaintAnalyzer;
+        let taint_data = if let (Some(ref cfg), Some(ref pdg)) = (&cfg_data, &pdg_data) {
+            let mut analyzer = TaintAnalyzer::new(pdg, cfg);
+            analyzer.detect_patterns(lang);
+            let flows = analyzer.analyze();
+            if flows.is_empty() {
+                None
+            } else {
+                Some(flows)
+            }
+        } else {
+            None
+        };
+
         // Store analysis
         let analysis = FunctionAnalysis {
             function_id: func_node.id,
@@ -1472,6 +1520,7 @@ fn run_full_analysis(
             cfg: cfg_data,
             pdg: pdg_data,
             dominance: dom_data,
+            taint: taint_data,
         };
 
         if storage.save_function(&analysis).is_ok() {
@@ -1493,6 +1542,20 @@ fn run_full_analysis(
             if verbose {
                 println!("  Exported to {}", export_path.display());
             }
+        }
+
+        // Taint analysis summary
+        let all_analyses = storage.load_all().unwrap_or_default();
+        let mut total_flows = 0;
+        let mut vulnerable_flows = 0;
+        for analysis in &all_analyses {
+            if let Some(ref flows) = analysis.taint {
+                total_flows += flows.len();
+                vulnerable_flows += flows.iter().filter(|f| f.is_vulnerable()).count();
+            }
+        }
+        if total_flows > 0 {
+            println!("  Taint flows: {} total ({} vulnerable)", total_flows, vulnerable_flows);
         }
     } else if !functions.is_empty() {
         println!("  No functions analyzed (Rust/Python only)");
