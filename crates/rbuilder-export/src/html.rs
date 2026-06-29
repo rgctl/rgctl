@@ -2316,8 +2316,18 @@ fn generate_html_template(
 
         function populateTaintFunctionList() {{
             const listContainer = document.getElementById('taintFunctionList');
+
+            // Deduplicate by function_id
+            const seenIds = new Set();
             allTaintFunctions = dataflowFunctions
                 .filter(f => f.taint && f.taint.length > 0)
+                .filter(f => {{
+                    if (seenIds.has(f.function_id)) {{
+                        return false;
+                    }}
+                    seenIds.add(f.function_id);
+                    return true;
+                }})
                 .map(f => ({{
                     function_id: f.function_id,
                     function_name: f.function_name,
@@ -2517,7 +2527,17 @@ fn generate_html_template(
 
         function populateDataflowFunctionList() {{
             const listContainer = document.getElementById('dataflowFunctionList');
+
+            // Deduplicate by function_id
+            const seenIds = new Set();
             allDataflowFunctions = dataflowFunctions
+                .filter(f => {{
+                    if (seenIds.has(f.function_id)) {{
+                        return false;
+                    }}
+                    seenIds.add(f.function_id);
+                    return true;
+                }})
                 .map(f => ({{
                     function_id: f.function_id,
                     function_name: f.function_name,
@@ -2608,8 +2628,18 @@ fn generate_html_template(
 
         function populateSliceFunctionList() {{
             const listContainer = document.getElementById('sliceFunctionList');
+
+            // Deduplicate by function_id
+            const seenIds = new Set();
             allSliceFunctions = dataflowFunctions
                 .filter(f => f.pdg && f.cfg)
+                .filter(f => {{
+                    if (seenIds.has(f.function_id)) {{
+                        return false;
+                    }}
+                    seenIds.add(f.function_id);
+                    return true;
+                }})
                 .map(f => ({{
                     function_id: f.function_id,
                     function_name: f.function_name,
