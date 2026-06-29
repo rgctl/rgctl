@@ -131,8 +131,11 @@ impl<'a> BlastRadiusAnalyzer<'a> {
             {
                 if is_calls_edge(view, pred, caller_idx) {
                     if let Some(uuid) = view.directed_to_uuid.get(&pred) {
-                        if *uuid != symbol_id {
-                            queue.push_back((*uuid, depth + 1));
+                        // Only include Function nodes in impact zone
+                        if let Some(node) = view.nodes.iter().find(|n| n.id == *uuid) {
+                            if node.node_type == rbuilder_graph::schema::NodeType::Function && *uuid != symbol_id {
+                                queue.push_back((*uuid, depth + 1));
+                            }
                         }
                     }
                 }
@@ -186,11 +189,20 @@ impl<'a> BlastRadiusAnalyzer<'a> {
 }
 
 fn incoming_callers(view: &PetGraphView, target_idx: petgraph::graph::NodeIndex) -> Vec<Uuid> {
+    use rbuilder_graph::schema::NodeType;
+
     view.directed
         .neighbors_directed(target_idx, Direction::Incoming)
         .filter_map(|idx| {
             if is_calls_edge(view, idx, target_idx) {
-                view.directed_to_uuid.get(&idx).copied()
+                let uuid = view.directed_to_uuid.get(&idx).copied()?;
+                // Only include Function nodes
+                let node = view.nodes.iter().find(|n| n.id == uuid)?;
+                if node.node_type == NodeType::Function {
+                    Some(uuid)
+                } else {
+                    None
+                }
             } else {
                 None
             }

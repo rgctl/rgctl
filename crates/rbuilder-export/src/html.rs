@@ -2128,6 +2128,13 @@ fn generate_html_template(
             const width = container.node().getBoundingClientRect().width;
             const height = 600;
 
+            console.log('renderBlastRadius called:', {{
+                targetNode: targetNode.name,
+                targetId: targetNode.id,
+                directCallers: blastData.directCallers,
+                impactZone: blastData.impactZone
+            }});
+
             // Build subgraph - only include Calls edges
             const relevantNodes = new Set([targetNode.id, ...blastData.directCallers, ...blastData.impactZone]);
             const nodes = graphData.nodes.filter(n => relevantNodes.has(n.id));
@@ -2136,6 +2143,24 @@ fn generate_html_template(
                 relevantNodes.has(e.source) &&
                 relevantNodes.has(e.target)
             );
+
+            console.log('Subgraph built:', {{
+                relevantNodeCount: relevantNodes.size,
+                foundNodes: nodes.length,
+                foundEdges: edges.length,
+                nodeNames: nodes.map(n => n.name)
+            }});
+
+            if (nodes.length === 0) {{
+                container.append('div')
+                    .attr('class', 'p-5 text-center text-muted')
+                    .html('<i class="fas fa-exclamation-triangle fa-2x mb-3"></i><br>No nodes found in graph');
+                return;
+            }}
+
+            if (edges.length === 0 && nodes.length > 1) {{
+                console.warn('Found nodes but no edges connecting them');
+            }}
 
             const svg = container.append('svg')
                 .attr('width', width)
