@@ -135,6 +135,7 @@ impl<'a> TaintAnalyzer<'a> {
             "python" | "py" => self.detect_python_patterns(),
             "javascript" | "js" | "typescript" | "ts" => self.detect_js_patterns(),
             "rust" | "rs" => self.detect_rust_patterns(),
+            "java" => self.detect_java_patterns(),
             _ => {}
         }
     }
@@ -222,6 +223,73 @@ impl<'a> TaintAnalyzer<'a> {
             if text.contains(".parse::<") {
                 self.sanitizers
                     .insert(*node_id, Sanitizer::TypeCast("typed".into()));
+            }
+        }
+    }
+
+    fn detect_java_patterns(&mut self) {
+        for (node_id, node) in &self.pdg.nodes {
+            let text = &node.statement.text;
+
+            // Sources
+            if text.contains("getParameter(")
+                || text.contains("getHeader(")
+                || text.contains("getQueryString(")
+                || text.contains("request.get") {
+                self.sources.insert(*node_id, TaintSource::HttpParameter);
+            } else if text.contains("FileInputStream")
+                || text.contains("Files.read")
+                || text.contains("BufferedReader") {
+                self.sources.insert(*node_id, TaintSource::FileInput);
+            } else if text.contains("System.getenv") {
+                self.sources.insert(*node_id, TaintSource::EnvironmentVar);
+            } else if text.contains("args[") || text.contains("getArgs(") {
+                self.sources.insert(*node_id, TaintSource::CommandLineArg);
+            } else if text.contains("ResultSet") || text.contains("executeQuery") {
+                self.sources.insert(*node_id, TaintSource::DatabaseResult);
+            }
+
+            // Sinks
+            if text.contains("createStatement")
+                || text.contains("prepareStatement")
+                || text.contains("executeQuery")
+                || text.contains("executeUpdate")
+                || text.contains(".createQuery(") {
+                self.sinks.insert(*node_id, TaintSink::SqlQuery);
+            } else if text.contains("Runtime.getRuntime().exec")
+                || text.contains("ProcessBuilder")
+                || text.contains(".exec(") {
+                self.sinks.insert(*node_id, TaintSink::ShellCommand);
+            } else if text.contains("FileOutputStream")
+                || text.contains("FileWriter")
+                || text.contains("Files.write") {
+                self.sinks.insert(*node_id, TaintSink::FileWrite);
+            } else if text.contains("PrintWriter")
+                || text.contains("response.getWriter")
+                || text.contains("innerHTML")
+                || text.contains("innerText") {
+                self.sinks.insert(*node_id, TaintSink::HtmlRender);
+            } else if text.contains("Logger.") || text.contains(".log(") {
+                self.sinks.insert(*node_id, TaintSink::LogOutput);
+            }
+
+            // Sanitizers
+            if text.contains("Integer.parseInt")
+                || text.contains("Long.parseLong")
+                || text.contains("Double.parseDouble") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::TypeCast("numeric".into()));
+            } else if text.contains("StringEscapeUtils")
+                || text.contains("HtmlUtils.htmlEscape")
+                || text.contains("ESAPI.encoder") {
+                self.sanitizers.insert(*node_id, Sanitizer::HtmlEscape);
+            } else if text.contains("prepareStatement") && text.contains("setString") {
+                self.sanitizers.insert(*node_id, Sanitizer::SqlParameterize);
+            } else if text.contains("Pattern.matches")
+                || text.contains(".matches(")
+                || text.contains("Validator.") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::Validation("pattern".into()));
             }
         }
     }
