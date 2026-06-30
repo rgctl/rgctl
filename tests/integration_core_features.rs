@@ -426,16 +426,21 @@ fn test_call_graph_usability() {
     let (graph, _) = pipeline.process_repository(repo.path()).unwrap();
     let backend = graph.backend();
 
-    // Find the 'process' method
-    let process_method = backend
-        .all_nodes()
-        .unwrap()
+    // Find the 'process' method implementation (not the interface declaration)
+    // We want the one that has outgoing calls, which is in ServiceImpl
+    let all_nodes = backend.all_nodes().unwrap();
+
+    let process_method = all_nodes
         .into_iter()
-        .find(|n| n.name.contains("process") && n.node_type == NodeType::Function);
+        .find(|n| {
+            n.name == "process"
+            && n.node_type == NodeType::Function
+            && n.file_path.as_ref().map_or(false, |p| p.contains("ServiceImpl"))
+        });
 
     assert!(
         process_method.is_some(),
-        "Test setup issue: Could not find 'process' method"
+        "Test setup issue: Could not find 'process' method in ServiceImpl"
     );
 
     let process_id = process_method.unwrap().id;

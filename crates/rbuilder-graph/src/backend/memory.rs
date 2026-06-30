@@ -41,7 +41,7 @@ pub struct MemoryBackend {
     node_label_index: Arc<RwLock<HashMap<Arc<str>, Vec<Uuid>>>>,
     node_property_index: Arc<RwLock<PropertyIndex>>,
     edge_type_index: Arc<RwLock<HashMap<EdgeType, Vec<usize>>>>,
-    string_interner: StringInterner,
+    string_interner: Arc<StringInterner>,  // CRITICAL: Must be Arc-wrapped to share pool across clones
     query_cache: Arc<RwLock<HashMap<String, Vec<Node>>>>,
 }
 
@@ -56,7 +56,7 @@ impl MemoryBackend {
             node_label_index: Arc::new(RwLock::new(HashMap::new())),
             node_property_index: Arc::new(RwLock::new(HashMap::new())),
             edge_type_index: Arc::new(RwLock::new(HashMap::new())),
-            string_interner: StringInterner::new(),
+            string_interner: Arc::new(StringInterner::new()),  // Wrap in Arc
             query_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
