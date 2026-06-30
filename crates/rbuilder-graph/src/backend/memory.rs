@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-type PropertyIndex = HashMap<String, HashMap<String, Vec<Uuid>>>;
+type PropertyIndex = HashMap<Arc<str>, HashMap<Arc<str>, Vec<Uuid>>>;
 
 fn read_lock<T>(lock: &RwLock<T>) -> Result<std::sync::RwLockReadGuard<'_, T>> {
     lock.read()
@@ -36,9 +36,9 @@ fn expect_write<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
 pub struct MemoryBackend {
     nodes: Arc<RwLock<HashMap<Uuid, Node>>>,
     edges: Arc<RwLock<Vec<Edge>>>,
-    node_name_index: Arc<RwLock<HashMap<String, Vec<Uuid>>>>,
+    node_name_index: Arc<RwLock<HashMap<Arc<str>, Vec<Uuid>>>>,
     node_type_index: Arc<RwLock<HashMap<NodeType, Vec<Uuid>>>>,
-    node_label_index: Arc<RwLock<HashMap<String, Vec<Uuid>>>>,
+    node_label_index: Arc<RwLock<HashMap<Arc<str>, Vec<Uuid>>>>,
     node_property_index: Arc<RwLock<PropertyIndex>>,
     edge_type_index: Arc<RwLock<HashMap<EdgeType, Vec<usize>>>>,
     string_interner: StringInterner,
@@ -75,8 +75,9 @@ impl MemoryBackend {
 
     /// Find nodes by name (indexed)
     pub fn find_nodes_by_name(&self, name: &str) -> Result<Vec<Node>> {
+        let name_arc = self.string_interner.intern(name);
         let index = read_lock(&self.node_name_index)?;
-        if let Some(ids) = index.get(name) {
+        if let Some(ids) = index.get(name_arc.as_ref()) {
             let nodes = read_lock(&self.nodes)?;
             Ok(ids.iter().filter_map(|id| nodes.get(id).cloned()).collect())
         } else {
@@ -97,8 +98,9 @@ impl MemoryBackend {
 
     /// Find nodes by label (indexed)
     pub fn find_nodes_by_label(&self, label: &str) -> Result<Vec<Node>> {
+        let label_arc = self.string_interner.intern(label);
         let index = read_lock(&self.node_label_index)?;
-        if let Some(ids) = index.get(label) {
+        if let Some(ids) = index.get(label_arc.as_ref()) {
             let nodes = read_lock(&self.nodes)?;
             Ok(ids.iter().filter_map(|id| nodes.get(id).cloned()).collect())
         } else {
@@ -108,9 +110,11 @@ impl MemoryBackend {
 
     /// Find nodes by property key/value (indexed).
     pub fn find_nodes_by_property(&self, key: &str, value: &str) -> Result<Vec<Node>> {
+        let key_arc = self.string_interner.intern(key);
+        let value_arc = self.string_interner.intern(value);
         let index = read_lock(&self.node_property_index)?;
-        if let Some(values) = index.get(key) {
-            if let Some(ids) = values.get(value) {
+        if let Some(values) = index.get(key_arc.as_ref()) {
+            if let Some(ids) = values.get(value_arc.as_ref()) {
                 let nodes = read_lock(&self.nodes)?;
                 return Ok(ids.iter().filter_map(|id| nodes.get(id).cloned()).collect());
             }
@@ -141,20 +145,33 @@ impl MemoryBackend {
             return Ok(());
         }
 
+        let start = std::time::Instant::now();
+        let node_count = nodes.len();
+
+        eprintln!("[PROFILE] insert_nodes_batch: Starting with {} nodes", node_count);
+
+        let intern_start = std::time::Instant::now();
         let mut prepared = Vec::with_capacity(nodes.len());
         for mut node in nodes {
             self.intern_node(&mut node);
             prepared.push(node);
         }
+        eprintln!("[PROFILE] insert_nodes_batch: String interning took {:?}", intern_start.elapsed());
 
+        let index_start = std::time::Instant::now();
         self.index_nodes(&prepared);
+        eprintln!("[PROFILE] insert_nodes_batch: Indexing took {:?}", index_start.elapsed());
 
+        let store_start = std::time::Instant::now();
         let mut store = write_lock(&self.nodes)?;
         for node in prepared {
             store.insert(node.id, node);
         }
         drop(store);
+        eprintln!("[PROFILE] insert_nodes_batch: Storing took {:?}", store_start.elapsed());
+
         self.invalidate_cache();
+        eprintln!("[PROFILE] insert_nodes_batch: Total took {:?}", start.elapsed());
         Ok(())
     }
 
@@ -163,6 +180,10 @@ impl MemoryBackend {
         if edges.is_empty() {
             return Ok(());
         }
+
+        let start = std::time::Instant::now();
+        let edge_count = edges.len();
+        eprintln!("[PROFILE] insert_edges_batch: Starting with {} edges", edge_count);
 
         let mut store = write_lock(&self.edges)?;
         let mut type_index = write_lock(&self.edge_type_index)?;
@@ -174,6 +195,8 @@ impl MemoryBackend {
         drop(type_index);
         drop(store);
         self.invalidate_cache();
+
+        eprintln!("[PROFILE] insert_edges_batch: Total took {:?}", start.elapsed());
         Ok(())
     }
 
@@ -386,46 +409,65 @@ impl MemoryBackend {
     }
 
     fn index_nodes(&self, nodes: &[Node]) {
+        let start = std::time::Instant::now();
+
+        let lock_start = std::time::Instant::now();
         let mut name_index = expect_write(&self.node_name_index);
         let mut type_index = expect_write(&self.node_type_index);
         let mut label_index = expect_write(&self.node_label_index);
         let mut property_index = expect_write(&self.node_property_index);
+        eprintln!("[PROFILE] index_nodes: Lock acquisition took {:?}", lock_start.elapsed());
 
+        let index_start = std::time::Instant::now();
         for node in nodes {
+            // Intern strings once, share Arc across indexes (no clones!)
+            let name_arc = self.string_interner.intern(&node.name);
             name_index
-                .entry(node.name.clone())
+                .entry(name_arc)  // Arc::clone is cheap (just pointer + refcount)
                 .or_default()
                 .push(node.id);
+
             type_index.entry(node.node_type).or_default().push(node.id);
+
             for label in &node.labels {
-                label_index.entry(label.clone()).or_default().push(node.id);
+                let label_arc = self.string_interner.intern(label);
+                label_index.entry(label_arc).or_default().push(node.id);
             }
+
             for (key, value) in &node.properties {
+                let key_arc = self.string_interner.intern(key);
+                let value_arc = self.string_interner.intern(value);
                 property_index
-                    .entry(key.clone())
+                    .entry(key_arc)
                     .or_default()
-                    .entry(value.clone())
+                    .entry(value_arc)
                     .or_default()
                     .push(node.id);
             }
         }
+        eprintln!("[PROFILE] index_nodes: Index population took {:?}", index_start.elapsed());
+        eprintln!("[PROFILE] index_nodes: Total took {:?}", start.elapsed());
     }
 
     fn unindex_node(&self, node: &Node) {
-        if let Some(ids) = expect_write(&self.node_name_index).get_mut(&node.name) {
+        let name_arc = self.string_interner.intern(&node.name);
+        if let Some(ids) = expect_write(&self.node_name_index).get_mut(name_arc.as_ref()) {
             ids.retain(|&x| x != node.id);
         }
         if let Some(ids) = expect_write(&self.node_type_index).get_mut(&node.node_type) {
             ids.retain(|&x| x != node.id);
         }
         for label in &node.labels {
-            if let Some(ids) = expect_write(&self.node_label_index).get_mut(label) {
+            let label_arc = self.string_interner.intern(label);
+            if let Some(ids) = expect_write(&self.node_label_index).get_mut(label_arc.as_ref()) {
                 ids.retain(|&x| x != node.id);
             }
         }
         for (key, value) in &node.properties {
-            if let Some(values) = expect_write(&self.node_property_index).get_mut(key) {
-                if let Some(ids) = values.get_mut(value) {
+            let key_arc = self.string_interner.intern(key);
+            let value_arc = self.string_interner.intern(value);
+            if let Some(values) = expect_write(&self.node_property_index).get_mut(key_arc.as_ref()) {
+                if let Some(ids) = values.get_mut(value_arc.as_ref()) {
                     ids.retain(|&x| x != node.id);
                 }
             }
@@ -495,6 +537,119 @@ impl GraphBackend for MemoryBackend {
 
     fn query(&self, query: &str) -> Result<Vec<Node>> {
         self.cached_query(query)
+    }
+}
+
+impl MemoryBackend {
+    /// Stream nodes in batches to avoid loading all nodes into memory at once.
+    ///
+    /// Returns an iterator that yields batches of nodes. This is memory-efficient
+    /// for large graphs as it only holds one batch in memory at a time.
+    pub fn stream_nodes(&self, batch_size: usize) -> Result<NodeBatchIterator> {
+        let ids: Vec<Uuid> = {
+            let nodes = read_lock(&self.nodes)?;
+            nodes.keys().copied().collect()
+        };
+
+        Ok(NodeBatchIterator {
+            nodes: Arc::clone(&self.nodes),
+            ids,
+            batch_size,
+            position: 0,
+        })
+    }
+
+    /// Stream edges in batches to avoid loading all edges into memory at once.
+    pub fn stream_edges(&self, batch_size: usize) -> Result<EdgeBatchIterator> {
+        let total_edges = {
+            let edges = read_lock(&self.edges)?;
+            edges.len()
+        };
+
+        Ok(EdgeBatchIterator {
+            edges: Arc::clone(&self.edges),
+            batch_size,
+            position: 0,
+            total: total_edges,
+        })
+    }
+
+    /// Stream nodes of a specific type in batches.
+    pub fn stream_nodes_by_type(&self, node_type: NodeType, batch_size: usize) -> Result<NodeBatchIterator> {
+        let ids: Vec<Uuid> = {
+            let index = read_lock(&self.node_type_index)?;
+            index.get(&node_type).cloned().unwrap_or_default()
+        };
+
+        Ok(NodeBatchIterator {
+            nodes: Arc::clone(&self.nodes),
+            ids,
+            batch_size,
+            position: 0,
+        })
+    }
+}
+
+/// Iterator that yields batches of nodes
+pub struct NodeBatchIterator {
+    nodes: Arc<RwLock<HashMap<Uuid, Node>>>,
+    ids: Vec<Uuid>,
+    batch_size: usize,
+    position: usize,
+}
+
+impl Iterator for NodeBatchIterator {
+    type Item = Result<Vec<Node>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.position >= self.ids.len() {
+            return None;
+        }
+
+        let end = (self.position + self.batch_size).min(self.ids.len());
+        let batch_ids = &self.ids[self.position..end];
+        self.position = end;
+
+        let nodes_lock = match read_lock(&self.nodes) {
+            Ok(lock) => lock,
+            Err(e) => return Some(Err(e)),
+        };
+
+        let batch: Vec<Node> = batch_ids
+            .iter()
+            .filter_map(|id| nodes_lock.get(id).cloned())
+            .collect();
+
+        Some(Ok(batch))
+    }
+}
+
+/// Iterator that yields batches of edges
+pub struct EdgeBatchIterator {
+    edges: Arc<RwLock<Vec<Edge>>>,
+    batch_size: usize,
+    position: usize,
+    total: usize,
+}
+
+impl Iterator for EdgeBatchIterator {
+    type Item = Result<Vec<Edge>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.position >= self.total {
+            return None;
+        }
+
+        let edges_lock = match read_lock(&self.edges) {
+            Ok(lock) => lock,
+            Err(e) => return Some(Err(e)),
+        };
+
+        let end = (self.position + self.batch_size).min(self.total);
+        let batch = edges_lock[self.position..end].to_vec();
+        self.position = end;
+
+        Some(Ok(batch))
     }
 }
 
