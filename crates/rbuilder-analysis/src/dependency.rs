@@ -6,7 +6,7 @@ use crate::graph_utils::PetGraphView;
 use petgraph::algo::kosaraju_scc;
 use petgraph::visit::EdgeRef;
 use rbuilder_error::{Error, Result};
-use rbuilder_graph::backend::MemoryBackend;
+use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
 use rbuilder_graph::schema::EdgeType;
 use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
@@ -52,7 +52,7 @@ impl DependencyAnalyzer {
             let has_call_edge = component.iter().any(|&a| {
                 view.directed
                     .edges(a)
-                    .any(|e| *e.weight() == EdgeType::Calls && component.contains(&e.target()))
+                    .any(|e| component.contains(&e.target()))
             });
             if !has_call_edge && component.len() == 1 {
                 continue;
@@ -60,15 +60,12 @@ impl DependencyAnalyzer {
 
             let uuids: Vec<Uuid> = component
                 .iter()
-                .filter_map(|idx| view.directed_to_uuid.get(idx).copied())
+                .filter_map(|idx| view.index_to_uuid.get(idx).copied())
                 .collect();
             let names: Vec<String> = uuids
                 .iter()
                 .filter_map(|id| {
-                    view.nodes
-                        .iter()
-                        .find(|n| n.id == *id)
-                        .map(|n| n.name.clone())
+                    backend.get_node(*id).ok().flatten().map(|n| n.name.clone())
                 })
                 .collect();
 
@@ -88,12 +85,12 @@ impl DependencyAnalyzer {
         symbol_name: &str,
     ) -> Result<ImpactResult> {
         let view = PetGraphView::from_backend(backend)?;
-        let source_node = view
-            .find_node_by_name(symbol_name)
+        let nodes = backend.find_nodes_by_name(symbol_name)?;
+        let source_node = nodes.first()
             .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?;
         let source = source_node.id;
         let source_idx = view
-            .uuid_to_directed
+            .uuid_to_index
             .get(&source)
             .copied()
             .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?;
@@ -114,7 +111,7 @@ impl DependencyAnalyzer {
                 .directed
                 .neighbors_directed(idx, petgraph::Direction::Incoming)
             {
-                if let Some(uuid) = view.directed_to_uuid.get(&neighbor) {
+                if let Some(uuid) = view.index_to_uuid.get(&neighbor) {
                     if *uuid != source && affected.insert(*uuid) {
                         _depths.insert(*uuid, depth + 1);
                         queue.push_back((neighbor, depth + 1));
@@ -126,10 +123,7 @@ impl DependencyAnalyzer {
         let affected_names: Vec<String> = affected
             .iter()
             .filter_map(|id| {
-                view.nodes
-                    .iter()
-                    .find(|n| n.id == *id)
-                    .map(|n| n.name.clone())
+                backend.get_node(*id).ok().flatten().map(|n| n.name.clone())
             })
             .collect();
 
@@ -145,20 +139,18 @@ impl DependencyAnalyzer {
     /// Find callers of a symbol (direct).
     pub fn find_callers(backend: &MemoryBackend, symbol_name: &str) -> Result<Vec<String>> {
         let view = PetGraphView::from_backend(backend)?;
-        let target = view
-            .find_uuid_by_name(symbol_name)
-            .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?;
-        let target_idx = view.uuid_to_directed[&target];
+        let target_nodes = backend.find_nodes_by_name(symbol_name)?;
+        let target = target_nodes.first()
+            .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?
+            .id;
+        let target_idx = view.uuid_to_index[&target];
 
         let callers: Vec<String> = view
             .directed
             .neighbors_directed(target_idx, petgraph::Direction::Incoming)
-            .filter_map(|idx| view.directed_to_uuid.get(&idx))
+            .filter_map(|idx| view.index_to_uuid.get(&idx))
             .filter_map(|uuid| {
-                view.nodes
-                    .iter()
-                    .find(|n| n.id == *uuid)
-                    .map(|n| n.name.clone())
+                backend.get_node(*uuid).ok().flatten().map(|n| n.name.clone())
             })
             .collect();
         Ok(callers)

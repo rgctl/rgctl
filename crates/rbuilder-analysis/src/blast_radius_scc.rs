@@ -16,7 +16,7 @@ use petgraph::algo::{kosaraju_scc, toposort};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use rbuilder_error::{Error, Result};
-use rbuilder_graph::backend::MemoryBackend;
+use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
 use rbuilder_graph::schema::{EdgeType, NodeType};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -35,7 +35,7 @@ pub struct SccNode {
 /// Blast radius analysis engine using SCC condensation + dense bitsets.
 pub struct BlastRadiusEngine {
     /// SCC-condensed DAG
-    dag: DiGraph<SccNode, EdgeType>,
+    dag: DiGraph<SccNode, ()>,
     /// Original node UUID → SCC index mapping
     node_to_scc: HashMap<Uuid, NodeIndex>,
     /// SCC index → original node UUIDs mapping
@@ -79,7 +79,7 @@ impl BlastRadiusEngine {
         for (scc_id, component) in sccs.iter().enumerate() {
             for &node_idx in component {
                 node_to_scc_idx.insert(node_idx, scc_id);
-                if let Some(uuid) = view.directed_to_uuid.get(&node_idx) {
+                if let Some(uuid) = view.index_to_uuid.get(&node_idx) {
                     scc_members[scc_id].push(*uuid);
                 }
             }
@@ -94,7 +94,7 @@ impl BlastRadiusEngine {
         }
 
         // Step 4: Build condensed DAG
-        let mut dag: DiGraph<SccNode, EdgeType> = DiGraph::new();
+        let mut dag: DiGraph<SccNode, ()> = DiGraph::new();
         let mut scc_node_indices: Vec<NodeIndex> = Vec::with_capacity(scc_count);
 
         for (scc_id, members) in scc_members.iter().enumerate() {
@@ -103,13 +103,12 @@ impl BlastRadiusEngine {
                 // Find first function node, or use first member
                 members.iter()
                     .find_map(|uuid| {
-                        view.nodes.iter()
-                            .find(|n| n.id == *uuid && n.node_type == NodeType::Function)
+                        backend.get_node(*uuid).ok().flatten()
+                            .filter(|n| n.node_type == NodeType::Function)
                             .map(|n| n.name.clone())
                     })
                     .unwrap_or_else(|| {
-                        view.nodes.iter()
-                            .find(|n| n.id == members[0])
+                        backend.get_node(members[0]).ok().flatten()
                             .map(|n| n.name.clone())
                             .unwrap_or_else(|| format!("SCC_{}", scc_id))
                     })
@@ -141,7 +140,7 @@ impl BlastRadiusEngine {
                     dag.add_edge(
                         scc_node_indices[from_scc],
                         scc_node_indices[to_scc],
-                        *edge.weight(),
+                        (),
                     );
                     added_edges.insert(edge_key, ());
                 }
