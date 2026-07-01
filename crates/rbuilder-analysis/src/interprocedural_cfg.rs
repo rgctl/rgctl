@@ -21,15 +21,21 @@ pub struct InterproceduralCFG {
 impl InterproceduralCFG {
     /// Build from backend and source file contents keyed by path.
     pub fn build(backend: &MemoryBackend, source_files: &HashMap<String, String>) -> Result<Self> {
+        use rbuilder_graph::backend::GraphBackend;
+
         let call_graph = CallGraph::from_backend(backend)?;
         let mut function_cfgs = HashMap::new();
 
-        for (func_id, func_node) in &call_graph.nodes {
-            let source = resolve_source(source_files, &func_node.file_path);
-            if let Some(source) = source {
-                let language = detect_language(&func_node.file_path);
-                if let Ok(cfg) = build_cfg_for_function(language, source, &func_node.name) {
-                    function_cfgs.insert(*func_id, cfg);
+        // Iterate over function IDs and fetch metadata from backend
+        for &func_id in call_graph.function_ids() {
+            if let Ok(Some(func_node)) = backend.get_node(func_id) {
+                let file_path = func_node.file_path.as_deref().unwrap_or("");
+                let source = resolve_source(source_files, file_path);
+                if let Some(source) = source {
+                    let language = detect_language(file_path);
+                    if let Ok(cfg) = build_cfg_for_function(language, source, &func_node.name) {
+                        function_cfgs.insert(func_id, cfg);
+                    }
                 }
             }
         }

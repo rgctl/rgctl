@@ -4,6 +4,7 @@ use crate::interprocedural_cfg::InterproceduralCFG;
 use crate::pdg::{PdgNodeId, ProgramDependenceGraph};
 use crate::slicing::{BackwardSlicer, SliceCriterion};
 use rbuilder_error::{Error, Result};
+use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
 use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
@@ -26,29 +27,44 @@ pub struct InterproceduralSlice {
 pub struct InterproceduralSlicer<'a> {
     icfg: &'a InterproceduralCFG,
     pdgs: HashMap<Uuid, ProgramDependenceGraph>,
+    /// Cached function names for call site detection
+    function_names: HashMap<Uuid, String>,
 }
 
 impl<'a> InterproceduralSlicer<'a> {
     /// Build slicer with PDGs for each function CFG.
     pub fn new(
         icfg: &'a InterproceduralCFG,
+        backend: &MemoryBackend,
         source_files: &HashMap<String, String>,
     ) -> Result<Self> {
         let mut pdgs = HashMap::new();
+        let mut function_names = HashMap::new();
+
         for (func_id, cfg) in &icfg.function_cfgs {
-            let func_node = &icfg.call_graph.nodes[func_id];
-            let source = source_files.get(&func_node.file_path).or_else(|| {
-                source_files
-                    .iter()
-                    .find(|(k, _)| k.ends_with(&func_node.file_path))
-                    .map(|(_, v)| v)
-            });
-            if let Some(source) = source {
-                let pdg = ProgramDependenceGraph::build(cfg, source.as_bytes())?;
-                pdgs.insert(*func_id, pdg);
+            // Fetch node metadata from backend
+            if let Ok(Some(func_node)) = backend.get_node(*func_id) {
+                // Cache function name for call site detection
+                function_names.insert(*func_id, func_node.name.clone());
+
+                let file_path = func_node.file_path.as_deref().unwrap_or("");
+                let source = source_files.get(file_path).or_else(|| {
+                    source_files
+                        .iter()
+                        .find(|(k, _)| k.ends_with(file_path))
+                        .map(|(_, v)| v)
+                });
+                if let Some(source) = source {
+                    let pdg = ProgramDependenceGraph::build(cfg, source.as_bytes())?;
+                    pdgs.insert(*func_id, pdg);
+                }
             }
         }
-        Ok(Self { icfg, pdgs })
+        Ok(Self {
+            icfg,
+            pdgs,
+            function_names,
+        })
     }
 
     /// Compute interprocedural slice starting in `function`.
@@ -149,13 +165,16 @@ impl<'a> InterproceduralSlicer<'a> {
         caller_pdg: &ProgramDependenceGraph,
         callee_func: Uuid,
     ) -> Vec<PdgNodeId> {
-        let callee_name = &self.icfg.call_graph.nodes[&callee_func].name;
-        caller_pdg
-            .nodes
-            .iter()
-            .filter(|(_, node)| node.statement.text.contains(callee_name))
-            .map(|(id, _)| *id)
-            .collect()
+        if let Some(callee_name) = self.function_names.get(&callee_func) {
+            caller_pdg
+                .nodes
+                .iter()
+                .filter(|(_, node)| node.statement.text.contains(callee_name))
+                .map(|(id, _)| *id)
+                .collect()
+        } else {
+            Vec::new()
+        }
     }
 
     fn count_total_lines(&self) -> usize {
