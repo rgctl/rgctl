@@ -316,6 +316,7 @@ fn connected_components(
     Ok(components)
 }
 
+#[allow(dead_code)]
 fn most_common_type(nodes: &[&rbuilder_graph::schema::Node]) -> NodeType {
     let mut counts = HashMap::new();
     for node in nodes {
@@ -328,6 +329,7 @@ fn most_common_type(nodes: &[&rbuilder_graph::schema::Node]) -> NodeType {
         .unwrap_or(NodeType::Function)
 }
 
+#[allow(dead_code)]
 fn avg_complexity(nodes: &[&rbuilder_graph::schema::Node]) -> f64 {
     if nodes.is_empty() {
         return 0.0;
@@ -336,12 +338,14 @@ fn avg_complexity(nodes: &[&rbuilder_graph::schema::Node]) -> f64 {
     sum / nodes.len() as f64
 }
 
+#[allow(dead_code)]
 fn node_complexity(node: &rbuilder_graph::schema::Node) -> i64 {
     node.get_property("cyclomatic")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0)
 }
 
+#[allow(dead_code)]
 fn infer_community_label(nodes: &[&rbuilder_graph::schema::Node], idx: usize) -> String {
     let paths: Vec<_> = nodes.iter().filter_map(|n| n.file_path.as_ref()).collect();
 
@@ -371,6 +375,7 @@ fn infer_community_label(nodes: &[&rbuilder_graph::schema::Node], idx: usize) ->
     format!("cluster_{idx}")
 }
 
+#[allow(dead_code)]
 fn find_common_path_prefix(paths: &[&String]) -> Option<String> {
     if paths.is_empty() {
         return None;

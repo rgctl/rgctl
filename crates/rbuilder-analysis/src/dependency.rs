@@ -7,7 +7,6 @@ use petgraph::algo::kosaraju_scc;
 use petgraph::visit::EdgeRef;
 use rbuilder_error::{Error, Result};
 use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
-use rbuilder_graph::schema::EdgeType;
 use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 

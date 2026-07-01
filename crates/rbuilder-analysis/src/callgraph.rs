@@ -12,7 +12,7 @@
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 use rbuilder_error::{Error, Result};
-use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
+use rbuilder_graph::backend::MemoryBackend;
 use rbuilder_graph::schema::{CallType, EdgeType, GraphParameter, NodeType};
 use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
@@ -286,6 +286,7 @@ impl CallGraph {
     }
 }
 
+#[allow(dead_code)]
 fn parameter_names(params: &[GraphParameter]) -> Vec<String> {
     params.iter().map(|p| p.name.clone()).collect()
 }

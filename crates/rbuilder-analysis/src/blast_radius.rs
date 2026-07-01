@@ -8,7 +8,6 @@ use crate::graph_utils::PetGraphView;
 use petgraph::Direction;
 use rbuilder_error::{Error, Result};
 use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
-use rbuilder_graph::schema::EdgeType;
 use std::collections::{HashSet, VecDeque};
 use uuid::Uuid;
 

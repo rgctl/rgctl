@@ -17,7 +17,7 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use rbuilder_error::{Error, Result};
 use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
-use rbuilder_graph::schema::{EdgeType, NodeType};
+use rbuilder_graph::schema::NodeType;
 use std::collections::HashMap;
 use uuid::Uuid;
 

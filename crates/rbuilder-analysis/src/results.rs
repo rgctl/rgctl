@@ -125,9 +125,13 @@ impl CentralityTable {
 /// Centrality metrics for a single node.
 #[derive(Debug, Clone, Copy)]
 pub struct CentralityMetrics {
+    /// PageRank centrality score
     pub pagerank: f32,
+    /// Betweenness centrality score
     pub betweenness: f32,
+    /// Number of incoming edges
     pub in_degree: u32,
+    /// Number of outgoing edges
     pub out_degree: u32,
 }
 
@@ -173,9 +177,13 @@ impl BlastRadiusTable {
 /// Blast radius metrics for a single node.
 #[derive(Debug, Clone, Copy)]
 pub struct BlastRadiusMetrics {
+    /// Impact score (0-100 scale)
     pub score: f32,
+    /// Number of functions that directly call this node
     pub direct_callers: u32,
+    /// Total size of the impact zone (transitive callers)
     pub impact_zone_size: u32,
+    /// ID of the strongly connected component this node belongs to
     pub scc_id: u32,
     /// Size of the strongly connected component this node belongs to
     pub scc_size: u32,
