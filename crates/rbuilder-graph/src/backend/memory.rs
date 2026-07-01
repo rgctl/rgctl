@@ -136,6 +136,13 @@ impl MemoryBackend {
         Ok(index.get(&node_type).cloned().unwrap_or_default())
     }
 
+    /// Collect nodes by type (optimized: uses index + targeted clones, not full scan).
+    pub fn collect_nodes_by_type(&self, node_type: NodeType) -> Result<Vec<Node>> {
+        let node_ids = self.find_node_ids_by_type(node_type)?;
+        let nodes_map = read_lock(&self.nodes)?;
+        Ok(node_ids.iter().filter_map(|id| nodes_map.get(id).cloned()).collect())
+    }
+
     /// Get outgoing edge target IDs (returns UUIDs, not cloned edges).
     pub fn get_outgoing_edge_targets(&self, node_id: Uuid) -> Result<Vec<Uuid>> {
         let edges = read_lock(&self.edges)?;

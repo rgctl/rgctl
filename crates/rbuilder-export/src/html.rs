@@ -12,8 +12,7 @@ pub fn export_html_dashboard(
     analysis_dir: Option<&Path>,
     output_path: &Path,
 ) -> Result<(), String> {
-    let nodes = backend.all_nodes().map_err(|e| e.to_string())?;
-    let edges = backend.all_edges().map_err(|e| e.to_string())?;
+    // Zero-copy: stream nodes/edges into JSON instead of cloning all at once
 
     // Load analysis data if available - create summaries to avoid huge HTML files
     let mut analysis_data = json!([]);
@@ -130,66 +129,66 @@ pub fn export_html_dashboard(
         }
     }
 
-    // Prepare graph data for D3
-    let graph_nodes: Vec<_> = nodes
-        .iter()
-        .map(|n| {
-            json!({
-                "id": n.id.to_string(),
-                "name": n.name,
-                "type": format!("{:?}", n.node_type),
-                "file_path": n.file_path,
-                "properties": n.properties,
-            })
-        })
-        .collect();
+    // Prepare graph data for D3 + calculate statistics in a single pass
+    let mut graph_nodes = Vec::new();
+    let mut total_nodes = 0;
+    let mut function_count = 0;
+    let mut class_count = 0;
+    let mut complexity_sum = 0.0;
+    let mut high_blast_radius_count = 0;
 
-    let graph_edges: Vec<_> = edges
-        .iter()
-        .map(|e| {
-            json!({
-                "source": e.from.to_string(),
-                "target": e.to.to_string(),
-                "type": format!("{:?}", e.edge_type),
-            })
-        })
-        .collect();
+    backend.for_each_node(|n| {
+        total_nodes += 1;
 
-    // Calculate statistics
-    let total_nodes = nodes.len();
-    let total_edges = edges.len();
-    let function_count = nodes
-        .iter()
-        .filter(|n| n.node_type == NodeType::Function)
-        .count();
-    let class_count = nodes
-        .iter()
-        .filter(|n| n.node_type == NodeType::Class)
-        .count();
-    let calls_count = edges
-        .iter()
-        .filter(|e| e.edge_type == EdgeType::Calls)
-        .count();
+        // Build JSON node
+        graph_nodes.push(json!({
+            "id": n.id.to_string(),
+            "name": n.name,
+            "type": format!("{:?}", n.node_type),
+            "file_path": n.file_path,
+            "properties": n.properties,
+        }));
 
-    let avg_complexity: f64 = nodes
-        .iter()
-        .filter(|n| n.node_type == NodeType::Function)
-        .filter_map(|n| n.properties.get("cyclomatic"))
-        .filter_map(|v| v.parse::<f64>().ok())
-        .sum::<f64>()
-        / function_count.max(1) as f64;
+        // Calculate statistics on-the-fly
+        if n.node_type == NodeType::Function {
+            function_count += 1;
+            if let Some(v) = n.properties.get("cyclomatic") {
+                if let Ok(c) = v.parse::<f64>() {
+                    complexity_sum += c;
+                }
+            }
+            if let Some(v) = n.properties.get("blast_radius_score") {
+                if let Ok(s) = v.parse::<f64>() {
+                    if s > 50.0 {
+                        high_blast_radius_count += 1;
+                    }
+                }
+            }
+        } else if n.node_type == NodeType::Class {
+            class_count += 1;
+        }
+    }).map_err(|e| e.to_string())?;
 
-    let high_blast_radius_count = nodes
-        .iter()
-        .filter(|n| n.node_type == NodeType::Function)
-        .filter(|n| {
-            n.properties
-                .get("blast_radius_score")
-                .and_then(|v| v.parse::<f64>().ok())
-                .map(|s| s > 50.0)
-                .unwrap_or(false)
-        })
-        .count();
+    let avg_complexity: f64 = complexity_sum / function_count.max(1) as f64;
+
+    // Stream edges + calculate statistics in a single pass
+    let mut graph_edges = Vec::new();
+    let mut total_edges = 0;
+    let mut calls_count = 0;
+
+    backend.for_each_edge(|e| {
+        total_edges += 1;
+
+        graph_edges.push(json!({
+            "source": e.from.to_string(),
+            "target": e.to.to_string(),
+            "type": format!("{:?}", e.edge_type),
+        }));
+
+        if e.edge_type == EdgeType::Calls {
+            calls_count += 1;
+        }
+    }).map_err(|e| e.to_string())?;
 
     // Generate HTML
     let html = generate_html_template(

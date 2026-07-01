@@ -33,6 +33,18 @@ struct Cli {
     /// Watch for file changes and auto-update
     #[arg(short, long, global = true)]
     watch: bool,
+
+    /// Run security analysis (secret scanning)
+    #[arg(long, global = true)]
+    security: bool,
+
+    /// Build control flow graphs for functions
+    #[arg(long, global = true)]
+    cfg: bool,
+
+    /// Run all analyses (warning: may take several minutes on large codebases)
+    #[arg(long, global = true)]
+    all: bool,
 }
 
 #[derive(Subcommand)]
@@ -402,7 +414,7 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         };
-        return run_full_analysis(path, cli.languages, cli.exclude, cli.watch, cli.verbose);
+        return run_full_analysis(path, cli.languages, cli.exclude, cli.watch, cli.verbose, cli.security, cli.cfg, cli.all);
     };
 
     match command {
@@ -567,12 +579,8 @@ fn main() -> anyhow::Result<()> {
                 let storage = AnalysisStorage::new(output_dir);
                 storage.ensure_dir()?;
 
-                // Find all function nodes
-                let functions: Vec<_> = backend
-                    .all_nodes()?
-                    .into_iter()
-                    .filter(|n| n.node_type == NodeType::Function)
-                    .collect();
+                // Find all function nodes (indexed lookup, not full scan)
+                let functions = backend.collect_nodes_by_type(NodeType::Function)?;
 
                 println!("\nBuilding analysis for {} functions...", functions.len());
                 let mut success_count = 0;
@@ -1260,6 +1268,9 @@ fn run_full_analysis(
     exclude: Option<String>,
     watch: bool,
     verbose: bool,
+    security: bool,
+    cfg: bool,
+    all: bool,
 ) -> anyhow::Result<()> {
     use rbuilder::analysis::{CentralityAnalyzer, CommunityDetector, ComplexityAnalyzer, DependencyAnalyzer};
     use rbuilder::analysis::graph_utils::PetGraphView;
@@ -1295,6 +1306,13 @@ fn run_full_analysis(
 
     println!("Analyzing repository: {}", root.display());
 
+    // Show warning for --all flag
+    if all {
+        println!("\n⚠️  WARNING: --all flag enables all analyses including CFG/PDG.");
+        println!("   This may take several minutes on large codebases (>50K functions).");
+        println!("   For faster analysis, run without --all (default mode).\n");
+    }
+
     // Initialize memory monitoring
     use rbuilder_core::memory::MemoryMonitor;
     let mem_monitor = MemoryMonitor::new();
@@ -1310,6 +1328,10 @@ fn run_full_analysis(
             ..PipelineConfig::default()
         },
     );
+
+    // Discover files (used for indexing and later for security/tracking)
+    let discoverer = FileDiscoverer::with_config(Arc::clone(&registry), discovery_config.clone());
+    let files = discoverer.discover(root)?;
 
     // Index the repository
     let (mut graph, stats) = pipeline.process_repository(root)?;
@@ -1329,7 +1351,8 @@ fn run_full_analysis(
 
     // Initialize columnar analysis results
     use rbuilder::analysis::AnalysisResults;
-    let node_ids: Vec<uuid::Uuid> = graph.backend().all_nodes()?.iter().map(|n| n.id).collect();
+    // Zero-copy: collect node IDs directly without cloning full nodes
+    let node_ids = graph.backend().all_node_ids()?;
     let mut analysis_results = AnalysisResults::new(node_ids);
 
     // Build PetGraphView ONCE - reused for community, centrality, and blast radius
@@ -1464,60 +1487,55 @@ fn run_full_analysis(
     println!("\n✓ Dependency analysis:");
     println!("  Circular dependencies: {}", cycles.len());
 
-    // Discover files for security analysis and later tracking
-    let discoverer = FileDiscoverer::with_config(Arc::clone(&registry), discovery_config);
-    let files = discoverer.discover(root)?;
+    // Security analysis (opt-in with --security or --all)
+    if security || all {
+        println!("\n✓ Security analysis:");
+        let detector = SecretDetector::new();
+        let mut total_secrets = 0usize;
 
-    // Security analysis
-    println!("\n✓ Security analysis:");
-    let detector = SecretDetector::new();
-    let mut total_secrets = 0usize;
+        for file in files.iter().take(100) {
+            if let Ok(content) = std::fs::read_to_string(file) {
+                let found = detector.scan(&content);
+                total_secrets += found.len();
 
-    for file in files.iter().take(100) {
-        if let Ok(content) = std::fs::read_to_string(file) {
-            let found = detector.scan(&content);
-            total_secrets += found.len();
-
-            if verbose {
-                for secret in &found {
-                    println!(
-                        "  [{}] {}:{} - {} ({:?})",
-                        file.display(),
-                        secret.line,
-                        secret.secret_type,
-                        secret.value,
-                        secret.severity
-                    );
+                if verbose {
+                    for secret in &found {
+                        println!(
+                            "  [{}] {}:{} - {} ({:?})",
+                            file.display(),
+                            secret.line,
+                            secret.secret_type,
+                            secret.value,
+                            secret.severity
+                        );
+                    }
                 }
             }
         }
+        println!("  Potential secrets found: {total_secrets}");
     }
-    println!("  Potential secrets found: {total_secrets}");
 
-    // CFG/PDG/Dominance analysis (default)
-    println!("\n✓ Control flow analysis:");
-    use rbuilder::analysis::{
-        build_cfg_for_function, AnalysisStorage, DominatorTree, FunctionAnalysis,
-        ProgramDependenceGraph,
-    };
+    // Get backend and functions for later use (blast radius, etc.)
     use rbuilder_graph::schema::NodeType;
-
-    let output_dir = root.join(".rbuilder/analysis");
-    let storage = AnalysisStorage::new(&output_dir);
-    storage.ensure_dir()?;
-
-    // Find all function nodes
     let backend = graph.backend();
-    let functions: Vec<_> = backend
-        .all_nodes()?
-        .into_iter()
-        .filter(|n| n.node_type == NodeType::Function)
-        .collect();
+    let functions = backend.collect_nodes_by_type(NodeType::Function)?;
+    let output_dir = root.join(".rbuilder/analysis");
 
-    let mut success_count = 0;
-    let mut error_count = 0;
+    // CFG/PDG/Dominance analysis (opt-in with --cfg or --all)
+    if cfg || all {
+        println!("\n✓ Control flow analysis:");
+        use rbuilder::analysis::{
+            build_cfg_for_function, AnalysisStorage, DominatorTree, FunctionAnalysis,
+            ProgramDependenceGraph,
+        };
 
-    for func_node in &functions {
+        let storage = AnalysisStorage::new(&output_dir);
+        storage.ensure_dir()?;
+
+        let mut success_count = 0;
+        let mut error_count = 0;
+
+        for func_node in &functions {
         // Get function source
         let file_path = match &func_node.file_path {
             Some(p) => p,
@@ -1628,11 +1646,12 @@ fn run_full_analysis(
         if total_flows > 0 {
             println!("  Taint flows: {} total ({} vulnerable)", total_flows, vulnerable_flows);
         }
-    } else if !functions.is_empty() {
-        println!("  No functions analyzed (Rust/Python only)");
-    }
-    if verbose {
-        println!("{}", mem_monitor.report());
+        } else if !functions.is_empty() {
+            println!("  No functions analyzed (Rust/Python only)");
+        }
+        if verbose {
+            println!("{}", mem_monitor.report());
+        }
     }
 
     // Blast radius analysis with SCC + Dense Bitsets engine

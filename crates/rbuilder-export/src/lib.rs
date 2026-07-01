@@ -38,7 +38,6 @@ pub fn select_subgraph(
         return Ok(Subgraph::default());
     }
 
-    let all_edges = backend.all_edges()?;
     let mut included: HashSet<Uuid> = seeds.iter().map(|n| n.id).collect();
 
     if let Some(depth) = max_depth {
@@ -47,12 +46,13 @@ pub fn select_subgraph(
             if d >= depth {
                 continue;
             }
-            for edge in &all_edges {
+            // Zero-copy edge iteration: stream over edges without cloning
+            backend.for_each_edge(|edge| {
                 if !matches!(
                     edge.edge_type,
                     EdgeType::Calls | EdgeType::Contains | EdgeType::Uses
                 ) {
-                    continue;
+                    return;
                 }
                 if edge.from == id && included.insert(edge.to) {
                     queue.push_back((edge.to, d + 1));
@@ -60,7 +60,7 @@ pub fn select_subgraph(
                 if edge.to == id && included.insert(edge.from) {
                     queue.push_back((edge.from, d + 1));
                 }
-            }
+            })?;
         }
     }
 
@@ -70,10 +70,14 @@ pub fn select_subgraph(
         .collect();
 
     let node_ids: HashSet<Uuid> = nodes.iter().map(|n| n.id).collect();
-    let edges: Vec<Edge> = all_edges
-        .into_iter()
-        .filter(|e| node_ids.contains(&e.from) && node_ids.contains(&e.to))
-        .collect();
+
+    // Zero-copy edge filtering: stream edges and collect only those in subgraph
+    let mut edges = Vec::new();
+    backend.for_each_edge(|edge| {
+        if node_ids.contains(&edge.from) && node_ids.contains(&edge.to) {
+            edges.push(edge.clone());
+        }
+    })?;
 
     Ok(Subgraph { nodes, edges })
 }

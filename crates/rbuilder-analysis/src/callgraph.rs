@@ -96,8 +96,8 @@ impl CallGraph {
             }
         }
 
-        // 2. Stream edges into adjacency lists in O(E) time
-        for edge in backend.all_edges()? {
+        // 2. Stream edges into adjacency lists in O(E) time (zero-copy)
+        backend.for_each_edge(|edge| {
             if edge.edge_type == EdgeType::Calls {
                 if let (Some(&from_idx), Some(&to_idx)) =
                     (id_to_index.get(&edge.from), id_to_index.get(&edge.to))
@@ -106,7 +106,7 @@ impl CallGraph {
                     precursor_list[to_idx as usize].push(from_idx);
                 }
             }
-        }
+        })?;
 
         Ok(Self {
             index_to_id,
