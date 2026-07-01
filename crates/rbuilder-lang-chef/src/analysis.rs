@@ -70,12 +70,12 @@ impl CookbookDependencyGraph {
                     name,
                     version: node
                         .get_property("version")
-                        .cloned()
+                        .map(String::from)
                         .unwrap_or_else(|| "0.0.0".to_string()),
                     path: node
                         .file_path
                         .clone()
-                        .or_else(|| node.get_property("cookbook_path").cloned())
+                        .or_else(|| node.get_property("cookbook_path").map(String::from))
                         .unwrap_or_default(),
                     dependencies: vec![],
                     dependents: vec![],
@@ -112,7 +112,7 @@ impl CookbookDependencyGraph {
                             name: from_name.clone(),
                             version: from
                                 .get_property("version")
-                                .cloned()
+                                .map(String::from)
                                 .unwrap_or_else(|| "0.0.0".to_string()),
                             path: from.file_path.clone().unwrap_or_default(),
                             dependencies: vec![],
@@ -131,7 +131,7 @@ impl CookbookDependencyGraph {
                             name: to_name.clone(),
                             version: to
                                 .get_property("version")
-                                .cloned()
+                                .map(String::from)
                                 .unwrap_or_else(|| "0.0.0".to_string()),
                             path: to.file_path.clone().unwrap_or_default(),
                             dependencies: vec![],

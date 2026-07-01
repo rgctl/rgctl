@@ -141,6 +141,6 @@ fn test_workspace_sync() {
         .iter()
         .filter_map(|n| n.get_property("repo"))
         .collect();
-    assert!(repos.contains(&"backend".to_string()));
-    assert!(repos.contains(&"frontend".to_string()));
+    assert!(repos.contains("backend"));
+    assert!(repos.contains("frontend"));
 }

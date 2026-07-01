@@ -297,7 +297,7 @@ fn resolve_property(node: &Node, key: &str) -> Option<String> {
         "type" => Some(format!("{:?}", node.node_type)),
         "signature" => node.signature_text().map(str::to_string),
         "return_type" => node.return_type_text().map(str::to_string),
-        _ => node.get_property(key).cloned(),
+        _ => node.get_property(key).map(String::from),
     }
 }
 

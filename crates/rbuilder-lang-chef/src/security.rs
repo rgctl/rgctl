@@ -99,7 +99,7 @@ impl ChefSecurityScanner {
         let mut findings = Vec::new();
         let resource_type = node
             .get_property("resource_type")
-            .cloned()
+            .map(String::from)
             .unwrap_or_else(|| "unknown".to_string());
         let props = node.signature.as_deref().unwrap_or("");
         let name = node.name.clone();

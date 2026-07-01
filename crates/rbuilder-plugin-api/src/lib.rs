@@ -527,6 +527,8 @@ mod tests {
                     end_column: 20,
                 },
                 metadata: serde_json::json!({}),
+                to_qualified_hint: None,
+                to_type_hint: None,
             }])
         }
 

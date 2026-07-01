@@ -5,6 +5,7 @@
 use clap::{Parser, Subcommand};
 use rbuilder::BUILD_INFO;
 use rbuilder_graph::backend::GraphBackend;
+use std::collections::HashMap;
 
 #[derive(Parser)]
 #[command(name = "rbuilder")]
@@ -382,7 +383,8 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter(log_level).init();
 
     // If no subcommand, run full analysis
-    if cli.command.is_none() {
+    // Route to appropriate command handler or run full analysis
+    let Some(command) = cli.command else {
         let path = match cli.path.as_deref() {
             Some(p) => p,
             None => {
@@ -402,10 +404,9 @@ fn main() -> anyhow::Result<()> {
             }
         };
         return run_full_analysis(path, cli.languages, cli.exclude, cli.watch, cli.verbose);
-    }
+    };
 
-    // Route to appropriate command handler
-    match cli.command.unwrap() {
+    match command {
         Commands::Update {
             since,
             force,
@@ -623,21 +624,19 @@ fn main() -> anyhow::Result<()> {
                     };
 
                     // Build PDG if requested
-                    let pdg_data = if pdg && cfg_data.is_some() {
-                        match ProgramDependenceGraph::build(
-                            cfg_data.as_ref().unwrap(),
-                            source.as_bytes(),
-                        ) {
-                            Ok(p) => Some(p),
-                            Err(_) => None,
+                    let pdg_data = if pdg {
+                        if let Some(ref cfg) = cfg_data {
+                            ProgramDependenceGraph::build(cfg, source.as_bytes()).ok()
+                        } else {
+                            None
                         }
                     } else {
                         None
                     };
 
                     // Build Dominance if requested
-                    let dom_data = if dominance && cfg_data.is_some() {
-                        Some(DominatorTree::build(cfg_data.as_ref().unwrap()))
+                    let dom_data = if dominance {
+                        cfg_data.as_ref().map(DominatorTree::build)
                     } else {
                         None
                     };
@@ -1330,14 +1329,16 @@ fn run_full_analysis(
 
     // Community detection
     let community_result = CommunityDetector::new().detect(graph.backend_mut())?;
-    // Persist community assignments
+
+    // Batch update community assignments
+    let mut community_updates: HashMap<uuid::Uuid, HashMap<String, String>> = HashMap::new();
     for (node_id, community_id) in &community_result.assignments {
-        if let Ok(Some(mut node)) = graph.backend().get_node(*node_id) {
-            node.properties
-                .insert("community".to_string(), community_id.to_string());
-            graph.backend_mut().insert_node(node)?;
-        }
+        let mut props = HashMap::new();
+        props.insert("community".to_string(), community_id.to_string());
+        community_updates.insert(*node_id, props);
     }
+    graph.backend_mut().batch_update_node_properties(community_updates)?;
+
     if verbose {
         println!("\nCommunity detection:");
         println!("  Communities: {}", community_result.communities.len());
@@ -1351,16 +1352,17 @@ fn run_full_analysis(
 
     // Complexity analysis
     let complexity_report = ComplexityAnalyzer::analyze(graph.backend())?;
-    // Persist complexity metrics
+
+    // Batch update complexity metrics
+    let mut complexity_updates: HashMap<uuid::Uuid, HashMap<String, String>> = HashMap::new();
     for func in &complexity_report.functions {
-        if let Ok(Some(mut node)) = graph.backend().get_node(func.node.id) {
-            node.properties
-                .insert("cyclomatic".to_string(), func.cyclomatic.to_string());
-            node.properties
-                .insert("cognitive".to_string(), func.cognitive.to_string());
-            graph.backend_mut().insert_node(node)?;
-        }
+        let mut props = HashMap::new();
+        props.insert("cyclomatic".to_string(), func.cyclomatic.to_string());
+        props.insert("cognitive".to_string(), func.cognitive.to_string());
+        complexity_updates.insert(func.node.id, props);
     }
+    graph.backend_mut().batch_update_node_properties(complexity_updates)?;
+
     println!("\n✓ Complexity analysis:");
     println!("  Functions: {}", complexity_report.functions.len());
     println!("  Avg cyclomatic: {:.1}", complexity_report.avg_cyclomatic);
@@ -1373,24 +1375,54 @@ fn run_full_analysis(
     }
 
     // Centrality analysis
+    // PageRank is fast (< 1s even on 187K nodes)
+    // Betweenness auto-skips internally for graphs > 500 nodes
     let centrality_report = CentralityAnalyzer::new().analyze(graph.backend_mut())?;
-    // Persist centrality scores
+
+    // Batch update centrality scores
+    let mut centrality_updates: HashMap<uuid::Uuid, HashMap<String, String>> = HashMap::new();
     for (node_id, scores) in &centrality_report.scores {
-        if let Ok(Some(mut node)) = graph.backend().get_node(*node_id) {
-            node.properties
-                .insert("pagerank".to_string(), scores.pagerank.to_string());
-            node.properties
-                .insert("betweenness".to_string(), scores.betweenness.to_string());
-            graph.backend_mut().insert_node(node)?;
+        let mut props = HashMap::new();
+        props.insert("pagerank".to_string(), scores.pagerank.to_string());
+        props.insert("in_degree".to_string(), scores.in_degree.to_string());
+        props.insert("out_degree".to_string(), scores.out_degree.to_string());
+        // Betweenness is only computed for small graphs (< 500 nodes)
+        if scores.betweenness > 0.0 {
+            props.insert("betweenness".to_string(), scores.betweenness.to_string());
         }
+        centrality_updates.insert(*node_id, props);
     }
+    graph.backend_mut().batch_update_node_properties(centrality_updates)?;
+
     println!("\n✓ Centrality analysis:");
+
+    // Check if we have betweenness data
+    let has_betweenness = centrality_report.scores.values().any(|s| s.betweenness > 0.0);
+    if has_betweenness {
+        println!("  Metrics: PageRank + Betweenness + Degree");
+    } else {
+        println!("  Metrics: PageRank + Degree (Betweenness skipped for large graph)");
+    }
+
     println!("  Top hotspots by PageRank:");
     for (id, score) in centrality_report.top_pagerank.iter().take(5) {
         if let Ok(Some(node)) = graph.backend().get_node(*id) {
-            println!("    - {} ({:.4})", node.name, score);
+            let in_deg = centrality_report.scores[id].in_degree;
+            let out_deg = centrality_report.scores[id].out_degree;
+            println!("    - {} (PageRank: {:.4}, in: {}, out: {})",
+                     node.name, score, in_deg, out_deg);
         }
     }
+
+    if has_betweenness && !centrality_report.top_betweenness.is_empty() {
+        println!("  Top architectural bottlenecks by Betweenness:");
+        for (id, score) in centrality_report.top_betweenness.iter().take(5) {
+            if let Ok(Some(node)) = graph.backend().get_node(*id) {
+                println!("    - {} ({:.4})", node.name, score);
+            }
+        }
+    }
+
     if verbose {
         println!("{}", mem_monitor.report());
     }
@@ -1497,20 +1529,13 @@ fn run_full_analysis(
 
         // Build PDG
         let pdg_data = if let Some(ref cfg) = cfg_data {
-            match ProgramDependenceGraph::build(cfg, source.as_bytes()) {
-                Ok(p) => Some(p),
-                Err(_) => None,
-            }
+            ProgramDependenceGraph::build(cfg, source.as_bytes()).ok()
         } else {
             None
         };
 
         // Build Dominance
-        let dom_data = if let Some(ref cfg) = cfg_data {
-            Some(DominatorTree::build(cfg))
-        } else {
-            None
-        };
+        let dom_data = cfg_data.as_ref().map(|cfg| DominatorTree::build(cfg));
 
         // Run Taint Analysis
         use rbuilder::analysis::TaintAnalyzer;
@@ -1553,11 +1578,10 @@ fn run_full_analysis(
 
         // Export consolidated file
         let export_path = output_dir.join("all_analyses.json");
-        if storage.export_all(&export_path).is_ok() {
-            if verbose {
+        if storage.export_all(&export_path).is_ok()
+            && verbose {
                 println!("  Exported to {}", export_path.display());
             }
-        }
 
         // Taint analysis summary
         let all_analyses = storage.load_all().unwrap_or_default();
@@ -1579,91 +1603,107 @@ fn run_full_analysis(
         println!("{}", mem_monitor.report());
     }
 
-    // Blast radius analysis (default)
-    println!("\n✓ Blast radius analysis:");
-    use rbuilder::analysis::{BlastRadiusAnalyzer, FlowCache};
+    // Blast radius analysis with SCC + Dense Bitsets engine
+    println!("\n✓ Blast radius analysis (SCC-based):");
+    use rbuilder::analysis::BlastRadiusEngine;
+    use std::time::Instant;
 
-    // Build FlowCache from stored PDG analyses for enriched blast radius
-    let mut flow_cache = FlowCache::new();
-    let all_analyses = storage.load_all().unwrap_or_default();
-    for analysis in &all_analyses {
-        if let Some(ref pdg) = analysis.pdg {
-            flow_cache.insert_pdg(analysis.function_id, pdg.clone());
+    let blast_start = Instant::now();
+
+    // Build SCC engine (one-time cost: Tarjan's + topo sort + bitset propagation)
+    let engine = match BlastRadiusEngine::build(backend) {
+        Ok(e) => e,
+        Err(err) => {
+            println!("  ⊘ Engine build failed: {}", err);
+            println!("\n=== Analysis Complete ===");
+            return Ok(());
         }
+    };
+
+    let build_time = blast_start.elapsed();
+    let stats = engine.stats();
+
+    if verbose {
+        println!("  Engine built in {:.2}s", build_time.as_secs_f64());
+        println!("  SCCs: {} (reduced from {} nodes, {:.1}% compression)",
+                 stats.scc_count,
+                 graph.node_count(),
+                 (graph.node_count() - stats.scc_count) as f64 / graph.node_count() as f64 * 100.0);
+        println!("  DAG edges: {}", stats.dag_edges);
+        println!("  Avg SCC size: {:.1}", stats.avg_scc_size);
+        println!("  Memory: {:.1} MB", stats.memory_mb);
     }
 
-    // Compute blast radius for all functions (collect updates first)
+    // Analyze all functions (O(1) lookup per function!)
+    let query_start = Instant::now();
     let mut blast_updates = Vec::new();
     let mut high_impact_count = 0;
     let mut max_impact_score = 0.0f64;
     let mut max_impact_function = String::new();
+    let mut in_cycle_count = 0;
 
     for func_node in &functions {
-        let analyzer = BlastRadiusAnalyzer::new(backend)
-            .with_flow_cache(&flow_cache)
-            .with_max_depth(10);
+        if let Ok(result) = engine.analyze(func_node.id) {
+            if result.scc_size > 1 {
+                in_cycle_count += 1;
+            }
 
-        if let Ok(report) = analyzer.analyze(&func_node.name) {
-            blast_updates.push((func_node.id, report.clone()));
-
-            if report.score > 50.0 {
+            if result.score > 50.0 {
                 high_impact_count += 1;
             }
 
-            if report.score > max_impact_score {
-                max_impact_score = report.score;
+            if result.score > max_impact_score {
+                max_impact_score = result.score;
                 max_impact_function = func_node.name.clone();
             }
+
+            blast_updates.push((func_node.id, result));
         }
     }
 
-    // Apply blast radius updates to graph
-    let mut analyzed_functions = 0;
-    for (node_id, report) in blast_updates {
-        if let Ok(Some(mut node)) = graph.backend().get_node(node_id) {
-            node.properties
-                .insert("blast_radius_score".to_string(), report.score.to_string());
-            node.properties.insert(
-                "blast_radius_direct_callers".to_string(),
-                report.direct_callers.len().to_string(),
-            );
-            node.properties.insert(
-                "blast_radius_impact_zone".to_string(),
-                report.impact_zone.len().to_string(),
-            );
-            node.properties.insert(
-                "blast_radius_data_flow_depth".to_string(),
-                report.data_flow_depth.to_string(),
-            );
+    let query_time = query_start.elapsed();
 
-            // Store caller IDs as JSON arrays for visualization
-            node.properties.insert(
-                "blast_radius_direct_caller_ids".to_string(),
-                serde_json::to_string(&report.direct_caller_ids).unwrap_or_else(|_| "[]".to_string()),
-            );
-            node.properties.insert(
-                "blast_radius_impact_zone_ids".to_string(),
-                serde_json::to_string(&report.impact_zone_ids).unwrap_or_else(|_| "[]".to_string()),
-            );
+    // Batch update blast radius properties
+    let mut blast_property_updates: HashMap<uuid::Uuid, HashMap<String, String>> = HashMap::new();
+    for (node_id, result) in blast_updates {
+        let mut props = HashMap::new();
+        props.insert("blast_radius_score".to_string(), result.score.to_string());
+        props.insert("blast_radius_direct_callers".to_string(), result.direct_caller_ids.len().to_string());
+        props.insert("blast_radius_impact_zone".to_string(), result.impact_zone_ids.len().to_string());
+        props.insert("blast_radius_scc_id".to_string(), result.scc_id.to_string());
+        props.insert("blast_radius_scc_size".to_string(), result.scc_size.to_string());
 
-            if graph.backend_mut().insert_node(node).is_ok() {
-                analyzed_functions += 1;
-            }
-        }
+        // Store caller IDs as JSON arrays
+        props.insert(
+            "blast_radius_direct_caller_ids".to_string(),
+            serde_json::to_string(&result.direct_caller_ids).unwrap_or_else(|_| "[]".to_string()),
+        );
+        props.insert(
+            "blast_radius_impact_zone_ids".to_string(),
+            serde_json::to_string(&result.impact_zone_ids).unwrap_or_else(|_| "[]".to_string()),
+        );
+
+        blast_property_updates.insert(node_id, props);
     }
 
-    if analyzed_functions > 0 {
-        println!("  Functions: {} analyzed", analyzed_functions);
-        println!("  High impact (>50): {}", high_impact_count);
-        if !max_impact_function.is_empty() {
-            println!(
-                "  Max impact: {} (score: {:.1})",
-                max_impact_function, max_impact_score
-            );
-        }
-    } else {
-        println!("  No blast radius data computed");
+    let analyzed_functions = blast_property_updates.len();
+    graph.backend_mut().batch_update_node_properties(blast_property_updates)?;
+
+    let total_time = blast_start.elapsed();
+
+    println!("  Functions analyzed: {}", analyzed_functions);
+    println!("  High impact (>50): {}", high_impact_count);
+    println!("  In circular deps: {}", in_cycle_count);
+    if !max_impact_function.is_empty() {
+        println!("  Max impact: {} (score: {:.1})", max_impact_function, max_impact_score);
     }
+    println!("  Build time: {:.2}s", build_time.as_secs_f64());
+    println!("  Query time: {:.3}s ({} functions = {:.1}μs/function)",
+             query_time.as_secs_f64(),
+             analyzed_functions,
+             query_time.as_micros() as f64 / analyzed_functions as f64);
+    println!("  Total time: {:.2}s", total_time.as_secs_f64());
+
     if verbose {
         println!("{}", mem_monitor.report());
     }

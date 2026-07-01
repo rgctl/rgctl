@@ -54,7 +54,7 @@ impl SignatureExtractor {
                 .collect()
         } else {
             node.get_property("parameters")
-                .map(|p| parse_params_json(p))
+                .map(parse_params_json)
                 .unwrap_or_default()
         };
 

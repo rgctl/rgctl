@@ -299,8 +299,8 @@ impl JavaPlugin {
                         // Best-effort: try to infer the target class from the object
                         // For example: helper.transform() → infer "Helper" class
                         let (to_qualified_hint, to_type_hint) = if let Some(object_node) = node.child_by_field_name("object") {
-                            let result = self.infer_method_target(object_node, &simple_name, source, node);
-                            result
+                            
+                            self.infer_method_target(object_node, &simple_name, source, node)
                         } else {
                             (None, None)
                         };
@@ -546,8 +546,7 @@ impl JavaPlugin {
             if let Some(type_name) = self.find_field_type(class_node, object_name, source) {
                 let qualified_hint = format!("{}.{}", type_name, method_name);
                 return (Some(qualified_hint), Some(type_name));
-            } else {
-            }
+            } 
         }
 
         // Fallback: check for local variable declarations

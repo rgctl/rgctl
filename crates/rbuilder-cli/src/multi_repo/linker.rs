@@ -28,7 +28,7 @@ pub fn link_cross_repo(backend: &mut MemoryBackend) -> Result<CrossRepoLinkRepor
 
     for node in &nodes {
         if let Some(repo) = node.get_property("repo") {
-            by_repo.entry(repo.clone()).or_default().push(node.clone());
+            by_repo.entry(repo.to_string()).or_default().push(node.clone());
 
             if matches!(
                 node.node_type,
@@ -37,7 +37,7 @@ pub fn link_cross_repo(backend: &mut MemoryBackend) -> Result<CrossRepoLinkRepor
                 symbol_names
                     .entry(node.name.clone())
                     .or_default()
-                    .insert(repo.clone());
+                    .insert(repo.to_string());
             }
         }
     }
@@ -75,7 +75,7 @@ pub fn link_cross_repo(backend: &mut MemoryBackend) -> Result<CrossRepoLinkRepor
                     if existing.insert((node.id, target)) {
                         backend.insert_edge(edge)?;
                         report.edges_added += 1;
-                        let pair = (from_repo.clone(), to_repo.clone());
+                        let pair = (from_repo.to_string(), to_repo.clone());
                         if !report.repo_pairs.contains(&pair) {
                             report.repo_pairs.push(pair);
                         }

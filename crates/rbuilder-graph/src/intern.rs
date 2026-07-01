@@ -27,20 +27,25 @@ impl StringInterner {
         }
 
         // Slow path: insert if not present (write lock with entry API)
+        // Note: Race condition is acceptable - duplicate Arc<str> instances
+        // will be deduplicated on next read, only slight temporary memory overhead
         self.pool
             .write()
-            .unwrap()
+            .expect("StringInterner lock poisoned")
             .entry(value.to_string())
             .or_insert_with(|| Arc::from(value))
             .clone()
     }
 
-    /// Intern a owned string in-place.
-    pub fn intern_string(&self, value: &mut String) {
-        let arc = self.intern(value);
-        if value.as_str() != arc.as_ref() {
-            *value = arc.to_string();
-        }
+    /// Ensure a string is in the intern pool.
+    ///
+    /// NOTE: This method currently doesn't optimize the in-memory representation
+    /// since Node stores String, not Arc<str>. The real memory savings come from
+    /// the indexes using Arc<str>. Future optimization: change Node to store Arc<str>.
+    pub fn intern_string(&self, _value: &mut String) {
+        // Intentionally does nothing - the actual interning happens when building indexes
+        // This method exists to maintain API compatibility but should be reconsidered
+        // in a future refactor where Node uses Arc<str> directly
     }
 
     /// Number of unique interned strings.

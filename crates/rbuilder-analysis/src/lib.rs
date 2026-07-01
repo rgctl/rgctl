@@ -3,6 +3,7 @@
 #![warn(missing_docs)]
 
 pub mod blast_radius;
+pub mod blast_radius_scc;
 pub mod callgraph;
 pub mod centrality;
 pub mod cfg;
@@ -24,6 +25,7 @@ pub mod taint;
 pub mod type_inference;
 
 pub use blast_radius::{BlastRadiusAnalyzer, BlastRadiusReport, DataFlowImpact};
+pub use blast_radius_scc::{BlastRadiusEngine, BlastRadiusResult, EngineStats, SccNode};
 pub use callgraph::{CallGraph, CallGraphEdge, CallGraphNode};
 pub use centrality::{
     degree_centrality, identify_hotspots, CentralityAnalyzer, CentralityReport, CentralityScore,

@@ -132,6 +132,6 @@ mod tests {
 
         let updated = backend.get_node(id).unwrap().unwrap();
         assert!(updated.has_label("security:critical"));
-        assert_eq!(updated.get_property("priority"), Some(&"high".to_string()));
+        assert_eq!(updated.get_property("priority"), Some("high"));
     }
 }

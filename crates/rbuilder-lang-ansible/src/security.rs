@@ -120,7 +120,7 @@ impl AnsibleSecurityScanner {
         let mut findings = Vec::new();
         let module = node
             .get_property("module")
-            .cloned()
+            .map(String::from)
             .unwrap_or_else(|| "unknown".to_string());
         let args = node.signature.as_deref().unwrap_or("");
         let name = node.name.clone();

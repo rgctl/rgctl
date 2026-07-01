@@ -145,6 +145,32 @@ rbuilder-bundle-full = { path = "crates/rbuilder-bundle-full", version = "0.1.0"
 rbuilder-bundle-minimal = { path = "crates/rbuilder-bundle-minimal", version = "0.1.0" }
 tree-sitter = "0.25"
 
+[workspace.lints.rust]
+unsafe_code = "warn"
+missing_docs = "warn"
+unexpected_cfgs = "warn"
+
+[workspace.lints.clippy]
+# Correctness lints (deny - these are likely bugs)
+correctness = { level = "deny", priority = -1 }
+
+# Suspicious patterns (warn - likely bugs)
+suspicious = { level = "warn", priority = -1 }
+
+# Style and complexity (warn - code quality)
+style = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+
+# Performance (warn - potential optimizations)
+perf = { level = "warn", priority = -1 }
+
+# Specific important lints
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+missing_safety_doc = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+
 [package]
 name = "rbuilder"
 version = "0.1.0"
@@ -255,12 +281,16 @@ nlp-llm = ["nlp-cache", "reqwest", "rbuilder-nlp/nlp-llm"]
 proc-macros = ["rbuilder-macros"]
 
 [profile.release]
-lto = true
+opt-level = 3
+lto = "fat"
 codegen-units = 1
+panic = "abort"
 strip = true
 
 [profile.bench]
 inherits = "release"
+debug = true
+strip = false
 
 [[bin]]
 name = "rbuilder"

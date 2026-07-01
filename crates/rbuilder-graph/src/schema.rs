@@ -317,13 +317,13 @@ impl Node {
     }
 
     /// Get a property value
-    pub fn get_property(&self, key: &str) -> Option<&String> {
-        self.properties.get(key)
+    pub fn get_property(&self, key: &str) -> Option<&str> {
+        self.properties.get(key).map(String::as_str)
     }
 
     /// Check if node has a label
     pub fn has_label(&self, label: &str) -> bool {
-        self.labels.contains(&label.to_string())
+        self.labels.iter().any(|l| l == label)
     }
 }
 
@@ -393,8 +393,8 @@ impl Edge {
     }
 
     /// Get a property value
-    pub fn get_property(&self, key: &str) -> Option<&String> {
-        self.properties.get(key)
+    pub fn get_property(&self, key: &str) -> Option<&str> {
+        self.properties.get(key).map(String::as_str)
     }
 }
 
@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(node.file_path, Some("src/math.rs".to_string()));
         assert_eq!(node.start_line, Some(10));
         assert_eq!(node.end_line, Some(15));
-        assert_eq!(node.get_property("visibility"), Some(&"public".to_string()));
+        assert_eq!(node.get_property("visibility"), Some("public"));
         assert!(node.has_label("critical"));
     }
 
@@ -477,7 +477,7 @@ mod tests {
             .with_property("frequency".to_string(), "high".to_string());
 
         assert_eq!(edge.weight, 2.5);
-        assert_eq!(edge.get_property("frequency"), Some(&"high".to_string()));
+        assert_eq!(edge.get_property("frequency"), Some("high"));
     }
 
     #[test]

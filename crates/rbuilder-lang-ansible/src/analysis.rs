@@ -66,7 +66,7 @@ impl RoleDependencyGraph {
                     path: node
                         .file_path
                         .clone()
-                        .or_else(|| node.get_property("role_path").cloned())
+                        .or_else(|| node.get_property("role_path").map(String::from))
                         .unwrap_or_default(),
                     dependencies: vec![],
                     dependents: vec![],

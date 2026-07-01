@@ -12,7 +12,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 /// Builds graph nodes and edges from extracted data.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct GraphBuilder {
     symbol_index: HashMap<String, Uuid>,
     file_nodes: HashMap<String, Uuid>,
@@ -21,6 +21,45 @@ pub struct GraphBuilder {
     nodes: Vec<Node>,
     edges: Vec<Edge>,
     code_index: Option<CodeIndex>,
+    // Resolution performance tracking
+    resolution_stats: ResolutionStats,
+    // Fast resolution indexes (built on demand)
+    symbols_by_qualified: HashMap<String, Uuid>,
+    symbols_by_suffix: HashMap<String, Vec<Uuid>>,
+    indexes_built: bool,
+}
+
+#[derive(Debug, Default)]
+struct ResolutionStats {
+    total_calls: usize,
+    hashmap_hits: usize,
+    qualified_hint_scans: usize,
+    qualified_hint_hits: usize,      // O(1) index hits
+    type_hint_scans: usize,
+    type_hint_hits: usize,           // O(1) index hits
+    fuzzy_scans: usize,
+    fuzzy_hits: usize,               // O(1) index hits
+    total_time: std::time::Duration,
+    line_lookups: usize,
+    line_lookup_time: std::time::Duration,
+}
+
+impl Default for GraphBuilder {
+    fn default() -> Self {
+        Self {
+            symbol_index: HashMap::default(),
+            file_nodes: HashMap::default(),
+            config_key_nodes: HashMap::default(),
+            env_nodes: HashMap::default(),
+            nodes: Vec::default(),
+            edges: Vec::default(),
+            code_index: None,
+            resolution_stats: ResolutionStats::default(),
+            symbols_by_qualified: HashMap::default(),
+            symbols_by_suffix: HashMap::default(),
+            indexes_built: false,
+        }
+    }
 }
 
 impl GraphBuilder {
@@ -169,6 +208,56 @@ impl GraphBuilder {
         }
     }
 
+    /// Build reverse indexes for fast symbol resolution.
+    ///
+    /// Call this after all symbols are added but before processing relations.
+    /// This converts O(n) linear scans into O(1) HashMap lookups.
+    pub fn build_resolution_indexes(&mut self) {
+        use std::time::Instant;
+        use tracing::info;
+
+        if self.indexes_built {
+            return; // Already built
+        }
+
+        let start = Instant::now();
+        let symbol_count = self.symbol_index.len();
+
+        // Build qualified name index and suffix index
+        for (key, uuid) in &self.symbol_index {
+            // Find the node to get its qualified_name
+            if let Some(node) = self.nodes.iter().find(|n| n.id == *uuid) {
+                // Index by qualified_name if present
+                if let Some(qualified) = &node.qualified_name {
+                    self.symbols_by_qualified.insert(qualified.clone(), *uuid);
+                }
+            }
+
+            // Build suffix index for "ends_with" queries
+            // Split "file.rs::Module::function" into suffixes:
+            // - "Module::function"
+            // - "function"
+            let parts: Vec<&str> = key.split("::").collect();
+            for i in 1..parts.len() {
+                let suffix = parts[i..].join("::");
+                self.symbols_by_suffix
+                    .entry(suffix)
+                    .or_default()
+                    .push(*uuid);
+            }
+        }
+
+        self.indexes_built = true;
+
+        info!(
+            symbol_count,
+            qualified_count = self.symbols_by_qualified.len(),
+            suffix_count = self.symbols_by_suffix.len(),
+            elapsed_ms = start.elapsed().as_millis(),
+            "built resolution indexes"
+        );
+    }
+
     /// Add a configuration key node linked to its file.
     pub fn add_config_key(&mut self, key: &ConfigKey, file_id: Uuid) -> Uuid {
         let lookup = format!("{}::{}", key.location.file, key.key_path);
@@ -191,11 +280,11 @@ impl GraphBuilder {
 
     /// Add a relation between symbols if both endpoints exist.
     pub fn add_relation(&mut self, relation: &Relation) -> Result<()> {
-        let from_id = self.resolve_symbol(&relation.from, &relation.location.file, None, None);
+        let from_id = self.resolve_symbol_tracked(&relation.from, &relation.location.file, None, None);
 
         // Use hints for cross-file resolution (best-effort)
         // Hints are language plugin's best guess at the qualified name based on local context
-        let to_id = self.resolve_symbol(
+        let to_id = self.resolve_symbol_tracked(
             &relation.to,
             &relation.location.file,
             relation.to_qualified_hint.as_deref(),
@@ -217,7 +306,7 @@ impl GraphBuilder {
         usage_type: ConfigUsageKind,
     ) {
         let file_id = self.file_nodes.get(file_path).copied();
-        let code_node = self.find_symbol_at_line(file_path, line).or(file_id);
+        let code_node = self.find_symbol_at_line_tracked(file_path, line).or(file_id);
 
         let Some(from_id) = code_node else {
             return;
@@ -260,6 +349,28 @@ impl GraphBuilder {
         id
     }
 
+    fn find_symbol_at_line_tracked(&mut self, file_path: &str, line: usize) -> Option<Uuid> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+        self.resolution_stats.line_lookups += 1;
+
+        let result = self.nodes
+            .iter()
+            .filter(|n| n.file_path.as_deref() == Some(file_path))
+            .filter(|n| {
+                n.start_line
+                    .map(|start| start <= line && n.end_line.unwrap_or(start) >= line)
+                    .unwrap_or(false)
+            })
+            .max_by_key(|n| n.start_line.unwrap_or(0))
+            .map(|n| n.id);
+
+        self.resolution_stats.line_lookup_time += start.elapsed();
+        result
+    }
+
+    #[allow(dead_code)]
     fn find_symbol_at_line(&self, file_path: &str, line: usize) -> Option<Uuid> {
         self.nodes
             .iter()
@@ -273,7 +384,81 @@ impl GraphBuilder {
             .map(|n| n.id)
     }
 
-    /// Resolve a symbol name to its UUID.
+    /// Resolve a symbol name to its UUID with performance tracking.
+    fn resolve_symbol_tracked(
+        &mut self,
+        name: &str,
+        file: &str,
+        qualified_hint: Option<&str>,
+        type_hint: Option<&str>,
+    ) -> Option<Uuid> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+        self.resolution_stats.total_calls += 1;
+
+        // 1. Try exact match in current file
+        let qualified = format!("{file}::{name}");
+        if let Some(id) = self.symbol_index.get(&qualified) {
+            self.resolution_stats.hashmap_hits += 1;
+            self.resolution_stats.total_time += start.elapsed();
+            return Some(*id);
+        }
+
+        // 2. Try qualified hint direct lookup (O(1))
+        if let Some(hint) = qualified_hint {
+            self.resolution_stats.qualified_hint_scans += 1;
+
+            // First try direct qualified name lookup
+            if let Some(id) = self.symbols_by_qualified.get(hint) {
+                self.resolution_stats.qualified_hint_hits += 1;
+                self.resolution_stats.total_time += start.elapsed();
+                return Some(*id);
+            }
+
+            // Then try suffix index
+            if let Some(ids) = self.symbols_by_suffix.get(hint) {
+                if let Some(id) = ids.first() {
+                    self.resolution_stats.qualified_hint_hits += 1;
+                    self.resolution_stats.total_time += start.elapsed();
+                    return Some(*id);
+                }
+            }
+        }
+
+        // 3. Try type hint + simple name (O(1))
+        if let Some(type_name) = type_hint {
+            self.resolution_stats.type_hint_scans += 1;
+            // Extract simple name from qualified name if needed
+            let simple_name = name.split('.').next_back().unwrap_or(name);
+            let type_qualified = format!("{type_name}.{simple_name}");
+
+            // Try suffix index lookup
+            if let Some(ids) = self.symbols_by_suffix.get(&type_qualified) {
+                if let Some(id) = ids.first() {
+                    self.resolution_stats.type_hint_hits += 1;
+                    self.resolution_stats.total_time += start.elapsed();
+                    return Some(*id);
+                }
+            }
+        }
+
+        // 4. Fallback: suffix index lookup (O(1))
+        self.resolution_stats.fuzzy_scans += 1;
+        let result = self.symbols_by_suffix
+            .get(name)
+            .and_then(|ids| ids.first())
+            .copied();
+
+        if result.is_some() {
+            self.resolution_stats.fuzzy_hits += 1;
+        }
+
+        self.resolution_stats.total_time += start.elapsed();
+        result
+    }
+
+    /// Resolve a symbol name to its UUID (internal use without tracking).
     ///
     /// Resolution strategy (in order):
     /// 1. Try exact match in current file: `{file}::{name}`
@@ -283,6 +468,7 @@ impl GraphBuilder {
     ///
     /// Hints are best-effort guesses from language plugins based on local context
     /// (variable types, field declarations, etc.) and may not always be accurate.
+    #[allow(dead_code)]
     fn resolve_symbol(
         &self,
         name: &str,
@@ -312,7 +498,7 @@ impl GraphBuilder {
         // 3. Try type hint + simple name
         if let Some(type_name) = type_hint {
             // Extract simple name from qualified name if needed
-            let simple_name = name.split('.').last().unwrap_or(name);
+            let simple_name = name.split('.').next_back().unwrap_or(name);
             let type_qualified = format!("{type_name}.{simple_name}");
             let hint_suffix = format!("::{type_qualified}");
             if let Some((_, id)) = self
@@ -330,6 +516,53 @@ impl GraphBuilder {
             .iter()
             .find(|(k, _)| k.ends_with(&fuzzy_suffix))
             .map(|(_, id)| *id)
+    }
+
+    /// Log resolution performance statistics.
+    pub fn log_resolution_stats(&self) {
+        use tracing::info;
+
+        let stats = &self.resolution_stats;
+        let avg_time_micros = if stats.total_calls > 0 {
+            stats.total_time.as_micros() / stats.total_calls as u128
+        } else {
+            0
+        };
+
+        let avg_line_lookup_micros = if stats.line_lookups > 0 {
+            stats.line_lookup_time.as_micros() / stats.line_lookups as u128
+        } else {
+            0
+        };
+
+        let scan_calls = stats.qualified_hint_scans + stats.type_hint_scans + stats.fuzzy_scans;
+        let index_hits = stats.qualified_hint_hits + stats.type_hint_hits + stats.fuzzy_hits;
+        let total_index_lookups = scan_calls;
+        let index_hit_rate = if total_index_lookups > 0 {
+            (index_hits as f64 / total_index_lookups as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        info!(
+            total_calls = stats.total_calls,
+            hashmap_hits = stats.hashmap_hits,
+            qualified_hint_scans = stats.qualified_hint_scans,
+            qualified_hint_hits = stats.qualified_hint_hits,
+            type_hint_scans = stats.type_hint_scans,
+            type_hint_hits = stats.type_hint_hits,
+            fuzzy_scans = stats.fuzzy_scans,
+            fuzzy_hits = stats.fuzzy_hits,
+            total_scan_calls = scan_calls,
+            index_hits,
+            index_hit_rate_percent = format!("{:.1}", index_hit_rate),
+            total_time_secs = stats.total_time.as_secs_f64(),
+            avg_time_micros,
+            line_lookups = stats.line_lookups,
+            line_lookup_time_secs = stats.line_lookup_time.as_secs_f64(),
+            avg_line_lookup_micros,
+            "symbol resolution statistics"
+        );
     }
 
     fn add_edge(&mut self, from: Uuid, to: Uuid, edge_type: EdgeType) {
