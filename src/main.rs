@@ -1478,14 +1478,14 @@ fn run_full_analysis(
     }
 
     if verbose {
-        println!("\n✓ Complexity analysis:");
-        println!("  Functions: {}", complexity_report.functions.len());
-        println!("  Avg cyclomatic: {:.1}", complexity_report.avg_cyclomatic);
-        println!("  Max cyclomatic: {}", complexity_report.max_cyclomatic);
+        debug!("✓ Complexity analysis:");
+        debug!("  Functions: {}", complexity_report.functions.len());
+        debug!("  Avg cyclomatic: {:.1}", complexity_report.avg_cyclomatic);
+        debug!("  Max cyclomatic: {}", complexity_report.max_cyclomatic);
         for (level, count) in &complexity_report.by_level {
-            println!("    {:?}: {}", level, count);
+            debug!("    {:?}: {}", level, count);
         }
-        println!("{}", mem_monitor.report());
+        debug!("{}", mem_monitor.report());
     }
 
     let high_complexity = complexity_report.by_level.get(&rbuilder::analysis::ComplexityLevel::High).unwrap_or(&0);
