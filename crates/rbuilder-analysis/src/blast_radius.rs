@@ -7,7 +7,7 @@ use crate::flow_cache::FlowCache;
 use crate::graph_utils::PetGraphView;
 use petgraph::Direction;
 use rbuilder_error::{Error, Result};
-use rbuilder_graph::backend::MemoryBackend;
+use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
 use rbuilder_graph::schema::EdgeType;
 use std::collections::{HashSet, VecDeque};
 use uuid::Uuid;
@@ -77,23 +77,23 @@ impl<'a> BlastRadiusAnalyzer<'a> {
 
     /// Analyze blast radius by symbol name.
     pub fn analyze(&self, symbol_name: &str) -> Result<BlastRadiusReport> {
-        let view = PetGraphView::from_backend(self.backend)?;
-        let source = view
-            .find_node_by_name(symbol_name)
+        // Find node by name using backend
+        let nodes = self.backend.find_nodes_by_name(symbol_name)?;
+        let source = nodes.first()
             .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?;
+
+        let view = PetGraphView::from_backend(self.backend)?;
         self.analyze_node(&view, source.id, &source.name)
     }
 
     /// Analyze blast radius by node id.
     pub fn analyze_by_id(&self, symbol_id: Uuid) -> Result<BlastRadiusReport> {
-        let view = PetGraphView::from_backend(self.backend)?;
-        let name = view
-            .nodes
-            .iter()
-            .find(|n| n.id == symbol_id)
-            .map(|n| n.name.clone())
+        // Look up name using backend
+        let node = self.backend.get_node(symbol_id)?
             .ok_or_else(|| Error::NodeNotFound(symbol_id.to_string()))?;
-        self.analyze_node(&view, symbol_id, &name)
+
+        let view = PetGraphView::from_backend(self.backend)?;
+        self.analyze_node(&view, symbol_id, &node.name)
     }
 
     fn analyze_node(
@@ -103,13 +103,13 @@ impl<'a> BlastRadiusAnalyzer<'a> {
         symbol_name: &str,
     ) -> Result<BlastRadiusReport> {
         let source_idx = view
-            .uuid_to_directed
+            .uuid_to_index
             .get(&symbol_id)
             .copied()
             .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?;
 
         let direct_caller_ids = incoming_callers(view, source_idx);
-        let direct_callers = uuid_list_to_names(view, &direct_caller_ids);
+        let direct_callers = uuid_list_to_names(self.backend, &direct_caller_ids);
 
         let mut impact_ids = HashSet::new();
         let mut queue: VecDeque<(Uuid, usize)> =
@@ -122,7 +122,7 @@ impl<'a> BlastRadiusAnalyzer<'a> {
             if caller_id == symbol_id || !impact_ids.insert(caller_id) {
                 continue;
             }
-            let Some(caller_idx) = view.uuid_to_directed.get(&caller_id).copied() else {
+            let Some(caller_idx) = view.uuid_to_index.get(&caller_id).copied() else {
                 continue;
             };
             for pred in view
@@ -130,9 +130,9 @@ impl<'a> BlastRadiusAnalyzer<'a> {
                 .neighbors_directed(caller_idx, Direction::Incoming)
             {
                 if is_calls_edge(view, pred, caller_idx) {
-                    if let Some(uuid) = view.directed_to_uuid.get(&pred) {
+                    if let Some(uuid) = view.index_to_uuid.get(&pred) {
                         // Only include Function nodes in impact zone
-                        if let Some(node) = view.nodes.iter().find(|n| n.id == *uuid) {
+                        if let Ok(Some(node)) = self.backend.get_node(*uuid) {
                             if node.node_type == rbuilder_graph::schema::NodeType::Function && *uuid != symbol_id {
                                 queue.push_back((*uuid, depth + 1));
                             }
@@ -145,10 +145,10 @@ impl<'a> BlastRadiusAnalyzer<'a> {
         let mut data_flow_impact = Vec::new();
         let mut max_data_flow = 0usize;
         for caller_id in &direct_caller_ids {
-            let caller_name = view
-                .nodes
-                .iter()
-                .find(|n| n.id == *caller_id)
+            let caller_name = self.backend
+                .get_node(*caller_id)
+                .ok()
+                .flatten()
                 .map(|n| n.name.clone())
                 .unwrap_or_else(|| caller_id.to_string());
             let depth = self
@@ -164,13 +164,13 @@ impl<'a> BlastRadiusAnalyzer<'a> {
             });
         }
 
-        let impact_zone = ids_to_names(view, &impact_ids);
+        let impact_zone = ids_to_names(self.backend, &impact_ids);
         let impact_zone_ids: Vec<Uuid> = impact_ids.iter().copied().collect();
         let score = calculate_score(
             direct_callers.len(),
             impact_zone.len(),
             max_data_flow,
-            view,
+            self.backend,
             &impact_ids,
         );
 
@@ -221,28 +221,22 @@ fn is_calls_edge(
         == Some(EdgeType::Calls)
 }
 
-fn uuid_list_to_names(view: &PetGraphView, ids: &[Uuid]) -> Vec<String> {
+fn uuid_list_to_names(backend: &MemoryBackend, ids: &[Uuid]) -> Vec<String> {
     let mut names: Vec<String> = ids
         .iter()
         .filter_map(|id| {
-            view.nodes
-                .iter()
-                .find(|n| n.id == *id)
-                .map(|n| n.name.clone())
+            backend.get_node(*id).ok().flatten().map(|n| n.name.clone())
         })
         .collect();
     names.sort();
     names
 }
 
-fn ids_to_names(view: &PetGraphView, ids: &HashSet<Uuid>) -> Vec<String> {
+fn ids_to_names(backend: &MemoryBackend, ids: &HashSet<Uuid>) -> Vec<String> {
     let mut names: Vec<String> = ids
         .iter()
         .filter_map(|id| {
-            view.nodes
-                .iter()
-                .find(|n| n.id == *id)
-                .map(|n| n.name.clone())
+            backend.get_node(*id).ok().flatten().map(|n| n.name.clone())
         })
         .collect();
     names.sort();
@@ -253,7 +247,7 @@ fn calculate_score(
     direct_count: usize,
     impact_count: usize,
     data_flow_depth: usize,
-    view: &PetGraphView,
+    backend: &MemoryBackend,
     impact_ids: &HashSet<Uuid>,
 ) -> f64 {
     if direct_count == 0 && impact_count == 0 {
@@ -264,20 +258,20 @@ fn calculate_score(
     let transitive_component = (impact_count as f64 * 12.0).min(35.0);
     let flow_component = (data_flow_depth as f64 * 8.0).min(15.0);
 
-    let avg_complexity = average_complexity(view, impact_ids);
+    let avg_complexity = average_complexity(backend, impact_ids);
     let complexity_component = (avg_complexity * 2.0).min(10.0);
 
     (direct_component + transitive_component + flow_component + complexity_component).min(100.0)
 }
 
-fn average_complexity(view: &PetGraphView, ids: &HashSet<Uuid>) -> f64 {
+fn average_complexity(backend: &MemoryBackend, ids: &HashSet<Uuid>) -> f64 {
     if ids.is_empty() {
         return 0.0;
     }
     let sum: f64 = ids
         .iter()
         .filter_map(|id| {
-            view.nodes.iter().find(|n| n.id == *id).and_then(|n| {
+            backend.get_node(*id).ok().flatten().and_then(|n| {
                 n.get_property("complexity")
                     .or_else(|| n.get_property("cyclomatic_complexity"))
                     .and_then(|v| v.parse::<f64>().ok())

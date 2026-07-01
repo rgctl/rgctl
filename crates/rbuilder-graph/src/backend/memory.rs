@@ -12,7 +12,6 @@ use std::sync::{Arc, RwLock};
 use tracing::trace;
 use uuid::Uuid;
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::Directed;
 
 type PropertyIndex = HashMap<Arc<str>, HashMap<Arc<str>, Vec<Uuid>>>;
 
@@ -74,6 +73,18 @@ impl MemoryBackend {
     pub fn all_edges(&self) -> Result<Vec<Edge>> {
         let edges = read_lock(&self.edges)?;
         Ok(edges.clone())
+    }
+
+    /// Get all node UUIDs (zero-copy except for the Vec of UUIDs)
+    pub fn all_node_ids(&self) -> Result<Vec<Uuid>> {
+        let nodes = read_lock(&self.nodes)?;
+        Ok(nodes.keys().copied().collect())
+    }
+
+    /// Get edge topology as (from, to) pairs (zero-copy except for the Vec of tuples)
+    pub fn edge_topology(&self) -> Result<Vec<(Uuid, Uuid)>> {
+        let edges = read_lock(&self.edges)?;
+        Ok(edges.iter().map(|e| (e.from, e.to)).collect())
     }
 
     /// Find nodes by name (indexed)

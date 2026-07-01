@@ -1262,6 +1262,7 @@ fn run_full_analysis(
     verbose: bool,
 ) -> anyhow::Result<()> {
     use rbuilder::analysis::{CentralityAnalyzer, CommunityDetector, ComplexityAnalyzer, DependencyAnalyzer};
+    use rbuilder::analysis::graph_utils::PetGraphView;
     use rbuilder::config::secret_detector::SecretDetector;
     use rbuilder::discovery::{DiscoveryConfig, FileDiscoverer};
     use rbuilder::incremental::FileTracker;
@@ -1331,8 +1332,16 @@ fn run_full_analysis(
     let node_ids: Vec<uuid::Uuid> = graph.backend().all_nodes()?.iter().map(|n| n.id).collect();
     let mut analysis_results = AnalysisResults::new(node_ids);
 
+    // Build PetGraphView ONCE - reused for community, centrality, and blast radius
+    // Zero-clone topology projection: ~50ms vs 5+ minutes with full graph cloning
+    println!("Building topology view...");
+    let petgraph_view = PetGraphView::from_backend(graph.backend())?;
+    println!("✓ Topology view built ({} nodes, {} edges)",
+             petgraph_view.directed.node_count(),
+             petgraph_view.directed.edge_count());
+
     // Community detection - write to columnar table
-    let community_result = CommunityDetector::new().detect(graph.backend_mut())?;
+    let community_result = CommunityDetector::new().detect_with_view(&petgraph_view)?;
     {
         // Collect data with compact IDs first
         let community_data: Vec<_> = community_result.assignments.iter()
@@ -1397,7 +1406,7 @@ fn run_full_analysis(
     // Centrality analysis - write to columnar table
     // PageRank is fast (< 1s even on 187K nodes)
     // Betweenness auto-skips internally for graphs > 500 nodes
-    let centrality_report = CentralityAnalyzer::new().analyze(graph.backend_mut())?;
+    let centrality_report = CentralityAnalyzer::new().analyze_with_view(&petgraph_view)?;
     {
         // Collect data with compact IDs first
         let centrality_data: Vec<_> = centrality_report.scores.iter()

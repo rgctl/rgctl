@@ -49,8 +49,9 @@ impl CommunityDetector {
     }
 
     /// Detect communities using label propagation (Leiden-like heuristic).
-    pub fn detect(&self, backend: &MemoryBackend) -> Result<CommunityResult> {
-        let view = PetGraphView::from_backend(backend)?;
+    ///
+    /// Accepts a pre-built PetGraphView to avoid rebuilding the topology.
+    pub fn detect_with_view(&self, view: &PetGraphView) -> Result<CommunityResult> {
         let node_count = view.undirected.node_count();
         if node_count == 0 {
             return Ok(CommunityResult {
@@ -93,7 +94,7 @@ impl CommunityDetector {
         let modularity = self.calculate_modularity(&view, &labels);
         let mut community_members: HashMap<usize, Vec<Uuid>> = HashMap::new();
         for (idx, &label) in &labels {
-            if let Some(uuid) = view.undirected.node_weight(*idx) {
+            if let Some(uuid) = view.undirected_to_uuid.get(idx) {
                 community_members.entry(label).or_default().push(*uuid);
             }
         }
@@ -106,7 +107,7 @@ impl CommunityDetector {
         let assignments = labels
             .iter()
             .filter_map(|(idx, &label)| {
-                view.undirected.node_weight(*idx).map(|uuid| (*uuid, label))
+                view.undirected_to_uuid.get(idx).map(|uuid| (*uuid, label))
             })
             .collect();
 
@@ -115,6 +116,15 @@ impl CommunityDetector {
             modularity,
             assignments,
         })
+    }
+
+    /// Detect communities using label propagation (Leiden-like heuristic).
+    ///
+    /// Builds a PetGraphView internally. For better performance when running
+    /// multiple analyses, build the view once and use `detect_with_view()`.
+    pub fn detect(&self, backend: &MemoryBackend) -> Result<CommunityResult> {
+        let view = PetGraphView::from_backend(backend)?;
+        self.detect_with_view(&view)
     }
 
     /// Calculate modularity for a partition.

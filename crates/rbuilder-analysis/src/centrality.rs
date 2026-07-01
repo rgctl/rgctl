@@ -56,13 +56,14 @@ impl CentralityAnalyzer {
     }
 
     /// Calculate centrality metrics for all nodes.
-    pub fn analyze(&self, backend: &MemoryBackend) -> Result<CentralityReport> {
-        let view = PetGraphView::from_backend(backend)?;
+    ///
+    /// Accepts a pre-built PetGraphView to avoid rebuilding the topology.
+    pub fn analyze_with_view(&self, view: &PetGraphView) -> Result<CentralityReport> {
         let mut scores: HashMap<Uuid, CentralityScores> = HashMap::new();
 
         let pagerank_map = page_rank(&view.directed, self.damping, self.iterations);
 
-        for (idx, uuid) in &view.directed_to_uuid {
+        for (idx, uuid) in &view.index_to_uuid {
             let in_degree = view
                 .directed
                 .neighbors_directed(*idx, petgraph::Direction::Incoming)
@@ -86,7 +87,7 @@ impl CentralityAnalyzer {
 
         // Approximate betweenness via Brandes for small graphs
         if view.directed.node_count() <= 500 {
-            let bc = self.approximate_betweenness(&view);
+            let bc = self.approximate_betweenness(view);
             for (uuid, score) in bc {
                 if let Some(entry) = scores.get_mut(&uuid) {
                     entry.betweenness = score;
@@ -108,6 +109,15 @@ impl CentralityAnalyzer {
             top_pagerank,
             top_betweenness,
         })
+    }
+
+    /// Calculate centrality metrics for all nodes.
+    ///
+    /// Builds a PetGraphView internally. For better performance when running
+    /// multiple analyses, build the view once and use `analyze_with_view()`.
+    pub fn analyze(&self, backend: &MemoryBackend) -> Result<CentralityReport> {
+        let view = PetGraphView::from_backend(backend)?;
+        self.analyze_with_view(&view)
     }
 
     fn approximate_betweenness(&self, view: &PetGraphView) -> HashMap<Uuid, f64> {
@@ -174,7 +184,7 @@ impl CentralityAnalyzer {
         betweenness
             .into_iter()
             .filter_map(|(idx, score)| {
-                view.directed_to_uuid
+                view.index_to_uuid
                     .get(&idx)
                     .map(|uuid| (*uuid, score * scale))
             })
