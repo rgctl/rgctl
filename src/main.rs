@@ -5,7 +5,6 @@
 use clap::{Parser, Subcommand};
 use rbuilder::BUILD_INFO;
 use rbuilder_graph::backend::GraphBackend;
-use std::collections::HashMap;
 
 #[derive(Parser)]
 #[command(name = "rbuilder")]
@@ -1324,20 +1323,32 @@ fn run_full_analysis(
     println!("Time: {:.2}s", stats.duration.as_secs_f64());
     println!("{}", mem_monitor.report());
 
-    // Run analyses and persist results BEFORE saving
+    // Run analyses and store results in columnar format (zero graph mutation!)
     println!("\n=== Running Analyses ===");
 
-    // Community detection
-    let community_result = CommunityDetector::new().detect(graph.backend_mut())?;
+    // Initialize columnar analysis results
+    use rbuilder::analysis::AnalysisResults;
+    let node_ids: Vec<uuid::Uuid> = graph.backend().all_nodes()?.iter().map(|n| n.id).collect();
+    let mut analysis_results = AnalysisResults::new(node_ids);
 
-    // Batch update community assignments
-    let mut community_updates: HashMap<uuid::Uuid, HashMap<String, String>> = HashMap::new();
-    for (node_id, community_id) in &community_result.assignments {
-        let mut props = HashMap::new();
-        props.insert("community".to_string(), community_id.to_string());
-        community_updates.insert(*node_id, props);
+    // Community detection - write to columnar table
+    let community_result = CommunityDetector::new().detect(graph.backend_mut())?;
+    {
+        // Collect data with compact IDs first
+        let community_data: Vec<_> = community_result.assignments.iter()
+            .filter_map(|(node_id, community_id)| {
+                analysis_results.get_compact_id(*node_id).map(|compact_id| (compact_id, *community_id))
+            })
+            .collect();
+
+        // Now update table
+        let table = analysis_results.init_community();
+        table.modularity = community_result.modularity;
+        table.num_communities = community_result.communities.len();
+        for (compact_id, community_id) in community_data {
+            table.assignments[compact_id as usize] = community_id;
+        }
     }
-    graph.backend_mut().batch_update_node_properties(community_updates)?;
 
     if verbose {
         println!("\nCommunity detection:");
@@ -1350,18 +1361,27 @@ fn run_full_analysis(
         println!("{}", mem_monitor.report());
     }
 
-    // Complexity analysis
+    // Complexity analysis - write to columnar table
     let complexity_report = ComplexityAnalyzer::analyze(graph.backend())?;
+    {
+        // Collect data with compact IDs first
+        let complexity_data: Vec<_> = complexity_report.functions.iter()
+            .filter_map(|func| {
+                analysis_results.get_compact_id(func.node.id).map(|compact_id| {
+                    (compact_id, func.cyclomatic as u32, func.cognitive as u32)
+                })
+            })
+            .collect();
 
-    // Batch update complexity metrics
-    let mut complexity_updates: HashMap<uuid::Uuid, HashMap<String, String>> = HashMap::new();
-    for func in &complexity_report.functions {
-        let mut props = HashMap::new();
-        props.insert("cyclomatic".to_string(), func.cyclomatic.to_string());
-        props.insert("cognitive".to_string(), func.cognitive.to_string());
-        complexity_updates.insert(func.node.id, props);
+        // Now update table
+        let table = analysis_results.init_complexity();
+        table.avg_cyclomatic = complexity_report.avg_cyclomatic;
+        table.max_cyclomatic = complexity_report.max_cyclomatic as u32;
+        for (compact_id, cyclomatic, cognitive) in complexity_data {
+            table.cyclomatic[compact_id as usize] = cyclomatic;
+            table.cognitive[compact_id as usize] = cognitive;
+        }
     }
-    graph.backend_mut().batch_update_node_properties(complexity_updates)?;
 
     println!("\n✓ Complexity analysis:");
     println!("  Functions: {}", complexity_report.functions.len());
@@ -1374,25 +1394,28 @@ fn run_full_analysis(
         println!("{}", mem_monitor.report());
     }
 
-    // Centrality analysis
+    // Centrality analysis - write to columnar table
     // PageRank is fast (< 1s even on 187K nodes)
     // Betweenness auto-skips internally for graphs > 500 nodes
     let centrality_report = CentralityAnalyzer::new().analyze(graph.backend_mut())?;
+    {
+        // Collect data with compact IDs first
+        let centrality_data: Vec<_> = centrality_report.scores.iter()
+            .filter_map(|(node_id, scores)| {
+                analysis_results.get_compact_id(*node_id).map(|compact_id| (compact_id, scores))
+            })
+            .collect();
 
-    // Batch update centrality scores
-    let mut centrality_updates: HashMap<uuid::Uuid, HashMap<String, String>> = HashMap::new();
-    for (node_id, scores) in &centrality_report.scores {
-        let mut props = HashMap::new();
-        props.insert("pagerank".to_string(), scores.pagerank.to_string());
-        props.insert("in_degree".to_string(), scores.in_degree.to_string());
-        props.insert("out_degree".to_string(), scores.out_degree.to_string());
-        // Betweenness is only computed for small graphs (< 500 nodes)
-        if scores.betweenness > 0.0 {
-            props.insert("betweenness".to_string(), scores.betweenness.to_string());
+        // Now update table
+        let table = analysis_results.init_centrality();
+        for (compact_id, scores) in centrality_data {
+            let idx = compact_id as usize;
+            table.pagerank[idx] = scores.pagerank as f32;
+            table.betweenness[idx] = scores.betweenness as f32;
+            table.in_degree[idx] = scores.in_degree as u32;
+            table.out_degree[idx] = scores.out_degree as u32;
         }
-        centrality_updates.insert(*node_id, props);
     }
-    graph.backend_mut().batch_update_node_properties(centrality_updates)?;
 
     println!("\n✓ Centrality analysis:");
 
@@ -1663,31 +1686,28 @@ fn run_full_analysis(
 
     let query_time = query_start.elapsed();
 
-    // Batch update blast radius properties
-    let mut blast_property_updates: HashMap<uuid::Uuid, HashMap<String, String>> = HashMap::new();
-    for (node_id, result) in blast_updates {
-        let mut props = HashMap::new();
-        props.insert("blast_radius_score".to_string(), result.score.to_string());
-        props.insert("blast_radius_direct_callers".to_string(), result.direct_caller_ids.len().to_string());
-        props.insert("blast_radius_impact_zone".to_string(), result.impact_zone_ids.len().to_string());
-        props.insert("blast_radius_scc_id".to_string(), result.scc_id.to_string());
-        props.insert("blast_radius_scc_size".to_string(), result.scc_size.to_string());
+    // Write blast radius results to columnar table
+    {
+        // Collect data with compact IDs first
+        let blast_data: Vec<_> = blast_updates.into_iter()
+            .filter_map(|(node_id, result)| {
+                analysis_results.get_compact_id(node_id).map(|compact_id| (compact_id, result))
+            })
+            .collect();
 
-        // Store caller IDs as JSON arrays
-        props.insert(
-            "blast_radius_direct_caller_ids".to_string(),
-            serde_json::to_string(&result.direct_caller_ids).unwrap_or_else(|_| "[]".to_string()),
-        );
-        props.insert(
-            "blast_radius_impact_zone_ids".to_string(),
-            serde_json::to_string(&result.impact_zone_ids).unwrap_or_else(|_| "[]".to_string()),
-        );
-
-        blast_property_updates.insert(node_id, props);
+        // Now update table
+        let table = analysis_results.init_blast_radius();
+        for (compact_id, result) in blast_data {
+            let idx = compact_id as usize;
+            table.scores[idx] = result.score as f32;
+            table.direct_callers[idx] = result.direct_caller_ids.len() as u32;
+            table.impact_zone_size[idx] = result.impact_zone_ids.len() as u32;
+            table.scc_id[idx] = result.scc_id as u32;
+            table.scc_size[idx] = result.scc_size as u32;
+        }
     }
 
-    let analyzed_functions = blast_property_updates.len();
-    graph.backend_mut().batch_update_node_properties(blast_property_updates)?;
+    let analyzed_functions = functions.len();
 
     let total_time = blast_start.elapsed();
 
@@ -1710,13 +1730,21 @@ fn run_full_analysis(
 
     println!("\n=== Analysis Complete ===");
 
-    // Save graph with analysis results
+    // Save analysis results (columnar format - separate from graph!)
+    let analysis_path = root.join(".rbuilder/analysis_results.bin");
+    std::fs::create_dir_all(root.join(".rbuilder"))?;
+    analysis_results.save(&analysis_path)?;
+    println!("\nAnalysis results saved to {} ({:.1} MB)",
+             analysis_path.display(),
+             std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0));
+
+    // Save graph topology (no analysis properties!)
     let mut tracker = FileTracker::new(root);
     tracker.index_files(&files, &graph)?;
     tracker.save()?;
 
     let saved = graph.save_to_repo(root)?;
-    println!("\nGraph with analysis results saved to {}", saved.display());
+    println!("Graph topology saved to {}", saved.display());
     if verbose {
         println!("{}", mem_monitor.report());
     }
