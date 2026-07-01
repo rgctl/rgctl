@@ -307,19 +307,19 @@ const DASHBOARD_CENTRALITY_LIMIT: usize = 500;
 
 /// Degree centrality for dashboard (limited to graphs ≤500 nodes for betweenness).
 pub fn degree_centrality(backend: &MemoryBackend) -> Result<Vec<CentralityScore>> {
-    let nodes = backend.all_nodes()?;
-    if nodes.is_empty() {
+    let node_count = backend.node_count();
+    if node_count == 0 {
         return Ok(vec![]);
     }
 
-    let edges = backend.all_edges()?;
+    // Build degree map with zero-copy edge iteration
     let mut degree_map: HashMap<Uuid, usize> = HashMap::new();
-    for edge in &edges {
+    backend.for_each_edge(|edge| {
         *degree_map.entry(edge.from).or_insert(0) += 1;
         *degree_map.entry(edge.to).or_insert(0) += 1;
-    }
+    })?;
 
-    let betweenness = if nodes.len() <= DASHBOARD_CENTRALITY_LIMIT {
+    let betweenness = if node_count <= DASHBOARD_CENTRALITY_LIMIT {
         CentralityAnalyzer::new()
             .analyze(backend)
             .ok()
@@ -329,31 +329,30 @@ pub fn degree_centrality(backend: &MemoryBackend) -> Result<Vec<CentralityScore>
         HashMap::new()
     };
 
-    let mut scores: Vec<CentralityScore> = nodes
-        .iter()
-        .map(|node| {
-            let degree = degree_map.get(&node.id).copied().unwrap_or(0);
-            let complexity = node
-                .get_property("cyclomatic")
-                .and_then(|v| v.parse::<i64>().ok());
-            let bt = betweenness
-                .get(&node.id)
-                .map(|s| s.betweenness)
-                .unwrap_or(0.0);
-            let risk_score = degree as f64 * complexity.unwrap_or(1) as f64;
+    // Build scores with zero-copy node iteration
+    let mut scores: Vec<CentralityScore> = Vec::with_capacity(node_count);
+    backend.for_each_node(|node| {
+        let degree = degree_map.get(&node.id).copied().unwrap_or(0);
+        let complexity = node
+            .get_property("cyclomatic")
+            .and_then(|v| v.parse::<i64>().ok());
+        let bt = betweenness
+            .get(&node.id)
+            .map(|s| s.betweenness)
+            .unwrap_or(0.0);
+        let risk_score = degree as f64 * complexity.unwrap_or(1) as f64;
 
-            CentralityScore {
-                node_id: node.id,
-                name: node.name.clone(),
-                file_path: node.file_path.clone(),
-                degree,
-                betweenness: bt,
-                closeness: closeness_estimate(degree, nodes.len()),
-                complexity,
-                risk_score,
-            }
-        })
-        .collect();
+        scores.push(CentralityScore {
+            node_id: node.id,
+            name: node.name.clone(),
+            file_path: node.file_path.clone(),
+            degree,
+            betweenness: bt,
+            closeness: closeness_estimate(degree, node_count),
+            complexity,
+            risk_score,
+        });
+    })?;
 
     scores.sort_by(|a, b| {
         b.degree.cmp(&a.degree).then_with(|| {

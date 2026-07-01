@@ -187,25 +187,24 @@ pub struct DashboardCommunity {
 /// with labels and complexity metadata. Falls back to connected components when
 /// propagation yields a single cluster on disconnected subgraphs.
 pub fn detect_communities(backend: &MemoryBackend) -> Result<Vec<DashboardCommunity>> {
-    let nodes = backend.all_nodes()?;
     let detection = CommunityDetector::new().detect(backend)?;
 
     let mut communities: Vec<DashboardCommunity> = detection
         .communities
         .into_iter()
         .filter(|c| c.members.len() >= 2)
-        .map(|c| build_dashboard_community(c.id, &c.members, &nodes))
-        .collect();
+        .map(|c| build_dashboard_community(c.id, &c.members, backend))
+        .collect::<Result<_>>()?;
 
     if communities.len() < 2 {
-        let components = connected_components(backend, &nodes)?;
+        let components = connected_components(backend)?;
         if components.len() > communities.len() {
             communities = components
                 .into_iter()
                 .enumerate()
                 .filter(|(_, members)| members.len() >= 2)
-                .map(|(idx, members)| build_dashboard_community(idx, &members, &nodes))
-                .collect();
+                .map(|(idx, members)| build_dashboard_community(idx, &members, backend))
+                .collect::<Result<_>>()?;
         }
     }
 
@@ -216,42 +215,86 @@ pub fn detect_communities(backend: &MemoryBackend) -> Result<Vec<DashboardCommun
 fn build_dashboard_community(
     id: usize,
     member_ids: &[Uuid],
-    all_nodes: &[rbuilder_graph::schema::Node],
-) -> DashboardCommunity {
-    let community_nodes: Vec<_> = all_nodes
-        .iter()
-        .filter(|n| member_ids.contains(&n.id))
-        .collect();
+    backend: &MemoryBackend,
+) -> Result<DashboardCommunity> {
+    // Collect minimal data from each member node (zero-copy scoped access)
+    let mut type_counts: HashMap<NodeType, usize> = HashMap::new();
+    let mut complexity_sum = 0.0;
+    let mut complexity_count = 0;
+    let mut file_paths: Vec<String> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
 
-    DashboardCommunity {
+    for &member_id in member_ids {
+        backend.with_node(member_id, |node| {
+            *type_counts.entry(node.node_type).or_insert(0) += 1;
+
+            if let Some(complexity_str) = node.get_property("cyclomatic") {
+                if let Ok(complexity) = complexity_str.parse::<i64>() {
+                    complexity_sum += complexity as f64;
+                    complexity_count += 1;
+                }
+            }
+
+            if let Some(path) = &node.file_path {
+                file_paths.push(path.clone());
+            }
+            names.push(node.name.clone());
+        })?;
+    }
+
+    let primary_type = type_counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(t, _)| t)
+        .unwrap_or(NodeType::Function);
+
+    let avg_complexity = if complexity_count > 0 {
+        complexity_sum / complexity_count as f64
+    } else {
+        0.0
+    };
+
+    let label = if let Some(common) = find_common_path_prefix_strings(&file_paths) {
+        if !common.is_empty() {
+            common
+        } else {
+            infer_label_from_names(&names, id)
+        }
+    } else {
+        infer_label_from_names(&names, id)
+    };
+
+    Ok(DashboardCommunity {
         id,
         nodes: member_ids.to_vec(),
         size: member_ids.len(),
-        primary_type: most_common_type(&community_nodes),
-        avg_complexity: avg_complexity(&community_nodes),
-        label: infer_community_label(&community_nodes, id),
-    }
+        primary_type,
+        avg_complexity,
+        label,
+    })
 }
 
 fn connected_components(
     backend: &MemoryBackend,
-    nodes: &[rbuilder_graph::schema::Node],
 ) -> Result<Vec<Vec<Uuid>>> {
-    let edges = backend.all_edges()?;
+    // Build adjacency list with zero-copy edge iteration
     let mut adj: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
-    for edge in &edges {
+    backend.for_each_edge(|edge| {
         adj.entry(edge.from).or_default().push(edge.to);
         adj.entry(edge.to).or_default().push(edge.from);
-    }
+    })?;
 
     let mut visited = HashSet::new();
     let mut components = Vec::new();
 
-    for node in nodes {
-        if visited.contains(&node.id) {
+    // Get all node IDs (only copies UUIDs, not full nodes)
+    let node_ids = backend.all_node_ids()?;
+
+    for node_id in node_ids {
+        if visited.contains(&node_id) {
             continue;
         }
-        let mut stack = vec![node.id];
+        let mut stack = vec![node_id];
         let mut component = Vec::new();
         while let Some(current) = stack.pop() {
             if !visited.insert(current) {
@@ -349,6 +392,54 @@ fn find_common_path_prefix(paths: &[&String]) -> Option<String> {
         return Some(first[..last_slash].to_string());
     }
     Some(first[..prefix_len].to_string())
+}
+
+// Zero-copy helper: work with String references instead of Node references
+fn find_common_path_prefix_strings(paths: &[String]) -> Option<String> {
+    if paths.is_empty() {
+        return None;
+    }
+    let first = &paths[0];
+    let mut prefix_len = first.len();
+    for path in &paths[1..] {
+        prefix_len = first
+            .chars()
+            .zip(path.chars())
+            .take(prefix_len)
+            .take_while(|(a, b)| a == b)
+            .count();
+    }
+    if prefix_len == 0 {
+        return None;
+    }
+    if let Some(last_slash) = first[..prefix_len].rfind('/') {
+        return Some(first[..last_slash].to_string());
+    }
+    Some(first[..prefix_len].to_string())
+}
+
+fn infer_label_from_names(names: &[String], idx: usize) -> String {
+    if names.is_empty() {
+        return format!("Community {}", idx + 1);
+    }
+
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for name in names {
+        let tokens: Vec<&str> = name.split(&['_', '-', '.'][..]).collect();
+        for token in tokens {
+            if !token.is_empty() && token.len() > 2 {
+                *counts.entry(token).or_insert(0) += 1;
+            }
+        }
+    }
+
+    if let Some((token, _)) = counts.iter().max_by_key(|(_, count)| *count) {
+        if counts[token] >= names.len() / 3 {
+            return token.to_string();
+        }
+    }
+
+    format!("Community {}", idx + 1)
 }
 
 #[cfg(test)]

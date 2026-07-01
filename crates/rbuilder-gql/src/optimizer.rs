@@ -112,10 +112,11 @@ impl<'a> QueryOptimizer<'a> {
     fn estimate_selectivity(&self, pattern: &crate::ast::Pattern) -> f64 {
         let total = self.backend.node_count().max(1) as f64;
         let type_sel = if let Some(node_type) = pattern.node.node_type {
+            // Use indexed count for typed queries (zero-copy)
             let count = self
                 .backend
-                .all_nodes()
-                .map(|nodes| nodes.iter().filter(|n| n.node_type == node_type).count() as f64)
+                .find_node_ids_by_type(node_type)
+                .map(|ids| ids.len() as f64)
                 .unwrap_or(total)
                 / total;
             count
@@ -130,18 +131,23 @@ impl<'a> QueryOptimizer<'a> {
         if node_pattern.properties.is_empty() {
             return 1.0;
         }
-        let nodes = match self.backend.all_nodes() {
-            Ok(n) => n,
-            Err(_) => return 0.1,
-        };
-        if nodes.is_empty() {
+
+        let total = self.backend.node_count().max(1);
+        if total == 0 {
             return 1.0;
         }
-        let matching = nodes
-            .iter()
-            .filter(|n| node_matches_properties(n, &node_pattern.properties))
-            .count();
-        (matching as f64 / nodes.len() as f64).clamp(0.001, 1.0)
+
+        // Count matching nodes with zero-copy iteration
+        let mut matching = 0usize;
+        if let Ok(()) = self.backend.for_each_node(|n| {
+            if node_matches_properties(n, &node_pattern.properties) {
+                matching += 1;
+            }
+        }) {
+            (matching as f64 / total as f64).clamp(0.001, 1.0)
+        } else {
+            0.1
+        }
     }
 }
 

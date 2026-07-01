@@ -75,13 +75,9 @@ pub struct CallGraph {
 impl CallGraph {
     /// Build from in-memory graph backend using zero-clone construction.
     pub fn from_backend(backend: &MemoryBackend) -> Result<Self> {
-        // 1. Fetch only function nodes (zero-clone: just collect IDs)
-        let function_nodes: Vec<_> = backend.all_nodes()?
-            .into_iter()
-            .filter(|n| n.node_type == NodeType::Function)
-            .collect();
-
-        let node_count = function_nodes.len();
+        // 1. Get function IDs without cloning nodes (zero-copy)
+        let function_ids = backend.find_node_ids_by_type(NodeType::Function)?;
+        let node_count = function_ids.len();
 
         let mut id_to_index = HashMap::with_capacity(node_count);
         let mut index_to_id = Vec::with_capacity(node_count);
@@ -89,10 +85,15 @@ impl CallGraph {
         let mut precursor_list = vec![Vec::new(); node_count];
         let mut line_numbers = vec![0; node_count];
 
-        for (index, node) in function_nodes.iter().enumerate() {
-            id_to_index.insert(node.id, index as u32);
-            index_to_id.push(node.id);
-            line_numbers[index] = node.start_line.unwrap_or(0);
+        // 2. Build index mappings and extract metadata with scoped access
+        for (index, &func_id) in function_ids.iter().enumerate() {
+            id_to_index.insert(func_id, index as u32);
+            index_to_id.push(func_id);
+
+            // Scoped read-only access to get start_line without cloning node
+            if let Ok(Some(start_line)) = backend.with_node(func_id, |node| node.start_line.unwrap_or(0)) {
+                line_numbers[index] = start_line;
+            }
         }
 
         // 2. Stream edges into adjacency lists in O(E) time

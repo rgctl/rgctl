@@ -223,10 +223,15 @@ impl GraphBuilder {
         let start = Instant::now();
         let symbol_count = self.symbol_index.len();
 
+        // Build UUID → Node index for O(1) lookups (eliminates O(n²) nested loop)
+        let uuid_to_node: HashMap<Uuid, &Node> = self.nodes.iter()
+            .map(|n| (n.id, n))
+            .collect();
+
         // Build qualified name index and suffix index
         for (key, uuid) in &self.symbol_index {
-            // Find the node to get its qualified_name
-            if let Some(node) = self.nodes.iter().find(|n| n.id == *uuid) {
+            // Find the node to get its qualified_name (now O(1) instead of O(n))
+            if let Some(node) = uuid_to_node.get(uuid) {
                 // Index by qualified_name if present
                 if let Some(qualified) = &node.qualified_name {
                     self.symbols_by_qualified.insert(qualified.clone(), *uuid);

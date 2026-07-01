@@ -162,16 +162,34 @@ impl<'a> QueryExecutor<'a> {
     }
 
     fn match_node_pattern(&self, pattern: &NodePattern, binding: &Binding) -> Result<Vec<Node>> {
-        let nodes: Vec<Node> = if let Some(node_type) = pattern.node_type {
-            self.backend.find_nodes_by_type(node_type)?
-        } else {
-            self.backend.all_nodes()?
-        };
+        let mut matching_nodes = Vec::new();
 
-        Ok(nodes
-            .into_iter()
-            .filter(|n| node_matches_pattern(n, pattern, binding))
-            .collect())
+        if let Some(node_type) = pattern.node_type {
+            // Use indexed lookup for typed queries
+            let node_ids = self.backend.find_node_ids_by_type(node_type)?;
+            for node_id in node_ids {
+                if let Ok(Some(node)) = self.backend.with_node(node_id, |n| {
+                    if node_matches_pattern(n, pattern, binding) {
+                        Some(n.clone())
+                    } else {
+                        None
+                    }
+                }) {
+                    if let Some(n) = node {
+                        matching_nodes.push(n);
+                    }
+                }
+            }
+        } else {
+            // Untyped query: scan all nodes but only clone matches
+            self.backend.for_each_node(|n| {
+                if node_matches_pattern(n, pattern, binding) {
+                    matching_nodes.push(n.clone());
+                }
+            })?;
+        }
+
+        Ok(matching_nodes)
     }
 
     fn match_hops(

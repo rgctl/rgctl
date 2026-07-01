@@ -87,6 +87,77 @@ impl MemoryBackend {
         Ok(edges.iter().map(|e| (e.from, e.to)).collect())
     }
 
+    // ========== ZERO-CLONE API (use these for performance) ==========
+
+    /// Zero-allocation node iteration. Passes read-only references to a closure.
+    /// Use this instead of all_nodes() to avoid cloning 187K nodes.
+    pub fn for_each_node<F>(&self, mut f: F) -> Result<()>
+    where
+        F: FnMut(&Node),
+    {
+        let nodes = read_lock(&self.nodes)?;
+        for node in nodes.values() {
+            f(node);
+        }
+        Ok(())
+    }
+
+    /// Zero-allocation edge iteration.
+    pub fn for_each_edge<F>(&self, mut f: F) -> Result<()>
+    where
+        F: FnMut(&Edge),
+    {
+        let edges = read_lock(&self.edges)?;
+        for edge in edges.iter() {
+            f(edge);
+        }
+        Ok(())
+    }
+
+    /// Scoped read-only access to a single node. Returns result of closure.
+    pub fn with_node<F, R>(&self, id: Uuid, f: F) -> Result<Option<R>>
+    where
+        F: FnOnce(&Node) -> R,
+    {
+        let nodes = read_lock(&self.nodes)?;
+        Ok(nodes.get(&id).map(f))
+    }
+
+    /// Find node IDs by name (returns UUIDs, not cloned nodes).
+    pub fn find_node_ids_by_name(&self, name: &str) -> Result<Vec<Uuid>> {
+        let name_arc = self.string_interner.intern(name);
+        let index = read_lock(&self.node_name_index)?;
+        Ok(index.get(name_arc.as_ref()).cloned().unwrap_or_default())
+    }
+
+    /// Find node IDs by type (returns UUIDs, not cloned nodes).
+    pub fn find_node_ids_by_type(&self, node_type: NodeType) -> Result<Vec<Uuid>> {
+        let index = read_lock(&self.node_type_index)?;
+        Ok(index.get(&node_type).cloned().unwrap_or_default())
+    }
+
+    /// Get outgoing edge target IDs (returns UUIDs, not cloned edges).
+    pub fn get_outgoing_edge_targets(&self, node_id: Uuid) -> Result<Vec<Uuid>> {
+        let edges = read_lock(&self.edges)?;
+        Ok(edges
+            .iter()
+            .filter(|e| e.from == node_id)
+            .map(|e| e.to)
+            .collect())
+    }
+
+    /// Get incoming edge source IDs (returns UUIDs, not cloned edges).
+    pub fn get_incoming_edge_sources(&self, node_id: Uuid) -> Result<Vec<Uuid>> {
+        let edges = read_lock(&self.edges)?;
+        Ok(edges
+            .iter()
+            .filter(|e| e.to == node_id)
+            .map(|e| e.from)
+            .collect())
+    }
+
+    // ========== LEGACY API (clones nodes - avoid in hot paths) ==========
+
     /// Find nodes by name (indexed)
     pub fn find_nodes_by_name(&self, name: &str) -> Result<Vec<Node>> {
         let name_arc = self.string_interner.intern(name);
