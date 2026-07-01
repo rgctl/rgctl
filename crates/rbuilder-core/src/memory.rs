@@ -36,7 +36,7 @@ impl MemoryMonitor {
     /// Get current memory usage in bytes for the specified process.
     fn current_memory(system: &System, pid: Pid) -> u64 {
         if let Some(process) = system.process(pid) {
-            process.memory() * 1024 // Convert from KB to bytes
+            process.memory() // Already in bytes
         } else {
             0
         }

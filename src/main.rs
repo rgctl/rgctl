@@ -390,8 +390,11 @@ fn main() -> anyhow::Result<()> {
     rbuilder::init();
 
     // Initialize logging
-    let log_level = if cli.verbose { "debug" } else { "info" };
-    tracing_subscriber::fmt().with_env_filter(log_level).init();
+    let log_level = if cli.verbose { "info" } else { "warn" };
+    tracing_subscriber::fmt()
+        .with_env_filter(log_level)
+        .with_target(false)
+        .init();
 
     // If no subcommand, run full analysis
     // Route to appropriate command handler or run full analysis
@@ -1304,7 +1307,11 @@ fn run_full_analysis(
             .collect();
     }
 
-    println!("Analyzing repository: {}", root.display());
+    if !verbose {
+        println!("🔍 Analyzing: {}", root.display());
+    } else {
+        println!("Analyzing repository: {}", root.display());
+    }
 
     // Show warning for --all flag
     if all {
@@ -1316,7 +1323,6 @@ fn run_full_analysis(
     // Initialize memory monitoring
     use rbuilder_core::memory::MemoryMonitor;
     let mem_monitor = MemoryMonitor::new();
-    println!("Starting analysis... {}", mem_monitor.report());
 
     let discovery_config = discovery.clone();
     let registry = LanguageRegistry::new().into();
@@ -1336,18 +1342,24 @@ fn run_full_analysis(
     // Index the repository
     let (graph, stats) = pipeline.process_repository(root)?;
 
-    println!("\n=== Indexing Complete ===");
-    println!("Processed {} files", stats.files_processed);
-    if stats.files_failed > 0 {
-        println!("Skipped {} files due to errors", stats.files_failed);
+    if verbose {
+        println!("\n=== Indexing Complete ===");
+        println!("Processed {} files", stats.files_processed);
+        if stats.files_failed > 0 {
+            println!("Skipped {} files due to errors", stats.files_failed);
+        }
+        println!("Created {} nodes", stats.nodes_created);
+        println!("Created {} edges", stats.edges_created);
+        println!("Time: {:.2}s", stats.duration.as_secs_f64());
+        println!("{}", mem_monitor.report());
+        println!("\n=== Running Analyses ===");
+    } else {
+        println!("📊 Indexed {} files → {} nodes, {} edges ({:.1}s)",
+                 stats.files_processed,
+                 stats.nodes_created,
+                 stats.edges_created,
+                 stats.duration.as_secs_f64());
     }
-    println!("Created {} nodes", stats.nodes_created);
-    println!("Created {} edges", stats.edges_created);
-    println!("Time: {:.2}s", stats.duration.as_secs_f64());
-    println!("{}", mem_monitor.report());
-
-    // Run analyses and store results in columnar format (zero graph mutation!)
-    println!("\n=== Running Analyses ===");
 
     // Initialize columnar analysis results
     use rbuilder::analysis::AnalysisResults;
@@ -1356,12 +1368,13 @@ fn run_full_analysis(
     let mut analysis_results = AnalysisResults::new(node_ids);
 
     // Build PetGraphView ONCE - reused for community, centrality, and blast radius
-    // Zero-clone topology projection: ~50ms vs 5+ minutes with full graph cloning
-    println!("Building topology view...");
     let petgraph_view = PetGraphView::from_backend(graph.backend())?;
-    println!("✓ Topology view built ({} nodes, {} edges)",
-             petgraph_view.directed.node_count(),
-             petgraph_view.directed.edge_count());
+    if verbose {
+        println!("Building topology view...");
+        println!("✓ Topology view built ({} nodes, {} edges)",
+                 petgraph_view.directed.node_count(),
+                 petgraph_view.directed.edge_count());
+    }
 
     // Community detection - write to columnar table
     let community_result = CommunityDetector::new().detect_with_view(&petgraph_view)?;
@@ -1386,11 +1399,11 @@ fn run_full_analysis(
         println!("\nCommunity detection:");
         println!("  Communities: {}", community_result.communities.len());
         println!("  Modularity: {:.3}", community_result.modularity);
-    } else {
-        println!("✓ Community detection complete ({} communities)", community_result.communities.len());
-    }
-    if verbose {
         println!("{}", mem_monitor.report());
+    } else {
+        println!("📍 Detected {} communities (modularity: {:.2})",
+                 community_result.communities.len(),
+                 community_result.modularity);
     }
 
     // Complexity analysis - write to columnar table
@@ -1415,15 +1428,23 @@ fn run_full_analysis(
         }
     }
 
-    println!("\n✓ Complexity analysis:");
-    println!("  Functions: {}", complexity_report.functions.len());
-    println!("  Avg cyclomatic: {:.1}", complexity_report.avg_cyclomatic);
-    println!("  Max cyclomatic: {}", complexity_report.max_cyclomatic);
-    for (level, count) in &complexity_report.by_level {
-        println!("    {:?}: {}", level, count);
-    }
     if verbose {
+        println!("\n✓ Complexity analysis:");
+        println!("  Functions: {}", complexity_report.functions.len());
+        println!("  Avg cyclomatic: {:.1}", complexity_report.avg_cyclomatic);
+        println!("  Max cyclomatic: {}", complexity_report.max_cyclomatic);
+        for (level, count) in &complexity_report.by_level {
+            println!("    {:?}: {}", level, count);
+        }
         println!("{}", mem_monitor.report());
+    } else {
+        let high_complexity = complexity_report.by_level.get(&rbuilder::analysis::ComplexityLevel::High).unwrap_or(&0);
+        let medium_complexity = complexity_report.by_level.get(&rbuilder::analysis::ComplexityLevel::Medium).unwrap_or(&0);
+        println!("🔧 Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
+                 complexity_report.functions.len(),
+                 complexity_report.avg_cyclomatic,
+                 high_complexity,
+                 medium_complexity);
     }
 
     // Centrality analysis - write to columnar table
@@ -1449,43 +1470,52 @@ fn run_full_analysis(
         }
     }
 
-    println!("\n✓ Centrality analysis:");
-
     // Check if we have betweenness data
     let has_betweenness = centrality_report.scores.values().any(|s| s.betweenness > 0.0);
-    if has_betweenness {
-        println!("  Metrics: PageRank + Betweenness + Degree");
-    } else {
-        println!("  Metrics: PageRank + Degree (Betweenness skipped for large graph)");
-    }
 
-    println!("  Top hotspots by PageRank:");
-    for (id, score) in centrality_report.top_pagerank.iter().take(5) {
-        if let Ok(Some(node)) = graph.backend().get_node(*id) {
-            let in_deg = centrality_report.scores[id].in_degree;
-            let out_deg = centrality_report.scores[id].out_degree;
-            println!("    - {} (PageRank: {:.4}, in: {}, out: {})",
-                     node.name, score, in_deg, out_deg);
+    if verbose {
+        println!("\n✓ Centrality analysis:");
+        if has_betweenness {
+            println!("  Metrics: PageRank + Betweenness + Degree");
+        } else {
+            println!("  Metrics: PageRank + Degree (Betweenness skipped for large graph)");
         }
-    }
-
-    if has_betweenness && !centrality_report.top_betweenness.is_empty() {
-        println!("  Top architectural bottlenecks by Betweenness:");
-        for (id, score) in centrality_report.top_betweenness.iter().take(5) {
+        println!("  Top hotspots by PageRank:");
+        for (id, score) in centrality_report.top_pagerank.iter().take(5) {
             if let Ok(Some(node)) = graph.backend().get_node(*id) {
-                println!("    - {} ({:.4})", node.name, score);
+                let in_deg = centrality_report.scores[id].in_degree;
+                let out_deg = centrality_report.scores[id].out_degree;
+                println!("    - {} (PageRank: {:.4}, in: {}, out: {})",
+                         node.name, score, in_deg, out_deg);
+            }
+        }
+        if has_betweenness && !centrality_report.top_betweenness.is_empty() {
+            println!("  Top architectural bottlenecks by Betweenness:");
+            for (id, score) in centrality_report.top_betweenness.iter().take(5) {
+                if let Ok(Some(node)) = graph.backend().get_node(*id) {
+                    println!("    - {} ({:.4})", node.name, score);
+                }
+            }
+        }
+        println!("{}", mem_monitor.report());
+    } else {
+        if let Some((top_id, top_score)) = centrality_report.top_pagerank.first() {
+            if let Ok(Some(node)) = graph.backend().get_node(*top_id) {
+                println!("⭐ Top hotspot: {} (PageRank: {:.4})",
+                         node.name.split('/').last().unwrap_or(&node.name),
+                         top_score);
             }
         }
     }
 
-    if verbose {
-        println!("{}", mem_monitor.report());
-    }
-
     // Dependency analysis
     let cycles = DependencyAnalyzer::find_circular_dependencies(graph.backend())?;
-    println!("\n✓ Dependency analysis:");
-    println!("  Circular dependencies: {}", cycles.len());
+    if verbose {
+        println!("\n✓ Dependency analysis:");
+        println!("  Circular dependencies: {}", cycles.len());
+    } else if cycles.len() > 0 {
+        println!("⚠️  Found {} circular dependencies", cycles.len());
+    }
 
     // Security analysis (opt-in with --security or --all)
     if security || all {
@@ -1655,7 +1685,6 @@ fn run_full_analysis(
     }
 
     // Blast radius analysis with SCC + Dense Bitsets engine
-    println!("\n✓ Blast radius analysis (SCC-based):");
     use rbuilder::analysis::BlastRadiusEngine;
     use std::time::Instant;
 
@@ -1665,8 +1694,11 @@ fn run_full_analysis(
     let engine = match BlastRadiusEngine::build(backend) {
         Ok(e) => e,
         Err(err) => {
-            println!("  ⊘ Engine build failed: {}", err);
-            println!("\n=== Analysis Complete ===");
+            if verbose {
+                println!("\n✓ Blast radius analysis:");
+                println!("  ⊘ Engine build failed: {}", err);
+            }
+            println!("\n✅ Analysis complete");
             return Ok(());
         }
     };
@@ -1675,6 +1707,7 @@ fn run_full_analysis(
     let stats = engine.stats();
 
     if verbose {
+        println!("\n✓ Blast radius analysis (SCC-based):");
         println!("  Engine built in {:.2}s", build_time.as_secs_f64());
         println!("  SCCs: {} (reduced from {} nodes, {:.1}% compression)",
                  stats.scc_count,
@@ -1739,32 +1772,35 @@ fn run_full_analysis(
 
     let total_time = blast_start.elapsed();
 
-    println!("  Functions analyzed: {}", analyzed_functions);
-    println!("  High impact (>50): {}", high_impact_count);
-    println!("  In circular deps: {}", in_cycle_count);
-    if !max_impact_function.is_empty() {
-        println!("  Max impact: {} (score: {:.1})", max_impact_function, max_impact_score);
-    }
-    println!("  Build time: {:.2}s", build_time.as_secs_f64());
-    println!("  Query time: {:.3}s ({} functions = {:.1}μs/function)",
-             query_time.as_secs_f64(),
-             analyzed_functions,
-             query_time.as_micros() as f64 / analyzed_functions as f64);
-    println!("  Total time: {:.2}s", total_time.as_secs_f64());
-
     if verbose {
+        println!("  Functions analyzed: {}", analyzed_functions);
+        println!("  High impact (>50): {}", high_impact_count);
+        println!("  In circular deps: {}", in_cycle_count);
+        if !max_impact_function.is_empty() {
+            println!("  Max impact: {} (score: {:.1})", max_impact_function, max_impact_score);
+        }
+        println!("  Build time: {:.2}s", build_time.as_secs_f64());
+        println!("  Query time: {:.3}s ({} functions = {:.1}μs/function)",
+                 query_time.as_secs_f64(),
+                 analyzed_functions,
+                 query_time.as_micros() as f64 / analyzed_functions as f64);
+        println!("  Total time: {:.2}s", total_time.as_secs_f64());
         println!("{}", mem_monitor.report());
+    } else {
+        if !max_impact_function.is_empty() {
+            println!("💥 Highest impact: {} (score: {:.1}/100, {} high-impact functions)",
+                     max_impact_function.split('/').last().unwrap_or(&max_impact_function),
+                     max_impact_score,
+                     high_impact_count);
+        }
     }
 
-    println!("\n=== Analysis Complete ===");
+    println!("\n✅ Analysis complete");
 
     // Save analysis results (columnar format - separate from graph!)
     let analysis_path = root.join(".rbuilder/analysis_results.bin");
     std::fs::create_dir_all(root.join(".rbuilder"))?;
     analysis_results.save(&analysis_path)?;
-    println!("\nAnalysis results saved to {} ({:.1} MB)",
-             analysis_path.display(),
-             std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0));
 
     // Save graph topology (no analysis properties!)
     let mut tracker = FileTracker::new(root);
@@ -1772,33 +1808,47 @@ fn run_full_analysis(
     tracker.save()?;
 
     let saved = graph.save_to_repo(root)?;
-    println!("Graph topology saved to {}", saved.display());
-    if verbose {
-        println!("{}", mem_monitor.report());
-    }
 
     // Export HTML dashboard
     use rbuilder::export::export_html_dashboard;
     let html_path = root.join(".rbuilder/dashboard.html");
-    if let Err(e) = export_html_dashboard(
+    let dashboard_exported = export_html_dashboard(
         graph.backend(),
         Some(&output_dir),
         &html_path,
-    ) {
-        eprintln!("Warning: Failed to export HTML dashboard: {}", e);
+    ).is_ok();
+
+    if verbose {
+        println!("\nAnalysis results saved to {} ({:.1} MB)",
+                 analysis_path.display(),
+                 std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0));
+        println!("Graph topology saved to {}", saved.display());
+        if dashboard_exported {
+            println!("HTML dashboard exported to {}", html_path.display());
+        }
+        println!("\n=== Performance Summary ===");
+        println!("{}", mem_monitor.report());
     } else {
-        println!("HTML dashboard exported to {}", html_path.display());
+        let analysis_size = std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0);
+        println!("\n💾 Saved to .rbuilder/ ({:.1} MB total)", analysis_size);
+        if dashboard_exported {
+            println!("📊 Dashboard: {}", html_path.display());
+        }
+        let snapshot = mem_monitor.snapshot();
+        println!("⚡ Completed in {:.1}s (peak memory: {:.0} MB)",
+                 snapshot.elapsed.as_secs_f64(),
+                 snapshot.peak_mb);
     }
 
-    println!("\n=== Performance Summary ===");
-    println!("{}", mem_monitor.report());
-
-    println!("\nNext steps:");
-    println!("  - Query: rbuilder ask \"your question\"");
-    println!("  - GQL: rbuilder gql \"your query\"");
-    println!("  - Stats: rbuilder stats");
-    println!("  - Chat: rbuilder chat");
-    println!("  - View: open {}", html_path.display());
+    if !verbose {
+        println!("\n💡 Next steps:");
+        println!("   rbuilder ask \"<question>\"   # Query the graph");
+        println!("   rbuilder chat                 # Interactive mode");
+        println!("   rbuilder stats                # View statistics");
+        if dashboard_exported {
+            println!("   open {}   # View dashboard", html_path.file_name().unwrap().to_str().unwrap());
+        }
+    }
 
     // Enter watch mode if requested
     if watch {
