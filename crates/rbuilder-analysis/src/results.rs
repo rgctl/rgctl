@@ -177,6 +177,7 @@ pub struct BlastRadiusMetrics {
     pub direct_callers: u32,
     pub impact_zone_size: u32,
     pub scc_id: u32,
+    /// Size of the strongly connected component this node belongs to
     pub scc_size: u32,
 }
 

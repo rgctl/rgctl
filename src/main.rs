@@ -1334,7 +1334,7 @@ fn run_full_analysis(
     let files = discoverer.discover(root)?;
 
     // Index the repository
-    let (mut graph, stats) = pipeline.process_repository(root)?;
+    let (graph, stats) = pipeline.process_repository(root)?;
 
     println!("\n=== Indexing Complete ===");
     println!("Processed {} files", stats.files_processed);
