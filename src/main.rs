@@ -1378,7 +1378,7 @@ fn run_full_analysis(
             nodes = stats.nodes_created,
             edges = stats.edges_created,
             duration_secs = %format!("{:.1}", stats.duration.as_secs_f64()),
-            "[+] Indexed {} files -> {} nodes, {} edges ({:.1}s)",
+            "[✓] Indexed {} files -> {} nodes, {} edges ({:.1}s)",
             stats.files_processed,
             stats.nodes_created,
             stats.edges_created,
@@ -1386,7 +1386,7 @@ fn run_full_analysis(
         );
     } else {
         info!(
-            "[+] Indexed {} files -> {} nodes, {} edges ({:.1}s)",
+            "[✓] Indexed {} files -> {} nodes, {} edges ({:.1}s)",
             stats.files_processed,
             stats.nodes_created,
             stats.edges_created,
@@ -1441,13 +1441,13 @@ fn run_full_analysis(
         info!(
             communities = community_result.communities.len(),
             modularity = %format!("{:.2}", community_result.modularity),
-            "[-] Detected {} communities (modularity: {:.2})",
+            "[✓] Detected {} communities (modularity: {:.2})",
             community_result.communities.len(),
             community_result.modularity
         );
     } else {
         info!(
-            "[-] Detected {} communities (modularity: {:.2})",
+            "[✓] Detected {} communities (modularity: {:.2})",
             community_result.communities.len(),
             community_result.modularity
         );
@@ -1497,7 +1497,7 @@ fn run_full_analysis(
             avg_cyclomatic = %format!("{:.1}", complexity_report.avg_cyclomatic),
             high = high_complexity,
             medium = medium_complexity,
-            "[>] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
+            "[✓] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
             complexity_report.functions.len(),
             complexity_report.avg_cyclomatic,
             high_complexity,
@@ -1505,7 +1505,7 @@ fn run_full_analysis(
         );
     } else {
         info!(
-            "[>] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
+            "[✓] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
             complexity_report.functions.len(),
             complexity_report.avg_cyclomatic,
             high_complexity,
@@ -1893,14 +1893,14 @@ fn run_full_analysis(
     let analysis_size = std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0);
     let snapshot = mem_monitor.snapshot();
 
-    info!("[-] Saved to .rbuilder/ ({:.1} MB total)", analysis_size);
+    info!("[✓] Saved to .rbuilder/ ({:.1} MB total)", analysis_size);
 
     if dashboard_exported {
-        info!("[+] Dashboard: {}", html_path.display());
+        info!("[✓] Dashboard: {}", html_path.display());
     }
 
     info!(
-        "[>] Completed in {:.1}s (peak memory: {:.0} MB)",
+        "[✓] Completed in {:.1}s (peak memory: {:.0} MB)",
         snapshot.elapsed.as_secs_f64(),
         snapshot.peak_mb
     );
