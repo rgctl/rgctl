@@ -5,6 +5,7 @@
 use clap::{Parser, Subcommand};
 use rbuilder::BUILD_INFO;
 use rbuilder_graph::backend::GraphBackend;
+use tracing::{debug, error, info, info_span, warn};
 
 #[derive(Parser)]
 #[command(name = "rbuilder")]
@@ -390,11 +391,30 @@ fn main() -> anyhow::Result<()> {
     rbuilder::init();
 
     // Initialize logging
-    let log_level = if cli.verbose { "info" } else { "warn" };
-    tracing_subscriber::fmt()
-        .with_env_filter(log_level)
-        .with_target(false)
-        .init();
+    use tracing_subscriber::EnvFilter;
+
+    if cli.verbose {
+        // Verbose: show all details with timestamps and targets
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("info,rbuilder=debug"))
+            )
+            .with_target(true)
+            .with_level(true)
+            .init();
+    } else {
+        // Non-verbose: compact, clean output
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("warn,rbuilder=info"))
+            )
+            .with_target(false)
+            .with_level(false)
+            .without_time()
+            .init();
+    }
 
     // If no subcommand, run full analysis
     // Route to appropriate command handler or run full analysis
@@ -1307,17 +1327,16 @@ fn run_full_analysis(
             .collect();
     }
 
-    if !verbose {
-        println!("==> Analyzing: {}", root.display());
-    } else {
-        println!("Analyzing repository: {}", root.display());
-    }
+    // Create analysis span for the entire operation
+    let _analysis_span = info_span!("analysis", repo = %root.display()).entered();
+
+    info!("==> Analyzing: {}", root.display());
 
     // Show warning for --all flag
     if all {
-        println!("\n[!] WARNING: --all flag enables all analyses including CFG/PDG.");
-        println!("   This may take several minutes on large codebases (>50K functions).");
-        println!("   For faster analysis, run without --all (default mode).\n");
+        warn!("[!] WARNING: --all flag enables all analyses including CFG/PDG.");
+        warn!("   This may take several minutes on large codebases (>50K functions).");
+        warn!("   For faster analysis, run without --all (default mode).");
     }
 
     // Initialize memory monitoring
@@ -1340,26 +1359,28 @@ fn run_full_analysis(
     let files = discoverer.discover(root)?;
 
     // Index the repository
-    let (graph, stats) = pipeline.process_repository(root)?;
+    let (graph, stats) = {
+        let _span = info_span!("indexing").entered();
+        pipeline.process_repository(root)?
+    };
 
-    if verbose {
-        println!("\n=== Indexing Complete ===");
-        println!("Processed {} files", stats.files_processed);
-        if stats.files_failed > 0 {
-            println!("Skipped {} files due to errors", stats.files_failed);
-        }
-        println!("Created {} nodes", stats.nodes_created);
-        println!("Created {} edges", stats.edges_created);
-        println!("Time: {:.2}s", stats.duration.as_secs_f64());
-        println!("{}", mem_monitor.report());
-        println!("\n=== Running Analyses ===");
-    } else {
-        println!("[+] Indexed {} files -> {} nodes, {} edges ({:.1}s)",
-                 stats.files_processed,
-                 stats.nodes_created,
-                 stats.edges_created,
-                 stats.duration.as_secs_f64());
+    info!(
+        files = stats.files_processed,
+        nodes = stats.nodes_created,
+        edges = stats.edges_created,
+        duration_secs = %format!("{:.1}", stats.duration.as_secs_f64()),
+        "[+] Indexed {} files -> {} nodes, {} edges ({:.1}s)",
+        stats.files_processed,
+        stats.nodes_created,
+        stats.edges_created,
+        stats.duration.as_secs_f64()
+    );
+
+    if stats.files_failed > 0 {
+        warn!(failed = stats.files_failed, "Skipped files due to errors");
     }
+
+    debug!("{}", mem_monitor.report());
 
     // Initialize columnar analysis results
     use rbuilder::analysis::AnalysisResults;
@@ -1368,13 +1389,16 @@ fn run_full_analysis(
     let mut analysis_results = AnalysisResults::new(node_ids);
 
     // Build PetGraphView ONCE - reused for community, centrality, and blast radius
-    let petgraph_view = PetGraphView::from_backend(graph.backend())?;
-    if verbose {
-        println!("Building topology view...");
-        println!("✓ Topology view built ({} nodes, {} edges)",
-                 petgraph_view.directed.node_count(),
-                 petgraph_view.directed.edge_count());
-    }
+    let petgraph_view = {
+        let _span = info_span!("topology").entered();
+        let view = PetGraphView::from_backend(graph.backend())?;
+        debug!(
+            nodes = view.directed.node_count(),
+            edges = view.directed.edge_count(),
+            "Topology view built"
+        );
+        view
+    };
 
     // Community detection - write to columnar table
     let community_result = CommunityDetector::new().detect_with_view(&petgraph_view)?;
@@ -1395,16 +1419,15 @@ fn run_full_analysis(
         }
     }
 
-    if verbose {
-        println!("\nCommunity detection:");
-        println!("  Communities: {}", community_result.communities.len());
-        println!("  Modularity: {:.3}", community_result.modularity);
-        println!("{}", mem_monitor.report());
-    } else {
-        println!("[-] Detected {} communities (modularity: {:.2})",
-                 community_result.communities.len(),
-                 community_result.modularity);
-    }
+    info!(
+        communities = community_result.communities.len(),
+        modularity = %format!("{:.2}", community_result.modularity),
+        "[-] Detected {} communities (modularity: {:.2})",
+        community_result.communities.len(),
+        community_result.modularity
+    );
+
+    debug!("{}", mem_monitor.report());
 
     // Complexity analysis - write to columnar table
     let complexity_report = ComplexityAnalyzer::analyze(graph.backend())?;
@@ -1437,15 +1460,24 @@ fn run_full_analysis(
             println!("    {:?}: {}", level, count);
         }
         println!("{}", mem_monitor.report());
-    } else {
-        let high_complexity = complexity_report.by_level.get(&rbuilder::analysis::ComplexityLevel::High).unwrap_or(&0);
-        let medium_complexity = complexity_report.by_level.get(&rbuilder::analysis::ComplexityLevel::Medium).unwrap_or(&0);
-        println!("[>] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
-                 complexity_report.functions.len(),
-                 complexity_report.avg_cyclomatic,
-                 high_complexity,
-                 medium_complexity);
     }
+
+    let high_complexity = complexity_report.by_level.get(&rbuilder::analysis::ComplexityLevel::High).unwrap_or(&0);
+    let medium_complexity = complexity_report.by_level.get(&rbuilder::analysis::ComplexityLevel::Medium).unwrap_or(&0);
+
+    info!(
+        functions = complexity_report.functions.len(),
+        avg_cyclomatic = %format!("{:.1}", complexity_report.avg_cyclomatic),
+        high = high_complexity,
+        medium = medium_complexity,
+        "[>] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
+        complexity_report.functions.len(),
+        complexity_report.avg_cyclomatic,
+        high_complexity,
+        medium_complexity
+    );
+
+    debug!("{}", mem_monitor.report());
 
     // Centrality analysis - write to columnar table
     // PageRank is fast (< 1s even on 187K nodes)
@@ -1473,48 +1505,39 @@ fn run_full_analysis(
     // Check if we have betweenness data
     let has_betweenness = centrality_report.scores.values().any(|s| s.betweenness > 0.0);
 
-    if verbose {
-        println!("\n✓ Centrality analysis:");
-        if has_betweenness {
-            println!("  Metrics: PageRank + Betweenness + Degree");
-        } else {
-            println!("  Metrics: PageRank + Degree (Betweenness skipped for large graph)");
-        }
-        println!("  Top hotspots by PageRank:");
-        for (id, score) in centrality_report.top_pagerank.iter().take(5) {
-            if let Ok(Some(node)) = graph.backend().get_node(*id) {
-                let in_deg = centrality_report.scores[id].in_degree;
-                let out_deg = centrality_report.scores[id].out_degree;
-                println!("    - {} (PageRank: {:.4}, in: {}, out: {})",
-                         node.name, score, in_deg, out_deg);
-            }
-        }
-        if has_betweenness && !centrality_report.top_betweenness.is_empty() {
-            println!("  Top architectural bottlenecks by Betweenness:");
-            for (id, score) in centrality_report.top_betweenness.iter().take(5) {
-                if let Ok(Some(node)) = graph.backend().get_node(*id) {
-                    println!("    - {} ({:.4})", node.name, score);
-                }
-            }
-        }
-        println!("{}", mem_monitor.report());
-    } else {
-        if let Some((top_id, top_score)) = centrality_report.top_pagerank.first() {
-            if let Ok(Some(node)) = graph.backend().get_node(*top_id) {
-                println!("[*] Top hotspot: {} (PageRank: {:.4})",
-                         node.name.split('/').last().unwrap_or(&node.name),
-                         top_score);
-            }
+    if let Some((top_id, top_score)) = centrality_report.top_pagerank.first() {
+        if let Ok(Some(node)) = graph.backend().get_node(*top_id) {
+            let short_name = node.name.split('/').last().unwrap_or(&node.name);
+            info!(
+                hotspot = short_name,
+                pagerank = %format!("{:.4}", top_score),
+                betweenness_enabled = has_betweenness,
+                "[*] Top hotspot: {} (PageRank: {:.4})",
+                short_name,
+                top_score
+            );
+
+            debug!(
+                hotspot_full = node.name,
+                in_degree = centrality_report.scores.get(top_id).map(|s| s.in_degree).unwrap_or(0),
+                out_degree = centrality_report.scores.get(top_id).map(|s| s.out_degree).unwrap_or(0),
+                "Top hotspot details"
+            );
         }
     }
 
+    debug!("{}", mem_monitor.report());
+
     // Dependency analysis
     let cycles = DependencyAnalyzer::find_circular_dependencies(graph.backend())?;
-    if verbose {
-        println!("\n✓ Dependency analysis:");
-        println!("  Circular dependencies: {}", cycles.len());
-    } else if cycles.len() > 0 {
-        println!("[!] Found {} circular dependencies", cycles.len());
+    if cycles.len() > 0 {
+        warn!(
+            count = cycles.len(),
+            "[!] Found {} circular dependencies",
+            cycles.len()
+        );
+    } else {
+        debug!("No circular dependencies found");
     }
 
     // Security analysis (opt-in with --security or --all)
@@ -1694,11 +1717,8 @@ fn run_full_analysis(
     let engine = match BlastRadiusEngine::build(backend) {
         Ok(e) => e,
         Err(err) => {
-            if verbose {
-                println!("\n✓ Blast radius analysis:");
-                println!("  [x] Engine build failed: {}", err);
-            }
-            println!("\n[✓] Analysis complete");
+            error!(error = %err, "[x] Blast radius engine build failed");
+            info!("[✓] Analysis complete");
             return Ok(());
         }
     };
@@ -1706,17 +1726,15 @@ fn run_full_analysis(
     let build_time = blast_start.elapsed();
     let stats = engine.stats();
 
-    if verbose {
-        println!("\n✓ Blast radius analysis (SCC-based):");
-        println!("  Engine built in {:.2}s", build_time.as_secs_f64());
-        println!("  SCCs: {} (reduced from {} nodes, {:.1}% compression)",
-                 stats.scc_count,
-                 graph.node_count(),
-                 (graph.node_count() - stats.scc_count) as f64 / graph.node_count() as f64 * 100.0);
-        println!("  DAG edges: {}", stats.dag_edges);
-        println!("  Avg SCC size: {:.1}", stats.avg_scc_size);
-        println!("  Memory: {:.1} MB", stats.memory_mb);
-    }
+    debug!(
+        scc_count = stats.scc_count,
+        dag_edges = stats.dag_edges,
+        build_time_secs = %format!("{:.2}", build_time.as_secs_f64()),
+        compression_percent = %format!("{:.1}", (graph.node_count() - stats.scc_count) as f64 / graph.node_count() as f64 * 100.0),
+        avg_scc_size = %format!("{:.1}", stats.avg_scc_size),
+        memory_mb = %format!("{:.1}", stats.memory_mb),
+        "Blast radius engine built"
+    );
 
     // Analyze all functions (O(1) lookup per function!)
     let query_start = Instant::now();
@@ -1772,30 +1790,30 @@ fn run_full_analysis(
 
     let total_time = blast_start.elapsed();
 
-    if verbose {
-        println!("  Functions analyzed: {}", analyzed_functions);
-        println!("  High impact (>50): {}", high_impact_count);
-        println!("  In circular deps: {}", in_cycle_count);
-        if !max_impact_function.is_empty() {
-            println!("  Max impact: {} (score: {:.1})", max_impact_function, max_impact_score);
-        }
-        println!("  Build time: {:.2}s", build_time.as_secs_f64());
-        println!("  Query time: {:.3}s ({} functions = {:.1}μs/function)",
-                 query_time.as_secs_f64(),
-                 analyzed_functions,
-                 query_time.as_micros() as f64 / analyzed_functions as f64);
-        println!("  Total time: {:.2}s", total_time.as_secs_f64());
-        println!("{}", mem_monitor.report());
-    } else {
-        if !max_impact_function.is_empty() {
-            println!("[!] Highest impact: {} (score: {:.1}/100, {} high-impact functions)",
-                     max_impact_function.split('/').last().unwrap_or(&max_impact_function),
-                     max_impact_score,
-                     high_impact_count);
-        }
+    if !max_impact_function.is_empty() {
+        let short_name = max_impact_function.split('/').last().unwrap_or(&max_impact_function);
+        info!(
+            function = short_name,
+            score = %format!("{:.1}", max_impact_score),
+            high_impact_count = high_impact_count,
+            in_cycles = in_cycle_count,
+            "[!] Highest impact: {} (score: {:.1}/100, {} high-impact functions)",
+            short_name,
+            max_impact_score,
+            high_impact_count
+        );
     }
 
-    println!("\n[✓] Analysis complete");
+    debug!(
+        functions = analyzed_functions,
+        build_time_secs = %format!("{:.2}", build_time.as_secs_f64()),
+        query_time_secs = %format!("{:.3}", query_time.as_secs_f64()),
+        total_time_secs = %format!("{:.2}", total_time.as_secs_f64()),
+        "Blast radius analysis complete"
+    );
+    debug!("{}", mem_monitor.report());
+
+    info!("[✓] Analysis complete");
 
     // Save analysis results (columnar format - separate from graph!)
     let analysis_path = root.join(".rbuilder/analysis_results.bin");
@@ -1818,37 +1836,45 @@ fn run_full_analysis(
         &html_path,
     ).is_ok();
 
-    if verbose {
-        println!("\nAnalysis results saved to {} ({:.1} MB)",
-                 analysis_path.display(),
-                 std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0));
-        println!("Graph topology saved to {}", saved.display());
-        if dashboard_exported {
-            println!("HTML dashboard exported to {}", html_path.display());
-        }
-        println!("\n=== Performance Summary ===");
-        println!("{}", mem_monitor.report());
-    } else {
-        let analysis_size = std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0);
-        println!("\n[-] Saved to .rbuilder/ ({:.1} MB total)", analysis_size);
-        if dashboard_exported {
-            println!("[+] Dashboard: {}", html_path.display());
-        }
-        let snapshot = mem_monitor.snapshot();
-        println!("[>] Completed in {:.1}s (peak memory: {:.0} MB)",
-                 snapshot.elapsed.as_secs_f64(),
-                 snapshot.peak_mb);
+    let analysis_size = std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0);
+    let snapshot = mem_monitor.snapshot();
+
+    info!(
+        saved_path = %analysis_path.display(),
+        size_mb = %format!("{:.1}", analysis_size),
+        "[-] Saved to .rbuilder/ ({:.1} MB total)",
+        analysis_size
+    );
+
+    if dashboard_exported {
+        info!(
+            dashboard = %html_path.display(),
+            "[+] Dashboard: {}",
+            html_path.display()
+        );
     }
 
-    if !verbose {
-        println!("\n[i] Next steps:");
-        println!("   rbuilder ask \"<question>\"   # Query the graph");
-        println!("   rbuilder chat                 # Interactive mode");
-        println!("   rbuilder stats                # View statistics");
-        if dashboard_exported {
-            println!("   open {}   # View dashboard", html_path.file_name().unwrap().to_str().unwrap());
-        }
+    info!(
+        duration_secs = %format!("{:.1}", snapshot.elapsed.as_secs_f64()),
+        peak_mb = %format!("{:.0}", snapshot.peak_mb),
+        "[>] Completed in {:.1}s (peak memory: {:.0} MB)",
+        snapshot.elapsed.as_secs_f64(),
+        snapshot.peak_mb
+    );
+
+    info!("");
+    info!("[i] Next steps:");
+    info!("   rbuilder ask \"<question>\"   # Query the graph");
+    info!("   rbuilder chat                 # Interactive mode");
+    info!("   rbuilder stats                # View statistics");
+    if dashboard_exported {
+        info!("   open {}   # View dashboard", html_path.file_name().unwrap().to_str().unwrap());
     }
+
+    debug!(
+        graph_path = %saved.display(),
+        "Graph topology saved"
+    );
 
     // Enter watch mode if requested
     if watch {
