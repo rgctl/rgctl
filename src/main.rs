@@ -1308,14 +1308,14 @@ fn run_full_analysis(
     }
 
     if !verbose {
-        println!("🔍 Analyzing: {}", root.display());
+        println!("==> Analyzing: {}", root.display());
     } else {
         println!("Analyzing repository: {}", root.display());
     }
 
     // Show warning for --all flag
     if all {
-        println!("\n⚠️  WARNING: --all flag enables all analyses including CFG/PDG.");
+        println!("\n[!] WARNING: --all flag enables all analyses including CFG/PDG.");
         println!("   This may take several minutes on large codebases (>50K functions).");
         println!("   For faster analysis, run without --all (default mode).\n");
     }
@@ -1354,7 +1354,7 @@ fn run_full_analysis(
         println!("{}", mem_monitor.report());
         println!("\n=== Running Analyses ===");
     } else {
-        println!("📊 Indexed {} files → {} nodes, {} edges ({:.1}s)",
+        println!("[+] Indexed {} files -> {} nodes, {} edges ({:.1}s)",
                  stats.files_processed,
                  stats.nodes_created,
                  stats.edges_created,
@@ -1401,7 +1401,7 @@ fn run_full_analysis(
         println!("  Modularity: {:.3}", community_result.modularity);
         println!("{}", mem_monitor.report());
     } else {
-        println!("📍 Detected {} communities (modularity: {:.2})",
+        println!("[-] Detected {} communities (modularity: {:.2})",
                  community_result.communities.len(),
                  community_result.modularity);
     }
@@ -1440,7 +1440,7 @@ fn run_full_analysis(
     } else {
         let high_complexity = complexity_report.by_level.get(&rbuilder::analysis::ComplexityLevel::High).unwrap_or(&0);
         let medium_complexity = complexity_report.by_level.get(&rbuilder::analysis::ComplexityLevel::Medium).unwrap_or(&0);
-        println!("🔧 Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
+        println!("[>] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
                  complexity_report.functions.len(),
                  complexity_report.avg_cyclomatic,
                  high_complexity,
@@ -1501,7 +1501,7 @@ fn run_full_analysis(
     } else {
         if let Some((top_id, top_score)) = centrality_report.top_pagerank.first() {
             if let Ok(Some(node)) = graph.backend().get_node(*top_id) {
-                println!("⭐ Top hotspot: {} (PageRank: {:.4})",
+                println!("[*] Top hotspot: {} (PageRank: {:.4})",
                          node.name.split('/').last().unwrap_or(&node.name),
                          top_score);
             }
@@ -1514,7 +1514,7 @@ fn run_full_analysis(
         println!("\n✓ Dependency analysis:");
         println!("  Circular dependencies: {}", cycles.len());
     } else if cycles.len() > 0 {
-        println!("⚠️  Found {} circular dependencies", cycles.len());
+        println!("[!] Found {} circular dependencies", cycles.len());
     }
 
     // Security analysis (opt-in with --security or --all)
@@ -1696,9 +1696,9 @@ fn run_full_analysis(
         Err(err) => {
             if verbose {
                 println!("\n✓ Blast radius analysis:");
-                println!("  ⊘ Engine build failed: {}", err);
+                println!("  [x] Engine build failed: {}", err);
             }
-            println!("\n✅ Analysis complete");
+            println!("\n[✓] Analysis complete");
             return Ok(());
         }
     };
@@ -1788,14 +1788,14 @@ fn run_full_analysis(
         println!("{}", mem_monitor.report());
     } else {
         if !max_impact_function.is_empty() {
-            println!("💥 Highest impact: {} (score: {:.1}/100, {} high-impact functions)",
+            println!("[!] Highest impact: {} (score: {:.1}/100, {} high-impact functions)",
                      max_impact_function.split('/').last().unwrap_or(&max_impact_function),
                      max_impact_score,
                      high_impact_count);
         }
     }
 
-    println!("\n✅ Analysis complete");
+    println!("\n[✓] Analysis complete");
 
     // Save analysis results (columnar format - separate from graph!)
     let analysis_path = root.join(".rbuilder/analysis_results.bin");
@@ -1830,18 +1830,18 @@ fn run_full_analysis(
         println!("{}", mem_monitor.report());
     } else {
         let analysis_size = std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0);
-        println!("\n💾 Saved to .rbuilder/ ({:.1} MB total)", analysis_size);
+        println!("\n[-] Saved to .rbuilder/ ({:.1} MB total)", analysis_size);
         if dashboard_exported {
-            println!("📊 Dashboard: {}", html_path.display());
+            println!("[+] Dashboard: {}", html_path.display());
         }
         let snapshot = mem_monitor.snapshot();
-        println!("⚡ Completed in {:.1}s (peak memory: {:.0} MB)",
+        println!("[>] Completed in {:.1}s (peak memory: {:.0} MB)",
                  snapshot.elapsed.as_secs_f64(),
                  snapshot.peak_mb);
     }
 
     if !verbose {
-        println!("\n💡 Next steps:");
+        println!("\n[i] Next steps:");
         println!("   rbuilder ask \"<question>\"   # Query the graph");
         println!("   rbuilder chat                 # Interactive mode");
         println!("   rbuilder stats                # View statistics");
