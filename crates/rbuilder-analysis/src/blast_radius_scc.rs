@@ -21,6 +21,9 @@ use rbuilder_graph::schema::NodeType;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::centrality::CentralityScores;
+use crate::policy::{evaluate_policies, PolicyRegistry};
+
 /// A strongly connected component in the condensed graph.
 #[derive(Debug, Clone)]
 pub struct SccNode {
@@ -59,10 +62,10 @@ impl BlastRadiusEngine {
         use crate::graph_utils::PetGraphView;
 
         let view = PetGraphView::from_backend(backend)?;
-        let graph = &view.directed;
+        let graph = view.call_only_directed();
 
-        // Step 1: Find strongly connected components
-        let sccs = kosaraju_scc(graph);
+        // Step 1: Find strongly connected components (call graph only)
+        let sccs = kosaraju_scc(&graph);
         let scc_count = sccs.len();
 
         tracing::info!(
@@ -126,7 +129,7 @@ impl BlastRadiusEngine {
             scc_node_indices.push(idx);
         }
 
-        // Step 5: Add edges between SCCs
+        // Step 5: Add call edges between SCCs (call-only graph already filtered)
         let mut added_edges: HashMap<(usize, usize), ()> = HashMap::new();
 
         for edge in graph.edge_references() {
@@ -196,10 +199,43 @@ impl BlastRadiusEngine {
         })
     }
 
+    /// Analyze blast radius by unique symbol name.
+    pub fn analyze_by_name(&self, backend: &MemoryBackend, symbol_name: &str) -> Result<BlastRadiusResult> {
+        let (id, _) = crate::blast_radius::resolve_unique_symbol(backend, symbol_name)?;
+        self.analyze(id)
+    }
+
     /// Analyze blast radius for a function by UUID.
     ///
     /// Returns the set of all UUIDs that are reachable (upstream callers).
     pub fn analyze(&self, func_id: Uuid) -> Result<BlastRadiusResult> {
+        self.analyze_with_policy(func_id, None, None, None)
+    }
+
+    /// Analyze blast radius and enforce optional policy guardrails.
+    pub fn analyze_with_policy(
+        &self,
+        func_id: Uuid,
+        backend: Option<&MemoryBackend>,
+        registry: Option<&PolicyRegistry>,
+        centrality: Option<&HashMap<Uuid, CentralityScores>>,
+    ) -> Result<BlastRadiusResult> {
+        let result = self.analyze_inner(func_id)?;
+
+        if let (Some(backend), Some(registry)) = (backend, registry) {
+            evaluate_policies(
+                func_id,
+                &result.impact_zone_ids,
+                registry,
+                backend,
+                centrality,
+            )?;
+        }
+
+        Ok(result)
+    }
+
+    fn analyze_inner(&self, func_id: Uuid) -> Result<BlastRadiusResult> {
         let scc_idx = self.node_to_scc
             .get(&func_id)
             .ok_or_else(|| Error::NodeNotFound(func_id.to_string()))?;
@@ -207,17 +243,17 @@ impl BlastRadiusEngine {
         let scc_id = scc_idx.index();
         let reachable_sccs = &self.reachability[scc_id];
 
-        // Expand SCCs to individual node UUIDs
+        // Expand SCCs to individual function node UUIDs (exclude structural nodes)
         let mut impact_zone_ids = Vec::new();
         for scc in reachable_sccs.iter() {
             for &uuid in &self.scc_members[scc] {
-                if uuid != func_id {  // Exclude the function itself
+                if uuid != func_id {
                     impact_zone_ids.push(uuid);
                 }
             }
         }
 
-        // Calculate direct callers (nodes in SCCs that have edges TO this SCC)
+        // Calculate direct callers from incoming call SCC edges
         let mut direct_caller_ids = Vec::new();
         for incoming_scc in self.dag.neighbors_directed(*scc_idx, petgraph::Direction::Incoming) {
             for &uuid in &self.scc_members[incoming_scc.index()] {
@@ -225,7 +261,6 @@ impl BlastRadiusEngine {
             }
         }
 
-        // Score based on impact size
         let impact_count = impact_zone_ids.len();
         let direct_count = direct_caller_ids.len();
 
@@ -239,6 +274,24 @@ impl BlastRadiusEngine {
             scc_id,
             scc_size: self.scc_members[scc_id].len(),
         })
+    }
+
+    /// Filter impact zone to function nodes only (for display / policy on call graph).
+    pub fn filter_function_impact(
+        backend: &MemoryBackend,
+        impact_zone_ids: &[Uuid],
+    ) -> Result<Vec<Uuid>> {
+        Ok(impact_zone_ids
+            .iter()
+            .copied()
+            .filter(|id| {
+                backend
+                    .get_node(*id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|n| n.node_type == NodeType::Function)
+            })
+            .collect())
     }
 
     /// Get reach centrality (blast radius size) for all functions.
@@ -320,7 +373,7 @@ fn calculate_impact_score(direct_count: usize, impact_count: usize) -> f64 {
 mod tests {
     use super::*;
     use rbuilder_graph::backend::GraphBackend;
-    use rbuilder_graph::schema::{Edge, Node};
+    use rbuilder_graph::schema::{Edge, EdgeType, Node};
 
     fn build_chain() -> MemoryBackend {
         let mut backend = MemoryBackend::new();

@@ -20,12 +20,15 @@ pub mod graph_utils;
 pub mod interprocedural_cfg;
 pub mod interprocedural_slicing;
 pub mod pdg;
+pub mod policy;
 pub mod slicing;
 pub mod storage;
 pub mod taint;
 pub mod type_inference;
 
-pub use blast_radius::{BlastRadiusAnalyzer, BlastRadiusReport, DataFlowImpact};
+pub use blast_radius::{
+    resolve_unique_symbol, BlastRadiusAnalyzer, BlastRadiusReport, DataFlowImpact,
+};
 pub use blast_radius_scc::{BlastRadiusEngine, BlastRadiusResult, EngineStats, SccNode};
 pub use callgraph::{CallGraph, CallGraphEdge, CallGraphNode};
 pub use results::{
@@ -51,6 +54,7 @@ pub use dominance::DominatorTree;
 pub use flow_cache::{CachedAnalysis, CfgPdgCache, FlowCache, NodePdgCache};
 pub use interprocedural_cfg::InterproceduralCFG;
 pub use interprocedural_slicing::{InterproceduralSlice, InterproceduralSlicer};
+pub use policy::{check_policies, evaluate_policies, DomainId, PolicyRegistry, PolicyViolation};
 pub use pdg::{
     ControlDependency, DataDepType, DataDependency, PdgNode, PdgNodeId, ProgramDependenceGraph,
 };

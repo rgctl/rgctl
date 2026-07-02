@@ -1,7 +1,7 @@
 //! Staged / changed-file risk analysis for git hooks.
 
 use crate::file_tracker::normalize_path_str;
-use rbuilder_analysis::BlastRadiusAnalyzer;
+use rbuilder_analysis::BlastRadiusEngine;
 use rbuilder_error::Result;
 use rbuilder_graph::code_graph::CodeGraph;
 use rbuilder_graph::schema::NodeType;
@@ -70,10 +70,10 @@ impl ChangeDetector {
         self
     }
 
-    /// Analyze changed files against the indexed graph.
+    /// Analyze changed files against the indexed graph using the SCC blast-radius engine.
     pub fn detect(&self, graph: &CodeGraph, files: &[String]) -> Result<ChangeDetectionResult> {
         let backend = graph.backend();
-        let analyzer = BlastRadiusAnalyzer::new(backend);
+        let engine = BlastRadiusEngine::build(backend)?;
         let mut details = Vec::new();
         let mut max_score = 0.0f64;
 
@@ -93,14 +93,17 @@ impl ChangeDetector {
                 if node_file != *file {
                     continue;
                 }
-                if let Ok(report) = analyzer.analyze(&node.name) {
-                    max_score = max_score.max(report.score);
+                if let Ok(result) = engine.analyze(node.id) {
+                    let impact_zone_size =
+                        BlastRadiusEngine::filter_function_impact(backend, &result.impact_zone_ids)?
+                            .len();
+                    max_score = max_score.max(result.score);
                     details.push(ChangeDetail {
                         file: file.clone(),
                         symbol: node.name.clone(),
-                        blast_radius_score: report.score,
-                        direct_callers: report.direct_callers.len(),
-                        impact_zone_size: report.impact_zone.len(),
+                        blast_radius_score: result.score,
+                        direct_callers: result.direct_caller_ids.len(),
+                        impact_zone_size,
                     });
                 }
             }

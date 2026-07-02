@@ -5,11 +5,29 @@
 
 use crate::flow_cache::FlowCache;
 use crate::graph_utils::PetGraphView;
-use petgraph::Direction;
+use petgraph::graph::NodeIndex;
 use rbuilder_error::{Error, Result};
 use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
+use rbuilder_graph::schema::{EdgeType, NodeType};
 use std::collections::{HashSet, VecDeque};
 use uuid::Uuid;
+
+const CALL_EDGES: &[EdgeType] = &[EdgeType::Calls];
+
+/// Resolve a symbol name to a unique node, rejecting ambiguous duplicates.
+pub fn resolve_unique_symbol(
+    backend: &MemoryBackend,
+    symbol_name: &str,
+) -> Result<(Uuid, String)> {
+    let nodes = backend.find_nodes_by_name(symbol_name)?;
+    match nodes.len() {
+        0 => Err(Error::NodeNotFound(symbol_name.to_string())),
+        1 => Ok((nodes[0].id, nodes[0].name.clone())),
+        count => Err(Error::QueryError(format!(
+            "ambiguous symbol '{symbol_name}': {count} matches; use qualified name or node id"
+        ))),
+    }
+}
 
 /// Per-caller data-flow impact detail.
 #[derive(Debug, Clone)]
@@ -54,11 +72,13 @@ pub struct BlastRadiusAnalyzer<'a> {
 
 impl<'a> BlastRadiusAnalyzer<'a> {
     /// Create an analyzer without PDG enrichment.
+    ///
+    /// Prefer [`crate::BlastRadiusEngine`] for full transitive closure without depth caps.
     pub fn new(backend: &'a MemoryBackend) -> Self {
         Self {
             backend,
             flow_cache: None,
-            max_depth: 10,
+            max_depth: usize::MAX,
         }
     }
 
@@ -74,15 +94,11 @@ impl<'a> BlastRadiusAnalyzer<'a> {
         self
     }
 
-    /// Analyze blast radius by symbol name.
+    /// Analyze blast radius by symbol name (rejects ambiguous duplicate names).
     pub fn analyze(&self, symbol_name: &str) -> Result<BlastRadiusReport> {
-        // Find node by name using backend
-        let nodes = self.backend.find_nodes_by_name(symbol_name)?;
-        let source = nodes.first()
-            .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?;
-
+        let (source_id, source_name) = resolve_unique_symbol(self.backend, symbol_name)?;
         let view = PetGraphView::from_backend(self.backend)?;
-        self.analyze_node(&view, source.id, &source.name)
+        self.analyze_node(&view, source_id, &source_name)
     }
 
     /// Analyze blast radius by node id.
@@ -124,17 +140,11 @@ impl<'a> BlastRadiusAnalyzer<'a> {
             let Some(caller_idx) = view.uuid_to_index.get(&caller_id).copied() else {
                 continue;
             };
-            for pred in view
-                .directed
-                .neighbors_directed(caller_idx, Direction::Incoming)
-            {
-                if is_calls_edge(view, pred, caller_idx) {
-                    if let Some(uuid) = view.index_to_uuid.get(&pred) {
-                        // Only include Function nodes in impact zone
-                        if let Ok(Some(node)) = self.backend.get_node(*uuid) {
-                            if node.node_type == rbuilder_graph::schema::NodeType::Function && *uuid != symbol_id {
-                                queue.push_back((*uuid, depth + 1));
-                            }
+            for pred in view.incoming_filtered(caller_idx, CALL_EDGES) {
+                if let Some(uuid) = view.index_to_uuid.get(&pred) {
+                    if let Ok(Some(node)) = self.backend.get_node(*uuid) {
+                        if node.node_type == NodeType::Function && *uuid != symbol_id {
+                            queue.push_back((*uuid, depth + 1));
                         }
                     }
                 }
@@ -187,36 +197,18 @@ impl<'a> BlastRadiusAnalyzer<'a> {
     }
 }
 
-fn incoming_callers(view: &PetGraphView, backend: &MemoryBackend, target_idx: petgraph::graph::NodeIndex) -> Vec<Uuid> {
-    use rbuilder_graph::schema::NodeType;
-
-    view.directed
-        .neighbors_directed(target_idx, Direction::Incoming)
+fn incoming_callers(view: &PetGraphView, backend: &MemoryBackend, target_idx: NodeIndex) -> Vec<Uuid> {
+    view.incoming_filtered(target_idx, CALL_EDGES)
         .filter_map(|idx| {
-            if is_calls_edge(view, idx, target_idx) {
-                let uuid = view.index_to_uuid.get(&idx).copied()?;
-                // Only include Function nodes
-                let node = backend.get_node(uuid).ok()??;
-                if node.node_type == NodeType::Function {
-                    Some(uuid)
-                } else {
-                    None
-                }
+            let uuid = view.index_to_uuid.get(&idx).copied()?;
+            let node = backend.get_node(uuid).ok()??;
+            if node.node_type == NodeType::Function {
+                Some(uuid)
             } else {
                 None
             }
         })
         .collect()
-}
-
-fn is_calls_edge(
-    view: &PetGraphView,
-    from: petgraph::graph::NodeIndex,
-    to: petgraph::graph::NodeIndex,
-) -> bool {
-    // In zero-clone topology view, we include all edges
-    // TODO: Filter by edge type if needed for accuracy
-    view.directed.find_edge(from, to).is_some()
 }
 
 fn uuid_list_to_names(backend: &MemoryBackend, ids: &[Uuid]) -> Vec<String> {
@@ -290,7 +282,7 @@ mod tests {
     use crate::cfg::{Statement, StatementKind};
     use crate::pdg::{DataDepType, DataDependency, PdgNode, ProgramDependenceGraph};
     use rbuilder_graph::backend::GraphBackend;
-    use rbuilder_graph::schema::{Edge, Node, NodeType};
+    use rbuilder_graph::schema::{Edge, EdgeType, Node, NodeType};
     use std::collections::HashSet;
 
     fn build_chain() -> (MemoryBackend, Uuid, Uuid, Uuid) {
