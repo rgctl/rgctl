@@ -40,3 +40,6 @@ graphify-out/
 # Temporary files
 *.tmp
 .cache/
+
+# Local large fixtures (clone separately; not part of the repo)
+example/kafka/

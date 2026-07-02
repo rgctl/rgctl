@@ -321,3 +321,7 @@ harness = false
 name = "phase13_analysis"
 harness = false
 required-features = ["bundle-minimal"]
+
+[[bench]]
+name = "centrality_benchmarks"
+harness = false
