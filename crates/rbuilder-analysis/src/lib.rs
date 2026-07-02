@@ -51,7 +51,8 @@ pub use cfg::{
 };
 pub use cfg_builder::build_cfg_for_function;
 pub use community::{
-    detect_communities, Community, CommunityDetector, CommunityResult, DashboardCommunity,
+    default_community_edge_types, detect_communities, Community, CommunityDetector,
+    CommunityResult, DashboardCommunity,
 };
 pub use complexity::{classify_complexity, ComplexityAnalyzer, ComplexityLevel, ComplexityReport};
 pub use dataflow::{compute_reaching_definitions, Definition, ReachingDefs};

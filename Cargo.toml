@@ -325,3 +325,7 @@ required-features = ["bundle-minimal"]
 [[bench]]
 name = "centrality_benchmarks"
 harness = false
+
+[[bench]]
+name = "community_benchmarks"
+harness = false

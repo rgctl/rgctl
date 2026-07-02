@@ -1,15 +1,24 @@
 //! Community detection
 //!
 //! Task 2.1.1: Label-propagation community detection with modularity scoring.
+//!
+//! Uses dense `Vec` layouts, directional edge-type filters, and deterministic
+//! tie-breaking so behavioral communities are not contaminated by structural edges.
 
 use crate::graph_utils::PetGraphView;
 use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
 use rbuilder_error::Result;
 use rbuilder_graph::backend::MemoryBackend;
-use rbuilder_graph::schema::NodeType;
+use rbuilder_graph::schema::{EdgeType, NodeType};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+/// Default behavioral edge types for community detection.
+pub fn default_community_edge_types() -> &'static [EdgeType] {
+    &[EdgeType::Calls, EdgeType::Uses]
+}
 
 /// Community detection engine.
 pub struct CommunityDetector {
@@ -48,11 +57,20 @@ impl CommunityDetector {
         Self::default()
     }
 
-    /// Detect communities using label propagation (Leiden-like heuristic).
+    /// Detect communities using behavioral edge types (Calls + Uses).
     ///
     /// Accepts a pre-built PetGraphView to avoid rebuilding the topology.
     pub fn detect_with_view(&self, view: &PetGraphView) -> Result<CommunityResult> {
-        let node_count = view.undirected.node_count();
+        self.detect_with_view_filtered(view, default_community_edge_types())
+    }
+
+    /// Detect communities with explicit edge-type isolation.
+    pub fn detect_with_view_filtered(
+        &self,
+        view: &PetGraphView,
+        allowed_types: &[EdgeType],
+    ) -> Result<CommunityResult> {
+        let node_count = view.directed.node_count();
         if node_count == 0 {
             return Ok(CommunityResult {
                 communities: vec![],
@@ -61,40 +79,63 @@ impl CommunityDetector {
             });
         }
 
-        let mut labels: HashMap<NodeIndex, usize> = view
-            .undirected
-            .node_indices()
-            .enumerate()
-            .map(|(i, idx)| (idx, i))
-            .collect();
+        let mut labels: Vec<usize> = (0..node_count).collect();
+        let mut label_weights = vec![0_usize; node_count];
+        let mut seen_labels = Vec::with_capacity(64);
+        let neighbors = build_filtered_neighbor_lists(view, allowed_types);
 
         for _ in 0..self.max_iterations {
             let mut changed = false;
-            for node in view.undirected.node_indices() {
-                let mut neighbor_counts: HashMap<usize, usize> = HashMap::new();
-                for neighbor in view.undirected.neighbors(node).chain(
-                    view.undirected
-                        .neighbors_directed(node, petgraph::Direction::Incoming),
-                ) {
-                    let label = labels[&neighbor];
-                    *neighbor_counts.entry(label).or_default() += 1;
+
+            for node_idx in view.directed.node_indices() {
+                let u = node_idx.index();
+                seen_labels.clear();
+
+                for &v in &neighbors[u] {
+                    let label = labels[v];
+                    if label_weights[label] == 0 {
+                        seen_labels.push(label);
+                    }
+                    label_weights[label] += 1;
                 }
-                if let Some((&best_label, _)) = neighbor_counts.iter().max_by_key(|(_, c)| *c) {
-                    if labels[&node] != best_label {
-                        labels.insert(node, best_label);
-                        changed = true;
+
+                let mut best_label = labels[u];
+                let mut max_count = 0usize;
+
+                for &label in &seen_labels {
+                    let count = label_weights[label];
+                    if count > max_count || (count == max_count && label < best_label) {
+                        max_count = count;
+                        best_label = label;
                     }
                 }
+
+                for &label in &seen_labels {
+                    label_weights[label] = 0;
+                }
+
+                if labels[u] != best_label {
+                    labels[u] = best_label;
+                    changed = true;
+                }
             }
+
             if !changed {
                 break;
             }
         }
 
-        let modularity = self.calculate_modularity(&view, &labels);
+        let label_map: HashMap<NodeIndex, usize> = view
+            .directed
+            .node_indices()
+            .map(|idx| (idx, labels[idx.index()]))
+            .collect();
+
+        let modularity = self.calculate_modularity(view, &label_map, allowed_types);
+
         let mut community_members: HashMap<usize, Vec<Uuid>> = HashMap::new();
-        for (idx, &label) in &labels {
-            if let Some(uuid) = view.undirected_to_uuid.get(idx) {
+        for (idx, &label) in &label_map {
+            if let Some(uuid) = view.index_to_uuid.get(idx) {
                 community_members.entry(label).or_default().push(*uuid);
             }
         }
@@ -104,10 +145,10 @@ impl CommunityDetector {
             .map(|(id, members)| Community { id, members })
             .collect();
 
-        let assignments = labels
+        let assignments = label_map
             .iter()
             .filter_map(|(idx, &label)| {
-                view.undirected_to_uuid.get(idx).map(|uuid| (*uuid, label))
+                view.index_to_uuid.get(idx).map(|uuid| (*uuid, label))
             })
             .collect();
 
@@ -127,41 +168,77 @@ impl CommunityDetector {
         self.detect_with_view(&view)
     }
 
-    /// Calculate modularity for a partition.
+    /// Calculate modularity for a partition on a behavioral edge projection.
     pub fn calculate_modularity(
         &self,
         view: &PetGraphView,
         labels: &HashMap<NodeIndex, usize>,
+        allowed_types: &[EdgeType],
     ) -> f64 {
-        let m = view.undirected.edge_count() as f64;
+        let node_count = view.directed.node_count();
+        let mut m = 0.0;
+        let mut degrees = vec![0.0; node_count];
+        let mut node_community = vec![0usize; node_count];
+
+        for (&idx, &label) in labels {
+            node_community[idx.index()] = label;
+        }
+
+        let mut internal_by_community: HashMap<usize, f64> = HashMap::new();
+
+        for edge in view.directed.edge_references() {
+            if !allowed_types.contains(edge.weight()) {
+                continue;
+            }
+            m += 1.0;
+            let s = edge.source().index();
+            let t = edge.target().index();
+            degrees[s] += 1.0;
+            degrees[t] += 1.0;
+            if node_community[s] == node_community[t] {
+                *internal_by_community.entry(node_community[s]).or_default() += 1.0;
+            }
+        }
+
         if m == 0.0 {
             return 0.0;
         }
 
-        let mut community_nodes: HashMap<usize, HashSet<NodeIndex>> = HashMap::new();
+        let mut degree_sum_by_community: HashMap<usize, f64> = HashMap::new();
         for (&idx, &label) in labels {
-            community_nodes.entry(label).or_default().insert(idx);
+            *degree_sum_by_community.entry(label).or_default() += degrees[idx.index()];
         }
 
         let mut q = 0.0;
-        for members in community_nodes.values() {
-            let mut internal = 0.0;
-            let mut degree_sum = 0.0;
-            for &node in members {
-                let degree = view.undirected.neighbors(node).count() as f64;
-                degree_sum += degree;
-                for neighbor in view.undirected.neighbors(node) {
-                    if members.contains(&neighbor) {
-                        internal += 1.0;
-                    }
-                }
-            }
-            internal /= 2.0;
+        for (&community, &degree_sum) in &degree_sum_by_community {
+            let internal = internal_by_community.get(&community).copied().unwrap_or(0.0);
             let expected = (degree_sum * degree_sum) / (4.0 * m);
-            q += internal / m - expected / m;
+            q += (internal / m) - (expected / m);
         }
         q
     }
+}
+
+/// Pre-build undirected neighbor lists for a filtered behavioral projection.
+fn build_filtered_neighbor_lists(
+    view: &PetGraphView,
+    allowed_types: &[EdgeType],
+) -> Vec<Vec<usize>> {
+    let node_count = view.directed.node_count();
+    let mut neighbors = vec![Vec::new(); node_count];
+
+    for edge in view.directed.edge_references() {
+        if allowed_types.contains(edge.weight()) {
+            let s = edge.source().index();
+            let t = edge.target().index();
+            neighbors[s].push(t);
+            if s != t {
+                neighbors[t].push(s);
+            }
+        }
+    }
+
+    neighbors
 }
 
 /// Dashboard community with inferred metadata (Phase 14 A+).
@@ -187,7 +264,9 @@ pub struct DashboardCommunity {
 /// with labels and complexity metadata. Falls back to connected components when
 /// propagation yields a single cluster on disconnected subgraphs.
 pub fn detect_communities(backend: &MemoryBackend) -> Result<Vec<DashboardCommunity>> {
-    let detection = CommunityDetector::new().detect(backend)?;
+    let view = PetGraphView::from_backend(backend)?;
+    let detection =
+        CommunityDetector::new().detect_with_view_filtered(&view, default_community_edge_types())?;
 
     let mut communities: Vec<DashboardCommunity> = detection
         .communities
@@ -451,7 +530,7 @@ fn infer_label_from_names(names: &[String], idx: usize) -> String {
 mod tests {
     use super::*;
     use rbuilder_graph::backend::GraphBackend;
-    use rbuilder_graph::schema::{Edge, Node, NodeType};
+    use rbuilder_graph::schema::{Edge, Node};
 
     fn build_modular_graph() -> MemoryBackend {
         let mut backend = MemoryBackend::new();
@@ -474,28 +553,28 @@ mod tests {
             .insert_edge(Edge::new(
                 ids[0],
                 ids[1],
-                rbuilder_graph::schema::EdgeType::Calls,
+                EdgeType::Calls,
             ))
             .unwrap();
         backend
             .insert_edge(Edge::new(
                 ids[2],
                 ids[3],
-                rbuilder_graph::schema::EdgeType::Calls,
+                EdgeType::Calls,
             ))
             .unwrap();
         backend
             .insert_edge(Edge::new(
                 ids[0],
                 ids[2],
-                rbuilder_graph::schema::EdgeType::Uses,
+                EdgeType::Uses,
             ))
             .unwrap();
         backend
             .insert_edge(Edge::new(
                 ids[4],
                 ids[0],
-                rbuilder_graph::schema::EdgeType::Calls,
+                EdgeType::Calls,
             ))
             .unwrap();
         backend
@@ -508,5 +587,37 @@ mod tests {
         let result = detector.detect(&backend).unwrap();
         assert!(!result.communities.is_empty());
         assert!(result.modularity >= 0.0);
+    }
+
+    #[test]
+    fn test_deterministic_tie_break() {
+        let mut backend = MemoryBackend::new();
+        let a = Node::new(NodeType::Function, "a".into());
+        let b = Node::new(NodeType::Function, "b".into());
+        let c = Node::new(NodeType::Function, "c".into());
+        let id_a = a.id;
+        let id_b = b.id;
+        let id_c = c.id;
+        backend.insert_node(a).unwrap();
+        backend.insert_node(b).unwrap();
+        backend.insert_node(c).unwrap();
+        backend
+            .insert_edge(Edge::new(id_a, id_c, EdgeType::Calls))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(id_b, id_c, EdgeType::Calls))
+            .unwrap();
+
+        let view = PetGraphView::from_backend(&backend).unwrap();
+        let detector = CommunityDetector::new();
+        let first = detector
+            .detect_with_view_filtered(&view, &[EdgeType::Calls])
+            .unwrap();
+        for _ in 0..100 {
+            let again = detector
+                .detect_with_view_filtered(&view, &[EdgeType::Calls])
+                .unwrap();
+            assert_eq!(first.assignments, again.assignments);
+        }
     }
 }
