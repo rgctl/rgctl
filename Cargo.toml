@@ -314,6 +314,10 @@ name = "nlp"
 harness = false
 
 [[bench]]
+name = "graph_benchmarks"
+harness = false
+
+[[bench]]
 name = "phase13_analysis"
 harness = false
 required-features = ["bundle-minimal"]
