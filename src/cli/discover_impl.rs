@@ -641,7 +641,7 @@ pub(crate) fn run_full_analysis(
     info!("[i] Next steps:");
     info!("   rbuilder gql \"MATCH (n:Function) RETURN n\"  # Query the graph");
     info!("   rbuilder slice <file> --line <N> --variable <VAR>");
-    info!("   rbuilder export --format html --output dashboard.html");
+    info!("   rbuilder -f html-dashboard -o .rbuilder/dashboard.html");
     if dashboard_exported {
         info!("   open {}   # View dashboard", html_path.file_name().unwrap().to_str().unwrap());
     }

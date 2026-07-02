@@ -150,13 +150,13 @@ pub enum Commands {
         policy_file: String,
     },
 
-    /// Export graph or projections
+    /// Export graph or projections (use global `-f html-dashboard` for the HTML dashboard)
     Export {
-        #[arg(long, value_enum)]
-        format: ExportFormat,
+        #[arg(long = "export-format", value_enum)]
+        export_format: ExportFormat,
 
-        #[arg(long)]
-        output: String,
+        #[arg(long = "export-output", value_name = "FILE")]
+        export_output: String,
 
         #[arg(long, default_value = "all")]
         query: String,
@@ -174,14 +174,6 @@ impl Cli {
             self.format.unwrap_or_default(),
             self.output,
             verbose,
-        );
-
-        let skip_html_emit = matches!(
-            &self.command,
-            Commands::Export {
-                format: ExportFormat::Html,
-                ..
-            }
         );
 
         let result = match self.command {
@@ -273,20 +265,20 @@ impl Cli {
                 check::run(&ctx, check::CheckArgs { policy_file })
             }
             Commands::Export {
-                format,
-                output,
+                export_format,
+                export_output,
                 query,
             } => export::run(
                 &ctx,
                 export::ExportArgs {
-                    format,
-                    output,
+                    export_format,
+                    export_output,
                     query,
                 },
             ),
         };
 
-        if ctx.is_html_dashboard() && !skip_html_emit {
+        if ctx.is_html_dashboard() {
             ctx.emit_html_dashboard()?;
         }
 

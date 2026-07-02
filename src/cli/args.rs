@@ -40,12 +40,11 @@ pub enum PdgEdgeLayer {
     Control,
 }
 
-/// Export format selector.
+/// File serialization format for `rbuilder export` (not the global `-f` output format).
 #[derive(ValueEnum, Clone, Debug)]
 pub enum ExportFormat {
     Json,
     Graphml,
-    Html,
     Graphviz,
     Mermaid,
 }
