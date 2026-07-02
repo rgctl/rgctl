@@ -1,4 +1,4 @@
-//! Phase 2 integration tests: analysis and NLP
+//! Phase 2 integration tests: analysis and config scanning
 
 use rbuilder::analysis::{ComplexityAnalyzer, DependencyAnalyzer};
 use rbuilder::config::analyzer::ConfigAnalyzer;
@@ -6,7 +6,6 @@ use rbuilder::config::secret_detector::SecretDetector;
 use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::schema::{Edge, Node, NodeType};
 use rbuilder::graph::CodeGraph;
-use rbuilder::nlp::{PatternMatcher, QueryResult};
 use std::fs;
 use tempfile::TempDir;
 
@@ -33,26 +32,6 @@ fn sample_graph() -> CodeGraph {
         ))
         .unwrap();
     graph
-}
-
-#[test]
-fn test_nlp_count_query() {
-    let graph = sample_graph();
-    let matcher = PatternMatcher::new();
-    let result = matcher.ask("how many functions?", graph.backend()).unwrap();
-    assert!(matches!(result, QueryResult::Count(2)));
-}
-
-#[test]
-fn test_nlp_callers_query() {
-    let graph = sample_graph();
-    let matcher = PatternMatcher::new();
-    let result = matcher.ask("what calls helper?", graph.backend()).unwrap();
-    if let QueryResult::Text(lines) = result {
-        assert!(lines.iter().any(|l| l.contains("main")));
-    } else {
-        panic!("expected text result");
-    }
 }
 
 #[test]
@@ -118,7 +97,7 @@ fn test_secret_scanner_on_file() {
 }
 
 #[test]
-fn test_end_to_end_repo_with_nlp() {
+fn test_end_to_end_repo_graph_roundtrip() {
     let temp = TempDir::new().unwrap();
     fs::write(
         temp.path().join("main.rs"),
@@ -130,9 +109,9 @@ fn test_end_to_end_repo_with_nlp() {
     graph.save_to_repo(temp.path()).unwrap();
 
     let loaded = CodeGraph::load_from_repo(temp.path()).unwrap();
-    let matcher = PatternMatcher::new();
-    let result = matcher
-        .ask("how many functions?", loaded.backend())
+    let functions = loaded
+        .backend()
+        .collect_nodes_by_type(NodeType::Function)
         .unwrap();
-    assert!(matches!(result, QueryResult::Count(n) if n >= 2));
+    assert!(functions.len() >= 2);
 }

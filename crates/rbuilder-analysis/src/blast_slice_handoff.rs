@@ -17,12 +17,15 @@ use uuid::Uuid;
 pub struct SliceHandoffSeed {
     /// Callee function receiving the argument.
     pub callee_id: Uuid,
+    /// Callee function name.
     pub callee_name: String,
     /// Direct caller invoking the callee.
     pub caller_id: Uuid,
+    /// Caller function name.
     pub caller_name: String,
     /// Callee formal parameter name.
     pub param_name: String,
+    /// Zero-based index of the callee formal parameter.
     pub param_index: usize,
     /// Call-site source line (when known).
     pub call_site_line: usize,
@@ -31,9 +34,13 @@ pub struct SliceHandoffSeed {
 /// Full trace from blast radius through to line-level slices.
 #[derive(Debug, Clone)]
 pub struct BlastSliceTrace {
+    /// Entry symbol analyzed for blast radius.
     pub symbol_name: String,
+    /// Blast-radius result for the entry symbol.
     pub blast: BlastRadiusResult,
+    /// Interprocedural slice seeds derived from call-site hand-offs.
     pub handoffs: Vec<SliceHandoffSeed>,
+    /// Resolved slices as `(function_id, function_name, slice)`.
     pub slices: Vec<(Uuid, String, InterproceduralSlice)>,
 }
 

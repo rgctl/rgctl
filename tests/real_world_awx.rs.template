@@ -1,0 +1,314 @@
+//! Real-world integration tests using Ansible AWX
+//!
+//! These tests validate rBuilder against a production-quality
+//! DevOps automation platform with heavy Ansible usage.
+//!
+//! To run these tests:
+//! 1. Set AWX_TEST_PATH env var or let it clone automatically
+//! 2. Run: cargo test --test real_world_awx -- --nocapture
+//!
+//! Note: First run will clone AWX (~100MB) and may take 5-10 minutes
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use tempfile::TempDir;
+
+/// Get or clone AWX repository for testing
+fn get_awx_repo() -> PathBuf {
+    // Check if user specified a path
+    if let Ok(path) = std::env::var("AWX_TEST_PATH") {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return p;
+        }
+    }
+
+    // Clone to temp directory
+    let temp = TempDir::new().expect("Failed to create temp dir");
+    let awx_path = temp.path().join("awx");
+
+    println!("Cloning AWX (this may take a few minutes)...");
+    let output = Command::new("git")
+        .args(&[
+            "clone",
+            "--depth",
+            "1",
+            "https://github.com/ansible/awx.git",
+            awx_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to clone AWX");
+
+    assert!(output.status.success(), "Git clone failed");
+
+    // Don't drop temp, leak it for test duration
+    std::mem::forget(temp);
+    awx_path
+}
+
+/// Build rBuilder graph for AWX
+fn build_awx_graph(repo_path: &Path) -> rbuilder_graph::backend::MemoryBackend {
+    use rbuilder_extraction::graph_builder::GraphBuilder;
+    use rbuilder_extraction::extractor::Extractor;
+    use rbuilder_pipeline::discovery::DiscoveryConfig;
+    use rbuilder_registry::registry::LanguageRegistry;
+    use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
+    use std::sync::Arc;
+
+    println!("Building graph for AWX at {:?}", repo_path);
+
+    let backend = MemoryBackend::new();
+    let registry = Arc::new(LanguageRegistry::new());
+    let mut builder = GraphBuilder::new(backend.clone());
+
+    // Configure discovery
+    let config = DiscoveryConfig {
+        root: repo_path.to_path_buf(),
+        include_languages: Some(vec![
+            "python".to_string(),
+            "ansible".to_string(),
+            "yaml".to_string(),
+            "javascript".to_string(),
+        ]),
+        exclude_patterns: vec![
+            "*/node_modules/*".to_string(),
+            "*/venv/*".to_string(),
+            "*/.git/*".to_string(),
+            "*/test/*".to_string(),
+        ],
+        ..Default::default()
+    };
+
+    // Extract and build
+    let extractor = Extractor::new(registry, config);
+    let extraction_result = extractor.extract().expect("Extraction failed");
+
+    for symbol in extraction_result.symbols {
+        builder.add_symbol(&symbol).expect("Failed to add symbol");
+    }
+
+    backend
+}
+
+#[test]
+#[ignore] // Requires network and is slow - run explicitly with --ignored
+fn test_awx_repository_structure() {
+    let awx = get_awx_repo();
+
+    // Verify AWX structure
+    assert!(awx.join("awx").exists(), "awx/ directory should exist");
+    assert!(awx.join("installer").exists(), "installer/ directory should exist");
+    assert!(awx.join("tools").exists(), "tools/ directory should exist");
+}
+
+#[test]
+#[ignore]
+fn test_awx_graph_build() {
+    let awx = get_awx_repo();
+    let backend = build_awx_graph(&awx);
+
+    // Basic graph validation
+    let stats = backend.stats().expect("Failed to get stats");
+
+    println!("AWX Graph Stats:");
+    println!("  Nodes: {}", stats.node_count);
+    println!("  Edges: {}", stats.edge_count);
+
+    // AWX should have substantial code
+    assert!(stats.node_count > 1000, "Should have > 1000 nodes");
+    assert!(stats.edge_count > 2000, "Should have > 2000 edges");
+}
+
+#[test]
+#[ignore]
+fn test_awx_python_functions() {
+    let awx = get_awx_repo();
+    let backend = build_awx_graph(&awx);
+
+    // Query for Python functions
+    use rbuilder_gql::executor::execute;
+    use rbuilder_gql::parser::parse;
+
+    let query = "type:function WHERE language = 'python' RETURN name LIMIT 100";
+    let parsed = parse(query).expect("Failed to parse query");
+    let results = execute(&parsed, &backend).expect("Failed to execute query");
+
+    assert!(!results.is_empty(), "Should find Python functions");
+    assert!(results.len() >= 50, "Should find at least 50 Python functions");
+
+    println!("Found {} Python functions", results.len());
+}
+
+#[test]
+#[ignore]
+fn test_awx_ansible_playbooks() {
+    let awx = get_awx_repo();
+    let backend = build_awx_graph(&awx);
+
+    use rbuilder_gql::executor::execute;
+    use rbuilder_gql::parser::parse;
+
+    // Find Ansible playbooks
+    let query = "type:playbook RETURN name, file";
+    let parsed = parse(query).expect("Failed to parse query");
+    let results = execute(&parsed, &backend).expect("Failed to execute query");
+
+    println!("Found {} Ansible playbooks", results.len());
+
+    // AWX installer should have playbooks
+    assert!(!results.is_empty(), "Should find Ansible playbooks in AWX");
+}
+
+#[test]
+#[ignore]
+fn test_awx_ansible_roles() {
+    let awx = get_awx_repo();
+    let backend = build_awx_graph(&awx);
+
+    use rbuilder_gql::executor::execute;
+    use rbuilder_gql::parser::parse;
+
+    let query = "type:role RETURN name";
+    let parsed = parse(query).expect("Failed to parse query");
+    let results = execute(&parsed, &backend).expect("Failed to execute query");
+
+    if !results.is_empty() {
+        println!("Found {} Ansible roles", results.len());
+        for result in results.iter().take(10) {
+            println!("  - {}", result.properties.get("name").unwrap_or(&"<unknown>".to_string()));
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn test_awx_api_views() {
+    let awx = get_awx_repo();
+    let backend = build_awx_graph(&awx);
+
+    use rbuilder_gql::executor::execute;
+    use rbuilder_gql::parser::parse;
+
+    // Find Django REST framework views
+    let query = "type:class WHERE name =~ '.*View.*|.*Serializer.*' RETURN name, file LIMIT 50";
+    let parsed = parse(query).expect("Failed to parse query");
+    let results = execute(&parsed, &backend).expect("Failed to execute query");
+
+    println!("Found {} API views/serializers", results.len());
+    assert!(!results.is_empty(), "AWX should have Django views");
+}
+
+#[test]
+#[ignore]
+fn test_awx_complexity_analysis() {
+    let awx = get_awx_repo();
+    let backend = build_awx_graph(&awx);
+
+    use rbuilder_analysis::complexity::ComplexityAnalyzer;
+
+    let analyzer = ComplexityAnalyzer::new(&backend);
+    let report = analyzer.analyze().expect("Complexity analysis failed");
+
+    println!("Complexity Report:");
+    println!("  Average complexity: {:.2}", report.average);
+    println!("  Max complexity: {}", report.max);
+    println!("  High complexity functions: {}", report.high_complexity_count);
+
+    assert!(report.max > 10, "Should have some complex functions");
+}
+
+#[test]
+#[ignore]
+fn test_awx_security_scan() {
+    let awx = get_awx_repo();
+    let backend = build_awx_graph(&awx);
+
+    use rbuilder_security::scanner::SecurityAnalyzer;
+
+    let analyzer = SecurityAnalyzer::new(&backend);
+    let vulnerabilities = analyzer.scan().expect("Security scan failed");
+
+    println!("Security Scan Results:");
+    println!("  Total findings: {}", vulnerabilities.len());
+
+    // Group by severity
+    let critical = vulnerabilities.iter().filter(|v| v.severity == "critical").count();
+    let high = vulnerabilities.iter().filter(|v| v.severity == "high").count();
+    let medium = vulnerabilities.iter().filter(|v| v.severity == "medium").count();
+
+    println!("  Critical: {}", critical);
+    println!("  High: {}", high);
+    println!("  Medium: {}", medium);
+}
+
+#[test]
+#[ignore]
+fn test_awx_call_graph_depth() {
+    let awx = get_awx_repo();
+    let backend = build_awx_graph(&awx);
+
+    use rbuilder_analysis::callgraph::CallGraph;
+
+    let callgraph = CallGraph::from_backend(&backend).expect("Failed to build call graph");
+
+    println!("Call Graph Stats:");
+    println!("  Total nodes: {}", callgraph.node_count());
+    println!("  Total edges: {}", callgraph.edge_count());
+
+    // Find deepest call chain
+    let max_depth = callgraph.max_depth().unwrap_or(0);
+    println!("  Max call depth: {}", max_depth);
+
+    assert!(max_depth > 3, "Should have call chains deeper than 3");
+}
+
+#[test]
+#[ignore]
+fn test_awx_module_dependencies() {
+    let awx = get_awx_repo();
+    let backend = build_awx_graph(&awx);
+
+    use rbuilder_gql::executor::execute;
+    use rbuilder_gql::parser::parse;
+
+    // Find Python imports
+    let query = "type:file WHERE language = 'python' -imports-> type:file RETURN name LIMIT 20";
+    let parsed = parse(query).expect("Failed to parse query");
+    let results = execute(&parsed, &backend).expect("Failed to execute query");
+
+    println!("Module Dependencies:");
+    for result in results.iter().take(10) {
+        println!("  {}", result.properties.get("name").unwrap_or(&"<unknown>".to_string()));
+    }
+}
+
+#[test]
+#[ignore]
+fn test_awx_database_models() {
+    let awx = get_awx_repo();
+    let backend = build_awx_graph(&awx);
+
+    use rbuilder_gql::executor::execute;
+    use rbuilder_gql::parser::parse;
+
+    // Find Django models
+    let query = "type:class WHERE name =~ '.*Model' AND file =~ '.*models.*' RETURN name LIMIT 50";
+    let parsed = parse(query).expect("Failed to parse query");
+    let results = execute(&parsed, &backend).expect("Failed to execute query");
+
+    println!("Found {} Django models", results.len());
+    assert!(!results.is_empty(), "AWX should have Django models");
+}
+
+// Helper to print test instructions
+#[test]
+fn print_test_instructions() {
+    println!("\n=== AWX Real-World Tests ===\n");
+    println!("These tests validate rBuilder against Ansible AWX.");
+    println!("\nTo run all AWX tests:");
+    println!("  cargo test --test real_world_awx -- --ignored --nocapture\n");
+    println!("To run a specific test:");
+    println!("  cargo test --test real_world_awx test_awx_graph_build -- --ignored --nocapture\n");
+    println!("To use an existing AWX clone:");
+    println!("  AWX_TEST_PATH=/path/to/awx cargo test --test real_world_awx -- --ignored\n");
+}

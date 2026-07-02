@@ -42,7 +42,7 @@ pub use results::{
     CommunityTable, ComplexityTable,
 };
 pub use centrality::{
-    default_behavioral_edges, degree_centrality, identify_hotspots, BetweennessCentrality,
+    default_behavioral_edges, degree_centrality, BetweennessCentrality,
     CentralityAnalyzer, CentralityReport, CentralityScore, CentralityScores, DegreeCentrality,
     FastPageRank, FlatGraphIndex, PageRankStats, PAGERANK_TOLERANCE, STRUCTURAL_EDGE_TYPES,
 };

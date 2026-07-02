@@ -1,9 +1,5 @@
-//! Phase 4 integration tests: IDL generation and domain learning
+//! Phase 4 integration tests: IDL generation
 
-use rbuilder::graph::backend::GraphBackend;
-use rbuilder::graph::schema::{Node, NodeType};
-use rbuilder::graph::CodeGraph;
-use rbuilder::nlp::{PatternDetector, PatternMatcher};
 use rbuilder::semantic::{IdlFormat, IdlGenerator, SignatureExtractor};
 use std::fs;
 use tempfile::TempDir;
@@ -27,22 +23,6 @@ fn test_idl_generation_pipeline() {
     let content = fs::read_to_string(path).unwrap();
     assert!(content.contains("syntax = \"proto3\""));
     assert!(content.contains("authenticate"));
-}
-
-#[test]
-fn test_domain_aware_nlp() {
-    let mut graph = CodeGraph::new();
-    let backend = graph.backend_mut();
-    for i in 0..5 {
-        let mut node = Node::new(NodeType::Class, format!("OrderService{i}"));
-        node.labels.push("soa:service".to_string());
-        backend.insert_node(node).unwrap();
-    }
-
-    let domain = PatternDetector::new().analyze(backend).unwrap();
-    let matcher = PatternMatcher::new().with_domain(domain);
-    let translated = matcher.translate("how many services?").unwrap();
-    assert!(translated.internal_query.contains("soa:service"));
 }
 
 #[test]

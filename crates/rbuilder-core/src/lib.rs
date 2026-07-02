@@ -9,7 +9,6 @@ pub use rbuilder_extraction as extraction;
 pub use rbuilder_gql as gql;
 pub use rbuilder_graph as graph;
 pub use rbuilder_incremental as incremental;
-pub use rbuilder_nlp as nlp;
 pub use rbuilder_pipeline as pipeline;
 pub use rbuilder_plugin_api as plugin;
 pub use rbuilder_project_config as config;
@@ -18,18 +17,12 @@ pub use rbuilder_rules as rules;
 pub use rbuilder_security as security;
 pub use rbuilder_semantic as semantic;
 
-pub use rbuilder_cli::{git_util, hooks, multi_repo, output};
 pub use rbuilder_extraction::discovery;
 pub use rbuilder_graph::CodeGraph;
 pub use rbuilder_incremental::changes;
 pub use rbuilder_incremental::{
     ChangeDetail, ChangeDetectionResult, ChangeDetector, ChangeSet, ChangeSummary, FileTracker,
     IncrementalUpdater, UpdateOptions, UpdateResult,
-};
-pub use rbuilder_incremental::watch;
-pub use rbuilder_nlp::conversation::ConversationContext;
-pub use rbuilder_nlp::{
-    DomainContext, PatternDetector, PatternMatcher, QueryResult, TranslatedQuery,
 };
 pub use rbuilder_pipeline::parallel;
 pub use rbuilder_pipeline::{par_filter_map, PipelineConfig, PipelineStats, ProcessingPipeline};

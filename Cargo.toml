@@ -14,13 +14,11 @@ members = [
     "crates/rbuilder-analysis",
     "crates/rbuilder-gql",
     "crates/rbuilder-export",
-    "crates/rbuilder-nlp",
     "crates/rbuilder-security",
     "crates/rbuilder-project-config",
     "crates/rbuilder-incremental",
     "crates/rbuilder-semantic",
     "crates/rbuilder-rules",
-    "crates/rbuilder-cli",
     "crates/rbuilder-core",
     "crates/rbuilder-lang-ansible",
     "crates/rbuilder-lang-assembly",
@@ -86,13 +84,11 @@ rbuilder-pipeline = { path = "crates/rbuilder-pipeline", version = "0.1.0" }
 rbuilder-analysis = { path = "crates/rbuilder-analysis", version = "0.1.0" }
 rbuilder-gql = { path = "crates/rbuilder-gql", version = "0.1.0" }
 rbuilder-export = { path = "crates/rbuilder-export", version = "0.1.0" }
-rbuilder-nlp = { path = "crates/rbuilder-nlp", version = "0.1.0" }
 rbuilder-security = { path = "crates/rbuilder-security", version = "0.1.0" }
 rbuilder-project-config = { path = "crates/rbuilder-project-config", version = "0.1.0" }
 rbuilder-incremental = { path = "crates/rbuilder-incremental", version = "0.1.0" }
 rbuilder-semantic = { path = "crates/rbuilder-semantic", version = "0.1.0" }
 rbuilder-rules = { path = "crates/rbuilder-rules", version = "0.1.0" }
-rbuilder-cli = { path = "crates/rbuilder-cli", version = "0.1.0" }
 rbuilder-core = { path = "crates/rbuilder-core", version = "0.1.0" }
 tempfile = "3"
 rbuilder-lang-ansible = { path = "crates/rbuilder-lang-ansible", version = "0.1.0" }
@@ -198,13 +194,11 @@ rbuilder-pipeline = { workspace = true }
 rbuilder-analysis = { workspace = true }
 rbuilder-gql = { workspace = true }
 rbuilder-export = { workspace = true }
-rbuilder-nlp = { workspace = true }
 rbuilder-security = { workspace = true }
 rbuilder-project-config = { workspace = true }
 rbuilder-incremental = { workspace = true }
 rbuilder-semantic = { workspace = true }
 rbuilder-rules = { workspace = true }
-rbuilder-cli = { workspace = true }
 
 rbuilder-bundle-minimal = { workspace = true, optional = true }
 rbuilder-bundle-extended = { workspace = true, optional = true }
@@ -232,8 +226,6 @@ aho-corasick = "1"
 fancy-regex = "0.11"
 unicode-normalization = "0.1"
 strsim = "0.11"
-ndarray = { version = "0.15", optional = true }
-reqwest = { version = "0.11", features = ["json"], optional = true }
 clap = { version = "4", features = ["derive"] }
 comfy-table = "7"
 indicatif = "0.17"
@@ -248,7 +240,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sysinfo = "0.30"
 pulldown-cmark = "0.9"
-notify = "6.1"
 bincode = "1.3"
 ignore = "0.4"
 
@@ -264,7 +255,7 @@ rbuilder-lang-puppet = { workspace = true }
 
 
 [features]
-default = ["bundle-full", "nlp-patterns"]
+default = ["bundle-full"]
 
 all-languages = ["bundle-extra"]
 
@@ -273,10 +264,6 @@ bundle-extended = ["dep:rbuilder-bundle-extended", "iac-langs"]
 bundle-full = ["dep:rbuilder-bundle-full", "iac-langs"]
 bundle-extra = ["dep:rbuilder-bundle-extra", "iac-langs"]
 iac-langs = ["dep:rbuilder-lang-ansible", "dep:rbuilder-lang-chef", "dep:rbuilder-lang-puppet"]
-
-nlp-patterns = ["rbuilder-nlp/nlp-patterns"]
-nlp-cache = ["nlp-patterns", "ndarray", "rbuilder-nlp/nlp-cache"]
-nlp-llm = ["nlp-cache", "reqwest", "rbuilder-nlp/nlp-llm"]
 
 proc-macros = ["rbuilder-macros"]
 
@@ -308,10 +295,6 @@ harness = false
 name = "phase11_polyglot"
 harness = false
 required-features = ["bundle-extended"]
-
-[[bench]]
-name = "nlp"
-harness = false
 
 [[bench]]
 name = "graph_benchmarks"

@@ -6,6 +6,7 @@
 pub use rbuilder_core::*;
 
 pub mod analysis;
+#[allow(missing_docs)]
 pub mod cli;
 pub mod graph;
 pub mod languages;

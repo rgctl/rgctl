@@ -7,14 +7,12 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 rbuilder-analysis = { path = "../rbuilder-analysis" }
-rbuilder-cli = { path = "../rbuilder-cli" }
 rbuilder-error = { path = "../rbuilder-error" }
 rbuilder-export = { path = "../rbuilder-export" }
 rbuilder-extraction = { path = "../rbuilder-extraction" }
 rbuilder-gql = { path = "../rbuilder-gql" }
 rbuilder-graph = { path = "../rbuilder-graph" }
 rbuilder-incremental = { path = "../rbuilder-incremental" }
-rbuilder-nlp = { path = "../rbuilder-nlp" }
 rbuilder-pipeline = { path = "../rbuilder-pipeline" }
 rbuilder-plugin-api = { path = "../rbuilder-plugin-api" }
 rbuilder-project-config = { path = "../rbuilder-project-config" }

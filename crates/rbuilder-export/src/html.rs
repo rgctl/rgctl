@@ -1085,10 +1085,6 @@ fn generate_html_template(
                                 </thead>
                                 <tbody>
                                     <tr>
-                                        <td><code>rbuilder ask "question"</code></td>
-                                        <td>Natural language queries (AI-powered)</td>
-                                    </tr>
-                                    <tr>
                                         <td><code>rbuilder blast-radius SYMBOL</code></td>
                                         <td>Impact analysis for a function/class</td>
                                     </tr>
@@ -1097,12 +1093,16 @@ fn generate_html_template(
                                         <td>Program slicing for dataflow analysis</td>
                                     </tr>
                                     <tr>
-                                        <td><code>rbuilder stats</code></td>
-                                        <td>Show graph statistics and reports</td>
+                                        <td><code>rbuilder metrics --pagerank</code></td>
+                                        <td>Network centrality and community analytics</td>
                                     </tr>
                                     <tr>
-                                        <td><code>rbuilder chat</code></td>
-                                        <td>Interactive conversational mode</td>
+                                        <td><code>rbuilder inspect SYMBOL cfg</code></td>
+                                        <td>Inspect CFG / PDG / dominance for a function</td>
+                                    </tr>
+                                    <tr>
+                                        <td><code>rbuilder check --policy-file policy.json</code></td>
+                                        <td>CI policy gateway for blast-radius violations</td>
                                     </tr>
                                 </tbody>
                             </table>

@@ -570,18 +570,6 @@ pub fn degree_centrality(backend: &MemoryBackend) -> Result<Vec<CentralityScore>
     Ok(scores)
 }
 
-/// Hotspots: high degree and high complexity nodes.
-pub fn identify_hotspots(backend: &MemoryBackend) -> Result<Vec<CentralityScore>> {
-    let mut scores = degree_centrality(backend)?;
-    scores.retain(|s| s.degree >= 3 && s.complexity.unwrap_or(0) >= 10);
-    scores.sort_by(|a, b| {
-        b.risk_score
-            .partial_cmp(&a.risk_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    Ok(scores)
-}
-
 fn closeness_estimate(degree: usize, node_count: usize) -> f64 {
     if node_count <= 1 || degree == 0 {
         return 0.0;

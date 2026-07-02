@@ -58,8 +58,11 @@ pub struct CallGraph {
 
     /// Column-oriented metadata parallel to `index_to_id`
     pub names: Vec<String>,
+    /// Source file path for each node (empty when unknown).
     pub file_paths: Vec<String>,
+    /// Definition line number for each node.
     pub line_numbers: Vec<usize>,
+    /// Formal parameter names for each function node.
     pub parameters: Vec<Vec<String>>,
 
     /// Call-site metadata for each outgoing edge instance

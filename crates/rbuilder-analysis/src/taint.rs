@@ -105,7 +105,7 @@ impl TaintFlow {
 /// Forward taint analyzer over a function PDG.
 pub struct TaintAnalyzer<'a> {
     pdg: &'a ProgramDependenceGraph,
-    cfg: &'a ControlFlowGraph,
+    _cfg: &'a ControlFlowGraph,
     dom_tree: DominatorTree,
     sources: HashMap<PdgNodeId, TaintSource>,
     sinks: HashMap<PdgNodeId, TaintSink>,
@@ -118,7 +118,7 @@ impl<'a> TaintAnalyzer<'a> {
     pub fn new(pdg: &'a ProgramDependenceGraph, cfg: &'a ControlFlowGraph) -> Self {
         Self {
             pdg,
-            cfg,
+            _cfg: cfg,
             dom_tree: DominatorTree::build(cfg),
             sources: HashMap::new(),
             sinks: HashMap::new(),

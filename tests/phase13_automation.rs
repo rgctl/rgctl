@@ -1,35 +1,14 @@
-//! Phase 13: real-time updates and automation (TASK_PLAN).
+//! Phase 13: change detection and incremental updates.
 
 use rbuilder::changes::ChangeDetector;
 use rbuilder::config::project::{RbuilderConfig, RiskLevel};
 use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};
-use rbuilder::hooks::install_hooks;
 use rbuilder::incremental::{changes_for_paths, IncrementalUpdater, UpdateOptions};
 use rbuilder::languages::registry::LanguageRegistry;
 use rbuilder::pipeline::{PipelineConfig, ProcessingPipeline};
 use std::fs;
-use std::path::Path;
-use std::process::Command;
 use tempfile::TempDir;
-
-fn init_git(root: &Path) {
-    Command::new("git")
-        .args(["init"])
-        .current_dir(root)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "t@example.com"])
-        .current_dir(root)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(root)
-        .output()
-        .unwrap();
-}
 
 fn chain_graph_repo(temp: &TempDir) -> rbuilder::CodeGraph {
     let root = temp.path();
@@ -121,16 +100,6 @@ fn test_update_files_incremental() {
 }
 
 #[test]
-fn test_init_hooks_creates_scripts() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init_git(root);
-    let hooks = install_hooks(root, true).unwrap();
-    assert_eq!(hooks.len(), 3);
-    assert!(hooks.iter().all(|h| h.exists()));
-}
-
-#[test]
 fn test_rbuilder_config_defaults() {
     let temp = TempDir::new().unwrap();
     let cfg = RbuilderConfig::load(temp.path()).unwrap();
@@ -162,26 +131,6 @@ fn test_manual_graph_blast_risk() {
         .detect(&graph, &["f.rs".into()])
         .unwrap();
     assert!(result.details.iter().any(|d| d.symbol == "c"));
-}
-
-#[test]
-fn test_graph_update_notification_shape() {
-    use rbuilder::incremental::UpdateResult;
-    use rbuilder::watch::GraphUpdateNotification;
-    use std::time::Duration;
-
-    let result = UpdateResult {
-        files_changed: 2,
-        nodes_added: 1,
-        nodes_removed: 0,
-        edges_added: 2,
-        edges_removed: 1,
-        duration: Duration::from_millis(10),
-        ..Default::default()
-    };
-    let n = GraphUpdateNotification::from_result(vec!["a.rs".into(), "b.rs".into()], &result);
-    assert_eq!(n.files_changed.len(), 2);
-    assert_eq!(n.edges_changed, 3);
 }
 
 #[test]
@@ -224,27 +173,6 @@ fn test_changes_for_paths_detects_new_file() {
     fs::write(root.join("src/extra.rs"), "pub fn extra() {}\n").unwrap();
     let changes = changes_for_paths(root, &["src/extra.rs".into()]).unwrap();
     assert!(changes.added.contains(&"src/extra.rs".to_string()));
-}
-
-#[test]
-fn test_hooks_write_rbuilder_toml_on_install() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init_git(root);
-    install_hooks(root, true).unwrap();
-    assert!(root.join("rbuilder.toml").exists());
-}
-
-#[test]
-fn test_installed_pre_commit_script_content() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init_git(root);
-    let hooks = install_hooks(root, true).unwrap();
-    let pre_commit = hooks.iter().find(|p| p.ends_with("pre-commit")).unwrap();
-    let body = fs::read_to_string(pre_commit).unwrap();
-    assert!(body.contains("rbuilder update"));
-    assert!(body.contains("STAGED"));
 }
 
 #[test]
