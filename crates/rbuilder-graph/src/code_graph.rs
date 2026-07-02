@@ -102,7 +102,7 @@ impl CodeGraph {
         let path = repo_root.join(GRAPH_DIR).join(GRAPH_FILE);
         if !path.exists() {
             return Err(Error::NotFound(format!(
-                "Graph not found at {}. Run `rbuilder init` first.",
+                "Graph not found at {}. Run `rbuilder discover .` first.",
                 path.display()
             )));
         }

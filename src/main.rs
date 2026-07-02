@@ -30,122 +30,85 @@ struct Cli {
     /// Exclude patterns (comma-separated)
     #[arg(short, long, global = true)]
     exclude: Option<String>,
-
-    /// Watch for file changes and auto-update
-    #[arg(short, long, global = true)]
-    watch: bool,
-
-    /// Run security analysis (secret scanning)
-    #[arg(long, global = true)]
-    security: bool,
-
-    /// Build control flow graphs for functions
-    #[arg(long, global = true)]
-    cfg: bool,
-
-    /// Run all analyses (warning: may take several minutes on large codebases)
-    #[arg(long, global = true)]
-    all: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Update graph incrementally
-    Update {
-        /// Update since git commit
-        #[arg(long)]
-        since: Option<String>,
+    // /// Update graph incrementally
+    // Update {
+    //     /// Update since git commit
+    //     #[arg(long)]
+    //     since: Option<String>,
+    //
+    //     /// Force full rebuild
+    //     #[arg(long)]
+    //     force: bool,
+    //
+    //     /// Update only these repo-relative files (repeatable)
+    //     #[arg(long)]
+    //     files: Vec<String>,
+    // },
+    //
+    // /// Watch repository and re-index on file changes
+    // Watch {
+    //     /// Debounce window in milliseconds
+    //     #[arg(long)]
+    //     debounce_ms: Option<u64>,
+    // },
+    //
+    // /// Git hooks management
+    // Hooks {
+    //     #[command(subcommand)]
+    //     command: HooksCommands,
+    // },
 
-        /// Force full rebuild
-        #[arg(long)]
-        force: bool,
+    /// Discover and analyze a codebase (index + analyze)
+    Discover {
+        /// Repository path to analyze
+        path: Option<String>,
 
-        /// Update only these repo-relative files (repeatable)
-        #[arg(long)]
-        files: Vec<String>,
-    },
+        /// Include only specific languages (comma-separated)
+        #[arg(short, long)]
+        languages: Option<String>,
 
-    /// Watch repository and re-index on file changes
-    Watch {
-        /// Debounce window in milliseconds
-        #[arg(long)]
-        debounce_ms: Option<u64>,
-    },
+        /// Exclude patterns (comma-separated)
+        #[arg(short, long)]
+        exclude: Option<String>,
 
-    /// Git hooks management
-    Hooks {
-        #[command(subcommand)]
-        command: HooksCommands,
-    },
+        /// Enable verbose output
+        #[arg(short, long)]
+        verbose: bool,
 
-    /// Run specific analyses on existing graph
-    Analyze {
-        /// Run community detection
-        #[arg(long)]
-        community: bool,
-
-        /// Calculate complexity metrics
-        #[arg(long)]
-        complexity: bool,
-
-        /// Compute centrality scores
-        #[arg(long)]
-        centrality: bool,
-
-        /// Analyze dependencies (works for all languages)
-        #[arg(long)]
-        dependencies: bool,
-
-        /// Run security analysis (secrets, vulnerabilities, misconfigurations)
+        /// Run security analysis (secret scanning)
         #[arg(long)]
         security: bool,
 
-        /// Build control flow graphs for all functions
+        /// Build control flow graphs for functions
         #[arg(long)]
         cfg: bool,
 
-        /// Build program dependence graphs for all functions (implies --cfg)
-        #[arg(long)]
-        pdg: bool,
-
-        /// Compute dominance trees for all functions (implies --cfg)
-        #[arg(long)]
-        dominance: bool,
-
-        /// Filter by language (ansible, chef, puppet, python, rust, etc.)
-        #[arg(long)]
-        language: Option<String>,
-
-        /// Output format
-        #[arg(long, default_value = "text")]
-        format: String,
-
-        /// Output directory for CFG/PDG/Dominance results
-        #[arg(long)]
-        output: Option<String>,
-
-        /// Run all analyses
+        /// Run all analyses (warning: may take several minutes on large codebases)
         #[arg(long)]
         all: bool,
     },
 
-    /// Query the graph using natural language
-    Ask {
-        /// Natural language question
-        question: String,
-
-        /// Show the translated query
-        #[arg(long)]
-        explain: bool,
-
-        /// Use dual-agent query decomposition
-        #[arg(long)]
-        dual_agent: bool,
-
-        /// Output format
-        #[arg(long, value_enum, default_value = "text")]
-        format: OutputFormat,
-    },
+    // /// Query the graph using natural language
+    // Ask {
+    //     /// Natural language question
+    //     question: String,
+    //
+    //     /// Show the translated query
+    //     #[arg(long)]
+    //     explain: bool,
+    //
+    //     /// Use dual-agent query decomposition
+    //     #[arg(long)]
+    //     dual_agent: bool,
+    //
+    //     /// Output format
+    //     #[arg(long, value_enum, default_value = "text")]
+    //     format: OutputFormat,
+    // },
 
     /// Backward program slice for a variable at a source line
     Slice {
@@ -187,65 +150,61 @@ enum Commands {
     BlastRadius {
         /// Symbol name
         symbol: String,
-
-        /// Maximum transitive caller depth
-        #[arg(long, default_value = "10")]
-        depth: usize,
     },
 
-    /// Interactive conversational mode
-    Chat,
+    // /// Interactive conversational mode
+    // Chat,
 
-    /// Apply labeling rules
-    Label {
-        /// Path to ruleset file
-        #[arg(long)]
-        ruleset: String,
-
-        /// Dry run (show what would be labeled)
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Generate IDL files
-    Idl {
-        /// IDL format (proto, thrift, openapi)
-        #[arg(long)]
-        format: String,
-
-        /// Module name
-        #[arg(long)]
-        module: Option<String>,
-
-        /// Output directory
-        #[arg(long)]
-        output_dir: Option<String>,
-    },
-
-    /// Configuration analysis
-    Config {
-        /// Find unused config keys
-        #[arg(long)]
-        unused: bool,
-
-        /// Find missing environment variables
-        #[arg(long)]
-        missing_env: bool,
-
-        /// Find hardcoded secrets
-        #[arg(long)]
-        secrets: bool,
-
-        /// Compare configs for drift
-        #[arg(long)]
-        drift: Option<Vec<String>>,
-    },
-
-    /// Plugin management
-    Plugin {
-        #[command(subcommand)]
-        command: PluginCommands,
-    },
+    // /// Apply labeling rules
+    // Label {
+    //     /// Path to ruleset file
+    //     #[arg(long)]
+    //     ruleset: String,
+    //
+    //     /// Dry run (show what would be labeled)
+    //     #[arg(long)]
+    //     dry_run: bool,
+    // },
+    //
+    // /// Generate IDL files
+    // Idl {
+    //     /// IDL format (proto, thrift, openapi)
+    //     #[arg(long)]
+    //     format: String,
+    //
+    //     /// Module name
+    //     #[arg(long)]
+    //     module: Option<String>,
+    //
+    //     /// Output directory
+    //     #[arg(long)]
+    //     output_dir: Option<String>,
+    // },
+    //
+    // /// Configuration analysis
+    // Config {
+    //     /// Find unused config keys
+    //     #[arg(long)]
+    //     unused: bool,
+    //
+    //     /// Find missing environment variables
+    //     #[arg(long)]
+    //     missing_env: bool,
+    //
+    //     /// Find hardcoded secrets
+    //     #[arg(long)]
+    //     secrets: bool,
+    //
+    //     /// Compare configs for drift
+    //     #[arg(long)]
+    //     drift: Option<Vec<String>>,
+    // },
+    //
+    // /// Plugin management
+    // Plugin {
+    //     #[command(subcommand)]
+    //     command: PluginCommands,
+    // },
 
     /// Export graph
     Export {
@@ -262,120 +221,120 @@ enum Commands {
         query: String,
     },
 
-    /// Generate a diagram from a graph query
-    Diagram {
-        /// Graph query (e.g. `type:Function`, `functions`)
-        query: String,
-
-        /// Output format: mermaid, dot, graphml, png, svg, pdf
-        #[arg(long, default_value = "mermaid")]
-        format: String,
-
-        /// Mermaid diagram type: flowchart, class, call-graph
-        #[arg(long, default_value = "flowchart")]
-        diagram_type: String,
-
-        /// Output file (stdout if omitted for text formats)
-        #[arg(short, long)]
-        output: Option<String>,
-
-        /// Expand call neighborhood depth
-        #[arg(long)]
-        depth: Option<usize>,
-
-        /// Graphviz layout: dot, neato, fdp, circo
-        #[arg(long, default_value = "dot")]
-        layout: String,
-
-        /// Rank direction: TB or LR
-        #[arg(long, default_value = "TB")]
-        rankdir: String,
-    },
-
-    /// Show statistics
-    Stats {
-        /// Community structure report
-        #[arg(long)]
-        community_report: bool,
-
-        /// Complexity distribution
-        #[arg(long)]
-        complexity_report: bool,
-
-        /// Find hotspots
-        #[arg(long)]
-        hotspots: bool,
-
-        /// Filter by repository namespace
-        #[arg(long)]
-        repo: Option<String>,
-    },
-
-    /// Multi-repository workspace management
-    Workspace {
-        #[command(subcommand)]
-        command: WorkspaceCommands,
-    },
+    // /// Generate a diagram from a graph query
+    // Diagram {
+    //     /// Graph query (e.g. `type:Function`, `functions`)
+    //     query: String,
+    //
+    //     /// Output format: mermaid, dot, graphml, png, svg, pdf
+    //     #[arg(long, default_value = "mermaid")]
+    //     format: String,
+    //
+    //     /// Mermaid diagram type: flowchart, class, call-graph
+    //     #[arg(long, default_value = "flowchart")]
+    //     diagram_type: String,
+    //
+    //     /// Output file (stdout if omitted for text formats)
+    //     #[arg(short, long)]
+    //     output: Option<String>,
+    //
+    //     /// Expand call neighborhood depth
+    //     #[arg(long)]
+    //     depth: Option<usize>,
+    //
+    //     /// Graphviz layout: dot, neato, fdp, circo
+    //     #[arg(long, default_value = "dot")]
+    //     layout: String,
+    //
+    //     /// Rank direction: TB or LR
+    //     #[arg(long, default_value = "TB")]
+    //     rankdir: String,
+    // },
+    //
+    // /// Show statistics
+    // Stats {
+    //     /// Community structure report
+    //     #[arg(long)]
+    //     community_report: bool,
+    //
+    //     /// Complexity distribution
+    //     #[arg(long)]
+    //     complexity_report: bool,
+    //
+    //     /// Find hotspots
+    //     #[arg(long)]
+    //     hotspots: bool,
+    //
+    //     /// Filter by repository namespace
+    //     #[arg(long)]
+    //     repo: Option<String>,
+    // },
+    //
+    // /// Multi-repository workspace management
+    // Workspace {
+    //     #[command(subcommand)]
+    //     command: WorkspaceCommands,
+    // },
 }
 
-#[derive(Subcommand)]
-enum PluginCommands {
-    /// Install external plugin
-    Install { path: String },
-
-    /// List all plugins
-    List,
-
-    /// Show plugin information
-    Info { plugin_id: String },
-
-    /// Uninstall plugin
-    Uninstall { plugin_id: String },
-}
-
-#[derive(Subcommand)]
-enum HooksCommands {
-    /// Install git hooks for pre-commit, post-commit, and post-checkout
-    Install {
-        /// Overwrite existing hook scripts
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Uninstall git hooks
-    Uninstall,
-
-    /// List installed hooks
-    List,
-}
-
-#[derive(Subcommand)]
-enum WorkspaceCommands {
-    /// Initialize a multi-repo workspace
-    Init,
-
-    /// Add a repository to the workspace
-    Add {
-        /// Path to repository
-        path: String,
-
-        /// Namespace identifier (used in `repo:` queries)
-        #[arg(long)]
-        namespace: String,
-    },
-
-    /// List workspace repositories
-    List,
-
-    /// Index all repos and merge into workspace graph
-    Sync,
-
-    /// Remove a repository from the workspace
-    Remove {
-        /// Namespace to remove
-        namespace: String,
-    },
-}
+// #[derive(Subcommand)]
+// enum PluginCommands {
+//     /// Install external plugin
+//     Install { path: String },
+//
+//     /// List all plugins
+//     List,
+//
+//     /// Show plugin information
+//     Info { plugin_id: String },
+//
+//     /// Uninstall plugin
+//     Uninstall { plugin_id: String },
+// }
+//
+// #[derive(Subcommand)]
+// enum HooksCommands {
+//     /// Install git hooks for pre-commit, post-commit, and post-checkout
+//     Install {
+//         /// Overwrite existing hook scripts
+//         #[arg(long)]
+//         force: bool,
+//     },
+//
+//     /// Uninstall git hooks
+//     Uninstall,
+//
+//     /// List installed hooks
+//     List,
+// }
+//
+// #[derive(Subcommand)]
+// enum WorkspaceCommands {
+//     /// Initialize a multi-repo workspace
+//     Init,
+//
+//     /// Add a repository to the workspace
+//     Add {
+//         /// Path to repository
+//         path: String,
+//
+//         /// Namespace identifier (used in `repo:` queries)
+//         #[arg(long)]
+//         namespace: String,
+//     },
+//
+//     /// List workspace repositories
+//     List,
+//
+//     /// Index all repos and merge into workspace graph
+//     Sync,
+//
+//     /// Remove a repository from the workspace
+//     Remove {
+//         /// Namespace to remove
+//         namespace: String,
+//     },
+// }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 enum OutputFormat {
@@ -420,623 +379,383 @@ fn main() -> anyhow::Result<()> {
             .init();
     }
 
-    // If no subcommand, run full analysis
-    // Route to appropriate command handler or run full analysis
+    // Route to command handler
     let Some(command) = cli.command else {
-        let path = match cli.path.as_deref() {
-            Some(p) => p,
-            None => {
-                eprintln!("Error: PATH argument required for analysis");
-                eprintln!();
-                eprintln!("Usage: rbuilder <PATH> [OPTIONS]");
-                eprintln!("       rbuilder . [OPTIONS]          # Analyze current directory");
-                eprintln!("       rbuilder /path/to/repo        # Analyze specific directory");
-                eprintln!();
-                eprintln!("Or use a subcommand:");
-                eprintln!("       rbuilder update               # Update existing graph");
-                eprintln!("       rbuilder ask \"question\"       # Query the graph");
-                eprintln!("       rbuilder stats                # Show statistics");
-                eprintln!();
-                eprintln!("Run 'rbuilder --help' for more information");
-                std::process::exit(1);
-            }
-        };
-        return run_full_analysis(path, cli.languages, cli.exclude, cli.watch, cli.verbose, cli.security, cli.cfg, cli.all);
+        eprintln!("Error: Subcommand required");
+        eprintln!();
+        eprintln!("Usage: rbuilder <COMMAND>");
+        eprintln!();
+        eprintln!("Commands:");
+        eprintln!("  discover <PATH>      Index and analyze a codebase");
+        eprintln!("  gql <QUERY>          Execute graph query language");
+        eprintln!("  slice                Backward program slicing");
+        eprintln!("  blast-radius         Impact analysis for a symbol");
+        eprintln!("  export               Export graph");
+        eprintln!();
+        eprintln!("Run 'rbuilder --help' for more information");
+        std::process::exit(1);
     };
 
     match command {
-        Commands::Update {
-            since,
-            force,
-            files,
-        } => {
-            use rbuilder::cli::update;
-            use std::path::Path;
-            let path = cli.path.as_deref().unwrap_or(".");
-            update::run_update(Path::new(path), since, force, files, cli.verbose)?;
-            Ok(())
-        }
-
-        Commands::Watch { debounce_ms } => {
-            use rbuilder::watch::WatchService;
-            use std::path::Path;
-            let path = cli.path.as_deref().unwrap_or(".");
-            WatchService::run_blocking(Path::new(path), debounce_ms)?;
-            Ok(())
-        }
-
-        Commands::Hooks { command } => {
-            use rbuilder::hooks::{install_hooks, list_hooks, uninstall_hooks};
-            use std::path::Path;
-            let path = cli.path.as_deref().unwrap_or(".");
-            match command {
-                HooksCommands::Install { force } => {
-                    let written = install_hooks(Path::new(path), force)?;
-                    for hook in written {
-                        println!("Installed {}", hook.display());
-                    }
-                }
-                HooksCommands::Uninstall => {
-                    uninstall_hooks(Path::new(path))?;
-                    println!("Uninstalled git hooks");
-                }
-                HooksCommands::List => {
-                    let hooks = list_hooks(Path::new(path))?;
-                    if hooks.is_empty() {
-                        println!("No hooks installed");
-                    } else {
-                        println!("Installed hooks:");
-                        for hook in hooks {
-                            println!("  - {}", hook.display());
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
-
-        Commands::Analyze {
-            community,
-            complexity,
-            centrality,
-            dependencies,
+        Commands::Discover {
+            path,
+            languages,
+            exclude,
+            verbose,
             security,
             cfg,
-            pdg,
-            dominance,
-            language,
-            format: _,
-            output,
             all,
         } => {
-            use rbuilder::analysis::{ComplexityAnalyzer, DependencyAnalyzer};
-            use rbuilder::config::secret_detector::SecretDetector;
-            use rbuilder::discovery::FileDiscoverer;
-            use rbuilder::languages::registry::LanguageRegistry;
-            use rbuilder::nlp::PatternMatcher;
-            use rbuilder_graph::CodeGraph;
-            use std::path::Path;
-
-            let path = cli.path.as_deref().unwrap_or(".");
-            let graph = CodeGraph::load_from_repo(Path::new(path))?;
-            let backend = graph.backend();
-            let matcher = PatternMatcher::new();
-
-            let run_all = all || (!community && !complexity && !centrality && !dependencies && !security);
-
-            if community || run_all {
-                println!("{}", matcher.analyze_communities(backend)?);
-            }
-            if complexity || run_all {
-                let report = ComplexityAnalyzer::analyze(backend)?;
-                println!(
-                    "Complexity: {} functions, avg cyclomatic {:.1}, max {}",
-                    report.functions.len(),
-                    report.avg_cyclomatic,
-                    report.max_cyclomatic
-                );
-                for (level, count) in &report.by_level {
-                    println!("  {:?}: {}", level, count);
-                }
-            }
-            if centrality || run_all {
-                println!("{}", matcher.analyze_centrality(backend)?);
-            }
-            if dependencies || run_all {
-                let cycles = DependencyAnalyzer::find_circular_dependencies(backend)?;
-                println!("Circular dependencies: {}", cycles.len());
-
-                // Show dependencies filtered by language if specified
-                if let Some(ref lang) = language {
-                    let query = format!("type:{}", lang);
-                    let nodes = graph.query(&query)?;
-                    println!("\n{} dependencies for {} nodes:", lang, nodes.len());
-                    for node in nodes.iter().take(10) {
-                        println!("  - {}", node.name);
-                    }
-                }
-            }
-            if security || run_all {
-                // Run secret detection
-                let discoverer = FileDiscoverer::new(LanguageRegistry::new().into());
-                let files = discoverer.discover(Path::new(path))?;
-                let detector = SecretDetector::new();
-                let mut total = 0usize;
-
-                for file in files.iter().take(100) {
-                    if let Ok(content) = std::fs::read_to_string(file) {
-                        let found = detector.scan(&content);
-                        for secret in &found {
-                            println!(
-                                "  [{}] {}:{} - {} ({:?})",
-                                file.display(),
-                                secret.line,
-                                secret.secret_type,
-                                secret.value,
-                                secret.severity
-                            );
-                        }
-                        total += found.len();
-                    }
-                }
-                println!("Potential secrets found: {total}");
-
-                // Query security findings from graph if any
-                if let Ok(security_findings) = graph.query("type:SecurityFinding") {
-                    if !security_findings.is_empty() {
-                        println!("\nSecurity findings in graph: {}", security_findings.len());
-                        for finding in security_findings.iter().take(10) {
-                            println!("  - {}", finding.name);
-                        }
-                    }
-                }
-            }
-
-            // CFG/PDG/Dominance analysis
-            if cfg || pdg || dominance {
-                use rbuilder::analysis::{
-                    build_cfg_for_function, AnalysisStorage, DominatorTree, FunctionAnalysis,
-                    ProgramDependenceGraph,
-                };
-                use rbuilder_graph::schema::NodeType;
-
-                let output_dir = output
-                    .as_deref()
-                    .unwrap_or(".rbuilder/analysis");
-                let storage = AnalysisStorage::new(output_dir);
-                storage.ensure_dir()?;
-
-                // Find all function nodes (indexed lookup, not full scan)
-                let functions = backend.collect_nodes_by_type(NodeType::Function)?;
-
-                println!("\nBuilding analysis for {} functions...", functions.len());
-                let mut success_count = 0;
-                let mut error_count = 0;
-
-                for func_node in &functions {
-                    // Get function source
-                    let file_path = match &func_node.file_path {
-                        Some(p) => p,
-                        None => {
-                            error_count += 1;
-                            continue;
-                        }
-                    };
-
-                    let source = match std::fs::read_to_string(file_path) {
-                        Ok(s) => s,
-                        Err(_) => {
-                            error_count += 1;
-                            continue;
-                        }
-                    };
-
-                    // Determine language from file extension
-                    let lang = if file_path.ends_with(".rs") {
-                        "rust"
-                    } else if file_path.ends_with(".py") {
-                        "python"
-                    } else {
-                        error_count += 1;
-                        continue;
-                    };
-
-                    // Build CFG
-                    let cfg_result = if cfg || pdg || dominance {
-                        build_cfg_for_function(lang, &source, &func_node.name)
-                    } else {
-                        error_count += 1;
-                        continue;
-                    };
-
-                    let cfg_data = match cfg_result {
-                        Ok(c) => Some(c),
-                        Err(_) => {
-                            error_count += 1;
-                            continue;
-                        }
-                    };
-
-                    // Build PDG if requested
-                    let pdg_data = if pdg {
-                        if let Some(ref cfg) = cfg_data {
-                            ProgramDependenceGraph::build(cfg, source.as_bytes()).ok()
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                    // Build Dominance if requested
-                    let dom_data = if dominance {
-                        cfg_data.as_ref().map(DominatorTree::build)
-                    } else {
-                        None
-                    };
-
-                    // Run Taint Analysis (always enabled)
-                    use rbuilder::analysis::TaintAnalyzer;
-                    let taint_data = if let (Some(ref cfg), Some(ref pdg)) = (&cfg_data, &pdg_data) {
-                        let mut analyzer = TaintAnalyzer::new(pdg, cfg);
-                        analyzer.detect_patterns(lang);
-                        let flows = analyzer.analyze();
-                        if flows.is_empty() {
-                            None
-                        } else {
-                            Some(flows)
-                        }
-                    } else {
-                        None
-                    };
-
-                    // Store analysis
-                    let analysis = FunctionAnalysis {
-                        function_id: func_node.id,
-                        function_name: func_node.name.clone(),
-                        file_path: file_path.clone(),
-                        cfg: cfg_data,
-                        pdg: pdg_data,
-                        dominance: dom_data,
-                        taint: taint_data,
-                    };
-
-                    if storage.save_function(&analysis).is_ok() {
-                        success_count += 1;
-                    } else {
-                        error_count += 1;
-                    }
-                }
-
-                println!(
-                    "✓ Analysis complete: {} functions analyzed, {} errors",
-                    success_count, error_count
-                );
-                println!("Results saved to {}", output_dir);
-
-                // Export to consolidated JSON
-                let export_path = Path::new(output_dir).join("all_analyses.json");
-                storage.export_all(&export_path)?;
-                println!("Exported to {}", export_path.display());
-
-                // Taint analysis summary
-                let all_analyses = storage.load_all().unwrap_or_default();
-                let mut total_flows = 0;
-                let mut vulnerable_flows = 0;
-                for analysis in &all_analyses {
-                    if let Some(ref flows) = analysis.taint {
-                        total_flows += flows.len();
-                        vulnerable_flows += flows.iter().filter(|f| f.is_vulnerable()).count();
-                    }
-                }
-                if total_flows > 0 {
-                    println!("\n✓ Taint analysis:");
-                    println!("  Total flows: {}", total_flows);
-                    println!("  Vulnerable flows: {}", vulnerable_flows);
-                    println!("  Sanitized flows: {}", total_flows - vulnerable_flows);
-                }
-            }
-
-            Ok(())
+            let path = path.as_deref().unwrap_or(".");
+            return run_full_analysis(path, languages, exclude, false, verbose, security, cfg, all);
         }
+        // Commands::Update {
+        //     since,
+        //     force,
+        //     files,
+        // } => {
+        //     use rbuilder::cli::update;
+        //     use std::path::Path;
+        //     let path = cli.path.as_deref().unwrap_or(".");
+        //     update::run_update(Path::new(path), since, force, files, cli.verbose)?;
+        //     Ok(())
+        // }
+        //
+        // Commands::Watch { debounce_ms } => {
+        //     use rbuilder::watch::WatchService;
+        //     use std::path::Path;
+        //     let path = cli.path.as_deref().unwrap_or(".");
+        //     WatchService::run_blocking(Path::new(path), debounce_ms)?;
+        //     Ok(())
+        // }
+        //
+        // Commands::Hooks { command } => {
+        //     use rbuilder::hooks::{install_hooks, list_hooks, uninstall_hooks};
+        //     use std::path::Path;
+        //     let path = cli.path.as_deref().unwrap_or(".");
+        //     match command {
+        //         HooksCommands::Install { force } => {
+        //             let written = install_hooks(Path::new(path), force)?;
+        //             for hook in written {
+        //                 println!("Installed {}", hook.display());
+        //             }
+        //         }
+        //         HooksCommands::Uninstall => {
+        //             uninstall_hooks(Path::new(path))?;
+        //             println!("Uninstalled git hooks");
+        //         }
+        //         HooksCommands::List => {
+        //             let hooks = list_hooks(Path::new(path))?;
+        //             if hooks.is_empty() {
+        //                 println!("No hooks installed");
+        //             } else {
+        //                 println!("Installed hooks:");
+        //                 for hook in hooks {
+        //                     println!("  - {}", hook.display());
+        //                 }
+        //             }
+        //         }
+        //     }
+        //     Ok(())
+        // }
 
-        Commands::Ask {
-            question,
-            explain,
-            dual_agent,
-            format,
-        } => {
-            use rbuilder::nlp::PatternMatcher;
-            use rbuilder::nlp::QueryResult;
-            use rbuilder_graph::CodeGraph;
-            use std::path::Path;
+        // Commands::Ask {
+        //     question,
+        //     explain,
+        //     dual_agent,
+        //     format,
+        // } => {
+        //     use rbuilder::nlp::PatternMatcher;
+        //     use rbuilder::nlp::QueryResult;
+        //     use rbuilder_graph::CodeGraph;
+        //     use std::path::Path;
+        //
+        //     let graph = CodeGraph::load_from_repo(Path::new("."))?;
+        //     let matcher = PatternMatcher::from_graph(graph.backend())?;
+        //
+        //     if dual_agent {
+        //         use rbuilder::nlp::dual_agent::DualAgentQuerySystem;
+        //
+        //         let dual = DualAgentQuerySystem::new().query(&question, graph.backend())?;
+        //         let answer = dual.answer_lines.join("\n");
+        //         if explain {
+        //             println!("Answer: {answer}");
+        //             for sq in &dual.context.sub_queries {
+        //                 println!(
+        //                     "  - {} => {} ({} results)",
+        //                     sq.natural_language,
+        //                     sq.translated_pattern.as_deref().unwrap_or("?"),
+        //                     sq.results.len() + sq.text_results.len()
+        //                 );
+        //             }
+        //             println!();
+        //         } else {
+        //             println!("{answer}");
+        //         }
+        //         return Ok(());
+        //     }
+        //
+        //     let translated = matcher.translate_with_dual_agent(&question)?;
+        //
+        //     if explain {
+        //         println!("Intent: {:?}", translated.intent);
+        //         println!("Operation: {}", translated.operation);
+        //         println!("Internal query: {}", translated.internal_query);
+        //         println!("Confidence: {:.2}", translated.confidence);
+        //         println!();
+        //     }
+        //
+        //     let result = matcher.execute(&translated, graph.backend())?;
+        //
+        //     match format {
+        //         OutputFormat::Json => {
+        //             let json = match &result {
+        //                 QueryResult::Count(n) => serde_json::json!({ "count": n }),
+        //                 QueryResult::Nodes(nodes) => serde_json::json!({
+        //                     "results": nodes.iter().map(|n| serde_json::json!({
+        //                         "name": n.name,
+        //                         "type": format!("{:?}", n.node_type),
+        //                         "file": n.file_path,
+        //                     })).collect::<Vec<_>>()
+        //                 }),
+        //                 QueryResult::Text(lines) => serde_json::json!({ "lines": lines }),
+        //             };
+        //             println!("{}", serde_json::to_string_pretty(&json)?);
+        //         }
+        //         OutputFormat::Text | OutputFormat::Table => match result {
+        //             QueryResult::Count(n) => println!("Found {n} result(s)"),
+        //             QueryResult::Nodes(nodes) => {
+        //                 if nodes.is_empty() {
+        //                     println!("No results found.");
+        //                 } else {
+        //                     println!("Found {} result(s):", nodes.len());
+        //                     for node in nodes.iter().take(50) {
+        //                         let file = node.file_path.as_deref().unwrap_or("?");
+        //                         println!("  - {} ({:?}) @ {}", node.name, node.node_type, file);
+        //                     }
+        //                     if nodes.len() > 50 {
+        //                         println!("  ... and {} more", nodes.len() - 50);
+        //                     }
+        //                 }
+        //             }
+        //             QueryResult::Text(lines) => {
+        //                 for line in lines {
+        //                     println!("{line}");
+        //                 }
+        //             }
+        //         },
+        //     }
+        //     Ok(())
+        // }
 
-            let graph = CodeGraph::load_from_repo(Path::new("."))?;
-            let matcher = PatternMatcher::from_graph(graph.backend())?;
+        // Commands::Chat => {
+        //     use rbuilder::cli::chat;
+        //     use std::path::Path;
+        //     chat::run_chat(Path::new("."))?;
+        //     Ok(())
+        // }
 
-            if dual_agent {
-                use rbuilder::nlp::dual_agent::DualAgentQuerySystem;
+        // Commands::Label { ruleset, dry_run } => {
+        //     use rbuilder::rules::{RuleEngine, Ruleset};
+        //     use rbuilder_graph::CodeGraph;
+        //     use std::path::Path;
+        //
+        //     let ruleset = Ruleset::from_file(Path::new(&ruleset))?;
+        //     let mut graph = CodeGraph::load_from_repo(Path::new("."))?;
+        //     let report = RuleEngine::apply_ruleset(graph.backend_mut(), &ruleset, dry_run)?;
+        //
+        //     if dry_run {
+        //         println!("Would apply {} rules:", ruleset.rules.len());
+        //     } else {
+        //         println!("Applied {} rules:", ruleset.rules.len());
+        //         graph.save_to_repo(Path::new("."))?;
+        //     }
+        //
+        //     for (rule, count) in &report.rule_matches {
+        //         println!("  - {rule}: {count} matches");
+        //     }
+        //     if !dry_run {
+        //         println!("Modified {} nodes", report.nodes_modified);
+        //     }
+        //     Ok(())
+        // }
 
-                let dual = DualAgentQuerySystem::new().query(&question, graph.backend())?;
-                let answer = dual.answer_lines.join("\n");
-                if explain {
-                    println!("Answer: {answer}");
-                    for sq in &dual.context.sub_queries {
-                        println!(
-                            "  - {} => {} ({} results)",
-                            sq.natural_language,
-                            sq.translated_pattern.as_deref().unwrap_or("?"),
-                            sq.results.len() + sq.text_results.len()
-                        );
-                    }
-                    println!();
-                } else {
-                    println!("{answer}");
-                }
-                return Ok(());
-            }
+        // Commands::Idl {
+        //     format,
+        //     module,
+        //     output_dir,
+        // } => {
+        //     use rbuilder::semantic::{IdlFormat, IdlGenerator};
+        //     use rbuilder_graph::CodeGraph;
+        //     use std::path::Path;
+        //
+        //     let idl_format = IdlFormat::parse(&format)?;
+        //     let graph = CodeGraph::load_from_repo(Path::new("."))?;
+        //     let generator = IdlGenerator::new();
+        //     let module_name = module.unwrap_or_else(|| "service".to_string());
+        //
+        //     if let Some(dir) = output_dir {
+        //         let path = generator.write_module(
+        //             graph.backend(),
+        //             idl_format,
+        //             &module_name,
+        //             Path::new(&dir),
+        //         )?;
+        //         println!("Generated IDL: {}", path.display());
+        //     } else {
+        //         let content =
+        //             generator.generate_module(graph.backend(), idl_format, &module_name)?;
+        //         print!("{content}");
+        //     }
+        //     Ok(())
+        // }
 
-            let translated = matcher.translate_with_dual_agent(&question)?;
+        // Commands::Config {
+        //     unused,
+        //     missing_env,
+        //     secrets,
+        //     drift,
+        // } => {
+        //     use rbuilder::config::analyzer::ConfigAnalyzer;
+        //     use rbuilder::config::secret_detector::SecretDetector;
+        //     use rbuilder::discovery::FileDiscoverer;
+        //     use rbuilder::languages::registry::LanguageRegistry;
+        //     use rbuilder_graph::CodeGraph;
+        //     use std::path::Path;
+        //
+        //     let graph = CodeGraph::load_from_repo(Path::new("."))?;
+        //     let run_all = !unused && !missing_env && !secrets && drift.is_none();
+        //
+        //     if unused || run_all {
+        //         let unused_keys = ConfigAnalyzer::find_unused_keys(graph.backend())?;
+        //         println!("Unused config keys: {}", unused_keys.len());
+        //         for key in unused_keys.iter().take(20) {
+        //             println!("  - {} ({})", key.key, key.file.as_deref().unwrap_or("?"));
+        //         }
+        //     }
+        //     if missing_env || run_all {
+        //         let missing =
+        //             ConfigAnalyzer::find_missing_env_vars(graph.backend(), &[Path::new(".env")])?;
+        //         println!("Missing env vars: {}", missing.len());
+        //         for var in &missing {
+        //             println!("  - {}", var.var);
+        //         }
+        //     }
+        //     if secrets || run_all {
+        //         let discoverer = FileDiscoverer::new(LanguageRegistry::new().into());
+        //         let files = discoverer.discover(Path::new("."))?;
+        //         let detector = SecretDetector::new();
+        //         let mut total = 0usize;
+        //         for file in files {
+        //             if let Ok(content) = std::fs::read_to_string(&file) {
+        //                 let found = detector.scan(&content);
+        //                 for secret in &found {
+        //                     println!(
+        //                         "  [{}] {}:{} - {} ({:?})",
+        //                         file.display(),
+        //                         secret.line,
+        //                         secret.secret_type,
+        //                         secret.value,
+        //                         secret.severity
+        //                     );
+        //                 }
+        //                 total += found.len();
+        //             }
+        //         }
+        //         println!("Potential secrets found: {total}");
+        //     }
+        //     if let Some(paths) = drift {
+        //         use rbuilder::config::drift::{compare_configs, format_drift_report};
+        //         use std::path::Path;
+        //
+        //         if paths.len() < 2 {
+        //             anyhow::bail!("--drift requires at least two config file paths");
+        //         }
+        //         let left = Path::new(&paths[0]);
+        //         let right = Path::new(&paths[1]);
+        //         let report = compare_configs(left, right)?;
+        //         println!("{}", format_drift_report(&report));
+        //         if !report.is_clean() {
+        //             std::process::exit(1);
+        //         }
+        //     }
+        //     Ok(())
+        // }
 
-            if explain {
-                println!("Intent: {:?}", translated.intent);
-                println!("Operation: {}", translated.operation);
-                println!("Internal query: {}", translated.internal_query);
-                println!("Confidence: {:.2}", translated.confidence);
-                println!();
-            }
-
-            let result = matcher.execute(&translated, graph.backend())?;
-
-            match format {
-                OutputFormat::Json => {
-                    let json = match &result {
-                        QueryResult::Count(n) => serde_json::json!({ "count": n }),
-                        QueryResult::Nodes(nodes) => serde_json::json!({
-                            "results": nodes.iter().map(|n| serde_json::json!({
-                                "name": n.name,
-                                "type": format!("{:?}", n.node_type),
-                                "file": n.file_path,
-                            })).collect::<Vec<_>>()
-                        }),
-                        QueryResult::Text(lines) => serde_json::json!({ "lines": lines }),
-                    };
-                    println!("{}", serde_json::to_string_pretty(&json)?);
-                }
-                OutputFormat::Text | OutputFormat::Table => match result {
-                    QueryResult::Count(n) => println!("Found {n} result(s)"),
-                    QueryResult::Nodes(nodes) => {
-                        if nodes.is_empty() {
-                            println!("No results found.");
-                        } else {
-                            println!("Found {} result(s):", nodes.len());
-                            for node in nodes.iter().take(50) {
-                                let file = node.file_path.as_deref().unwrap_or("?");
-                                println!("  - {} ({:?}) @ {}", node.name, node.node_type, file);
-                            }
-                            if nodes.len() > 50 {
-                                println!("  ... and {} more", nodes.len() - 50);
-                            }
-                        }
-                    }
-                    QueryResult::Text(lines) => {
-                        for line in lines {
-                            println!("{line}");
-                        }
-                    }
-                },
-            }
-            Ok(())
-        }
-
-        Commands::Chat => {
-            use rbuilder::cli::chat;
-            use std::path::Path;
-            chat::run_chat(Path::new("."))?;
-            Ok(())
-        }
-
-        Commands::Label { ruleset, dry_run } => {
-            use rbuilder::rules::{RuleEngine, Ruleset};
-            use rbuilder_graph::CodeGraph;
-            use std::path::Path;
-
-            let ruleset = Ruleset::from_file(Path::new(&ruleset))?;
-            let mut graph = CodeGraph::load_from_repo(Path::new("."))?;
-            let report = RuleEngine::apply_ruleset(graph.backend_mut(), &ruleset, dry_run)?;
-
-            if dry_run {
-                println!("Would apply {} rules:", ruleset.rules.len());
-            } else {
-                println!("Applied {} rules:", ruleset.rules.len());
-                graph.save_to_repo(Path::new("."))?;
-            }
-
-            for (rule, count) in &report.rule_matches {
-                println!("  - {rule}: {count} matches");
-            }
-            if !dry_run {
-                println!("Modified {} nodes", report.nodes_modified);
-            }
-            Ok(())
-        }
-
-        Commands::Idl {
-            format,
-            module,
-            output_dir,
-        } => {
-            use rbuilder::semantic::{IdlFormat, IdlGenerator};
-            use rbuilder_graph::CodeGraph;
-            use std::path::Path;
-
-            let idl_format = IdlFormat::parse(&format)?;
-            let graph = CodeGraph::load_from_repo(Path::new("."))?;
-            let generator = IdlGenerator::new();
-            let module_name = module.unwrap_or_else(|| "service".to_string());
-
-            if let Some(dir) = output_dir {
-                let path = generator.write_module(
-                    graph.backend(),
-                    idl_format,
-                    &module_name,
-                    Path::new(&dir),
-                )?;
-                println!("Generated IDL: {}", path.display());
-            } else {
-                let content =
-                    generator.generate_module(graph.backend(), idl_format, &module_name)?;
-                print!("{content}");
-            }
-            Ok(())
-        }
-
-        Commands::Config {
-            unused,
-            missing_env,
-            secrets,
-            drift,
-        } => {
-            use rbuilder::config::analyzer::ConfigAnalyzer;
-            use rbuilder::config::secret_detector::SecretDetector;
-            use rbuilder::discovery::FileDiscoverer;
-            use rbuilder::languages::registry::LanguageRegistry;
-            use rbuilder_graph::CodeGraph;
-            use std::path::Path;
-
-            let graph = CodeGraph::load_from_repo(Path::new("."))?;
-            let run_all = !unused && !missing_env && !secrets && drift.is_none();
-
-            if unused || run_all {
-                let unused_keys = ConfigAnalyzer::find_unused_keys(graph.backend())?;
-                println!("Unused config keys: {}", unused_keys.len());
-                for key in unused_keys.iter().take(20) {
-                    println!("  - {} ({})", key.key, key.file.as_deref().unwrap_or("?"));
-                }
-            }
-            if missing_env || run_all {
-                let missing =
-                    ConfigAnalyzer::find_missing_env_vars(graph.backend(), &[Path::new(".env")])?;
-                println!("Missing env vars: {}", missing.len());
-                for var in &missing {
-                    println!("  - {}", var.var);
-                }
-            }
-            if secrets || run_all {
-                let discoverer = FileDiscoverer::new(LanguageRegistry::new().into());
-                let files = discoverer.discover(Path::new("."))?;
-                let detector = SecretDetector::new();
-                let mut total = 0usize;
-                for file in files {
-                    if let Ok(content) = std::fs::read_to_string(&file) {
-                        let found = detector.scan(&content);
-                        for secret in &found {
-                            println!(
-                                "  [{}] {}:{} - {} ({:?})",
-                                file.display(),
-                                secret.line,
-                                secret.secret_type,
-                                secret.value,
-                                secret.severity
-                            );
-                        }
-                        total += found.len();
-                    }
-                }
-                println!("Potential secrets found: {total}");
-            }
-            if let Some(paths) = drift {
-                use rbuilder::config::drift::{compare_configs, format_drift_report};
-                use std::path::Path;
-
-                if paths.len() < 2 {
-                    anyhow::bail!("--drift requires at least two config file paths");
-                }
-                let left = Path::new(&paths[0]);
-                let right = Path::new(&paths[1]);
-                let report = compare_configs(left, right)?;
-                println!("{}", format_drift_report(&report));
-                if !report.is_clean() {
-                    std::process::exit(1);
-                }
-            }
-            Ok(())
-        }
-
-        Commands::Plugin { command } => {
-            use rbuilder::languages::plugin_loader::{PluginLoader, PluginRegistry};
-            use rbuilder::languages::registry::LanguageRegistry;
-            use std::path::Path;
-
-            match command {
-                PluginCommands::Install { path } => {
-                    let source = Path::new(&path);
-                    let dest = PluginLoader::copy_to_plugins_dir(Path::new("."), source)?;
-                    let metadata = PluginLoader::install(Path::new("."), &dest)?;
-                    println!(
-                        "Installed plugin '{}' v{} from {}",
-                        metadata.language_id,
-                        metadata.version,
-                        dest.display()
-                    );
-                }
-                PluginCommands::List => {
-                    let registry = LanguageRegistry::new();
-                    println!("Built-in plugins:");
-                    for id in registry.language_plugin_ids() {
-                        if let Some(plugin) = registry.get_language_plugin(&id) {
-                            println!(
-                                "  - {} (extensions: {})",
-                                plugin.language_id(),
-                                plugin.file_extensions().join(", ")
-                            );
-                        }
-                    }
-                    let external = PluginRegistry::load(Path::new("."))?;
-                    if external.plugins.is_empty() {
-                        println!("\nExternal plugins: none");
-                    } else {
-                        println!("\nExternal plugins:");
-                        for plugin in &external.plugins {
-                            println!(
-                                "  - {} v{} at {}",
-                                plugin.language_id, plugin.version, plugin.path
-                            );
-                        }
-                    }
-                }
-                PluginCommands::Info { plugin_id } => {
-                    let registry = LanguageRegistry::new();
-                    if let Some(plugin) = registry.get_language_plugin(&plugin_id) {
-                        println!("Built-in plugin: {}", plugin.language_id());
-                        println!("Extensions: {:?}", plugin.file_extensions());
-                        let caps = plugin.capabilities();
-                        println!(
-                            "Capabilities: functions={}, types={}",
-                            caps.extracts_functions, caps.extracts_types
-                        );
-                    } else if let Some(ext) = PluginRegistry::load(Path::new("."))?.get(&plugin_id)
-                    {
-                        println!("External plugin: {}", ext.language_id);
-                        println!("Version: {}", ext.version);
-                        println!("Path: {}", ext.path);
-                        println!("Extensions: {:?}", ext.extensions);
-                    } else {
-                        anyhow::bail!("Plugin not found: {plugin_id}");
-                    }
-                }
-                PluginCommands::Uninstall { plugin_id } => {
-                    let mut registry = PluginRegistry::load(Path::new("."))?;
-                    if registry.uninstall(&plugin_id) {
-                        registry.save(Path::new("."))?;
-                        println!("Uninstalled plugin: {plugin_id}");
-                    } else {
-                        anyhow::bail!("External plugin not found: {plugin_id}");
-                    }
-                }
-            }
-            Ok(())
-        }
+        // Commands::Plugin { command } => {
+        //     use rbuilder::languages::plugin_loader::{PluginLoader, PluginRegistry};
+        //     use rbuilder::languages::registry::LanguageRegistry;
+        //     use std::path::Path;
+        //
+        //     match command {
+        //         PluginCommands::Install { path } => {
+        //             let source = Path::new(&path);
+        //             let dest = PluginLoader::copy_to_plugins_dir(Path::new("."), source)?;
+        //             let metadata = PluginLoader::install(Path::new("."), &dest)?;
+        //             println!(
+        //                 "Installed plugin '{}' v{} from {}",
+        //                 metadata.language_id,
+        //                 metadata.version,
+        //                 dest.display()
+        //             );
+        //         }
+        //         PluginCommands::List => {
+        //             let registry = LanguageRegistry::new();
+        //             println!("Built-in plugins:");
+        //             for id in registry.language_plugin_ids() {
+        //                 if let Some(plugin) = registry.get_language_plugin(&id) {
+        //                     println!(
+        //                         "  - {} (extensions: {})",
+        //                         plugin.language_id(),
+        //                         plugin.file_extensions().join(", ")
+        //                     );
+        //                 }
+        //             }
+        //             let external = PluginRegistry::load(Path::new("."))?;
+        //             if external.plugins.is_empty() {
+        //                 println!("\nExternal plugins: none");
+        //             } else {
+        //                 println!("\nExternal plugins:");
+        //                 for plugin in &external.plugins {
+        //                     println!(
+        //                         "  - {} v{} at {}",
+        //                         plugin.language_id, plugin.version, plugin.path
+        //                     );
+        //                 }
+        //             }
+        //         }
+        //         PluginCommands::Info { plugin_id } => {
+        //             let registry = LanguageRegistry::new();
+        //             if let Some(plugin) = registry.get_language_plugin(&plugin_id) {
+        //                 println!("Built-in plugin: {}", plugin.language_id());
+        //                 println!("Extensions: {:?}", plugin.file_extensions());
+        //                 let caps = plugin.capabilities();
+        //                 println!(
+        //                     "Capabilities: functions={}, types={}",
+        //                     caps.extracts_functions, caps.extracts_types
+        //                 );
+        //             } else if let Some(ext) = PluginRegistry::load(Path::new("."))?.get(&plugin_id)
+        //             {
+        //                 println!("External plugin: {}", ext.language_id);
+        //                 println!("Version: {}", ext.version);
+        //                 println!("Path: {}", ext.path);
+        //                 println!("Extensions: {:?}", ext.extensions);
+        //             } else {
+        //                 anyhow::bail!("Plugin not found: {plugin_id}");
+        //             }
+        //         }
+        //         PluginCommands::Uninstall { plugin_id } => {
+        //             let mut registry = PluginRegistry::load(Path::new("."))?;
+        //             if registry.uninstall(&plugin_id) {
+        //                 registry.save(Path::new("."))?;
+        //                 println!("Uninstalled plugin: {plugin_id}");
+        //             } else {
+        //                 anyhow::bail!("External plugin not found: {plugin_id}");
+        //             }
+        //         }
+        //     }
+        //     Ok(())
+        // }
 
         Commands::Export {
             format,
@@ -1081,85 +800,85 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
 
-        Commands::Diagram {
-            query,
-            format,
-            diagram_type,
-            output,
-            depth,
-            layout,
-            rankdir,
-        } => {
-            use rbuilder::cli::diagram::{run_diagram, DiagramOptions};
-            use std::path::Path;
+        // Commands::Diagram {
+        //     query,
+        //     format,
+        //     diagram_type,
+        //     output,
+        //     depth,
+        //     layout,
+        //     rankdir,
+        // } => {
+        //     use rbuilder::cli::diagram::{run_diagram, DiagramOptions};
+        //     use std::path::Path;
+        //
+        //     run_diagram(
+        //         Path::new("."),
+        //         DiagramOptions {
+        //             query,
+        //             format,
+        //             diagram_type,
+        //             output: output.map(Into::into),
+        //             depth,
+        //             layout,
+        //             rankdir,
+        //         },
+        //     )?;
+        //     Ok(())
+        // }
 
-            run_diagram(
-                Path::new("."),
-                DiagramOptions {
-                    query,
-                    format,
-                    diagram_type,
-                    output: output.map(Into::into),
-                    depth,
-                    layout,
-                    rankdir,
-                },
-            )?;
-            Ok(())
-        }
-
-        Commands::Stats {
-            community_report,
-            complexity_report,
-            hotspots,
-            repo,
-        } => {
-            use rbuilder::analysis::{CentralityAnalyzer, ComplexityAnalyzer};
-            use rbuilder::graph::backend::GraphBackend;
-            use rbuilder::multi_repo::load_workspace_graph;
-            use rbuilder::nlp::PatternMatcher;
-            use rbuilder_graph::CodeGraph;
-            use std::path::Path;
-
-            let graph = load_workspace_graph(Path::new("."))
-                .or_else(|_| CodeGraph::load_from_repo(Path::new(".")))?;
-            let backend = graph.backend();
-
-            if let Some(ref ns) = repo {
-                let nodes = graph.query(&format!("repo:{ns}"))?;
-                println!("Repo '{ns}': {} nodes", nodes.len());
-            }
-
-            let run_all = !community_report && !complexity_report && !hotspots;
-
-            if community_report || run_all {
-                println!("{}", PatternMatcher::new().analyze_communities(backend)?);
-            }
-            if complexity_report || run_all {
-                let report = ComplexityAnalyzer::analyze(backend)?;
-                println!(
-                    "Functions: {}, avg complexity {:.1}, max {}",
-                    report.functions.len(),
-                    report.avg_cyclomatic,
-                    report.max_cyclomatic
-                );
-            }
-            if hotspots || run_all {
-                let report = CentralityAnalyzer::new().analyze(backend)?;
-                println!("Top PageRank hotspots:");
-                for (id, score) in report.top_pagerank.iter().take(10) {
-                    if let Ok(Some(node)) = backend.get_node(*id) {
-                        if let Some(ref ns) = repo {
-                            if node.get_property("repo").is_none_or(|r| r != ns) {
-                                continue;
-                            }
-                        }
-                        println!("  - {} ({score:.4})", node.name);
-                    }
-                }
-            }
-            Ok(())
-        }
+        // Commands::Stats {
+        //     community_report,
+        //     complexity_report,
+        //     hotspots,
+        //     repo,
+        // } => {
+        //     use rbuilder::analysis::{CentralityAnalyzer, ComplexityAnalyzer};
+        //     use rbuilder::graph::backend::GraphBackend;
+        //     use rbuilder::multi_repo::load_workspace_graph;
+        //     use rbuilder::nlp::PatternMatcher;
+        //     use rbuilder_graph::CodeGraph;
+        //     use std::path::Path;
+        //
+        //     let graph = load_workspace_graph(Path::new("."))
+        //         .or_else(|_| CodeGraph::load_from_repo(Path::new(".")))?;
+        //     let backend = graph.backend();
+        //
+        //     if let Some(ref ns) = repo {
+        //         let nodes = graph.query(&format!("repo:{ns}"))?;
+        //         println!("Repo '{ns}': {} nodes", nodes.len());
+        //     }
+        //
+        //     let run_all = !community_report && !complexity_report && !hotspots;
+        //
+        //     if community_report || run_all {
+        //         println!("{}", PatternMatcher::new().analyze_communities(backend)?);
+        //     }
+        //     if complexity_report || run_all {
+        //         let report = ComplexityAnalyzer::analyze(backend)?;
+        //         println!(
+        //             "Functions: {}, avg complexity {:.1}, max {}",
+        //             report.functions.len(),
+        //             report.avg_cyclomatic,
+        //             report.max_cyclomatic
+        //         );
+        //     }
+        //     if hotspots || run_all {
+        //         let report = CentralityAnalyzer::new().analyze(backend)?;
+        //         println!("Top PageRank hotspots:");
+        //         for (id, score) in report.top_pagerank.iter().take(10) {
+        //             if let Ok(Some(node)) = backend.get_node(*id) {
+        //                 if let Some(ref ns) = repo {
+        //                     if node.get_property("repo").is_none_or(|r| r != ns) {
+        //                         continue;
+        //                     }
+        //                 }
+        //                 println!("  - {} ({score:.4})", node.name);
+        //             }
+        //         }
+        //     }
+        //     Ok(())
+        // }
 
         Commands::Slice {
             file,
@@ -1249,42 +968,57 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
 
-        Commands::BlastRadius { symbol, depth } => {
-            use rbuilder::analysis::BlastRadiusAnalyzer;
+        Commands::BlastRadius { symbol } => {
+            use rbuilder::analysis::BlastRadiusEngine;
             use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
-            let graph = CodeGraph::load_from_repo(Path::new("."))?;
-            let report = BlastRadiusAnalyzer::new(graph.backend())
-                .with_max_depth(depth)
-                .analyze(&symbol)?;
+            let repo = cli.path.as_deref().unwrap_or(".");
+            let graph = CodeGraph::load_from_repo(Path::new(repo))?;
+            let backend = graph.backend();
+            let engine = BlastRadiusEngine::build(backend)?;
+            let result = engine.analyze_by_name(backend, &symbol)?;
+            let direct_names: Vec<String> = result
+                .direct_caller_ids
+                .iter()
+                .filter_map(|id| backend.get_node(*id).ok().flatten().map(|n| n.name.clone()))
+                .collect();
+            let impact_ids =
+                BlastRadiusEngine::filter_function_impact(backend, &result.impact_zone_ids)?;
+            let mut impact_names: Vec<String> = impact_ids
+                .iter()
+                .filter_map(|id| backend.get_node(*id).ok().flatten().map(|n| n.name.clone()))
+                .collect();
+            impact_names.sort();
 
             println!("Blast radius for '{symbol}'");
-            println!("  Score: {:.1}/100", report.score);
-            println!("  Direct callers: {}", report.direct_callers.len());
-            println!("  Impact zone: {}", report.impact_zone.len());
-            println!("  Data-flow depth: {}", report.data_flow_depth);
-            if !report.direct_callers.is_empty() {
-                println!("  Callers: {}", report.direct_callers.join(", "));
+            println!("  Score: {:.1}/100", result.score);
+            println!("  Direct callers: {}", result.direct_caller_ids.len());
+            println!("  Impact zone: {}", impact_names.len());
+            if !direct_names.is_empty() {
+                println!("  Callers: {}", direct_names.join(", "));
+            }
+            if !impact_names.is_empty() {
+                println!("  Impact: {}", impact_names.join(", "));
             }
             Ok(())
         }
 
-        Commands::Workspace { command } => {
-            use rbuilder::cli::workspace;
-            use std::path::Path;
-            let root = Path::new(".");
-            match command {
-                WorkspaceCommands::Init => workspace::run_init(root)?,
-                WorkspaceCommands::Add { path, namespace } => {
-                    workspace::run_add(root, Path::new(&path), &namespace)?;
-                }
-                WorkspaceCommands::List => workspace::run_list(root)?,
-                WorkspaceCommands::Sync => workspace::run_sync(root, cli.verbose)?,
-                WorkspaceCommands::Remove { namespace } => workspace::run_remove(root, &namespace)?,
-            }
-            Ok(())
-        }
+        // Commands::Workspace { command } => {
+        //     use rbuilder::cli::workspace;
+        //     use std::path::Path;
+        //     let root = Path::new(".");
+        //     match command {
+        //         WorkspaceCommands::Init => workspace::run_init(root)?,
+        //         WorkspaceCommands::Add { path, namespace } => {
+        //             workspace::run_add(root, Path::new(&path), &namespace)?;
+        //         }
+        //         WorkspaceCommands::List => workspace::run_list(root)?,
+        //         WorkspaceCommands::Sync => workspace::run_sync(root, cli.verbose)?,
+        //         WorkspaceCommands::Remove { namespace } => workspace::run_remove(root, &namespace)?,
+        //     }
+        //     Ok(())
+        // }
     }
 }
 
@@ -1918,9 +1652,9 @@ fn run_full_analysis(
 
     info!("");
     info!("[i] Next steps:");
-    info!("   rbuilder ask \"<question>\"   # Query the graph");
-    info!("   rbuilder chat                 # Interactive mode");
-    info!("   rbuilder stats                # View statistics");
+    info!("   rbuilder gql \"MATCH (n:Function) RETURN n\"  # Query the graph");
+    info!("   rbuilder slice <file> --line <N> --variable <VAR>");
+    info!("   rbuilder export --format html --output dashboard.html");
     if dashboard_exported {
         info!("   open {}   # View dashboard", html_path.file_name().unwrap().to_str().unwrap());
     }
