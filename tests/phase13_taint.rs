@@ -519,3 +519,66 @@ def run(request):
         assert_eq!(flows[0].severity, 10);
     }
 );
+
+#[cfg(feature = "bundle-minimal")]
+#[test]
+fn test_partial_dominance_bypass() {
+    use rbuilder::analysis::{build_cfg_for_function, PolicyViolation, ProgramDependenceGraph, TaintAnalyzer};
+
+    let code = r#"
+def handle(request):
+    user = request.GET['user']
+    if user.isdigit():
+        user = int(user)
+    cursor.execute(user)
+"#;
+    let cfg = build_cfg_for_function("python", code, "handle").unwrap();
+    let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+    let mut analyzer = TaintAnalyzer::new(&pdg, &cfg);
+    analyzer.detect_patterns("python");
+    let result = analyzer.analyze_with_policy();
+    assert!(
+        matches!(result, Err(PolicyViolation::SanitizationBypass { .. })),
+        "partial branch sanitizer must not dominate merge sink: {result:?}"
+    );
+}
+
+#[cfg(feature = "bundle-minimal")]
+#[test]
+fn test_sanitizer_after_sink_trap() {
+    use rbuilder::analysis::{build_cfg_for_function, PolicyViolation, ProgramDependenceGraph, TaintAnalyzer};
+
+    let code = r#"
+def handle(request):
+    user = request.GET['user']
+    cursor.execute(user)
+    user = int(user)
+"#;
+    let cfg = build_cfg_for_function("python", code, "handle").unwrap();
+    let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+    let mut analyzer = TaintAnalyzer::new(&pdg, &cfg);
+    analyzer.detect_patterns("python");
+    let result = analyzer.analyze_with_policy();
+    assert!(
+        matches!(result, Err(PolicyViolation::SanitizationBypass { .. })),
+        "sanitizer after sink must be flagged: {result:?}"
+    );
+}
+
+#[cfg(feature = "bundle-minimal")]
+#[test]
+fn test_dominating_sanitizer_passes_policy() {
+    use rbuilder::analysis::{build_cfg_for_function, ProgramDependenceGraph, TaintAnalyzer};
+
+    let code = r#"
+def safe(request):
+    user = request.GET['user']
+    user = int(user)
+    cursor.execute(user)
+"#;
+    let cfg = build_cfg_for_function("python", code, "safe").unwrap();
+    let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+    let mut analyzer = TaintAnalyzer::new(&pdg, &cfg);
+    analyzer.detect_patterns("python");
+    assert!(analyzer.analyze_with_policy().is_ok());
+}

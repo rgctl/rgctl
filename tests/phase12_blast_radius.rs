@@ -5,6 +5,7 @@ use rbuilder::analysis::pdg::{DataDepType, DataDependency, PdgNode};
 use rbuilder::analysis::{BlastRadiusAnalyzer, FlowCache, ProgramDependenceGraph};
 use rbuilder::graph::backend::{GraphBackend, MemoryBackend};
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};
+use std::collections::HashSet;
 
 fn build_call_chain() -> (MemoryBackend, uuid::Uuid, uuid::Uuid, uuid::Uuid) {
     let mut backend = MemoryBackend::new();
@@ -70,6 +71,8 @@ fn test_blast_radius_pdg_enriches_data_flow_depth() {
                 kind: StatementKind::Expression,
                 line: 1,
                 text: "let tmp = c()".into(),
+                defined_vars: HashSet::new(),
+                used_vars: HashSet::new(),
             },
             block,
             defined_vars: ["tmp"].into_iter().map(String::from).collect(),
@@ -84,6 +87,8 @@ fn test_blast_radius_pdg_enriches_data_flow_depth() {
                 kind: StatementKind::Return,
                 line: 2,
                 text: "return tmp".into(),
+                defined_vars: HashSet::new(),
+                used_vars: HashSet::new(),
             },
             block,
             defined_vars: std::collections::HashSet::new(),

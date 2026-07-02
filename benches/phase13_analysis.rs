@@ -4,7 +4,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use rbuilder::analysis::{
-    build_cfg_for_function, CallGraph, InterproceduralCFG, InterproceduralSlicer,
+    build_cfg_for_function, CallGraph, DominatorTree, InterproceduralCFG, InterproceduralSlicer,
     ProgramDependenceGraph, SliceCriterion, TaintAnalyzer, TypeInferenceEngine,
 };
 use rbuilder::gql::{execute, parse, QueryExecutor};
@@ -92,14 +92,8 @@ fn bench_interprocedural_slice(c: &mut Criterion) {
     c.bench_function("phase13_interprocedural_10_fn_chain", |b| {
         b.iter(|| {
             let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
-            let slicer = InterproceduralSlicer::new(&icfg, &files).unwrap();
-            let leaf_id = icfg
-                .call_graph
-                .nodes
-                .values()
-                .find(|n| n.name == leaf_name)
-                .unwrap()
-                .id;
+            let slicer = InterproceduralSlicer::new(&icfg, &backend, &files).unwrap();
+            let leaf_id = icfg.call_graph.id_by_name(&leaf_name).unwrap();
             let pdg =
                 ProgramDependenceGraph::build(icfg.get_cfg(leaf_id).unwrap(), source.as_bytes())
                     .unwrap();
@@ -172,12 +166,37 @@ fn bench_call_graph(c: &mut Criterion) {
     });
 }
 
+fn bench_dominance_1000_blocks(c: &mut Criterion) {
+    let mut code = String::from("fn nested(mut x: i32) -> i32 {\n");
+    for i in 0..500 {
+        code.push_str(&format!("    if x > {i} {{ x += {i}; }}\n"));
+    }
+    code.push_str("    x\n}\n");
+    let cfg = build_cfg_for_function("rust", &code, "nested").unwrap();
+    assert!(cfg.blocks.len() >= 500, "expected large CFG, got {}", cfg.blocks.len());
+
+    c.bench_function("phase13_dominance_1000_blocks", |b| {
+        b.iter(|| {
+            let start = std::time::Instant::now();
+            let dom = DominatorTree::build(&cfg);
+            let elapsed = start.elapsed();
+            assert!(
+                elapsed < Duration::from_millis(15),
+                "idom+DF exceeded 15ms: {elapsed:?} for {} blocks",
+                cfg.blocks.len()
+            );
+            black_box(dom)
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_taint_analysis,
     bench_type_inference,
     bench_interprocedural_slice,
     bench_gql_optimizer_speedup,
-    bench_call_graph
+    bench_call_graph,
+    bench_dominance_1000_blocks
 );
 criterion_main!(benches);

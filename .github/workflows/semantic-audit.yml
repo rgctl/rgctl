@@ -1,0 +1,50 @@
+name: Semantic Analysis Verification
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  semantic-verification:
+    name: Semantic Audit & Performance Gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-semantic-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run semantic verification pipeline
+        run: bash scripts/semantic-verification.sh
+
+  semantic-boundary:
+    name: Boundary & Stress Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-boundary-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo test --features bundle-minimal --test phase13_semantic_boundary
+      - run: cargo test --features bundle-minimal --test phase13_taint test_partial_dominance_bypass test_sanitizer_after_sink_trap
+      - run: cargo test --features bundle-minimal --test phase13_interprocedural test_multi_argument_index_isolation

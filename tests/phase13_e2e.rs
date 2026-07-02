@@ -43,13 +43,7 @@ e2e_test!(e2e_interprocedural_dominance_slice, {
     assert_eq!(cg.topological_order().unwrap().len(), 4);
 
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
-    let leaf = icfg
-        .call_graph
-        .nodes
-        .values()
-        .find(|n| n.name == "f3")
-        .unwrap()
-        .id;
+    let leaf = icfg.call_graph.id_by_name("f3").unwrap();
     let source = files.get("app.rs").unwrap();
 
     let (cfg, dom) = build_dominance("rust", source, "f3");
@@ -57,7 +51,7 @@ e2e_test!(e2e_interprocedural_dominance_slice, {
         assert!(dom.dominates(cfg.entry, *block));
     }
 
-    let slicer = InterproceduralSlicer::new(&icfg, &files).unwrap();
+    let slicer = InterproceduralSlicer::new(&icfg, &backend, &files).unwrap();
     let pdg =
         ProgramDependenceGraph::build(icfg.get_cfg(leaf).unwrap(), source.as_bytes()).unwrap();
     let line = pdg
