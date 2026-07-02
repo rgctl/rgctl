@@ -5,7 +5,9 @@ use crate::pdg::{PdgNodeId, ProgramDependenceGraph};
 use crate::slicing::{BackwardSlicer, SliceCriterion};
 use rbuilder_error::{Error, Result};
 use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 use uuid::Uuid;
 
 /// Result of interprocedural backward slicing.
@@ -23,62 +25,46 @@ pub struct InterproceduralSlice {
     pub reduction_percent: f64,
 }
 
-/// Backward slicer across function boundaries.
+/// Backward slicer across function boundaries with lazy PDG construction.
 pub struct InterproceduralSlicer<'a> {
     icfg: &'a InterproceduralCFG,
-    pdgs: HashMap<Uuid, ProgramDependenceGraph>,
-    /// Cached function names for call site detection
+    backend: &'a MemoryBackend,
+    source_files: HashMap<String, String>,
+    pdgs: RefCell<HashMap<Uuid, Rc<ProgramDependenceGraph>>>,
     function_names: HashMap<Uuid, String>,
 }
 
 impl<'a> InterproceduralSlicer<'a> {
-    /// Build slicer with PDGs for each function CFG.
+    /// Build slicer; PDGs are constructed lazily per function during slicing.
     pub fn new(
         icfg: &'a InterproceduralCFG,
-        backend: &MemoryBackend,
+        backend: &'a MemoryBackend,
         source_files: &HashMap<String, String>,
     ) -> Result<Self> {
-        let mut pdgs = HashMap::new();
         let mut function_names = HashMap::new();
-
-        for (func_id, cfg) in &icfg.function_cfgs {
-            // Fetch node metadata from backend
-            if let Ok(Some(func_node)) = backend.get_node(*func_id) {
-                // Cache function name for call site detection
-                function_names.insert(*func_id, func_node.name.clone());
-
-                let file_path = func_node.file_path.as_deref().unwrap_or("");
-                let source = source_files.get(file_path).or_else(|| {
-                    source_files
-                        .iter()
-                        .find(|(k, _)| k.ends_with(file_path))
-                        .map(|(_, v)| v)
-                });
-                if let Some(source) = source {
-                    let pdg = ProgramDependenceGraph::build(cfg, source.as_bytes())?;
-                    pdgs.insert(*func_id, pdg);
-                }
+        for &func_id in icfg.call_graph.function_ids() {
+            if let Ok(Some(func_node)) = backend.get_node(func_id) {
+                function_names.insert(func_id, func_node.name.clone());
             }
         }
         Ok(Self {
             icfg,
-            pdgs,
+            backend,
+            source_files: source_files.clone(),
+            pdgs: RefCell::new(HashMap::new()),
             function_names,
         })
     }
 
     /// Compute interprocedural slice starting in `function`.
     pub fn slice(&self, function: Uuid, criterion: SliceCriterion) -> Result<InterproceduralSlice> {
-        let pdg = self
-            .pdgs
-            .get(&function)
-            .ok_or_else(|| Error::NotFound(format!("PDG for function {function}")))?;
+        let pdg = self.pdg_for(function)?;
         let cfg = self
             .icfg
             .get_cfg(function)
             .ok_or_else(|| Error::NotFound(format!("CFG for function {function}")))?;
 
-        let local_slicer = BackwardSlicer::new(pdg, cfg);
+        let local_slicer = BackwardSlicer::new(pdg.as_ref(), cfg);
         let local_slice = local_slicer.slice(criterion.clone())?;
 
         let mut slice: HashSet<(Uuid, PdgNodeId)> = HashSet::new();
@@ -92,20 +78,19 @@ impl<'a> InterproceduralSlicer<'a> {
         visited_functions.insert(function);
 
         while let Some((current_func, current_node)) = worklist.pop_front() {
-            let current_pdg = &self.pdgs[&current_func];
+            let current_pdg = self.pdg_for(current_func)?;
             let node = &current_pdg.nodes[&current_node];
 
             for var in &node.used_vars {
                 if self.is_parameter(current_func, var) {
                     for (caller_id, _) in self.icfg.caller_cfgs(current_func) {
-                        if let Some(caller_pdg) = self.pdgs.get(&caller_id) {
-                            let call_sites = self.find_call_site_nodes(caller_pdg, current_func);
-                            for call_node in call_sites {
-                                if slice.insert((caller_id, call_node)) {
-                                    worklist.push_back((caller_id, call_node));
-                                }
-                                visited_functions.insert(caller_id);
+                        let caller_pdg = self.pdg_for(caller_id)?;
+                        let call_sites = self.find_call_site_nodes(caller_pdg.as_ref(), current_func);
+                        for call_node in call_sites {
+                            if slice.insert((caller_id, call_node)) {
+                                worklist.push_back((caller_id, call_node));
                             }
+                            visited_functions.insert(caller_id);
                         }
                     }
                 }
@@ -116,6 +101,7 @@ impl<'a> InterproceduralSlicer<'a> {
             .iter()
             .filter_map(|(func_id, node_id)| {
                 self.pdgs
+                    .borrow()
                     .get(func_id)
                     .and_then(|p| p.nodes.get(node_id))
                     .map(|n| n.statement.line)
@@ -138,6 +124,35 @@ impl<'a> InterproceduralSlicer<'a> {
         })
     }
 
+    fn pdg_for(&self, function: Uuid) -> Result<Rc<ProgramDependenceGraph>> {
+        if let Some(pdg) = self.pdgs.borrow().get(&function).cloned() {
+            return Ok(pdg);
+        }
+
+        let cfg = self
+            .icfg
+            .get_cfg(function)
+            .ok_or_else(|| Error::NotFound(format!("CFG for function {function}")))?;
+        let func_node = self
+            .backend
+            .get_node(function)?
+            .ok_or_else(|| Error::NotFound(format!("node {function}")))?;
+        let file_path = func_node.file_path.as_deref().unwrap_or("");
+        let source = self
+            .source_files
+            .get(file_path)
+            .or_else(|| {
+                self.source_files
+                    .iter()
+                    .find(|(k, _)| k.ends_with(file_path))
+                    .map(|(_, v)| v)
+            })
+            .ok_or_else(|| Error::NotFound(format!("source for {file_path}")))?;
+        let pdg = Rc::new(ProgramDependenceGraph::build(cfg, source.as_bytes())?);
+        self.pdgs.borrow_mut().insert(function, Rc::clone(&pdg));
+        Ok(pdg)
+    }
+
     fn is_parameter(&self, function: Uuid, variable: &str) -> bool {
         if self
             .icfg
@@ -148,7 +163,7 @@ impl<'a> InterproceduralSlicer<'a> {
         {
             return true;
         }
-        if let Some(pdg) = self.pdgs.get(&function) {
+        if let Ok(pdg) = self.pdg_for(function) {
             return pdg.nodes.values().any(|n| {
                 let text = &n.statement.text;
                 text.contains(&format!("{variable}:"))
@@ -228,7 +243,7 @@ fn write_output(_: String) {}
         let mut files = HashMap::new();
         files.insert("prog.rs".into(), source.to_string());
         let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
-        let slicer = InterproceduralSlicer::new(&icfg, &files).unwrap();
+        let slicer = InterproceduralSlicer::new(&icfg, &backend, &files).unwrap();
 
         let pdg =
             ProgramDependenceGraph::build(icfg.get_cfg(id_process).unwrap(), source.as_bytes())

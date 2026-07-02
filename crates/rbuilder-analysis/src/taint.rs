@@ -1,7 +1,9 @@
 //! Forward taint analysis from sources to sinks (Phase 13.0).
 
 use crate::cfg::ControlFlowGraph;
+use crate::dominance::DominatorTree;
 use crate::pdg::{PdgNodeId, ProgramDependenceGraph};
+use crate::policy::PolicyViolation;
 use crate::type_inference::{InferredType, TypeInferenceEngine};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -79,7 +81,7 @@ pub struct TaintFlow {
 }
 
 impl TaintFlow {
-    /// True when no sanitizer was applied on the path.
+    /// True when no sanitizer was applied on the path (path-presence only).
     pub fn is_vulnerable(&self) -> bool {
         self.sanitizers.is_empty()
     }
@@ -103,7 +105,8 @@ impl TaintFlow {
 /// Forward taint analyzer over a function PDG.
 pub struct TaintAnalyzer<'a> {
     pdg: &'a ProgramDependenceGraph,
-    _cfg: &'a ControlFlowGraph,
+    cfg: &'a ControlFlowGraph,
+    dom_tree: DominatorTree,
     sources: HashMap<PdgNodeId, TaintSource>,
     sinks: HashMap<PdgNodeId, TaintSink>,
     sanitizers: HashMap<PdgNodeId, Sanitizer>,
@@ -115,7 +118,8 @@ impl<'a> TaintAnalyzer<'a> {
     pub fn new(pdg: &'a ProgramDependenceGraph, cfg: &'a ControlFlowGraph) -> Self {
         Self {
             pdg,
-            _cfg: cfg,
+            cfg,
+            dom_tree: DominatorTree::build(cfg),
             sources: HashMap::new(),
             sinks: HashMap::new(),
             sanitizers: HashMap::new(),
@@ -309,7 +313,7 @@ impl<'a> TaintAnalyzer<'a> {
                     .and_then(|n| n.defined_vars.iter().next())
                     .cloned()
                     .unwrap_or_default();
-                let sanitizers = self.find_sanitizers_on_path(&path, &variable);
+                let sanitizers = self.find_dominating_sanitizers_on_path(&path, sink_id, &variable);
                 let mut flow = TaintFlow {
                     source: *source_id,
                     source_type: *source_type,
@@ -327,7 +331,96 @@ impl<'a> TaintAnalyzer<'a> {
         flows
     }
 
-    /// Vulnerable flows only (no sanitizers).
+    /// Run taint analysis enforcing sanitizer dominance; fails on bypass paths.
+    pub fn analyze_with_policy(&self) -> std::result::Result<Vec<TaintFlow>, PolicyViolation> {
+        let mut flows = Vec::new();
+        for (source_id, source_type) in &self.sources {
+            for (sink_id, path) in self.find_reachable_sinks_from_source(*source_id) {
+                let Some(sink_type) = self.sinks.get(&sink_id).copied() else {
+                    continue;
+                };
+                let variable = self
+                    .pdg
+                    .nodes
+                    .get(source_id)
+                    .and_then(|n| n.defined_vars.iter().next())
+                    .cloned()
+                    .unwrap_or_default();
+                self.check_sanitizer_policy(sink_id, &path, &variable)?;
+                let sanitizers =
+                    self.find_dominating_sanitizers_on_path(&path, sink_id, &variable);
+                let mut flow = TaintFlow {
+                    source: *source_id,
+                    source_type: *source_type,
+                    sink: sink_id,
+                    sink_type,
+                    variable,
+                    path,
+                    sanitizers,
+                    severity: 0,
+                };
+                flow.compute_severity();
+                flows.push(flow);
+            }
+        }
+        Ok(flows)
+    }
+
+    /// Validate sanitizer placement: must dominate sink and precede it in control flow.
+    fn check_sanitizer_policy(
+        &self,
+        sink_id: PdgNodeId,
+        path: &[PdgNodeId],
+        variable: &str,
+    ) -> std::result::Result<(), PolicyViolation> {
+        let sink_block = self.pdg.nodes[&sink_id].block;
+        let sink_line = self.pdg.nodes[&sink_id].statement.line;
+
+        for node_id in path {
+            if self.sanitizers.contains_key(node_id) {
+                let san_block = self.pdg.nodes[node_id].block;
+                if !self.dom_tree.dominates(san_block, sink_block) {
+                    return Err(PolicyViolation::SanitizationBypass {
+                        sink_line,
+                        path_trace: path.to_vec(),
+                        sanitizer_node: *node_id,
+                    });
+                }
+            }
+        }
+
+        for (&san_id, _) in &self.sanitizers {
+            let node = &self.pdg.nodes[&san_id];
+            if !self.node_affects_variable(node, variable) {
+                continue;
+            }
+            let san_block = node.block;
+            if node.statement.line > sink_line {
+                return Err(PolicyViolation::SanitizationBypass {
+                    sink_line,
+                    path_trace: path.to_vec(),
+                    sanitizer_node: san_id,
+                });
+            }
+            if !self.dom_tree.dominates(san_block, sink_block) {
+                return Err(PolicyViolation::SanitizationBypass {
+                    sink_line,
+                    path_trace: path.to_vec(),
+                    sanitizer_node: san_id,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn node_affects_variable(&self, node: &crate::pdg::PdgNode, variable: &str) -> bool {
+        node.defined_vars.contains(variable)
+            || node.used_vars.contains(variable)
+            || node.statement.text.contains(&format!("int({variable})"))
+            || node.statement.text.contains(&format!("int({variable} "))
+    }
+
+    /// Vulnerable flows only (no dominating sanitizers).
     pub fn vulnerable_flows(&self) -> Vec<TaintFlow> {
         self.analyze()
             .into_iter()
@@ -360,22 +453,33 @@ impl<'a> TaintAnalyzer<'a> {
         reachable
     }
 
-    fn find_sanitizers_on_path(&self, path: &[PdgNodeId], variable: &str) -> Vec<Sanitizer> {
+    fn find_dominating_sanitizers_on_path(
+        &self,
+        path: &[PdgNodeId],
+        sink: PdgNodeId,
+        variable: &str,
+    ) -> Vec<Sanitizer> {
+        let sink_block = self.pdg.nodes[&sink].block;
         let mut sanitizers = Vec::new();
         for node_id in path {
             if let Some(san) = self.sanitizers.get(node_id) {
-                sanitizers.push(san.clone());
+                let san_block = self.pdg.nodes[node_id].block;
+                if self.dom_tree.dominates(san_block, sink_block) {
+                    sanitizers.push(san.clone());
+                }
             }
             if let Some(ref engine) = self.type_inference {
                 if let Some(typ) = engine.get_type(*node_id, variable) {
-                    match typ {
-                        InferredType::Int | InferredType::Float => {
-                            sanitizers.push(Sanitizer::TypeCast("numeric".into()));
+                    if self.dom_tree.dominates(self.pdg.nodes[node_id].block, sink_block) {
+                        match typ {
+                            InferredType::Int | InferredType::Float => {
+                                sanitizers.push(Sanitizer::TypeCast("numeric".into()));
+                            }
+                            InferredType::Bool => {
+                                sanitizers.push(Sanitizer::TypeCast("boolean".into()));
+                            }
+                            _ => {}
                         }
-                        InferredType::Bool => {
-                            sanitizers.push(Sanitizer::TypeCast("boolean".into()));
-                        }
-                        _ => {}
                     }
                 }
             }

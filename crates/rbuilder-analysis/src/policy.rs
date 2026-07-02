@@ -67,6 +67,15 @@ pub enum PolicyViolation {
         /// Configured threshold.
         threshold: f64,
     },
+    /// Sanitizer present on a path but does not dominate the sink block.
+    SanitizationBypass {
+        /// Sink statement line.
+        sink_line: usize,
+        /// PDG nodes on the taint path.
+        path_trace: Vec<uuid::Uuid>,
+        /// Sanitizer node that failed dominance check.
+        sanitizer_node: uuid::Uuid,
+    },
 }
 
 impl std::fmt::Display for PolicyViolation {
@@ -90,6 +99,15 @@ impl std::fmt::Display for PolicyViolation {
             } => write!(
                 f,
                 "cascade hazard: node {node} betweenness {betweenness:.4} exceeds threshold {threshold:.4}"
+            ),
+            Self::SanitizationBypass {
+                sink_line,
+                path_trace,
+                sanitizer_node,
+            } => write!(
+                f,
+                "sanitization bypass: sanitizer {sanitizer_node} does not dominate sink at line {sink_line} (path len {})",
+                path_trace.len()
             ),
         }
     }
@@ -214,6 +232,34 @@ mod tests {
                 source_domain: "domain_a".into(),
                 reached_domain: "domain_b".into(),
                 node: id_b,
+            })
+        );
+    }
+
+    #[test]
+    fn test_cascade_hazard_variant() {
+        use crate::centrality::CentralityScores;
+
+        let backend = MemoryBackend::new();
+        let bridge = Uuid::new_v4();
+        let mut centrality = HashMap::new();
+        centrality.insert(
+            bridge,
+            CentralityScores {
+                betweenness: 0.9,
+                ..Default::default()
+            },
+        );
+
+        let mut registry = PolicyRegistry::permissive();
+        registry.centrality_alert_threshold = 0.5;
+
+        assert_eq!(
+            check_policies(Uuid::new_v4(), &[bridge], &registry, &backend, Some(&centrality)),
+            Err(PolicyViolation::CascadeHazard {
+                node: bridge,
+                betweenness: 0.9,
+                threshold: 0.5,
             })
         );
     }

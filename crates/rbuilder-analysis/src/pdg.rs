@@ -77,7 +77,7 @@ impl ProgramDependenceGraph {
     pub fn build(cfg: &ControlFlowGraph, source: &[u8]) -> Result<Self> {
         let mut pdg = Self::default();
         pdg.create_nodes_from_cfg(cfg);
-        pdg.enrich_def_use_from_text(source);
+        let _ = source;
         let reaching = compute_reaching_definitions(cfg, &pdg);
         pdg.build_data_dependencies(cfg, &reaching);
         pdg.build_control_dependencies(cfg);
@@ -92,8 +92,8 @@ impl ProgramDependenceGraph {
                     id,
                     statement: stmt.clone(),
                     block: block.id,
-                    defined_vars: HashSet::new(),
-                    used_vars: HashSet::new(),
+                    defined_vars: stmt.defined_vars.clone(),
+                    used_vars: stmt.used_vars.clone(),
                 };
                 self.block_nodes.entry(block.id).or_default().push(id);
                 self.nodes.insert(id, node);
@@ -101,19 +101,14 @@ impl ProgramDependenceGraph {
         }
     }
 
-    fn enrich_def_use_from_text(&mut self, source: &[u8]) {
-        for node in self.nodes.values_mut() {
-            infer_def_use(
-                &node.statement.text,
-                &mut node.defined_vars,
-                &mut node.used_vars,
-            );
-            let _ = source;
-        }
-    }
-
     fn build_data_dependencies(&mut self, cfg: &ControlFlowGraph, reaching: &ReachingDefs) {
         for block in cfg.blocks.values() {
+            let node_ids: Vec<PdgNodeId> = self
+                .block_nodes
+                .get(&block.id)
+                .cloned()
+                .unwrap_or_default();
+
             for (idx, _stmt) in block.statements.iter().enumerate() {
                 let Some(use_node) = self.find_node_by_block_and_index(block.id, idx) else {
                     continue;
@@ -127,12 +122,12 @@ impl ProgramDependenceGraph {
                             .iter()
                             .filter(|d| d.variable == var)
                         {
-                            self.data_deps.push(DataDependency {
-                                from: def.pdg_node,
-                                to: use_id,
-                                variable: var.clone(),
-                                dep_type: DataDepType::Flow,
-                            });
+                            self.push_data_dep(
+                                def.pdg_node,
+                                use_id,
+                                var.clone(),
+                                DataDepType::Flow,
+                            );
                         }
                     }
 
@@ -140,17 +135,71 @@ impl ProgramDependenceGraph {
                         if let Some(def_node) = self.find_node_by_block_and_index(block.id, def_idx)
                         {
                             if def_node.defined_vars.contains(&var) {
-                                self.data_deps.push(DataDependency {
-                                    from: def_node.id,
-                                    to: use_id,
-                                    variable: var.clone(),
-                                    dep_type: DataDepType::Flow,
-                                });
+                                self.push_data_dep(
+                                    def_node.id,
+                                    use_id,
+                                    var.clone(),
+                                    DataDepType::Flow,
+                                );
+                            } else if def_node.used_vars.contains(&var) {
+                                self.push_data_dep(
+                                    def_node.id,
+                                    use_id,
+                                    var.clone(),
+                                    DataDepType::Anti,
+                                );
                             }
                         }
                     }
                 }
             }
+
+            for (i, &later_id) in node_ids.iter().enumerate() {
+                let defined: Vec<String> = self
+                    .nodes
+                    .get(&later_id)
+                    .map(|n| n.defined_vars.iter().cloned().collect())
+                    .unwrap_or_default();
+                for var in defined {
+                    for &earlier_id in node_ids.iter().take(i) {
+                        if self
+                            .nodes
+                            .get(&earlier_id)
+                            .is_some_and(|n| n.defined_vars.contains(&var))
+                        {
+                            self.push_data_dep(
+                                earlier_id,
+                                later_id,
+                                var.clone(),
+                                DataDepType::Output,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn push_data_dep(
+        &mut self,
+        from: PdgNodeId,
+        to: PdgNodeId,
+        variable: String,
+        dep_type: DataDepType,
+    ) {
+        if from == to {
+            return;
+        }
+        let duplicate = self.data_deps.iter().any(|d| {
+            d.from == from && d.to == to && d.variable == variable && d.dep_type == dep_type
+        });
+        if !duplicate {
+            self.data_deps.push(DataDependency {
+                from,
+                to,
+                variable,
+                dep_type,
+            });
         }
     }
 
@@ -301,70 +350,6 @@ impl ProgramDependenceGraph {
         }
         max_depth
     }
-}
-
-fn infer_def_use(text: &str, defined: &mut HashSet<String>, used: &mut HashSet<String>) {
-    let trimmed = text.trim();
-    if trimmed.starts_with("let ") || trimmed.starts_with("let\t") {
-        if let Some(rest) = trimmed.strip_prefix("let") {
-            let rest = rest.trim().trim_start_matches("mut").trim();
-            if let Some(name) = rest.split('=').next() {
-                let name = name.trim();
-                if is_ident(name) {
-                    defined.insert(name.to_string());
-                }
-            }
-        }
-    } else if trimmed.contains('=') && !trimmed.contains("==") && !trimmed.contains("!=") {
-        if let Some(left) = trimmed.split('=').next() {
-            let name = left.trim();
-            if is_ident(name) {
-                defined.insert(name.to_string());
-            }
-        }
-    }
-
-    for token in trimmed.split(|c: char| !c.is_alphanumeric() && c != '_') {
-        if token.is_empty() || is_keyword(token) {
-            continue;
-        }
-        if !defined.contains(token) {
-            used.insert(token.to_string());
-        }
-    }
-}
-
-fn is_ident(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_')
-}
-
-fn is_keyword(token: &str) -> bool {
-    matches!(
-        token,
-        "fn" | "let"
-            | "mut"
-            | "if"
-            | "else"
-            | "return"
-            | "for"
-            | "while"
-            | "loop"
-            | "match"
-            | "def"
-            | "class"
-            | "import"
-            | "from"
-            | "in"
-            | "true"
-            | "false"
-            | "None"
-            | "Some"
-            | "Ok"
-            | "Err"
-            | "i32"
-            | "i64"
-            | "usize"
-    )
 }
 
 /// Post-dominator tree for control dependence.

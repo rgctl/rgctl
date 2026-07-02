@@ -42,6 +42,12 @@ pub struct Statement {
     pub line: usize,
     /// Source text.
     pub text: String,
+    /// Variables defined by this statement (tree-sitter extraction).
+    #[serde(default)]
+    pub defined_vars: HashSet<String>,
+    /// Variables used by this statement (tree-sitter extraction).
+    #[serde(default)]
+    pub used_vars: HashSet<String>,
 }
 
 /// High-level statement categories for CFG/PDG analysis.
@@ -143,6 +149,32 @@ impl ControlFlowGraph {
             .filter(|e| e.from == block_id)
             .map(|e| e.to)
             .collect()
+    }
+
+    /// Blocks reachable from the entry block.
+    pub fn reachable_blocks(&self) -> HashSet<BlockId> {
+        let mut reachable = HashSet::new();
+        let mut stack = vec![self.entry];
+        while let Some(block) = stack.pop() {
+            if !reachable.insert(block) {
+                continue;
+            }
+            for succ in self.successors(block) {
+                if !reachable.contains(&succ) {
+                    stack.push(succ);
+                }
+            }
+        }
+        reachable
+    }
+
+    /// Remove blocks not reachable from entry (dead code after return, etc.).
+    pub fn prune_unreachable_blocks(&mut self) {
+        let reachable = self.reachable_blocks();
+        self.blocks.retain(|id, _| reachable.contains(id));
+        self.edges
+            .retain(|e| reachable.contains(&e.from) && reachable.contains(&e.to));
+        self.exits.retain(|id| reachable.contains(id));
     }
 
     /// Returns true when the CFG contains a cycle reachable from entry.
@@ -271,6 +303,8 @@ mod tests {
                 kind: StatementKind::Expression,
                 line: 1,
                 text: "a".into(),
+                defined_vars: HashSet::new(),
+                used_vars: HashSet::new(),
             }],
             start_line: 1,
             end_line: 1,
@@ -281,6 +315,8 @@ mod tests {
                 kind: StatementKind::Expression,
                 line: 2,
                 text: "b".into(),
+                defined_vars: HashSet::new(),
+                used_vars: HashSet::new(),
             }],
             start_line: 2,
             end_line: 2,

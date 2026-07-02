@@ -969,12 +969,13 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::BlastRadius { symbol } => {
-            use rbuilder::analysis::BlastRadiusEngine;
+            use rbuilder::analysis::{trace_blast_to_slices, BlastRadiusEngine};
             use rbuilder_graph::CodeGraph;
             use std::path::Path;
 
             let repo = cli.path.as_deref().unwrap_or(".");
-            let graph = CodeGraph::load_from_repo(Path::new(repo))?;
+            let repo_path = Path::new(repo);
+            let graph = CodeGraph::load_from_repo(repo_path)?;
             let backend = graph.backend();
             let engine = BlastRadiusEngine::build(backend)?;
             let result = engine.analyze_by_name(backend, &symbol)?;
@@ -1000,6 +1001,27 @@ fn main() -> anyhow::Result<()> {
             }
             if !impact_names.is_empty() {
                 println!("  Impact: {}", impact_names.join(", "));
+            }
+
+            if let Ok(trace) = trace_blast_to_slices(backend, repo_path, &symbol) {
+                if !trace.handoffs.is_empty() {
+                    println!("  Hand-offs: {}", trace.handoffs.len());
+                }
+                for (func_id, name, slice) in &trace.slices {
+                    if slice.lines.is_empty() {
+                        continue;
+                    }
+                    let mut lines: Vec<_> = slice.lines.iter().copied().collect();
+                    lines.sort_unstable();
+                    println!(
+                        "  Slice '{name}' ({func_id}): lines {}",
+                        lines
+                            .iter()
+                            .map(|l| l.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
             }
             Ok(())
         }

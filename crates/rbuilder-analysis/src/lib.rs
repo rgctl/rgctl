@@ -4,6 +4,7 @@
 
 pub mod blast_radius;
 pub mod blast_radius_scc;
+pub mod blast_slice_handoff;
 pub mod callgraph;
 pub mod results;
 pub mod centrality;
@@ -30,14 +31,20 @@ pub use blast_radius::{
     resolve_unique_symbol, BlastRadiusAnalyzer, BlastRadiusReport, DataFlowImpact,
 };
 pub use blast_radius_scc::{BlastRadiusEngine, BlastRadiusResult, EngineStats, SccNode};
+pub use blast_slice_handoff::{
+    criterion_for_parameter, filter_handoff_seeds_by_index, load_source_files,
+    resolve_handoff_seeds, resolve_handoff_seeds_for_indices, trace_blast_to_slices,
+    BlastSliceTrace, SliceHandoffSeed,
+};
 pub use callgraph::{CallGraph, CallGraphEdge, CallGraphNode};
 pub use results::{
     AnalysisResults, BlastRadiusMetrics, BlastRadiusTable, CentralityMetrics, CentralityTable,
     CommunityTable, ComplexityTable,
 };
 pub use centrality::{
-    degree_centrality, identify_hotspots, CentralityAnalyzer, CentralityReport, CentralityScore,
-    CentralityScores,
+    default_behavioral_edges, degree_centrality, identify_hotspots, BetweennessCentrality,
+    CentralityAnalyzer, CentralityReport, CentralityScore, CentralityScores, DegreeCentrality,
+    FastPageRank, FlatGraphIndex, PageRankStats, PAGERANK_TOLERANCE, STRUCTURAL_EDGE_TYPES,
 };
 pub use cfg::{
     BasicBlock, BlockId, CfgEdge, CfgEdgeType, ControlFlowGraph, Statement, StatementKind,
@@ -50,8 +57,9 @@ pub use complexity::{classify_complexity, ComplexityAnalyzer, ComplexityLevel, C
 pub use dataflow::{compute_reaching_definitions, Definition, ReachingDefs};
 pub use def_use::{extract_def_use, extract_used_variables};
 pub use dependency::{CircularDependency, DependencyAnalyzer, ImpactResult};
-pub use dominance::DominatorTree;
+pub use dominance::{verify_idom_acyclic, DominatorTree};
 pub use flow_cache::{CachedAnalysis, CfgPdgCache, FlowCache, NodePdgCache};
+pub use graph_utils::PetGraphView;
 pub use interprocedural_cfg::InterproceduralCFG;
 pub use interprocedural_slicing::{InterproceduralSlice, InterproceduralSlicer};
 pub use policy::{check_policies, evaluate_policies, DomainId, PolicyRegistry, PolicyViolation};

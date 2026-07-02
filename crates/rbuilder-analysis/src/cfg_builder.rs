@@ -1,8 +1,10 @@
 //! CFG construction from tree-sitter ASTs.
 
 use crate::cfg::{BasicBlock, BlockId, CfgEdgeType, ControlFlowGraph, Statement, StatementKind};
+use crate::def_use::extract_def_use;
 use rbuilder_error::{Error, Result};
 use rbuilder_plugin_helpers::extract_name_from_node;
+use std::collections::HashSet;
 use tree_sitter::{Node, Parser, Tree};
 use uuid::Uuid;
 
@@ -81,6 +83,8 @@ struct CfgBuilder<'a> {
     current_block: BlockId,
     language: &'a str,
     loop_stack: Vec<LoopContext>,
+    /// False after return/unreachable branch terminates the current path.
+    flow_active: bool,
 }
 
 struct LoopContext {
@@ -96,6 +100,7 @@ impl<'a> CfgBuilder<'a> {
             current_block: entry,
             language,
             loop_stack: Vec::new(),
+            flow_active: true,
         }
     }
 
@@ -107,12 +112,13 @@ impl<'a> CfgBuilder<'a> {
                 message: "Function has no body".to_string(),
             })?;
         self.visit_block(body, source)?;
-        if self.cfg.exits.is_empty() {
+        if self.flow_active && self.cfg.exits.is_empty() {
             let exit = self.new_block();
             self.cfg
                 .add_edge(self.current_block, exit, CfgEdgeType::Next);
             self.cfg.exits.push(exit);
         }
+        self.cfg.prune_unreachable_blocks();
         Ok(())
     }
 
@@ -130,7 +136,14 @@ impl<'a> CfgBuilder<'a> {
     fn add_statement(&mut self, node: Node, source: &[u8], kind: StatementKind) -> Result<()> {
         let line = node.start_position().row + 1;
         let text = node.utf8_text(source)?.trim().to_string();
-        let stmt = Statement { kind, line, text };
+        let (defined_vars, used_vars) = extract_def_use(node, source);
+        let stmt = Statement {
+            kind,
+            line,
+            text,
+            defined_vars,
+            used_vars,
+        };
         self.add_statement_to_current(stmt);
         Ok(())
     }
@@ -165,6 +178,9 @@ impl<'a> CfgBuilder<'a> {
     }
 
     fn visit_statement(&mut self, node: Node, source: &[u8]) -> Result<()> {
+        if !self.flow_active {
+            return Ok(());
+        }
         match node.kind() {
             // Rust + Python conditionals
             "if_statement" | "if_expression" => self.visit_if(node, source),
@@ -252,6 +268,14 @@ impl<'a> CfgBuilder<'a> {
         self.add_statement(node, source, StatementKind::Branch)?;
         let cond_block = self.current_block;
 
+        let cond_text = node
+            .child_by_field_name("condition")
+            .or_else(|| node.child_by_field_name("operand"))
+            .and_then(|c| c.utf8_text(source).ok())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
         let true_block = self.new_block();
         self.cfg
             .add_edge(cond_block, true_block, CfgEdgeType::IfTrue);
@@ -260,23 +284,33 @@ impl<'a> CfgBuilder<'a> {
         self.cfg
             .add_edge(cond_block, false_block, CfgEdgeType::IfFalse);
 
-        self.current_block = true_block;
-        if let Some(consequence) = node.child_by_field_name("consequence") {
-            self.visit_block(consequence, source)?;
+        let mut true_end = true_block;
+        if !is_constant_false(&cond_text) {
+            self.current_block = true_block;
+            if let Some(consequence) = node.child_by_field_name("consequence") {
+                self.visit_block(consequence, source)?;
+            }
+            true_end = self.current_block;
         }
-        let true_end = self.current_block;
 
+        let mut false_end = false_block;
         self.current_block = false_block;
-        if let Some(alternative) = node.child_by_field_name("alternative") {
-            self.visit_block(alternative, source)?;
-        } else if let Some(else_clause) = node.child_by_field_name("else_clause") {
-            self.visit_block(else_clause, source)?;
+        if !is_constant_true(&cond_text) {
+            if let Some(alternative) = node.child_by_field_name("alternative") {
+                self.visit_block(alternative, source)?;
+            } else if let Some(else_clause) = node.child_by_field_name("else_clause") {
+                self.visit_block(else_clause, source)?;
+            }
+            false_end = self.current_block;
         }
-        let false_end = self.current_block;
 
         let merge = self.new_block();
-        self.cfg.add_edge(true_end, merge, CfgEdgeType::Next);
-        self.cfg.add_edge(false_end, merge, CfgEdgeType::Next);
+        if !is_constant_false(&cond_text) {
+            self.cfg.add_edge(true_end, merge, CfgEdgeType::Next);
+        }
+        if !is_constant_true(&cond_text) {
+            self.cfg.add_edge(false_end, merge, CfgEdgeType::Next);
+        }
         self.current_block = merge;
         Ok(())
     }
@@ -294,6 +328,8 @@ impl<'a> CfgBuilder<'a> {
                 .unwrap_or("while")
                 .trim()
                 .to_string(),
+            defined_vars: HashSet::new(),
+            used_vars: HashSet::new(),
         });
 
         let body = self.new_block();
@@ -323,6 +359,8 @@ impl<'a> CfgBuilder<'a> {
             kind: StatementKind::Branch,
             line: node.start_position().row + 1,
             text: "for".to_string(),
+            defined_vars: HashSet::new(),
+            used_vars: HashSet::new(),
         });
 
         let body = self.new_block();
@@ -373,7 +411,7 @@ impl<'a> CfgBuilder<'a> {
         self.cfg
             .add_edge(self.current_block, exit, CfgEdgeType::Return);
         self.cfg.exits.push(exit);
-        self.current_block = self.new_block();
+        self.flow_active = false;
         Ok(())
     }
 
@@ -495,6 +533,14 @@ fn function_body_node<'a>(func_node: Node<'a>, language: &str) -> Option<Node<'a
             None
         }
     }
+}
+
+fn is_constant_false(text: &str) -> bool {
+    matches!(text, "false" | "False" | "0")
+}
+
+fn is_constant_true(text: &str) -> bool {
+    matches!(text, "true" | "True" | "1")
 }
 
 #[cfg(test)]

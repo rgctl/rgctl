@@ -1,6 +1,7 @@
 //! Dominator tree and dominance frontiers (Phase 13.2).
 
 use crate::cfg::{BlockId, ControlFlowGraph};
+use rbuilder_error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -11,6 +12,8 @@ pub struct DominatorTree {
     pub idom: HashMap<BlockId, BlockId>,
     /// Dominance frontiers per block.
     pub frontiers: HashMap<BlockId, HashSet<BlockId>>,
+    /// Blocks reachable from entry (unreachable blocks excluded).
+    pub reachable: HashSet<BlockId>,
     /// DFS block order for intersect algorithm (used by [`intersect`]).
     #[allow(dead_code)]
     block_order: HashMap<BlockId, usize>,
@@ -19,9 +22,10 @@ pub struct DominatorTree {
 impl DominatorTree {
     /// Build dominator tree via iterative dataflow (Cooper-Harvey-Kennedy style).
     pub fn build(cfg: &ControlFlowGraph) -> Self {
-        let block_order = compute_block_order(cfg);
+        let reachable = cfg.reachable_blocks();
+        let block_order = compute_block_order(cfg, &reachable);
         let mut idom = HashMap::new();
-        for block_id in cfg.blocks.keys() {
+        for block_id in reachable.iter() {
             idom.insert(*block_id, cfg.entry);
         }
         idom.insert(cfg.entry, cfg.entry);
@@ -29,11 +33,15 @@ impl DominatorTree {
         let mut changed = true;
         while changed {
             changed = false;
-            for block_id in cfg.blocks.keys() {
-                if *block_id == cfg.entry {
+            for &block_id in reachable.iter() {
+                if block_id == cfg.entry {
                     continue;
                 }
-                let preds = cfg.predecessors(*block_id);
+                let preds: Vec<BlockId> = cfg
+                    .predecessors(block_id)
+                    .into_iter()
+                    .filter(|p| reachable.contains(p))
+                    .collect();
                 if preds.is_empty() {
                     continue;
                 }
@@ -41,27 +49,48 @@ impl DominatorTree {
                 for pred in &preds[1..] {
                     new_idom = intersect(&idom, &block_order, new_idom, *pred);
                 }
-                if idom.get(block_id) != Some(&new_idom) {
-                    idom.insert(*block_id, new_idom);
+                if idom.get(&block_id) != Some(&new_idom) {
+                    idom.insert(block_id, new_idom);
                     changed = true;
                 }
             }
         }
 
-        let frontiers = compute_dominance_frontiers(cfg, &idom);
+        debug_assert!(
+            verify_idom_acyclic(&idom),
+            "idom tree must be acyclic"
+        );
+
+        let frontiers = compute_dominance_frontiers(cfg, &idom, &reachable);
         Self {
             idom,
             frontiers,
+            reachable,
             block_order,
         }
     }
 
+    /// Build and validate dominator tree, returning error if idom is cyclic.
+    pub fn build_verified(cfg: &ControlFlowGraph) -> Result<Self> {
+        let tree = Self::build(cfg);
+        if !verify_idom_acyclic(&tree.idom) {
+            return Err(Error::InvalidQuery(
+                "dominator tree contains a cycle".into(),
+            ));
+        }
+        Ok(tree)
+    }
+
     /// Returns true if `dominator` dominates `node`.
     pub fn dominates(&self, dominator: BlockId, node: BlockId) -> bool {
+        if !self.reachable.contains(&node) || !self.reachable.contains(&dominator) {
+            return false;
+        }
         if dominator == node {
             return true;
         }
         let mut current = node;
+        let mut steps = 0usize;
         while let Some(&parent) = self.idom.get(&current) {
             if parent == current {
                 break;
@@ -70,6 +99,10 @@ impl DominatorTree {
                 return true;
             }
             current = parent;
+            steps += 1;
+            if steps > self.reachable.len() {
+                return false;
+            }
         }
         false
     }
@@ -83,29 +116,43 @@ impl DominatorTree {
     }
 }
 
-fn compute_block_order(cfg: &ControlFlowGraph) -> HashMap<BlockId, usize> {
+/// Verify that the immediate-dominator relation has no cycles.
+pub fn verify_idom_acyclic(idom: &HashMap<BlockId, BlockId>) -> bool {
+    for &node in idom.keys() {
+        let mut seen = HashSet::new();
+        let mut current = node;
+        loop {
+            let Some(&parent) = idom.get(&current) else {
+                break;
+            };
+            if parent == current {
+                break;
+            }
+            if !seen.insert(parent) {
+                return false;
+            }
+            current = parent;
+        }
+    }
+    true
+}
+
+fn compute_block_order(cfg: &ControlFlowGraph, reachable: &HashSet<BlockId>) -> HashMap<BlockId, usize> {
     let mut order = HashMap::new();
     let mut stack = vec![cfg.entry];
     let mut visited = HashSet::new();
     let mut idx = 0usize;
     while let Some(block) = stack.pop() {
-        if !visited.insert(block) {
+        if !reachable.contains(&block) || !visited.insert(block) {
             continue;
         }
         order.insert(block, idx);
         idx += 1;
         for succ in cfg.successors(block) {
-            if !visited.contains(&succ) {
+            if reachable.contains(&succ) && !visited.contains(&succ) {
                 stack.push(succ);
             }
         }
-    }
-    for block in cfg.blocks.keys() {
-        order.entry(*block).or_insert_with(|| {
-            let v = idx;
-            idx += 1;
-            v
-        });
     }
     order
 }
@@ -136,12 +183,19 @@ fn intersect(
 fn compute_dominance_frontiers(
     cfg: &ControlFlowGraph,
     idom: &HashMap<BlockId, BlockId>,
+    reachable: &HashSet<BlockId>,
 ) -> HashMap<BlockId, HashSet<BlockId>> {
-    let mut frontiers: HashMap<BlockId, HashSet<BlockId>> =
-        cfg.blocks.keys().map(|id| (*id, HashSet::new())).collect();
+    let mut frontiers: HashMap<BlockId, HashSet<BlockId>> = reachable
+        .iter()
+        .map(|id| (*id, HashSet::new()))
+        .collect();
 
-    for block in cfg.blocks.keys() {
-        let preds = cfg.predecessors(*block);
+    for block in reachable {
+        let preds: Vec<BlockId> = cfg
+            .predecessors(*block)
+            .into_iter()
+            .filter(|p| reachable.contains(p))
+            .collect();
         if preds.len() < 2 {
             continue;
         }
@@ -177,9 +231,10 @@ fn test(x: i32) -> i32 {
 "#;
         let cfg = build_cfg_for_function("rust", code, "test").unwrap();
         let dom = DominatorTree::build(&cfg);
-        for block in cfg.blocks.keys() {
+        for block in dom.reachable.iter() {
             assert!(dom.dominates(cfg.entry, *block));
         }
+        assert!(verify_idom_acyclic(&dom.idom));
     }
 
     #[test]
@@ -195,5 +250,23 @@ fn branch(x: i32) {
         let dom = DominatorTree::build(&cfg);
         let has_frontier = dom.frontiers.values().any(|f| !f.is_empty());
         assert!(has_frontier || cfg.blocks.len() <= 2);
+    }
+
+    #[test]
+    fn test_idom_acyclic_on_loop() {
+        let code = r#"
+fn sum(n: i32) -> i32 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < n {
+        s += i;
+        i += 1;
+    }
+    s
+}
+"#;
+        let cfg = build_cfg_for_function("rust", code, "sum").unwrap();
+        let dom = DominatorTree::build(&cfg);
+        assert!(verify_idom_acyclic(&dom.idom));
     }
 }
