@@ -143,6 +143,16 @@ pub enum EdgeType {
     RequiresResource,
     /// Puppet class or resource uses a fact
     UsesFact,
+    /// Unknown or forward-compatible edge type; excluded from call-graph traversals.
+    #[serde(other)]
+    Unknown,
+}
+
+impl EdgeType {
+    /// Whether this edge type participates in call-graph blast-radius traversals.
+    pub fn is_call_traversal(self) -> bool {
+        matches!(self, EdgeType::Calls)
+    }
 }
 
 /// Function parameter stored on graph nodes (Phase 12.0).
@@ -553,7 +563,8 @@ mod tests {
             EdgeType::InheritsClass,
             EdgeType::RequiresResource,
             EdgeType::UsesFact,
+            EdgeType::Unknown,
         ];
-        assert_eq!(types.len(), 28);
+        assert_eq!(types.len(), 29);
     }
 }

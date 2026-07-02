@@ -1,29 +1,26 @@
 //! Utilities for converting rBuilder graphs into petgraph structures.
 //!
-//! ## Zero-Clone Topology Projection
+//! ## Type-Aware Topology Projection
 //!
-//! This module builds lightweight petgraph views using empty node/edge weights `()`.
-//! Graph algorithms like PageRank and community detection only need topology
-//! (which index connects to which), not the rich domain model (UUIDs, names, properties).
-//!
-//! By using `DiGraph<(), ()>` instead of `DiGraph<Node, Edge>`, we eliminate
-//! gigabytes of allocations from cloning 187K Node structs and 719K Edge structs.
+//! Builds lightweight petgraph views using `EdgeType` edge weights so consumers can
+//! filter projections (call graph, structural graph, etc.) without cloning full
+//! [`Edge`] structs from the backend.
 
 use petgraph::graph::{DiGraph, NodeIndex, UnGraph};
+use petgraph::visit::EdgeRef;
+use petgraph::Direction;
 use rbuilder_error::Result;
 use rbuilder_graph::backend::MemoryBackend;
+use rbuilder_graph::schema::EdgeType;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// A petgraph view of the code graph with UUID mapping.
-///
-/// Uses empty weights `()` to avoid cloning the entire rich domain model.
-/// Maintains bidirectional UUID<->NodeIndex mapping for result translation.
+/// A petgraph view of the code graph with UUID mapping and typed edges.
 pub struct PetGraphView {
-    /// Directed graph with empty weights (topology only)
-    pub directed: DiGraph<(), ()>,
-    /// Undirected graph for community detection (topology only)
-    pub undirected: UnGraph<(), ()>,
+    /// Directed graph with [`EdgeType`] weights
+    pub directed: DiGraph<(), EdgeType>,
+    /// Undirected graph for community detection
+    pub undirected: UnGraph<(), EdgeType>,
     /// Map from node UUID to directed graph index
     pub uuid_to_index: HashMap<Uuid, NodeIndex>,
     /// Map from directed graph index to UUID
@@ -33,30 +30,20 @@ pub struct PetGraphView {
 }
 
 impl PetGraphView {
-    /// Build petgraph views from a memory backend using zero-clone topology projection.
-    ///
-    /// This method:
-    /// 1. Pre-allocates exact capacity to avoid resizing
-    /// 2. Uses empty weights `()` to avoid cloning Node/Edge structs
-    /// 3. Only copies primitive UUIDs for mapping (16 bytes each)
-    ///
-    /// Construction time: ~50ms for 187K nodes + 719K edges vs 5+ minutes with cloning.
+    /// Build petgraph views from a memory backend using zero-clone typed topology projection.
     pub fn from_backend(backend: &MemoryBackend) -> Result<Self> {
         let node_count = backend.node_count();
         let edge_count = backend.edge_count();
 
-        // Pre-allocate exact capacity to avoid dynamic resizing
-        let mut directed = DiGraph::<(), ()>::with_capacity(node_count, edge_count);
-        let mut undirected = UnGraph::<(), ()>::with_capacity(node_count, edge_count);
+        let mut directed = DiGraph::<(), EdgeType>::with_capacity(node_count, edge_count);
+        let mut undirected = UnGraph::<(), EdgeType>::with_capacity(node_count, edge_count);
         let mut uuid_to_index = HashMap::with_capacity(node_count);
         let mut index_to_uuid = HashMap::with_capacity(node_count);
         let mut uuid_to_undirected = HashMap::with_capacity(node_count);
         let mut undirected_to_uuid = HashMap::with_capacity(node_count);
 
-        // Get all node UUIDs (only copies 16 bytes per node, not full Node struct)
         let node_ids = backend.all_node_ids()?;
 
-        // Add nodes with empty weights
         for node_id in node_ids {
             let d_idx = directed.add_node(());
             let u_idx = undirected.add_node(());
@@ -66,24 +53,21 @@ impl PetGraphView {
             undirected_to_uuid.insert(u_idx, node_id);
         }
 
-        // Get edge topology (only copies (Uuid, Uuid) tuples, not full Edge structs)
-        let edge_topology = backend.edge_topology()?;
+        let edge_topology = backend.edge_topology_typed()?;
 
-        // Add edges with empty weights
-        for (from_uuid, to_uuid) in edge_topology {
+        for (from_uuid, to_uuid, edge_type) in edge_topology {
             if let (Some(&from), Some(&to)) = (
                 uuid_to_index.get(&from_uuid),
                 uuid_to_index.get(&to_uuid),
             ) {
-                directed.add_edge(from, to, ());
+                directed.add_edge(from, to, edge_type);
             }
 
-            // For undirected graph, add all edges (community detection doesn't care about edge type)
             if let (Some(&from), Some(&to)) = (
                 uuid_to_undirected.get(&from_uuid),
                 uuid_to_undirected.get(&to_uuid),
             ) {
-                undirected.add_edge(from, to, ());
+                undirected.add_edge(from, to, edge_type);
             }
         }
 
@@ -94,6 +78,52 @@ impl PetGraphView {
             index_to_uuid,
             undirected_to_uuid,
         })
+    }
+
+    /// Incoming neighbors reachable via one of `allowed` edge types.
+    pub fn incoming_filtered<'a>(
+        &'a self,
+        idx: NodeIndex,
+        allowed: &'a [EdgeType],
+    ) -> impl Iterator<Item = NodeIndex> + 'a {
+        self.directed
+            .edges_directed(idx, Direction::Incoming)
+            .filter(move |e| allowed.contains(e.weight()))
+            .map(|e| e.source())
+    }
+
+    /// Outgoing neighbors reachable via one of `allowed` edge types.
+    pub fn outgoing_filtered<'a>(
+        &'a self,
+        idx: NodeIndex,
+        allowed: &'a [EdgeType],
+    ) -> impl Iterator<Item = NodeIndex> + 'a {
+        self.directed
+            .edges_directed(idx, Direction::Outgoing)
+            .filter(move |e| allowed.contains(e.weight()))
+            .map(|e| e.target())
+    }
+
+    /// Whether a directed edge of the given type exists between two nodes.
+    pub fn has_edge_type(&self, from: NodeIndex, to: NodeIndex, edge_type: EdgeType) -> bool {
+        self.directed
+            .find_edge(from, to)
+            .is_some_and(|e| *self.directed.edge_weight(e).unwrap_or(&EdgeType::Calls) == edge_type)
+    }
+
+    /// Build a call-only directed graph sharing the same node indices as [`Self::directed`].
+    pub fn call_only_directed(&self) -> DiGraph<(), ()> {
+        let mut call_only =
+            DiGraph::<(), ()>::with_capacity(self.directed.node_count(), self.directed.edge_count());
+        for _ in self.directed.node_indices() {
+            call_only.add_node(());
+        }
+        for edge in self.directed.edge_references() {
+            if *edge.weight() == EdgeType::Calls {
+                call_only.add_edge(edge.source(), edge.target(), ());
+            }
+        }
+        call_only
     }
 
     /// Get petgraph NodeIndex for a UUID.
@@ -111,7 +141,7 @@ impl PetGraphView {
 mod tests {
     use super::*;
     use rbuilder_graph::backend::GraphBackend;
-    use rbuilder_graph::schema::{Edge, NodeType};
+    use rbuilder_graph::schema::{Edge, Node, NodeType};
 
     #[test]
     fn test_build_petgraph_view() {
@@ -129,5 +159,8 @@ mod tests {
         let view = PetGraphView::from_backend(&backend).unwrap();
         assert_eq!(view.directed.node_count(), 2);
         assert_eq!(view.directed.edge_count(), 1);
+        let idx1 = view.uuid_to_index[&id1];
+        let idx2 = view.uuid_to_index[&id2];
+        assert!(view.has_edge_type(idx1, idx2, EdgeType::Calls));
     }
 }

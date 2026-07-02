@@ -87,6 +87,15 @@ impl MemoryBackend {
         Ok(edges.iter().map(|e| (e.from, e.to)).collect())
     }
 
+    /// Get edge topology preserving edge types for typed graph projections.
+    pub fn edge_topology_typed(&self) -> Result<Vec<(Uuid, Uuid, EdgeType)>> {
+        let edges = read_lock(&self.edges)?;
+        Ok(edges
+            .iter()
+            .map(|e| (e.from, e.to, e.edge_type))
+            .collect())
+    }
+
     // ========== ZERO-CLONE API (use these for performance) ==========
 
     /// Zero-allocation node iteration. Passes read-only references to a closure.
@@ -963,6 +972,24 @@ mod tests {
             backend.find_edges_by_type(EdgeType::Calls).unwrap().len(),
             1
         );
+    }
+
+    #[test]
+    fn test_edge_topology_typed() {
+        let mut backend = MemoryBackend::new();
+        let n1 = Node::new(NodeType::Function, "a".to_string());
+        let n2 = Node::new(NodeType::Function, "b".to_string());
+        let id1 = n1.id;
+        let id2 = n2.id;
+        backend.insert_node(n1).unwrap();
+        backend.insert_node(n2).unwrap();
+        backend
+            .insert_edge(Edge::new(id1, id2, EdgeType::Calls))
+            .unwrap();
+
+        let typed = backend.edge_topology_typed().unwrap();
+        assert_eq!(typed.len(), 1);
+        assert_eq!(typed[0], (id1, id2, EdgeType::Calls));
     }
 
     #[test]

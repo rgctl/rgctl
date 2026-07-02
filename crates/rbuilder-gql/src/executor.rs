@@ -4,11 +4,10 @@ use crate::ast::{
     EdgePattern, NodePattern, Pattern, Predicate, PropertyMatcher, Query, WhereClause,
 };
 use crate::explain::{ExplainPlan, ExplainStep};
-use petgraph::Direction;
 use rbuilder_analysis::graph_utils::PetGraphView;
 use rbuilder_error::{Error, Result};
 use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
-use rbuilder_graph::schema::{EdgeType, Node};
+use rbuilder_graph::schema::Node;
 use std::collections::{HashMap, HashSet};
 
 /// One row of query results keyed by bound variable name.
@@ -246,6 +245,7 @@ fn traverse_edge(
     let mut results = Vec::new();
     let mut queue = vec![(start, 0usize)];
     let mut visited_paths: HashSet<(petgraph::graph::NodeIndex, usize)> = HashSet::new();
+    let allowed = [edge.edge_type];
 
     while let Some((node, depth)) = queue.pop() {
         if depth >= edge.min_hops && depth <= max && depth > 0 {
@@ -254,26 +254,13 @@ fn traverse_edge(
         if depth >= max {
             continue;
         }
-        for succ in view.directed.neighbors_directed(node, Direction::Outgoing) {
-            if is_edge_type(view, node, succ, edge.edge_type)
-                && visited_paths.insert((succ, depth + 1))
-            {
+        for succ in view.outgoing_filtered(node, &allowed) {
+            if visited_paths.insert((succ, depth + 1)) {
                 queue.push((succ, depth + 1));
             }
         }
     }
     results
-}
-
-fn is_edge_type(
-    view: &PetGraphView,
-    from: petgraph::graph::NodeIndex,
-    to: petgraph::graph::NodeIndex,
-    _edge_type: EdgeType,
-) -> bool {
-    // In zero-clone topology view, we include all edges
-    // TODO: Filter by edge type for accurate GQL queries
-    view.directed.find_edge(from, to).is_some()
 }
 
 fn node_matches_pattern(node: &Node, pattern: &NodePattern, binding: &Binding) -> bool {
