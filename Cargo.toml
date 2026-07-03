@@ -284,6 +284,10 @@ strip = false
 name = "rbuilder"
 path = "src/main.rs"
 
+[[test]]
+name = "cli_output"
+path = "tests/cli_output/main.rs"
+
 [[bench]]
 name = "parsing"
 harness = false

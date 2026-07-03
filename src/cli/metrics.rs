@@ -2,6 +2,7 @@
 
 use super::args::OutputFormat;
 use super::context::CliContext;
+use super::metrics_output::wrap_metrics_payload;
 use anyhow::Result;
 use crate::analysis::{
     BetweennessCentrality, CommunityDetector, FastPageRank, PetGraphView,
@@ -69,6 +70,7 @@ pub fn run(ctx: &CliContext, args: MetricsArgs) -> Result<()> {
     }
 
     if ctx.format == OutputFormat::Json {
+        wrap_metrics_payload(&mut payload);
         ctx.emit_json_value(&payload)?;
     } else {
         if let Some(pr) = payload.get("pagerank") {

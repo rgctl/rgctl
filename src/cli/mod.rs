@@ -4,13 +4,16 @@ mod args;
 mod blast_radius;
 pub mod blast_radius_output;
 mod check;
+pub mod check_output;
 mod context;
 mod discover;
 mod discover_impl;
 mod export;
 mod gql;
+pub mod gql_output;
 mod inspect;
 mod metrics;
+pub mod metrics_output;
 mod policy_file;
 mod slice;
 

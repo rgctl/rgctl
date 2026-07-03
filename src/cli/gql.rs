@@ -2,8 +2,8 @@
 
 use super::args::OutputFormat;
 use super::context::CliContext;
+use super::gql_output::gql_result_to_json;
 use anyhow::Result;
-use serde_json::json;
 
 pub struct GqlArgs {
     pub query: String,
@@ -27,27 +27,7 @@ pub fn run(ctx: &CliContext, args: GqlArgs) -> Result<()> {
     };
 
     if ctx.format == OutputFormat::Json {
-        let rows: Vec<_> = result
-            .rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|(name, node)| {
-                        json!({
-                            "binding": name,
-                            "node": node.name,
-                            "type": format!("{:?}", node.node_type),
-                            "file": node.file_path,
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        let payload = json!({
-            "rows": rows,
-            "explain": args.explain,
-        });
-        return ctx.emit_json_value(&payload);
+        return ctx.emit_json_value(&gql_result_to_json(&result, args.explain));
     }
 
     if args.explain {

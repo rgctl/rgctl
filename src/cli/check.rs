@@ -1,6 +1,7 @@
 //! `rbuilder check` — CI policy gateway.
 
 use super::args::OutputFormat;
+use super::check_output::{build_check_response, violations_from_json_values};
 use super::context::CliContext;
 use super::policy_file::PolicyFile;
 use anyhow::Result;
@@ -27,7 +28,7 @@ pub fn run(ctx: &CliContext, args: CheckArgs) -> Result<()> {
 
     let symbols = changed_function_symbols(&ctx.repo, backend)?;
     let symbol_count = symbols.len();
-    let mut violations = Vec::new();
+    let mut violation_rows = Vec::new();
 
     for symbol in symbols {
         let Ok((id, _)) = crate::analysis::resolve_unique_symbol(backend, &symbol) else {
@@ -39,7 +40,7 @@ pub fn run(ctx: &CliContext, args: CheckArgs) -> Result<()> {
             Some(&registry),
             Some(&centrality),
         ) {
-            violations.push(json!({
+            violation_rows.push(json!({
                 "symbol": symbol,
                 "error": err.to_string(),
             }));
@@ -49,7 +50,7 @@ pub fn run(ctx: &CliContext, args: CheckArgs) -> Result<()> {
             for node_id in &result.impact_zone_ids {
                 if let Some(score) = centrality.get(node_id) {
                     if score.betweenness > centrality_threshold {
-                        violations.push(json!({
+                        violation_rows.push(json!({
                             "symbol": symbol,
                             "violation": format!("{}", PolicyViolation::CascadeHazard {
                                 node: *node_id,
@@ -63,24 +64,23 @@ pub fn run(ctx: &CliContext, args: CheckArgs) -> Result<()> {
         }
     }
 
-    let payload = json!({
-        "policy": args.policy_file,
-        "violations": violations,
-        "passed": violations.is_empty(),
-    });
+    let response = build_check_response(
+        &args.policy_file,
+        violations_from_json_values(&violation_rows),
+    );
 
     if ctx.format == OutputFormat::Json {
-        ctx.emit_json_value(&payload)?;
-    } else if violations.is_empty() {
+        ctx.emit_json_value(&serde_json::to_value(&response)?)?;
+    } else if response.passed {
         println!("Policy check passed ({} symbols)", symbol_count);
     } else {
-        println!("Policy violations: {}", violations.len());
-        for v in &violations {
-            println!("  {v}");
+        println!("Policy violations: {}", response.violations.len());
+        for v in &response.violations {
+            println!("  {v:?}");
         }
     }
 
-    if !violations.is_empty() {
+    if !response.passed {
         std::process::exit(1);
     }
     Ok(())
