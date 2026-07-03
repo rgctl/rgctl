@@ -17,6 +17,7 @@ pub mod inspect_output;
 mod metrics;
 pub mod metrics_output;
 mod policy_file;
+mod query_daemon;
 mod slice;
 pub mod slice_output;
 
@@ -186,6 +187,17 @@ pub enum Commands {
         #[arg(long, default_value = "all")]
         query: String,
     },
+
+    /// Keep graph + blast engine warm for repeated blast-radius queries (Unix socket).
+    Serve {
+        /// Unix socket path (default: `<repo>/.rbuilder/query.sock`)
+        #[arg(long, value_name = "PATH")]
+        socket: Option<std::path::PathBuf>,
+
+        /// Exit after this many seconds without requests
+        #[arg(long, default_value_t = 300)]
+        idle_secs: u64,
+    },
 }
 
 impl Cli {
@@ -311,6 +323,10 @@ impl Cli {
                     query,
                 },
             ),
+            Commands::Serve { socket, idle_secs } => {
+                let socket = socket.unwrap_or_else(|| query_daemon::default_socket_path(&ctx.repo));
+                query_daemon::serve(&ctx, socket, idle_secs)
+            }
         };
 
         result

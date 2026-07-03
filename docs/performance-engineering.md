@@ -178,7 +178,7 @@ br.query.sqlite_unique_ms regression: 42ms >= 15ms
 | No **end-to-end CLI** T1 subprocess gate on metasfresh | In-process soft gates only; T0 covered via `fast_path_ms` |
 | **T3** slice path without prior `discover --cfg` | Still rebuilds ICFG/PDG from source on large repos |
 | **metasfresh** not required in CI | Soft gates skip when checkout/cache absent |
-| **P2 columnar graph / query daemon** | Columnar v2 **done**; query daemon still open — see roadmap below |
+| **P2 columnar graph / query daemon** | **Done** — columnar v2 + `rbuilder serve` query daemon |
 | `semantic-verification.sh` | Dominance only; no blast-radius |
 | **JSON lines** trend file | Not built |
 
@@ -211,7 +211,7 @@ Prioritized by impact on T0–T3. Status as of 2026-07-03.
 |---|------|--------|
 | 8 | Columnar mmap graph — true zero-copy open | **Done** — v2 columnar `graph.snapshot.bin`; `ColumnarGraphMmap` + `SnapshotNodeStore` read mmap columns; v1 bincode still supported on read |
 | 9 | CFG/PDG mmap archive for `--with-slices` | **Done** — `CfgPdgArchive`; `to_interprocedural_cfg` + PDG preload; run `discover --cfg` first on large repos |
-| 10 | Ephemeral query daemon (amortize cold start) | Open |
+| 10 | Ephemeral query daemon (amortize cold start) | **Done** — `rbuilder serve` on `.rbuilder/query.sock`; lite `blast-radius` auto-connects when socket present (`RBUILDER_NO_QUERY_DAEMON` to disable) |
 
 ### P3 — Cleanup
 
@@ -246,6 +246,11 @@ cargo test --test cli_output --test subprocess_golden_path --test all_commands_s
 # ── Semantic pipeline (dominance perf only) ──
 bash scripts/semantic-verification.sh
 
+# ── Query daemon (amortize engine load) ──
+rbuilder serve -r example/metasfresh-4.9.8b &
+rbuilder blast-radius saveError -r example/metasfresh-4.9.8b   # auto-uses socket when present
+RBUILDER_NO_QUERY_DAEMON=1 rbuilder blast-radius saveError -r …  # force cold CLI path
+
 # ── Manual real-repo ──
 cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 /usr/bin/time -p target/release/rbuilder blast-radius saveError -r example/metasfresh-4.9.8b
@@ -255,11 +260,9 @@ cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 
 ## Recommended next steps
 
-1. **P2 #10 query daemon** — amortize snapshot + engine load across repeated blast-radius invocations.
+1. **P3 #11 `--depth`** — implement hop-limited impact zone or remove flag from CLI.
 
-2. **P3 #11 `--depth`** — implement hop-limited impact zone or remove flag from CLI.
-
-4. **Metasfresh T3 gate** — optional soft gate for `--with-slices` when fixture cache present.
+2. **Metasfresh T3 gate** — optional soft gate for `--with-slices` when fixture cache present.
 
 5. **Nightly large-scale** — `RBUILDER_BENCH_LARGE=1 cargo bench --bench blast_radius_benchmarks` + `phase16 --ignored`.
 
@@ -283,6 +286,7 @@ cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 | `docs/cli-io-sanity-audit.md` | I/O contract matrix |
 | `scripts/semantic-verification.sh` | CI semantic + dominance perf |
 | `src/cli/context.rs` | Snapshot session cache (`SnapshotSession`) |
+| `src/cli/query_daemon.rs` | Ephemeral Unix-socket query daemon (`rbuilder serve`) |
 | `src/cli/blast_radius.rs` | T0/T1/T2/T3 orchestration + fast-path lookup |
 | `crates/rbuilder-analysis/src/blast_radius_scc.rs` | Engine + `ReachabilityStore` integration |
 | `src/cli/discover_impl.rs` | Discover pipeline (prepared dedup, parallel blast analyze) |

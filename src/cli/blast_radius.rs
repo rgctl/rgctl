@@ -6,6 +6,7 @@ use super::blast_radius_output::{
     handoffs_from_seeds, response_to_json, skipped_gatekeeping, BlastRadiusResponse, NodeLookup,
 };
 use super::context::CliContext;
+use super::query_daemon;
 use anyhow::Result;
 use super::policy_file::PolicyFile;
 use crate::analysis::{
@@ -198,12 +199,25 @@ fn try_snapshot_lite_path(
         return Ok(None);
     };
 
+    let response = build_lite_response(ctx, args, parsed, store, &engine)?;
+    emit_output(ctx, &response)?;
+    Ok(Some(()))
+}
+
+/// Lite blast-radius response using mmap store + warm engine (no full graph hydrate).
+pub(crate) fn build_lite_response(
+    ctx: &CliContext,
+    args: &BlastRadiusArgs,
+    parsed: &crate::analysis::ParsedSymbol,
+    store: &SnapshotNodeStore,
+    engine: &BlastRadiusEngine,
+) -> Result<BlastRadiusResponse> {
     let (id, _resolved_name) = resolve_target_uuid_snapshot(ctx, parsed, store)?;
     let result = engine.analyze(id)?;
 
     let impact_ids = store.filter_function_impact(&result.impact_zone_ids)?;
     let lookup = NodeLookup::Snapshot(store);
-    let response = build_from_engine_result(
+    Ok(build_from_engine_result(
         &args.symbol,
         parsed.class_filter.clone(),
         &result,
@@ -211,9 +225,7 @@ fn try_snapshot_lite_path(
         &impact_ids,
         lookup,
         skipped_gatekeeping(),
-    );
-    emit_output(ctx, &response)?;
-    Ok(Some(()))
+    ))
 }
 
 fn resolve_blast_result(
@@ -258,6 +270,15 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
         }
 
         if let Some(session) = ctx.snapshot_session()? {
+            if let Some(response) = query_daemon::try_client_blast_radius(
+                ctx,
+                &args,
+                &parsed,
+                session.digest.as_ref(),
+            )? {
+                return emit_output(ctx, &response);
+            }
+
             if try_snapshot_lite_path(
                 ctx,
                 &args,
