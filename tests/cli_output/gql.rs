@@ -24,6 +24,17 @@ fn test_gql_json_schema_sanity() {
 }
 
 #[test]
+fn test_gql_explain_flag_serializes_true() {
+    use rbuilder::cli::gql_output::gql_response_from_result;
+    use rbuilder_gql::QueryResult;
+
+    let response = gql_response_from_result(&QueryResult { rows: vec![], plan: None }, true);
+    assert!(response.explain);
+    let doc = serde_json::to_value(&response).unwrap();
+    assert_eq!(doc["explain"].as_bool(), Some(true));
+}
+
+#[test]
 fn test_gql_empty_rows_explicit_array() {
     use rbuilder::cli::gql_output::gql_response_from_result;
     use rbuilder_gql::QueryResult;

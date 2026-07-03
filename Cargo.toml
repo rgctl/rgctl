@@ -292,6 +292,10 @@ path = "tests/cli_output/main.rs"
 name = "subprocess_golden_path"
 path = "tests/cli_output/subprocess_golden_path.rs"
 
+[[test]]
+name = "all_commands_sanity"
+path = "tests/cli_output/all_commands_sanity.rs"
+
 [[bench]]
 name = "parsing"
 harness = false

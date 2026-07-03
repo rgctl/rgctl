@@ -33,6 +33,33 @@ fn test_blast_radius_symbol_context_shape() {
 }
 
 #[test]
+fn test_handoffs_from_seeds_populated() {
+    use rbuilder::cli::blast_radius_output::{handoffs_from_seeds, SliceHandoff};
+    use rbuilder::analysis::SliceHandoffSeed;
+    use uuid::Uuid;
+
+    let seeds = vec![SliceHandoffSeed {
+        callee_id: Uuid::new_v4(),
+        callee_name: "publishEvent".into(),
+        caller_id: Uuid::new_v4(),
+        caller_name: "checkout".into(),
+        param_name: "input".into(),
+        param_index: 0,
+        call_site_line: 8,
+    }];
+    let handoffs = handoffs_from_seeds(&seeds);
+    assert_eq!(handoffs.len(), 1);
+    assert_eq!(
+        handoffs[0],
+        SliceHandoff {
+            callee: "publishEvent".into(),
+            param: "input".into(),
+            index: 0,
+        }
+    );
+}
+
+#[test]
 fn test_skipped_gatekeeping_always_has_empty_handoffs() {
     let gate = skipped_gatekeeping();
     assert_eq!(gate.policy_status, "SKIPPED");

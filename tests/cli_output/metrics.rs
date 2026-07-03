@@ -44,6 +44,48 @@ fn test_metrics_wrap_adds_schema_version() {
 }
 
 #[test]
+fn test_metrics_betweenness_only_omits_other_sections() {
+    let response = build_metrics_response(
+        None,
+        Some(vec![json!({ "node": "00000000-0000-0000-0000-000000000001", "score": 0.5 })]),
+        None,
+    );
+
+    let doc = metrics_response_to_json(&response);
+    assert!(doc.get("betweenness").is_some());
+    assert!(doc.get("pagerank").is_none());
+    assert!(doc.get("communities").is_none());
+
+    let json_str = serde_json::to_string(&response).expect("metrics serializes");
+    assert!(!json_str.contains("pagerank"));
+    assert!(!json_str.contains("communities"));
+}
+
+#[test]
+fn test_metrics_communities_only_omits_other_sections() {
+    use rbuilder::cli::metrics_output::MetricsCommunitiesSection;
+
+    let response = build_metrics_response(
+        None,
+        None,
+        Some(MetricsCommunitiesSection {
+            count: 1,
+            modularity: 0.5,
+            assignments: 3,
+        }),
+    );
+
+    let doc = metrics_response_to_json(&response);
+    assert!(doc.get("communities").is_some());
+    assert!(doc.get("pagerank").is_none());
+    assert!(doc.get("betweenness").is_none());
+
+    let json_str = serde_json::to_string(&response).expect("metrics serializes");
+    assert!(!json_str.contains("pagerank"));
+    assert!(!json_str.contains("betweenness"));
+}
+
+#[test]
 fn test_metrics_pagerank_only_omits_other_sections() {
     let response = build_metrics_response(
         Some(MetricsPagerankSection {

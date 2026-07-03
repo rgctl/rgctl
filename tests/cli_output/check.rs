@@ -30,3 +30,23 @@ fn test_check_violations_always_array_when_passing() {
     assert!(doc["violations"].is_array());
     assert!(doc["passed"].as_bool().unwrap());
 }
+
+#[test]
+fn test_check_passed_false_contract() {
+    use rbuilder::cli::check_output::{build_check_response, CheckViolationEntry};
+
+    let response = build_check_response(
+        "policy.json",
+        vec![CheckViolationEntry {
+            symbol: "foo".into(),
+            error: None,
+            violation: Some("scale failure".into()),
+        }],
+    );
+    assert!(!response.passed);
+    let doc = serde_json::to_value(&response).unwrap();
+    assert_eq!(doc["passed"].as_bool(), Some(false));
+    assert!(!doc["violations"].as_array().unwrap().is_empty());
+    // Subprocess exit 1 when !passed: check_policy_violation_fails_closed_with_exit_one
+    // (fixture `publishEvent` has upstream caller `checkout`).
+}
