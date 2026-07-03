@@ -252,6 +252,20 @@ rbuilder -r "$REPO" -f json blast-radius CartService | jq '.metrics.score, .topo
 
 Breaking change from the old flat JSON shape; see [blast-radius-json-schema-v1.md](blast-radius-json-schema-v1.md) and the full catalog [cli-output-schemas.md](cli-output-schemas.md).
 
+### Optional: query daemon (repeated queries)
+
+For many blast-radius calls in one session, keep the graph and blast engine warm:
+
+```bash
+# Terminal 1
+rbuilder -r "$REPO" serve
+
+# Terminal 2 — auto-uses .rbuilder/query.sock when present
+rbuilder -r "$REPO" -f json blast-radius CartService
+```
+
+Disable auto-connect with `RBUILDER_NO_QUERY_DAEMON=1`. Not required for one-off or agent queries.
+
 ---
 
 ## Step 4: Program slicing

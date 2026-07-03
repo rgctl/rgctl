@@ -41,8 +41,19 @@ Related: [blast-radius-json-schema-v1.md](blast-radius-json-schema-v1.md) (v1 br
 **Command:**
 
 ```bash
-rbuilder -f json blast-radius <SYMBOL> [--policy-file PATH] [--with-slices] [--class CLASS] [--file PATH]
+rbuilder -f json blast-radius <SYMBOL> [--depth N] [--policy-file PATH] [--with-slices] [--class CLASS] [--file PATH]
 ```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--depth N` | Cap `topology.impact_zone` to upstream callers within **N incoming call hops** (hop 1 = direct callers). Omits `metrics.caller_depth_limit` when unset (full closure). Score is recomputed when capped. |
+| `--policy-file` | Run policy guardrails on the (possibly depth-filtered) impact zone |
+| `--with-slices` | Populate `gatekeeping.handoffs` (requires full graph path) |
+| `--class` / `--file` | Disambiguate overloads |
+
+**Optional warm path:** start `rbuilder serve -r REPO` to keep graph + engine loaded; lite queries auto-connect to `.rbuilder/query.sock` unless `RBUILDER_NO_QUERY_DAEMON=1`.
 
 **Source:** `src/cli/blast_radius_output.rs`  
 **Cache enrichment:** `crates/rbuilder-analysis/src/macro_call_index.rs`, `macro_call_lookup.rs`
@@ -81,7 +92,8 @@ rbuilder -f json blast-radius <SYMBOL> [--policy-file PATH] [--with-slices] [--c
 |-------|------|-------------|
 | `score` | number | Impact score 0–100 |
 | `direct_callers_count` | integer | Immediate caller count |
-| `impact_zone_size` | integer | Transitive caller count (functions only) |
+| `impact_zone_size` | integer | Transitive caller count (functions only); reflects `--depth` cap when set |
+| `caller_depth_limit` | integer \| omitted | Present when `--depth N` was passed; echoes the hop cap applied to `impact_zone` |
 
 ### `topology` — graph layout
 
@@ -89,7 +101,7 @@ rbuilder -f json blast-radius <SYMBOL> [--policy-file PATH] [--with-slices] [--c
 |-------|------|-------------|
 | `scc_component_id` | integer \| null | SCC index from engine; `null` on macro-index/SQLite fast path |
 | `direct_callers` | `SymbolContext[]` | Immediate callers |
-| `impact_zone` | `SymbolContext[]` | Transitive callers |
+| `impact_zone` | `SymbolContext[]` | Transitive upstream callers (filtered by `--depth` when set) |
 
 **`SymbolContext`:**
 
@@ -158,6 +170,24 @@ See v1 doc for `SliceHandoff` and `PolicyViolation` tag shapes.
 
 - `0` — success
 - `1` — `policy_status == "VIOLATED"` when `--policy-file` is set (JSON still emitted to stdout first)
+
+---
+
+## 1b. `serve` — query daemon (no JSON stdout)
+
+**Command:**
+
+```bash
+rbuilder serve -r REPO [--socket PATH] [--idle-secs SECS]
+```
+
+**Defaults:** socket `{repo}/.rbuilder/query.sock`, idle exit 300s.
+
+**Role:** Loads mmap graph + blast engine once; answers NDJSON RPC (`ping`, `blast_radius`) over a Unix socket. Lite `blast-radius` (no `--with-slices`, no `--policy-file`) auto-connects when the socket exists.
+
+**Environment:** `RBUILDER_NO_QUERY_DAEMON=1` disables client auto-connect.
+
+**Requires:** prior `discover` producing `graph.snapshot.bin` and `blast_engine.snapshot.bin`.
 
 ---
 

@@ -165,6 +165,8 @@ These tests call **serializer fixtures** in `src/cli/*_output.rs` directly. They
 - `gatekeeping.handoffs` is always a present empty array when slices skipped
 - Topology caller entries expose `id`, `fqn`, `file_path`
 - Target v2: `language`, `canonical_fqn`; `signature` omitted when `None`
+- `metrics.caller_depth_limit` present only when `--depth N` passed; `impact_zone_size` matches filtered zone
+- `--depth N` post-filters cached/engine impact zones by incoming call hops (see [cli-output-schemas.md](cli-output-schemas.md) §1)
 - Unresolved UUIDs in cache → caller dropped from topology (nil-UUID guardrail)
 
 #### `gql`

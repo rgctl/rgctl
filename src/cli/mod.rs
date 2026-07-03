@@ -126,6 +126,7 @@ pub enum Commands {
         #[arg(value_name = "SYMBOL")]
         symbol: String,
 
+        /// Limit upstream impact zone to N incoming call hops (default: full transitive closure)
         #[arg(long, value_name = "N")]
         depth: Option<usize>,
 
