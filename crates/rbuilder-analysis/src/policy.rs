@@ -40,7 +40,8 @@ impl PolicyRegistry {
 }
 
 /// Policy violation detected during blast-radius evaluation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PolicyViolation {
     /// Blast radius crosses a forbidden domain boundary.
     DomainIsolation {
