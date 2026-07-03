@@ -4,7 +4,7 @@ This document captures blast-radius **query latency tiers**, the **benchmark lan
 
 **Companion doc:** [cli-io-sanity-audit.md](cli-io-sanity-audit.md) — JSON schemas, exit codes, and subprocess correctness (orthogonal to wall-clock gates).
 
-Last updated: 2026-07-03 (Sprint C: perf gates + CI; T3: CFG/PDG archive foundation).
+Last updated: 2026-07-03 (T3 complete: ICFG from CFG archive + br.slice.total_ms gate).
 
 ---
 
@@ -29,7 +29,7 @@ Reference repo: `example/metasfresh-4.9.8b` (~128k functions, ~700k edges).
 | **T0** | SQLite macro index (`macro_call_index.db`) | ~280 ms | DB open + bincode BLOB read (Sprint A) | Micro + subprocess (`br.query.fast_path_ms`) |
 | **T1** | Lite path (mmap graph + engine v2 snapshot) | ~200 ms (post-Sprint A; was ~5.8 s) | Lazy `ReachabilityStore` load + single-row expand at analyze | Soft gate when metasfresh cache present |
 | **T2** | Full graph hydrate (`MemoryBackend`) | ~26 s+ | Legacy JSON / full backend rebuild | No |
-| **T3** | `--with-slices` | 8+ min (pre-archive) | ICFG + PDG per seed; **Sprint D (partial):** `cfg_pdg.archive.bin` when `discover --cfg` | No |
+| **T3** | `--with-slices` | seconds (tiny + `--cfg` archive); minutes without | ICFG from archive + PDG preload; ICFG still rebuilt if no archive | ✅ subprocess `br.slice.total_ms` (tiny fixture) |
 
 These T0–T3 numbers are **manual** (`/usr/bin/time`, ignored rebuild test). They are not enforced in CI.
 
@@ -172,7 +172,7 @@ br.query.sqlite_unique_ms regression: 42ms >= 15ms
 | Gap | Impact |
 |-----|--------|
 | No **end-to-end CLI** T1 subprocess gate on metasfresh | In-process soft gates only; T0 covered via `fast_path_ms` |
-| **T3** slice path still rebuilds ICFG; archive only skips PDG rebuild | Run `discover --cfg` first; full T3 gate not wired |
+| **T3** slice path without prior `discover --cfg` | Still rebuilds ICFG/PDG from source on large repos |
 | **metasfresh** not required in CI | Soft gates skip when checkout/cache absent |
 | **P2 columnar graph / query daemon** | Not started — see roadmap below |
 | `semantic-verification.sh` | Dominance only; no blast-radius |
@@ -206,7 +206,7 @@ Prioritized by impact on T0–T3. Status as of 2026-07-03.
 | # | Item | Status |
 |---|------|--------|
 | 8 | Columnar mmap graph — true zero-copy open | Open |
-| 9 | CFG/PDG mmap archive for `--with-slices` | **Partial** — `CfgPdgArchive` (`cfg_pdg_archive.rs`); PDG preload in slice trace; ICFG still built per query |
+| 9 | CFG/PDG mmap archive for `--with-slices` | **Done** — `CfgPdgArchive`; `to_interprocedural_cfg` + PDG preload; run `discover --cfg` first on large repos |
 | 10 | Ephemeral query daemon (amortize cold start) | Open |
 
 ### P3 — Cleanup
@@ -251,13 +251,13 @@ cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 
 ## Recommended next steps
 
-1. **T3 completion** — mmap ICFG archive; `br.slice.total_ms` subprocess gate; discover `--cfg` in CI fixture path.
+1. **P2 #8 columnar mmap graph** — eliminate bincode deserialize on graph open.
 
-2. **P2 #8 columnar mmap graph** — eliminate bincode deserialize on graph open.
+2. **P2 #10 query daemon** — amortize snapshot + engine load across repeated blast-radius invocations.
 
-3. **P2 #10 query daemon** — amortize snapshot + engine load across repeated blast-radius invocations.
+3. **P3 #11 `--depth`** — implement hop-limited impact zone or remove flag from CLI.
 
-4. **P3 #11 `--depth`** — implement hop-limited impact zone or remove flag from CLI.
+4. **Metasfresh T3 gate** — optional soft gate for `--with-slices` when fixture cache present.
 
 5. **Nightly large-scale** — `RBUILDER_BENCH_LARGE=1 cargo bench --bench blast_radius_benchmarks` + `phase16 --ignored`.
 

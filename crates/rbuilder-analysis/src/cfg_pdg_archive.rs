@@ -7,6 +7,7 @@ use crate::cfg::ControlFlowGraph;
 use crate::pdg::ProgramDependenceGraph;
 use memmap2::Mmap;
 use rbuilder_error::{Error, Result};
+use rbuilder_graph::backend::MemoryBackend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -95,6 +96,25 @@ impl CfgPdgArchive {
             return Ok(None);
         }
         Ok(Some(Self::load_from_path(&path)?))
+    }
+
+    /// CFG map for [`InterproceduralCFG::from_cfg_archive`].
+    pub fn function_cfgs(&self) -> HashMap<Uuid, ControlFlowGraph> {
+        self.records
+            .iter()
+            .map(|(id, record)| (*id, record.cfg.clone()))
+            .collect()
+    }
+
+    /// Build interprocedural CFG using archived CFGs and live call graph from backend.
+    pub fn to_interprocedural_cfg(
+        &self,
+        backend: &MemoryBackend,
+    ) -> Result<crate::interprocedural_cfg::InterproceduralCFG> {
+        crate::interprocedural_cfg::InterproceduralCFG::from_cfg_archive(
+            backend,
+            self.function_cfgs(),
+        )
     }
 }
 

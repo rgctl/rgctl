@@ -275,10 +275,15 @@ pub fn trace_blast_to_slices_with_blast(
     let handoffs = resolve_handoff_seeds(backend, blast, symbol_id)?;
 
     let source_files = load_source_files(backend, repo_root);
-    let icfg = InterproceduralCFG::build(backend, &source_files)?;
+    let archive = crate::cfg_pdg_archive::CfgPdgArchive::open_if_exists(repo_root)?;
+    let icfg = if let Some(ref archive) = archive {
+        archive.to_interprocedural_cfg(backend)?
+    } else {
+        InterproceduralCFG::build(backend, &source_files)?
+    };
     let slicer = InterproceduralSlicer::new(&icfg, backend, &source_files)?;
-    if let Some(archive) = crate::cfg_pdg_archive::CfgPdgArchive::open_if_exists(repo_root)? {
-        slicer.preload_pdgs(&archive);
+    if let Some(ref archive) = archive {
+        slicer.preload_pdgs(archive);
     }
 
     let mut slices = Vec::new();

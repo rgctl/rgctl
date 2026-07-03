@@ -46,6 +46,17 @@ impl InterproceduralCFG {
         })
     }
 
+    /// Assemble ICFG from a discover-time CFG archive + live call graph (skips CFG rebuild).
+    pub fn from_cfg_archive(
+        backend: &MemoryBackend,
+        function_cfgs: HashMap<Uuid, ControlFlowGraph>,
+    ) -> Result<Self> {
+        Ok(Self {
+            function_cfgs,
+            call_graph: CallGraph::from_backend(backend)?,
+        })
+    }
+
     /// CFG for one function.
     pub fn get_cfg(&self, function: Uuid) -> Option<&ControlFlowGraph> {
         self.function_cfgs.get(&function)
@@ -124,5 +135,45 @@ fn helper() -> i32 {
         let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
         assert!(icfg.function_cfgs.contains_key(&id_main));
         assert!(icfg.function_cfgs.contains_key(&id_helper));
+    }
+
+    #[test]
+    fn from_cfg_archive_reuses_stored_cfgs() {
+        use crate::cfg_pdg_archive::{CfgPdgArchive, CfgPdgRecord};
+        use rbuilder_graph::code_index::hash_code;
+
+        let mut backend = MemoryBackend::new();
+        let main = Node::new(NodeType::Function, "main".into()).with_file_path("main.rs".into());
+        let helper =
+            Node::new(NodeType::Function, "helper".into()).with_file_path("main.rs".into());
+        let id_main = main.id;
+        let id_helper = helper.id;
+        backend.insert_node(main).unwrap();
+        backend.insert_node(helper).unwrap();
+        backend
+            .insert_edge(Edge::new(id_main, id_helper, EdgeType::Calls))
+            .unwrap();
+
+        let source = r#"
+fn main() { helper(); }
+fn helper() -> i32 { 42 }
+"#;
+        let cfg_main = build_cfg_for_function("rust", source, "main").unwrap();
+        let cfg_helper = build_cfg_for_function("rust", source, "helper").unwrap();
+        let pdg = crate::pdg::ProgramDependenceGraph::build(&cfg_main, source.as_bytes()).unwrap();
+
+        let mut archive = CfgPdgArchive::default();
+        for (id, cfg) in [(id_main, cfg_main), (id_helper, cfg_helper)] {
+            archive.insert(CfgPdgRecord {
+                function_id: id,
+                code_hash: hash_code(source),
+                cfg,
+                pdg: pdg.clone(),
+            });
+        }
+
+        let icfg = archive.to_interprocedural_cfg(&backend).unwrap();
+        assert_eq!(icfg.function_cfgs.len(), 2);
+        assert!(icfg.get_cfg(id_main).is_some());
     }
 }

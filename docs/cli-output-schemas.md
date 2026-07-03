@@ -210,7 +210,7 @@ Without `-f json`, discover remains human-readable text progress (unchanged).
 | `.rbuilder/analysis_results.bin` | Always | Columnar analysis tables |
 | `.rbuilder/dashboard.html` | When export succeeds | HTML dashboard |
 | `.rbuilder/graph.db` / `.rbuilder/graph.json` | `--write-json-graph` only | Legacy full graph JSON |
-| `.rbuilder/analysis/cfg_pdg.archive.bin` | `--cfg` or `--all` | CFG/PDG archive for `--with-slices` PDG preload |
+| `.rbuilder/analysis/cfg_pdg.archive.bin` | `--cfg` or `--all` | CFG + PDG for `--with-slices` (ICFG assembled from archived CFGs + live call graph) |
 | `.rbuilder/analysis/all_analyses.json` | `--cfg` / `--all` (verbose path) | Per-function CFG/taint JSON export |
 
 ---

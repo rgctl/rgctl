@@ -209,6 +209,7 @@ Focused regressions that proved fragile during P2 work. Uses the same temp-copy 
 | `blast_radius_json_exit_zero_after_discover` | Java `OrderService::process` via `--class`; v2 target metadata including `signature` |
 | `blast_radius_policy_violation_fails_closed_with_exit_one` | `--policy-file` with `max_impact_nodes: 0` → exit **1**, `policy_status: VIOLATED` |
 | `blast_radius_with_slices_populates_handoffs` | `--with-slices` on `publishEvent` → non-empty `handoffs` |
+| `blast_radius_with_slices_under_30s_after_cfg_discover` | `discover --cfg` then `--with-slices` under 30s (`br.slice.total_ms`) |
 | `check_policy_violation_fails_closed_with_exit_one` | `check` with `max_impact_nodes: 0` → exit **1** |
 
 Add a golden-path test when a **specific** discover → command pipeline breaks in production but unit fixtures still pass.

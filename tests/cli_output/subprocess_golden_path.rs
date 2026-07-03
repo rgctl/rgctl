@@ -12,6 +12,7 @@
 //! | `blast_radius_policy_violation_fails_closed_with_exit_one` | Policy breach → exit 1 + valid JSON |
 //! | `blast_radius_fast_path_under_150ms` | T0 SQLite fast path on warm `publishEvent` cache |
 //! | `blast_radius_with_slices_populates_handoffs` | `--with-slices` emits non-empty `gatekeeping.handoffs` |
+//! | `blast_radius_with_slices_under_30s_after_cfg_discover` | T3 slice path with CFG archive (`br.slice.total_ms`) |
 //!
 //! Full command matrix: `all_commands_sanity.rs` + `docs/cli-io-sanity-audit.md`.
 
@@ -236,6 +237,51 @@ fn blast_radius_with_slices_populates_handoffs() {
         .expect("handoffs array");
     assert!(!handoffs.is_empty());
     assert_eq!(handoffs[0]["callee"].as_str(), Some("publishEvent"));
+}
+
+#[test]
+fn blast_radius_with_slices_under_30s_after_cfg_discover() {
+    let dir = materialize_fixture();
+    let repo = dir.path();
+
+    let discover = run_rbuilder(
+        repo,
+        &["discover", ".", "--languages", "java,rust", "--cfg"],
+    );
+    assert!(
+        discover.status.success(),
+        "discover --cfg failed: stderr={}",
+        String::from_utf8_lossy(&discover.stderr)
+    );
+    assert!(
+        repo.join(".rbuilder/analysis/cfg_pdg.archive.bin").exists(),
+        "discover --cfg should write cfg_pdg archive"
+    );
+
+    let start = Instant::now();
+    let output = run_rbuilder(
+        repo,
+        &["-f", "json", "blast-radius", "publishEvent", "--with-slices"],
+    );
+    let latency = start.elapsed();
+
+    assert!(
+        output.status.success(),
+        "blast-radius --with-slices failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        latency < Duration::from_secs(30),
+        "br.slice.total_ms regression: {latency:?} >= 30s"
+    );
+
+    let doc: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("blast-radius stdout must be valid JSON");
+    let handoffs = doc["gatekeeping"]["handoffs"]
+        .as_array()
+        .expect("handoffs array");
+    assert!(!handoffs.is_empty());
 }
 
 #[test]
