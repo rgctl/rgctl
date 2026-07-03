@@ -31,6 +31,16 @@ impl GraphFingerprint {
         Self::capture_with_digest(graph_db_path, backend, None)
     }
 
+    /// Capture fingerprint from topology counts and optional snapshot digest (no JSON file required).
+    pub fn from_topology(backend: &MemoryBackend, graph_digest: Option<String>) -> Self {
+        Self {
+            file_size: 0,
+            node_count: backend.node_count(),
+            edge_count: backend.edge_count(),
+            graph_digest,
+        }
+    }
+
     /// Capture fingerprint with optional binary snapshot digest.
     pub fn capture_with_digest(
         graph_db_path: &Path,
@@ -193,6 +203,19 @@ impl MacroCallIndex {
         results: &[(Uuid, BlastRadiusResult)],
         graph_digest: Option<String>,
     ) -> Result<Self> {
+        let fingerprint = if graph_db_path.exists() {
+            GraphFingerprint::capture_with_digest(graph_db_path, backend, graph_digest)?
+        } else {
+            GraphFingerprint::from_topology(backend, graph_digest)
+        };
+        Self::from_results_with_fingerprint(backend, results, fingerprint)
+    }
+
+    fn from_results_with_fingerprint(
+        backend: &MemoryBackend,
+        results: &[(Uuid, BlastRadiusResult)],
+        graph_fingerprint: GraphFingerprint,
+    ) -> Result<Self> {
         let mut entries = HashMap::with_capacity(results.len());
         let mut name_index: HashMap<String, Vec<Uuid>> = HashMap::new();
         let mut symbol_context = HashMap::with_capacity(results.len());
@@ -206,11 +229,7 @@ impl MacroCallIndex {
         }
 
         Ok(Self {
-            graph_fingerprint: GraphFingerprint::capture_with_digest(
-                graph_db_path,
-                backend,
-                graph_digest,
-            )?,
+            graph_fingerprint,
             node_count: backend.node_count(),
             edge_count: backend.edge_count(),
             name_index,

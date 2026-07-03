@@ -65,8 +65,41 @@ impl MemoryBackend {
 
     /// Hydrate a backend from a prepared mmap snapshot (fast binary path).
     pub fn from_prepared_snapshot(prepared: &crate::snapshot::PreparedGraphSnapshot) -> Result<Self> {
+        Self::hydrate_prepared(prepared)
+    }
+
+    fn hydrate_prepared(prepared: &crate::snapshot::PreparedGraphSnapshot) -> Result<Self> {
         let mut backend = Self::new();
-        backend.insert_nodes_batch(prepared.nodes.clone())?;
+        if prepared.nodes.is_empty() {
+            return Ok(backend);
+        }
+
+        let mut nodes = Vec::with_capacity(prepared.nodes.len());
+        for mut node in prepared.nodes.clone() {
+            backend.intern_node(&mut node);
+            nodes.push(node);
+        }
+
+        {
+            let mut name_index = expect_write(&backend.node_name_index);
+            for (name, ids) in &prepared.indexes.name_index {
+                let name_arc = backend.string_interner.intern(name);
+                name_index.insert(name_arc, ids.clone());
+            }
+            let mut type_index = expect_write(&backend.node_type_index);
+            for (node_type, ids) in &prepared.indexes.type_index {
+                type_index.insert(*node_type, ids.clone());
+            }
+        }
+        backend.index_node_metadata(&nodes);
+
+        {
+            let mut store = expect_write(&backend.nodes);
+            for node in nodes {
+                store.insert(node.id, node);
+            }
+        }
+
         backend.insert_edges_batch(prepared.edges.clone())?;
         Ok(backend)
     }
@@ -657,6 +690,31 @@ impl MemoryBackend {
         }
         trace!(elapsed = ?index_start.elapsed(), "index_nodes: index population complete");
         trace!(elapsed = ?start.elapsed(), "index_nodes complete");
+    }
+
+    /// Index labels and properties only (name/type indexes supplied externally).
+    fn index_node_metadata(&self, nodes: &[Node]) {
+        let mut label_index = expect_write(&self.node_label_index);
+        let mut property_index = expect_write(&self.node_property_index);
+        for node in nodes {
+            for label in &node.labels {
+                let label_arc = self.string_interner.intern(label);
+                label_index
+                    .entry(label_arc)
+                    .or_default()
+                    .push(node.id);
+            }
+            for (key, value) in &node.properties {
+                let key_arc = self.string_interner.intern(key);
+                let value_arc = self.string_interner.intern(value);
+                property_index
+                    .entry(key_arc)
+                    .or_default()
+                    .entry(value_arc)
+                    .or_default()
+                    .push(node.id);
+            }
+        }
     }
 
     fn unindex_node(&self, node: &Node) {

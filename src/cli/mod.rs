@@ -76,6 +76,10 @@ pub enum Commands {
 
         #[arg(long = "all")]
         all: bool,
+
+        /// Write legacy JSON graph files (`graph.db` / `graph.json`); default is snapshot-only.
+        #[arg(long = "write-json-graph")]
+        write_json_graph: bool,
     },
 
     /// Execute graph query language
@@ -208,6 +212,7 @@ impl Cli {
                 security,
                 cfg,
                 all,
+                write_json_graph,
             } => discover::run(
                 &ctx,
                 discover::DiscoverArgs {
@@ -217,6 +222,7 @@ impl Cli {
                     security,
                     cfg,
                     all,
+                    write_json_graph,
                 },
             ),
             Commands::Gql {

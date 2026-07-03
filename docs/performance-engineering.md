@@ -4,7 +4,7 @@ This document captures blast-radius **query latency tiers**, the **benchmark lan
 
 **Companion doc:** [cli-io-sanity-audit.md](cli-io-sanity-audit.md) — JSON schemas, exit codes, and subprocess correctness (orthogonal to wall-clock gates).
 
-Last updated: 2026-07-03 (Sprint A: lazy reachability, snapshot session, SQLite bincode blobs, fast-path lookup).
+Last updated: 2026-07-03 (Sprint B: discover dedup, parallel analyze, snapshot-canonical discover).
 
 ---
 
@@ -195,10 +195,10 @@ Prioritized by impact on T0–T3. Status as of 2026-07-03.
 
 | # | Item | Metric | Status |
 |---|------|--------|--------|
-| 4 | Prepared indexes on hydrate | `br.load.backend_hydrate_ms` | Open |
-| 5 | Discover deduplication — one `PreparedGraphSnapshot`, `build_from_view` | `br.discover.*` | Open |
-| 6 | Parallel analyze loop at discover | `br.discover.analyze_all_ms` | Open |
-| 7 | Snapshot canonical; JSON `graph.db` opt-in | — | Open |
+| 4 | Prepared indexes on hydrate | `br.load.backend_hydrate_ms` | **Done** — `MemoryBackend::hydrate_prepared` applies snapshot `PreparedIndexes`; labels/properties indexed once |
+| 5 | Discover deduplication — one `PreparedGraphSnapshot`, `build_from_view` | `br.discover.*` | **Done** — single `prepared` in `discover_impl.rs`; `PetGraphView::from_prepared` + `BlastRadiusEngine::build_from_view` |
+| 6 | Parallel analyze loop at discover | `br.discover.analyze_all_ms` | **Done** — `rayon` parallel `engine.analyze` over functions; lazy cache uses `Mutex` for `Sync` |
+| 7 | Snapshot canonical; JSON `graph.db` opt-in | — | **Done** — discover writes `graph.snapshot.bin` by default; `--write-json-graph` for legacy JSON |
 
 ### P2 — Architecture (weeks)
 
@@ -250,13 +250,15 @@ cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 
 ## Recommended next steps
 
-1. **Sprint B — discover path** — prepared indexes on hydrate, deduplicated `PreparedGraphSnapshot`, parallel analyze loop.
+1. **`br.load.backend_hydrate_ms` gate** — assert hydrate-from-snapshot faster than full re-index on 150k mock.
 
-2. **`br.load.engine_snapshot_rss_mb` gate** — RSS delta after engine load on 150k mock or metasfresh.
+2. **`br.discover.analyze_all_ms` gate** — soft gate on metasfresh discover or synthetic fixture.
 
-3. **Optional CI job** — `cargo test --release --test phase16_blast_radius_perf` on every PR (non-ignored gates only); nightly `RBUILDER_BENCH_LARGE=1 cargo bench --bench blast_radius_benchmarks`.
+3. **`br.load.engine_snapshot_rss_mb` gate** — RSS delta after engine load on 150k mock or metasfresh.
 
-4. **Doc hygiene** — keep this file in sync when adding gates; cross-link new metrics in gate assert messages.
+4. **Optional CI job** — `cargo test --release --test phase16_blast_radius_perf` on every PR (non-ignored gates only); nightly `RBUILDER_BENCH_LARGE=1 cargo bench --bench blast_radius_benchmarks`.
+
+5. **Doc hygiene** — keep this file in sync when adding gates; cross-link new metrics in gate assert messages.
 
 ---
 
@@ -278,7 +280,8 @@ cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 | `src/cli/context.rs` | Snapshot session cache (`SnapshotSession`) |
 | `src/cli/blast_radius.rs` | T0/T1/T2/T3 orchestration + fast-path lookup |
 | `crates/rbuilder-analysis/src/blast_radius_scc.rs` | Engine + `ReachabilityStore` integration |
-| `src/cli/discover_impl.rs` | Discover pipeline + cache writers |
+| `src/cli/discover_impl.rs` | Discover pipeline (prepared dedup, parallel blast analyze) |
+| `crates/rbuilder-graph/src/backend/memory.rs` | `hydrate_prepared` with snapshot indexes |
 | `src/cli/discover_output.rs` | Discover JSON telemetry (`duration_ms`) |
 | `crates/rbuilder-analysis/src/macro_call_lookup.rs` | SQLite macro index (T0) |
 | `crates/rbuilder-analysis/src/blast_engine_snapshot.rs` | Engine v2 sparse+zstd |

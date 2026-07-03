@@ -8,11 +8,11 @@ use bit_set::BitSet;
 use memmap2::Mmap;
 use rbuilder_error::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::blast_radius_scc::BlastRadiusEngine;
@@ -166,7 +166,7 @@ enum ReachabilityBacking {
     Eager(Vec<BitSet>),
     Lazy {
         rows: HashMap<u32, Vec<u8>>,
-        cache: RefCell<HashMap<usize, BitSet>>,
+        cache: Mutex<HashMap<usize, BitSet>>,
     },
 }
 
@@ -193,7 +193,7 @@ impl ReachabilityStore {
                 word_count: scc_count.div_ceil(64),
                 backing: ReachabilityBacking::Lazy {
                     rows,
-                    cache: RefCell::new(HashMap::new()),
+                    cache: Mutex::new(HashMap::new()),
                 },
             });
         }
@@ -226,7 +226,7 @@ impl ReachabilityStore {
         match &self.backing {
             ReachabilityBacking::Eager(v) => Ok(v[scc_id].clone()),
             ReachabilityBacking::Lazy { rows, cache } => {
-                if let Some(cached) = cache.borrow().get(&scc_id) {
+                if let Some(cached) = cache.lock().expect("reachability cache lock").get(&scc_id) {
                     return Ok(cached.clone());
                 }
                 let mut bs = BitSet::new();
@@ -235,7 +235,10 @@ impl ReachabilityStore {
                     let words = decompress_words(compressed, self.word_count)?;
                     bs = words_to_bitset(&words, self.scc_count);
                 }
-                cache.borrow_mut().insert(scc_id, bs.clone());
+                cache
+                    .lock()
+                    .expect("reachability cache lock")
+                    .insert(scc_id, bs.clone());
                 Ok(bs)
             }
         }

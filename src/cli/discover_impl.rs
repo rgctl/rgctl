@@ -17,6 +17,7 @@ pub(crate) fn run_full_analysis(
     security: bool,
     cfg: bool,
     all: bool,
+    write_json_graph: bool,
     db_path: &Path,
 ) -> Result<()> {
     let verbose = ctx.verbose;
@@ -31,6 +32,8 @@ pub(crate) fn run_full_analysis(
     use crate::incremental::FileTracker;
     use crate::languages::registry::LanguageRegistry;
     use crate::pipeline::{PipelineConfig, ProcessingPipeline};
+    use rbuilder_graph::PreparedGraphSnapshot;
+    use rayon::prelude::*;
     use std::path::Path;
     use std::sync::Arc;
 
@@ -128,16 +131,20 @@ pub(crate) fn run_full_analysis(
 
     debug!("{}", mem_monitor.report());
 
+    // One prepared snapshot for topology views, digest, and mmap write (Sprint B dedup).
+    let prepared = PreparedGraphSnapshot::from_backend(graph.backend())?;
+    let graph_digest = prepared.content_digest.clone();
+
     // Initialize columnar analysis results
     use crate::analysis::AnalysisResults;
     // Zero-copy: collect node IDs directly without cloning full nodes
     let node_ids = graph.backend().all_node_ids()?;
     let mut analysis_results = AnalysisResults::new(node_ids);
 
-    // Build PetGraphView ONCE - reused for community, centrality, and blast radius
+    // Build PetGraphView ONCE from prepared snapshot — reused for community, centrality, blast radius
     let petgraph_view = {
         let _span = if verbose { Some(info_span!("topology").entered()) } else { None };
-        let view = PetGraphView::from_backend(graph.backend())?;
+        let view = PetGraphView::from_prepared(&prepared)?;
         debug!(
             nodes = view.directed.node_count(),
             edges = view.directed.edge_count(),
@@ -487,12 +494,11 @@ pub(crate) fn run_full_analysis(
 
     // Blast radius analysis with SCC + Dense Bitsets engine
     use crate::analysis::BlastRadiusEngine;
-    use std::time::Instant;
 
     let blast_start = Instant::now();
 
     // Build SCC engine (one-time cost: Tarjan's + topo sort + bitset propagation)
-    let engine = match BlastRadiusEngine::build(backend) {
+    let engine = match BlastRadiusEngine::build_from_view(backend, &petgraph_view) {
         Ok(e) => e,
         Err(err) => {
             error!(error = %err, "[x] Blast radius engine build failed");
@@ -514,43 +520,40 @@ pub(crate) fn run_full_analysis(
         "Blast radius engine built"
     );
 
-    // Analyze all functions (O(1) lookup per function!)
+    // Analyze all functions in parallel (O(1) lookup per function, read-only engine)
     let query_start = Instant::now();
-    let mut blast_updates = Vec::new();
+    let blast_results: Vec<(uuid::Uuid, crate::analysis::BlastRadiusResult)> = functions
+        .par_iter()
+        .filter_map(|func_node| engine.analyze(func_node.id).ok().map(|result| (func_node.id, result)))
+        .collect();
+
     let mut high_impact_count = 0;
     let mut max_impact_score = 0.0f64;
     let mut max_impact_function = String::new();
     let mut in_cycle_count = 0;
 
-    for func_node in &functions {
-        if let Ok(result) = engine.analyze(func_node.id) {
-            if result.scc_size > 1 {
-                in_cycle_count += 1;
+    for (func_id, result) in &blast_results {
+        if result.scc_size > 1 {
+            in_cycle_count += 1;
+        }
+        if result.score > 50.0 {
+            high_impact_count += 1;
+        }
+        if result.score > max_impact_score {
+            max_impact_score = result.score;
+            if let Ok(Some(node)) = backend.get_node(*func_id) {
+                max_impact_function = node.name.clone();
             }
-
-            if result.score > 50.0 {
-                high_impact_count += 1;
-            }
-
-            if result.score > max_impact_score {
-                max_impact_score = result.score;
-                max_impact_function = func_node.name.clone();
-            }
-
-            blast_updates.push((func_node.id, result));
         }
     }
 
     let query_time = query_start.elapsed();
-
-    let graph_digest = rbuilder_graph::PreparedGraphSnapshot::from_backend(backend)
-        .ok()
-        .map(|p| p.content_digest);
+    let blast_updates = blast_results;
 
     // Persist SCC engine snapshot for instant blast-radius cache misses
-    if let Some(ref digest) = graph_digest {
+    {
         use crate::analysis::BlastEngineSnapshot;
-        let blast_snap = engine.to_engine_snapshot(digest.clone());
+        let blast_snap = engine.to_engine_snapshot(graph_digest.clone());
         let blast_path = BlastEngineSnapshot::default_path(root);
         if let Err(err) = blast_snap.write_to_path(&blast_path) {
             warn!(error = %err, "Failed to save blast engine snapshot");
@@ -562,18 +565,11 @@ pub(crate) fn run_full_analysis(
     // Serialize minimized macro-call index for instant blast-radius lookups
     {
         use crate::analysis::MacroCallIndex;
-        // Fingerprint capture reads graph.db; persist topology before indexing.
-        if !db_path.exists() {
-            if let Some(parent) = db_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(db_path, graph.export_json()?)?;
-        }
         let macro_index = MacroCallIndex::from_results(
             db_path,
             backend,
             &blast_updates,
-            graph_digest.clone(),
+            Some(graph_digest.clone()),
         )?;
         let macro_path = root.join(".rbuilder/macro_call_index.bin");
         if let Err(err) = macro_index.save(&macro_path) {
@@ -598,10 +594,14 @@ pub(crate) fn run_full_analysis(
             warn!(error = %err, "Failed to save macro_call_candidates table");
         } else if let Err(err) = MacroCallLookupDb::write_meta_with_digest(
             &lookup_db_path,
-            std::fs::metadata(db_path).map(|m| m.len()).unwrap_or(0),
+            if write_json_graph {
+                std::fs::metadata(db_path).map(|m| m.len()).unwrap_or(0)
+            } else {
+                0
+            },
             backend.node_count(),
             backend.edge_count(),
-            graph_digest.as_deref(),
+            Some(graph_digest.as_str()),
         ) {
             warn!(error = %err, "Failed to write macro_call_index.db metadata");
         } else if verbose {
@@ -686,16 +686,22 @@ pub(crate) fn run_full_analysis(
     tracker.index_files(&files, &graph)?;
     tracker.save()?;
 
-    let json = graph.export_json()?;
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)?;
+    std::fs::create_dir_all(root.join(".rbuilder"))?;
+    let snapshot_path = rbuilder_graph::snapshot::MmappedGraphSnapshot::default_path(root);
+    prepared.write_to_path(&snapshot_path)?;
+    if verbose {
+        debug!(path = %snapshot_path.display(), "Graph binary snapshot saved");
     }
-    std::fs::write(db_path, json)?;
-    let saved = graph.save_to_repo(root)?;
 
-    if let Ok(snap_path) = graph.save_snapshot(root) {
+    if write_json_graph {
+        let json = graph.export_json()?;
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(db_path, &json)?;
+        let saved = graph.save_to_repo(root)?;
         if verbose {
-            debug!(path = %snap_path.display(), "Graph binary snapshot saved");
+            debug!(path = %saved.display(), "Legacy JSON graph saved");
         }
     }
 
@@ -730,7 +736,7 @@ pub(crate) fn run_full_analysis(
         if verbose {
             debug!(
                 saved_path = %analysis_path.display(),
-                graph_path = %saved.display(),
+                graph_snapshot = %snapshot_path.display(),
                 size_mb = %format!("{:.1}", analysis_size),
                 duration_secs = %format!("{:.1}", snapshot.elapsed.as_secs_f64()),
                 peak_mb = %format!("{:.0}", snapshot.peak_mb),

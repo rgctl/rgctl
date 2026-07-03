@@ -294,4 +294,21 @@ mod tests {
         assert_eq!(loaded.node_count(), 1);
         assert_eq!(loaded.find_nodes_by_name("main").unwrap().len(), 1);
     }
+
+    #[test]
+    fn hydrate_uses_prepared_indexes_without_rescan() {
+        let mut backend = MemoryBackend::new();
+        for name in ["alpha", "beta"] {
+            let n = Node::new(NodeType::Function, name.into());
+            backend.insert_node(n).unwrap();
+        }
+        let prepared = PreparedGraphSnapshot::from_backend(&backend).unwrap();
+        let loaded = prepared.hydrate_backend().unwrap();
+        assert_eq!(loaded.find_nodes_by_name("alpha").unwrap().len(), 1);
+        assert_eq!(loaded.find_nodes_by_name("beta").unwrap().len(), 1);
+        assert_eq!(
+            loaded.find_nodes_by_type(NodeType::Function).unwrap().len(),
+            2
+        );
+    }
 }

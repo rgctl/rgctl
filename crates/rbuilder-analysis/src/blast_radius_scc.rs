@@ -63,6 +63,11 @@ impl BlastRadiusEngine {
         use crate::graph_utils::PetGraphView;
 
         let view = PetGraphView::from_backend(backend)?;
+        Self::build_from_view(backend, &view)
+    }
+
+    /// Build the engine from an existing topology view (avoids rebuilding petgraph).
+    pub fn build_from_view(backend: &MemoryBackend, view: &crate::graph_utils::PetGraphView) -> Result<Self> {
         let graph = view.call_only_directed();
 
         // Step 1: Find strongly connected components (call graph only)
@@ -558,6 +563,21 @@ mod tests {
         assert_eq!(result.direct_caller_ids.len(), 1);  // c
         assert_eq!(result.impact_zone_ids.len(), 3);    // a, b, c
         assert!(result.score > 0.0);
+    }
+
+    #[test]
+    fn build_from_view_matches_build() {
+        use crate::graph_utils::PetGraphView;
+        let backend = build_chain();
+        let view = PetGraphView::from_backend(&backend).unwrap();
+        let direct = BlastRadiusEngine::build(&backend).unwrap();
+        let from_view = BlastRadiusEngine::build_from_view(&backend, &view).unwrap();
+        let nodes = backend.all_nodes().unwrap();
+        let id = nodes[0].id;
+        assert_eq!(
+            direct.analyze(id).unwrap().score,
+            from_view.analyze(id).unwrap().score
+        );
     }
 
     #[test]

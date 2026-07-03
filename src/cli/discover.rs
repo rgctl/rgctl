@@ -10,6 +10,8 @@ pub struct DiscoverArgs {
     pub security: bool,
     pub cfg: bool,
     pub all: bool,
+    /// Also write legacy JSON graph files (`graph.db` / `graph.json`).
+    pub write_json_graph: bool,
 }
 
 pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
@@ -33,6 +35,7 @@ pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
         args.security,
         args.cfg,
         args.all,
+        args.write_json_graph,
         &ctx.db,
     )
 }
