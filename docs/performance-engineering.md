@@ -4,7 +4,7 @@ This document captures blast-radius **query latency tiers**, the **benchmark lan
 
 **Companion doc:** [cli-io-sanity-audit.md](cli-io-sanity-audit.md) — JSON schemas, exit codes, and subprocess correctness (orthogonal to wall-clock gates).
 
-Last updated: 2026-07-03 (Sprint B: discover dedup, parallel analyze, snapshot-canonical discover).
+Last updated: 2026-07-03 (Sprint C: perf gates + CI; T3: CFG/PDG archive foundation).
 
 ---
 
@@ -12,8 +12,8 @@ Last updated: 2026-07-03 (Sprint B: discover dedup, parallel analyze, snapshot-c
 
 | Track | Status | What it proves |
 |-------|--------|----------------|
-| **CLI I/O contract** | ✅ Strong | Output shape, schema versions, exit codes — `tests/cli_output/`, `all_commands_sanity` |
-| **Blast-radius perf infra** | ✅ Landed | `blast_radius_benchmarks` + `phase16_blast_radius_perf` (mock scale) |
+| **CLI I/O contract** | ✅ Strong | `cli_output`, `subprocess_golden_path`, `all_commands_sanity` — CI in [blast-radius-perf.yml](../.github/workflows/blast-radius-perf.yml) |
+| **Blast-radius perf infra** | ✅ Landed | `phase16_blast_radius_perf` (8 CI gates + 3 ignored 150k) |
 | **Production latency (T0–T3)** | ⚠️ Partial | metasfresh T1 ~200 ms post-Sprint A; soft gates when cache present |
 
 **Bottom line:** We can regress **algorithm + cache micro-paths** at mock scale and **SQLite lookup** on synthetic rows. We **cannot yet** automatically regress end-to-end CLI latency on a real monorepo cache.
@@ -29,7 +29,7 @@ Reference repo: `example/metasfresh-4.9.8b` (~128k functions, ~700k edges).
 | **T0** | SQLite macro index (`macro_call_index.db`) | ~280 ms | DB open + bincode BLOB read (Sprint A) | Micro + subprocess (`br.query.fast_path_ms`) |
 | **T1** | Lite path (mmap graph + engine v2 snapshot) | ~200 ms (post-Sprint A; was ~5.8 s) | Lazy `ReachabilityStore` load + single-row expand at analyze | Soft gate when metasfresh cache present |
 | **T2** | Full graph hydrate (`MemoryBackend`) | ~26 s+ | Legacy JSON / full backend rebuild | No |
-| **T3** | `--with-slices` | 8+ min | ICFG + PDG per handoff seed; slice trace not cache-backed | No |
+| **T3** | `--with-slices` | 8+ min (pre-archive) | ICFG + PDG per seed; **Sprint D (partial):** `cfg_pdg.archive.bin` when `discover --cfg` | No |
 
 These T0–T3 numbers are **manual** (`/usr/bin/time`, ignored rebuild test). They are not enforced in CI.
 
@@ -129,15 +129,15 @@ Each metric should eventually have Criterion samples **and** a release gate wher
 | `br.load.snapshot_node_store_ms` | `SnapshotNodeStore::open` | < 15 s | ✅ ignored `phase16` |
 | `br.load.graph_snapshot_ms` | `MmappedGraphSnapshot::open` | < 15 s | ✅ `blast_radius_benchmarks` assert |
 | `br.load.engine_snapshot_ms` | Load + `from_engine_snapshot` | < 5 s (150k mock + metasfresh soft) | ✅ `phase16` |
-| `br.load.engine_snapshot_rss_mb` | RSS delta after engine load | < 512 MB | ❌ Not implemented |
-| `br.load.backend_hydrate_ms` | Full `MemoryBackend` hydrate | TBD | ❌ Not implemented |
+| `br.load.engine_snapshot_rss_mb` | RSS delta after engine load | < 512 MB (5k mock) | ✅ `phase16` |
+| `br.load.backend_hydrate_ms` | `hydrate_prepared` vs batch re-index | hydrate ≤ batch | ✅ `phase16` (5k mock) |
 
 ### Discover / write path
 
 | Metric ID | Description | Gate status |
 |-----------|-------------|-------------|
 | `br.discover.engine_build_ms` | `BlastRadiusEngine::build` | ❌ Manual only |
-| `br.discover.analyze_all_ms` | Loop over all functions at discover | ❌ Manual only |
+| `br.discover.analyze_all_ms` | Parallel loop over all functions at discover | < 2 s (5k mock) | ✅ `phase16` |
 | `br.discover.snapshot_write_ms` | `PreparedGraphSnapshot::write_to_path` | ❌ |
 | `br.discover.engine_snapshot_write_ms` | v2 sparse+zstd write | ❌ |
 | `br.discover.macro_index_write_ms` | SQLite + macro index | ❌ |
@@ -150,6 +150,7 @@ Each metric should eventually have Criterion samples **and** a release gate wher
 | `br.slice.icfg_build_ms` | `InterproceduralCFG::build` | ❌ Informational |
 | `br.slice.per_seed_pdg_ms` | PDG per handoff seed | ❌ Informational |
 | `br.slice.total_ms` | `trace_blast_to_slices_with_blast` | ❌ Informational |
+| CFG/PDG archive | `discover --cfg` → `.rbuilder/analysis/cfg_pdg.archive.bin`; loaded by `--with-slices` | ✅ Write + preload (Sprint D partial) |
 | Handoffs JSON | `resolve_handoff_seeds` → `gatekeeping.handoffs` | ✅ I/O contract (decoupled from slice trace) |
 
 ### Gate failure format
@@ -171,9 +172,9 @@ br.query.sqlite_unique_ms regression: 42ms >= 15ms
 | Gap | Impact |
 |-----|--------|
 | No **end-to-end CLI** T1 subprocess gate on metasfresh | In-process soft gates only; T0 covered via `fast_path_ms` |
-| No **RSS gate** after engine load | Memory regressions invisible |
+| **T3** slice path still rebuilds ICFG; archive only skips PDG rebuild | Run `discover --cfg` first; full T3 gate not wired |
 | **metasfresh** not required in CI | Soft gates skip when checkout/cache absent |
-| `full_analysis` bench orphaned | Dead code |
+| **P2 columnar graph / query daemon** | Not started — see roadmap below |
 | `semantic-verification.sh` | Dominance only; no blast-radius |
 | **JSON lines** trend file | Not built |
 
@@ -205,16 +206,16 @@ Prioritized by impact on T0–T3. Status as of 2026-07-03.
 | # | Item | Status |
 |---|------|--------|
 | 8 | Columnar mmap graph — true zero-copy open | Open |
-| 9 | CFG/PDG mmap archive for `--with-slices` | Open |
+| 9 | CFG/PDG mmap archive for `--with-slices` | **Partial** — `CfgPdgArchive` (`cfg_pdg_archive.rs`); PDG preload in slice trace; ICFG still built per query |
 | 10 | Ephemeral query daemon (amortize cold start) | Open |
 
 ### P3 — Cleanup
 
 | # | Item | Status |
 |---|------|--------|
-| 11 | Implement or remove `--depth` flag | Open |
+| 11 | Implement or remove `--depth` flag | Open — flag accepted but not applied (`blast_radius.rs`) |
 | 12 | Scope policy centrality to impact subgraph only | Open |
-| 13 | Wire or delete `benches/full_analysis.rs` | Open |
+| 13 | Wire or delete `benches/full_analysis.rs` | **Done** — removed orphaned bench |
 
 ---
 
@@ -250,15 +251,15 @@ cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 
 ## Recommended next steps
 
-1. **`br.load.backend_hydrate_ms` gate** — assert hydrate-from-snapshot faster than full re-index on 150k mock.
+1. **T3 completion** — mmap ICFG archive; `br.slice.total_ms` subprocess gate; discover `--cfg` in CI fixture path.
 
-2. **`br.discover.analyze_all_ms` gate** — soft gate on metasfresh discover or synthetic fixture.
+2. **P2 #8 columnar mmap graph** — eliminate bincode deserialize on graph open.
 
-3. **`br.load.engine_snapshot_rss_mb` gate** — RSS delta after engine load on 150k mock or metasfresh.
+3. **P2 #10 query daemon** — amortize snapshot + engine load across repeated blast-radius invocations.
 
-4. **Optional CI job** — `cargo test --release --test phase16_blast_radius_perf` on every PR (non-ignored gates only); nightly `RBUILDER_BENCH_LARGE=1 cargo bench --bench blast_radius_benchmarks`.
+4. **P3 #11 `--depth`** — implement hop-limited impact zone or remove flag from CLI.
 
-5. **Doc hygiene** — keep this file in sync when adding gates; cross-link new metrics in gate assert messages.
+5. **Nightly large-scale** — `RBUILDER_BENCH_LARGE=1 cargo bench --bench blast_radius_benchmarks` + `phase16 --ignored`.
 
 ---
 
@@ -267,7 +268,9 @@ cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 | File | Role |
 |------|------|
 | `benches/blast_radius_benchmarks.rs` | Blast-radius Criterion + small-scale asserts |
-| `tests/phase16_blast_radius_perf.rs` | Release perf gates (SQLite, analyze, 150k load) |
+| `tests/phase16_blast_radius_perf.rs` | Release perf gates (SQLite, analyze, hydrate, RSS, 150k load) |
+| `.github/workflows/blast-radius-perf.yml` | CI: `phase16` + CLI I/O tests on PR |
+| `crates/rbuilder-analysis/src/cfg_pdg_archive.rs` | CFG/PDG archive for `--with-slices` (T3) |
 | `benches/centrality_benchmarks.rs` | PageRank 150k template |
 | `benches/community_benchmarks.rs` | Community 150k template |
 | `tests/phase14_centrality_audit.rs` | Ignored PageRank regression |

@@ -11,6 +11,7 @@ pub mod results;
 pub mod centrality;
 pub mod cfg;
 pub mod cfg_builder;
+pub mod cfg_pdg_archive;
 pub mod community;
 pub mod complexity;
 pub mod dataflow;
@@ -40,7 +41,7 @@ pub use blast_slice_handoff::{
     resolve_handoff_seeds, resolve_handoff_seeds_for_indices, trace_blast_to_slices,
     trace_blast_to_slices_with_blast, BlastSliceTrace, SliceHandoffSeed,
 };
-pub use callgraph::{CallGraph, CallGraphEdge, CallGraphNode};
+pub use cfg_pdg_archive::{CfgPdgArchive, CfgPdgRecord, CFG_PDG_ARCHIVE_FILE};
 pub use results::{
     AnalysisResults, BlastRadiusMetrics, BlastRadiusTable, CentralityMetrics, CentralityTable,
     CommunityTable, ComplexityTable,

@@ -49,6 +49,8 @@ Run everything:
 cargo test --test cli_output --test subprocess_golden_path --test all_commands_sanity
 ```
 
+**CI:** On every PR to `main`/`master`, [.github/workflows/blast-radius-perf.yml](../.github/workflows/blast-radius-perf.yml) runs release `phase16_blast_radius_perf` plus all three CLI I/O test targets.
+
 Individual targets:
 
 ```bash
@@ -270,5 +272,6 @@ Prefer asserting in `all_commands_sanity.rs` if the flag affects JSON shape or e
 ## Related docs
 
 - [cli-output-schemas.md](cli-output-schemas.md) — field-by-field JSON reference
+- [performance-engineering.md](performance-engineering.md) — blast-radius latency tiers, perf gates, discover/snapshot flags
 - [blast-radius-json-schema-v2.md](blast-radius-json-schema-v2.md) — v2 target metadata
 - [Code_structure.md](Code_structure.md) — where to put CLI vs analysis changes

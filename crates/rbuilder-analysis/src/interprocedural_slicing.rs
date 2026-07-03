@@ -56,6 +56,14 @@ impl<'a> InterproceduralSlicer<'a> {
         })
     }
 
+    /// Pre-populate PDGs from a discover-time archive (skips lazy rebuild when present).
+    pub fn preload_pdgs(&self, archive: &crate::cfg_pdg_archive::CfgPdgArchive) {
+        let mut pdgs = self.pdgs.borrow_mut();
+        for (function_id, record) in &archive.records {
+            pdgs.insert(*function_id, Rc::new(record.pdg.clone()));
+        }
+    }
+
     /// Compute interprocedural slice starting in `function`.
     pub fn slice(&self, function: Uuid, criterion: SliceCriterion) -> Result<InterproceduralSlice> {
         let pdg = self.pdg_for(function)?;

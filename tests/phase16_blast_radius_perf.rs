@@ -7,6 +7,8 @@ use rbuilder::analysis::{
 use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};
 use rbuilder::graph::{CodeGraph, PreparedGraphSnapshot, SnapshotNodeStore};
+use rbuilder::graph::backend::MemoryBackend;
+use rayon::prelude::*;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -272,5 +274,81 @@ fn bench_repo_lite_analyze_under_3s() {
     assert!(
         latency < Duration::from_secs(3),
         "br.query.lite_total_ms (metasfresh analyze) regression: {latency:?} >= 3s"
+    );
+}
+
+/// Prepared-index hydrate should beat full batch re-index on mock scale.
+#[test]
+fn hydrate_prepared_faster_than_batch_reindex_5k() {
+    let graph = build_monorepo_mock(5_000, 25_000);
+    let prepared = PreparedGraphSnapshot::from_backend(graph.backend()).unwrap();
+
+    let start = Instant::now();
+    prepared.hydrate_backend().unwrap();
+    let hydrate = start.elapsed();
+
+    let start = Instant::now();
+    let mut slow = MemoryBackend::new();
+    slow.insert_nodes_batch(prepared.nodes.clone()).unwrap();
+    slow.insert_edges_batch(prepared.edges.clone()).unwrap();
+    let batch = start.elapsed();
+
+    assert!(
+        hydrate <= batch,
+        "br.load.backend_hydrate_ms regression: hydrate {hydrate:?} > batch reindex {batch:?}"
+    );
+}
+
+/// Parallel blast analyze over all functions on warm engine (discover hot loop).
+#[test]
+fn parallel_blast_analyze_all_5k_under_2s() {
+    let graph = build_monorepo_mock(5_000, 25_000);
+    let backend = graph.backend();
+    let prepared = PreparedGraphSnapshot::from_backend(backend).unwrap();
+    let view = PetGraphView::from_prepared(&prepared).unwrap();
+    let engine = BlastRadiusEngine::build_from_view(backend, &view).unwrap();
+    let functions = backend.collect_nodes_by_type(NodeType::Function).unwrap();
+
+    let start = Instant::now();
+    let count = functions
+        .par_iter()
+        .filter(|func| engine.analyze(func.id).is_ok())
+        .count();
+    let latency = start.elapsed();
+
+    assert_eq!(count, functions.len());
+    assert!(
+        latency < Duration::from_secs(2),
+        "br.discover.analyze_all_ms regression: {latency:?} >= 2s"
+    );
+}
+
+/// RSS delta after engine snapshot load stays bounded on mock scale.
+#[test]
+fn engine_snapshot_load_rss_delta_under_512mb_5k() {
+    use rbuilder_core::memory::MemoryMonitor;
+
+    let graph = build_monorepo_mock(5_000, 25_000);
+    let backend = graph.backend();
+    let engine = BlastRadiusEngine::build(backend).unwrap();
+    let digest = PreparedGraphSnapshot::from_backend(backend)
+        .unwrap()
+        .content_digest;
+    let snap = engine.to_engine_snapshot(digest);
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("blast_engine.snapshot.bin");
+    snap.write_to_path(&path).unwrap();
+
+    let monitor = MemoryMonitor::new();
+    let before = monitor.current_mb();
+    let loaded = BlastEngineSnapshot::load_from_path(&path).unwrap();
+    BlastRadiusEngine::from_engine_snapshot(loaded).unwrap();
+    let after = monitor.current_mb();
+
+    assert!(
+        after - before < 512.0,
+        "br.load.engine_snapshot_rss_mb regression: delta {:.1} MB >= 512 MB",
+        after - before
     );
 }

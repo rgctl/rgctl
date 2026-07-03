@@ -166,7 +166,7 @@ See v1 doc for `SliceHandoff` and `PolicyViolation` tag shapes.
 **Command:**
 
 ```bash
-rbuilder -f json discover PATH [--languages LANGS] [--exclude PATTERNS] [--security] [--cfg] [--all]
+rbuilder -f json discover PATH [--languages LANGS] [--exclude PATTERNS] [--security] [--cfg] [--all] [--write-json-graph]
 ```
 
 **Source:** `src/cli/discover_output.rs`, `src/cli/discover_impl.rs`
@@ -199,17 +199,19 @@ With `-f json`, discover **suppresses** progress bars and human status lines on 
 
 Without `-f json`, discover remains human-readable text progress (unchanged).
 
-### Artifacts on disk (always)
+### Artifacts on disk
 
-| Path | Format |
-|------|--------|
-| `.rbuilder/graph.db` | Full graph JSON |
-| `.rbuilder/graph.snapshot.bin` | Binary graph snapshot |
-| `.rbuilder/blast_engine.snapshot.bin` | Binary blast engine snapshot |
-| `.rbuilder/macro_call_index.db` | SQLite blast-radius cache (+ UUID + v2 target columns) |
-| `.rbuilder/macro_call_index.bin` | Bincode macro index |
-| `.rbuilder/all_analyses.json` | Optional CFG/taint dump (`--cfg` / `--all`) |
-| `.rbuilder/dashboard.html` | HTML dashboard |
+| Path | When | Format |
+|------|------|--------|
+| `.rbuilder/graph.snapshot.bin` | Always (default canonical graph) | Binary graph snapshot |
+| `.rbuilder/blast_engine.snapshot.bin` | Always | Binary blast engine snapshot |
+| `.rbuilder/macro_call_index.db` | Always | SQLite blast-radius cache (+ UUID + v2 target columns) |
+| `.rbuilder/macro_call_index.bin` | Always | Bincode macro index |
+| `.rbuilder/analysis_results.bin` | Always | Columnar analysis tables |
+| `.rbuilder/dashboard.html` | When export succeeds | HTML dashboard |
+| `.rbuilder/graph.db` / `.rbuilder/graph.json` | `--write-json-graph` only | Legacy full graph JSON |
+| `.rbuilder/analysis/cfg_pdg.archive.bin` | `--cfg` or `--all` | CFG/PDG archive for `--with-slices` PDG preload |
+| `.rbuilder/analysis/all_analyses.json` | `--cfg` / `--all` (verbose path) | Per-function CFG/taint JSON export |
 
 ---
 

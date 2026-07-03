@@ -360,15 +360,22 @@ pub(crate) fn run_full_analysis(
     let output_dir = root.join(".rbuilder/analysis");
 
     // CFG/PDG/Dominance analysis (opt-in with --cfg or --all)
-    if (cfg || all) && human_output {
-        println!("\n✓ Control flow analysis:");
+    if cfg || all {
+        if human_output {
+            println!("\n✓ Control flow analysis:");
+        }
         use crate::analysis::{
-            build_cfg_for_function, AnalysisStorage, DominatorTree, FunctionAnalysis,
-            ProgramDependenceGraph,
+            build_cfg_for_function, AnalysisStorage, CfgPdgArchive, CfgPdgRecord,
+            DominatorTree, FunctionAnalysis, ProgramDependenceGraph,
         };
+        use rbuilder_graph::code_index::hash_code;
 
         let storage = AnalysisStorage::new(&output_dir);
         storage.ensure_dir()?;
+        let mut cfg_archive = CfgPdgArchive {
+            graph_digest: Some(graph_digest.clone()),
+            ..CfgPdgArchive::default()
+        };
 
         let mut success_count = 0;
         let mut error_count = 0;
@@ -453,11 +460,33 @@ pub(crate) fn run_full_analysis(
 
         if storage.save_function(&analysis).is_ok() {
             success_count += 1;
+            if let (Some(cfg), Some(pdg)) = (&analysis.cfg, &analysis.pdg) {
+                cfg_archive.insert(CfgPdgRecord {
+                    function_id: func_node.id,
+                    code_hash: hash_code(&source),
+                    cfg: cfg.clone(),
+                    pdg: pdg.clone(),
+                });
+            }
         } else {
             error_count += 1;
         }
     }
 
+    if !cfg_archive.records.is_empty() {
+        let archive_path = CfgPdgArchive::default_path(root);
+        if let Err(err) = cfg_archive.write_to_path(&archive_path) {
+            warn!(error = %err, "Failed to save cfg_pdg archive");
+        } else if verbose {
+            debug!(
+                path = %archive_path.display(),
+                entries = cfg_archive.records.len(),
+                "CFG/PDG archive saved"
+            );
+        }
+    }
+
+    if human_output {
     if success_count > 0 {
         println!("  CFG/PDG/Dominance: {} functions analyzed", success_count);
         if error_count > 0 {
@@ -490,6 +519,7 @@ pub(crate) fn run_full_analysis(
         if verbose {
             println!("{}", mem_monitor.report());
         }
+    }
     }
 
     // Blast radius analysis with SCC + Dense Bitsets engine
