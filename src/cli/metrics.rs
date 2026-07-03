@@ -2,7 +2,10 @@
 
 use super::args::OutputFormat;
 use super::context::CliContext;
-use super::metrics_output::wrap_metrics_payload;
+use super::metrics_output::{
+    build_metrics_response, metrics_response_to_json, MetricsCommunitiesSection,
+    MetricsPagerankSection,
+};
 use anyhow::Result;
 use crate::analysis::{
     BetweennessCentrality, CommunityDetector, FastPageRank, PetGraphView,
@@ -25,7 +28,9 @@ pub fn run(ctx: &CliContext, args: MetricsArgs) -> Result<()> {
     let iterations = args.iterations.unwrap_or(20);
     let allowed = default_behavioral_edges();
 
-    let mut payload = json!({});
+    let mut pagerank = None;
+    let mut betweenness = None;
+    let mut communities = None;
 
     if args.pagerank || run_all {
         let engine = FastPageRank::new(iterations, 0.85);
@@ -35,11 +40,11 @@ pub fn run(ctx: &CliContext, args: MetricsArgs) -> Result<()> {
             .map(|(id, score)| json!({ "node": id.to_string(), "pagerank": score }))
             .take(20)
             .collect();
-        payload["pagerank"] = json!({
-            "top": top,
-            "converged": stats.converged,
-            "iterations": stats.iterations_run,
-            "max_delta": stats.max_delta,
+        pagerank = Some(MetricsPagerankSection {
+            top,
+            converged: stats.converged,
+            iterations: stats.iterations_run,
+            max_delta: stats.max_delta,
         });
     }
 
@@ -51,35 +56,36 @@ pub fn run(ctx: &CliContext, args: MetricsArgs) -> Result<()> {
             .collect();
         top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         top.truncate(20);
-        payload["betweenness"] = json!(
+        betweenness = Some(
             top.iter()
                 .map(|(id, s)| json!({ "node": id.to_string(), "score": s }))
-                .collect::<Vec<_>>()
+                .collect(),
         );
     }
 
     if args.communities || run_all {
         let detector = CommunityDetector::new();
         let result = detector.detect_with_view_filtered(&view, default_community_edge_types())?;
-        payload["communities"] = json!({
-            "count": result.communities.len(),
-            "modularity": result.modularity,
-            "assignments": result.assignments.len(),
+        communities = Some(MetricsCommunitiesSection {
+            count: result.communities.len(),
+            modularity: result.modularity,
+            assignments: result.assignments.len(),
         });
         let _ = allowed;
     }
 
+    let response = build_metrics_response(pagerank, betweenness, communities);
+
     if ctx.format == OutputFormat::Json {
-        wrap_metrics_payload(&mut payload);
-        ctx.emit_json_value(&payload)?;
+        ctx.emit_json_value(&metrics_response_to_json(&response))?;
     } else {
-        if let Some(pr) = payload.get("pagerank") {
+        if let Some(pr) = &response.pagerank {
             println!("PageRank: {:?}", pr);
         }
-        if let Some(bc) = payload.get("betweenness") {
+        if let Some(bc) = &response.betweenness {
             println!("Betweenness top: {:?}", bc);
         }
-        if let Some(cm) = payload.get("communities") {
+        if let Some(cm) = &response.communities {
             println!("Communities: {:?}", cm);
         }
     }

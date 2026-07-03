@@ -19,7 +19,12 @@ pub const BLAST_RADIUS_SCHEMA_VERSION: u32 = 1;
 pub struct SymbolContext {
     /// Graph node UUID.
     pub id: Uuid,
-    /// Fully qualified or bare symbol name.
+    /// Graph `qualified_name` when present, otherwise bare `name`.
+    ///
+    /// **Schema v1:** language-native dot notation (e.g. Java `MRequest.beforeSave`).
+    /// Downstream tools should treat this as opaque display text keyed by [`Self::id`].
+    /// **Schema v2 (planned):** add `language`, structured signature, and a canonical
+    /// delimiter form (`Class::method`) so clients need not parse language-specific FQNs.
     pub fqn: String,
     /// Project-relative source path (empty when unknown).
     pub file_path: String,

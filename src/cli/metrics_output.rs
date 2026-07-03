@@ -35,6 +35,25 @@ pub struct MetricsJsonResponse {
     pub communities: Option<MetricsCommunitiesSection>,
 }
 
+/// Build a metrics response; unset sections are omitted from JSON via `Option`.
+pub fn build_metrics_response(
+    pagerank: Option<MetricsPagerankSection>,
+    betweenness: Option<Vec<Value>>,
+    communities: Option<MetricsCommunitiesSection>,
+) -> MetricsJsonResponse {
+    MetricsJsonResponse {
+        schema_version: METRICS_SCHEMA_VERSION,
+        pagerank,
+        betweenness,
+        communities,
+    }
+}
+
+/// Serialize a typed metrics response to JSON.
+pub fn metrics_response_to_json(response: &MetricsJsonResponse) -> Value {
+    serde_json::to_value(response).expect("MetricsJsonResponse serializes")
+}
+
 /// Wrap a legacy metrics object with schema version and normalize keys.
 pub fn wrap_metrics_payload(payload: &mut Value) {
     if let Some(obj) = payload.as_object_mut() {
