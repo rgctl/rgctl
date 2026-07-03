@@ -63,6 +63,14 @@ impl MemoryBackend {
         }
     }
 
+    /// Hydrate a backend from a prepared mmap snapshot (fast binary path).
+    pub fn from_prepared_snapshot(prepared: &crate::snapshot::PreparedGraphSnapshot) -> Result<Self> {
+        let mut backend = Self::new();
+        backend.insert_nodes_batch(prepared.nodes.clone())?;
+        backend.insert_edges_batch(prepared.edges.clone())?;
+        Ok(backend)
+    }
+
     /// Get all nodes
     pub fn all_nodes(&self) -> Result<Vec<Node>> {
         let nodes = read_lock(&self.nodes)?;

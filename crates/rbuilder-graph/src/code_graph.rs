@@ -88,17 +88,23 @@ impl CodeGraph {
         Ok(graph)
     }
 
-    /// Save the graph to the default path under a repository root.
-    pub fn save_to_repo(&self, repo_root: &Path) -> Result<PathBuf> {
-        let dir = repo_root.join(GRAPH_DIR);
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join(GRAPH_FILE);
-        std::fs::write(&path, self.export_json()?)?;
-        Ok(path)
+    /// Open a memory-mapped binary snapshot (preferred over JSON).
+    pub fn open_snapshot(path: &Path) -> Result<Self> {
+        let backend = crate::snapshot::MmappedGraphSnapshot::open(path)?.hydrate_backend()?;
+        Ok(Self { backend })
     }
 
-    /// Load a graph from the default path under a repository root.
+    /// Load graph preferring binary snapshot, then legacy JSON db path.
     pub fn load_from_repo(repo_root: &Path) -> Result<Self> {
+        let snapshot_path = crate::snapshot::MmappedGraphSnapshot::default_path(repo_root);
+        if snapshot_path.exists() {
+            return Self::open_snapshot(&snapshot_path);
+        }
+        Self::load_from_repo_json(repo_root)
+    }
+
+    /// Load graph from legacy JSON only.
+    pub fn load_from_repo_json(repo_root: &Path) -> Result<Self> {
         let path = repo_root.join(GRAPH_DIR).join(GRAPH_FILE);
         if !path.exists() {
             return Err(Error::NotFound(format!(
@@ -108,6 +114,23 @@ impl CodeGraph {
         }
         let json = std::fs::read_to_string(path)?;
         Self::import_json(&json)
+    }
+
+    /// Save the graph to the default JSON path under a repository root.
+    pub fn save_to_repo(&self, repo_root: &Path) -> Result<PathBuf> {
+        let dir = repo_root.join(GRAPH_DIR);
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(GRAPH_FILE);
+        std::fs::write(&path, self.export_json()?)?;
+        Ok(path)
+    }
+
+    /// Write the mmap-friendly binary snapshot under `.rbuilder/`.
+    pub fn save_snapshot(&self, repo_root: &Path) -> Result<PathBuf> {
+        let path = crate::snapshot::MmappedGraphSnapshot::default_path(repo_root);
+        let prepared = crate::snapshot::PreparedGraphSnapshot::from_backend(&self.backend)?;
+        prepared.write_to_path(&path)?;
+        Ok(path)
     }
 
     /// Create a snapshot of the graph.
