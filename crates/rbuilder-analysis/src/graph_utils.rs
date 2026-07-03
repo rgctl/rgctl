@@ -13,7 +13,7 @@ use rbuilder_error::Result;
 use rbuilder_graph::backend::MemoryBackend;
 use rbuilder_graph::snapshot::{PreparedGraphSnapshot, SnapshotNodeStore};
 use rbuilder_graph::schema::EdgeType;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
 /// A petgraph view of the code graph with UUID mapping and typed edges.
@@ -236,6 +236,62 @@ impl PetGraphView {
     }
 }
 
+const CALL_EDGES: &[EdgeType] = &[EdgeType::Calls];
+
+/// Upstream function callers within `max_depth` call hops of `target_id` (hop 1 = direct callers).
+pub fn caller_ids_within_depth(view: &PetGraphView, target_id: Uuid, max_depth: usize) -> HashSet<Uuid> {
+    if max_depth == 0 {
+        return HashSet::new();
+    }
+    let Some(target_idx) = view.get_index(target_id) else {
+        return HashSet::new();
+    };
+
+    let mut allowed = HashSet::new();
+    let mut queue: VecDeque<(Uuid, usize)> = view
+        .incoming_filtered(target_idx, CALL_EDGES)
+        .filter_map(|idx| view.get_uuid(idx).map(|id| (id, 1usize)))
+        .collect();
+
+    while let Some((caller_id, depth)) = queue.pop_front() {
+        if depth > max_depth || caller_id == target_id {
+            continue;
+        }
+        if !allowed.insert(caller_id) {
+            continue;
+        }
+        let Some(caller_idx) = view.get_index(caller_id) else {
+            continue;
+        };
+        for pred in view.incoming_filtered(caller_idx, CALL_EDGES) {
+            if let Some(uuid) = view.get_uuid(pred) {
+                if uuid != target_id {
+                    queue.push_back((uuid, depth + 1));
+                }
+            }
+        }
+    }
+    allowed
+}
+
+/// Restrict an impact zone to nodes reachable within `max_depth` incoming call hops.
+pub fn filter_impact_by_caller_depth(
+    view: &PetGraphView,
+    target_id: Uuid,
+    impact_zone_ids: &[Uuid],
+    max_depth: usize,
+) -> Vec<Uuid> {
+    if max_depth == usize::MAX {
+        return impact_zone_ids.to_vec();
+    }
+    let allowed = caller_ids_within_depth(view, target_id, max_depth);
+    impact_zone_ids
+        .iter()
+        .copied()
+        .filter(|id| allowed.contains(id))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,5 +340,34 @@ mod tests {
         let view = PetGraphView::from_snapshot_store(&store).unwrap();
         assert_eq!(view.directed.node_count(), 2);
         assert_eq!(view.directed.edge_count(), 1);
+    }
+
+    #[test]
+    fn caller_depth_limits_impact_zone_on_chain() {
+        let mut backend = MemoryBackend::new();
+        let a = Node::new(NodeType::Function, "a".to_string());
+        let b = Node::new(NodeType::Function, "b".to_string());
+        let c = Node::new(NodeType::Function, "c".to_string());
+        let id_a = a.id;
+        let id_b = b.id;
+        let id_c = c.id;
+        backend.insert_node(a).unwrap();
+        backend.insert_node(b).unwrap();
+        backend.insert_node(c).unwrap();
+        backend
+            .insert_edge(Edge::new(id_a, id_b, EdgeType::Calls))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(id_b, id_c, EdgeType::Calls))
+            .unwrap();
+
+        let view = PetGraphView::from_backend(&backend).unwrap();
+        let full = vec![id_a, id_b];
+        let depth_one = filter_impact_by_caller_depth(&view, id_c, &full, 1);
+        assert_eq!(depth_one, vec![id_b]);
+        let depth_two = filter_impact_by_caller_depth(&view, id_c, &full, 2);
+        assert_eq!(depth_two.len(), 2);
+        assert!(depth_two.contains(&id_a));
+        assert!(depth_two.contains(&id_b));
     }
 }

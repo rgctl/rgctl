@@ -35,7 +35,9 @@ pub use blast_engine_snapshot::{try_load_engine, BlastEngineSnapshot, BLAST_SNAP
 pub use blast_radius::{
     resolve_unique_symbol, BlastRadiusAnalyzer, BlastRadiusReport, DataFlowImpact,
 };
-pub use blast_radius_scc::{BlastRadiusEngine, BlastRadiusResult, EngineStats, SccNode};
+pub use blast_radius_scc::{
+    impact_score_from_counts, BlastRadiusEngine, BlastRadiusResult, EngineStats, SccNode,
+};
 pub use blast_slice_handoff::{
     criterion_for_parameter, filter_handoff_seeds_by_index, load_source_files,
     resolve_handoff_seeds, resolve_handoff_seeds_for_indices, trace_blast_to_slices,
@@ -65,7 +67,7 @@ pub use def_use::{extract_def_use, extract_used_variables};
 pub use dependency::{CircularDependency, DependencyAnalyzer, ImpactResult};
 pub use dominance::{verify_idom_acyclic, DominatorTree};
 pub use flow_cache::{CachedAnalysis, CfgPdgCache, FlowCache, NodePdgCache};
-pub use graph_utils::PetGraphView;
+pub use graph_utils::{filter_impact_by_caller_depth, PetGraphView};
 pub use macro_call_index::{GraphFingerprint, MacroCallIndex, MacroCallIndexEntry, SymbolContext};
 pub use macro_call_lookup::{
     canonical_fqn_from_node, canonical_fqn_from_qualified_name, candidates_from_backend,

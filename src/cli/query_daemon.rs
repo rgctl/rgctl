@@ -53,6 +53,8 @@ struct BlastRadiusParams {
     #[serde(default)]
     file: Option<String>,
     #[serde(default)]
+    depth: Option<usize>,
+    #[serde(default)]
     graph_digest: Option<String>,
 }
 
@@ -109,7 +111,7 @@ impl DaemonState {
         let parsed = parse_fqn_symbol(&params.symbol, params.class.clone(), params.file.clone());
         let args = BlastRadiusArgs {
             symbol: params.symbol,
-            depth: None,
+            depth: params.depth,
             policy_file: None,
             no_policy: true,
             with_slices: false,
@@ -280,6 +282,7 @@ pub fn try_client_blast_radius(
             "symbol": args.symbol,
             "class": parsed.class_filter,
             "file": parsed.file_filter,
+            "depth": args.depth,
             "graph_digest": graph_digest,
         }),
     };

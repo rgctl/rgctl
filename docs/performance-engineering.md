@@ -217,7 +217,7 @@ Prioritized by impact on T0–T3. Status as of 2026-07-03.
 
 | # | Item | Status |
 |---|------|--------|
-| 11 | Implement or remove `--depth` flag | Open — flag accepted but not applied (`blast_radius.rs`) |
+| 11 | Implement `--depth` hop-limited impact zone | **Done** — limits incoming call hops on `impact_zone`; emits `metrics.caller_depth_limit`; score recomputed when capped |
 | 12 | Scope policy centrality to impact subgraph only | Open |
 | 13 | Wire or delete `benches/full_analysis.rs` | **Done** — removed orphaned bench |
 
@@ -260,11 +260,9 @@ cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 
 ## Recommended next steps
 
-1. **P3 #11 `--depth`** — implement hop-limited impact zone or remove flag from CLI.
+1. **Metasfresh T3 gate** — optional soft gate for `--with-slices` when fixture cache present.
 
-2. **Metasfresh T3 gate** — optional soft gate for `--with-slices` when fixture cache present.
-
-5. **Nightly large-scale** — `RBUILDER_BENCH_LARGE=1 cargo bench --bench blast_radius_benchmarks` + `phase16 --ignored`.
+2. **Nightly large-scale** — `RBUILDER_BENCH_LARGE=1 cargo bench --bench blast_radius_benchmarks` + `phase16 --ignored`.
 
 ---
 

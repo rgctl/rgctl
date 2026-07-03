@@ -19,7 +19,14 @@ fn test_cache_entry_omits_unresolved_topology_without_nil_uuid() {
         signature: None,
         canonical_fqn: "target".into(),
     };
-    let response = build_from_cache_entry(&entry, skipped_gatekeeping(), NodeLookup::None);
+    let response = build_from_cache_entry(
+        &entry,
+        skipped_gatekeeping(),
+        NodeLookup::None,
+        &entry.impact_zone_ids,
+        entry.score,
+        None,
+    );
     assert!(response.topology.direct_callers.is_empty());
     assert!(response
         .topology

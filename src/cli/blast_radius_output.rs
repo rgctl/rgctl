@@ -58,6 +58,9 @@ pub struct BlastRadiusMetrics {
     pub direct_callers_count: usize,
     /// Total transitive reachability zone size.
     pub impact_zone_size: usize,
+    /// When set, `impact_zone` was truncated to this many incoming call hops.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caller_depth_limit: Option<usize>,
 }
 
 /// Graph structural layout boundaries.
@@ -237,6 +240,8 @@ pub fn build_from_engine_result(
     result: &BlastRadiusResult,
     direct_ids: &[Uuid],
     impact_ids: &[Uuid],
+    score: f64,
+    caller_depth_limit: Option<usize>,
     lookup: NodeLookup<'_>,
     gatekeeping: BlastRadiusGatekeeping,
 ) -> BlastRadiusResponse {
@@ -264,9 +269,10 @@ pub fn build_from_engine_result(
             None,
         ),
         metrics: BlastRadiusMetrics {
-            score: result.score,
+            score,
             direct_callers_count: direct_ids.len(),
             impact_zone_size: impact_ids.len(),
+            caller_depth_limit,
         },
         topology: BlastRadiusTopology {
             scc_component_id: Some(result.scc_id),
@@ -282,11 +288,13 @@ pub fn build_from_cache_entry(
     entry: &MacroIndexEntry,
     gatekeeping: BlastRadiusGatekeeping,
     lookup: NodeLookup<'_>,
+    impact_ids: &[Uuid],
+    score: f64,
+    caller_depth_limit: Option<usize>,
 ) -> BlastRadiusResponse {
     let direct_callers =
         contexts_from_id_name_pairs(&entry.direct_caller_ids, &entry.direct_callers, &lookup);
-    let impact_zone =
-        contexts_from_id_name_pairs(&entry.impact_zone_ids, &entry.impact_zone, &lookup);
+    let impact_zone = contexts_from_ids(impact_ids, &lookup);
     BlastRadiusResponse {
         schema_version: BLAST_RADIUS_SCHEMA_VERSION,
         target: build_target(
@@ -298,9 +306,10 @@ pub fn build_from_cache_entry(
             Some(entry),
         ),
         metrics: BlastRadiusMetrics {
-            score: entry.score,
+            score,
             direct_callers_count: direct_callers.len(),
             impact_zone_size: impact_zone.len(),
+            caller_depth_limit,
         },
         topology: BlastRadiusTopology {
             scc_component_id: None,
@@ -456,7 +465,14 @@ mod output_tests {
             signature: None,
             canonical_fqn: "t".into(),
         };
-        let response = build_from_cache_entry(&entry, skipped_gatekeeping(), NodeLookup::None);
+        let response = build_from_cache_entry(
+            &entry,
+            skipped_gatekeeping(),
+            NodeLookup::None,
+            &entry.impact_zone_ids,
+            entry.score,
+            None,
+        );
         assert!(response.topology.direct_callers.is_empty());
     }
 }
@@ -481,6 +497,7 @@ pub fn fixture_response() -> BlastRadiusResponse {
             score: 65.0,
             direct_callers_count: 1,
             impact_zone_size: 2,
+            caller_depth_limit: None,
         },
         topology: BlastRadiusTopology {
             scc_component_id: Some(2),

@@ -463,6 +463,11 @@ pub struct EngineStats {
 }
 
 fn calculate_impact_score(direct_count: usize, impact_count: usize) -> f64 {
+    impact_score_from_counts(direct_count, impact_count)
+}
+
+/// Impact score (0–100) from direct and transitive caller counts.
+pub fn impact_score_from_counts(direct_count: usize, impact_count: usize) -> f64 {
     if direct_count == 0 && impact_count == 0 {
         return 0.0;
     }
