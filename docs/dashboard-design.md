@@ -57,7 +57,7 @@ crates/rbuilder-wasm/           # WASM engine (Phase 1+)
 | **1** | `graph_payload.bin`, WASM header parse, worker boot | JSON-in-HTML graph embed (already gone with html.rs) |
 | **2** | Sigma.js metanode view @ 50k+ | Placeholder graph renderer |
 | **3** | LOD drill-down, bitmask filters, function table | Placeholder function tab text |
-| **4** | CFG/dominance from `cfg_pdg.archive.bin` | `all_analyses.json`, dataflow tab |
+| **4** | CFG/dominance from `cfg_pdg.archive.bin` | ~~`all_analyses.json`~~ (removed) |
 | **5** | Slice + CodeMirror | Client `computeBackwardSlice` |
 | **6** | Blast radius + depth slider in WASM | Client blast BFS |
 | **7** | Taint from archive | Embedded taint JSON |
@@ -254,6 +254,10 @@ _Update this table when a phase lands._
 | Bitmask type filters | 3 | **done** | Graph + Functions tabs |
 | Functions virtual table | 3 | **done** | WASM paginated list |
 | `tests/dashboard_harness.rs` | 3 | **done** | phase 3 + `member_indices` |
+| Bootstrap UI restore | 3+ | **done** | Full-height tabs, worker URL fix |
+| CFG index + detail export | 4 | **done** | `cfg_index.json`, `cfg/*.json`, archive copy |
+| CFG / dominance tab | 4 | **done** | `CfgView.tsx` Sigma CFG + idom table |
+| Remove `all_analyses.json` | 4 | **done** | Discover no longer writes consolidated JSON |
 
 ### Removed (Phase 0)
 
@@ -261,9 +265,12 @@ _Update this table when a phase lands._
 - `export_html_dashboard` public API
 - Monolithic `.rbuilder/dashboard.html` default output
 
+### Removed (Phase 4)
+
+- `all_analyses.json` writer in discover (`discover --cfg` still writes per-function storage + archive)
+
 ### Not yet removed (later phases)
 
-- `all_analyses.json` writer in discover (Phase 4)
 - Discover-time blast radius string properties on nodes (Phase 6, dashboard only)
 
 ---

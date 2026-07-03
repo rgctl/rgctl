@@ -1,5 +1,6 @@
 //! Dashboard manifest written beside the static bundle.
 
+use crate::cfg_export::CfgExportSummary;
 use crate::metagraph::MetagraphPayload;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -13,6 +14,8 @@ pub struct DashboardManifest {
     pub phases: BTreeMap<String, String>,
     pub graph: GraphSection,
     pub view: ViewSection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<AnalysisSection>,
     pub metrics: MetricsSection,
     pub generated_at: String,
 }
@@ -38,6 +41,15 @@ pub struct ViewSection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalysisSection {
+    pub cfg_available: bool,
+    pub cfg_index_path: String,
+    pub cfg_detail_dir: String,
+    pub cfg_archive_path: Option<String>,
+    pub cfg_function_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsSection {
     pub function_count: usize,
     pub class_count: usize,
@@ -53,12 +65,33 @@ impl DashboardManifest {
         digest: String,
         metrics: MetricsSection,
         meta: &MetagraphPayload,
+        cfg: &CfgExportSummary,
     ) -> Self {
         let mut phases = BTreeMap::new();
         phases.insert("0".into(), "complete".into());
         phases.insert("1".into(), "complete".into());
         phases.insert("2".into(), "complete".into());
         phases.insert("3".into(), "complete".into());
+        phases.insert(
+            "4".into(),
+            if cfg.available {
+                "complete".into()
+            } else {
+                "pending".into()
+            },
+        );
+
+        let analysis = Some(AnalysisSection {
+            cfg_available: cfg.available,
+            cfg_index_path: crate::cfg_export::CFG_INDEX_FILE.into(),
+            cfg_detail_dir: crate::cfg_export::CFG_DETAIL_DIR.into(),
+            cfg_archive_path: if cfg.archive_copied {
+                Some(crate::cfg_export::CFG_ARCHIVE_BUNDLE_NAME.into())
+            } else {
+                None
+            },
+            cfg_function_count: cfg.function_count,
+        });
 
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
@@ -80,6 +113,7 @@ impl DashboardManifest {
                 community_only: meta.community_only,
                 threshold_community_only: meta.threshold_community_only,
             },
+            analysis,
             metrics,
             generated_at: chrono_now_rfc3339(),
         }
@@ -133,9 +167,12 @@ mod tests {
                 high_blast_radius_count: 0,
             },
             &meta,
+            &CfgExportSummary::default(),
         );
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["phases"]["2"], "complete");
+        assert_eq!(v["phases"]["4"], "pending");
         assert_eq!(v["view"]["metanode_count"], 1);
+        assert_eq!(v["analysis"]["cfg_available"], false);
     }
 }

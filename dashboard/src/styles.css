@@ -46,6 +46,27 @@ body {
   overflow: hidden;
 }
 
+.rb-tab-panel-body--cfg {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cfg-graph-host {
+  min-height: 320px;
+}
+
+.cfg-view {
+  min-height: 0;
+}
+
+.sigma-host {
+  width: 100%;
+  min-height: 280px;
+  background: #f8f9fa;
+}
+
 .rb-tab-panel-body--scroll {
   overflow: auto;
 }

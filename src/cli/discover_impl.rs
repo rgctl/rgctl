@@ -493,13 +493,6 @@ pub(crate) fn run_full_analysis(
             println!("  Skipped: {} functions (unsupported language or parse error)", error_count);
         }
 
-        // Export consolidated file
-        let export_path = output_dir.join("all_analyses.json");
-        if storage.export_all(&export_path).is_ok()
-            && verbose {
-                println!("  Exported to {}", export_path.display());
-            }
-
         // Taint analysis summary
         let all_analyses = storage.load_all().unwrap_or_default();
         let mut total_flows = 0;

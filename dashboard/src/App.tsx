@@ -1,4 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
+import { CfgView } from "./CfgView";
 import { FunctionsView } from "./FunctionsView";
 import { GraphView } from "./GraphView";
 import { loadManifest, type DashboardManifest, type EngineReady } from "./types";
@@ -114,7 +115,9 @@ export function App() {
           }`}
         >
           <div
-            class={`rb-tab-panel-body ${tab === "graph" ? "" : "rb-tab-panel-body--scroll p-4"}`}
+            class={`rb-tab-panel-body ${
+              tab === "graph" ? "" : tab === "cfg" ? "rb-tab-panel-body--cfg p-3" : "rb-tab-panel-body--scroll p-4"
+            }`}
           >
             <TabPanel
               id={tab}
@@ -189,9 +192,12 @@ function TabPanel({
     );
   }
 
-  const placeholders: Record<Exclude<TabId, "graph" | "functions">, string> = {
-    cfg: "Phase 4: CFG + dominance from cfg_pdg.archive.bin",
-    dataflow: "Phase 4: dataflow from archive",
+  if (id === "cfg") {
+    return <CfgView />;
+  }
+
+  const placeholders: Record<Exclude<TabId, "graph" | "functions" | "cfg">, string> = {
+    dataflow: "Phase 5+: dataflow from archive",
     taint: "Phase 7: taint from archive",
     guide: "CLI query reference",
     slice: "Phase 5: CodeMirror + WASM slice",
@@ -201,7 +207,7 @@ function TabPanel({
   return (
     <div>
       <h2 class="h5 mb-2">{TABS.find((t) => t.id === id)?.label}</h2>
-      <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions">]}</p>
+      <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions" | "cfg">]}</p>
       {id === "guide" && (
         <pre class="bg-light border rounded p-3 small mb-0">
           {`rbuilder discover .

@@ -6,6 +6,7 @@ description = "Static dashboard bundle export for rBuilder"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+rbuilder-analysis = { path = "../rbuilder-analysis" }
 rbuilder-graph = { path = "../rbuilder-graph" }
 include_dir = "0.7"
 serde = { version = "1", features = ["derive"] }

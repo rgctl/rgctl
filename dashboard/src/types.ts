@@ -12,6 +12,7 @@ export interface DashboardManifest {
     digest: string;
   };
   view?: ViewSection;
+  analysis?: AnalysisSection;
   metrics: {
     function_count: number;
     class_count: number;
@@ -30,6 +31,57 @@ export interface ViewSection {
   mode: string;
   community_only: boolean;
   threshold_community_only: number;
+}
+
+export interface AnalysisSection {
+  cfg_available: boolean;
+  cfg_index_path: string;
+  cfg_detail_dir: string;
+  cfg_archive_path?: string | null;
+  cfg_function_count: number;
+}
+
+export interface CfgIndexPayload {
+  schema_version: number;
+  available: boolean;
+  archive_path?: string | null;
+  function_count: number;
+  functions: CfgFunctionEntry[];
+}
+
+export interface CfgFunctionEntry {
+  function_id: string;
+  name: string;
+  file_path?: string | null;
+  block_count: number;
+  cfg_edge_count: number;
+}
+
+export interface CfgDetailPayload {
+  schema_version: number;
+  function_id: string;
+  name: string;
+  file_path?: string | null;
+  entry: number;
+  exits: number[];
+  blocks: CfgBlockView[];
+  edges: CfgEdgeView[];
+  idom: Array<number | null>;
+  dominance_frontiers: number[][];
+}
+
+export interface CfgBlockView {
+  id: number;
+  label: string;
+  start_line: number;
+  end_line: number;
+  statements: string[];
+}
+
+export interface CfgEdgeView {
+  from: number;
+  to: number;
+  edge_type: string;
 }
 
 export interface MetagraphPayload {
