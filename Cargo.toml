@@ -317,3 +317,7 @@ harness = false
 [[bench]]
 name = "community_benchmarks"
 harness = false
+
+[[bench]]
+name = "blast_radius_benchmarks"
+harness = false
