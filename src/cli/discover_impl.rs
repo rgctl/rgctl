@@ -1,20 +1,28 @@
 //! Discover implementation (index + analyze pipeline).
 
+use super::args::OutputFormat;
+use super::context::CliContext;
+use super::discover_output::build_discover_response;
 use anyhow::Result;
 use rbuilder_graph::backend::GraphBackend;
 use std::path::Path;
+use std::time::Instant;
 use tracing::{debug, error, info, info_span, warn};
 
 pub(crate) fn run_full_analysis(
+    ctx: &CliContext,
     path: &str,
     languages: Option<String>,
     exclude: Option<String>,
-    verbose: bool,
     security: bool,
     cfg: bool,
     all: bool,
     db_path: &Path,
 ) -> Result<()> {
+    let verbose = ctx.verbose;
+    let json_output = ctx.format == OutputFormat::Json;
+    let human_output = !json_output;
+    let run_start = Instant::now();
     let db_path = db_path;
     use crate::analysis::{CentralityAnalyzer, CommunityDetector, ComplexityAnalyzer, DependencyAnalyzer};
     use crate::analysis::graph_utils::PetGraphView;
@@ -54,7 +62,9 @@ pub(crate) fn run_full_analysis(
         None
     };
 
-    info!("==> Analyzing: {}", root.display());
+    if human_output {
+        info!("==> Analyzing: {}", root.display());
+    }
 
     // Show warning for --all flag
     if all {
@@ -73,7 +83,7 @@ pub(crate) fn run_full_analysis(
         Arc::clone(&registry),
         PipelineConfig {
             discovery,
-            show_progress: true,
+            show_progress: human_output,
             ..PipelineConfig::default()
         },
     );
@@ -83,35 +93,37 @@ pub(crate) fn run_full_analysis(
     let files = discoverer.discover(root)?;
 
     // Index the repository
-    let (graph, stats) = {
+    let (graph, index_stats) = {
         let _span = if verbose { Some(info_span!("indexing").entered()) } else { None };
         pipeline.process_repository(root)?
     };
 
-    if verbose {
-        info!(
-            files = stats.files_processed,
-            nodes = stats.nodes_created,
-            edges = stats.edges_created,
-            duration_secs = %format!("{:.1}", stats.duration.as_secs_f64()),
-            "[✓] Indexed {} files -> {} nodes, {} edges ({:.1}s)",
-            stats.files_processed,
-            stats.nodes_created,
-            stats.edges_created,
-            stats.duration.as_secs_f64()
-        );
-    } else {
-        info!(
-            "[✓] Indexed {} files -> {} nodes, {} edges ({:.1}s)",
-            stats.files_processed,
-            stats.nodes_created,
-            stats.edges_created,
-            stats.duration.as_secs_f64()
-        );
+    if human_output {
+        if verbose {
+            info!(
+                files = index_stats.files_processed,
+                nodes = index_stats.nodes_created,
+                edges = index_stats.edges_created,
+                duration_secs = %format!("{:.1}", index_stats.duration.as_secs_f64()),
+                "[✓] Indexed {} files -> {} nodes, {} edges ({:.1}s)",
+                index_stats.files_processed,
+                index_stats.nodes_created,
+                index_stats.edges_created,
+                index_stats.duration.as_secs_f64()
+            );
+        } else {
+            info!(
+                "[✓] Indexed {} files -> {} nodes, {} edges ({:.1}s)",
+                index_stats.files_processed,
+                index_stats.nodes_created,
+                index_stats.edges_created,
+                index_stats.duration.as_secs_f64()
+            );
+        }
     }
 
-    if stats.files_failed > 0 {
-        warn!(failed = stats.files_failed, "Skipped files due to errors");
+    if index_stats.files_failed > 0 {
+        warn!(failed = index_stats.files_failed, "Skipped files due to errors");
     }
 
     debug!("{}", mem_monitor.report());
@@ -153,20 +165,22 @@ pub(crate) fn run_full_analysis(
         }
     }
 
-    if verbose {
-        info!(
-            communities = community_result.communities.len(),
-            modularity = %format!("{:.2}", community_result.modularity),
-            "[✓] Detected {} communities (modularity: {:.2})",
-            community_result.communities.len(),
-            community_result.modularity
-        );
-    } else {
-        info!(
-            "[✓] Detected {} communities (modularity: {:.2})",
-            community_result.communities.len(),
-            community_result.modularity
-        );
+    if human_output {
+        if verbose {
+            info!(
+                communities = community_result.communities.len(),
+                modularity = %format!("{:.2}", community_result.modularity),
+                "[✓] Detected {} communities (modularity: {:.2})",
+                community_result.communities.len(),
+                community_result.modularity
+            );
+        } else {
+            info!(
+                "[✓] Detected {} communities (modularity: {:.2})",
+                community_result.communities.len(),
+                community_result.modularity
+            );
+        }
     }
 
     debug!("{}", mem_monitor.report());
@@ -207,26 +221,28 @@ pub(crate) fn run_full_analysis(
     let high_complexity = complexity_report.by_level.get(&crate::analysis::ComplexityLevel::High).unwrap_or(&0);
     let medium_complexity = complexity_report.by_level.get(&crate::analysis::ComplexityLevel::Medium).unwrap_or(&0);
 
-    if verbose {
-        info!(
-            functions = complexity_report.functions.len(),
-            avg_cyclomatic = %format!("{:.1}", complexity_report.avg_cyclomatic),
-            high = high_complexity,
-            medium = medium_complexity,
-            "[✓] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
-            complexity_report.functions.len(),
-            complexity_report.avg_cyclomatic,
-            high_complexity,
-            medium_complexity
-        );
-    } else {
-        info!(
-            "[✓] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
-            complexity_report.functions.len(),
-            complexity_report.avg_cyclomatic,
-            high_complexity,
-            medium_complexity
-        );
+    if human_output {
+        if verbose {
+            info!(
+                functions = complexity_report.functions.len(),
+                avg_cyclomatic = %format!("{:.1}", complexity_report.avg_cyclomatic),
+                high = high_complexity,
+                medium = medium_complexity,
+                "[✓] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
+                complexity_report.functions.len(),
+                complexity_report.avg_cyclomatic,
+                high_complexity,
+                medium_complexity
+            );
+        } else {
+            info!(
+                "[✓] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
+                complexity_report.functions.len(),
+                complexity_report.avg_cyclomatic,
+                high_complexity,
+                medium_complexity
+            );
+        }
     }
 
     debug!("{}", mem_monitor.report());
@@ -257,27 +273,29 @@ pub(crate) fn run_full_analysis(
     // Check if we have betweenness data
     let has_betweenness = centrality_report.scores.values().any(|s| s.betweenness > 0.0);
 
-    if let Some((top_id, top_score)) = centrality_report.top_pagerank.first() {
-        if let Ok(Some(node)) = graph.backend().get_node(*top_id) {
-            let short_name = node.name.split('/').last().unwrap_or(&node.name);
+    if human_output {
+        if let Some((top_id, top_score)) = centrality_report.top_pagerank.first() {
+            if let Ok(Some(node)) = graph.backend().get_node(*top_id) {
+                let short_name = node.name.split('/').last().unwrap_or(&node.name);
 
-            if verbose {
-                info!(
-                    hotspot = short_name,
-                    pagerank = %format!("{:.4}", top_score),
-                    betweenness_enabled = has_betweenness,
-                    in_degree = centrality_report.scores.get(top_id).map(|s| s.in_degree).unwrap_or(0),
-                    out_degree = centrality_report.scores.get(top_id).map(|s| s.out_degree).unwrap_or(0),
-                    "[*] Top hotspot: {} (PageRank: {:.4})",
-                    short_name,
-                    top_score
-                );
-            } else {
-                info!(
-                    "[*] Top hotspot: {} (PageRank: {:.4})",
-                    short_name,
-                    top_score
-                );
+                if verbose {
+                    info!(
+                        hotspot = short_name,
+                        pagerank = %format!("{:.4}", top_score),
+                        betweenness_enabled = has_betweenness,
+                        in_degree = centrality_report.scores.get(top_id).map(|s| s.in_degree).unwrap_or(0),
+                        out_degree = centrality_report.scores.get(top_id).map(|s| s.out_degree).unwrap_or(0),
+                        "[*] Top hotspot: {} (PageRank: {:.4})",
+                        short_name,
+                        top_score
+                    );
+                } else {
+                    info!(
+                        "[*] Top hotspot: {} (PageRank: {:.4})",
+                        short_name,
+                        top_score
+                    );
+                }
             }
         }
     }
@@ -286,7 +304,7 @@ pub(crate) fn run_full_analysis(
 
     // Dependency analysis
     let cycles = DependencyAnalyzer::find_circular_dependencies(graph.backend())?;
-    if cycles.len() > 0 {
+    if cycles.len() > 0 && human_output {
         if verbose {
             warn!(
                 count = cycles.len(),
@@ -296,12 +314,12 @@ pub(crate) fn run_full_analysis(
         } else {
             warn!("[!] Found {} circular dependencies", cycles.len());
         }
-    } else {
+    } else if cycles.is_empty() {
         debug!("No circular dependencies found");
     }
 
     // Security analysis (opt-in with --security or --all)
-    if security || all {
+    if (security || all) && human_output {
         println!("\n✓ Security analysis:");
         let detector = SecretDetector::new();
         let mut total_secrets = 0usize;
@@ -335,7 +353,7 @@ pub(crate) fn run_full_analysis(
     let output_dir = root.join(".rbuilder/analysis");
 
     // CFG/PDG/Dominance analysis (opt-in with --cfg or --all)
-    if cfg || all {
+    if (cfg || all) && human_output {
         println!("\n✓ Control flow analysis:");
         use crate::analysis::{
             build_cfg_for_function, AnalysisStorage, DominatorTree, FunctionAnalysis,
@@ -484,15 +502,15 @@ pub(crate) fn run_full_analysis(
     };
 
     let build_time = blast_start.elapsed();
-    let stats = engine.stats();
+    let engine_stats = engine.stats();
 
     debug!(
-        scc_count = stats.scc_count,
-        dag_edges = stats.dag_edges,
+        scc_count = engine_stats.scc_count,
+        dag_edges = engine_stats.dag_edges,
         build_time_secs = %format!("{:.2}", build_time.as_secs_f64()),
-        compression_percent = %format!("{:.1}", (graph.node_count() - stats.scc_count) as f64 / graph.node_count() as f64 * 100.0),
-        avg_scc_size = %format!("{:.1}", stats.avg_scc_size),
-        memory_mb = %format!("{:.1}", stats.memory_mb),
+        compression_percent = %format!("{:.1}", (graph.node_count() - engine_stats.scc_count) as f64 / graph.node_count() as f64 * 100.0),
+        avg_scc_size = %format!("{:.1}", engine_stats.avg_scc_size),
+        memory_mb = %format!("{:.1}", engine_stats.memory_mb),
         "Blast radius engine built"
     );
 
@@ -621,7 +639,7 @@ pub(crate) fn run_full_analysis(
 
     let total_time = blast_start.elapsed();
 
-    if !max_impact_function.is_empty() {
+    if !max_impact_function.is_empty() && human_output {
         let short_name = max_impact_function.split('/').last().unwrap_or(&max_impact_function);
 
         if verbose {
@@ -654,7 +672,9 @@ pub(crate) fn run_full_analysis(
     );
     debug!("{}", mem_monitor.report());
 
-    info!("[✓] Analysis complete");
+    if human_output {
+        info!("[✓] Analysis complete");
+    }
 
     // Save analysis results (columnar format - separate from graph!)
     let analysis_path = root.join(".rbuilder/analysis_results.bin");
@@ -691,35 +711,40 @@ pub(crate) fn run_full_analysis(
     let analysis_size = std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0);
     let snapshot = mem_monitor.snapshot();
 
-    info!("[✓] Saved to .rbuilder/ ({:.1} MB total)", analysis_size);
+    if json_output {
+        let response = build_discover_response(&index_stats, run_start.elapsed().as_millis() as u64);
+        ctx.emit_json_value(&serde_json::to_value(&response)?)?;
+    } else {
+        info!("[✓] Saved to .rbuilder/ ({:.1} MB total)", analysis_size);
 
-    if dashboard_exported {
-        info!("[✓] Dashboard: {}", html_path.display());
-    }
+        if dashboard_exported {
+            info!("[✓] Dashboard: {}", html_path.display());
+        }
 
-    info!(
-        "[✓] Completed in {:.1}s (peak memory: {:.0} MB)",
-        snapshot.elapsed.as_secs_f64(),
-        snapshot.peak_mb
-    );
-
-    if verbose {
-        debug!(
-            saved_path = %analysis_path.display(),
-            graph_path = %saved.display(),
-            size_mb = %format!("{:.1}", analysis_size),
-            duration_secs = %format!("{:.1}", snapshot.elapsed.as_secs_f64()),
-            peak_mb = %format!("{:.0}", snapshot.peak_mb),
-            "Save complete"
+        info!(
+            "[✓] Completed in {:.1}s (peak memory: {:.0} MB)",
+            snapshot.elapsed.as_secs_f64(),
+            snapshot.peak_mb
         );
-    }
 
-    info!("");
-    info!("[i] Next steps:");
-    info!("   rbuilder gql \"MATCH (n:Function) RETURN n\"  # Query the graph");
-    info!("   rbuilder slice <file> --line <N> --variable <VAR>");
-    if dashboard_exported {
-        info!("   open {}   # View dashboard", html_path.display());
+        if verbose {
+            debug!(
+                saved_path = %analysis_path.display(),
+                graph_path = %saved.display(),
+                size_mb = %format!("{:.1}", analysis_size),
+                duration_secs = %format!("{:.1}", snapshot.elapsed.as_secs_f64()),
+                peak_mb = %format!("{:.0}", snapshot.peak_mb),
+                "Save complete"
+            );
+        }
+
+        info!("");
+        info!("[i] Next steps:");
+        info!("   rbuilder gql \"MATCH (n:Function) RETURN n\"  # Query the graph");
+        info!("   rbuilder slice <file> --line <N> --variable <VAR>");
+        if dashboard_exported {
+            info!("   open {}   # View dashboard", html_path.display());
+        }
     }
 
     Ok(())

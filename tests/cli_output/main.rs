@@ -2,6 +2,7 @@
 
 mod blast_radius;
 mod check;
+mod discover;
 mod gql;
 mod inspect;
 mod metrics;

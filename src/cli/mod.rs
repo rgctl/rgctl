@@ -8,6 +8,7 @@ pub mod check_output;
 mod context;
 mod discover;
 mod discover_impl;
+pub mod discover_output;
 mod export;
 mod gql;
 pub mod gql_output;
@@ -186,7 +187,9 @@ pub enum Commands {
 impl Cli {
     pub fn run(self) -> anyhow::Result<()> {
         let verbose = matches!(self.command, Commands::Discover { verbose: true, .. });
-        init_logging(verbose);
+        let discover_json = matches!(self.command, Commands::Discover { .. })
+            && self.format.as_ref() == Some(&OutputFormat::Json);
+        init_logging(verbose, discover_json);
 
         let ctx = CliContext::new(
             self.repo,
@@ -308,7 +311,7 @@ impl Cli {
     }
 }
 
-fn init_logging(verbose: bool) {
+fn init_logging(verbose: bool, discover_json: bool) {
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::EnvFilter;
 
@@ -321,6 +324,16 @@ fn init_logging(verbose: bool) {
             .with_target(true)
             .with_level(true)
             .with_span_events(FmtSpan::CLOSE)
+            .init();
+    } else if discover_json {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("error")),
+            )
+            .with_target(false)
+            .with_level(false)
+            .with_ansi(false)
+            .without_time()
             .init();
     } else {
         tracing_subscriber::fmt()

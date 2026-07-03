@@ -41,6 +41,41 @@ fn run_rbuilder(repo: &Path, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn discover_json_emits_telemetry_on_stdout() {
+    let dir = materialize_fixture();
+    let repo = dir.path();
+
+    let output = run_rbuilder(
+        repo,
+        &["-f", "json", "discover", ".", "--languages", "java,rust"],
+    );
+
+    assert!(
+        output.status.success(),
+        "discover -f json failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("[✓] Indexed"),
+        "human progress should not appear on stdout in json mode"
+    );
+
+    let doc: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("discover stdout must be valid JSON");
+    assert_eq!(doc.get("schema_version").and_then(|v| v.as_u64()), Some(2));
+    assert_eq!(doc.get("command").and_then(|v| v.as_str()), Some("discover"));
+
+    let metrics = doc.get("metrics").unwrap().as_object().unwrap();
+    assert!(metrics.get("files_discovered").and_then(|v| v.as_u64()).unwrap() >= 4);
+    assert!(metrics.get("files_indexed").and_then(|v| v.as_u64()).unwrap() >= 4);
+    assert!(metrics.get("nodes_generated").and_then(|v| v.as_u64()).unwrap() > 0);
+    assert!(metrics.get("edges_generated").and_then(|v| v.as_u64()).unwrap() > 0);
+    assert!(metrics.get("duration_ms").and_then(|v| v.as_u64()).is_some());
+}
+
+#[test]
 fn discover_initializes_tiny_polyglot_repo() {
     let dir = materialize_fixture();
     let repo = dir.path();

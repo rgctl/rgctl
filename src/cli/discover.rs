@@ -26,10 +26,10 @@ pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
         .unwrap_or_else(|| ctx.repo.to_string_lossy().into_owned());
 
     super::discover_impl::run_full_analysis(
+        ctx,
         &path,
         args.languages,
         args.exclude,
-        ctx.verbose,
         args.security,
         args.cfg,
         args.all,
