@@ -73,6 +73,10 @@ pub enum Error {
     #[error("Resource not found: {0}")]
     NotFound(String),
 
+    /// Symbol name matched multiple graph nodes
+    #[error("Ambiguous symbol '{name}': {count} matches")]
+    AmbiguousSymbol { name: String, count: usize },
+
     /// Generic error with context
     #[error("{0}")]
     Other(String),
