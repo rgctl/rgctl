@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/cfgview.tsx","./src/functionsview.tsx","./src/graphview.tsx","./src/nodetypefilter.tsx","./src/bundleurl.ts","./src/main.tsx","./src/types.ts","./src/useengineworker.ts","./src/vite-env.d.ts","./src/worker.ts"],"version":"5.7.3"}
+{"root":["./src/app.tsx","./src/cfgview.tsx","./src/functionsview.tsx","./src/graphview.tsx","./src/nodetypefilter.tsx","./src/bundleurl.ts","./src/main.tsx","./src/sigmamount.ts","./src/types.ts","./src/useengineworker.ts","./src/vite-env.d.ts","./src/worker.ts"],"version":"5.7.3"}

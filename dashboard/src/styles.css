@@ -47,18 +47,58 @@ body {
 }
 
 .rb-tab-panel-body--cfg {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
 }
 
-.cfg-graph-host {
-  min-height: 320px;
+.cfg-view {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.cfg-view {
+.cfg-detail {
+  flex: 1 1 auto;
   min-height: 0;
+}
+
+.cfg-graph-col {
+  min-width: 0;
+}
+
+.cfg-dom-col {
+  flex: 0 0 auto;
+  width: 100%;
+  max-height: 40vh;
+}
+
+@media (min-width: 992px) {
+  .cfg-dom-col {
+    width: 34%;
+    max-height: none;
+  }
+}
+
+.cfg-graph-panel,
+.cfg-dom-panel {
+  min-height: 0;
+}
+
+.cfg-graph-wrap {
+  flex: 1 1 auto;
+  min-height: 280px;
+  position: relative;
+}
+
+.cfg-graph-wrap .sigma-host {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: #f8f9fa;
 }
 
 .sigma-host {
@@ -113,7 +153,7 @@ body {
 
 .graph-canvas-wrap {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 280px;
   background: var(--rb-graph-canvas);
   position: relative;
 }

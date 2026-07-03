@@ -10,6 +10,7 @@ import type {
 } from "./types";
 import { DEFAULT_GRAPH_TYPE_MASK } from "./types";
 import { bundleDataUrl } from "./bundleUrl";
+import { mountSigmaWhenReady } from "./sigmaMount";
 
 export interface GraphViewProps {
   communityOnly: boolean;
@@ -86,20 +87,24 @@ export function GraphView({
     : null;
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    const container = containerRef.current;
+    if (!container) return;
 
-    if (level === "metagraph") {
-      if (!filteredMeta) return;
-      return renderMetagraph(filteredMeta, containerRef.current, sigmaRef, showCalls, {
-        setHover,
-        setSelected,
-        onDrill: (m) => void drillInto(m),
-      });
-    }
+    if (level === "metagraph" && !filteredMeta) return;
+    if (level === "subgraph" && !subgraph) return;
 
-    if (subgraph) {
-      return renderSubgraph(subgraph, containerRef.current, sigmaRef, setSubHover, showCalls);
-    }
+    return mountSigmaWhenReady(container, () => {
+      if (level === "metagraph" && filteredMeta) {
+        return renderMetagraph(filteredMeta, container, sigmaRef, showCalls, {
+          setHover,
+          setSelected,
+          onDrill: (m) => void drillInto(m),
+        });
+      }
+      if (level === "subgraph" && subgraph) {
+        return renderSubgraph(subgraph, container, sigmaRef, setSubHover, showCalls);
+      }
+    });
   }, [filteredMeta, level, subgraph, showCalls, search]);
 
   useEffect(() => {

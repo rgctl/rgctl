@@ -111,12 +111,16 @@ export function App() {
 
         <div
           class={`card shadow-sm border-top-0 rounded-top-0 rb-tab-panel-card ${
-            tab === "graph" ? "graph-panel p-0" : "p-0"
+            tab === "graph" || tab === "cfg" ? "graph-panel p-0" : "p-0"
           }`}
         >
           <div
             class={`rb-tab-panel-body ${
-              tab === "graph" ? "" : tab === "cfg" ? "rb-tab-panel-body--cfg p-3" : "rb-tab-panel-body--scroll p-4"
+              tab === "graph"
+                ? ""
+                : tab === "cfg"
+                  ? "rb-tab-panel-body--cfg p-3"
+                  : "rb-tab-panel-body--scroll p-4"
             }`}
           >
             <TabPanel
