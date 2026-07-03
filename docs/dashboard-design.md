@@ -1,6 +1,6 @@
 # rBuilder static dashboard — engineering design (living document)
 
-**Status:** Phase 5 complete (slice tab + CodeMirror, PDG worker slice)  
+**Status:** Phase 6 complete (WASM blast radius + depth slider)  
 **Last updated:** 2026-07-03  
 **Owner:** rBuilder core / export pipeline  
 
@@ -261,6 +261,10 @@ _Update this table when a phase lands._
 | Slice index + PDG export | 5 | **done** | `slice_index.json`, `slice/*.json` with source + PDG |
 | CodeMirror slice tab | 5 | **done** | `SliceView.tsx`, worker `compute_slice` on exported PDG |
 | `tests/dashboard_harness.rs` | 5 | **done** | phase 5 + `slice_index.json` |
+| WASM `blastRadius` API | 6 | **done** | Reverse call-graph BFS with depth limit |
+| Blast radius tab | 6 | **done** | `BlastView.tsx` + depth slider |
+| `blast_index.json` export | 6 | **done** | Optional snapshot copy |
+| `tests/dashboard_harness.rs` | 6 | **done** | phase 6 + `blast_index.json` |
 
 ### Removed (Phase 0)
 

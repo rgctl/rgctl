@@ -1,4 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
+import { BlastView } from "./BlastView";
 import { SliceView } from "./SliceView";
 import { CfgView } from "./CfgView";
 import { FunctionsView } from "./FunctionsView";
@@ -23,7 +24,8 @@ export function App() {
   const [manifest, setManifest] = useState<DashboardManifest | null>(null);
   const [manifestError, setManifestError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>("graph");
-  const { engine, error: workerError, expand, listNodes, computeSlice, wasmReady } = useEngineWorker();
+  const { engine, error: workerError, expand, listNodes, computeSlice, blastRadius, wasmReady } =
+    useEngineWorker();
 
   useEffect(() => {
     loadManifest()
@@ -112,7 +114,9 @@ export function App() {
 
         <div
           class={`card shadow-sm border-top-0 rounded-top-0 rb-tab-panel-card ${
-            tab === "graph" || tab === "cfg" || tab === "slice" ? "graph-panel p-0" : "p-0"
+            tab === "graph" || tab === "cfg" || tab === "slice" || tab === "blast"
+              ? "graph-panel p-0"
+              : "p-0"
           }`}
         >
           <div
@@ -123,7 +127,9 @@ export function App() {
                   ? "rb-tab-panel-body--cfg p-3"
                   : tab === "slice"
                     ? "rb-tab-panel-body--cfg p-3"
-                    : "rb-tab-panel-body--scroll p-4"
+                    : tab === "blast"
+                      ? "rb-tab-panel-body--cfg p-3"
+                      : "rb-tab-panel-body--scroll p-4"
             }`}
           >
             <TabPanel
@@ -134,6 +140,7 @@ export function App() {
               expand={expand}
               listNodes={listNodes}
               computeSlice={computeSlice}
+              blastRadius={blastRadius}
             />
           </div>
         </div>
@@ -168,6 +175,7 @@ function TabPanel({
   expand,
   listNodes,
   computeSlice,
+  blastRadius,
 }: {
   id: TabId;
   manifest: DashboardManifest | null;
@@ -185,6 +193,10 @@ function TabPanel({
     variable: string,
     direction: import("./types").SliceDirection,
   ) => Promise<import("./types").SliceResultPayload>;
+  blastRadius: (
+    nodeIndex: number,
+    maxDepth: number,
+  ) => Promise<import("./types").BlastRadiusPayload>;
 }) {
   if (id === "graph") {
     return (
@@ -215,17 +227,27 @@ function TabPanel({
     return <SliceView computeSlice={computeSlice} />;
   }
 
-  const placeholders: Record<Exclude<TabId, "graph" | "functions" | "cfg" | "slice">, string> = {
+  if (id === "blast") {
+    return (
+      <BlastView
+        wasmReady={wasmReady}
+        functionCount={manifest?.metrics.function_count ?? 0}
+        listNodes={listNodes}
+        blastRadius={blastRadius}
+      />
+    );
+  }
+
+  const placeholders: Record<Exclude<TabId, "graph" | "functions" | "cfg" | "slice" | "blast">, string> = {
     dataflow: "Phase 5+: dataflow from archive",
     taint: "Phase 7: taint from archive",
     guide: "CLI query reference",
-    blast: "Phase 6: blast engine + depth slider",
   };
 
   return (
     <div>
       <h2 class="h5 mb-2">{TABS.find((t) => t.id === id)?.label}</h2>
-      <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions" | "cfg" | "slice">]}</p>
+      <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions" | "cfg" | "slice" | "blast">]}</p>
       {id === "guide" && (
         <pre class="bg-light border rounded p-3 small mb-0">
           {`rbuilder discover .

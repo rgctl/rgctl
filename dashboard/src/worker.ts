@@ -37,6 +37,9 @@ self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
           msg.direction,
         );
         break;
+      case "blast_radius":
+        await handleBlastRadius(msg.requestId, msg.nodeIndex, msg.maxDepth);
+        break;
       default:
         break;
     }
@@ -146,6 +149,16 @@ async function handleComputeSlice(
     bundle.total_lines,
   );
   const out: WorkerOut = { type: "slice_result", requestId, payload };
+  self.postMessage(out);
+}
+
+async function handleBlastRadius(requestId: number, nodeIndex: number, maxDepth: number) {
+  if (!engine) {
+    throw new Error("WASM engine not loaded — blast_radius requires wasm");
+  }
+  const json = engine.blastRadius(nodeIndex >>> 0, maxDepth >>> 0);
+  const payload = JSON.parse(json) as import("./types").BlastRadiusPayload;
+  const out: WorkerOut = { type: "blast_result", requestId, payload };
   self.postMessage(out);
 }
 

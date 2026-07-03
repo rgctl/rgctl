@@ -112,6 +112,11 @@ body {
   min-height: 0;
 }
 
+.blast-view {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .slice-editor-panel {
   min-height: 280px;
 }

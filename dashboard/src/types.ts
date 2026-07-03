@@ -33,6 +33,24 @@ export interface ViewSection {
   threshold_community_only: number;
 }
 
+export interface BlastRadiusPayload {
+  seed_index: number;
+  seed_name: string;
+  depth_limit: number;
+  direct_caller_count: number;
+  impact_zone_count: number;
+  score: number;
+  callers: BlastCallerEntry[];
+}
+
+export interface BlastCallerEntry {
+  index: number;
+  name: string;
+  depth: number;
+  node_type: number;
+  node_type_name: string;
+}
+
 export interface AnalysisSection {
   cfg_available: boolean;
   cfg_index_path: string;
@@ -43,6 +61,9 @@ export interface AnalysisSection {
   slice_index_path: string;
   slice_detail_dir: string;
   slice_function_count: number;
+  blast_available: boolean;
+  blast_index_path: string;
+  blast_snapshot_path?: string | null;
 }
 
 export type SliceDirection = "backward" | "forward";
@@ -200,6 +221,7 @@ export interface NodeListEntry {
   node_type: number;
   node_type_name: string;
   complexity: number;
+  blast_score: number;
   file_path?: string | null;
 }
 
@@ -248,7 +270,8 @@ export type WorkerInWithoutId =
       line: number;
       variable: string;
       direction: SliceDirection;
-    };
+    }
+  | { type: "blast_radius"; nodeIndex: number; maxDepth: number };
 
 export type WorkerIn =
   | { type: "init" }
@@ -261,7 +284,8 @@ export type WorkerIn =
       line: number;
       variable: string;
       direction: SliceDirection;
-    };
+    }
+  | { type: "blast_radius"; requestId: number; nodeIndex: number; maxDepth: number };
 
 export type WorkerOut =
   | {
@@ -275,6 +299,7 @@ export type WorkerOut =
   | { type: "subgraph"; requestId: number; payload: SubgraphPayload }
   | { type: "node_list"; requestId: number; payload: NodeListPayload }
   | { type: "slice_result"; requestId: number; payload: SliceResultPayload }
+  | { type: "blast_result"; requestId: number; payload: BlastRadiusPayload }
   | { type: "error"; requestId?: number; message: string };
 
 export async function loadManifest(): Promise<DashboardManifest> {

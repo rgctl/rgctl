@@ -1,5 +1,6 @@
 //! Dashboard manifest written beside the static bundle.
 
+use crate::blast_export::BlastExportSummary;
 use crate::cfg_export::CfgExportSummary;
 use crate::metagraph::MetagraphPayload;
 use crate::slice_export::SliceExportSummary;
@@ -52,6 +53,9 @@ pub struct AnalysisSection {
     pub slice_index_path: String,
     pub slice_detail_dir: String,
     pub slice_function_count: usize,
+    pub blast_available: bool,
+    pub blast_index_path: String,
+    pub blast_snapshot_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +76,7 @@ impl DashboardManifest {
         meta: &MetagraphPayload,
         cfg: &CfgExportSummary,
         slice: &SliceExportSummary,
+        blast: &BlastExportSummary,
     ) -> Self {
         let mut phases = BTreeMap::new();
         phases.insert("0".into(), "complete".into());
@@ -94,6 +99,14 @@ impl DashboardManifest {
                 "pending".into()
             },
         );
+        phases.insert(
+            "6".into(),
+            if blast.available {
+                "complete".into()
+            } else {
+                "pending".into()
+            },
+        );
 
         let analysis = Some(AnalysisSection {
             cfg_available: cfg.available,
@@ -109,6 +122,13 @@ impl DashboardManifest {
             slice_index_path: crate::slice_export::SLICE_INDEX_FILE.into(),
             slice_detail_dir: crate::slice_export::SLICE_DETAIL_DIR.into(),
             slice_function_count: slice.function_count,
+            blast_available: blast.available,
+            blast_index_path: crate::blast_export::BLAST_INDEX_FILE.into(),
+            blast_snapshot_path: if blast.snapshot_copied {
+                Some(crate::blast_export::BLAST_SNAPSHOT_BUNDLE_NAME.into())
+            } else {
+                None
+            },
         });
 
         Self {
@@ -187,13 +207,16 @@ mod tests {
             &meta,
             &CfgExportSummary::default(),
             &SliceExportSummary::default(),
+            &BlastExportSummary::default(),
         );
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["phases"]["2"], "complete");
         assert_eq!(v["phases"]["4"], "pending");
         assert_eq!(v["phases"]["5"], "pending");
+        assert_eq!(v["phases"]["6"], "pending");
         assert_eq!(v["view"]["metanode_count"], 1);
         assert_eq!(v["analysis"]["cfg_available"], false);
         assert_eq!(v["analysis"]["slice_available"], false);
+        assert_eq!(v["analysis"]["blast_available"], false);
     }
 }

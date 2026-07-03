@@ -85,6 +85,20 @@ pub fn assert_dashboard_bundle_with_meta(
         manifest["phases"]["5"],
         if slice_available { "complete" } else { "pending" }
     );
+    assert_eq!(manifest["phases"]["6"], "complete");
+
+    assert!(
+        dash.join("blast_index.json").is_file(),
+        "missing blast_index.json (Phase 6)"
+    );
+    let blast_index: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("blast_index.json")).unwrap()).unwrap();
+    assert_eq!(blast_index["schema_version"], 1);
+    assert_eq!(blast_index["available"], true);
+
+    let analysis = &manifest["analysis"];
+    assert_eq!(analysis["blast_available"], true);
+    assert_eq!(analysis["blast_index_path"], "blast_index.json");
 
     assert!(
         dash.join("slice_index.json").is_file(),
@@ -92,8 +106,6 @@ pub fn assert_dashboard_bundle_with_meta(
     );
     assert_eq!(slice_index["schema_version"], 1);
     assert_eq!(slice_index["available"], cfg_available);
-
-    let analysis = &manifest["analysis"];
     assert_eq!(analysis["slice_available"], slice_available);
     assert_eq!(analysis["slice_index_path"], "slice_index.json");
 

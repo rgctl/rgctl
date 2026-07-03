@@ -92,6 +92,7 @@ export function FunctionsView({ wasmReady, functionCount, listNodes }: Functions
               <th>Name</th>
               <th>Type</th>
               <th>Cx</th>
+              <th>Blast</th>
               <th>Idx</th>
             </tr>
           </thead>
@@ -106,10 +107,13 @@ export function FunctionsView({ wasmReady, functionCount, listNodes }: Functions
                       <td class="fn-name small">{entry.name}</td>
                       <td class="small text-muted">{entry.node_type_name}</td>
                       <td class="small text-muted">{entry.complexity.toFixed(1)}</td>
+                      <td class="small text-muted">
+                        {entry.blast_score > 0 ? entry.blast_score.toFixed(0) : "—"}
+                      </td>
                       <td class="small text-muted">{entry.index}</td>
                     </>
                   ) : (
-                    <td colSpan={4} class="text-muted small">
+                    <td colSpan={5} class="text-muted small">
                       …
                     </td>
                   )}

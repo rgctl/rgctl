@@ -1,5 +1,6 @@
 //! Export `.rbuilder/dashboard/` static bundle after discover.
 
+mod blast_export;
 mod bundle;
 mod cfg_export;
 mod manifest;
@@ -7,13 +8,14 @@ mod metagraph;
 mod slice_export;
 
 pub use bundle::{default_dashboard_path, dist_embedded, DASHBOARD_DIR_NAME};
-pub use cfg_export::{CfgExportSummary, CFG_INDEX_FILE};
+pub use blast_export::{BlastExportSummary, BLAST_INDEX_FILE};
 pub use slice_export::{SliceExportSummary, SLICE_INDEX_FILE};
 pub use manifest::{
     AnalysisSection, DashboardManifest, MetricsSection, ViewSection, MANIFEST_SCHEMA_VERSION,
 };
 pub use metagraph::{MetagraphPayload, METAGRAPH_FILE, COMMUNITY_ONLY_THRESHOLD};
 
+use blast_export::export_blast_bundle;
 use bundle::{extract_static_assets, inject_manifest_bootstrap};
 use cfg_export::export_cfg_bundle;
 use manifest::DashboardManifest as Manifest;
@@ -44,6 +46,7 @@ pub fn export_dashboard_bundle(
     let meta = write_metagraph(backend, snapshot_path, &out_dir, node_count)?;
     let cfg_summary = export_cfg_bundle(backend, repo_root, &out_dir)?;
     let slice_summary = export_slice_bundle(backend, repo_root, &out_dir)?;
+    let blast_summary = export_blast_bundle(repo_root, &out_dir)?;
     let manifest = Manifest::with_phases(
         node_count,
         edge_count,
@@ -52,6 +55,7 @@ pub fn export_dashboard_bundle(
         &meta,
         &cfg_summary,
         &slice_summary,
+        &blast_summary,
     );
     let manifest_json =
         serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;

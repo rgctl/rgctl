@@ -1,7 +1,7 @@
 //! Minimal columnar v2 reader for browser WASM (Phase 3 LOD + filters).
 
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 const SNAPSHOT_MAGIC: [u8; 4] = *b"RBGR";
 const COLUMNAR_VERSION: u32 = 2;
@@ -85,7 +85,28 @@ pub struct NodeListEntry {
     pub node_type: u16,
     pub node_type_name: &'static str,
     pub complexity: f64,
+    pub blast_score: f64,
     pub file_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BlastCallerEntry {
+    pub index: u32,
+    pub name: String,
+    pub depth: u32,
+    pub node_type: u16,
+    pub node_type_name: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BlastRadiusPayload {
+    pub seed_index: u32,
+    pub seed_name: String,
+    pub depth_limit: u32,
+    pub direct_caller_count: u32,
+    pub impact_zone_count: u32,
+    pub score: f64,
+    pub callers: Vec<BlastCallerEntry>,
 }
 
 #[derive(Debug, Serialize)]
@@ -242,11 +263,12 @@ impl ColumnarView {
             }
             let node = self.materialize_light(idx)?;
             items.push(NodeListEntry {
-                index: node.index,
+                index: idx,
                 name: node.name,
                 node_type: node.node_type,
                 node_type_name: node.node_type_name,
                 complexity: node.complexity,
+                blast_score: self.blast_score_for_index(idx)?,
                 file_path: node.file_path,
             });
         }
@@ -256,6 +278,88 @@ impl ColumnarView {
             offset,
             items,
         })
+    }
+
+    /// Reverse call-graph BFS from `start` up to `max_depth` caller hops.
+    pub fn blast_radius(&self, start: u32, max_depth: u32) -> Result<BlastRadiusPayload, String> {
+        if start >= self.node_count as u32 {
+            return Err(format!("node index {start} out of range"));
+        }
+        let max_depth = max_depth.max(1).min(32);
+        let callers_adj = self.caller_adjacency();
+
+        let seed = self.materialize_light(start)?;
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::from([(start, 0u32)]);
+        let mut impact = Vec::new();
+        let mut direct_count = 0u32;
+
+        while let Some((node, depth)) = queue.pop_front() {
+            if !visited.insert(node) {
+                continue;
+            }
+            if node != start {
+                let row = read_node_row(&self.bytes, self.offset_nodes as usize, node as usize)?;
+                if row.node_type == 0 {
+                    impact.push((node, depth));
+                    if depth == 1 {
+                        direct_count += 1;
+                    }
+                }
+            }
+            if depth >= max_depth {
+                continue;
+            }
+            for &caller in &callers_adj[node as usize] {
+                if !visited.contains(&caller) {
+                    queue.push_back((caller, depth + 1));
+                }
+            }
+        }
+
+        let mut caller_entries = Vec::with_capacity(impact.len());
+        for (idx, depth) in impact {
+            let node = self.materialize_light(idx)?;
+            caller_entries.push(BlastCallerEntry {
+                index: node.index,
+                name: node.name,
+                depth,
+                node_type: node.node_type,
+                node_type_name: node.node_type_name,
+            });
+        }
+        caller_entries.sort_by(|a, b| a.depth.cmp(&b.depth).then(a.name.cmp(&b.name)));
+
+        let impact_count = caller_entries.len() as u32;
+        Ok(BlastRadiusPayload {
+            seed_index: seed.index,
+            seed_name: seed.name,
+            depth_limit: max_depth,
+            direct_caller_count: direct_count,
+            impact_zone_count: impact_count,
+            score: impact_score_from_counts(direct_count as usize, impact_count as usize),
+            callers: caller_entries,
+        })
+    }
+
+    fn caller_adjacency(&self) -> Vec<Vec<u32>> {
+        let mut adj = vec![Vec::new(); self.node_count];
+        for edge_idx in 0..self.edge_count {
+            let Ok(row) = read_edge_row(&self.bytes, self.offset_edges as usize, edge_idx) else {
+                continue;
+            };
+            if row.edge_type != CALLS_EDGE {
+                continue;
+            }
+            let Some(&from) = self.uuid_to_index.get(&row.from) else {
+                continue;
+            };
+            let Some(&to) = self.uuid_to_index.get(&row.to) else {
+                continue;
+            };
+            adj[to as usize].push(from);
+        }
+        adj
     }
 
     fn materialize_light(&self, idx: u32) -> Result<SubgraphNode, String> {
@@ -290,6 +394,20 @@ impl ColumnarView {
             complexity,
             file_path,
         })
+    }
+
+    fn blast_score_for_index(&self, idx: u32) -> Result<f64, String> {
+        let row = read_node_row(&self.bytes, self.offset_nodes as usize, idx as usize)?;
+        Ok(
+            extension_property_f64(
+                &self.bytes,
+                self.offset_extensions as usize,
+                row.extension_off,
+                row.extension_len,
+                "blast_radius_score",
+            )
+            .unwrap_or(0.0),
+        )
     }
 }
 
@@ -386,6 +504,16 @@ fn extension_complexity(
     off: u32,
     len: u32,
 ) -> Option<f64> {
+    extension_property_f64(bytes, ext_base, off, len, "cyclomatic")
+}
+
+fn extension_property_f64(
+    bytes: &[u8],
+    ext_base: usize,
+    off: u32,
+    len: u32,
+    key: &str,
+) -> Option<f64> {
     if len == 0 {
         return None;
     }
@@ -395,9 +523,16 @@ fn extension_complexity(
         return None;
     }
     let ext: NodeExtension = bincode::deserialize(&bytes[start..end]).ok()?;
-    ext.properties
-        .get("cyclomatic")
-        .and_then(|v| v.parse::<f64>().ok())
+    ext.properties.get(key).and_then(|v| v.parse::<f64>().ok())
+}
+
+fn impact_score_from_counts(direct_count: usize, impact_count: usize) -> f64 {
+    if direct_count == 0 && impact_count == 0 {
+        return 0.0;
+    }
+    let direct_component = (direct_count as f64 * 25.0).min(40.0);
+    let transitive_component = (impact_count as f64 * 0.05).min(60.0);
+    (direct_component + transitive_component).min(100.0)
 }
 
 #[cfg(test)]
@@ -408,5 +543,10 @@ mod tests {
     fn node_type_bits() {
         assert_eq!(node_type_bit(0), 1);
         assert_eq!(node_type_bit(1), 2);
+    }
+
+    #[test]
+    fn impact_score_caps_at_100() {
+        assert_eq!(impact_score_from_counts(10, 5000), 100.0);
     }
 }

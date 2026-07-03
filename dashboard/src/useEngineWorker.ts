@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import type { EngineReady, NodeListPayload, SliceDirection, SliceResultPayload, SubgraphPayload, WorkerInWithoutId, WorkerOut } from "./types";
+import type { EngineReady, BlastRadiusPayload, NodeListPayload, SliceDirection, SliceResultPayload, SubgraphPayload, WorkerInWithoutId, WorkerOut } from "./types";
 
 export function useEngineWorker() {
   const workerRef = useRef<Worker | null>(null);
@@ -42,6 +42,7 @@ export function useEngineWorker() {
         if (data.type === "subgraph") p.resolve(data.payload);
         else if (data.type === "node_list") p.resolve(data.payload);
         else if (data.type === "slice_result") p.resolve(data.payload);
+        else if (data.type === "blast_result") p.resolve(data.payload);
       }
     };
 
@@ -92,5 +93,19 @@ export function useEngineWorker() {
     [send],
   );
 
-  return { engine, error, expand, listNodes, computeSlice: computeSliceRequest, wasmReady: engine?.wasm ?? false };
+  const blastRadius = useCallback(
+    (nodeIndex: number, maxDepth: number) =>
+      send<BlastRadiusPayload>({ type: "blast_radius", nodeIndex, maxDepth }),
+    [send],
+  );
+
+  return {
+    engine,
+    error,
+    expand,
+    listNodes,
+    computeSlice: computeSliceRequest,
+    blastRadius,
+    wasmReady: engine?.wasm ?? false,
+  };
 }

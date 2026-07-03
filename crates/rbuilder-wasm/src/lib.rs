@@ -58,4 +58,14 @@ impl EngineContext {
             .map_err(|e| JsValue::from_str(&e))?;
         serde_json::to_string(&payload).map_err(|e| JsValue::from_str(&e.to_string()))
     }
+
+    /// Caller blast radius up to `max_depth` hops on the reverse call graph.
+    #[wasm_bindgen(js_name = blastRadius)]
+    pub fn blast_radius(&self, start_index: u32, max_depth: u32) -> Result<String, JsValue> {
+        let payload = self
+            .view
+            .blast_radius(start_index, max_depth)
+            .map_err(|e| JsValue::from_str(&e))?;
+        serde_json::to_string(&payload).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
 }
