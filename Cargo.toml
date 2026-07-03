@@ -288,6 +288,10 @@ path = "src/main.rs"
 name = "cli_output"
 path = "tests/cli_output/main.rs"
 
+[[test]]
+name = "subprocess_golden_path"
+path = "tests/cli_output/subprocess_golden_path.rs"
+
 [[bench]]
 name = "parsing"
 harness = false

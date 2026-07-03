@@ -544,6 +544,13 @@ pub(crate) fn run_full_analysis(
     // Serialize minimized macro-call index for instant blast-radius lookups
     {
         use crate::analysis::MacroCallIndex;
+        // Fingerprint capture reads graph.db; persist topology before indexing.
+        if !db_path.exists() {
+            if let Some(parent) = db_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(db_path, graph.export_json()?)?;
+        }
         let macro_index = MacroCallIndex::from_results(
             db_path,
             backend,
