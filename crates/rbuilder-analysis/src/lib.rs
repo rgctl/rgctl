@@ -2,6 +2,7 @@
 
 #![warn(missing_docs)]
 
+pub mod blast_engine_snapshot;
 pub mod blast_radius;
 pub mod blast_radius_scc;
 pub mod blast_slice_handoff;
@@ -18,6 +19,8 @@ pub mod dependency;
 pub mod dominance;
 pub mod flow_cache;
 pub mod graph_utils;
+pub mod macro_call_index;
+pub mod macro_call_lookup;
 pub mod interprocedural_cfg;
 pub mod interprocedural_slicing;
 pub mod pdg;
@@ -27,6 +30,7 @@ pub mod storage;
 pub mod taint;
 pub mod type_inference;
 
+pub use blast_engine_snapshot::{try_load_engine, BlastEngineSnapshot, BLAST_SNAPSHOT_FILE};
 pub use blast_radius::{
     resolve_unique_symbol, BlastRadiusAnalyzer, BlastRadiusReport, DataFlowImpact,
 };
@@ -34,7 +38,7 @@ pub use blast_radius_scc::{BlastRadiusEngine, BlastRadiusResult, EngineStats, Sc
 pub use blast_slice_handoff::{
     criterion_for_parameter, filter_handoff_seeds_by_index, load_source_files,
     resolve_handoff_seeds, resolve_handoff_seeds_for_indices, trace_blast_to_slices,
-    BlastSliceTrace, SliceHandoffSeed,
+    trace_blast_to_slices_with_blast, BlastSliceTrace, SliceHandoffSeed,
 };
 pub use callgraph::{CallGraph, CallGraphEdge, CallGraphNode};
 pub use results::{
@@ -61,6 +65,11 @@ pub use dependency::{CircularDependency, DependencyAnalyzer, ImpactResult};
 pub use dominance::{verify_idom_acyclic, DominatorTree};
 pub use flow_cache::{CachedAnalysis, CfgPdgCache, FlowCache, NodePdgCache};
 pub use graph_utils::PetGraphView;
+pub use macro_call_index::{GraphFingerprint, MacroCallIndex, MacroCallIndexEntry, SymbolContext};
+pub use macro_call_lookup::{
+    candidates_from_backend, candidates_from_snapshot, class_name_from_node, parse_fqn_symbol, resolve_symbol_uuid,
+    try_parse_symbol_uuid, MacroCallLookupDb, MacroCallLookupRow, MacroIndexEntry, ParsedSymbol,
+};
 pub use interprocedural_cfg::InterproceduralCFG;
 pub use interprocedural_slicing::{InterproceduralSlice, InterproceduralSlicer};
 pub use policy::{check_policies, evaluate_policies, DomainId, PolicyRegistry, PolicyViolation};

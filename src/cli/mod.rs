@@ -110,12 +110,26 @@ pub enum Commands {
 
     /// Macro impact / blast radius for a symbol
     BlastRadius {
+        /// Function symbol name, UUID, or FQN (e.g. `Class::method`)
+        #[arg(value_name = "SYMBOL")]
         symbol: String,
 
-        #[arg(long)]
+        #[arg(long, value_name = "N")]
         depth: Option<usize>,
 
+        /// Run statement-level slice hand-off analysis (slow on large graphs)
         #[arg(long)]
+        with_slices: bool,
+
+        /// Explicit class or namespace filter
+        #[arg(long, value_name = "NAME")]
+        class: Option<String>,
+
+        /// Explicit container source file path filter
+        #[arg(long, value_name = "PATH")]
+        file: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
         policy_file: Option<String>,
 
         #[arg(long)]
@@ -150,7 +164,7 @@ pub enum Commands {
         policy_file: String,
     },
 
-    /// Export graph or projections (use global `-f html-dashboard` for the HTML dashboard)
+    /// Export graph or projections
     Export {
         #[arg(long = "export-format", value_enum)]
         export_format: ExportFormat,
@@ -235,6 +249,9 @@ impl Cli {
                 depth,
                 policy_file,
                 no_policy,
+                with_slices,
+                class,
+                file,
             } => blast_radius::run(
                 &ctx,
                 blast_radius::BlastRadiusArgs {
@@ -242,6 +259,9 @@ impl Cli {
                     depth,
                     policy_file,
                     no_policy,
+                    with_slices,
+                    class,
+                    file,
                 },
             ),
             Commands::Inspect { symbol, layer } => {
@@ -277,10 +297,6 @@ impl Cli {
                 },
             ),
         };
-
-        if ctx.is_html_dashboard() {
-            ctx.emit_html_dashboard()?;
-        }
 
         result
     }

@@ -41,15 +41,13 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
                 OutputFormat::Graphviz => {
                     ctx.emit(&cfg_to_dot(&cfg))?;
                 }
-                OutputFormat::HtmlDashboard | OutputFormat::Text => {
-                    if !ctx.is_html_dashboard() {
-                        println!(
-                            "CFG for {}: {} blocks, {} edges",
-                            args.symbol,
-                            cfg.blocks.len(),
-                            cfg.edges.len()
-                        );
-                    }
+                OutputFormat::Text => {
+                    println!(
+                        "CFG for {}: {} blocks, {} edges",
+                        args.symbol,
+                        cfg.blocks.len(),
+                        cfg.edges.len()
+                    );
                 }
             }
         }
@@ -82,7 +80,7 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
                     "data_deps": data,
                     "control_deps": control,
                 }))?;
-            } else if !ctx.is_html_dashboard() {
+            } else {
                 println!(
                     "PDG for {}: {} nodes, {} data deps, {} control deps",
                     args.symbol,
@@ -115,7 +113,7 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
                 }))?;
             } else if ctx.format == OutputFormat::Mermaid {
                 ctx.emit(&dom_to_mermaid(&dom))?;
-            } else if !ctx.is_html_dashboard() {
+            } else {
                 println!("Dominators for {}: {} blocks", args.symbol, dom.idom.len());
                 if frontiers {
                     for (block, frontier) in &dom.frontiers {

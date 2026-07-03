@@ -9,9 +9,6 @@ pub enum OutputFormat {
     Json,
     Graphviz,
     Mermaid,
-    /// Interactive HTML dashboard (graph + analysis overlays)
-    #[value(name = "html-dashboard")]
-    HtmlDashboard,
 }
 
 /// Slice traversal direction.

@@ -261,7 +261,18 @@ pub fn trace_blast_to_slices(
     let (symbol_id, resolved_name) =
         crate::blast_radius::resolve_unique_symbol(backend, symbol_name)?;
     let blast = engine.analyze(symbol_id)?;
-    let handoffs = resolve_handoff_seeds(backend, &blast, symbol_id)?;
+    trace_blast_to_slices_with_blast(backend, repo_root, symbol_id, &resolved_name, &blast)
+}
+
+/// Derive interprocedural slices from a pre-computed blast-radius result.
+pub fn trace_blast_to_slices_with_blast(
+    backend: &MemoryBackend,
+    repo_root: &Path,
+    symbol_id: Uuid,
+    symbol_name: &str,
+    blast: &BlastRadiusResult,
+) -> Result<BlastSliceTrace> {
+    let handoffs = resolve_handoff_seeds(backend, blast, symbol_id)?;
 
     let source_files = load_source_files(backend, repo_root);
     let icfg = InterproceduralCFG::build(backend, &source_files)?;
@@ -286,8 +297,8 @@ pub fn trace_blast_to_slices(
     }
 
     Ok(BlastSliceTrace {
-        symbol_name: resolved_name,
-        blast,
+        symbol_name: symbol_name.to_string(),
+        blast: blast.clone(),
         handoffs,
         slices,
     })

@@ -39,6 +39,13 @@ impl CliContext {
     }
 
     pub fn load_graph(&self) -> Result<CodeGraph> {
+        let snapshot = self
+            .repo
+            .join(".rbuilder")
+            .join(rbuilder_graph::snapshot::SNAPSHOT_FILE);
+        if snapshot.exists() {
+            return CodeGraph::open_snapshot(&snapshot).map_err(Into::into);
+        }
         if self.db.exists() {
             let json = fs::read_to_string(&self.db)
                 .with_context(|| format!("read graph db {}", self.db.display()))?;
@@ -55,53 +62,36 @@ impl CliContext {
         );
     }
 
-    pub fn is_html_dashboard(&self) -> bool {
-        self.format == OutputFormat::HtmlDashboard
+    /// Graph content digest when a binary snapshot is present.
+    pub fn graph_digest(&self) -> Result<Option<String>> {
+        let snapshot = self
+            .repo
+            .join(".rbuilder")
+            .join(rbuilder_graph::snapshot::SNAPSHOT_FILE);
+        if !snapshot.exists() {
+            return Ok(None);
+        }
+        let mmap = rbuilder_graph::snapshot::MmappedGraphSnapshot::open(&snapshot)?;
+        Ok(Some(mmap.content_digest().to_string()))
     }
 
-    /// Write the interactive HTML dashboard (`-f html-dashboard`, optional `-o` path).
-    pub fn emit_html_dashboard(&self) -> Result<()> {
-        use crate::export::export_html_dashboard;
-
-        let graph = self.load_graph()?;
-        let path = self
-            .output
-            .clone()
-            .unwrap_or_else(|| self.repo.join(".rbuilder/dashboard.html"));
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+    /// Open a read-only mmap node store without hydrating [`MemoryBackend`].
+    pub fn open_snapshot_store(&self) -> Result<Option<rbuilder_graph::SnapshotNodeStore>> {
+        let snapshot = self
+            .repo
+            .join(".rbuilder")
+            .join(rbuilder_graph::snapshot::SNAPSHOT_FILE);
+        if !snapshot.exists() {
+            return Ok(None);
         }
-        let analysis_dir = self.repo.join(".rbuilder/analysis");
-        export_html_dashboard(
-            graph.backend(),
-            if analysis_dir.exists() {
-                Some(&analysis_dir)
-            } else {
-                None
-            },
-            &path,
-        )
-        .map_err(|e| anyhow::anyhow!(e))?;
-
-        if self.output.is_none() {
-            println!("HTML dashboard: {}", path.display());
-        }
-        Ok(())
+        Ok(Some(rbuilder_graph::SnapshotNodeStore::open(&snapshot)?))
     }
 
     pub fn emit(&self, text: &str) -> Result<()> {
-        if self.is_html_dashboard() {
-            return Ok(());
-        }
         self.emit_bytes(text.as_bytes())
     }
 
     pub fn emit_bytes(&self, bytes: &[u8]) -> Result<()> {
-        if self.is_html_dashboard() {
-            return Ok(());
-        }
         if let Some(path) = &self.output {
             if let Some(parent) = path.parent() {
                 if !parent.as_os_str().is_empty() {
@@ -120,9 +110,6 @@ impl CliContext {
     }
 
     pub fn emit_json_value(&self, value: &serde_json::Value) -> Result<()> {
-        if self.is_html_dashboard() {
-            return Ok(());
-        }
         match self.format {
             OutputFormat::Json => {
                 let text = serde_json::to_string_pretty(value)?;

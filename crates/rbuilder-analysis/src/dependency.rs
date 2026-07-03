@@ -160,7 +160,7 @@ impl DependencyAnalyzer {
 mod tests {
     use super::*;
     use rbuilder_graph::backend::GraphBackend;
-    use rbuilder_graph::schema::{Edge, Node, NodeType};
+    use rbuilder_graph::schema::{Edge, EdgeType, Node, NodeType};
 
     #[test]
     fn test_circular_dependency_detection() {

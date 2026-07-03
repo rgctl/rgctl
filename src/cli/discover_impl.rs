@@ -525,6 +525,70 @@ pub(crate) fn run_full_analysis(
 
     let query_time = query_start.elapsed();
 
+    let graph_digest = rbuilder_graph::PreparedGraphSnapshot::from_backend(backend)
+        .ok()
+        .map(|p| p.content_digest);
+
+    // Persist SCC engine snapshot for instant blast-radius cache misses
+    if let Some(ref digest) = graph_digest {
+        use crate::analysis::BlastEngineSnapshot;
+        let blast_snap = engine.to_engine_snapshot(digest.clone());
+        let blast_path = BlastEngineSnapshot::default_path(root);
+        if let Err(err) = blast_snap.write_to_path(&blast_path) {
+            warn!(error = %err, "Failed to save blast engine snapshot");
+        } else if verbose {
+            debug!(path = %blast_path.display(), "Blast engine snapshot saved");
+        }
+    }
+
+    // Serialize minimized macro-call index for instant blast-radius lookups
+    {
+        use crate::analysis::MacroCallIndex;
+        let macro_index = MacroCallIndex::from_results(
+            db_path,
+            backend,
+            &blast_updates,
+            graph_digest.clone(),
+        )?;
+        let macro_path = root.join(".rbuilder/macro_call_index.bin");
+        if let Err(err) = macro_index.save(&macro_path) {
+            warn!(error = %err, "Failed to save macro_call_index cache");
+        } else if verbose {
+            debug!(
+                path = %macro_path.display(),
+                entries = macro_index.entries.len(),
+                "Macro call index saved"
+            );
+        }
+
+        use crate::analysis::MacroCallLookupDb;
+        let lookup_db_path = MacroCallLookupDb::default_path(root);
+        let lookup_rows = macro_index.unique_lookup_rows();
+        let candidate_rows = macro_index.all_candidate_rows();
+        if let Err(err) = MacroCallLookupDb::replace_all(&lookup_db_path, &lookup_rows) {
+            warn!(error = %err, "Failed to save macro_call_index.db");
+        } else if let Err(err) =
+            MacroCallLookupDb::replace_candidates(&lookup_db_path, &candidate_rows)
+        {
+            warn!(error = %err, "Failed to save macro_call_candidates table");
+        } else if let Err(err) = MacroCallLookupDb::write_meta_with_digest(
+            &lookup_db_path,
+            std::fs::metadata(db_path).map(|m| m.len()).unwrap_or(0),
+            backend.node_count(),
+            backend.edge_count(),
+            graph_digest.as_deref(),
+        ) {
+            warn!(error = %err, "Failed to write macro_call_index.db metadata");
+        } else if verbose {
+            debug!(
+                path = %lookup_db_path.display(),
+                rows = lookup_rows.len(),
+                candidates = candidate_rows.len(),
+                "Macro call lookup DB saved"
+            );
+        }
+    }
+
     // Write blast radius results to columnar table
     {
         // Collect data with compact IDs first
@@ -602,6 +666,12 @@ pub(crate) fn run_full_analysis(
     std::fs::write(db_path, json)?;
     let saved = graph.save_to_repo(root)?;
 
+    if let Ok(snap_path) = graph.save_snapshot(root) {
+        if verbose {
+            debug!(path = %snap_path.display(), "Graph binary snapshot saved");
+        }
+    }
+
     // Export HTML dashboard
     use crate::export::export_html_dashboard;
     let html_path = root.join(".rbuilder/dashboard.html");
@@ -641,9 +711,8 @@ pub(crate) fn run_full_analysis(
     info!("[i] Next steps:");
     info!("   rbuilder gql \"MATCH (n:Function) RETURN n\"  # Query the graph");
     info!("   rbuilder slice <file> --line <N> --variable <VAR>");
-    info!("   rbuilder -f html-dashboard -o .rbuilder/dashboard.html");
     if dashboard_exported {
-        info!("   open {}   # View dashboard", html_path.file_name().unwrap().to_str().unwrap());
+        info!("   open {}   # View dashboard", html_path.display());
     }
 
     Ok(())
