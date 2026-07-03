@@ -1,6 +1,6 @@
 # rBuilder static dashboard — engineering design (living document)
 
-**Status:** Phase 0 + Phase 1 in progress  
+**Status:** Phase 3 complete  
 **Last updated:** 2026-07-03  
 **Owner:** rBuilder core / export pipeline  
 
