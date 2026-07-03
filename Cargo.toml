@@ -14,6 +14,8 @@ members = [
     "crates/rbuilder-analysis",
     "crates/rbuilder-gql",
     "crates/rbuilder-export",
+    "crates/rbuilder-dashboard",
+    "crates/rbuilder-wasm",
     "crates/rbuilder-security",
     "crates/rbuilder-project-config",
     "crates/rbuilder-incremental",
@@ -84,6 +86,8 @@ rbuilder-pipeline = { path = "crates/rbuilder-pipeline", version = "0.1.0" }
 rbuilder-analysis = { path = "crates/rbuilder-analysis", version = "0.1.0" }
 rbuilder-gql = { path = "crates/rbuilder-gql", version = "0.1.0" }
 rbuilder-export = { path = "crates/rbuilder-export", version = "0.1.0" }
+rbuilder-dashboard = { path = "crates/rbuilder-dashboard", version = "0.1.0" }
+rbuilder-wasm = { path = "crates/rbuilder-wasm", version = "0.1.0" }
 rbuilder-security = { path = "crates/rbuilder-security", version = "0.1.0" }
 rbuilder-project-config = { path = "crates/rbuilder-project-config", version = "0.1.0" }
 rbuilder-incremental = { path = "crates/rbuilder-incremental", version = "0.1.0" }
@@ -195,6 +199,7 @@ rbuilder-pipeline = { workspace = true }
 rbuilder-analysis = { workspace = true }
 rbuilder-gql = { workspace = true }
 rbuilder-export = { workspace = true }
+rbuilder-dashboard = { workspace = true }
 rbuilder-security = { workspace = true }
 rbuilder-project-config = { workspace = true }
 rbuilder-incremental = { workspace = true }
@@ -250,6 +255,7 @@ proptest = "1"
 tempfile = "3"
 pretty_assertions = "1"
 insta = "1"
+rbuilder-dashboard = { workspace = true }
 rbuilder-lang-ansible = { workspace = true }
 rbuilder-lang-chef = { workspace = true }
 rbuilder-lang-puppet = { workspace = true }
@@ -295,6 +301,14 @@ path = "tests/cli_output/subprocess_golden_path.rs"
 [[test]]
 name = "all_commands_sanity"
 path = "tests/cli_output/all_commands_sanity.rs"
+
+[[test]]
+name = "dashboard_bundle"
+path = "tests/dashboard_bundle.rs"
+
+[[test]]
+name = "dashboard_gbuilder"
+path = "tests/dashboard_gbuilder.rs"
 
 [[bench]]
 name = "parsing"

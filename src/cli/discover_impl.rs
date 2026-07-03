@@ -735,14 +735,17 @@ pub(crate) fn run_full_analysis(
         }
     }
 
-    // Export HTML dashboard
-    use crate::export::export_html_dashboard;
-    let html_path = root.join(".rbuilder/dashboard.html");
-    let dashboard_exported = export_html_dashboard(
+    // Export static dashboard bundle (Phase 0+1 — see docs/dashboard-design.md)
+    let dashboard_dir = root.join(".rbuilder/dashboard");
+    let dashboard_exported = rbuilder_dashboard::export_dashboard_bundle(
         graph.backend(),
-        Some(&output_dir),
-        &html_path,
-    ).is_ok();
+        root,
+        &snapshot_path,
+    )
+    .is_ok();
+    if !dashboard_exported && verbose {
+        debug!("Dashboard bundle skipped (run scripts/build-dashboard.sh then rebuild rbuilder)");
+    }
 
     let analysis_size = std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0);
     let snapshot = mem_monitor.snapshot();
@@ -754,7 +757,10 @@ pub(crate) fn run_full_analysis(
         info!("[✓] Saved to .rbuilder/ ({:.1} MB total)", analysis_size);
 
         if dashboard_exported {
-            info!("[✓] Dashboard: {}", html_path.display());
+            info!(
+                "[✓] Dashboard: {}/index.html",
+                dashboard_dir.display()
+            );
         }
 
         info!(
@@ -779,7 +785,10 @@ pub(crate) fn run_full_analysis(
         info!("   rbuilder gql \"MATCH (n:Function) RETURN n\"  # Query the graph");
         info!("   rbuilder slice <file> --line <N> --variable <VAR>");
         if dashboard_exported {
-            info!("   open {}   # View dashboard", html_path.display());
+            info!(
+                "   open {}/index.html   # View dashboard (or serve directory for WASM)",
+                dashboard_dir.display()
+            );
         }
     }
 

@@ -246,7 +246,7 @@ Understanding files helps avoid duplicating cache layers:
 | `cfg_pdg.archive.bin` | `discover --cfg` | `blast-radius --with-slices`, slice hand-offs |
 | `query.sock` | `serve` | blast-radius auto-connect (optional) |
 | `analysis_results.bin` | `discover` | Columnar metrics (centrality, community, blast tables) |
-| `dashboard.html` | `discover` | Browser dashboard |
+| `dashboard/` (bundle) | `discover` | Browser static dashboard (`index.html`, `manifest.json`, `graph_payload.bin`) |
 
 ---
 
@@ -312,4 +312,4 @@ When adding or fixing language support:
 
 ---
 
-*Related docs: [`cli-output-schemas.md`](cli-output-schemas.md), [`cli-io-sanity-audit.md`](cli-io-sanity-audit.md), [`performance-engineering.md`](performance-engineering.md), [`CLI_STRUCTURE.txt`](CLI_STRUCTURE.txt), [`How-to-Blast-radius.md`](How-to-Blast-radius.md), [`cli-getting-started.md`](cli-getting-started.md).*
+*Related docs: [`dashboard-design.md`](dashboard-design.md), [`cli-output-schemas.md`](cli-output-schemas.md), [`cli-io-sanity-audit.md`](cli-io-sanity-audit.md), [`performance-engineering.md`](performance-engineering.md), [`CLI_STRUCTURE.txt`](CLI_STRUCTURE.txt), [`How-to-Blast-radius.md`](How-to-Blast-radius.md), [`cli-getting-started.md`](cli-getting-started.md).*
