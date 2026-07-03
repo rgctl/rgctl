@@ -2,11 +2,11 @@
 
 use super::args::{InspectLayer, OutputFormat, PdgEdgeLayer};
 use super::context::{language_from_path, CliContext};
+use super::inspect_output::{inspect_cfg_json, inspect_dom_json, inspect_pdg_json};
 use anyhow::Result;
 use crate::analysis::{
     build_cfg_for_function, DominatorTree, ProgramDependenceGraph,
 };
-use serde_json::json;
 use std::path::Path;
 
 pub struct InspectArgs {
@@ -28,13 +28,10 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
                 cfg.prune_unreachable_blocks();
             }
             match ctx.format {
-                OutputFormat::Json => ctx.emit_json_value(&json!({
-                    "symbol": args.symbol,
-                    "layer": "cfg",
-                    "blocks": cfg.blocks.len(),
-                    "edges": cfg.edges.len(),
-                    "pruned": prune,
-                }))?,
+                OutputFormat::Json => {
+                    let response = inspect_cfg_json(&args.symbol, &cfg, prune);
+                    ctx.emit_json_value(&serde_json::to_value(&response)?)?;
+                }
                 OutputFormat::Mermaid => {
                     ctx.emit(&cfg_to_mermaid(&cfg))?;
                 }
@@ -58,28 +55,8 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
                 PdgEdgeLayer::Control => (0, pdg.control_deps.len()),
             };
             if ctx.format == OutputFormat::Json {
-                let nodes: Vec<_> = pdg
-                    .nodes
-                    .values()
-                    .map(|n| {
-                        let mut obj = json!({
-                            "line": n.statement.line,
-                            "kind": format!("{:?}", n.statement.kind),
-                        });
-                        if def_use {
-                            obj["defined"] = json!(n.defined_vars);
-                            obj["used"] = json!(n.used_vars);
-                        }
-                        obj
-                    })
-                    .collect();
-                ctx.emit_json_value(&json!({
-                    "symbol": args.symbol,
-                    "layer": "pdg",
-                    "nodes": nodes,
-                    "data_deps": data,
-                    "control_deps": control,
-                }))?;
+                let response = inspect_pdg_json(&args.symbol, &pdg, def_use, data, control);
+                ctx.emit_json_value(&serde_json::to_value(&response)?)?;
             } else {
                 println!(
                     "PDG for {}: {} nodes, {} data deps, {} control deps",
@@ -92,25 +69,8 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
         }
         InspectLayer::Dom { frontiers } => {
             if ctx.format == OutputFormat::Json {
-                let frontiers_json: serde_json::Map<_, _> = if frontiers {
-                    dom.frontiers
-                        .iter()
-                        .map(|(k, v)| (format!("{k:?}"), json!(v.iter().collect::<Vec<_>>())))
-                        .collect()
-                } else {
-                    serde_json::Map::new()
-                };
-                let idom: serde_json::Map<_, _> = dom
-                    .idom
-                    .iter()
-                    .map(|(k, v)| (format!("{k:?}"), json!(format!("{v:?}"))))
-                    .collect();
-                ctx.emit_json_value(&json!({
-                    "symbol": args.symbol,
-                    "layer": "dom",
-                    "idom": idom,
-                    "frontiers": frontiers_json,
-                }))?;
+                let response = inspect_dom_json(&args.symbol, &cfg, &dom, frontiers);
+                ctx.emit_json_value(&serde_json::to_value(&response)?)?;
             } else if ctx.format == OutputFormat::Mermaid {
                 ctx.emit(&dom_to_mermaid(&dom))?;
             } else {

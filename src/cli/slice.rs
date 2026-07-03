@@ -2,12 +2,14 @@
 
 use super::args::{OutputFormat, SliceDirection, SliceView};
 use super::context::{language_from_path, CliContext};
+use super::slice_output::{
+    cfg_topology_json, pdg_topology_json, taint_slice_json, text_slice_json,
+};
 use anyhow::{Context, Result};
 use crate::analysis::{
     build_cfg_for_function, BackwardSlicer, ProgramDependenceGraph, SliceCriterion, TaintAnalyzer,
 };
 use crate::analysis::pdg::PdgNodeId;
-use serde_json::json;
 use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
@@ -56,15 +58,15 @@ pub fn run(ctx: &CliContext, args: SliceArgs) -> Result<()> {
             .analyze_with_policy()
             .map_err(|v| anyhow::anyhow!(v.to_string()))?;
         if ctx.format == OutputFormat::Json {
-            return ctx.emit_json_value(&json!({
-                "file": args.file,
-                "function": fn_name,
-                "line": args.line,
-                "variable": args.variable,
-                "taint": true,
-                "flows": flows.len(),
-                "vulnerable": flows.iter().filter(|f| f.is_vulnerable()).count(),
-            }));
+            let response = taint_slice_json(
+                &args.file,
+                &fn_name,
+                args.line,
+                &args.variable,
+                flows.len(),
+                flows.iter().filter(|f| f.is_vulnerable()).count(),
+            );
+            return ctx.emit_json_value(&serde_json::to_value(&response)?);
         }
         println!(
             "Taint flows: {} ({} vulnerable)",
@@ -83,21 +85,25 @@ pub fn run(ctx: &CliContext, args: SliceArgs) -> Result<()> {
         SliceView::Cfg => {
             cfg.prune_unreachable_blocks();
             if ctx.format == OutputFormat::Json {
-                ctx.emit_json_value(&json!({
-                    "blocks": cfg.blocks.len(),
-                    "edges": cfg.edges.len(),
-                }))?;
+                let response = cfg_topology_json(
+                    &path.display().to_string(),
+                    &fn_name,
+                    &cfg,
+                );
+                ctx.emit_json_value(&serde_json::to_value(&response)?)?;
             } else {
                 println!("CFG: {} blocks, {} edges", cfg.blocks.len(), cfg.edges.len());
             }
         }
         SliceView::Pdg => {
             if ctx.format == OutputFormat::Json {
-                ctx.emit_json_value(&json!({
-                    "nodes": pdg.nodes.len(),
-                    "data_deps": pdg.data_deps.len(),
-                    "control_deps": pdg.control_deps.len(),
-                }))?;
+                let response = pdg_topology_json(
+                    &path.display().to_string(),
+                    &fn_name,
+                    &pdg,
+                    false,
+                );
+                ctx.emit_json_value(&serde_json::to_value(&response)?)?;
             } else {
                 println!(
                     "PDG: {} nodes, {} data deps, {} control deps",
@@ -107,7 +113,7 @@ pub fn run(ctx: &CliContext, args: SliceArgs) -> Result<()> {
                 );
             }
         }
-        SliceView::Text => render_slice_text(ctx, path, &criterion, &slice, args.direction)?,
+        SliceView::Text => render_slice_text(ctx, path, &fn_name, &criterion, &slice, &pdg, args.direction)?,
     }
     Ok(())
 }
@@ -164,24 +170,24 @@ fn forward_slice(
 fn render_slice_text(
     ctx: &CliContext,
     path: &Path,
+    function: &str,
     criterion: &SliceCriterion,
     slice: &crate::analysis::CodeSlice,
+    pdg: &ProgramDependenceGraph,
     direction: SliceDirection,
 ) -> Result<()> {
     if ctx.format == OutputFormat::Json {
-        let mut lines: Vec<_> = slice.lines.iter().copied().collect();
-        lines.sort_unstable();
-        return ctx.emit_json_value(&json!({
-            "file": path.display().to_string(),
-            "criterion": { "line": criterion.line, "variable": criterion.variable },
-            "direction": format!("{:?}", direction).to_lowercase(),
-            "reduction_percent": slice.reduction_percent,
-            "lines": lines,
-        }));
+        let response = text_slice_json(
+            &path.display().to_string(),
+            criterion,
+            &format!("{direction:?}").to_lowercase(),
+            slice,
+            pdg,
+        );
+        return ctx.emit_json_value(&serde_json::to_value(&response)?);
     }
     println!(
-        "{:?} slice for {}:{} (variable: {})",
-        direction,
+        "{direction:?} slice for {}:{} (variable: {})",
         path.display(),
         criterion.line,
         criterion.variable
@@ -192,5 +198,6 @@ fn render_slice_text(
     for ln in lines {
         println!("  {ln}");
     }
+    let _ = function;
     Ok(())
 }

@@ -12,10 +12,12 @@ mod export;
 mod gql;
 pub mod gql_output;
 mod inspect;
+pub mod inspect_output;
 mod metrics;
 pub mod metrics_output;
 mod policy_file;
 mod slice;
+pub mod slice_output;
 
 pub use args::OutputFormat;
 
