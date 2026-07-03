@@ -3,6 +3,7 @@
 import init, { EngineContext } from "../wasm/rbuilder_wasm.js";
 import { bundleDataUrl } from "./bundleUrl";
 import { computeSlice } from "./sliceEngine";
+import { computeDataflowGraph } from "./dataflowEngine";
 import type {
   NodeListPayload,
   SliceBundlePayload,
@@ -39,6 +40,14 @@ self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
         break;
       case "blast_radius":
         await handleBlastRadius(msg.requestId, msg.nodeIndex, msg.maxDepth);
+        break;
+      case "compute_dataflow":
+        await handleComputeDataflow(
+          msg.requestId,
+          msg.functionId,
+          msg.variable,
+          msg.includeControl,
+        );
         break;
       default:
         break;
@@ -159,6 +168,23 @@ async function handleBlastRadius(requestId: number, nodeIndex: number, maxDepth:
   const json = engine.blastRadius(nodeIndex >>> 0, maxDepth >>> 0);
   const payload = JSON.parse(json) as import("./types").BlastRadiusPayload;
   const out: WorkerOut = { type: "blast_result", requestId, payload };
+  self.postMessage(out);
+}
+
+async function handleComputeDataflow(
+  requestId: number,
+  functionId: string,
+  variable: string | null,
+  includeControl: boolean,
+) {
+  const bundle = await loadSliceBundle(functionId);
+  const payload = computeDataflowGraph(
+    bundle.pdg.nodes,
+    bundle.pdg.edges,
+    variable,
+    includeControl,
+  );
+  const out: WorkerOut = { type: "dataflow_result", requestId, payload };
   self.postMessage(out);
 }
 

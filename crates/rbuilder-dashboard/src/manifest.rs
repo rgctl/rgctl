@@ -2,6 +2,7 @@
 
 use crate::blast_export::BlastExportSummary;
 use crate::cfg_export::CfgExportSummary;
+use crate::dataflow_export::DataflowExportSummary;
 use crate::metagraph::MetagraphPayload;
 use crate::slice_export::SliceExportSummary;
 use serde::{Deserialize, Serialize};
@@ -56,6 +57,10 @@ pub struct AnalysisSection {
     pub blast_available: bool,
     pub blast_index_path: String,
     pub blast_snapshot_path: Option<String>,
+    pub dataflow_available: bool,
+    pub dataflow_index_path: String,
+    pub dataflow_detail_dir: String,
+    pub dataflow_function_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +82,7 @@ impl DashboardManifest {
         cfg: &CfgExportSummary,
         slice: &SliceExportSummary,
         blast: &BlastExportSummary,
+        dataflow: &DataflowExportSummary,
     ) -> Self {
         let mut phases = BTreeMap::new();
         phases.insert("0".into(), "complete".into());
@@ -107,6 +113,14 @@ impl DashboardManifest {
                 "pending".into()
             },
         );
+        phases.insert(
+            "7".into(),
+            if dataflow.available {
+                "complete".into()
+            } else {
+                "pending".into()
+            },
+        );
 
         let analysis = Some(AnalysisSection {
             cfg_available: cfg.available,
@@ -129,6 +143,10 @@ impl DashboardManifest {
             } else {
                 None
             },
+            dataflow_available: dataflow.available,
+            dataflow_index_path: crate::dataflow_export::DATAFLOW_INDEX_FILE.into(),
+            dataflow_detail_dir: crate::slice_export::SLICE_DETAIL_DIR.into(),
+            dataflow_function_count: dataflow.function_count,
         });
 
         Self {
@@ -208,15 +226,18 @@ mod tests {
             &CfgExportSummary::default(),
             &SliceExportSummary::default(),
             &BlastExportSummary::default(),
+            &DataflowExportSummary::default(),
         );
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["phases"]["2"], "complete");
         assert_eq!(v["phases"]["4"], "pending");
         assert_eq!(v["phases"]["5"], "pending");
         assert_eq!(v["phases"]["6"], "pending");
+        assert_eq!(v["phases"]["7"], "pending");
         assert_eq!(v["view"]["metanode_count"], 1);
         assert_eq!(v["analysis"]["cfg_available"], false);
         assert_eq!(v["analysis"]["slice_available"], false);
         assert_eq!(v["analysis"]["blast_available"], false);
+        assert_eq!(v["analysis"]["dataflow_available"], false);
     }
 }

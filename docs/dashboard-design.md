@@ -1,7 +1,7 @@
 # rBuilder static dashboard — engineering design (living document)
 
-**Status:** Phase 6 complete (WASM blast radius + depth slider)  
-**Last updated:** 2026-07-03  
+**Status:** Phase 7 complete (PDG dataflow visualization)  
+**Last updated:** 2026-07-04  
 **Owner:** rBuilder core / export pipeline  
 
 This document is the **running source of truth** for the WASM + WebGL dashboard replacement. Update the [Implementation status](#implementation-status) section at the end of every phase PR.
@@ -60,8 +60,9 @@ crates/rbuilder-wasm/           # WASM engine (Phase 1+)
 | **4** | CFG/dominance from `cfg_pdg.archive.bin` | ~~`all_analyses.json`~~ (removed) |
 | **5** | Slice + CodeMirror | Client `computeBackwardSlice` |
 | **6** | Blast radius + depth slider in WASM | Client blast BFS |
-| **7** | Taint from archive | Embedded taint JSON |
-| **8** | Decommission audit | Any remaining legacy grep hits |
+| **7** | Dataflow (PDG def-use visualization) | — |
+| **8** | Taint from archive | Embedded taint JSON |
+| **9** | Decommission audit | Any remaining legacy grep hits |
 
 ---
 
@@ -265,6 +266,9 @@ _Update this table when a phase lands._
 | Blast radius tab | 6 | **done** | `BlastView.tsx` + depth slider |
 | `blast_index.json` export | 6 | **done** | Optional snapshot copy |
 | `tests/dashboard_harness.rs` | 6 | **done** | phase 6 + `blast_index.json` |
+| Dataflow index export | 7 | **done** | `dataflow_index.json` → PDG in `slice/` |
+| Dataflow tab (Sigma PDG) | 7 | **done** | `DataflowView.tsx`, worker `compute_dataflow` |
+| `tests/dashboard_harness.rs` | 7 | **done** | phase 7 + `dataflow_index.json` |
 
 ### Removed (Phase 0)
 

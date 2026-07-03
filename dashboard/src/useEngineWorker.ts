@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import type { EngineReady, BlastRadiusPayload, NodeListPayload, SliceDirection, SliceResultPayload, SubgraphPayload, WorkerInWithoutId, WorkerOut } from "./types";
+import type { BlastRadiusPayload, DataflowGraphPayload, EngineReady, NodeListPayload, SliceDirection, SliceResultPayload, SubgraphPayload, WorkerInWithoutId, WorkerOut } from "./types";
 
 export function useEngineWorker() {
   const workerRef = useRef<Worker | null>(null);
@@ -43,6 +43,7 @@ export function useEngineWorker() {
         else if (data.type === "node_list") p.resolve(data.payload);
         else if (data.type === "slice_result") p.resolve(data.payload);
         else if (data.type === "blast_result") p.resolve(data.payload);
+        else if (data.type === "dataflow_result") p.resolve(data.payload);
       }
     };
 
@@ -99,6 +100,17 @@ export function useEngineWorker() {
     [send],
   );
 
+  const computeDataflow = useCallback(
+    (functionId: string, variable: string | null, includeControl: boolean) =>
+      send<DataflowGraphPayload>({
+        type: "compute_dataflow",
+        functionId,
+        variable,
+        includeControl,
+      }),
+    [send],
+  );
+
   return {
     engine,
     error,
@@ -106,6 +118,7 @@ export function useEngineWorker() {
     listNodes,
     computeSlice: computeSliceRequest,
     blastRadius,
+    computeDataflow,
     wasmReady: engine?.wasm ?? false,
   };
 }

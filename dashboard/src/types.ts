@@ -64,6 +64,51 @@ export interface AnalysisSection {
   blast_available: boolean;
   blast_index_path: string;
   blast_snapshot_path?: string | null;
+  dataflow_available: boolean;
+  dataflow_index_path: string;
+  dataflow_detail_dir: string;
+  dataflow_function_count: number;
+}
+
+export interface DataflowIndexPayload {
+  schema_version: number;
+  available: boolean;
+  detail_dir: string;
+  function_count: number;
+  functions: DataflowFunctionEntry[];
+}
+
+export interface DataflowFunctionEntry {
+  function_id: string;
+  name: string;
+  file_path?: string | null;
+  pdg_nodes: number;
+  data_edges: number;
+}
+
+export interface DataflowGraphPayload {
+  variable: string | null;
+  include_control: boolean;
+  nodes: DataflowGraphNode[];
+  edges: DataflowGraphEdge[];
+  lines: number[];
+  data_edge_count: number;
+  control_edge_count: number;
+}
+
+export interface DataflowGraphNode {
+  id: string;
+  line: number;
+  label: string;
+  defined: string[];
+  used: string[];
+}
+
+export interface DataflowGraphEdge {
+  source: string;
+  target: string;
+  kind: "data" | "control";
+  variable?: string | null;
 }
 
 export type SliceDirection = "backward" | "forward";
@@ -271,7 +316,13 @@ export type WorkerInWithoutId =
       variable: string;
       direction: SliceDirection;
     }
-  | { type: "blast_radius"; nodeIndex: number; maxDepth: number };
+  | { type: "blast_radius"; nodeIndex: number; maxDepth: number }
+  | {
+      type: "compute_dataflow";
+      functionId: string;
+      variable: string | null;
+      includeControl: boolean;
+    };
 
 export type WorkerIn =
   | { type: "init" }
@@ -285,7 +336,14 @@ export type WorkerIn =
       variable: string;
       direction: SliceDirection;
     }
-  | { type: "blast_radius"; requestId: number; nodeIndex: number; maxDepth: number };
+  | { type: "blast_radius"; requestId: number; nodeIndex: number; maxDepth: number }
+  | {
+      type: "compute_dataflow";
+      requestId: number;
+      functionId: string;
+      variable: string | null;
+      includeControl: boolean;
+    };
 
 export type WorkerOut =
   | {
@@ -300,6 +358,7 @@ export type WorkerOut =
   | { type: "node_list"; requestId: number; payload: NodeListPayload }
   | { type: "slice_result"; requestId: number; payload: SliceResultPayload }
   | { type: "blast_result"; requestId: number; payload: BlastRadiusPayload }
+  | { type: "dataflow_result"; requestId: number; payload: DataflowGraphPayload }
   | { type: "error"; requestId?: number; message: string };
 
 export async function loadManifest(): Promise<DashboardManifest> {

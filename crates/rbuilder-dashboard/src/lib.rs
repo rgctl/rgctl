@@ -3,12 +3,13 @@
 mod blast_export;
 mod bundle;
 mod cfg_export;
+mod dataflow_export;
 mod manifest;
 mod metagraph;
 mod slice_export;
 
 pub use bundle::{default_dashboard_path, dist_embedded, DASHBOARD_DIR_NAME};
-pub use blast_export::{BlastExportSummary, BLAST_INDEX_FILE};
+pub use dataflow_export::{DataflowExportSummary, DATAFLOW_INDEX_FILE};
 pub use slice_export::{SliceExportSummary, SLICE_INDEX_FILE};
 pub use manifest::{
     AnalysisSection, DashboardManifest, MetricsSection, ViewSection, MANIFEST_SCHEMA_VERSION,
@@ -20,6 +21,7 @@ use bundle::{extract_static_assets, inject_manifest_bootstrap};
 use cfg_export::export_cfg_bundle;
 use manifest::DashboardManifest as Manifest;
 use metagraph::write_metagraph;
+use dataflow_export::export_dataflow_index;
 use slice_export::export_slice_bundle;
 use rbuilder_graph::backend::MemoryBackend;
 use rbuilder_graph::schema::{EdgeType, NodeType};
@@ -46,6 +48,7 @@ pub fn export_dashboard_bundle(
     let meta = write_metagraph(backend, snapshot_path, &out_dir, node_count)?;
     let cfg_summary = export_cfg_bundle(backend, repo_root, &out_dir)?;
     let slice_summary = export_slice_bundle(backend, repo_root, &out_dir)?;
+    let dataflow_summary = export_dataflow_index(&slice_summary, &out_dir)?;
     let blast_summary = export_blast_bundle(repo_root, &out_dir)?;
     let manifest = Manifest::with_phases(
         node_count,
@@ -56,6 +59,7 @@ pub fn export_dashboard_bundle(
         &cfg_summary,
         &slice_summary,
         &blast_summary,
+        &dataflow_summary,
     );
     let manifest_json =
         serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;

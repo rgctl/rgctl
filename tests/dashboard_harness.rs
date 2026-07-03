@@ -87,6 +87,19 @@ pub fn assert_dashboard_bundle_with_meta(
     );
     assert_eq!(manifest["phases"]["6"], "complete");
 
+    let dataflow_index: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("dataflow_index.json")).unwrap()).unwrap();
+    let dataflow_available = dataflow_index["available"].as_bool().unwrap_or(false);
+    assert_eq!(
+        manifest["phases"]["7"],
+        if dataflow_available { "complete" } else { "pending" }
+    );
+    assert!(dash.join("dataflow_index.json").is_file());
+    assert_eq!(dataflow_index["schema_version"], 1);
+    if !cfg_available {
+        assert_eq!(dataflow_available, false);
+    }
+
     assert!(
         dash.join("blast_index.json").is_file(),
         "missing blast_index.json (Phase 6)"
@@ -99,6 +112,8 @@ pub fn assert_dashboard_bundle_with_meta(
     let analysis = &manifest["analysis"];
     assert_eq!(analysis["blast_available"], true);
     assert_eq!(analysis["blast_index_path"], "blast_index.json");
+    assert_eq!(analysis["dataflow_available"], dataflow_available);
+    assert_eq!(analysis["dataflow_index_path"], "dataflow_index.json");
 
     assert!(
         dash.join("slice_index.json").is_file(),
