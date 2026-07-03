@@ -1,18 +1,20 @@
 //! `rbuilder blast-radius` — SCC macro impact analysis.
 
 use super::args::OutputFormat;
+use super::blast_radius_output::{
+    build_from_cache_entry, build_from_engine_result, emit_text, evaluate_gatekeeping,
+    handoffs_from_seeds, response_to_json, skipped_gatekeeping, BlastRadiusResponse, NodeLookup,
+};
 use super::context::CliContext;
 use anyhow::Result;
 use super::policy_file::PolicyFile;
 use crate::analysis::{
-    candidates_from_backend, candidates_from_snapshot, evaluate_policies, parse_fqn_symbol,
-    resolve_symbol_uuid, trace_blast_to_slices_with_blast, try_load_engine, try_parse_symbol_uuid,
-    BlastRadiusEngine, BlastRadiusResult, CentralityAnalyzer, MacroCallIndex, MacroCallLookupDb,
-    PetGraphView,
+    candidates_from_backend, candidates_from_snapshot, parse_fqn_symbol, resolve_symbol_uuid,
+    trace_blast_to_slices_with_blast, try_load_engine, try_parse_symbol_uuid, BlastRadiusEngine,
+    BlastRadiusResult, MacroCallIndex, MacroCallLookupDb, PetGraphView,
 };
 use rbuilder_graph::SnapshotNodeStore;
 use crate::graph::backend::GraphBackend;
-use serde_json::json;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -26,34 +28,39 @@ pub struct BlastRadiusArgs {
     pub file: Option<String>,
 }
 
-struct BlastRadiusOutput {
-    symbol: String,
-    score: f64,
-    direct_names: Vec<String>,
-    impact_names: Vec<String>,
-}
-
 fn parsed_from_args(args: &BlastRadiusArgs) -> crate::analysis::ParsedSymbol {
     parse_fqn_symbol(&args.symbol, args.class.clone(), args.file.clone())
+}
+
+fn node_lookup<'a>(
+    backend: Option<&'a crate::graph::backend::MemoryBackend>,
+    store: Option<&'a SnapshotNodeStore>,
+) -> NodeLookup<'a> {
+    match (backend, store) {
+        (Some(b), _) => NodeLookup::Backend(b),
+        (None, Some(s)) => NodeLookup::Snapshot(s),
+        _ => NodeLookup::None,
+    }
 }
 
 fn try_fast_cached_lookup(
     ctx: &CliContext,
     parsed: &crate::analysis::ParsedSymbol,
-) -> Result<Option<BlastRadiusOutput>> {
+) -> Result<Option<BlastRadiusResponse>> {
+    let store = ctx.open_snapshot_store()?;
+    let lookup = node_lookup(None, store.as_ref());
+
     let lookup_db = MacroCallLookupDb::default_path(&ctx.repo);
     if MacroCallLookupDb::is_valid_for_repo(&lookup_db, &ctx.repo)? {
         if let Some(entry) = MacroCallLookupDb::lookup_resolved(&lookup_db, parsed)? {
-            return Ok(Some(BlastRadiusOutput {
-                symbol: args_display_symbol(parsed),
-                score: entry.score,
-                direct_names: entry.direct_callers,
-                impact_names: entry.impact_zone,
-            }));
+            return Ok(Some(build_from_cache_entry(
+                &entry,
+                skipped_gatekeeping(),
+                lookup,
+            )));
         }
     }
 
-    // Fallback: bulk bincode index (slower — loads entire cache file).
     let index_path = MacroCallIndex::default_path(&ctx.repo);
     let Some(index) = MacroCallIndex::load(&index_path)? else {
         return Ok(None);
@@ -73,20 +80,21 @@ fn try_fast_cached_lookup(
         return Ok(None);
     }
 
-    Ok(Some(BlastRadiusOutput {
-        symbol: args_display_symbol(parsed),
+    let cache_entry = crate::analysis::MacroIndexEntry {
+        id,
+        symbol_name: parsed.target_name.clone(),
+        class_name: parsed.class_filter.clone(),
+        file_path: parsed.file_filter.clone().unwrap_or_default(),
         score: entry.score,
-        direct_names: entry.direct_caller_names.clone(),
-        impact_names: entry.impact_function_names.clone(),
-    }))
-}
+        direct_callers: entry.direct_caller_names.clone(),
+        impact_zone: entry.impact_function_names.clone(),
+    };
 
-fn args_display_symbol(parsed: &crate::analysis::ParsedSymbol) -> String {
-    match (&parsed.class_filter, &parsed.file_filter) {
-        (Some(class), _) => format!("{class}::{}", parsed.target_name),
-        (None, Some(file)) => format!("{file}::{}", parsed.target_name),
-        _ => parsed.target_name.clone(),
-    }
+    Ok(Some(build_from_cache_entry(
+        &cache_entry,
+        skipped_gatekeeping(),
+        lookup,
+    )))
 }
 
 fn resolve_target_uuid(
@@ -188,52 +196,29 @@ fn try_snapshot_lite_path(
     let result = engine.analyze(id)?;
 
     let impact_ids = store.filter_function_impact(&result.impact_zone_ids);
-    let mut impact_names: Vec<String> = impact_ids
-        .iter()
-        .filter_map(|nid| store.get_node(*nid).map(|n| n.name.clone()))
-        .collect();
-    impact_names.sort();
-
-    let direct_names: Vec<String> = result
-        .direct_caller_ids
-        .iter()
-        .filter_map(|nid| store.get_node(*nid).map(|n| n.name.clone()))
-        .collect();
-
-    let output = BlastRadiusOutput {
-        symbol: args.symbol.clone(),
-        score: result.score,
-        direct_names,
-        impact_names,
-    };
-    emit_output(ctx, &output, Vec::new())?;
+    let lookup = NodeLookup::Snapshot(store);
+    let response = build_from_engine_result(
+        &args.symbol,
+        parsed.class_filter.clone(),
+        &result,
+        &result.direct_caller_ids,
+        &impact_ids,
+        lookup,
+        skipped_gatekeeping(),
+    );
+    emit_output(ctx, &response)?;
     Ok(Some(()))
 }
 
 fn resolve_blast_result(
     backend: &crate::graph::backend::MemoryBackend,
     repo: &Path,
-    _graph_db: &Path,
-    graph_digest: Option<&str>,
     symbol_id: uuid::Uuid,
-    registry: Option<&crate::analysis::PolicyRegistry>,
-    graph_view: Option<&PetGraphView>,
+    graph_digest: Option<&str>,
 ) -> Result<BlastRadiusResult> {
     if let Some(digest) = graph_digest {
         if let Some(engine) = try_load_engine(repo, digest)? {
-            let result = engine.analyze(symbol_id)?;
-            if let Some(reg) = registry {
-                let built_view;
-                let view = match graph_view {
-                    Some(v) => v,
-                    None => {
-                        built_view = PetGraphView::from_backend(backend)?;
-                        &built_view
-                    }
-                };
-                evaluate_with_view(symbol_id, &result, reg, backend, view)?;
-            }
-            return Ok(result);
+            return Ok(engine.analyze(symbol_id)?);
         }
     }
 
@@ -241,94 +226,20 @@ fn resolve_blast_result(
     if let Some(index) = MacroCallIndex::load(&index_path)? {
         if index.is_valid_for(backend) || index.is_valid_for_repo(repo)? {
             if let Some(entry) = index.get(symbol_id) {
-                let result = MacroCallIndex::to_blast_result(entry, symbol_id);
-                if let Some(reg) = registry {
-                    let built_view;
-                    let view = match graph_view {
-                        Some(v) => v,
-                        None => {
-                            built_view = PetGraphView::from_backend(backend)?;
-                            &built_view
-                        }
-                    };
-                    evaluate_with_view(symbol_id, &result, reg, backend, view)?;
-                }
-                return Ok(result);
+                return Ok(MacroCallIndex::to_blast_result(entry, symbol_id));
             }
         }
     }
 
     let engine = BlastRadiusEngine::build(backend)?;
-    let centrality = if registry.is_some() {
-        let built_view;
-        let view = match graph_view {
-            Some(v) => v,
-            None => {
-                built_view = PetGraphView::from_backend(backend)?;
-                &built_view
-            }
-        };
-        Some(CentralityAnalyzer::new().analyze_with_view(view)?.scores)
-    } else {
-        None
-    };
-
-    if let Some(reg) = registry {
-        Ok(engine.analyze_with_policy(
-            symbol_id,
-            Some(backend),
-            Some(reg),
-            centrality.as_ref(),
-        )?)
-    } else {
-        Ok(engine.analyze(symbol_id)?)
-    }
+    Ok(engine.analyze(symbol_id)?)
 }
 
-fn evaluate_with_view(
-    symbol_id: Uuid,
-    result: &BlastRadiusResult,
-    reg: &crate::analysis::PolicyRegistry,
-    backend: &crate::graph::backend::MemoryBackend,
-    view: &PetGraphView,
-) -> Result<()> {
-    let centrality = CentralityAnalyzer::new().analyze_with_view(view)?.scores;
-    evaluate_policies(
-        symbol_id,
-        &result.impact_zone_ids,
-        reg,
-        backend,
-        Some(&centrality),
-    )?;
-    Ok(())
-}
-
-fn emit_output(
-    ctx: &CliContext,
-    output: &BlastRadiusOutput,
-    handoffs: Vec<serde_json::Value>,
-) -> Result<()> {
+fn emit_output(ctx: &CliContext, response: &BlastRadiusResponse) -> Result<()> {
     if ctx.format == OutputFormat::Json {
-        return ctx.emit_json_value(&json!({
-            "symbol": output.symbol,
-            "score": output.score,
-            "direct_callers": output.direct_names,
-            "impact_zone": output.impact_names,
-            "handoffs": handoffs,
-        }));
+        return ctx.emit_json_value(&response_to_json(response));
     }
-
-    println!("Blast radius for '{}'", output.symbol);
-    println!("  Score: {:.1}/100", output.score);
-    println!("  Direct callers: {}", output.direct_names.len());
-    println!("  Impact zone: {}", output.impact_names.len());
-    if !output.direct_names.is_empty() {
-        println!("  Callers: {}", output.direct_names.join(", "));
-    }
-    if !output.impact_names.is_empty() {
-        println!("  Impact: {}", output.impact_names.join(", "));
-    }
-    Ok(())
+    ctx.emit(&emit_text(response))
 }
 
 pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
@@ -336,8 +247,8 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
     let needs_full_graph = args.with_slices || args.policy_file.is_some();
 
     if !needs_full_graph {
-        if let Some(output) = try_fast_cached_lookup(ctx, &parsed)? {
-            return emit_output(ctx, &output, Vec::new());
+        if let Some(response) = try_fast_cached_lookup(ctx, &parsed)? {
+            return emit_output(ctx, &response);
         }
 
         if let (Some(store), Some(digest)) = (
@@ -352,8 +263,8 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
 
     let graph = ctx.load_graph()?;
     let backend = graph.backend();
-    let graph_view = ctx
-        .open_snapshot_store()?
+    let snapshot_store = ctx.open_snapshot_store()?;
+    let graph_view = snapshot_store
         .as_ref()
         .map(|store| PetGraphView::from_prepared(store.prepared()))
         .transpose()?;
@@ -369,29 +280,10 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
 
     let (id, resolved_name) = resolve_target_uuid(backend, ctx, &parsed)?;
     let graph_digest = ctx.graph_digest().ok().flatten();
-    let result = resolve_blast_result(
-        backend,
-        &ctx.repo,
-        &ctx.db,
-        graph_digest.as_deref(),
-        id,
-        registry.as_ref(),
-        graph_view_ref,
-    )?;
+    let result = resolve_blast_result(backend, &ctx.repo, id, graph_digest.as_deref())?;
 
     let _depth = args.depth.unwrap_or(usize::MAX);
     let impact_ids = BlastRadiusEngine::filter_function_impact(backend, &result.impact_zone_ids)?;
-    let mut impact_names: Vec<String> = impact_ids
-        .iter()
-        .filter_map(|nid| backend.get_node(*nid).ok().flatten().map(|n| n.name.clone()))
-        .collect();
-    impact_names.sort();
-
-    let direct_names: Vec<String> = result
-        .direct_caller_ids
-        .iter()
-        .filter_map(|nid| backend.get_node(*nid).ok().flatten().map(|n| n.name.clone()))
-        .collect();
 
     let slice_trace = if args.with_slices {
         trace_blast_to_slices_with_blast(backend, &ctx.repo, id, &resolved_name, &result).ok()
@@ -399,30 +291,35 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
         None
     };
 
-    let handoffs: Vec<_> = slice_trace
+    let handoffs = slice_trace
         .as_ref()
-        .map(|trace| {
-            trace
-                .handoffs
-                .iter()
-                .map(|seed| {
-                    json!({
-                        "callee": seed.callee_name,
-                        "param": seed.param_name,
-                        "index": seed.param_index,
-                    })
-                })
-                .collect()
-        })
+        .map(|trace| handoffs_from_seeds(&trace.handoffs))
         .unwrap_or_default();
 
-    let output = BlastRadiusOutput {
-        symbol: args.symbol.clone(),
-        score: result.score,
-        direct_names,
-        impact_names,
-    };
-    emit_output(ctx, &output, handoffs)?;
+    let gatekeeping = evaluate_gatekeeping(
+        registry.as_ref(),
+        backend,
+        graph_view_ref,
+        id,
+        &result.impact_zone_ids,
+        handoffs,
+    )?;
+
+    let lookup = node_lookup(Some(backend), snapshot_store.as_ref());
+    let response = build_from_engine_result(
+        &args.symbol,
+        parsed.class_filter.clone(),
+        &result,
+        &result.direct_caller_ids,
+        &impact_ids,
+        lookup,
+        gatekeeping,
+    );
+    emit_output(ctx, &response)?;
+
+    if response.gatekeeping.policy_status == "VIOLATED" {
+        std::process::exit(1);
+    }
 
     if let Some(trace) = slice_trace {
         for (func_id, name, slice) in &trace.slices {

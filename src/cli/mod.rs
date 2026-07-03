@@ -2,6 +2,7 @@
 
 mod args;
 mod blast_radius;
+pub mod blast_radius_output;
 mod check;
 mod context;
 mod discover;
