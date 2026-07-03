@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import type { EngineReady, NodeListPayload, SubgraphPayload, WorkerInWithoutId, WorkerOut } from "./types";
+import type { EngineReady, NodeListPayload, SliceDirection, SliceResultPayload, SubgraphPayload, WorkerInWithoutId, WorkerOut } from "./types";
 
 export function useEngineWorker() {
   const workerRef = useRef<Worker | null>(null);
@@ -41,6 +41,7 @@ export function useEngineWorker() {
         pending.current.delete(data.requestId);
         if (data.type === "subgraph") p.resolve(data.payload);
         else if (data.type === "node_list") p.resolve(data.payload);
+        else if (data.type === "slice_result") p.resolve(data.payload);
       }
     };
 
@@ -79,5 +80,17 @@ export function useEngineWorker() {
     [send],
   );
 
-  return { engine, error, expand, listNodes, wasmReady: engine?.wasm ?? false };
+  const computeSliceRequest = useCallback(
+    (functionId: string, line: number, variable: string, direction: SliceDirection) =>
+      send<SliceResultPayload>({
+        type: "compute_slice",
+        functionId,
+        line,
+        variable,
+        direction,
+      }),
+    [send],
+  );
+
+  return { engine, error, expand, listNodes, computeSlice: computeSliceRequest, wasmReady: engine?.wasm ?? false };
 }

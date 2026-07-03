@@ -107,6 +107,32 @@ body {
   background: #f8f9fa;
 }
 
+.slice-view {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.slice-editor-panel {
+  min-height: 280px;
+}
+
+.slice-editor-host .cm-editor {
+  height: 100%;
+  font-size: 0.8125rem;
+}
+
+.slice-editor-host .cm-scroller {
+  min-height: 240px;
+}
+
+.slice-editor-host .cm-slice-line {
+  background: rgba(13, 110, 253, 0.1);
+}
+
+.slice-editor-host .cm-slice-criterion {
+  background: rgba(25, 135, 84, 0.18);
+}
+
 .rb-tab-panel-body--scroll {
   overflow: auto;
 }

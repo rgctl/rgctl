@@ -69,22 +69,47 @@ pub fn assert_dashboard_bundle_with_meta(
     assert_eq!(manifest["phases"]["1"], "complete");
     assert_eq!(manifest["phases"]["2"], "complete");
     assert_eq!(manifest["phases"]["3"], "complete");
-    assert_eq!(manifest["phases"]["4"], "pending");
+
+    let cfg_index: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("cfg_index.json")).unwrap()).unwrap();
+    let slice_index: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("slice_index.json")).unwrap()).unwrap();
+    let cfg_available = cfg_index["available"].as_bool().unwrap_or(false);
+    let slice_available = slice_index["available"].as_bool().unwrap_or(false);
+
+    assert_eq!(
+        manifest["phases"]["4"],
+        if cfg_available { "complete" } else { "pending" }
+    );
+    assert_eq!(
+        manifest["phases"]["5"],
+        if slice_available { "complete" } else { "pending" }
+    );
+
+    assert!(
+        dash.join("slice_index.json").is_file(),
+        "missing slice_index.json (Phase 5)"
+    );
+    assert_eq!(slice_index["schema_version"], 1);
+    assert_eq!(slice_index["available"], cfg_available);
+
+    let analysis = &manifest["analysis"];
+    assert_eq!(analysis["slice_available"], slice_available);
+    assert_eq!(analysis["slice_index_path"], "slice_index.json");
 
     assert!(
         dash.join("cfg_index.json").is_file(),
         "missing cfg_index.json (Phase 4)"
     );
-    let cfg_index: Value =
-        serde_json::from_slice(&std::fs::read(dash.join("cfg_index.json")).unwrap()).unwrap();
     assert_eq!(cfg_index["schema_version"], 1);
-    assert_eq!(
-        cfg_index["available"], false,
-        "default discover should export empty cfg index"
-    );
+    if !cfg_available {
+        assert_eq!(
+            cfg_index["available"], false,
+            "default discover should export empty cfg index when no archive"
+        );
+    }
 
-    let analysis = &manifest["analysis"];
-    assert_eq!(analysis["cfg_available"], false);
+    assert_eq!(analysis["cfg_available"], cfg_available);
     assert_eq!(analysis["cfg_index_path"], "cfg_index.json");
 
     let view = &manifest["view"];

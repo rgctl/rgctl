@@ -39,6 +39,67 @@ export interface AnalysisSection {
   cfg_detail_dir: string;
   cfg_archive_path?: string | null;
   cfg_function_count: number;
+  slice_available: boolean;
+  slice_index_path: string;
+  slice_detail_dir: string;
+  slice_function_count: number;
+}
+
+export type SliceDirection = "backward" | "forward";
+
+export interface SliceIndexPayload {
+  schema_version: number;
+  available: boolean;
+  function_count: number;
+  functions: SliceFunctionEntry[];
+}
+
+export interface SliceFunctionEntry {
+  function_id: string;
+  name: string;
+  file_path?: string | null;
+  source_lines: number;
+  pdg_nodes: number;
+}
+
+export interface SliceBundlePayload {
+  schema_version: number;
+  function_id: string;
+  name: string;
+  file_path?: string | null;
+  source: string;
+  total_lines: number;
+  pdg: SlicePdgPayload;
+}
+
+export interface SlicePdgPayload {
+  nodes: SlicePdgNode[];
+  edges: SlicePdgEdge[];
+}
+
+export interface SlicePdgNode {
+  id: string;
+  line: number;
+  label: string;
+  kind: string;
+  defined: string[];
+  used: string[];
+}
+
+export interface SlicePdgEdge {
+  source: string;
+  target: string;
+  kind: string;
+  variable?: string | null;
+}
+
+export interface SliceResultPayload {
+  criterion: { line: number; variable: string };
+  direction: SliceDirection;
+  reduction_percent: number;
+  lines: number[];
+  nodes: SlicePdgNode[];
+  edges: SlicePdgEdge[];
 }
 
 export interface CfgIndexPayload {
@@ -180,12 +241,27 @@ export const NODE_TYPE_FILTER_OPTIONS = [
 export type WorkerInWithoutId =
   | { type: "init" }
   | { type: "expand"; indices: number[]; typeMask: number }
-  | { type: "list_nodes"; typeMask: number; offset: number; limit: number };
+  | { type: "list_nodes"; typeMask: number; offset: number; limit: number }
+  | {
+      type: "compute_slice";
+      functionId: string;
+      line: number;
+      variable: string;
+      direction: SliceDirection;
+    };
 
 export type WorkerIn =
   | { type: "init" }
   | { type: "expand"; requestId: number; indices: number[]; typeMask: number }
-  | { type: "list_nodes"; requestId: number; typeMask: number; offset: number; limit: number };
+  | { type: "list_nodes"; requestId: number; typeMask: number; offset: number; limit: number }
+  | {
+      type: "compute_slice";
+      requestId: number;
+      functionId: string;
+      line: number;
+      variable: string;
+      direction: SliceDirection;
+    };
 
 export type WorkerOut =
   | {
@@ -198,6 +274,7 @@ export type WorkerOut =
     }
   | { type: "subgraph"; requestId: number; payload: SubgraphPayload }
   | { type: "node_list"; requestId: number; payload: NodeListPayload }
+  | { type: "slice_result"; requestId: number; payload: SliceResultPayload }
   | { type: "error"; requestId?: number; message: string };
 
 export async function loadManifest(): Promise<DashboardManifest> {

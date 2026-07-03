@@ -2,6 +2,7 @@
 
 use crate::cfg_export::CfgExportSummary;
 use crate::metagraph::MetagraphPayload;
+use crate::slice_export::SliceExportSummary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -47,6 +48,10 @@ pub struct AnalysisSection {
     pub cfg_detail_dir: String,
     pub cfg_archive_path: Option<String>,
     pub cfg_function_count: usize,
+    pub slice_available: bool,
+    pub slice_index_path: String,
+    pub slice_detail_dir: String,
+    pub slice_function_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +71,7 @@ impl DashboardManifest {
         metrics: MetricsSection,
         meta: &MetagraphPayload,
         cfg: &CfgExportSummary,
+        slice: &SliceExportSummary,
     ) -> Self {
         let mut phases = BTreeMap::new();
         phases.insert("0".into(), "complete".into());
@@ -75,6 +81,14 @@ impl DashboardManifest {
         phases.insert(
             "4".into(),
             if cfg.available {
+                "complete".into()
+            } else {
+                "pending".into()
+            },
+        );
+        phases.insert(
+            "5".into(),
+            if slice.available {
                 "complete".into()
             } else {
                 "pending".into()
@@ -91,6 +105,10 @@ impl DashboardManifest {
                 None
             },
             cfg_function_count: cfg.function_count,
+            slice_available: slice.available,
+            slice_index_path: crate::slice_export::SLICE_INDEX_FILE.into(),
+            slice_detail_dir: crate::slice_export::SLICE_DETAIL_DIR.into(),
+            slice_function_count: slice.function_count,
         });
 
         Self {
@@ -168,11 +186,14 @@ mod tests {
             },
             &meta,
             &CfgExportSummary::default(),
+            &SliceExportSummary::default(),
         );
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["phases"]["2"], "complete");
         assert_eq!(v["phases"]["4"], "pending");
+        assert_eq!(v["phases"]["5"], "pending");
         assert_eq!(v["view"]["metanode_count"], 1);
         assert_eq!(v["analysis"]["cfg_available"], false);
+        assert_eq!(v["analysis"]["slice_available"], false);
     }
 }

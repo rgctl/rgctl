@@ -2,9 +2,18 @@
 
 import init, { EngineContext } from "../wasm/rbuilder_wasm.js";
 import { bundleDataUrl } from "./bundleUrl";
-import type { NodeListPayload, SubgraphPayload, WorkerIn, WorkerOut } from "./types";
+import { computeSlice } from "./sliceEngine";
+import type {
+  NodeListPayload,
+  SliceBundlePayload,
+  SliceResultPayload,
+  SubgraphPayload,
+  WorkerIn,
+  WorkerOut,
+} from "./types";
 
 let engine: EngineContext | null = null;
+const sliceBundleCache = new Map<string, SliceBundlePayload>();
 
 self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
   const msg = ev.data;
@@ -18,6 +27,15 @@ self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
         break;
       case "list_nodes":
         await handleListNodes(msg.requestId, msg.typeMask, msg.offset, msg.limit);
+        break;
+      case "compute_slice":
+        await handleComputeSlice(
+          msg.requestId,
+          msg.functionId,
+          msg.line,
+          msg.variable,
+          msg.direction,
+        );
         break;
       default:
         break;
@@ -96,6 +114,38 @@ async function handleListNodes(
   const json = engine.listNodes(typeMask >>> 0, offset >>> 0, limit >>> 0);
   const payload = JSON.parse(json) as NodeListPayload;
   const out: WorkerOut = { type: "node_list", requestId, payload };
+  self.postMessage(out);
+}
+
+async function loadSliceBundle(functionId: string): Promise<SliceBundlePayload> {
+  const cached = sliceBundleCache.get(functionId);
+  if (cached) return cached;
+  const res = await fetch(bundleDataUrl(`slice/${functionId}.json`));
+  if (!res.ok) {
+    throw new Error(`slice/${functionId}.json: HTTP ${res.status}`);
+  }
+  const bundle = (await res.json()) as SliceBundlePayload;
+  sliceBundleCache.set(functionId, bundle);
+  return bundle;
+}
+
+async function handleComputeSlice(
+  requestId: number,
+  functionId: string,
+  line: number,
+  variable: string,
+  direction: "backward" | "forward",
+) {
+  const bundle = await loadSliceBundle(functionId);
+  const payload = computeSlice(
+    bundle.pdg.nodes,
+    bundle.pdg.edges,
+    line,
+    variable,
+    direction,
+    bundle.total_lines,
+  );
+  const out: WorkerOut = { type: "slice_result", requestId, payload };
   self.postMessage(out);
 }
 

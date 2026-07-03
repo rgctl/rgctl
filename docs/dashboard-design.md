@@ -1,6 +1,6 @@
 # rBuilder static dashboard — engineering design (living document)
 
-**Status:** Phase 3 complete (Bootstrap 5 UI, Sigma + WASM pipeline)  
+**Status:** Phase 5 complete (slice tab + CodeMirror, PDG worker slice)  
 **Last updated:** 2026-07-03  
 **Owner:** rBuilder core / export pipeline  
 
@@ -258,6 +258,9 @@ _Update this table when a phase lands._
 | CFG index + detail export | 4 | **done** | `cfg_index.json`, `cfg/*.json`, archive copy |
 | CFG / dominance tab | 4 | **done** | `CfgView.tsx` Sigma CFG + idom table |
 | Remove `all_analyses.json` | 4 | **done** | Discover no longer writes consolidated JSON |
+| Slice index + PDG export | 5 | **done** | `slice_index.json`, `slice/*.json` with source + PDG |
+| CodeMirror slice tab | 5 | **done** | `SliceView.tsx`, worker `compute_slice` on exported PDG |
+| `tests/dashboard_harness.rs` | 5 | **done** | phase 5 + `slice_index.json` |
 
 ### Removed (Phase 0)
 
