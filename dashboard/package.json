@@ -9,7 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "preact": "^10.25.4"
+    "graphology": "^0.26.0",
+    "preact": "^10.25.4",
+    "sigma": "^3.0.2"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.1",

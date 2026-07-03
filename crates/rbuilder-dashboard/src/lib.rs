@@ -2,12 +2,15 @@
 
 mod bundle;
 mod manifest;
+mod metagraph;
 
 pub use bundle::{default_dashboard_path, dist_embedded, DASHBOARD_DIR_NAME};
-pub use manifest::{DashboardManifest, MetricsSection, MANIFEST_SCHEMA_VERSION};
+pub use manifest::{DashboardManifest, MetricsSection, ViewSection, MANIFEST_SCHEMA_VERSION};
+pub use metagraph::{MetagraphPayload, METAGRAPH_FILE, COMMUNITY_ONLY_THRESHOLD};
 
 use bundle::{extract_static_assets, inject_manifest_bootstrap};
 use manifest::DashboardManifest as Manifest;
+use metagraph::write_metagraph;
 use rbuilder_graph::backend::MemoryBackend;
 use rbuilder_graph::schema::{EdgeType, NodeType};
 use std::fs;
@@ -30,7 +33,14 @@ pub fn export_dashboard_bundle(
     let (node_count, edge_count, digest) = payload_stats(snapshot_path, backend)?;
     let metrics = collect_metrics(backend);
 
-    let manifest = Manifest::phase0_and_1(node_count, edge_count, digest, metrics);
+    let meta = write_metagraph(backend, &out_dir, node_count)?;
+    let manifest = Manifest::with_phases(
+        node_count,
+        edge_count,
+        digest,
+        metrics,
+        &meta,
+    );
     let manifest_json =
         serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
     fs::write(out_dir.join("manifest.json"), &manifest_json).map_err(|e| e.to_string())?;

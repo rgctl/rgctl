@@ -153,6 +153,88 @@ body {
   color: var(--muted);
 }
 
+.panel-graph {
+  padding: 0;
+  min-height: 520px;
+  overflow: hidden;
+}
+
+.graph-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 520px;
+}
+
+.graph-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.graph-mode-badge {
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent);
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.graph-meta {
+  color: var(--muted);
+}
+
+.graph-layout {
+  display: grid;
+  grid-template-columns: 1fr 240px;
+  flex: 1;
+  min-height: 460px;
+}
+
+.graph-canvas-wrap {
+  min-height: 460px;
+  background: #0d1117;
+  position: relative;
+}
+
+.graph-inspector {
+  border-left: 1px solid var(--border);
+  padding: 1rem;
+  font-size: 0.85rem;
+  overflow-y: auto;
+}
+
+.graph-inspector h3 {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+}
+
+.inspector-dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 0.75rem;
+}
+
+.inspector-dl dt {
+  color: var(--muted);
+  margin: 0;
+}
+
+.inspector-dl dd {
+  margin: 0;
+}
+
+.hint {
+  margin-top: 1rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 code {
   font-family: ui-monospace, monospace;
   font-size: 0.85em;

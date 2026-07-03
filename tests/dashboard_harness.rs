@@ -42,8 +42,16 @@ pub fn run_discover(repo: &Path, languages: &str) -> Output {
         .expect("spawn rbuilder discover")
 }
 
-/// Assert Phase 0+1 bundle contract under `{repo}/.rbuilder/dashboard/`.
+/// Assert Phase 0–2 bundle contract under `{repo}/.rbuilder/dashboard/`.
 pub fn assert_dashboard_bundle(repo: &Path, min_nodes: u64) {
+    assert_dashboard_bundle_with_meta(repo, min_nodes, 1);
+}
+
+pub fn assert_dashboard_bundle_with_meta(
+    repo: &Path,
+    min_nodes: u64,
+    min_metanodes: u64,
+) {
     let dash = repo.join(".rbuilder/dashboard");
 
     assert!(dash.join("index.html").is_file(), "missing index.html");
@@ -59,6 +67,23 @@ pub fn assert_dashboard_bundle(repo: &Path, min_nodes: u64) {
     assert_eq!(manifest["graph"]["payload_format"], "columnar_v2");
     assert_eq!(manifest["phases"]["0"], "complete");
     assert_eq!(manifest["phases"]["1"], "complete");
+    assert_eq!(manifest["phases"]["2"], "complete");
+
+    let view = &manifest["view"];
+    assert_eq!(view["metagraph_path"], "metagraph.json");
+    assert!(
+        view["metanode_count"].as_u64().unwrap_or(0) >= min_metanodes,
+        "expected >= {min_metanodes} metanodes"
+    );
+
+    assert!(dash.join("metagraph.json").is_file(), "missing metagraph.json");
+    let meta: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("metagraph.json")).unwrap()).unwrap();
+    assert_eq!(meta["schema_version"], 1);
+    assert!(
+        meta["nodes"].as_array().map(|a| a.len()).unwrap_or(0) as u64 >= min_metanodes,
+        "metagraph nodes below minimum"
+    );
 
     let node_count = manifest["graph"]["node_count"].as_u64().unwrap_or(0);
     let edge_count = manifest["graph"]["edge_count"].as_u64().unwrap_or(0);

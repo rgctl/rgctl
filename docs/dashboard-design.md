@@ -195,7 +195,16 @@ cd /Users/sshaaf/git/java/gbuilder/.rbuilder/dashboard && python3 -m http.server
 | `dashboard_bundle` | `tests/fixtures/tiny_polyglot_repo` (temp copy) | Fast CI / minimal graph |
 | `dashboard_gbuilder` | `/Users/sshaaf/git/java/gbuilder` | Real Java graph (~2k nodes) |
 
-Shared assertions: `tests/dashboard_harness.rs` → `assert_dashboard_bundle()`.
+Shared assertions: `tests/dashboard_harness.rs` → `assert_dashboard_bundle_with_meta()`.
+
+### Phase 2 artifacts
+
+| File | Role |
+|------|------|
+| `metagraph.json` | Package-level metanodes + aggregated call edges |
+| `manifest.view` | Metagraph path, counts, `mode`, `community_only` flag |
+
+UI loads `./metagraph.json` in the Graph tab (Sigma.js). At ≥50k source nodes, `community_only` is set (no per-function LOD until Phase 3).
 
 ---
 
@@ -216,8 +225,9 @@ _Update this table when a phase lands._
 | `tests/dashboard_bundle.rs` | 0+1 | **done** | Tiny fixture subprocess |
 | `tests/dashboard_gbuilder.rs` | 0+1 | **done** | **gbuilder** golden repo gate |
 | `scripts/test-dashboard-golden.sh` | 0+1 | **done** | Phase gate script |
-| Sigma.js graph | 2 | pending | — |
-| Community metanodes | 2 | pending | — |
+| Sigma.js graph | 2 | **done** | `GraphView.tsx` — package metagraph WebGL |
+| Community metanodes | 2 | **done** | `metagraph.json` export + inspector |
+| `tests/dashboard_harness.rs` | 2 | **done** | Asserts `metagraph.json`, `manifest.view`, phase 2 |
 
 ### Removed (Phase 0)
 

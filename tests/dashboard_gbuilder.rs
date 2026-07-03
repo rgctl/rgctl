@@ -8,12 +8,13 @@
 
 mod dashboard_harness;
 
-use dashboard_harness::{assert_dashboard_bundle, golden_repo_path, run_discover};
+use dashboard_harness::{assert_dashboard_bundle_with_meta, golden_repo_path, run_discover};
 use rbuilder_dashboard::dist_embedded;
 
 /// gbuilder is a real multi-module Java graph (~2k nodes). Minimum counts guard against regressions.
 const GBUILDER_MIN_NODES: u64 = 500;
 const GBUILDER_MIN_FUNCTIONS: u64 = 400;
+const GBUILDER_MIN_METANODES: u64 = 5;
 
 #[test]
 fn discover_writes_dashboard_bundle_on_gbuilder_golden_repo() {
@@ -40,7 +41,7 @@ fn discover_writes_dashboard_bundle_on_gbuilder_golden_repo() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert_dashboard_bundle(&repo, GBUILDER_MIN_NODES);
+    assert_dashboard_bundle_with_meta(&repo, GBUILDER_MIN_NODES, GBUILDER_MIN_METANODES);
 
     let manifest: serde_json::Value = serde_json::from_slice(
         &std::fs::read(repo.join(".rbuilder/dashboard/manifest.json")).unwrap(),
@@ -53,9 +54,10 @@ fn discover_writes_dashboard_bundle_on_gbuilder_golden_repo() {
     );
 
     eprintln!(
-        "gbuilder golden OK: {} nodes, {} edges, {} functions",
+        "gbuilder golden OK: {} nodes, {} edges, {} functions, {} metanodes",
         manifest["graph"]["node_count"],
         manifest["graph"]["edge_count"],
-        functions
+        functions,
+        manifest["view"]["metanode_count"]
     );
 }

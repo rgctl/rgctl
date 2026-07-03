@@ -1,4 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
+import { GraphView } from "./GraphView";
 import {
   loadManifest,
   startEngineWorker,
@@ -50,12 +51,13 @@ export function App() {
 
   const m = manifest?.metrics;
   const phases = manifest?.phases ?? {};
+  const view = manifest?.view;
 
   return (
     <div class="app">
       <header class="header">
         <h1>rBuilder Analysis Dashboard</h1>
-        <p class="subtitle">Static bundle — Phase 0 shell + Phase 1 WASM loader</p>
+        <p class="subtitle">Phase 2 — Sigma.js package metagraph (WebGL)</p>
       </header>
 
       {error && (
@@ -79,6 +81,11 @@ export function App() {
             <span>Edges: {engine.edgeCount.toLocaleString()}</span>
             <span>Schema: v{engine.schemaVersion}</span>
           </>
+        )}
+        {view && (
+          <span>
+            Metanodes: {view.metanode_count} · Metaedges: {view.metaedge_count}
+          </span>
         )}
         {manifest && (
           <span class="phases">
@@ -115,7 +122,7 @@ export function App() {
         ))}
       </nav>
 
-      <main class="panel">
+      <main class={tab === "graph" ? "panel panel-graph" : "panel"}>
         <TabPanel id={tab} manifest={manifest} engine={engine} />
       </main>
 
@@ -145,9 +152,17 @@ function TabPanel({
   manifest: DashboardManifest | null;
   engine: EngineReady | null;
 }) {
-  const placeholders: Record<TabId, string> = {
-    graph: "Phase 2: Sigma.js community / exploration canvas",
-    functions: "Phase 0: virtualized function table (from payload indices)",
+  if (id === "graph") {
+    return (
+      <GraphView
+        communityOnly={manifest?.view?.community_only ?? false}
+        sourceNodeCount={manifest?.graph.node_count ?? engine?.nodeCount ?? 0}
+      />
+    );
+  }
+
+  const placeholders: Record<Exclude<TabId, "graph">, string> = {
+    functions: "Phase 3: virtualized function table (from payload indices)",
     cfg: "Phase 4: CFG + dominance from cfg_pdg.archive.bin",
     slice: "Phase 5: CodeMirror + WASM slice",
     blast: "Phase 6: blast engine + depth slider",
@@ -157,17 +172,7 @@ function TabPanel({
   return (
     <div class="tab-panel">
       <h2>{TABS.find((t) => t.id === id)?.label}</h2>
-      <p class="placeholder">{placeholders[id]}</p>
-      {id === "graph" && engine && (
-        <ul class="meta-list">
-          <li>
-            Payload digest: <code>{engine.digest || manifest?.graph.digest || "n/a"}</code>
-          </li>
-          <li>
-            Format: <code>{manifest?.graph.payload_format}</code>
-          </li>
-        </ul>
-      )}
+      <p class="placeholder">{placeholders[id as Exclude<TabId, "graph">]}</p>
       {id === "guide" && (
         <pre class="guide">
           {`rbuilder discover .

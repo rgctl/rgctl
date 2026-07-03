@@ -9,6 +9,7 @@ export interface DashboardManifest {
     edge_count: number;
     digest: string;
   };
+  view?: ViewSection;
   metrics: {
     function_count: number;
     class_count: number;
@@ -17,6 +18,44 @@ export interface DashboardManifest {
     high_blast_radius_count: number;
   };
   generated_at: string;
+}
+
+export interface ViewSection {
+  metagraph_path: string;
+  metagraph_schema_version: number;
+  metanode_count: number;
+  metaedge_count: number;
+  mode: string;
+  community_only: boolean;
+  threshold_community_only: number;
+}
+
+export interface MetagraphPayload {
+  schema_version: number;
+  mode: string;
+  community_only: boolean;
+  threshold_community_only: number;
+  source_node_count: number;
+  nodes: Metanode[];
+  edges: Metaedge[];
+}
+
+export interface Metanode {
+  id: number;
+  label: string;
+  size: number;
+  functions: number;
+  classes: number;
+  avg_complexity: number;
+  x: number;
+  y: number;
+}
+
+export interface Metaedge {
+  source: number;
+  target: number;
+  weight: number;
+  kind: string;
 }
 
 export interface EngineReady {
