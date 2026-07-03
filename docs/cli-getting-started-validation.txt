@@ -1,0 +1,1686 @@
+rBuilder CLI Getting Started — Validation Report
+Generated: 2026-07-02 09:24:50 UTC
+Guide: docs/cli-getting-started.md
+
+*** NOTE (2026-07-03): Historical run against coolstore-quarkus. ***
+Many failures below (export flag collision, ambiguous symbols) may be fixed or
+documented in the current guide. For automated CLI contract checks use:
+  cargo test --test cli_output --test subprocess_golden_path --test all_commands_sanity
+See docs/cli-io-sanity-audit.md for the current assertion matrix.
+
+Example repo: https://github.com/sshaaf/coolstore-quarkus
+Repo path: /tmp/coolstore-quarkus-validation
+rbuilder: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder
+
+================================================================================
+EXECUTIVE SUMMARY
+================================================================================
+Total steps executed: 37 (excluding skipped optional discover modes)
+PASSED (exit 0): 20
+FAILED (exit non-zero): 17
+
+Discover (default): PASS — 92 files, 798 nodes, 1506 edges in 0.13s
+Artifacts present: graph.db, graph.json, analysis_results.bin, dashboard.html,
+  file_hashes.json (guide lists file_index.json — name mismatch)
+
+GQL (all 10 steps): PASS
+Metrics (all 6 steps): PASS
+Check policy gateway: PASS
+
+Blast radius: PARTIAL — CartResourceV1, InventoryResource OK;
+  CartService, CatalogService FAIL (ambiguous symbol: multiple matches in graph)
+  CartService JSON/depth/policy variants also fail for same reason
+
+Slice (3 steps): FAIL — Java class names not found as functions by CFG builder
+  (CartServiceImpl, CartResourceV1 — needs discover --cfg and/or Java method names)
+
+Inspect (4 steps): FAIL — same as slice (CartServiceImpl not resolved)
+
+Export (5 steps): FAIL — CLI panic (exit 134): global -f/--format conflicts with
+  export subcommand --format (clap TypeId mismatch). All export formats affected.
+
+Guide gaps found:
+  1. Use unique symbol names or node IDs for blast-radius in multi-service repos
+  2. Slice/inspect examples should use Java method names or run discover --cfg first
+  3. export command is currently broken (format flag collision)
+  4. file_hashes.json vs file_index.json in artifact list
+  5. analysis/ directory only appears after discover --cfg or --all
+
+================================================================================
+================================================================================
+[0.1] Prerequisites — rbuilder --version
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder --version
+--------------------------------------------------------------------------------
+rbuilder rBuilder v0.1.0 (https://github.com/sshaaf/rbuilder)
+EXIT_CODE: 0
+DURATION_SEC: 0.019
+
+================================================================================
+[1.0] Step 1 — Discover artifacts check
+--------------------------------------------------------------------------------
+total 4584
+drwxr-xr-x@  7 sshaaf  wheel     224 Jul  2 11:24 .
+drwxr-xr-x@ 17 sshaaf  wheel     544 Jul  2 11:24 ..
+-rw-r--r--@  1 sshaaf  wheel   83136 Jul  2 11:24 analysis_results.bin
+-rw-r--r--@  1 sshaaf  wheel  499733 Jul  2 11:24 dashboard.html
+-rw-r--r--@  1 sshaaf  wheel   60413 Jul  2 11:24 file_hashes.json
+-rw-r--r--@  1 sshaaf  wheel  847748 Jul  2 11:24 graph.db
+-rw-r--r--@  1 sshaaf  wheel  847748 Jul  2 11:24 graph.json
+
+NOTE: discover was run before this script (default mode).
+Expected from guide: graph.db, graph.json, analysis_results.bin, dashboard.html
+Actual file_index name: file_hashes.json (not file_index.json)
+analysis/ directory: only created with discover --cfg / --all
+
+================================================================================
+[1.1] Optional discover modes (--security, --cfg, --all, -l, -v)
+STATUS: SKIPPED in validation (would re-index; default discover already succeeded)
+
+================================================================================
+[2.1] GQL — all functions
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation gql MATCH (n:Function) RETURN n
+--------------------------------------------------------------------------------
+setQuantity
+getCartItemPromoSavings
+setItemId
+getQuantity
+getTotal
+setSquare
+deleteItem
+checkout
+setTotal
+create
+anonymous
+hello
+testHelloEndpoint
+setShippingTotal
+anonymous
+getCart
+setImage
+setNameOnCard
+checkout
+setItemId
+getByItemId
+getCart
+anonymous
+getProducts
+getPromoSavings
+removeData
+setPromoSavings
+setPrice
+number
+getTotal
+getNextCreditCardNumber
+addCartItem
+applyCartItemPromotions
+set
+setCartItemPromoSavings
+getCreateCartId
+anonymous
+setReverseSquare
+getNextCvC
+getBillingAddress
+clearCart
+getOrderId
+getShippingPromoSavings
+getTitle
+anonymous
+anonymous
+getNumber
+getShoppingCart
+setExpiration
+testGetByItemId
+getOne
+setNumber
+dedupeCartItems
+setNumber
+ngOnInit
+setCart
+getTotal
+addItem
+setTwoPoints
+setThreePointsArea
+init
+applyShippingPromotions
+deleteOne
+addToCart
+checkout
+setPrice
+toString
+getNextPhoneNumber
+ngOnInit
+_deleteCartItem
+setCartId
+ngOnInit
+getProduct
+checkOutCart
+biasedRandom
+init
+getCreditCard
+setTitle
+findById
+cartCheckouts
+_checkoutCart
+setsTwoSquares
+doUpdate
+resetCartItemList
+onClearCart
+setNameOnCard
+getCartId
+setName
+getName
+_getCart
+getDesc
+getInternalPoint
+getNameOnCard
+getProduct
+getPromotions
+getPrice
+constructor
+clearData
+testHelloEndpoint
+getExpiration
+anonymous
+setCartItemTotal
+getPrice
+anonymous
+update
+hello
+getAllProductsWithQuantity
+set
+delete
+toString
+onRemoveFromCart
+setOrderId
+fromCatalog
+getNextLastName
+orderId
+removeCartItem
+setQuantity
+getImage
+getAll
+onAddToCart
+anonymous
+setExpiration
+toString
+getProduct
+setThreePointsLine
+anonymous
+getAvailability
+sendOrder
+addItem
+getShippingTotal
+getPercentOff
+getItemId
+getPoint
+billingAddress
+createCart
+_putCartItem
+delete
+constructor
+anonymous
+constructor
+ngOnDestroy
+getItemId
+initShoppingCartForPricing
+setPromotions
+setXCross
+getNextYear
+setCartTotal
+getAll
+testHelloEndpoint
+expiration
+removeFromCart
+getTotal
+getCartItemTotal
+setProduct
+setDesc
+err
+setCreditCard
+setCartItemList
+getShoppingCart
+set
+getData
+name
+add
+doDelete
+getAll
+getNextOrder
+onCheckout
+getExpiration
+getProducts
+getPrice
+setItemId
+generateCarts
+setPrice
+deleteItem
+getCartTotal
+getNumber
+getName
+calculateShipping
+cart
+anonymous
+setShippingPromoSavings
+priceShoppingCart
+constructor
+constructor
+getNextFirstName
+setCategory
+setBillingAddress
+getCartItemList
+getQuantity
+create
+anonymous
+saveData
+nameOnCard
+removeItem
+setPercentOff
+onAddQuantity
+getDesc
+removeQuantity
+getMapFromFile
+setName
+getItemId
+generateSingleOrder
+priceShoppingCart
+getOne
+addItem
+onRemoveQuantity
+getNameOnCard
+ngOnDestroy
+getCategory
+update
+constructor
+toString
+onClearCart
+checkout
+setsTwoSquaresWithOneInternalSquare
+build
+getAllProducts
+anonymous
+toString
+anonymous
+constructor
+getCartId
+constructor
+setPoints
+anonymous
+anonymous
+getNextFullName
+onAddToCart
+getNextMonth
+setDesc
+EXIT_CODE: 0
+DURATION_SEC: 0.024
+
+================================================================================
+[2.2] GQL — Resource LIKE filter
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation gql MATCH (n:Function) WHERE n.name LIKE '*Resource*' RETURN n
+--------------------------------------------------------------------------------
+EXIT_CODE: 0
+DURATION_SEC: 0.021
+
+================================================================================
+[2.3] GQL — one-hop calls LIMIT 20
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation gql MATCH (a:Function)-[:CALLS*1..1]->(b:Function) RETURN a,b LIMIT 20
+--------------------------------------------------------------------------------
+setSquare -> init
+deleteItem -> getShoppingCart
+deleteItem -> getCartItemList
+getProduct -> deleteItem
+deleteItem -> priceShoppingCart
+getShoppingCart -> checkout
+checkout -> resetCartItemList
+priceShoppingCart -> checkout
+create -> create
+getCart -> getShoppingCart
+checkout -> checkout
+getShoppingCart -> getCart
+applyCartItemPromotions -> getPromotions
+applyCartItemPromotions -> getItemId
+applyCartItemPromotions -> getPercentOff
+set -> getShoppingCart
+set -> resetCartItemList
+getCartItemList -> set
+set -> priceShoppingCart
+set -> setCartItemList
+EXIT_CODE: 0
+DURATION_SEC: 0.022
+
+================================================================================
+[2.4] GQL — call chain 1..3
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation gql MATCH (a:Function)-[:CALLS*1..3]->(b:Function) RETURN a,b
+--------------------------------------------------------------------------------
+init -> setSquare
+getShoppingCart -> deleteItem
+priceShoppingCart -> deleteItem
+deleteItem -> initShoppingCartForPricing
+applyCartItemPromotions -> deleteItem
+deleteItem -> calculateShipping
+applyShippingPromotions -> deleteItem
+deleteItem -> getCartItemList
+getProduct -> deleteItem
+deleteItem -> getProducts
+priceShoppingCart -> deleteItem
+initShoppingCartForPricing -> deleteItem
+getProduct -> deleteItem
+deleteItem -> getItemId
+deleteItem -> getName
+deleteItem -> getDesc
+deleteItem -> getPrice
+applyCartItemPromotions -> deleteItem
+getPromotions -> deleteItem
+getItemId -> deleteItem
+getPercentOff -> deleteItem
+deleteItem -> calculateShipping
+deleteItem -> applyShippingPromotions
+getShoppingCart -> checkout
+checkout -> priceShoppingCart
+initShoppingCartForPricing -> checkout
+checkout -> applyCartItemPromotions
+calculateShipping -> checkout
+applyShippingPromotions -> checkout
+checkout -> resetCartItemList
+checkout -> priceShoppingCart
+initShoppingCartForPricing -> checkout
+checkout -> getProduct
+getItemId -> checkout
+checkout -> getName
+checkout -> getDesc
+checkout -> getPrice
+checkout -> applyCartItemPromotions
+checkout -> getPromotions
+checkout -> getItemId
+getPercentOff -> checkout
+checkout -> calculateShipping
+applyShippingPromotions -> checkout
+create -> create
+create -> create
+create -> create
+getCart -> getShoppingCart
+checkout -> checkout
+checkout -> checkout
+checkout -> checkout
+getCart -> getShoppingCart
+getPromotions -> applyCartItemPromotions
+applyCartItemPromotions -> getItemId
+getPercentOff -> applyCartItemPromotions
+set -> getShoppingCart
+set -> priceShoppingCart
+set -> initShoppingCartForPricing
+set -> applyCartItemPromotions
+set -> calculateShipping
+set -> applyShippingPromotions
+set -> resetCartItemList
+getCartItemList -> set
+priceShoppingCart -> set
+initShoppingCartForPricing -> set
+set -> getProduct
+set -> getItemId
+set -> getName
+getDesc -> set
+set -> getPrice
+applyCartItemPromotions -> set
+set -> getPromotions
+getItemId -> set
+set -> getPercentOff
+calculateShipping -> set
+set -> applyShippingPromotions
+setCartItemList -> set
+dedupeCartItems -> set
+getProduct -> set
+set -> getProducts
+setQuantity -> set
+set -> setPrice
+set -> getPrice
+set -> setProduct
+init -> setReverseSquare
+priceShoppingCart -> getShoppingCart
+initShoppingCartForPricing -> getShoppingCart
+getProduct -> getShoppingCart
+getItemId -> getShoppingCart
+getName -> getShoppingCart
+getDesc -> getShoppingCart
+getPrice -> getShoppingCart
+getShoppingCart -> applyCartItemPromotions
+getShoppingCart -> getPromotions
+getShoppingCart -> getItemId
+getShoppingCart -> getPercentOff
+calculateShipping -> getShoppingCart
+getShoppingCart -> applyShippingPromotions
+getOne -> findById
+getOne -> findById
+getOne -> findById
+getOne -> getByItemId
+getOne -> setQuantity
+getOne -> getByItemId
+getOne -> setQuantity
+dedupeCartItems -> getProduct
+getProducts -> dedupeCartItems
+setQuantity -> dedupeCartItems
+dedupeCartItems -> setPrice
+dedupeCartItems -> getPrice
+dedupeCartItems -> setProduct
+setTwoPoints -> init
+setThreePointsArea -> init
+deleteOne -> delete
+checkout -> checkout
+checkout -> checkout
+checkout -> checkout
+toString -> toString
+toString -> toString
+toString -> toString
+findById -> findById
+findById -> findById
+findById -> findById
+findById -> getByItemId
+setQuantity -> findById
+getByItemId -> findById
+setQuantity -> findById
+findById -> getByItemId
+findById -> setQuantity
+cartCheckouts -> generateCarts
+generateSingleOrder -> cartCheckouts
+generateSingleOrder -> cartCheckouts
+cartCheckouts -> getNextFullName
+cartCheckouts -> biasedRandom
+cartCheckouts -> createCart
+cartCheckouts -> checkOutCart
+cartCheckouts -> toString
+init -> setsTwoSquares
+getPoint -> getInternalPoint
+getByItemId -> getAllProductsWithQuantity
+set -> set
+set -> set
+set -> set
+delete -> deleteItem
+getAllProductsWithQuantity -> getAll
+getByItemId -> getAll
+getProduct -> getProducts
+init -> setThreePointsLine
+getShoppingCart -> addItem
+addItem -> priceShoppingCart
+initShoppingCartForPricing -> addItem
+applyCartItemPromotions -> addItem
+addItem -> calculateShipping
+applyShippingPromotions -> addItem
+getProduct -> addItem
+addItem -> getProducts
+getPrice -> addItem
+addItem -> addCartItem
+priceShoppingCart -> addItem
+initShoppingCartForPricing -> addItem
+getProduct -> addItem
+getItemId -> addItem
+addItem -> getName
+getDesc -> addItem
+getPrice -> addItem
+addItem -> applyCartItemPromotions
+getPromotions -> addItem
+addItem -> getItemId
+getPercentOff -> addItem
+addItem -> calculateShipping
+addItem -> applyShippingPromotions
+addItem -> setCartItemList
+dedupeCartItems -> addItem
+getProduct -> addItem
+addItem -> getProducts
+addItem -> setQuantity
+setPrice -> addItem
+addItem -> getPrice
+setProduct -> addItem
+addItem -> removeCartItem
+getProduct -> initShoppingCartForPricing
+getProducts -> initShoppingCartForPricing
+getItemId -> initShoppingCartForPricing
+getName -> initShoppingCartForPricing
+getDesc -> initShoppingCartForPricing
+initShoppingCartForPricing -> getPrice
+init -> setXCross
+addItem -> add
+getNextCreditCardNumber -> getNextOrder
+generateSingleOrder -> generateCarts
+generateCarts -> generateSingleOrder
+generateSingleOrder -> generateCarts
+getNextFullName -> generateCarts
+generateCarts -> biasedRandom
+createCart -> generateCarts
+generateCarts -> checkOutCart
+toString -> generateCarts
+generateCarts -> getNextFullName
+generateCarts -> getNextFirstName
+generateCarts -> getNextLastName
+generateCarts -> biasedRandom
+generateCarts -> createCart
+generateCarts -> checkOutCart
+generateCarts -> toString
+deleteItem -> removeItem
+generateSingleOrder -> generateSingleOrder
+generateSingleOrder -> generateSingleOrder
+generateSingleOrder -> generateSingleOrder
+getNextFullName -> generateSingleOrder
+generateSingleOrder -> biasedRandom
+generateSingleOrder -> createCart
+generateSingleOrder -> checkOutCart
+generateSingleOrder -> toString
+generateSingleOrder -> getNextFullName
+getNextFirstName -> generateSingleOrder
+getNextLastName -> generateSingleOrder
+generateSingleOrder -> biasedRandom
+createCart -> generateSingleOrder
+generateSingleOrder -> checkOutCart
+toString -> generateSingleOrder
+getNextFullName -> generateSingleOrder
+getNextFirstName -> generateSingleOrder
+generateSingleOrder -> getNextLastName
+generateSingleOrder -> biasedRandom
+generateSingleOrder -> createCart
+generateSingleOrder -> checkOutCart
+toString -> generateSingleOrder
+priceShoppingCart -> initShoppingCartForPricing
+priceShoppingCart -> getProduct
+priceShoppingCart -> getProducts
+priceShoppingCart -> getItemId
+getName -> priceShoppingCart
+priceShoppingCart -> getDesc
+priceShoppingCart -> getPrice
+applyCartItemPromotions -> priceShoppingCart
+getPromotions -> priceShoppingCart
+priceShoppingCart -> getItemId
+getPercentOff -> priceShoppingCart
+calculateShipping -> priceShoppingCart
+applyShippingPromotions -> priceShoppingCart
+addItem -> addItem
+addItem -> addItem
+addItem -> addItem
+update -> update
+update -> update
+update -> update
+setsTwoSquaresWithOneInternalSquare -> init
+setPoints -> init
+getNextFullName -> getNextFirstName
+getNextFullName -> getNextLastName
+EXIT_CODE: 0
+DURATION_SEC: 0.024
+
+================================================================================
+[2.5] GQL macro — all_functions
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation gql --macro-name all_functions unused
+--------------------------------------------------------------------------------
+setQuantity
+getCartItemPromoSavings
+setItemId
+getQuantity
+getTotal
+setSquare
+deleteItem
+checkout
+setTotal
+create
+anonymous
+hello
+testHelloEndpoint
+setShippingTotal
+anonymous
+getCart
+setImage
+setNameOnCard
+checkout
+setItemId
+getByItemId
+getCart
+anonymous
+getProducts
+getPromoSavings
+removeData
+setPromoSavings
+setPrice
+number
+getTotal
+getNextCreditCardNumber
+addCartItem
+applyCartItemPromotions
+set
+setCartItemPromoSavings
+getCreateCartId
+anonymous
+setReverseSquare
+getNextCvC
+getBillingAddress
+clearCart
+getOrderId
+getShippingPromoSavings
+getTitle
+anonymous
+anonymous
+getNumber
+getShoppingCart
+setExpiration
+testGetByItemId
+getOne
+setNumber
+dedupeCartItems
+setNumber
+ngOnInit
+setCart
+getTotal
+addItem
+setTwoPoints
+setThreePointsArea
+init
+applyShippingPromotions
+deleteOne
+addToCart
+checkout
+setPrice
+toString
+getNextPhoneNumber
+ngOnInit
+_deleteCartItem
+setCartId
+ngOnInit
+getProduct
+checkOutCart
+biasedRandom
+init
+getCreditCard
+setTitle
+findById
+cartCheckouts
+_checkoutCart
+setsTwoSquares
+doUpdate
+resetCartItemList
+onClearCart
+setNameOnCard
+getCartId
+setName
+getName
+_getCart
+getDesc
+getInternalPoint
+getNameOnCard
+getProduct
+getPromotions
+getPrice
+constructor
+clearData
+testHelloEndpoint
+getExpiration
+anonymous
+setCartItemTotal
+getPrice
+anonymous
+update
+hello
+getAllProductsWithQuantity
+set
+delete
+toString
+onRemoveFromCart
+setOrderId
+fromCatalog
+getNextLastName
+orderId
+removeCartItem
+setQuantity
+getImage
+getAll
+onAddToCart
+anonymous
+setExpiration
+toString
+getProduct
+setThreePointsLine
+anonymous
+getAvailability
+sendOrder
+addItem
+getShippingTotal
+getPercentOff
+getItemId
+getPoint
+billingAddress
+createCart
+_putCartItem
+delete
+constructor
+anonymous
+constructor
+ngOnDestroy
+getItemId
+initShoppingCartForPricing
+setPromotions
+setXCross
+getNextYear
+setCartTotal
+getAll
+testHelloEndpoint
+expiration
+removeFromCart
+getTotal
+getCartItemTotal
+setProduct
+setDesc
+err
+setCreditCard
+setCartItemList
+getShoppingCart
+set
+getData
+name
+add
+doDelete
+getAll
+getNextOrder
+onCheckout
+getExpiration
+getProducts
+getPrice
+setItemId
+generateCarts
+setPrice
+deleteItem
+getCartTotal
+getNumber
+getName
+calculateShipping
+cart
+anonymous
+setShippingPromoSavings
+priceShoppingCart
+constructor
+constructor
+getNextFirstName
+setCategory
+setBillingAddress
+getCartItemList
+getQuantity
+create
+anonymous
+saveData
+nameOnCard
+removeItem
+setPercentOff
+onAddQuantity
+getDesc
+removeQuantity
+getMapFromFile
+setName
+getItemId
+generateSingleOrder
+priceShoppingCart
+getOne
+addItem
+onRemoveQuantity
+getNameOnCard
+ngOnDestroy
+getCategory
+update
+constructor
+toString
+onClearCart
+checkout
+setsTwoSquaresWithOneInternalSquare
+build
+getAllProducts
+anonymous
+toString
+anonymous
+constructor
+getCartId
+constructor
+setPoints
+anonymous
+anonymous
+getNextFullName
+onAddToCart
+getNextMonth
+setDesc
+EXIT_CODE: 0
+DURATION_SEC: 0.022
+
+================================================================================
+[2.6] GQL macro — direct_calls
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation gql --macro-name direct_calls unused
+--------------------------------------------------------------------------------
+init -> setSquare
+deleteItem -> getShoppingCart
+deleteItem -> getCartItemList
+getProduct -> deleteItem
+deleteItem -> priceShoppingCart
+getShoppingCart -> checkout
+resetCartItemList -> checkout
+checkout -> priceShoppingCart
+create -> create
+getShoppingCart -> getCart
+checkout -> checkout
+getCart -> getShoppingCart
+applyCartItemPromotions -> getPromotions
+getItemId -> applyCartItemPromotions
+applyCartItemPromotions -> getPercentOff
+getShoppingCart -> set
+set -> resetCartItemList
+set -> getCartItemList
+priceShoppingCart -> set
+setCartItemList -> set
+set -> dedupeCartItems
+setReverseSquare -> init
+getShoppingCart -> priceShoppingCart
+getOne -> findById
+getProduct -> dedupeCartItems
+setQuantity -> dedupeCartItems
+dedupeCartItems -> setPrice
+dedupeCartItems -> getPrice
+dedupeCartItems -> setProduct
+init -> setTwoPoints
+init -> setThreePointsArea
+delete -> deleteOne
+checkout -> checkout
+toString -> toString
+findById -> findById
+findById -> getByItemId
+setQuantity -> findById
+generateCarts -> cartCheckouts
+init -> setsTwoSquares
+getInternalPoint -> getPoint
+getByItemId -> getAllProductsWithQuantity
+set -> set
+deleteItem -> delete
+getAll -> getAllProductsWithQuantity
+getProduct -> getProducts
+init -> setThreePointsLine
+getShoppingCart -> addItem
+addItem -> getProduct
+getPrice -> addItem
+addItem -> addCartItem
+addItem -> priceShoppingCart
+setCartItemList -> addItem
+addItem -> dedupeCartItems
+removeCartItem -> addItem
+getProduct -> initShoppingCartForPricing
+initShoppingCartForPricing -> getItemId
+initShoppingCartForPricing -> getName
+initShoppingCartForPricing -> getDesc
+initShoppingCartForPricing -> getPrice
+init -> setXCross
+addItem -> add
+getNextOrder -> getNextCreditCardNumber
+generateCarts -> generateSingleOrder
+deleteItem -> removeItem
+generateSingleOrder -> generateSingleOrder
+generateSingleOrder -> getNextFullName
+generateSingleOrder -> biasedRandom
+createCart -> generateSingleOrder
+generateSingleOrder -> checkOutCart
+toString -> generateSingleOrder
+priceShoppingCart -> initShoppingCartForPricing
+priceShoppingCart -> applyCartItemPromotions
+priceShoppingCart -> calculateShipping
+applyShippingPromotions -> priceShoppingCart
+addItem -> addItem
+update -> update
+setsTwoSquaresWithOneInternalSquare -> init
+setPoints -> init
+getNextFullName -> getNextFirstName
+getNextLastName -> getNextFullName
+EXIT_CODE: 0
+DURATION_SEC: 0.022
+
+================================================================================
+[2.7] GQL macro — call_chain
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation gql --macro-name call_chain unused
+--------------------------------------------------------------------------------
+setSquare -> init
+getShoppingCart -> deleteItem
+priceShoppingCart -> deleteItem
+deleteItem -> initShoppingCartForPricing
+deleteItem -> applyCartItemPromotions
+calculateShipping -> deleteItem
+applyShippingPromotions -> deleteItem
+getCartItemList -> deleteItem
+deleteItem -> getProduct
+deleteItem -> getProducts
+deleteItem -> priceShoppingCart
+deleteItem -> initShoppingCartForPricing
+deleteItem -> getProduct
+getItemId -> deleteItem
+deleteItem -> getName
+deleteItem -> getDesc
+deleteItem -> getPrice
+deleteItem -> applyCartItemPromotions
+deleteItem -> getPromotions
+deleteItem -> getItemId
+deleteItem -> getPercentOff
+calculateShipping -> deleteItem
+deleteItem -> applyShippingPromotions
+checkout -> getShoppingCart
+priceShoppingCart -> checkout
+initShoppingCartForPricing -> checkout
+applyCartItemPromotions -> checkout
+checkout -> calculateShipping
+checkout -> applyShippingPromotions
+resetCartItemList -> checkout
+priceShoppingCart -> checkout
+initShoppingCartForPricing -> checkout
+getProduct -> checkout
+checkout -> getItemId
+checkout -> getName
+checkout -> getDesc
+checkout -> getPrice
+checkout -> applyCartItemPromotions
+checkout -> getPromotions
+getItemId -> checkout
+getPercentOff -> checkout
+checkout -> calculateShipping
+checkout -> applyShippingPromotions
+create -> create
+create -> create
+create -> create
+getShoppingCart -> getCart
+checkout -> checkout
+checkout -> checkout
+checkout -> checkout
+getCart -> getShoppingCart
+getPromotions -> applyCartItemPromotions
+applyCartItemPromotions -> getItemId
+applyCartItemPromotions -> getPercentOff
+getShoppingCart -> set
+set -> priceShoppingCart
+set -> initShoppingCartForPricing
+set -> applyCartItemPromotions
+set -> calculateShipping
+applyShippingPromotions -> set
+resetCartItemList -> set
+getCartItemList -> set
+set -> priceShoppingCart
+initShoppingCartForPricing -> set
+set -> getProduct
+set -> getItemId
+getName -> set
+getDesc -> set
+set -> getPrice
+set -> applyCartItemPromotions
+getPromotions -> set
+set -> getItemId
+getPercentOff -> set
+calculateShipping -> set
+set -> applyShippingPromotions
+set -> setCartItemList
+set -> dedupeCartItems
+set -> getProduct
+set -> getProducts
+set -> setQuantity
+setPrice -> set
+getPrice -> set
+setProduct -> set
+setReverseSquare -> init
+priceShoppingCart -> getShoppingCart
+initShoppingCartForPricing -> getShoppingCart
+getShoppingCart -> getProduct
+getShoppingCart -> getItemId
+getShoppingCart -> getName
+getShoppingCart -> getDesc
+getShoppingCart -> getPrice
+applyCartItemPromotions -> getShoppingCart
+getShoppingCart -> getPromotions
+getItemId -> getShoppingCart
+getShoppingCart -> getPercentOff
+getShoppingCart -> calculateShipping
+applyShippingPromotions -> getShoppingCart
+getOne -> findById
+getOne -> findById
+findById -> getOne
+getByItemId -> getOne
+getOne -> setQuantity
+getByItemId -> getOne
+getOne -> setQuantity
+getProduct -> dedupeCartItems
+getProducts -> dedupeCartItems
+setQuantity -> dedupeCartItems
+dedupeCartItems -> setPrice
+dedupeCartItems -> getPrice
+dedupeCartItems -> setProduct
+setTwoPoints -> init
+setThreePointsArea -> init
+deleteOne -> delete
+checkout -> checkout
+checkout -> checkout
+checkout -> checkout
+toString -> toString
+toString -> toString
+toString -> toString
+findById -> findById
+findById -> findById
+findById -> findById
+findById -> getByItemId
+setQuantity -> findById
+findById -> getByItemId
+setQuantity -> findById
+findById -> getByItemId
+findById -> setQuantity
+generateCarts -> cartCheckouts
+cartCheckouts -> generateSingleOrder
+cartCheckouts -> generateSingleOrder
+cartCheckouts -> getNextFullName
+cartCheckouts -> biasedRandom
+createCart -> cartCheckouts
+cartCheckouts -> checkOutCart
+cartCheckouts -> toString
+setsTwoSquares -> init
+getPoint -> getInternalPoint
+getByItemId -> getAllProductsWithQuantity
+set -> set
+set -> set
+set -> set
+deleteItem -> delete
+getAll -> getAllProductsWithQuantity
+getByItemId -> getAll
+getProduct -> getProducts
+init -> setThreePointsLine
+addItem -> getShoppingCart
+addItem -> priceShoppingCart
+initShoppingCartForPricing -> addItem
+applyCartItemPromotions -> addItem
+addItem -> calculateShipping
+addItem -> applyShippingPromotions
+addItem -> getProduct
+getProducts -> addItem
+getPrice -> addItem
+addCartItem -> addItem
+priceShoppingCart -> addItem
+initShoppingCartForPricing -> addItem
+getProduct -> addItem
+getItemId -> addItem
+addItem -> getName
+getDesc -> addItem
+addItem -> getPrice
+applyCartItemPromotions -> addItem
+addItem -> getPromotions
+getItemId -> addItem
+addItem -> getPercentOff
+addItem -> calculateShipping
+applyShippingPromotions -> addItem
+addItem -> setCartItemList
+dedupeCartItems -> addItem
+addItem -> getProduct
+getProducts -> addItem
+addItem -> setQuantity
+addItem -> setPrice
+getPrice -> addItem
+setProduct -> addItem
+removeCartItem -> addItem
+getProduct -> initShoppingCartForPricing
+initShoppingCartForPricing -> getProducts
+getItemId -> initShoppingCartForPricing
+getName -> initShoppingCartForPricing
+initShoppingCartForPricing -> getDesc
+getPrice -> initShoppingCartForPricing
+init -> setXCross
+addItem -> add
+getNextCreditCardNumber -> getNextOrder
+generateCarts -> generateSingleOrder
+generateCarts -> generateSingleOrder
+generateCarts -> generateSingleOrder
+getNextFullName -> generateCarts
+biasedRandom -> generateCarts
+createCart -> generateCarts
+checkOutCart -> generateCarts
+toString -> generateCarts
+generateCarts -> getNextFullName
+generateCarts -> getNextFirstName
+generateCarts -> getNextLastName
+biasedRandom -> generateCarts
+createCart -> generateCarts
+generateCarts -> checkOutCart
+generateCarts -> toString
+deleteItem -> removeItem
+generateSingleOrder -> generateSingleOrder
+generateSingleOrder -> generateSingleOrder
+generateSingleOrder -> generateSingleOrder
+getNextFullName -> generateSingleOrder
+biasedRandom -> generateSingleOrder
+createCart -> generateSingleOrder
+generateSingleOrder -> checkOutCart
+toString -> generateSingleOrder
+generateSingleOrder -> getNextFullName
+getNextFirstName -> generateSingleOrder
+getNextLastName -> generateSingleOrder
+generateSingleOrder -> biasedRandom
+generateSingleOrder -> createCart
+generateSingleOrder -> checkOutCart
+toString -> generateSingleOrder
+generateSingleOrder -> getNextFullName
+getNextFirstName -> generateSingleOrder
+generateSingleOrder -> getNextLastName
+generateSingleOrder -> biasedRandom
+generateSingleOrder -> createCart
+checkOutCart -> generateSingleOrder
+toString -> generateSingleOrder
+priceShoppingCart -> initShoppingCartForPricing
+getProduct -> priceShoppingCart
+priceShoppingCart -> getProducts
+priceShoppingCart -> getItemId
+priceShoppingCart -> getName
+getDesc -> priceShoppingCart
+priceShoppingCart -> getPrice
+priceShoppingCart -> applyCartItemPromotions
+priceShoppingCart -> getPromotions
+priceShoppingCart -> getItemId
+priceShoppingCart -> getPercentOff
+calculateShipping -> priceShoppingCart
+applyShippingPromotions -> priceShoppingCart
+addItem -> addItem
+addItem -> addItem
+addItem -> addItem
+update -> update
+update -> update
+update -> update
+init -> setsTwoSquaresWithOneInternalSquare
+setPoints -> init
+getNextFullName -> getNextFirstName
+getNextLastName -> getNextFullName
+EXIT_CODE: 0
+DURATION_SEC: 0.023
+
+================================================================================
+[2.8] GQL — explain CartService
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation gql --explain MATCH (n:Function) WHERE n.name = 'CartService' RETURN n
+--------------------------------------------------------------------------------
+Match: MATCH (n:Function)
+Project: RETURN n
+
+EXIT_CODE: 0
+DURATION_SEC: 0.019
+
+================================================================================
+[2.9] GQL JSON — Cart LIKE
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation -f json gql MATCH (n:Function) WHERE n.name LIKE '*Cart*' RETURN n
+--------------------------------------------------------------------------------
+{
+  "explain": false,
+  "rows": []
+}
+EXIT_CODE: 0
+DURATION_SEC: 0.018
+
+================================================================================
+[2.10] Global — json Class LIMIT (guide global flags)
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation -f json gql MATCH (n:Class) RETURN n LIMIT 10
+--------------------------------------------------------------------------------
+{
+  "explain": false,
+  "rows": [
+    [
+      {
+        "binding": "n",
+        "file": "/private/tmp/coolstore-quarkus-validation/./coolstore-fe/src/app/app.module.ts",
+        "node": "AppModule",
+        "type": "Class"
+      }
+    ],
+    [
+      {
+        "binding": "n",
+        "file": "/private/tmp/coolstore-quarkus-validation/./coolstore-fe/src/app/services/cart.service.ts",
+        "node": "CartService",
+        "type": "Class"
+      }
+    ],
+    [
+      {
+        "binding": "n",
+        "file": "/private/tmp/coolstore-quarkus-validation/./simulator/src/main/java/shaaf/dev/util/GeneratorResource.java",
+        "node": "GeneratorResource",
+        "type": "Class"
+      }
+    ],
+    [
+      {
+        "binding": "n",
+        "file": "/private/tmp/coolstore-quarkus-validation/./coolstore-fe/src/app/components/cart/cart.component.ts",
+        "node": "CartComponent",
+        "type": "Class"
+      }
+    ],
+    [
+      {
+        "binding": "n",
+        "file": "/private/tmp/coolstore-quarkus-validation/./coolstore-fe/src/app/components/product-card/product-card.component.ts",
+        "node": "ProductCardComponent",
+        "type": "Class"
+      }
+    ],
+    [
+      {
+        "binding": "n",
+        "file": "/private/tmp/coolstore-quarkus-validation/./cart-service/src/main/java/org/coolstore/cart/resource/CartResourceV2.java",
+        "node": "CartResourceV2",
+        "type": "Class"
+      }
+    ],
+    [
+      {
+        "binding": "n",
+        "file": "/private/tmp/coolstore-quarkus-validation/./inventory-service/src/main/java/org/coolstore/inventory/resource/InventoryResource.java",
+        "node": "InventoryResource",
+        "type": "Class"
+      }
+    ],
+    [
+      {
+        "binding": "n",
+        "file": "/private/tmp/coolstore-quarkus-validation/./catalog-service/src/main/java/org/coolstore/catalog/repository/CatalogRepository.java",
+        "node": "CatalogRepository",
+        "type": "Class"
+      }
+    ],
+    [
+      {
+        "binding": "n",
+        "file": "/private/tmp/coolstore-quarkus-validation/./coolstore-fe/src/app/services/local.service.ts",
+        "node": "LocalService",
+        "type": "Class"
+      }
+    ],
+    [
+      {
+        "binding": "n",
+        "file": "/private/tmp/coolstore-quarkus-validation/./cart-service/src/main/java/org/coolstore/cart/service/PromotionService.java",
+        "node": "PromotionService",
+        "type": "Class"
+      }
+    ]
+  ]
+}
+EXIT_CODE: 0
+DURATION_SEC: 0.017
+
+================================================================================
+[3.1] Blast radius — CartService
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation blast-radius CartService
+--------------------------------------------------------------------------------
+Error: Query error: ambiguous symbol 'CartService': 2 matches; use qualified name or node id
+EXIT_CODE: 1
+DURATION_SEC: 0.020
+
+================================================================================
+[3.2] Blast radius — CatalogService
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation blast-radius CatalogService
+--------------------------------------------------------------------------------
+Error: Query error: ambiguous symbol 'CatalogService': 3 matches; use qualified name or node id
+EXIT_CODE: 1
+DURATION_SEC: 0.022
+
+================================================================================
+[3.3] Blast radius — CartResourceV1
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation blast-radius CartResourceV1
+--------------------------------------------------------------------------------
+Blast radius for 'CartResourceV1'
+  Score: 0.0/100
+  Direct callers: 0
+  Impact zone: 0
+EXIT_CODE: 0
+DURATION_SEC: 0.310
+
+================================================================================
+[3.4] Blast radius — InventoryResource
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation blast-radius InventoryResource
+--------------------------------------------------------------------------------
+Blast radius for 'InventoryResource'
+  Score: 0.0/100
+  Direct callers: 0
+  Impact zone: 0
+EXIT_CODE: 0
+DURATION_SEC: 0.304
+
+================================================================================
+[3.5] Blast radius — depth 5
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation blast-radius CartService --depth 5
+--------------------------------------------------------------------------------
+Error: Query error: ambiguous symbol 'CartService': 2 matches; use qualified name or node id
+EXIT_CODE: 1
+DURATION_SEC: 0.018
+
+================================================================================
+[3.6] Blast radius — policy file
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation blast-radius CartService --policy-file /tmp/coolstore-quarkus-validation/policy.json
+--------------------------------------------------------------------------------
+Error: Query error: ambiguous symbol 'CartService': 2 matches; use qualified name or node id
+EXIT_CODE: 1
+DURATION_SEC: 0.020
+
+================================================================================
+[3.7] Blast radius — JSON
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation -f json blast-radius CartService
+--------------------------------------------------------------------------------
+Error: Query error: ambiguous symbol 'CartService': 2 matches; use qualified name or node id
+EXIT_CODE: 1
+DURATION_SEC: 0.019
+
+================================================================================
+[4.1] Slice backward — CartServiceImpl
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation slice cart-service/src/main/java/org/coolstore/cart/service/CartServiceImpl.java --line 45 --variable cart --function CartServiceImpl --language java
+--------------------------------------------------------------------------------
+Error: Resource not found: function 'CartServiceImpl' not found
+EXIT_CODE: 1
+DURATION_SEC: 0.018
+
+================================================================================
+[4.2] Slice forward — CartResourceV1
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation slice cart-service/src/main/java/org/coolstore/cart/resource/CartResourceV1.java --line 35 --variable cartId --function CartResourceV1 --direction forward --language java
+--------------------------------------------------------------------------------
+Error: Resource not found: function 'CartResourceV1' not found
+EXIT_CODE: 1
+DURATION_SEC: 0.019
+
+================================================================================
+[4.3] Slice taint — CartServiceImpl
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation slice cart-service/src/main/java/org/coolstore/cart/service/CartServiceImpl.java --line 50 --variable sc --function CartServiceImpl --taint --language java
+--------------------------------------------------------------------------------
+Error: Resource not found: function 'CartServiceImpl' not found
+EXIT_CODE: 1
+DURATION_SEC: 0.018
+
+================================================================================
+[5.1] Inspect CFG — CartServiceImpl
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation inspect CartServiceImpl cfg
+--------------------------------------------------------------------------------
+Error: Resource not found: function 'CartServiceImpl' not found
+EXIT_CODE: 1
+DURATION_SEC: 0.019
+
+================================================================================
+[5.2] Inspect CFG mermaid
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation -f mermaid inspect CartServiceImpl cfg
+--------------------------------------------------------------------------------
+Error: Resource not found: function 'CartServiceImpl' not found
+EXIT_CODE: 1
+DURATION_SEC: 0.019
+
+================================================================================
+[5.3] Inspect PDG data
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation inspect CartServiceImpl pdg --edge-layer data
+--------------------------------------------------------------------------------
+Error: Resource not found: function 'CartServiceImpl' not found
+EXIT_CODE: 1
+DURATION_SEC: 0.021
+
+================================================================================
+[5.4] Inspect dom frontiers
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation inspect CartServiceImpl dom --frontiers
+--------------------------------------------------------------------------------
+Error: Resource not found: function 'CartServiceImpl' not found
+EXIT_CODE: 1
+DURATION_SEC: 0.020
+
+================================================================================
+[6.1] Metrics — all
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation metrics
+--------------------------------------------------------------------------------
+PageRank: Object {"converged": Bool(false), "iterations": Number(20), "max_delta": Number(0.00003868486506551725), "top": Array [Object {"node": String("f52d6719-4538-4255-bb77-8d2cb3bbe669"), "pagerank": Number(0.0)}, Object {"node": String("7895dd3e-797b-4ce5-8e90-b99d486727cb"), "pagerank": Number(0.0)}, Object {"node": String("fcd3d09a-29e6-4fef-9a63-31588c226a5a"), "pagerank": Number(0.0)}, Object {"node": String("99c98a04-af8b-4e65-894f-e62524b60773"), "pagerank": Number(0.0)}, Object {"node": String("469bf1a0-498e-4047-9592-e6ca24e380ef"), "pagerank": Number(0.0)}, Object {"node": String("42f04eb5-b32b-447b-8d21-6665a1dc63a0"), "pagerank": Number(0.0)}, Object {"node": String("c327dc34-12c8-4a41-8d11-e80b4bf900ef"), "pagerank": Number(0.0)}, Object {"node": String("0f26204d-2ae7-4474-b99c-1b8304621544"), "pagerank": Number(0.0)}, Object {"node": String("82acb136-b7a5-48cb-bc93-0740f4e360b5"), "pagerank": Number(0.0)}, Object {"node": String("75a5bc7e-bb64-4156-bca9-bd7f14e950a7"), "pagerank": Number(0.0)}, Object {"node": String("a2ece6ff-cec2-4b42-a566-6025853cb58f"), "pagerank": Number(0.0011415482244707931)}, Object {"node": String("d2afa3db-65f0-4b74-9241-612af4568107"), "pagerank": Number(0.0)}, Object {"node": String("113e5ec2-dbe6-4b29-aaa2-e2285cb4b97c"), "pagerank": Number(0.0)}, Object {"node": String("ed73990d-0f75-47ae-ae04-5a5a2d7a69ac"), "pagerank": Number(0.0)}, Object {"node": String("098c9165-75dc-4eeb-bd35-35a2821ee424"), "pagerank": Number(0.0)}, Object {"node": String("729b1114-3569-41d0-8032-8aee9115a1cc"), "pagerank": Number(0.0)}, Object {"node": String("f1d05157-cb97-443e-8bd1-cec7a60a46a7"), "pagerank": Number(0.0)}, Object {"node": String("82fc634e-618b-4977-bf84-e041d16d6744"), "pagerank": Number(0.0)}, Object {"node": String("6f72bb3a-c00a-44c7-81d5-01d9d5a0ac68"), "pagerank": Number(0.0)}, Object {"node": String("66cfd170-bbb7-4a7d-aa70-5f86122ae871"), "pagerank": Number(0.0)}]}
+Betweenness top: Array [Object {"node": String("b8328fe1-8cf8-474d-b4cc-acf2690220ae"), "score": Number(0.0000898469764128043)}, Object {"node": String("5cd05022-1da9-4eb2-8921-c668c6ef5558"), "score": Number(0.000044135356834360003)}, Object {"node": String("2c9ee8e1-2783-471f-93de-7338b2b6378e"), "score": Number(0.000028372729393517148)}, Object {"node": String("13aa416b-2db2-4124-9ca0-dcfa30de4853"), "score": Number(0.000022067678417180002)}, Object {"node": String("31762e31-a65c-4a2e-a845-36f1922ba607"), "score": Number(0.000014186364696758574)}, Object {"node": String("975107d3-3676-4809-9325-18dc495251d6"), "score": Number(0.000012610101952674287)}, Object {"node": String("6133947f-24d5-4069-98df-425a206e28aa"), "score": Number(0.000012610101952674287)}, Object {"node": String("ba3ef69e-c196-4713-814d-79df8e26a23a"), "score": Number(9.457576464505716e-6)}, Object {"node": String("c7b9ccec-140a-4fda-ae43-b009fde7714e"), "score": Number(3.152525488168572e-6)}, Object {"node": String("de3a631d-c325-47b6-9054-777668f6939d"), "score": Number(1.576262744084286e-6)}, Object {"node": String("6eea2c4e-7dfe-4ab3-b633-7e99f1e4f1d4"), "score": Number(0.0)}, Object {"node": String("27cb5de3-138c-46f2-ae80-95d3063c9240"), "score": Number(0.0)}, Object {"node": String("7858d4bc-3989-4c39-80b6-89c11e33d459"), "score": Number(0.0)}, Object {"node": String("4f973add-5dc6-4b7a-b13c-ade6b1ef0bdd"), "score": Number(0.0)}, Object {"node": String("812e43f6-6bce-48ab-a447-109a14b7d215"), "score": Number(0.0)}, Object {"node": String("ad5eec91-191f-466f-8cf8-0150688070c1"), "score": Number(0.0)}, Object {"node": String("cdd19988-9b00-46b5-9a37-1862f09a18b6"), "score": Number(0.0)}, Object {"node": String("7240c740-5418-4ae9-b8a8-a64936602d50"), "score": Number(0.0)}, Object {"node": String("4b66dc66-e9c7-448b-9530-70d5efffb660"), "score": Number(0.0)}, Object {"node": String("8911e556-fd9e-49c7-b2e3-05c0eecc249b"), "score": Number(0.0)}]
+Communities: Object {"assignments": Number(798), "count": Number(746), "modularity": Number(0.724690082644628)}
+EXIT_CODE: 0
+DURATION_SEC: 0.071
+
+================================================================================
+[6.2] Metrics — pagerank
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation metrics --pagerank
+--------------------------------------------------------------------------------
+PageRank: Object {"converged": Bool(false), "iterations": Number(20), "max_delta": Number(0.00003868486506551812), "top": Array [Object {"node": String("0ba2e074-4be5-4924-93f1-84648f62ecff"), "pagerank": Number(0.0)}, Object {"node": String("99915304-5e1a-4341-8e9e-2c9861e18737"), "pagerank": Number(0.0)}, Object {"node": String("bb9b9791-509f-482b-be91-957c739959ab"), "pagerank": Number(0.0)}, Object {"node": String("93ffcddd-2f41-4eb6-b450-465f1e0f0257"), "pagerank": Number(0.0)}, Object {"node": String("9f232baf-5c55-4b5c-a916-833511e34ef4"), "pagerank": Number(0.0)}, Object {"node": String("f9d4299f-bce3-4b6e-8369-3a59b98aaec5"), "pagerank": Number(0.0)}, Object {"node": String("eb04aa20-83b3-48e7-806e-c25d3ab453e9"), "pagerank": Number(0.0)}, Object {"node": String("cbf9d353-9561-4548-99f1-91302dd1d7d7"), "pagerank": Number(0.0)}, Object {"node": String("14aad458-54a8-4db4-bda7-f28c5d184c6b"), "pagerank": Number(0.0)}, Object {"node": String("e6548751-2677-480c-a3d3-9d347031d58d"), "pagerank": Number(0.0)}, Object {"node": String("2c9ee8e1-2783-471f-93de-7338b2b6378e"), "pagerank": Number(0.0019305784473916028)}, Object {"node": String("a5f051a7-7c49-4717-8a03-db1054a110c4"), "pagerank": Number(0.0)}, Object {"node": String("50b3d9be-7f23-4469-bf37-95e23de56cd8"), "pagerank": Number(0.0)}, Object {"node": String("4693627e-382a-4998-9c09-829ce0031bc4"), "pagerank": Number(0.0)}, Object {"node": String("0d4ddf1e-8fd5-4a0d-947a-cb7be10cd9ff"), "pagerank": Number(0.0)}, Object {"node": String("6b0ff95c-db2e-4701-b34c-a43e3884dbf8"), "pagerank": Number(0.0)}, Object {"node": String("82acb136-b7a5-48cb-bc93-0740f4e360b5"), "pagerank": Number(0.0)}, Object {"node": String("418adb53-b5b9-46c3-9bd1-8d051e26161f"), "pagerank": Number(0.0)}, Object {"node": String("31c705fb-7939-4698-ad8c-1f0f0162b638"), "pagerank": Number(0.0)}, Object {"node": String("19b73364-ff7c-42a6-98a8-e5e1e9186343"), "pagerank": Number(0.0)}]}
+EXIT_CODE: 0
+DURATION_SEC: 0.019
+
+================================================================================
+[6.3] Metrics — betweenness
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation metrics --betweenness
+--------------------------------------------------------------------------------
+Betweenness top: Array [Object {"node": String("b8328fe1-8cf8-474d-b4cc-acf2690220ae"), "score": Number(0.0000898469764128043)}, Object {"node": String("5cd05022-1da9-4eb2-8921-c668c6ef5558"), "score": Number(0.000044135356834360003)}, Object {"node": String("2c9ee8e1-2783-471f-93de-7338b2b6378e"), "score": Number(0.000028372729393517148)}, Object {"node": String("13aa416b-2db2-4124-9ca0-dcfa30de4853"), "score": Number(0.000022067678417180002)}, Object {"node": String("31762e31-a65c-4a2e-a845-36f1922ba607"), "score": Number(0.000014186364696758574)}, Object {"node": String("6133947f-24d5-4069-98df-425a206e28aa"), "score": Number(0.000012610101952674287)}, Object {"node": String("975107d3-3676-4809-9325-18dc495251d6"), "score": Number(0.000012610101952674287)}, Object {"node": String("ba3ef69e-c196-4713-814d-79df8e26a23a"), "score": Number(9.457576464505716e-6)}, Object {"node": String("c7b9ccec-140a-4fda-ae43-b009fde7714e"), "score": Number(3.152525488168572e-6)}, Object {"node": String("de3a631d-c325-47b6-9054-777668f6939d"), "score": Number(1.576262744084286e-6)}, Object {"node": String("7e168906-692c-47a6-876a-9bd9f7dd999b"), "score": Number(0.0)}, Object {"node": String("d810d4d5-8cdf-4cf1-8ef5-78e05cb81f81"), "score": Number(0.0)}, Object {"node": String("ae27776a-fca9-479f-9681-17250133ddb0"), "score": Number(0.0)}, Object {"node": String("47bed0de-12a4-4fc2-8c28-a779d4aca2a9"), "score": Number(0.0)}, Object {"node": String("abd3677e-8e88-4e28-a1ac-708a694ee354"), "score": Number(0.0)}, Object {"node": String("e173c4ba-e8ec-4186-8629-1504bfb3cfea"), "score": Number(0.0)}, Object {"node": String("8911e556-fd9e-49c7-b2e3-05c0eecc249b"), "score": Number(0.0)}, Object {"node": String("c2316539-10da-4612-96ad-f6941b444e1e"), "score": Number(0.0)}, Object {"node": String("268d4ea7-11b3-40b1-b7b7-95a0e0333426"), "score": Number(0.0)}, Object {"node": String("7858d4bc-3989-4c39-80b6-89c11e33d459"), "score": Number(0.0)}]
+EXIT_CODE: 0
+DURATION_SEC: 0.070
+
+================================================================================
+[6.4] Metrics — communities
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation metrics --communities
+--------------------------------------------------------------------------------
+Communities: Object {"assignments": Number(798), "count": Number(744), "modularity": Number(0.7430268595041322)}
+EXIT_CODE: 0
+DURATION_SEC: 0.020
+
+================================================================================
+[6.5] Metrics — json pagerank 50 iter
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation -f json metrics --pagerank --iterations 50
+--------------------------------------------------------------------------------
+{
+  "pagerank": {
+    "converged": true,
+    "iterations": 42,
+    "max_delta": 9.027976473063859e-7,
+    "top": [
+      {
+        "node": "50b3d9be-7f23-4469-bf37-95e23de56cd8",
+        "pagerank": 0.0
+      },
+      {
+        "node": "186f1a40-e3bc-407b-a5af-5d3a2e472e19",
+        "pagerank": 0.0
+      },
+      {
+        "node": "a89ff6a6-619d-4e1c-bbd4-a6016d7b6589",
+        "pagerank": 0.0
+      },
+      {
+        "node": "ce370391-fadd-462a-936d-3cff3e6a07d2",
+        "pagerank": 0.0
+      },
+      {
+        "node": "6f72bb3a-c00a-44c7-81d5-01d9d5a0ac68",
+        "pagerank": 0.0
+      },
+      {
+        "node": "50c8da56-a8b9-489c-8c4c-26488a9a81d1",
+        "pagerank": 0.0
+      },
+      {
+        "node": "2796a89c-268f-47af-9467-5f578e01511c",
+        "pagerank": 0.0011398604828093259
+      },
+      {
+        "node": "7550c8b4-2086-4a1a-bb5c-f029c169619a",
+        "pagerank": 0.0
+      },
+      {
+        "node": "3d2c0f9d-bcc7-45a3-bbfd-82f57dd10037",
+        "pagerank": 0.0
+      },
+      {
+        "node": "26516041-7041-45d5-a461-e61afd529716",
+        "pagerank": 0.0
+      },
+      {
+        "node": "b8328fe1-8cf8-474d-b4cc-acf2690220ae",
+        "pagerank": 0.003705400793489574
+      },
+      {
+        "node": "af191ebf-a642-436e-bded-d3186d696b51",
+        "pagerank": 0.0
+      },
+      {
+        "node": "a6f5d9f5-4ee1-41ac-a6bd-f1d44c1d2e8a",
+        "pagerank": 0.0
+      },
+      {
+        "node": "1a6150fc-b28c-4f1e-b16d-f5158b43af78",
+        "pagerank": 0.0
+      },
+      {
+        "node": "9800dce4-395a-4fdc-a568-cba4b3599d8f",
+        "pagerank": 0.0
+      },
+      {
+        "node": "ca8f0720-9ab6-4753-a01d-22dadf8e4c20",
+        "pagerank": 0.0
+      },
+      {
+        "node": "77c66cd0-a451-4b43-bdf7-5783673c298e",
+        "pagerank": 0.0011398604828093259
+      },
+      {
+        "node": "00005473-6fc5-479b-a05e-6bc3cb4676a0",
+        "pagerank": 0.0
+      },
+      {
+        "node": "ba3ef69e-c196-4713-814d-79df8e26a23a",
+        "pagerank": 0.0016238383772239032
+      },
+      {
+        "node": "16c5d95b-5b1c-4ecd-9de1-e4fa2237ab6c",
+        "pagerank": 0.0
+      }
+    ]
+  }
+}
+EXIT_CODE: 0
+DURATION_SEC: 0.022
+
+================================================================================
+[6.6] Global html-dashboard metrics
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation -f html-dashboard metrics --pagerank
+--------------------------------------------------------------------------------
+PageRank: Object {"converged": Bool(false), "iterations": Number(20), "max_delta": Number(0.00003868486506551725), "top": Array [Object {"node": String("dd3e3ecd-7eed-4335-bdd6-04ee08dd0039"), "pagerank": Number(0.0)}, Object {"node": String("dd18ce9d-062f-4f91-84ea-95f88f99c64b"), "pagerank": Number(0.0012628719218869438)}, Object {"node": String("eb5bcd83-a9e2-4754-809b-f89d6b677d88"), "pagerank": Number(0.0)}, Object {"node": String("113e5ec2-dbe6-4b29-aaa2-e2285cb4b97c"), "pagerank": Number(0.0)}, Object {"node": String("b1abc51f-c990-4488-96fd-6aeb3b061e5e"), "pagerank": Number(0.0011415482244707927)}, Object {"node": String("729b1114-3569-41d0-8032-8aee9115a1cc"), "pagerank": Number(0.0)}, Object {"node": String("b68d5f42-2b24-4f83-9cb8-1e0191308a97"), "pagerank": Number(0.0)}, Object {"node": String("00a0097b-d11f-4f68-b363-5d5267291167"), "pagerank": Number(0.0)}, Object {"node": String("fae49ca0-5a28-46a1-b68b-7a65a258d947"), "pagerank": Number(0.0)}, Object {"node": String("27cb5de3-138c-46f2-ae80-95d3063c9240"), "pagerank": Number(0.0019305784473916017)}, Object {"node": String("d9189caf-b901-4209-9219-94253c3b1f0a"), "pagerank": Number(0.0)}, Object {"node": String("58ca76f7-c0b1-478f-b580-3cd272f9693d"), "pagerank": Number(0.0)}, Object {"node": String("128a1d90-1c66-409c-a90d-a9abe6dbae2a"), "pagerank": Number(0.0)}, Object {"node": String("b55b6d96-6d29-4485-884b-2a0e945da536"), "pagerank": Number(0.0011415482244707927)}, Object {"node": String("07988f3a-fa10-4130-b957-1dde856877f6"), "pagerank": Number(0.0)}, Object {"node": String("7858d4bc-3989-4c39-80b6-89c11e33d459"), "pagerank": Number(0.0016265574246743908)}, Object {"node": String("46d9fe97-e00c-43c5-9a39-6db8a86d14c4"), "pagerank": Number(0.0)}, Object {"node": String("8d0bf866-ea5e-4c1e-8600-78f86edf714b"), "pagerank": Number(0.0)}, Object {"node": String("110829db-3b71-4607-8eeb-c6d36be768ac"), "pagerank": Number(0.0)}, Object {"node": String("fd659d83-0346-4edc-a7df-9f39607915d8"), "pagerank": Number(0.0)}]}
+HTML dashboard: /tmp/coolstore-quarkus-validation/.rbuilder/dashboard.html
+EXIT_CODE: 0
+DURATION_SEC: 0.020
+
+================================================================================
+[7.1] Export json
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation export --format json --output /tmp/coolstore-quarkus-validation/rbuilder-validation-exports/coolstore-graph.json
+--------------------------------------------------------------------------------
+
+thread 'main' (13286609) panicked at /Users/sshaaf/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_builder-4.6.0/src/parser/error.rs:32:9:
+Mismatch between definition and access of `format`. Could not downcast to TypeId(0x7b1a0b9d78d7e25dd0149586ac117f34), need to downcast to TypeId(0xa0cdd6c7dc3690c64db99be881556329)
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+/tmp/run-getting-started-validation.sh: line 11: 17266 Abort trap: 6           "$@"
+EXIT_CODE: 134
+DURATION_SEC: 0.013
+
+================================================================================
+[7.2] Export graphml Cart subgraph
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation export --format graphml --output /tmp/coolstore-quarkus-validation/rbuilder-validation-exports/cart-subgraph.graphml --query MATCH (n:Function) WHERE n.name LIKE '*Cart*' RETURN n
+--------------------------------------------------------------------------------
+
+thread 'main' (13286641) panicked at /Users/sshaaf/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_builder-4.6.0/src/parser/error.rs:32:9:
+Mismatch between definition and access of `format`. Could not downcast to TypeId(0x7b1a0b9d78d7e25dd0149586ac117f34), need to downcast to TypeId(0xa0cdd6c7dc3690c64db99be881556329)
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+/tmp/run-getting-started-validation.sh: line 11: 17279 Abort trap: 6           "$@"
+EXIT_CODE: 134
+DURATION_SEC: 0.014
+
+================================================================================
+[7.3] Export graphviz
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation export --format graphviz --output /tmp/coolstore-quarkus-validation/rbuilder-validation-exports/calls.dot --query all
+--------------------------------------------------------------------------------
+
+thread 'main' (13286671) panicked at /Users/sshaaf/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_builder-4.6.0/src/parser/error.rs:32:9:
+Mismatch between definition and access of `format`. Could not downcast to TypeId(0x7b1a0b9d78d7e25dd0149586ac117f34), need to downcast to TypeId(0xa0cdd6c7dc3690c64db99be881556329)
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+/tmp/run-getting-started-validation.sh: line 11: 17289 Abort trap: 6           "$@"
+EXIT_CODE: 134
+DURATION_SEC: 0.013
+
+================================================================================
+[7.4] Export mermaid
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation export --format mermaid --output /tmp/coolstore-quarkus-validation/rbuilder-validation-exports/calls.mmd --query all
+--------------------------------------------------------------------------------
+
+thread 'main' (13286703) panicked at /Users/sshaaf/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_builder-4.6.0/src/parser/error.rs:32:9:
+Mismatch between definition and access of `format`. Could not downcast to TypeId(0x7b1a0b9d78d7e25dd0149586ac117f34), need to downcast to TypeId(0xa0cdd6c7dc3690c64db99be881556329)
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+/tmp/run-getting-started-validation.sh: line 11: 17299 Abort trap: 6           "$@"
+EXIT_CODE: 134
+DURATION_SEC: 0.012
+
+================================================================================
+[7.5] Export html dashboard
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation export --format html --output /tmp/coolstore-quarkus-validation/rbuilder-validation-exports/coolstore-dashboard.html
+--------------------------------------------------------------------------------
+
+thread 'main' (13286715) panicked at /Users/sshaaf/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_builder-4.6.0/src/parser/error.rs:32:9:
+Mismatch between definition and access of `format`. Could not downcast to TypeId(0x7b1a0b9d78d7e25dd0149586ac117f34), need to downcast to TypeId(0xa0cdd6c7dc3690c64db99be881556329)
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+/tmp/run-getting-started-validation.sh: line 11: 17306 Abort trap: 6           "$@"
+EXIT_CODE: 134
+DURATION_SEC: 0.014
+
+================================================================================
+[7.6] Export artifact sizes
+--------------------------------------------------------------------------------
+total 0
+drwxr-xr-x@  2 sshaaf  wheel   64 Jul  2 11:24 .
+drwxr-xr-x@ 17 sshaaf  wheel  544 Jul  2 11:24 ..
+
+================================================================================
+[8.1] Check policy gateway
+COMMAND: /Users/sshaaf/git/rust/rBuilder/target/release/rbuilder -r /tmp/coolstore-quarkus-validation check --policy-file /tmp/coolstore-quarkus-validation/policy.json
+--------------------------------------------------------------------------------
+Policy check passed (230 symbols)
+EXIT_CODE: 0
+DURATION_SEC: 0.039
+
+================================================================================
+VALIDATION SUMMARY
+--------------------------------------------------------------------------------
+[0.1] Prerequisites — rbuilder --version
+[1.0] Step 1 — Discover artifacts check
+[1.1] Optional discover modes (--security, --cfg, --all, -l, -v)
+[2.1] GQL — all functions
+[2.2] GQL — Resource LIKE filter
+[2.3] GQL — one-hop calls LIMIT 20
+[2.4] GQL — call chain 1..3
+[2.5] GQL macro — all_functions
+[2.6] GQL macro — direct_calls
+[2.7] GQL macro — call_chain
+[2.8] GQL — explain CartService
+[2.9] GQL JSON — Cart LIKE
+[2.10] Global — json Class LIMIT (guide global flags)
+[3.1] Blast radius — CartService
+[3.2] Blast radius — CatalogService
+[3.3] Blast radius — CartResourceV1
+[3.4] Blast radius — InventoryResource
+[3.5] Blast radius — depth 5
+[3.6] Blast radius — policy file
+[3.7] Blast radius — JSON
+[4.1] Slice backward — CartServiceImpl
+[4.2] Slice forward — CartResourceV1
+[4.3] Slice taint — CartServiceImpl
+[5.1] Inspect CFG — CartServiceImpl
+[5.2] Inspect CFG mermaid
+[5.3] Inspect PDG data
+[5.4] Inspect dom frontiers
+[6.1] Metrics — all
+[6.2] Metrics — pagerank
+[6.3] Metrics — betweenness
+[6.4] Metrics — communities
+[6.5] Metrics — json pagerank 50 iter
+[6.6] Global html-dashboard metrics
+[7.1] Export json
+[7.2] Export graphml Cart subgraph
+[7.3] Export graphviz
+[7.4] Export mermaid
+[7.5] Export html dashboard
+[7.6] Export artifact sizes
+[8.1] Check policy gateway
+
+Exit code counts:
+  20 EXIT_CODE: 0
+  12 EXIT_CODE: 1
+   5 EXIT_CODE: 134
+
+PASSED (exit 0): 20
+FAILED (exit non-zero): 17

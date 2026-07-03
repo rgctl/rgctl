@@ -21,6 +21,21 @@ fn test_blast_radius_json_schema_sanity() {
         .and_then(|v| v.as_array())
         .expect("gatekeeping.handoffs must be present");
     assert!(handoffs.is_empty());
+    assert!(
+        doc["metrics"].get("caller_depth_limit").is_none(),
+        "fixture/full closure must omit metrics.caller_depth_limit"
+    );
+}
+
+#[test]
+fn test_caller_depth_limit_serializes_when_set() {
+    let mut response = fixture_response();
+    response.metrics.caller_depth_limit = Some(5);
+    let doc = response_to_json(&response);
+    assert_eq!(
+        doc["metrics"]["caller_depth_limit"].as_u64(),
+        Some(5)
+    );
 }
 
 #[test]

@@ -1,0 +1,133 @@
+rBuilder CLI Structure (developer reference)
+==========================================
+Last synced: 2026-07-03 — see docs/cli-output-schemas.md for JSON contracts.
+
+rbuilder [GLOBAL OPTIONS] <COMMAND>
+
+Global Options:
+  -r, --repo <PATH>           Target repository root (default: cwd)
+  -d, --db <PATH>             Legacy graph.db path (default: {repo}/.rbuilder/graph.db)
+  -f, --format <FORMAT>       Output format: text | json | graphviz | mermaid
+  -o, --output <FILE>         Write stdout to file instead of terminal
+
+Active Commands:
+================
+
+├── discover [PATH]
+│   ├── -l, --languages <LANGS>     Comma-separated language filter
+│   ├── -e, --exclude <PATTERNS>    Comma-separated path excludes
+│   ├── -v, --verbose               Progress / debug logging
+│   ├── --security                  Secret scanning pass
+│   ├── --cfg                       CFG/PDG archive for slice hand-offs
+│   ├── --all                       All optional analyses (slow on large repos)
+│   └── --write-json-graph          Also write legacy graph.db / graph.json (opt-in)
+│
+│   Writes (default, under {repo}/.rbuilder/):
+│     graph.snapshot.bin          Columnar v2 mmap graph (default)
+│     blast_engine.snapshot.bin   Pre-built SCC blast engine
+│     macro_call_index.db/.bin    SQLite + bin macro lookup caches
+│     cfg_pdg.archive.bin         When --cfg
+│
+├── blast-radius <SYMBOL>
+│   ├── --depth <N>                 Cap impact_zone to N incoming call hops
+│   │                               (default: full transitive closure; omit key in JSON)
+│   ├── --class <NAME>              Disambiguate overloads / duplicate names
+│   ├── --file <PATH>               Disambiguate by source file
+│   ├── --policy-file <PATH>        Policy guardrails (uses filtered zone if --depth set)
+│   ├── --no-policy                 Skip default policy behavior
+│   └── --with-slices               Slice hand-offs in gatekeeping (slow; full graph path)
+│
+│   Query path order (no --with-slices / --policy-file):
+│     T0 SQLite/macro cache → query daemon (if serve running) → lite engine → full graph
+│   Env: RBUILDER_NO_QUERY_DAEMON=1 disables daemon auto-connect
+│
+├── serve
+│   ├── --socket <PATH>             Unix socket (default: {repo}/.rbuilder/query.sock)
+│   └── --idle-secs <SECS>          Exit after idle (default: 300)
+│
+├── gql <QUERY>
+│   ├── --explain                   Execution plan
+│   └── --macro-name <NAME>         Named query macro
+│
+├── slice <FILE>
+│   ├── --line <N>                  1-based line number
+│   ├── --variable <NAME>
+│   ├── --function <NAME>
+│   ├── --language <LANG>
+│   ├── --direction backward|forward
+│   ├── --taint                     Taint policy check
+│   └── --view text|cfg|pdg
+│
+├── inspect <SYMBOL> <LAYER>
+│   └── layer: cfg [--prune] | pdg [--edge-layer] [--def-use] | dom [--frontiers]
+│
+├── metrics
+│   ├── --pagerank
+│   ├── --betweenness
+│   ├── --communities
+│   └── --iterations <N>
+│
+├── check
+│   └── --policy-file <PATH>
+│
+└── export
+    ├── --export-format json|graphml|graphviz|mermaid
+    ├── --export-output <FILE>
+    └── --query <QUERY>
+
+
+Blast-radius JSON (schema v2, -f json):
+=======================================
+  schema_version: 2
+  target      id, symbol, class_context, file_path, language, signature?, canonical_fqn
+  metrics     score, direct_callers_count, impact_zone_size, caller_depth_limit?
+  topology    scc_component_id?, direct_callers[], impact_zone[]
+  gatekeeping policy_status, violations[], handoffs[]
+
+  caller_depth_limit — present only when --depth N passed
+
+
+Usage Examples:
+===============
+
+# Index (snapshot-canonical; no legacy JSON unless requested)
+rbuilder -r /path/to/repo discover . --languages java,rust
+
+# Blast radius (text)
+rbuilder -r /path/to/repo blast-radius OrderService::process
+
+# Hop-limited impact zone
+rbuilder -r /path/to/repo -f json blast-radius OrderService::process --depth 5
+
+# Optional warm daemon for repeated queries
+rbuilder -r /path/to/repo serve &
+rbuilder -r /path/to/repo -f json blast-radius saveError
+
+# JSON + policy
+rbuilder -r /path/to/repo -f json blast-radius publishEvent --policy-file policy.json
+
+# GQL
+rbuilder -r /path/to/repo gql "MATCH (n:Function) RETURN n LIMIT 10"
+
+# Slice
+rbuilder -r /path/to/repo slice src/main.rs --line 42 --variable x --function main
+
+# Export
+rbuilder -r /path/to/repo export --export-format graphml --export-output out.graphml --query all
+
+
+Performance / architecture notes:
+=================================
+  discover (default)     Writes columnar graph.snapshot.bin + engine snapshot
+  blast-radius T0        macro_call_index.db hit — no engine load
+  blast-radius T1        mmap graph + engine snapshot (or daemon if serve running)
+  blast-radius full      Hydrated graph — required for --with-slices, --policy-file centrality
+
+  See docs/performance-engineering.md for gates and benchmarks.
+
+
+Legend:
+=======
+  <...>  Required argument
+  [...]  Optional argument
+  ?      JSON key omitted when not applicable

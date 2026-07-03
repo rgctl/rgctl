@@ -15,7 +15,7 @@
 //! | Command | What this file asserts |
 //! |---------|------------------------|
 //! | `discover` | Text + JSON v2; flags in [`test_discover_cli_flags`] |
-//! | `blast-radius` | v2 sections, empty/default `handoffs`, `--with-slices` populated handoffs, policy → exit 1 |
+//! | `blast-radius` | v2 sections, empty/default `handoffs`, `--depth` + `caller_depth_limit`, `--with-slices` populated handoffs, policy → exit 1 |
 //! | `gql` | v1 rows; `--explain` sets `explain: true` |
 //! | `metrics` | Standalone `--pagerank`, `--betweenness`, `--communities` key omission |
 //! | `check` | Pass → exit 0; fail → exit 1 on `publishEvent` scale breach |
@@ -223,6 +223,40 @@ fn test_all_cli_commands_json_schema_sanity() {
     );
     assert_handoffs_empty_array(&blast_doc);
     assert_no_nil_uuids(blast_str);
+
+    // --- blast-radius --depth: hop cap reflected in JSON ---
+    let blast_pe = sandbox.run(&["-f", "json", "blast-radius", "publishEvent"]);
+    assert_success(&blast_pe, "blast-radius publishEvent");
+    let pe_doc = sandbox.parse_stdout_json(&blast_pe);
+    assert!(
+        pe_doc["metrics"].get("caller_depth_limit").is_none(),
+        "full closure must omit metrics.caller_depth_limit"
+    );
+
+    let blast_depth = sandbox.run(&[
+        "-f",
+        "json",
+        "blast-radius",
+        "publishEvent",
+        "--depth",
+        "1",
+    ]);
+    assert_success(&blast_depth, "blast-radius --depth 1");
+    let depth_doc = sandbox.parse_stdout_json(&blast_depth);
+    assert_eq!(
+        depth_doc["metrics"]["caller_depth_limit"].as_u64(),
+        Some(1)
+    );
+    let full_impact = pe_doc["metrics"]["impact_zone_size"]
+        .as_u64()
+        .unwrap_or(0);
+    let depth_impact = depth_doc["metrics"]["impact_zone_size"]
+        .as_u64()
+        .unwrap_or(0);
+    assert!(
+        depth_impact <= full_impact,
+        "depth-limited impact_zone_size ({depth_impact}) must be <= full ({full_impact})"
+    );
 
     // --- blast-radius --with-slices: populated handoffs (unique callee `publishEvent`) ---
     let blast_slices = sandbox.run(&[

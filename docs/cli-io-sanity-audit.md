@@ -100,7 +100,8 @@ Execution order inside the test (each phase uses a fresh discover ingest unless 
 |------|-------------------|------------|
 | 1 | `discover . --languages java,rust` (text) | Success; stdout does **not** start with `{` |
 | 2 | `-f json discover . --languages java,rust` | `schema_version: 2`, `command: discover`, metrics block keys |
-| 3 | `-f json blast-radius OrderService::process` | v2 sections (`target`, `metrics`, `topology`, `gatekeeping`); Java `language` + `canonical_fqn`; empty `handoffs`; no nil UUIDs |
+| 3 | `-f json blast-radius OrderService::process` | v2 sections; Java `language` + `canonical_fqn`; empty `handoffs`; no nil UUIDs |
+| 3b | `-f json blast-radius publishEvent --depth 1` | `metrics.caller_depth_limit: 1`; `impact_zone_size` ≤ full closure |
 | 4 | `-f json gql …` / `--explain` | v1 bindings; `explain: false` then `true` |
 | 5 | `-f json metrics --pagerank` / `--betweenness` / `--communities` | Each flag omits unrequested section keys |
 | 6–6b | `-f json check` permissive / strict | exit 0 pass; exit 1 + `publishEvent` violation |
@@ -143,7 +144,7 @@ These tests call **serializer fixtures** in `src/cli/*_output.rs` directly. They
 | File | Serializer under test | Tests |
 |------|----------------------|-------|
 | `discover.rs` | `discover_output.rs` | `test_discover_json_schema_sanity`, `test_discover_build_maps_pipeline_stats` |
-| `blast_radius.rs` | `blast_radius_output.rs` | `test_blast_radius_json_schema_sanity`, `test_blast_radius_symbol_context_shape`, `test_skipped_gatekeeping_always_has_empty_handoffs`, `test_blast_radius_target_v2_metadata` |
+| `blast_radius.rs` | `blast_radius_output.rs` | `test_blast_radius_json_schema_sanity`, `test_caller_depth_limit_serializes_when_set`, `test_blast_radius_symbol_context_shape`, `test_skipped_gatekeeping_always_has_empty_handoffs`, `test_blast_radius_target_v2_metadata` |
 | `uuid_resolution.rs` | `blast_radius_output.rs` | `test_cache_entry_omits_unresolved_topology_without_nil_uuid` |
 | `gql.rs` | `gql_output.rs` | `test_gql_json_schema_sanity`, `test_gql_empty_rows_explicit_array` |
 | `metrics.rs` | `metrics_output.rs` | `test_metrics_json_schema_sanity`, `test_metrics_wrap_adds_schema_version`, `test_metrics_pagerank_only_omits_other_sections` |
