@@ -251,6 +251,8 @@ impl MacroCallIndex {
                     class_name: ctx.class_name.clone(),
                     file_path: ctx.file_path.clone(),
                     score: entry.score,
+                    direct_caller_ids: entry.direct_caller_ids.clone(),
+                    impact_zone_ids: entry.impact_zone_ids.clone(),
                     direct_callers: entry.direct_caller_names.clone(),
                     impact_zone: entry.impact_function_names.clone(),
                 })
@@ -272,6 +274,8 @@ impl MacroCallIndex {
                         class_name: ctx.class_name.clone(),
                         file_path: ctx.file_path.clone(),
                         score: entry.score,
+                        direct_caller_ids: entry.direct_caller_ids.clone(),
+                        impact_zone_ids: entry.impact_zone_ids.clone(),
                         direct_callers: entry.direct_caller_names.clone(),
                         impact_zone: entry.impact_function_names.clone(),
                     })
@@ -305,8 +309,11 @@ impl MacroCallIndex {
             .filter_map(|(name, ids)| {
                 self.entries.get(&ids[0]).map(|entry| {
                     crate::macro_call_lookup::MacroCallLookupRow {
+                        node_id: ids[0],
                         symbol_name: name.clone(),
                         score: entry.score,
+                        direct_caller_ids: entry.direct_caller_ids.clone(),
+                        impact_zone_ids: entry.impact_zone_ids.clone(),
                         direct_callers: entry.direct_caller_names.clone(),
                         impact_zone: entry.impact_function_names.clone(),
                     }

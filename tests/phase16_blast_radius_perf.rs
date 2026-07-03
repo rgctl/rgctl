@@ -96,6 +96,8 @@ fn sqlite_fqn_resolved_lookup_under_50ms() {
             class_name: Some("MRequest".into()),
             file_path: "src/MRequest.java".into(),
             score: 55.0,
+            direct_caller_ids: vec![Uuid::new_v4()],
+            impact_zone_ids: vec![Uuid::new_v4()],
             direct_callers: vec!["caller".into()],
             impact_zone: vec!["impact".into()],
         }],

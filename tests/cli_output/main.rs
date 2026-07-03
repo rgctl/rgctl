@@ -3,4 +3,7 @@
 mod blast_radius;
 mod check;
 mod gql;
+mod inspect;
 mod metrics;
+mod slice;
+mod uuid_resolution;

@@ -86,6 +86,8 @@ fn try_fast_cached_lookup(
         class_name: parsed.class_filter.clone(),
         file_path: parsed.file_filter.clone().unwrap_or_default(),
         score: entry.score,
+        direct_caller_ids: entry.direct_caller_ids.clone(),
+        impact_zone_ids: entry.impact_zone_ids.clone(),
         direct_callers: entry.direct_caller_names.clone(),
         impact_zone: entry.impact_function_names.clone(),
     };

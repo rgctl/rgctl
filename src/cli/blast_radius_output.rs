@@ -117,11 +117,11 @@ impl NodeLookup<'_> {
         }
     }
 
-    fn resolve_name(&self, name: &str) -> SymbolContext {
+    fn resolve_name(&self, name: &str) -> Option<SymbolContext> {
         if let Self::Backend(backend) = self {
             if let Ok(nodes) = (*backend).find_nodes_by_name(name) {
                 if let Some(node) = nodes.into_iter().find(|n| n.name == name) {
-                    return symbol_context_from_node(&node);
+                    return Some(symbol_context_from_node(&node));
                 }
             }
         }
@@ -131,14 +131,10 @@ impl NodeLookup<'_> {
                 .into_iter()
                 .find(|n| n.name == name)
             {
-                return symbol_context_from_node(node);
+                return Some(symbol_context_from_node(node));
             }
         }
-        SymbolContext {
-            id: Uuid::nil(),
-            fqn: name.to_string(),
-            file_path: String::new(),
-        }
+        None
     }
 }
 
@@ -159,8 +155,18 @@ fn contexts_from_ids(ids: &[Uuid], lookup: &NodeLookup<'_>) -> Vec<SymbolContext
         .collect()
 }
 
-fn contexts_from_names(names: &[String], lookup: &NodeLookup<'_>) -> Vec<SymbolContext> {
-    names.iter().map(|name| lookup.resolve_name(name)).collect()
+fn contexts_from_id_name_pairs(
+    ids: &[Uuid],
+    names: &[String],
+    lookup: &NodeLookup<'_>,
+) -> Vec<SymbolContext> {
+    if !ids.is_empty() {
+        return contexts_from_ids(ids, lookup);
+    }
+    names
+        .iter()
+        .filter_map(|name| lookup.resolve_name(name))
+        .collect()
 }
 
 /// Build a response from an SCC engine result and graph lookup.
@@ -206,8 +212,10 @@ pub fn build_from_cache_entry(
     gatekeeping: BlastRadiusGatekeeping,
     lookup: NodeLookup<'_>,
 ) -> BlastRadiusResponse {
-    let direct_callers = contexts_from_names(&entry.direct_callers, &lookup);
-    let impact_zone = contexts_from_names(&entry.impact_zone, &lookup);
+    let direct_callers =
+        contexts_from_id_name_pairs(&entry.direct_caller_ids, &entry.direct_callers, &lookup);
+    let impact_zone =
+        contexts_from_id_name_pairs(&entry.impact_zone_ids, &entry.impact_zone, &lookup);
     BlastRadiusResponse {
         schema_version: BLAST_RADIUS_SCHEMA_VERSION,
         target: BlastRadiusTarget {
@@ -352,6 +360,29 @@ pub fn handoffs_from_seeds(seeds: &[SliceHandoffSeed]) -> Vec<SliceHandoff> {
             index: seed.param_index,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn cache_topology_skips_unresolved_without_nil_uuid() {
+        let entry = MacroIndexEntry {
+            id: Uuid::new_v4(),
+            symbol_name: "t".into(),
+            class_name: None,
+            file_path: "f.rs".into(),
+            score: 0.0,
+            direct_caller_ids: vec![Uuid::new_v4()],
+            impact_zone_ids: vec![],
+            direct_callers: vec![],
+            impact_zone: vec![],
+        };
+        let response = build_from_cache_entry(&entry, skipped_gatekeeping(), NodeLookup::None);
+        assert!(response.topology.direct_callers.is_empty());
+    }
 }
 
 /// Fixture response for schema sanity tests.
