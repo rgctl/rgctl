@@ -9,9 +9,9 @@ use super::context::CliContext;
 use anyhow::Result;
 use super::policy_file::PolicyFile;
 use crate::analysis::{
-    candidates_from_backend, candidates_from_snapshot, parse_fqn_symbol, resolve_symbol_uuid,
-    trace_blast_to_slices_with_blast, try_load_engine, try_parse_symbol_uuid, BlastRadiusEngine,
-    BlastRadiusResult, MacroCallIndex, MacroCallLookupDb, PetGraphView,
+    candidates_from_backend, candidates_from_snapshot, parse_fqn_symbol, resolve_handoff_seeds,
+    resolve_symbol_uuid, trace_blast_to_slices_with_blast, try_load_engine, try_parse_symbol_uuid,
+    BlastRadiusEngine, BlastRadiusResult, MacroCallIndex, MacroCallLookupDb, PetGraphView,
 };
 use rbuilder_graph::SnapshotNodeStore;
 use crate::graph::backend::GraphBackend;
@@ -47,11 +47,24 @@ fn try_fast_cached_lookup(
     ctx: &CliContext,
     parsed: &crate::analysis::ParsedSymbol,
 ) -> Result<Option<BlastRadiusResponse>> {
-    let store = ctx.open_snapshot_store()?;
-    let lookup = node_lookup(None, store.as_ref());
+    let session = ctx.snapshot_session()?;
+    let lookup = node_lookup(
+        None,
+        session.as_ref().map(|s| s.store.as_ref()),
+    );
 
     let lookup_db = MacroCallLookupDb::default_path(&ctx.repo);
     if MacroCallLookupDb::is_valid_for_repo(&lookup_db, &ctx.repo)? {
+        if parsed.class_filter.is_none() && parsed.file_filter.is_none() {
+            if let Some(row) = MacroCallLookupDb::lookup(&lookup_db, &parsed.target_name)? {
+                let entry = MacroCallLookupDb::index_entry_from_lookup_row(row);
+                return Ok(Some(build_from_cache_entry(
+                    &entry,
+                    skipped_gatekeeping(),
+                    lookup,
+                )));
+            }
+        }
         if let Some(entry) = MacroCallLookupDb::lookup_resolved(&lookup_db, parsed)? {
             return Ok(Some(build_from_cache_entry(
                 &entry,
@@ -244,11 +257,16 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
             return emit_output(ctx, &response);
         }
 
-        if let (Some(store), Some(digest)) = (
-            ctx.open_snapshot_store()?,
-            ctx.graph_digest()?.filter(|d| !d.is_empty()),
-        ) {
-            if try_snapshot_lite_path(ctx, &args, &parsed, &store, &digest)?.is_some() {
+        if let Some(session) = ctx.snapshot_session()? {
+            if try_snapshot_lite_path(
+                ctx,
+                &args,
+                &parsed,
+                session.store.as_ref(),
+                session.digest.as_ref(),
+            )?
+            .is_some()
+            {
                 return Ok(());
             }
         }
@@ -284,10 +302,13 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
         None
     };
 
-    let handoffs = slice_trace
-        .as_ref()
-        .map(|trace| handoffs_from_seeds(&trace.handoffs))
-        .unwrap_or_default();
+    let handoffs = if args.with_slices {
+        resolve_handoff_seeds(backend, &result, id)
+            .map(|seeds| handoffs_from_seeds(&seeds))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
     let gatekeeping = evaluate_gatekeeping(
         registry.as_ref(),
@@ -298,7 +319,10 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
         handoffs,
     )?;
 
-    let lookup = node_lookup(Some(backend), snapshot_store.as_ref());
+    let lookup = node_lookup(
+        Some(backend),
+        snapshot_store.as_deref(),
+    );
     let response = build_from_engine_result(
         &args.symbol,
         parsed.class_filter.clone(),

@@ -1,8 +1,24 @@
-//! Subprocess golden-path tests against the tiny polyglot fixture repository.
+//! CLI subprocess golden-path tests — Layer 2 (narrow end-to-end regressions).
+//!
+//! Spawns `CARGO_BIN_EXE_rbuilder` against a temp copy of
+//! `tests/fixtures/tiny_polyglot_repo`. Uses default graph storage under
+//! `{repo}/.rbuilder/` (unlike `all_commands_sanity.rs`, which forces `-d sandbox_graph.db`).
+//!
+//! | Test | Regression guarded |
+//! |------|-------------------|
+//! | `discover_json_emits_telemetry_on_stdout` | JSON discover = one stdout object, no progress text |
+//! | `discover_initializes_tiny_polyglot_repo` | Text discover materializes graph artifacts |
+//! | `blast_radius_json_exit_zero_after_discover` | Java v2 target metadata after ingest |
+//! | `blast_radius_policy_violation_fails_closed_with_exit_one` | Policy breach → exit 1 + valid JSON |
+//! | `blast_radius_fast_path_under_150ms` | T0 SQLite fast path on warm `publishEvent` cache |
+//! | `blast_radius_with_slices_populates_handoffs` | `--with-slices` emits non-empty `gatekeeping.handoffs` |
+//!
+//! Full command matrix: `all_commands_sanity.rs` + `docs/cli-io-sanity-audit.md`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 fn rbuilder_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_rbuilder"))
@@ -190,5 +206,114 @@ fn blast_radius_policy_violation_fails_closed_with_exit_one() {
     assert_eq!(
         doc["gatekeeping"]["policy_status"].as_str(),
         Some("VIOLATED")
+    );
+}
+
+#[test]
+fn blast_radius_with_slices_populates_handoffs() {
+    let dir = materialize_fixture();
+    let repo = dir.path();
+
+    let discover = run_rbuilder(repo, &["discover", ".", "--languages", "java,rust"]);
+    assert!(discover.status.success(), "discover setup failed");
+
+    let output = run_rbuilder(
+        repo,
+        &["-f", "json", "blast-radius", "publishEvent", "--with-slices"],
+    );
+
+    assert!(
+        output.status.success(),
+        "blast-radius --with-slices failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let doc: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("blast-radius stdout must be valid JSON");
+    let handoffs = doc["gatekeeping"]["handoffs"]
+        .as_array()
+        .expect("handoffs array");
+    assert!(!handoffs.is_empty());
+    assert_eq!(handoffs[0]["callee"].as_str(), Some("publishEvent"));
+}
+
+#[test]
+fn blast_radius_fast_path_under_150ms() {
+    let dir = materialize_fixture();
+    let repo = dir.path();
+
+    let discover = run_rbuilder(repo, &["discover", ".", "--languages", "java,rust"]);
+    assert!(discover.status.success(), "discover setup failed");
+
+    let start = Instant::now();
+    let output = run_rbuilder(
+        repo,
+        &["-f", "json", "blast-radius", "publishEvent"],
+    );
+    let latency = start.elapsed();
+
+    assert!(
+        output.status.success(),
+        "blast-radius fast path failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        latency < Duration::from_millis(150),
+        "br.query.fast_path_ms regression: {latency:?} >= 150ms"
+    );
+
+    let doc: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("blast-radius stdout must be valid JSON");
+    assert_eq!(
+        doc["target"]["symbol"].as_str(),
+        Some("publishEvent")
+    );
+    assert!(doc.get("topology").is_some());
+}
+
+#[test]
+fn check_policy_violation_fails_closed_with_exit_one() {
+    let dir = materialize_fixture();
+    let repo = dir.path();
+
+    let discover = run_rbuilder(repo, &["discover", ".", "--languages", "java,rust"]);
+    assert!(discover.status.success(), "discover setup failed");
+
+    let policy_path = repo.join("strict_policy.json");
+    fs::write(&policy_path, r#"{"max_impact_nodes": 0}"#).expect("write policy file");
+
+    let output = run_rbuilder(
+        repo,
+        &[
+            "-f",
+            "json",
+            "check",
+            "--policy-file",
+            policy_path.to_str().expect("policy path utf8"),
+        ],
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "check policy breach must fail closed with exit code 1; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let doc: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("violated check stdout must be valid JSON");
+    assert_eq!(doc.get("passed").and_then(|v| v.as_bool()), Some(false));
+    let violations = doc["violations"].as_array().expect("violations array");
+    assert!(!violations.is_empty());
+    assert!(
+        violations.iter().any(|v| {
+            v.get("symbol")
+                .and_then(|s| s.as_str())
+                .is_some_and(|s| s == "publishEvent")
+        }),
+        "expected publishEvent violation, got {violations:?}"
     );
 }

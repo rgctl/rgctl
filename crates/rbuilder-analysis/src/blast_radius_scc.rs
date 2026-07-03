@@ -24,6 +24,7 @@ use uuid::Uuid;
 
 use crate::centrality::CentralityScores;
 use crate::policy::{evaluate_policies, PolicyRegistry};
+use crate::blast_engine_snapshot::ReachabilityStore;
 
 /// A strongly connected component in the condensed graph.
 #[derive(Debug, Clone)]
@@ -44,9 +45,8 @@ pub struct BlastRadiusEngine {
     node_to_scc: HashMap<Uuid, NodeIndex>,
     /// SCC index → original node UUIDs mapping
     scc_members: Vec<Vec<Uuid>>,
-    /// Precomputed reachability bitsets (one per SCC)
-    /// reachability[i] = set of all SCCs reachable FROM SCC i
-    reachability: Vec<BitSet>,
+    /// Precomputed reachability (eager at build time; lazy after snapshot load).
+    reachability: ReachabilityStore,
     /// Total number of SCCs
     scc_count: usize,
 }
@@ -195,7 +195,7 @@ impl BlastRadiusEngine {
             dag,
             node_to_scc,
             scc_members,
-            reachability,
+            reachability: ReachabilityStore::from_eager(reachability, scc_count),
             scc_count,
         })
     }
@@ -242,7 +242,7 @@ impl BlastRadiusEngine {
             .ok_or_else(|| Error::NodeNotFound(func_id.to_string()))?;
 
         let scc_id = scc_idx.index();
-        let reachable_sccs = &self.reachability[scc_id];
+        let reachable_sccs = self.reachability.row_bitset(scc_id)?;
 
         // Expand SCCs to individual function node UUIDs (exclude structural nodes)
         let mut impact_zone_ids = Vec::new();
@@ -302,7 +302,11 @@ impl BlastRadiusEngine {
         let mut centrality = HashMap::new();
 
         for (scc_id, members) in self.scc_members.iter().enumerate() {
-            let reach = self.reachability[scc_id].len();
+            let reach = self
+                .reachability
+                .row_bitset(scc_id)
+                .expect("reachability row in bounds")
+                .len();
             for &uuid in members {
                 centrality.insert(uuid, reach);
             }
@@ -313,7 +317,11 @@ impl BlastRadiusEngine {
 
     /// Get statistics about the engine.
     pub fn stats(&self) -> EngineStats {
-        let memory_bytes = self.scc_count * self.scc_count / 8;  // Dense bitset
+        let memory_bytes = if self.reachability.is_lazy() {
+            self.scc_count * 64
+        } else {
+            self.scc_count * self.scc_count / 8
+        };
         let avg_scc_size = self.scc_members.iter().map(|m| m.len()).sum::<usize>() as f64
             / self.scc_count as f64;
 
@@ -325,14 +333,24 @@ impl BlastRadiusEngine {
         }
     }
 
+    /// True when reachability rows are loaded lazily from a v2 engine snapshot.
+    pub fn reachability_is_lazy(&self) -> bool {
+        self.reachability.is_lazy()
+    }
+
     /// Serialize engine state for mmap reload (sparse + zstd-compressed reachability).
     pub fn to_engine_snapshot(&self, graph_digest: String) -> crate::blast_engine_snapshot::BlastEngineSnapshot {
         use crate::blast_engine_snapshot::{
             bitset_to_words, compress_words, words_popcount, ReachabilityRow,
         };
 
+        let eager = self
+            .reachability
+            .eager_slice()
+            .expect("to_engine_snapshot requires an eagerly-built engine");
+
         let mut reachability_rows = Vec::new();
-        for (idx, bs) in self.reachability.iter().enumerate() {
+        for (idx, bs) in eager.iter().enumerate() {
             let words = bitset_to_words(bs, self.scc_count);
             if words_popcount(&words) <= 1 {
                 continue;
@@ -372,7 +390,7 @@ impl BlastRadiusEngine {
     pub fn from_engine_snapshot(
         snapshot: crate::blast_engine_snapshot::BlastEngineSnapshot,
     ) -> Result<Self> {
-        use crate::blast_engine_snapshot::reachability_from_snapshot;
+        use crate::blast_engine_snapshot::ReachabilityStore;
         use petgraph::graph::{DiGraph, NodeIndex};
 
         let mut dag: DiGraph<SccNode, ()> = DiGraph::new();
@@ -397,7 +415,7 @@ impl BlastRadiusEngine {
             node_to_scc.insert(*uuid, NodeIndex::new(*scc_id));
         }
 
-        let reachability = reachability_from_snapshot(&snapshot)?;
+        let reachability = ReachabilityStore::from_snapshot(&snapshot)?;
 
         Ok(Self {
             dag,
@@ -562,6 +580,7 @@ mod tests {
         assert_eq!(loaded.scc_count, engine.scc_count);
 
         let restored = BlastRadiusEngine::from_engine_snapshot(loaded).unwrap();
+        assert!(restored.reachability.is_lazy());
         let nodes = backend.all_nodes().unwrap();
         let id_a = nodes.iter().find(|n| n.name == "a").unwrap().id;
         let original = engine.analyze(id_a).unwrap();

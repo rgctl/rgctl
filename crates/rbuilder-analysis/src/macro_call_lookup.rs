@@ -334,6 +334,35 @@ pub fn try_parse_symbol_uuid(input: &str) -> Option<Uuid> {
 /// SQLite cache for instant blast-radius lookups.
 pub struct MacroCallLookupDb;
 
+fn bincode_err(e: bincode::Error) -> Error {
+    Error::SerdeError(format!("macro_call_index.db bincode: {e}"))
+}
+
+fn encode_blob<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
+    bincode::serialize(value).map_err(bincode_err)
+}
+
+fn decode_string_list(blob: Option<Vec<u8>>, json: &str) -> Result<Vec<String>> {
+    if let Some(bytes) = blob {
+        if !bytes.is_empty() {
+            return bincode::deserialize(&bytes).map_err(bincode_err);
+        }
+    }
+    if json.is_empty() || json == "[]" {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(json).map_err(json_err)
+}
+
+fn decode_uuid_list_blob(blob: Option<Vec<u8>>, json: &str) -> Result<Vec<Uuid>> {
+    if let Some(bytes) = blob {
+        if !bytes.is_empty() {
+            return bincode::deserialize(&bytes).map_err(bincode_err);
+        }
+    }
+    MacroCallLookupDb::parse_uuid_list(json)
+}
+
 impl MacroCallLookupDb {
     /// Default SQLite path under a repository root.
     pub fn default_path(repo_root: &Path) -> PathBuf {
@@ -378,7 +407,23 @@ impl MacroCallLookupDb {
         .map_err(|e| Error::QueryError(format!("init macro_call_index.db: {e}")))?;
         Self::migrate_uuid_columns(&conn)?;
         Self::migrate_target_metadata_columns(&conn)?;
+        Self::migrate_bincode_columns(&conn)?;
         Ok(conn)
+    }
+
+    fn migrate_bincode_columns(conn: &Connection) -> Result<()> {
+        for table in ["macro_call_index", "macro_call_candidates"] {
+            for col in [
+                "direct_callers_bin",
+                "impact_zone_bin",
+                "direct_caller_ids_bin",
+                "impact_zone_ids_bin",
+            ] {
+                let sql = format!("ALTER TABLE {table} ADD COLUMN {col} BLOB");
+                let _ = conn.execute_batch(&sql);
+            }
+        }
+        Ok(())
     }
 
     fn migrate_target_metadata_columns(conn: &Connection) -> Result<()> {
@@ -509,6 +554,24 @@ impl MacroCallLookupDb {
         Ok(meta.len().to_string() == stored_size)
     }
 
+    /// Convert a unique-table row into a candidate entry for JSON emission.
+    pub fn index_entry_from_lookup_row(row: MacroCallLookupRow) -> MacroIndexEntry {
+        MacroIndexEntry {
+            id: row.node_id,
+            symbol_name: row.symbol_name.clone(),
+            class_name: None,
+            file_path: String::new(),
+            score: row.score,
+            direct_caller_ids: row.direct_caller_ids,
+            impact_zone_ids: row.impact_zone_ids,
+            direct_callers: row.direct_callers,
+            impact_zone: row.impact_zone,
+            language: default_unknown_language(),
+            signature: None,
+            canonical_fqn: row.symbol_name,
+        }
+    }
+
     /// Replace all candidate rows (full disambiguation index).
     pub fn replace_candidates(path: &Path, entries: &[MacroIndexEntry]) -> Result<()> {
         let conn = Self::open(path)?;
@@ -520,8 +583,9 @@ impl MacroCallLookupDb {
                 .prepare(
                     "INSERT INTO macro_call_candidates
                      (symbol_name, node_id, class_name, file_path, score, direct_callers, impact_zone,
-                      direct_caller_ids, impact_zone_ids, language, signature, canonical_fqn)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                      direct_caller_ids, impact_zone_ids, language, signature, canonical_fqn,
+                      direct_callers_bin, impact_zone_bin, direct_caller_ids_bin, impact_zone_ids_bin)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 )
                 .map_err(sql_err)?;
             for entry in entries {
@@ -531,6 +595,10 @@ impl MacroCallLookupDb {
                     serde_json::to_string(&entry.direct_caller_ids).map_err(json_err)?;
                 let impact_ids =
                     serde_json::to_string(&entry.impact_zone_ids).map_err(json_err)?;
+                let direct_bin = encode_blob(&entry.direct_callers)?;
+                let impact_bin = encode_blob(&entry.impact_zone)?;
+                let direct_ids_bin = encode_blob(&entry.direct_caller_ids)?;
+                let impact_ids_bin = encode_blob(&entry.impact_zone_ids)?;
                 stmt.execute(params![
                     entry.symbol_name,
                     entry.id.to_string(),
@@ -544,6 +612,10 @@ impl MacroCallLookupDb {
                     entry.language,
                     entry.signature,
                     entry.canonical_fqn,
+                    direct_bin,
+                    impact_bin,
+                    direct_ids_bin,
+                    impact_ids_bin,
                 ])
                 .map_err(sql_err)?;
             }
@@ -562,8 +634,9 @@ impl MacroCallLookupDb {
                 .prepare(
                     "INSERT INTO macro_call_index
                      (symbol_name, node_id, score, direct_callers, impact_zone,
-                      direct_caller_ids, impact_zone_ids)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                      direct_caller_ids, impact_zone_ids,
+                      direct_callers_bin, impact_zone_bin, direct_caller_ids_bin, impact_zone_ids_bin)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 )
                 .map_err(sql_err)?;
             for row in rows {
@@ -573,6 +646,10 @@ impl MacroCallLookupDb {
                     serde_json::to_string(&row.direct_caller_ids).map_err(json_err)?;
                 let impact_ids =
                     serde_json::to_string(&row.impact_zone_ids).map_err(json_err)?;
+                let direct_bin = encode_blob(&row.direct_callers)?;
+                let impact_bin = encode_blob(&row.impact_zone)?;
+                let direct_ids_bin = encode_blob(&row.direct_caller_ids)?;
+                let impact_ids_bin = encode_blob(&row.impact_zone_ids)?;
                 stmt.execute(params![
                     row.symbol_name,
                     row.node_id.to_string(),
@@ -581,6 +658,10 @@ impl MacroCallLookupDb {
                     impact,
                     direct_ids,
                     impact_ids,
+                    direct_bin,
+                    impact_bin,
+                    direct_ids_bin,
+                    impact_ids_bin,
                 ])
                 .map_err(sql_err)?;
             }
@@ -602,6 +683,10 @@ impl MacroCallLookupDb {
         let id_str: String = row.get(1).map_err(sql_err)?;
         let direct_ids_json: String = row.get(7).unwrap_or_else(|_| "[]".into());
         let impact_ids_json: String = row.get(8).unwrap_or_else(|_| "[]".into());
+        let direct_bin: Option<Vec<u8>> = row.get(12).ok();
+        let impact_bin: Option<Vec<u8>> = row.get(13).ok();
+        let direct_ids_bin: Option<Vec<u8>> = row.get(14).ok();
+        let impact_ids_bin: Option<Vec<u8>> = row.get(15).ok();
         let language: String = row.get(9).unwrap_or_else(|_| "unknown".into());
         let signature: Option<String> = row.get(10).ok().filter(|s: &String| !s.is_empty());
         let canonical_fqn: String = row.get(11).unwrap_or_default();
@@ -613,10 +698,10 @@ impl MacroCallLookupDb {
             class_name: row.get(2).map_err(sql_err)?,
             file_path: row.get(3).map_err(sql_err)?,
             score: row.get(4).map_err(sql_err)?,
-            direct_caller_ids: Self::parse_uuid_list(&direct_ids_json)?,
-            impact_zone_ids: Self::parse_uuid_list(&impact_ids_json)?,
-            direct_callers: serde_json::from_str(&direct_json).map_err(json_err)?,
-            impact_zone: serde_json::from_str(&impact_json).map_err(json_err)?,
+            direct_caller_ids: decode_uuid_list_blob(direct_ids_bin, &direct_ids_json)?,
+            impact_zone_ids: decode_uuid_list_blob(impact_ids_bin, &impact_ids_json)?,
+            direct_callers: decode_string_list(direct_bin, &direct_json)?,
+            impact_zone: decode_string_list(impact_bin, &impact_json)?,
             language,
             signature,
             canonical_fqn,
@@ -632,7 +717,8 @@ impl MacroCallLookupDb {
         let mut stmt = conn
             .prepare(
                 "SELECT symbol_name, node_id, class_name, file_path, score, direct_callers, impact_zone,
-                        direct_caller_ids, impact_zone_ids, language, signature, canonical_fqn
+                        direct_caller_ids, impact_zone_ids, language, signature, canonical_fqn,
+                        direct_callers_bin, impact_zone_bin, direct_caller_ids_bin, impact_zone_ids_bin
                  FROM macro_call_candidates WHERE symbol_name = ?1",
             )
             .map_err(sql_err)?;
@@ -663,7 +749,8 @@ impl MacroCallLookupDb {
         let mut stmt = conn
             .prepare(
                 "SELECT symbol_name, node_id, score, direct_callers, impact_zone,
-                        direct_caller_ids, impact_zone_ids
+                        direct_caller_ids, impact_zone_ids,
+                        direct_callers_bin, impact_zone_bin, direct_caller_ids_bin, impact_zone_ids_bin
                  FROM macro_call_index WHERE symbol_name = ?1",
             )
             .map_err(sql_err)?;
@@ -674,15 +761,19 @@ impl MacroCallLookupDb {
             let impact_json: String = row.get(4).map_err(sql_err)?;
             let direct_ids_json: String = row.get(5).unwrap_or_else(|_| "[]".into());
             let impact_ids_json: String = row.get(6).unwrap_or_else(|_| "[]".into());
+            let direct_bin: Option<Vec<u8>> = row.get(7).ok();
+            let impact_bin: Option<Vec<u8>> = row.get(8).ok();
+            let direct_ids_bin: Option<Vec<u8>> = row.get(9).ok();
+            let impact_ids_bin: Option<Vec<u8>> = row.get(10).ok();
             let node_id_str: String = row.get(1).map_err(sql_err)?;
             found.push(MacroCallLookupRow {
                 symbol_name: row.get(0).map_err(sql_err)?,
                 node_id: Uuid::parse_str(&node_id_str).unwrap_or(Uuid::nil()),
                 score: row.get(2).map_err(sql_err)?,
-                direct_caller_ids: Self::parse_uuid_list(&direct_ids_json)?,
-                impact_zone_ids: Self::parse_uuid_list(&impact_ids_json)?,
-                direct_callers: serde_json::from_str(&direct_json).map_err(json_err)?,
-                impact_zone: serde_json::from_str(&impact_json).map_err(json_err)?,
+                direct_caller_ids: decode_uuid_list_blob(direct_ids_bin, &direct_ids_json)?,
+                impact_zone_ids: decode_uuid_list_blob(impact_ids_bin, &impact_ids_json)?,
+                direct_callers: decode_string_list(direct_bin, &direct_json)?,
+                impact_zone: decode_string_list(impact_bin, &impact_json)?,
             });
         }
         match found.len() {
@@ -761,7 +852,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn canonical_fqn_java_dot_notation() {
         use rbuilder_graph::schema::{Node, NodeType};
         let node = Node::new(NodeType::Function, "process".into())
@@ -804,5 +894,29 @@ mod tests {
         assert_eq!(row.id, id);
         assert_eq!(row.direct_caller_ids.len(), 1);
         assert_eq!(row.impact_zone_ids.len(), 1);
+    }
+
+    #[test]
+    fn sqlite_unique_lookup_uses_bincode_blobs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join("macro_call_index.db");
+        let callers: Vec<String> = (0..50).map(|i| format!("caller_{i}")).collect();
+        let impact: Vec<String> = (0..200).map(|i| format!("impact_{i}")).collect();
+        MacroCallLookupDb::replace_all(
+            &db,
+            &[MacroCallLookupRow {
+                symbol_name: "target_fn".into(),
+                node_id: Uuid::new_v4(),
+                score: 42.0,
+                direct_caller_ids: (0..10).map(|_| Uuid::new_v4()).collect(),
+                impact_zone_ids: (0..40).map(|_| Uuid::new_v4()).collect(),
+                direct_callers: callers.clone(),
+                impact_zone: impact.clone(),
+            }],
+        )
+        .unwrap();
+        let row = MacroCallLookupDb::lookup(&db, "target_fn").unwrap().unwrap();
+        assert_eq!(row.direct_callers.len(), 50);
+        assert_eq!(row.impact_zone.len(), 200);
     }
 }

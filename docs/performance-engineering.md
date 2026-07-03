@@ -1,0 +1,285 @@
+# Performance Engineering — Blast Radius & Graph Caches
+
+This document captures blast-radius **query latency tiers**, the **benchmark landscape**, optimization roadmap, and how performance work relates to the CLI I/O contract.
+
+**Companion doc:** [cli-io-sanity-audit.md](cli-io-sanity-audit.md) — JSON schemas, exit codes, and subprocess correctness (orthogonal to wall-clock gates).
+
+Last updated: 2026-07-03 (Sprint A: lazy reachability, snapshot session, SQLite bincode blobs, fast-path lookup).
+
+---
+
+## Executive summary
+
+| Track | Status | What it proves |
+|-------|--------|----------------|
+| **CLI I/O contract** | ✅ Strong | Output shape, schema versions, exit codes — `tests/cli_output/`, `all_commands_sanity` |
+| **Blast-radius perf infra** | ✅ Landed | `blast_radius_benchmarks` + `phase16_blast_radius_perf` (mock scale) |
+| **Production latency (T0–T3)** | ⚠️ Partial | metasfresh T1 ~200 ms post-Sprint A; soft gates when cache present |
+
+**Bottom line:** We can regress **algorithm + cache micro-paths** at mock scale and **SQLite lookup** on synthetic rows. We **cannot yet** automatically regress end-to-end CLI latency on a real monorepo cache.
+
+---
+
+## Current latency budget (metasfresh reference)
+
+Reference repo: `example/metasfresh-4.9.8b` (~128k functions, ~700k edges).
+
+| Tier | Path | Typical latency | Dominant cost | Automated gate? |
+|------|------|-----------------|---------------|-----------------|
+| **T0** | SQLite macro index (`macro_call_index.db`) | ~280 ms | DB open + bincode BLOB read (Sprint A) | Micro + subprocess (`br.query.fast_path_ms`) |
+| **T1** | Lite path (mmap graph + engine v2 snapshot) | ~200 ms (post-Sprint A; was ~5.8 s) | Lazy `ReachabilityStore` load + single-row expand at analyze | Soft gate when metasfresh cache present |
+| **T2** | Full graph hydrate (`MemoryBackend`) | ~26 s+ | Legacy JSON / full backend rebuild | No |
+| **T3** | `--with-slices` | 8+ min | ICFG + PDG per handoff seed; slice trace not cache-backed | No |
+
+These T0–T3 numbers are **manual** (`/usr/bin/time`, ignored rebuild test). They are not enforced in CI.
+
+### Query-tier routing (CLI)
+
+`src/cli/blast_radius.rs` dispatches in order:
+
+1. **T0 fast path** — `try_fast_cached_lookup()` → `MacroCallLookupDb::lookup_resolved()` + `SnapshotNodeStore` (no full hydrate when cache hits).
+2. **T1 lite path** — mmap snapshot + pre-built `BlastEngineSnapshot` + `try_load_engine()`.
+3. **T2 full path** — `ctx.load_graph()` → `MemoryBackend` + live `BlastRadiusEngine::build()`.
+4. **T3 slices** — full graph + `resolve_handoff_seeds()` (handoffs in JSON even when ICFG/PDG trace fails) + optional `trace_blast_to_slices_with_blast()`.
+
+Policy evaluation and `--with-slices` force T2+ (full graph required today).
+
+---
+
+## Benchmark landscape
+
+### What exists today
+
+| Asset | Location | Scale | Gate | Runs in CI? |
+|-------|----------|-------|------|-------------|
+| **Blast analyze (warm)** | `tests/phase16_blast_radius_perf.rs` | 5k / 25k edges mock | **< 1 ms** | Yes (`cargo test --release --test phase16_blast_radius_perf`) |
+| **SQLite unique lookup** | `phase16` | Synthetic row (100 callers, 500 impact names) | **< 15 ms** | Yes (release test) |
+| **SQLite FQN resolved** | `phase16` | Single candidate row | **< 50 ms** | Yes (release test) |
+| **PetGraph from prepared** | `phase16` + `blast_radius_benchmarks` | 150k / 700k mock | **< 30 s** | No (`#[ignore]`, needs `--ignored`) |
+| **SnapshotNodeStore open** | `phase16` + `blast_radius_benchmarks` | 150k mock | **< 15 s** | No (`#[ignore]`) |
+| **Engine snapshot load** | `phase16` + `blast_radius_benchmarks` | 150k mock | **< 60 s** | No (`#[ignore]`) |
+| **Blast analyze (small)** | `benches/blast_radius_benchmarks.rs` | 5k mock | **< 5 ms** (bench assert) | No |
+| PageRank | `centrality_benchmarks` + `phase14_centrality_audit` | 150k / 700k mock | **< 20 ms** | No (ignored / bench) |
+| Community | `community_benchmarks` + `phase15_community_audit` | 150k / 700k mock | **< 150 ms** | No (ignored / bench) |
+| PetGraphView (generic) | `benches/graph_benchmarks.rs` | 5k–25k; 150k/1M with `RBUILDER_BENCH_LARGE=1` | Criterion only | No |
+| Blast engine (small) | `graph_benchmarks` | ≤1000 nodes | Criterion only | No |
+| Dominance | `benches/phase13_analysis.rs` | 1000-block CFG | **< 15 ms** | Yes (`scripts/semantic-verification.sh`) |
+| Semantic smoke | `tests/phase13_perf.rs` | Small fixtures | < 2–5 s generous | Yes |
+| Blast correctness | `tests/phase12_blast_radius.rs` | Small chains | Functional | Yes |
+| **CLI I/O sanity** | `tests/cli_output/all_commands_sanity.rs` | Tiny polyglot fixture | Schema / exit code | Yes |
+| Cache rebuild | `tests/rebuild_macro_index.rs` | metasfresh (ignored) | `eprintln!` only | No |
+| Full repo indexing | `benches/full_analysis.rs` | kafka example | Criterion | **Orphan** (not in `Cargo.toml`) |
+
+### Standard benchmark suite (implemented)
+
+| Component | Path | Status |
+|-----------|------|--------|
+| Criterion benches | `benches/blast_radius_benchmarks.rs` | ✅ Wired in `Cargo.toml` |
+| Release gate tests | `tests/phase16_blast_radius_perf.rs` | ✅ 3 CI gates + 3 ignored 150k gates |
+
+### Fixture tiers
+
+| ID | Purpose | Source |
+|----|---------|--------|
+| **S** | Algorithm smoke | 5k-node mock in phase16 / blast_radius_benchmarks |
+| **M** | Scale gates (centrality/community parity) | `build_monorepo_mock(150_000, 700_000)` |
+| **R** | Realistic Java monorepo | `example/metasfresh-4.9.8b/.rbuilder/*` if present |
+| **R'** | Polyglot smoke | `example/kafka` if present |
+| **T** | CLI contract (not perf) | `tests/fixtures/tiny_polyglot_repo` |
+
+Environment variables:
+
+```bash
+RBUILDER_BENCH_LARGE=1              # enable 150k mock Criterion groups
+RBUILDER_BENCH_REPO=/path/to/repo     # real-repo soft gates in phase16 (skips if cache missing)
+RBUILDER_BENCH_SYMBOL=saveError       # optional symbol for bench_repo_lite_analyze_under_3s
+```
+
+### Pattern that works
+
+Centrality, community, and blast-radius now share:
+
+1. Synthetic monorepo mock at 150k nodes / 700k edges.
+2. Criterion bench for trend tracking.
+3. Ignored integration test with hard wall-time asserts (`cargo test --release --test … -- --ignored`).
+4. Optional real-repo test when checkout exists (metasfresh: manual only today).
+
+---
+
+## Metric registry
+
+Each metric should eventually have Criterion samples **and** a release gate where marked.
+
+### Query path (user-facing)
+
+| Metric ID | Description | Target (metasfresh) | Gate status |
+|-----------|-------------|---------------------|-------------|
+| `br.query.analyze_ms` | Warm `BlastRadiusEngine::analyze` | < 1 ms (5k mock) | ✅ `phase16` |
+| `br.query.sqlite_unique_ms` | `MacroCallLookupDb::lookup()` | < 15 ms | ✅ `phase16` (synthetic DB) |
+| `br.query.sqlite_fqn_ms` | `lookup_resolved()` with class filter | < 50 ms | ✅ `phase16` (synthetic DB) |
+| `br.query.fast_path_ms` | `try_fast_cached_lookup` end-to-end CLI | < 150 ms | ✅ `subprocess_golden_path` |
+| `br.query.lite_total_ms` | Full T1 CLI (snapshot + engine, no SQLite hit) | < 3000 ms | ✅ soft `phase16` when metasfresh cache present |
+| `br.query.full_hydrate_ms` | T2 `load_graph` + analyze | < 15000 ms | ❌ Soft gate only (manual) |
+
+### Load / deserialize (implementation-facing)
+
+| Metric ID | Description | Gate (150k mock) | Gate status |
+|-----------|-------------|------------------|-------------|
+| `br.load.petgraph_from_prepared_ms` | `PetGraphView::from_prepared` | < 30 s | ✅ ignored `phase16` |
+| `br.load.snapshot_node_store_ms` | `SnapshotNodeStore::open` | < 15 s | ✅ ignored `phase16` |
+| `br.load.graph_snapshot_ms` | `MmappedGraphSnapshot::open` | < 15 s | ✅ `blast_radius_benchmarks` assert |
+| `br.load.engine_snapshot_ms` | Load + `from_engine_snapshot` | < 5 s (150k mock + metasfresh soft) | ✅ `phase16` |
+| `br.load.engine_snapshot_rss_mb` | RSS delta after engine load | < 512 MB | ❌ Not implemented |
+| `br.load.backend_hydrate_ms` | Full `MemoryBackend` hydrate | TBD | ❌ Not implemented |
+
+### Discover / write path
+
+| Metric ID | Description | Gate status |
+|-----------|-------------|-------------|
+| `br.discover.engine_build_ms` | `BlastRadiusEngine::build` | ❌ Manual only |
+| `br.discover.analyze_all_ms` | Loop over all functions at discover | ❌ Manual only |
+| `br.discover.snapshot_write_ms` | `PreparedGraphSnapshot::write_to_path` | ❌ |
+| `br.discover.engine_snapshot_write_ms` | v2 sparse+zstd write | ❌ |
+| `br.discover.macro_index_write_ms` | SQLite + macro index | ❌ |
+| Discover telemetry | `discover -f json` → `metrics.duration_ms` | ✅ I/O contract only ([cli-io-sanity-audit](cli-io-sanity-audit.md)) |
+
+### Slice path (`--with-slices`)
+
+| Metric ID | Description | Gate status |
+|-----------|-------------|-------------|
+| `br.slice.icfg_build_ms` | `InterproceduralCFG::build` | ❌ Informational |
+| `br.slice.per_seed_pdg_ms` | PDG per handoff seed | ❌ Informational |
+| `br.slice.total_ms` | `trace_blast_to_slices_with_blast` | ❌ Informational |
+| Handoffs JSON | `resolve_handoff_seeds` → `gatekeeping.handoffs` | ✅ I/O contract (decoupled from slice trace) |
+
+### Gate failure format
+
+```
+br.query.sqlite_unique_ms regression: 42ms >= 15ms
+```
+
+### Proposed CI trend output (not implemented)
+
+```json
+{"metric":"br.query.lite_total_ms","fixture":"metasfresh","value_ms":200,"commit":"…","date":"2026-07-03"}
+```
+
+---
+
+## Remaining gaps
+
+| Gap | Impact |
+|-----|--------|
+| No **end-to-end CLI** T1 subprocess gate on metasfresh | In-process soft gates only; T0 covered via `fast_path_ms` |
+| No **RSS gate** after engine load | Memory regressions invisible |
+| **metasfresh** not required in CI | Soft gates skip when checkout/cache absent |
+| `full_analysis` bench orphaned | Dead code |
+| `semantic-verification.sh` | Dominance only; no blast-radius |
+| **JSON lines** trend file | Not built |
+
+---
+
+## Optimization roadmap
+
+Prioritized by impact on T0–T3. Status as of 2026-07-03.
+
+### P0 — Query path (days)
+
+| # | Item | Metric | Status |
+|---|------|--------|--------|
+| 1 | **SQLite fast path** — unique bare-name `lookup` before `lookup_resolved`; UUID columns + bincode BLOBs for caller/impact payloads | `br.query.sqlite_*` | **Done** — `try_fast_cached_lookup` in `blast_radius.rs`; `MacroCallLookupDb` bincode columns with JSON fallback (`macro_call_lookup.rs`). |
+| 2 | **Single snapshot session** — one mmap open per CLI invocation | `br.load.graph_snapshot_ms` | **Done** — `CliContext.snapshot_session()` caches `SnapshotSession` (store + digest); fast/lite paths reuse it. |
+| 3 | **Lazy in-memory reachability** — query-time bitset expand, not load-time full matrix | `br.load.engine_snapshot_ms`, RSS | **Done** — `ReachabilityStore` in `blast_engine_snapshot.rs`; v2 snapshot load keeps sparse+zstd rows; `row_bitset(scc_id)` expands on demand. Re-benchmark T1 on metasfresh to quantify win. |
+
+### P1 — Discover & hydrate (days–week)
+
+| # | Item | Metric | Status |
+|---|------|--------|--------|
+| 4 | Prepared indexes on hydrate | `br.load.backend_hydrate_ms` | Open |
+| 5 | Discover deduplication — one `PreparedGraphSnapshot`, `build_from_view` | `br.discover.*` | Open |
+| 6 | Parallel analyze loop at discover | `br.discover.analyze_all_ms` | Open |
+| 7 | Snapshot canonical; JSON `graph.db` opt-in | — | Open |
+
+### P2 — Architecture (weeks)
+
+| # | Item | Status |
+|---|------|--------|
+| 8 | Columnar mmap graph — true zero-copy open | Open |
+| 9 | CFG/PDG mmap archive for `--with-slices` | Open |
+| 10 | Ephemeral query daemon (amortize cold start) | Open |
+
+### P3 — Cleanup
+
+| # | Item | Status |
+|---|------|--------|
+| 11 | Implement or remove `--depth` flag | Open |
+| 12 | Scope policy centrality to impact subgraph only | Open |
+| 13 | Wire or delete `benches/full_analysis.rs` | Open |
+
+---
+
+## How to run benchmarks
+
+```bash
+# ── Blast-radius perf (release) ──
+cargo test --release --test phase16_blast_radius_perf
+cargo test --release --test phase16_blast_radius_perf -- --ignored   # 150k mock gates
+
+cargo bench --bench blast_radius_benchmarks
+RBUILDER_BENCH_LARGE=1 cargo bench --bench blast_radius_benchmarks   # 150k groups
+
+# ── Peer scale gates ──
+cargo bench --bench centrality_benchmarks
+cargo bench --bench community_benchmarks
+cargo test --release --test phase14_centrality_audit -- --ignored
+cargo test --release --test phase15_community_audit -- --ignored
+
+# ── Correctness (CI-friendly) ──
+cargo test --release --test phase12_blast_radius
+cargo test --test cli_output --test subprocess_golden_path --test all_commands_sanity
+
+# ── Semantic pipeline (dominance perf only) ──
+bash scripts/semantic-verification.sh
+
+# ── Manual real-repo ──
+cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
+/usr/bin/time -p target/release/rbuilder blast-radius saveError -r example/metasfresh-4.9.8b
+```
+
+---
+
+## Recommended next steps
+
+1. **Sprint B — discover path** — prepared indexes on hydrate, deduplicated `PreparedGraphSnapshot`, parallel analyze loop.
+
+2. **`br.load.engine_snapshot_rss_mb` gate** — RSS delta after engine load on 150k mock or metasfresh.
+
+3. **Optional CI job** — `cargo test --release --test phase16_blast_radius_perf` on every PR (non-ignored gates only); nightly `RBUILDER_BENCH_LARGE=1 cargo bench --bench blast_radius_benchmarks`.
+
+4. **Doc hygiene** — keep this file in sync when adding gates; cross-link new metrics in gate assert messages.
+
+---
+
+## Related files
+
+| File | Role |
+|------|------|
+| `benches/blast_radius_benchmarks.rs` | Blast-radius Criterion + small-scale asserts |
+| `tests/phase16_blast_radius_perf.rs` | Release perf gates (SQLite, analyze, 150k load) |
+| `benches/centrality_benchmarks.rs` | PageRank 150k template |
+| `benches/community_benchmarks.rs` | Community 150k template |
+| `tests/phase14_centrality_audit.rs` | Ignored PageRank regression |
+| `tests/phase15_community_audit.rs` | Ignored community regression |
+| `tests/rebuild_macro_index.rs` | Manual metasfresh cache rebuild |
+| `tests/cli_output/subprocess_golden_path.rs` | Golden paths + `br.query.fast_path_ms` gate |
+| `tests/cli_output/all_commands_sanity.rs` | CLI I/O contract (not wall-clock) |
+| `docs/cli-io-sanity-audit.md` | I/O contract matrix |
+| `scripts/semantic-verification.sh` | CI semantic + dominance perf |
+| `src/cli/context.rs` | Snapshot session cache (`SnapshotSession`) |
+| `src/cli/blast_radius.rs` | T0/T1/T2/T3 orchestration + fast-path lookup |
+| `crates/rbuilder-analysis/src/blast_radius_scc.rs` | Engine + `ReachabilityStore` integration |
+| `src/cli/discover_impl.rs` | Discover pipeline + cache writers |
+| `src/cli/discover_output.rs` | Discover JSON telemetry (`duration_ms`) |
+| `crates/rbuilder-analysis/src/macro_call_lookup.rs` | SQLite macro index (T0) |
+| `crates/rbuilder-analysis/src/blast_engine_snapshot.rs` | Engine v2 sparse+zstd |
+| `crates/rbuilder-graph/src/snapshot.rs` | Graph snapshot + `SnapshotNodeStore` |

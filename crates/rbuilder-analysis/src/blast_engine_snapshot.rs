@@ -1,12 +1,15 @@
 //! Serialized SCC blast-radius engine for mmap reload without recomputation.
 //!
 //! Format v2 stores sparse, zstd-compressed reachability rows. Trivial rows (only
-//! the SCC itself reachable) are omitted and reconstructed on load.
+//! the SCC itself reachable) are omitted and reconstructed on load. At query time
+//! only the requested SCC row is decompressed ([`ReachabilityStore::row_bitset`]).
 
 use bit_set::BitSet;
 use memmap2::Mmap;
 use rbuilder_error::{Error, Result};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -146,8 +149,101 @@ pub(crate) fn words_to_bitset(words: &[u64], bit_len: usize) -> BitSet {
 }
 
 pub(crate) fn reachability_from_snapshot(snapshot: &BlastEngineSnapshot) -> Result<Vec<BitSet>> {
+    let store = ReachabilityStore::from_snapshot(snapshot)?;
+    (0..store.scc_count())
+        .map(|idx| store.row_bitset(idx))
+        .collect()
+}
+
+/// Lazy or eager SCC reachability storage for [`BlastRadiusEngine`].
+pub struct ReachabilityStore {
+    scc_count: usize,
+    word_count: usize,
+    backing: ReachabilityBacking,
+}
+
+enum ReachabilityBacking {
+    Eager(Vec<BitSet>),
+    Lazy {
+        rows: HashMap<u32, Vec<u8>>,
+        cache: RefCell<HashMap<usize, BitSet>>,
+    },
+}
+
+impl ReachabilityStore {
+    pub fn from_eager(reachability: Vec<BitSet>, scc_count: usize) -> Self {
+        Self {
+            scc_count,
+            word_count: scc_count.div_ceil(64),
+            backing: ReachabilityBacking::Eager(reachability),
+        }
+    }
+
+    /// Load v2 snapshots lazily; expand v1 dense snapshots eagerly.
+    pub fn from_snapshot(snapshot: &BlastEngineSnapshot) -> Result<Self> {
+        let scc_count = snapshot.scc_count;
+        if !snapshot.reachability_rows.is_empty() {
+            let rows = snapshot
+                .reachability_rows
+                .iter()
+                .map(|row| (row.scc_idx, row.compressed.clone()))
+                .collect();
+            return Ok(Self {
+                scc_count,
+                word_count: scc_count.div_ceil(64),
+                backing: ReachabilityBacking::Lazy {
+                    rows,
+                    cache: RefCell::new(HashMap::new()),
+                },
+            });
+        }
+        Ok(Self::from_eager(reachability_from_snapshot_eager_only(snapshot)?, scc_count))
+    }
+
+    pub fn scc_count(&self) -> usize {
+        self.scc_count
+    }
+
+    pub fn is_lazy(&self) -> bool {
+        matches!(self.backing, ReachabilityBacking::Lazy { .. })
+    }
+
+    pub fn eager_slice(&self) -> Option<&[BitSet]> {
+        match &self.backing {
+            ReachabilityBacking::Eager(v) => Some(v.as_slice()),
+            ReachabilityBacking::Lazy { .. } => None,
+        }
+    }
+
+    /// Reachability bitset for one SCC (self-only when no sparse row exists).
+    pub fn row_bitset(&self, scc_id: usize) -> Result<BitSet> {
+        if scc_id >= self.scc_count {
+            return Err(Error::SerdeError(format!(
+                "reachability row index {scc_id} out of range (scc_count={})",
+                self.scc_count
+            )));
+        }
+        match &self.backing {
+            ReachabilityBacking::Eager(v) => Ok(v[scc_id].clone()),
+            ReachabilityBacking::Lazy { rows, cache } => {
+                if let Some(cached) = cache.borrow().get(&scc_id) {
+                    return Ok(cached.clone());
+                }
+                let mut bs = BitSet::new();
+                bs.insert(scc_id);
+                if let Some(compressed) = rows.get(&(scc_id as u32)) {
+                    let words = decompress_words(compressed, self.word_count)?;
+                    bs = words_to_bitset(&words, self.scc_count);
+                }
+                cache.borrow_mut().insert(scc_id, bs.clone());
+                Ok(bs)
+            }
+        }
+    }
+}
+
+fn reachability_from_snapshot_eager_only(snapshot: &BlastEngineSnapshot) -> Result<Vec<BitSet>> {
     let scc_count = snapshot.scc_count;
-    let word_count = scc_count.div_ceil(64);
     let mut reachability: Vec<BitSet> = (0..scc_count)
         .map(|idx| {
             let mut bs = BitSet::new();
@@ -156,20 +252,9 @@ pub(crate) fn reachability_from_snapshot(snapshot: &BlastEngineSnapshot) -> Resu
         })
         .collect();
 
-    if !snapshot.reachability_rows.is_empty() {
-        for row in &snapshot.reachability_rows {
-            let idx = row.scc_idx as usize;
-            if idx >= scc_count {
-                return Err(Error::SerdeError(format!(
-                    "reachability row index {idx} out of range (scc_count={scc_count})"
-                )));
-            }
-            let words = decompress_words(&row.compressed, word_count)?;
-            reachability[idx] = words_to_bitset(&words, scc_count);
-        }
+    if snapshot.reachability_words.is_empty() {
         return Ok(reachability);
     }
-
     if snapshot.reachability_words.len() != scc_count {
         return Err(Error::SerdeError(format!(
             "v1 reachability row count {} != scc_count {scc_count}",
@@ -271,5 +356,46 @@ mod tests {
         let loaded = reachability_from_snapshot(&snap).unwrap();
         assert_eq!(loaded[2].contains(1), reachability[2].contains(1));
         assert_eq!(loaded[0].contains(0), true);
+    }
+
+    #[test]
+    fn lazy_store_defers_row_expand_until_query() {
+        let scc_count = 4;
+        let mut reachability: Vec<BitSet> = (0..scc_count)
+            .map(|idx| {
+                let mut bs = BitSet::new();
+                bs.insert(idx);
+                bs
+            })
+            .collect();
+        reachability[2].insert(1);
+
+        let mut rows = Vec::new();
+        for (idx, bs) in reachability.iter().enumerate() {
+            let words = bitset_to_words(bs, scc_count);
+            if words_popcount(&words) <= 1 {
+                continue;
+            }
+            rows.push(ReachabilityRow {
+                scc_idx: idx as u32,
+                compressed: compress_words(&words).unwrap(),
+            });
+        }
+
+        let snap = BlastEngineSnapshot {
+            graph_digest: "lazy".into(),
+            scc_count,
+            dag_edges: vec![],
+            scc_members: vec![vec![]; scc_count],
+            scc_names: vec!["a".into(); scc_count],
+            node_to_scc: vec![],
+            reachability_words: vec![],
+            reachability_rows: rows,
+        };
+
+        let store = ReachabilityStore::from_snapshot(&snap).unwrap();
+        assert!(store.is_lazy());
+        let row = store.row_bitset(2).unwrap();
+        assert!(row.contains(1));
     }
 }

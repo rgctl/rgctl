@@ -2,20 +2,30 @@
 
 use anyhow::{bail, Context, Result};
 use rbuilder_graph::CodeGraph;
+use rbuilder_graph::SnapshotNodeStore;
+use std::cell::RefCell;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::OutputFormat;
 
+/// Cached mmap graph snapshot opened once per CLI invocation.
+#[derive(Clone)]
+pub struct SnapshotSession {
+    pub store: Arc<SnapshotNodeStore>,
+    pub digest: Arc<str>,
+}
+
 /// Resolved global CLI paths and formatting options.
-#[derive(Debug, Clone)]
 pub struct CliContext {
     pub repo: PathBuf,
     pub db: PathBuf,
     pub format: OutputFormat,
     pub output: Option<PathBuf>,
     pub verbose: bool,
+    snapshot_cache: RefCell<Option<SnapshotSession>>,
 }
 
 impl CliContext {
@@ -35,14 +45,42 @@ impl CliContext {
             format,
             output,
             verbose,
+            snapshot_cache: RefCell::new(None),
         }
     }
 
-    pub fn load_graph(&self) -> Result<CodeGraph> {
-        let snapshot = self
-            .repo
+    fn snapshot_path(&self) -> PathBuf {
+        self.repo
             .join(".rbuilder")
-            .join(rbuilder_graph::snapshot::SNAPSHOT_FILE);
+            .join(rbuilder_graph::snapshot::SNAPSHOT_FILE)
+    }
+
+    fn ensure_snapshot_loaded(&self) -> Result<()> {
+        let path = self.snapshot_path();
+        if !path.exists() {
+            *self.snapshot_cache.borrow_mut() = None;
+            return Ok(());
+        }
+        if self.snapshot_cache.borrow().is_some() {
+            return Ok(());
+        }
+        let store = SnapshotNodeStore::open(&path)?;
+        let digest: Arc<str> = Arc::from(store.content_digest());
+        *self.snapshot_cache.borrow_mut() = Some(SnapshotSession {
+            store: Arc::new(store),
+            digest,
+        });
+        Ok(())
+    }
+
+    /// Open the mmap snapshot once; reuse on subsequent calls within this context.
+    pub fn snapshot_session(&self) -> Result<Option<SnapshotSession>> {
+        self.ensure_snapshot_loaded()?;
+        Ok(self.snapshot_cache.borrow().clone())
+    }
+
+    pub fn load_graph(&self) -> Result<CodeGraph> {
+        let snapshot = self.snapshot_path();
         if snapshot.exists() {
             return CodeGraph::open_snapshot(&snapshot).map_err(Into::into);
         }
@@ -62,29 +100,16 @@ impl CliContext {
         );
     }
 
-    /// Graph content digest when a binary snapshot is present.
+    /// Graph content digest when a binary snapshot is present (cached with snapshot session).
     pub fn graph_digest(&self) -> Result<Option<String>> {
-        let snapshot = self
-            .repo
-            .join(".rbuilder")
-            .join(rbuilder_graph::snapshot::SNAPSHOT_FILE);
-        if !snapshot.exists() {
-            return Ok(None);
-        }
-        let mmap = rbuilder_graph::snapshot::MmappedGraphSnapshot::open(&snapshot)?;
-        Ok(Some(mmap.content_digest().to_string()))
+        Ok(self
+            .snapshot_session()?
+            .map(|session| session.digest.to_string()))
     }
 
     /// Open a read-only mmap node store without hydrating [`MemoryBackend`].
-    pub fn open_snapshot_store(&self) -> Result<Option<rbuilder_graph::SnapshotNodeStore>> {
-        let snapshot = self
-            .repo
-            .join(".rbuilder")
-            .join(rbuilder_graph::snapshot::SNAPSHOT_FILE);
-        if !snapshot.exists() {
-            return Ok(None);
-        }
-        Ok(Some(rbuilder_graph::SnapshotNodeStore::open(&snapshot)?))
+    pub fn open_snapshot_store(&self) -> Result<Option<Arc<SnapshotNodeStore>>> {
+        Ok(self.snapshot_session()?.map(|session| session.store))
     }
 
     pub fn emit(&self, text: &str) -> Result<()> {

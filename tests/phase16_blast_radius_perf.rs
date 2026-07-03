@@ -7,8 +7,29 @@ use rbuilder::analysis::{
 use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};
 use rbuilder::graph::{CodeGraph, PreparedGraphSnapshot, SnapshotNodeStore};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+fn bench_repo_root() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("RBUILDER_BENCH_REPO") {
+        let path = PathBuf::from(path);
+        if path.join(".rbuilder/blast_engine.snapshot.bin").exists() {
+            return Some(path);
+        }
+        return None;
+    }
+    let default =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example/metasfresh-4.9.8b");
+    if default
+        .join(".rbuilder/blast_engine.snapshot.bin")
+        .exists()
+    {
+        Some(default)
+    } else {
+        None
+    }
+}
 
 fn build_monorepo_mock(nodes: usize, edges: usize) -> CodeGraph {
     let mut graph = CodeGraph::new();
@@ -184,7 +205,72 @@ fn engine_snapshot_load_150k_under_60s() {
     let latency = start.elapsed();
 
     assert!(
-        latency < Duration::from_secs(60),
-        "br.load.engine_snapshot_ms regression: {latency:?} >= 60s"
+        latency < Duration::from_secs(5),
+        "br.load.engine_snapshot_ms regression: {latency:?} >= 5s"
+    );
+}
+
+/// Real-repo soft gate: lazy engine snapshot load (skip when checkout/cache absent).
+#[test]
+fn bench_repo_engine_snapshot_lazy_load_under_5s() {
+    let Some(repo) = bench_repo_root() else {
+        eprintln!("skip bench_repo_engine_snapshot_lazy_load_under_5s: no RBUILDER_BENCH_REPO or metasfresh cache");
+        return;
+    };
+    let path = repo.join(".rbuilder/blast_engine.snapshot.bin");
+
+    let start = Instant::now();
+    let loaded = BlastEngineSnapshot::load_from_path(&path).expect("load blast snapshot");
+    let engine = BlastRadiusEngine::from_engine_snapshot(loaded).expect("hydrate engine");
+    let latency = start.elapsed();
+
+    assert!(
+        engine.reachability_is_lazy(),
+        "bench repo engine should use lazy ReachabilityStore"
+    );
+    assert!(
+        latency < Duration::from_secs(5),
+        "br.load.engine_snapshot_ms (metasfresh) regression: {latency:?} >= 5s"
+    );
+}
+
+/// Real-repo soft gate: warm T1 lite analyze via engine snapshot (no macro index).
+#[test]
+fn bench_repo_lite_analyze_under_3s() {
+    let Some(repo) = bench_repo_root() else {
+        eprintln!("skip bench_repo_lite_analyze_under_3s: no RBUILDER_BENCH_REPO or metasfresh cache");
+        return;
+    };
+    let graph_path = repo.join(".rbuilder/graph.snapshot.bin");
+    let engine_path = repo.join(".rbuilder/blast_engine.snapshot.bin");
+    if !graph_path.exists() || !engine_path.exists() {
+        eprintln!("skip bench_repo_lite_analyze_under_3s: missing graph or engine snapshot");
+        return;
+    }
+
+    let store = SnapshotNodeStore::open(&graph_path).expect("open graph snapshot");
+    let digest = store.content_digest();
+    let loaded = BlastEngineSnapshot::load_from_path(&engine_path).expect("load blast snapshot");
+    let engine = BlastRadiusEngine::from_engine_snapshot(loaded).expect("hydrate engine");
+    assert!(
+        engine.reachability_is_lazy(),
+        "bench repo engine should use lazy ReachabilityStore"
+    );
+
+    let target_name = std::env::var("RBUILDER_BENCH_SYMBOL").unwrap_or_else(|_| "saveError".into());
+    let nodes = store.find_nodes_by_name(&target_name);
+    assert!(
+        !nodes.is_empty(),
+        "bench symbol {target_name} not found in graph snapshot"
+    );
+
+    let start = Instant::now();
+    engine.analyze(nodes[0].id).expect("analyze");
+    let latency = start.elapsed();
+
+    assert_eq!(digest, store.content_digest());
+    assert!(
+        latency < Duration::from_secs(3),
+        "br.query.lite_total_ms (metasfresh analyze) regression: {latency:?} >= 3s"
     );
 }
