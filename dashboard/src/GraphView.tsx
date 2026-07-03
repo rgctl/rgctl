@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import Graph from "graphology";
 import Sigma from "sigma";
 import { NodeTypeFilter } from "./NodeTypeFilter";
@@ -9,6 +9,7 @@ import type {
   SubgraphPayload,
 } from "./types";
 import { DEFAULT_GRAPH_TYPE_MASK } from "./types";
+import { bundleDataUrl } from "./bundleUrl";
 
 export interface GraphViewProps {
   communityOnly: boolean;
@@ -18,6 +19,14 @@ export interface GraphViewProps {
 }
 
 type ViewLevel = "metagraph" | "subgraph";
+
+const LEGEND = [
+  { label: "Function", color: "#0d6efd" },
+  { label: "Class", color: "#d63384" },
+  { label: "Interface", color: "#0dcaf0" },
+  { label: "Module", color: "#dc3545" },
+  { label: "Package", color: "#6f42c1" },
+];
 
 export function GraphView({
   communityOnly,
@@ -31,17 +40,19 @@ export function GraphView({
   const [error, setError] = useState<string | null>(null);
   const [hover, setHover] = useState<Metanode | null>(null);
   const [selected, setSelected] = useState<Metanode | null>(null);
-  const [loadState, setLoadState] = useState<string>("loading");
+  const [loadState, setLoadState] = useState("loading");
   const [level, setLevel] = useState<ViewLevel>("metagraph");
   const [subgraph, setSubgraph] = useState<SubgraphPayload | null>(null);
   const [drillLabel, setDrillLabel] = useState<string | null>(null);
   const [typeMask, setTypeMask] = useState(DEFAULT_GRAPH_TYPE_MASK);
   const [expanding, setExpanding] = useState(false);
   const [subHover, setSubHover] = useState<SubgraphNode | null>(null);
+  const [search, setSearch] = useState("");
+  const [showCalls, setShowCalls] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    fetch("./metagraph.json")
+    fetch(bundleDataUrl("metagraph.json"))
       .then((r) => {
         if (!r.ok) throw new Error(`metagraph.json HTTP ${r.status}`);
         return r.json();
@@ -63,12 +74,23 @@ export function GraphView({
     };
   }, []);
 
+  const filteredMeta = meta
+    ? {
+        ...meta,
+        nodes: search.trim()
+          ? meta.nodes.filter((n) =>
+              n.label.toLowerCase().includes(search.trim().toLowerCase()),
+            )
+          : meta.nodes,
+      }
+    : null;
+
   useEffect(() => {
     if (!containerRef.current) return;
 
     if (level === "metagraph") {
-      if (!meta) return;
-      return renderMetagraph(meta, containerRef.current, sigmaRef, {
+      if (!filteredMeta) return;
+      return renderMetagraph(filteredMeta, containerRef.current, sigmaRef, showCalls, {
         setHover,
         setSelected,
         onDrill: (m) => void drillInto(m),
@@ -76,9 +98,19 @@ export function GraphView({
     }
 
     if (subgraph) {
-      return renderSubgraph(subgraph, containerRef.current, sigmaRef, setSubHover);
+      return renderSubgraph(subgraph, containerRef.current, sigmaRef, setSubHover, showCalls);
     }
-  }, [meta, level, subgraph]);
+  }, [filteredMeta, level, subgraph, showCalls, search]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      sigmaRef.current?.refresh();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [level, subgraph, filteredMeta]);
 
   const prevMask = useRef(typeMask);
 
@@ -126,72 +158,106 @@ export function GraphView({
     setSubHover(null);
   };
 
-  const reExpand = async () => {
-    if (selected && level === "metagraph") return;
-    if (drillLabel && meta) {
-      const node = meta.nodes.find((n) => n.label === drillLabel);
-      if (node) await drillInto(node);
-    }
+  const resetView = () => {
+    sigmaRef.current?.getCamera().animatedReset({ duration: 300 });
   };
 
   return (
-    <div class="graph-view">
-      <div class="graph-toolbar">
-        {level === "subgraph" ? (
-          <button type="button" class="graph-back-btn" onClick={backToMeta}>
-            ← Packages
-          </button>
-        ) : (
-          <span class="graph-mode-badge">
-            {communityOnly ? "Community view (drill-down enabled)" : "Package metagraph"}
-          </span>
-        )}
-        <NodeTypeFilter
-          mask={typeMask}
-          onChange={(m) => {
-            setTypeMask(m);
-          }}
-          disabled={!wasmReady}
-        />
-        {level === "subgraph" && wasmReady && (
-          <button type="button" class="graph-refresh-btn" onClick={() => void reExpand()}>
-            Re-filter
-          </button>
-        )}
-        <span class="graph-meta">
+    <div class="graph-panel h-100">
+      <div class="border-bottom bg-white px-3 py-2 flex-shrink-0">
+        <div class="row g-2 align-items-center">
+          <div class="col-lg-auto">
+            {level === "subgraph" ? (
+              <button type="button" class="btn btn-outline-secondary btn-sm" onClick={backToMeta}>
+                ← Packages
+              </button>
+            ) : (
+              <span class="badge text-bg-primary">
+                {communityOnly ? "Community view" : "Package metagraph"}
+              </span>
+            )}
+          </div>
+          <div class="col-lg-auto">
+            <label class="form-label small text-muted mb-0 me-1">Search</label>
+            <input
+              type="search"
+              class="form-control form-control-sm"
+              placeholder="Search by name…"
+              value={search}
+              onInput={(e) => setSearch((e.target as HTMLInputElement).value)}
+              style="min-width: 160px"
+            />
+          </div>
+          <div class="col-lg">
+            <NodeTypeFilter mask={typeMask} onChange={setTypeMask} disabled={!wasmReady} />
+          </div>
+          <div class="col-lg-auto d-flex align-items-center gap-3">
+            <div class="form-check form-switch mb-0">
+              <input
+                class="form-check-input"
+                type="checkbox"
+                id="show-calls"
+                checked={showCalls}
+                onChange={(e) => setShowCalls((e.target as HTMLInputElement).checked)}
+              />
+              <label class="form-check-label small" for="show-calls">
+                Show Calls
+              </label>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" onClick={resetView}>
+              Reset View
+            </button>
+          </div>
+        </div>
+        <p class="small text-muted mb-0 mt-2">
           {level === "subgraph" && subgraph
             ? `${drillLabel} · ${subgraph.nodes.length} nodes · ${subgraph.edges.length} call edges`
-            : meta
-              ? `${meta.nodes.length} metanodes · ${meta.edges.length} cross-package edges · ${sourceNodeCount.toLocaleString()} source nodes`
+            : filteredMeta
+              ? `${filteredMeta.nodes.length} metanodes · ${filteredMeta.edges.length} cross-package edges · ${sourceNodeCount.toLocaleString()} source nodes`
               : loadState}
           {expanding ? " · expanding…" : ""}
-        </span>
+        </p>
       </div>
 
-      {error && <div class="banner banner-error">{error}</div>}
+      {error && (
+        <div class="alert alert-danger py-2 small mx-3 mt-2 mb-0" role="alert">
+          {error}
+        </div>
+      )}
 
-      <div class="graph-layout">
-        <div class="graph-canvas-wrap" ref={containerRef} />
-
-        <aside class="graph-inspector">
-          <h3>Inspector</h3>
-          {level === "subgraph" && subHover ? (
-            <SubgraphDetail node={subHover} />
-          ) : (selected ?? hover) ? (
-            <MetanodeDetail
-              node={selected ?? hover!}
-              isSelected={!!selected}
-              onDrill={wasmReady ? () => void drillInto(selected ?? hover!) : undefined}
-              drilling={expanding}
-            />
-          ) : (
-            <p class="placeholder">
-              {level === "subgraph"
-                ? "Hover a node for details."
-                : "Hover or click a metanode. Double-click or use Drill down to expand."}
-            </p>
-          )}
-        </aside>
+      <div class="row g-0 graph-body flex-grow-1 h-100">
+        <div class="col-lg-9 graph-main-col h-100">
+          <div class="graph-canvas-wrap flex-grow-1" ref={containerRef} />
+          <div class="graph-legend px-3 py-2 bg-white small d-flex flex-wrap gap-3 border-top">
+            {LEGEND.map((item) => (
+              <span key={item.label}>
+                <span class="legend-dot" style={{ background: item.color }} />
+                {item.label}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div class="col-lg-3 border-start bg-white h-100 overflow-hidden">
+          <aside class="graph-inspector p-3 h-100">
+            <h3 class="h6 mb-3">Inspector</h3>
+            {level === "subgraph" && subHover ? (
+              <SubgraphDetail node={subHover} />
+            ) : (selected ?? hover) ? (
+              <MetanodeDetail
+                node={selected ?? hover!}
+                isSelected={!!selected}
+                onDrill={wasmReady ? () => void drillInto(selected ?? hover!) : undefined}
+                drilling={expanding}
+              />
+            ) : (
+              <p class="text-muted small mb-0">
+                {level === "subgraph"
+                  ? "Hover a node for details."
+                  : "Hover or click a metanode. Double-click or Drill down to expand."}
+              </p>
+            )}
+          </aside>
+        </div>
       </div>
     </div>
   );
@@ -201,6 +267,7 @@ function renderMetagraph(
   meta: MetagraphPayload,
   container: HTMLDivElement,
   sigmaRef: { current: Sigma | null },
+  showCalls: boolean,
   handlers: {
     setHover: (n: Metanode | null) => void;
     setSelected: (n: Metanode | null) => void;
@@ -208,6 +275,8 @@ function renderMetagraph(
   },
 ) {
   const graph = new Graph();
+  const visibleIds = new Set(meta.nodes.map((n) => n.id));
+
   for (const n of meta.nodes) {
     graph.addNode(String(n.id), {
       label: n.label,
@@ -215,17 +284,16 @@ function renderMetagraph(
       y: n.y,
       size: Math.max(4, Math.log(n.size + 1) * 5),
       meta: n,
-      color: "#58a6ff",
+      color: "#6f42c1",
     });
   }
-  for (const e of meta.edges) {
-    const key = `${e.source}-${e.target}`;
-    if (!graph.hasEdge(key) && graph.hasNode(String(e.source)) && graph.hasNode(String(e.target))) {
-      graph.addEdge(String(e.source), String(e.target), {
-        size: Math.max(0.5, Math.log(e.weight + 1)),
-        color: "#484f58",
-      });
-    }
+  if (showCalls) {
+    addAggregatedEdges(
+      graph,
+      meta.edges
+        .filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target))
+        .map((e) => ({ source: e.source, target: e.target, weight: e.weight })),
+    );
   }
 
   if (sigmaRef.current) {
@@ -260,10 +328,18 @@ function renderSubgraph(
   container: HTMLDivElement,
   sigmaRef: { current: Sigma | null },
   setSubHover: (n: SubgraphNode | null) => void,
+  showCalls: boolean,
 ) {
   const graph = new Graph();
   const n = payload.nodes.length || 1;
   const radius = Math.max(30, Math.sqrt(n) * 8);
+
+  const typeColors: Record<number, string> = {
+    0: "#0d6efd",
+    1: "#d63384",
+    4: "#0dcaf0",
+    5: "#dc3545",
+  };
 
   for (let i = 0; i < payload.nodes.length; i++) {
     const node = payload.nodes[i];
@@ -274,14 +350,14 @@ function renderSubgraph(
       y: Math.sin(angle) * radius,
       size: Math.max(3, Math.log(node.complexity + 2) * 2),
       meta: node,
-      color: node.node_type === 0 ? "#3fb950" : "#58a6ff",
+      color: typeColors[node.node_type] ?? "#6c757d",
     });
   }
-  for (const e of payload.edges) {
-    const key = `${e.source}-${e.target}`;
-    if (!graph.hasEdge(key) && graph.hasNode(String(e.source)) && graph.hasNode(String(e.target))) {
-      graph.addEdge(String(e.source), String(e.target), { size: 0.5, color: "#484f58" });
-    }
+  if (showCalls) {
+    addAggregatedEdges(
+      graph,
+      payload.edges.map((e) => ({ source: e.source, target: e.target, weight: 1 })),
+    );
   }
 
   if (sigmaRef.current) {
@@ -294,6 +370,7 @@ function renderSubgraph(
     setSubHover(graph.getNodeAttribute(node, "meta") as SubgraphNode);
   });
   sigma.on("leaveNode", () => setSubHover(null));
+  sigma.getCamera().animatedReset({ duration: 300 });
 
   sigmaRef.current = sigma;
   return () => {
@@ -308,11 +385,33 @@ function sigmaOptions() {
     labelFont: "system-ui, sans-serif",
     labelSize: 11,
     labelWeight: "500" as const,
-    defaultNodeColor: "#58a6ff",
-    defaultEdgeColor: "#484f58",
+    defaultNodeColor: "#0d6efd",
+    defaultEdgeColor: "#adb5bd",
     minCameraRatio: 0.08,
     maxCameraRatio: 10,
   };
+}
+
+function addAggregatedEdges(
+  graph: Graph,
+  edges: Array<{ source: number; target: number; weight?: number }>,
+) {
+  const weights = new Map<string, number>();
+  for (const e of edges) {
+    const from = String(e.source);
+    const to = String(e.target);
+    if (!graph.hasNode(from) || !graph.hasNode(to) || from === to) continue;
+    const k = `${from}\t${to}`;
+    weights.set(k, (weights.get(k) ?? 0) + (e.weight ?? 1));
+  }
+  for (const [k, weight] of weights) {
+    const [from, to] = k.split("\t");
+    if (graph.hasEdge(from, to)) continue;
+    graph.addEdge(from, to, {
+      size: Math.max(0.5, Math.log(weight + 1)),
+      color: "#adb5bd",
+    });
+  }
 }
 
 function MetanodeDetail({
@@ -328,24 +427,27 @@ function MetanodeDetail({
 }) {
   return (
     <>
-      <dl class="inspector-dl">
-        <dt>{isSelected ? "Selected" : "Hover"}</dt>
-        <dd>
-          <code>{node.label}</code>
+      <dl class="row small mb-0">
+        <dt class="col-5 text-muted">{isSelected ? "Selected" : "Hover"}</dt>
+        <dd class="col-7 mb-1">
+          <code class="small">{node.label}</code>
         </dd>
-        <dt>Members</dt>
-        <dd>{node.size.toLocaleString()}</dd>
-        <dt>Functions</dt>
-        <dd>{node.functions.toLocaleString()}</dd>
-        <dt>Classes</dt>
-        <dd>{node.classes.toLocaleString()}</dd>
-        <dt>Avg complexity</dt>
-        <dd>{node.avg_complexity.toFixed(1)}</dd>
-        <dt>Payload indices</dt>
-        <dd>{(node.member_indices?.length ?? 0).toLocaleString()}</dd>
+        <dt class="col-5 text-muted">Members</dt>
+        <dd class="col-7 mb-1">{node.size.toLocaleString()}</dd>
+        <dt class="col-5 text-muted">Functions</dt>
+        <dd class="col-7 mb-1">{node.functions.toLocaleString()}</dd>
+        <dt class="col-5 text-muted">Classes</dt>
+        <dd class="col-7 mb-1">{node.classes.toLocaleString()}</dd>
+        <dt class="col-5 text-muted">Avg complexity</dt>
+        <dd class="col-7 mb-1">{node.avg_complexity.toFixed(1)}</dd>
       </dl>
       {onDrill && (
-        <button type="button" class="drill-btn" disabled={drilling} onClick={onDrill}>
+        <button
+          type="button"
+          class="btn btn-primary btn-sm w-100 mt-3"
+          disabled={drilling}
+          onClick={onDrill}
+        >
           {drilling ? "Expanding…" : "Drill down"}
         </button>
       )}
@@ -355,21 +457,19 @@ function MetanodeDetail({
 
 function SubgraphDetail({ node }: { node: SubgraphNode }) {
   return (
-    <dl class="inspector-dl">
-      <dt>Name</dt>
-      <dd>
-        <code>{node.name}</code>
+    <dl class="row small mb-0">
+      <dt class="col-5 text-muted">Name</dt>
+      <dd class="col-7 mb-1">
+        <code class="small">{node.name}</code>
       </dd>
-      <dt>Type</dt>
-      <dd>{node.node_type_name}</dd>
-      <dt>Complexity</dt>
-      <dd>{node.complexity.toFixed(1)}</dd>
-      <dt>Index</dt>
-      <dd>{node.index}</dd>
+      <dt class="col-5 text-muted">Type</dt>
+      <dd class="col-7 mb-1">{node.node_type_name}</dd>
+      <dt class="col-5 text-muted">Complexity</dt>
+      <dd class="col-7 mb-1">{node.complexity.toFixed(1)}</dd>
       {node.file_path && (
         <>
-          <dt>File</dt>
-          <dd class="file-path">{node.file_path}</dd>
+          <dt class="col-5 text-muted">File</dt>
+          <dd class="col-7 mb-1 text-break">{node.file_path}</dd>
         </>
       )}
     </dl>

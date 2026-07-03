@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import init, { EngineContext } from "../wasm/rbuilder_wasm.js";
+import { bundleDataUrl } from "./bundleUrl";
 import type { NodeListPayload, SubgraphPayload, WorkerIn, WorkerOut } from "./types";
 
 let engine: EngineContext | null = null;
@@ -32,7 +33,7 @@ self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
 };
 
 async function handleInit() {
-  const payloadRes = await fetch("./graph_payload.bin");
+  const payloadRes = await fetch(bundleDataUrl("graph_payload.bin"));
   if (!payloadRes.ok) {
     throw new Error(`graph_payload.bin: HTTP ${payloadRes.status}`);
   }

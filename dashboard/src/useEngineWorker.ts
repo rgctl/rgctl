@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import type { EngineReady, NodeListPayload, SubgraphPayload, WorkerIn, WorkerInWithoutId, WorkerOut } from "./types";
+import type { EngineReady, NodeListPayload, SubgraphPayload, WorkerInWithoutId, WorkerOut } from "./types";
 
 export function useEngineWorker() {
   const workerRef = useRef<Worker | null>(null);
@@ -39,22 +39,19 @@ export function useEngineWorker() {
         const p = pending.current.get(data.requestId);
         if (!p) return;
         pending.current.delete(data.requestId);
-        if (data.type === "subgraph") {
-          p.resolve(data.payload);
-        } else if (data.type === "node_list") {
-          p.resolve(data.payload);
-        }
+        if (data.type === "subgraph") p.resolve(data.payload);
+        else if (data.type === "node_list") p.resolve(data.payload);
       }
     };
 
-    worker.postMessage({ type: "init" } satisfies WorkerIn);
+    worker.postMessage({ type: "init" } satisfies WorkerInWithoutId);
     return () => {
       worker.terminate();
       workerRef.current = null;
     };
   }, []);
 
-  const send = useCallback(<T>(msg: Exclude<WorkerInWithoutId, { type: "init" }>): Promise<T> => {
+  const send = useCallback(<T,>(msg: Exclude<WorkerInWithoutId, { type: "init" }>): Promise<T> => {
     return new Promise((resolve, reject) => {
       const worker = workerRef.current;
       if (!worker) {
@@ -66,7 +63,7 @@ export function useEngineWorker() {
         resolve: resolve as (v: unknown) => void,
         reject,
       });
-      worker.postMessage({ ...msg, requestId } as WorkerIn);
+      worker.postMessage({ ...msg, requestId });
     });
   }, []);
 

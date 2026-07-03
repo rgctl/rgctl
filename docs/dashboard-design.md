@@ -1,6 +1,6 @@
 # rBuilder static dashboard — engineering design (living document)
 
-**Status:** Phase 3 complete  
+**Status:** Phase 3 complete (Bootstrap 5 UI, Sigma + WASM pipeline)  
 **Last updated:** 2026-07-03  
 **Owner:** rBuilder core / export pipeline  
 
@@ -25,7 +25,8 @@ Related: [performance-engineering.md](performance-engineering.md), [Code_structu
 ## Repository layout
 
 ```
-dashboard/                      # Vite + Preact UI (Phase 0+)
+dashboard/                      # Vite + Preact + Bootstrap 5 (bundled, offline)
+  src/styles.css                # Bootstrap import + graph layout tweaks
   src/App.tsx                   # Tab shell, stat toolbar
   src/worker.ts                 # Loads WASM + graph_payload.bin
   dist/                         # Built assets (npm run build) — embedded at compile time

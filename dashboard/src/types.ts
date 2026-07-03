@@ -1,3 +1,5 @@
+import { bundleDataUrl } from "./bundleUrl";
+
 export interface DashboardManifest {
   schema_version: number;
   dashboard_version: string;
@@ -151,7 +153,7 @@ export async function loadManifest(): Promise<DashboardManifest> {
   if (embedded?.textContent) {
     return JSON.parse(embedded.textContent) as DashboardManifest;
   }
-  const res = await fetch("./manifest.json");
+  const res = await fetch(bundleDataUrl("manifest.json"));
   if (!res.ok) {
     throw new Error(`manifest.json: HTTP ${res.status}`);
   }

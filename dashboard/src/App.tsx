@@ -7,10 +7,12 @@ import { useEngineWorker } from "./useEngineWorker";
 const TABS = [
   { id: "graph", label: "Graph Visualization" },
   { id: "functions", label: "Functions" },
-  { id: "cfg", label: "CFG / Dominance" },
+  { id: "cfg", label: "CFG / PDG Analysis" },
+  { id: "dataflow", label: "Dataflow" },
+  { id: "taint", label: "Taint Analysis" },
+  { id: "guide", label: "Query Guide" },
   { id: "slice", label: "Program Slicing" },
   { id: "blast", label: "Blast Radius" },
-  { id: "guide", label: "Query Guide" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -33,50 +35,54 @@ export function App() {
   const view = manifest?.view;
 
   return (
-    <div class="app">
-      <header class="header">
-        <h1>rBuilder Analysis Dashboard</h1>
-        <p class="subtitle">Phase 3 — LOD drill-down, bitmask filters, function table</p>
+    <div class="rb-app container-fluid py-3 px-4">
+      <header class="mb-3 flex-shrink-0">
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <span class="rb-header-icon" aria-hidden="true">
+            ⎇
+          </span>
+          <h1 class="h4 mb-0 fw-semibold text-primary">rBuilder Analysis Dashboard</h1>
+        </div>
+        <p class="text-muted small mb-0">Comprehensive code analysis visualization</p>
       </header>
 
       {error && (
-        <div class="banner banner-error" role="alert">
+        <div class="alert alert-danger py-2 small" role="alert">
           {error}
         </div>
       )}
 
-      <section class="status-bar">
-        <span>
-          Engine:{" "}
-          {engine
-            ? engine.wasm
-              ? "WASM ✓"
-              : "JS header fallback"
-            : "loading…"}
-        </span>
-        {engine && (
-          <>
-            <span>Nodes: {engine.nodeCount.toLocaleString()}</span>
-            <span>Edges: {engine.edgeCount.toLocaleString()}</span>
-            <span>Schema: v{engine.schemaVersion}</span>
-          </>
-        )}
-        {view && (
+      <div class="card mb-3 shadow-sm">
+        <div class="card-body py-2 small d-flex flex-wrap gap-3">
           <span>
-            Metanodes: {view.metanode_count} · Metaedges: {view.metaedge_count}
+            Engine:{" "}
+            <strong>
+              {engine ? (engine.wasm ? "WASM ✓" : "JS fallback") : "loading…"}
+            </strong>
           </span>
-        )}
-        {manifest && (
-          <span class="phases">
-            Phases:{" "}
-            {Object.entries(phases)
-              .map(([k, v]) => `${k}=${v}`)
-              .join(", ")}
-          </span>
-        )}
-      </section>
+          {engine && (
+            <>
+              <span>Nodes: {engine.nodeCount.toLocaleString()}</span>
+              <span>Edges: {engine.edgeCount.toLocaleString()}</span>
+            </>
+          )}
+          {view && (
+            <span>
+              Metanodes: {view.metanode_count} · Metaedges: {view.metaedge_count}
+            </span>
+          )}
+          {manifest && (
+            <span class="text-success">
+              Phases:{" "}
+              {Object.entries(phases)
+                .map(([k, v]) => `${k}=${v}`)
+                .join(", ")}
+            </span>
+          )}
+        </div>
+      </div>
 
-      <section class="stats">
+      <div class="row row-cols-2 row-cols-md-4 g-3 mb-3 flex-shrink-0">
         <StatCard label="Total Nodes" value={manifest?.graph.node_count ?? "—"} />
         <StatCard label="Total Edges" value={manifest?.graph.edge_count ?? "—"} />
         <StatCard label="Functions" value={m?.function_count ?? "—"} />
@@ -84,36 +90,46 @@ export function App() {
         <StatCard label="Classes" value={m?.class_count ?? "—"} />
         <StatCard label="Call Edges" value={m?.calls_count ?? "—"} />
         <StatCard label="High Blast Radius" value={m?.high_blast_radius_count ?? "—"} />
-      </section>
+        <StatCard label="Filtered Nodes" value={manifest?.graph.node_count ?? "—"} />
+      </div>
 
-      <nav class="tabs" role="tablist">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            class={tab === t.id ? "tab active" : "tab"}
-            onClick={() => setTab(t.id)}
+      <div class="rb-tab-workspace">
+        <ul class="nav nav-tabs mb-0 flex-shrink-0">
+          {TABS.map((t) => (
+            <li class="nav-item" key={t.id}>
+              <button
+                type="button"
+                class={`nav-link ${tab === t.id ? "active" : ""}`}
+                onClick={() => setTab(t.id)}
+              >
+                {t.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <div
+          class={`card shadow-sm border-top-0 rounded-top-0 rb-tab-panel-card ${
+            tab === "graph" ? "graph-panel p-0" : "p-0"
+          }`}
+        >
+          <div
+            class={`rb-tab-panel-body ${tab === "graph" ? "" : "rb-tab-panel-body--scroll p-4"}`}
           >
-            {t.label}
-          </button>
-        ))}
-      </nav>
+            <TabPanel
+              id={tab}
+              manifest={manifest}
+              engine={engine}
+              wasmReady={wasmReady}
+              expand={expand}
+              listNodes={listNodes}
+            />
+          </div>
+        </div>
+      </div>
 
-      <main class={tab === "graph" ? "panel panel-graph" : "panel"}>
-        <TabPanel
-          id={tab}
-          manifest={manifest}
-          engine={engine}
-          wasmReady={wasmReady}
-          expand={expand}
-          listNodes={listNodes}
-        />
-      </main>
-
-      <footer class="footer">
-        <code>docs/dashboard-design.md</code> — manifest v{manifest?.schema_version ?? "?"} ·{" "}
+      <footer class="text-muted small mt-3 flex-shrink-0">
+        <code>docs/dashboard-design.md</code> · manifest v{manifest?.schema_version ?? "?"} ·{" "}
         {manifest?.graph.payload_format ?? "columnar_v2"}
       </footer>
     </div>
@@ -122,9 +138,13 @@ export function App() {
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
-    <div class="stat-card">
-      <div class="stat-value">{value}</div>
-      <div class="stat-label">{label}</div>
+    <div class="col">
+      <div class="card stat-card shadow-sm h-100">
+        <div class="card-body py-3">
+          <div class="stat-value">{value}</div>
+          <div class="stat-label">{label}</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -171,17 +191,19 @@ function TabPanel({
 
   const placeholders: Record<Exclude<TabId, "graph" | "functions">, string> = {
     cfg: "Phase 4: CFG + dominance from cfg_pdg.archive.bin",
+    dataflow: "Phase 4: dataflow from archive",
+    taint: "Phase 7: taint from archive",
+    guide: "CLI query reference",
     slice: "Phase 5: CodeMirror + WASM slice",
     blast: "Phase 6: blast engine + depth slider",
-    guide: "CLI query reference (static markdown)",
   };
 
   return (
-    <div class="tab-panel">
-      <h2>{TABS.find((t) => t.id === id)?.label}</h2>
-      <p class="placeholder">{placeholders[id as Exclude<TabId, "graph" | "functions">]}</p>
+    <div>
+      <h2 class="h5 mb-2">{TABS.find((t) => t.id === id)?.label}</h2>
+      <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions">]}</p>
       {id === "guide" && (
-        <pre class="guide">
+        <pre class="bg-light border rounded p-3 small mb-0">
           {`rbuilder discover .
 rbuilder -f json blast-radius OrderService::process --depth 5
 rbuilder gql "MATCH (n:Function) RETURN n LIMIT 10"`}

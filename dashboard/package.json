@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "bootstrap": "^5.3.8",
     "graphology": "^0.26.0",
     "preact": "^10.25.4",
     "sigma": "^3.0.2"

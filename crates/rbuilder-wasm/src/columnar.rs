@@ -400,11 +400,6 @@ fn extension_complexity(
         .and_then(|v| v.parse::<f64>().ok())
 }
 
-/// Build uuid → columnar index map from snapshot bytes (for Rust export side).
-pub fn uuid_index_map(bytes: &[u8]) -> Result<HashMap<[u8; 16], u32>, String> {
-    Ok(ColumnarView::open(bytes.to_vec())?.uuid_to_index_map().clone())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
