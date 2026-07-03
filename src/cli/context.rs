@@ -65,7 +65,7 @@ impl CliContext {
             return Ok(());
         }
         let store = SnapshotNodeStore::open(&path)?;
-        let digest: Arc<str> = Arc::from(store.content_digest());
+        let digest: Arc<str> = Arc::from(store.content_digest()?);
         *self.snapshot_cache.borrow_mut() = Some(SnapshotSession {
             store: Arc::new(store),
             digest,

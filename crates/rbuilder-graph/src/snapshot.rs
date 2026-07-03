@@ -1,9 +1,9 @@
 //! Memory-mappable binary graph snapshot format.
 //!
-//! Replaces JSON `graph.db` parsing with a single contiguous binary layout that can
-//! be memory-mapped and hydrated into [`MemoryBackend`] without serde_json overhead.
+//! v1: bincode blob (legacy). v2: columnar mmap — see [`columnar_snapshot`].
 
 use crate::backend::MemoryBackend;
+use crate::columnar_snapshot::ColumnarGraphMmap;
 use crate::schema::{Edge, EdgeType, Node, NodeType, GRAPH_SCHEMA_VERSION};
 use memmap2::Mmap;
 use rbuilder_error::{Error, Result};
@@ -16,8 +16,8 @@ use uuid::Uuid;
 
 /// Magic bytes for graph snapshot files (`RBGR`).
 pub const SNAPSHOT_MAGIC: [u8; 4] = *b"RBGR";
-/// Current snapshot format version.
-pub const SNAPSHOT_VERSION: u32 = 1;
+/// Legacy bincode snapshot format version.
+pub const SNAPSHOT_VERSION_V1: u32 = 1;
 
 /// Default snapshot filename under `.rbuilder/`.
 pub const SNAPSHOT_FILE: &str = "graph.snapshot.bin";
@@ -82,19 +82,9 @@ impl PreparedGraphSnapshot {
         })
     }
 
-    /// Write snapshot to disk with magic header.
+    /// Write columnar v2 snapshot to disk (default).
     pub fn write_to_path(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let payload = bincode::serialize(self).map_err(serde_err)?;
-        let mut file = File::create(path)?;
-        use std::io::Write;
-        file.write_all(&SNAPSHOT_MAGIC)?;
-        file.write_all(&SNAPSHOT_VERSION.to_le_bytes())?;
-        file.write_all(&(payload.len() as u64).to_le_bytes())?;
-        file.write_all(&payload)?;
-        Ok(())
+        self.write_columnar_to_path(path)
     }
 
     /// Hydrate a [`MemoryBackend`] using pre-built indexes (no index rebuild scan).
@@ -103,10 +93,15 @@ impl PreparedGraphSnapshot {
     }
 }
 
+enum SnapshotBacking {
+    Legacy(PreparedGraphSnapshot),
+    Columnar(ColumnarGraphMmap),
+}
+
 /// Memory-mapped graph snapshot for zero-copy open.
 pub struct MmappedGraphSnapshot {
     _mmap: Arc<Mmap>,
-    prepared: PreparedGraphSnapshot,
+    backing: SnapshotBacking,
 }
 
 impl MmappedGraphSnapshot {
@@ -115,46 +110,91 @@ impl MmappedGraphSnapshot {
         repo_root.join(crate::code_graph::GRAPH_DIR).join(SNAPSHOT_FILE)
     }
 
-    /// Open and parse a snapshot file via mmap.
+    /// Open and parse a snapshot file via mmap (v1 bincode or v2 columnar).
     pub fn open(path: &Path) -> Result<Self> {
         let file = File::open(path)?;
-        let mmap = unsafe { Mmap::map(&file)? };
-        let prepared = parse_payload(&mmap)?;
+        let mmap = Arc::new(unsafe { Mmap::map(&file)? });
+        if mmap.len() < 8 {
+            return Err(Error::SerdeError("graph snapshot truncated".into()));
+        }
+        if mmap[0..4] != SNAPSHOT_MAGIC {
+            return Err(Error::SerdeError("invalid graph snapshot magic".into()));
+        }
+        let version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
+        let backing = match version {
+            SNAPSHOT_VERSION_V1 => SnapshotBacking::Legacy(parse_v1_payload(&mmap)?),
+            v if v == crate::columnar_snapshot::COLUMNAR_SNAPSHOT_VERSION => {
+                SnapshotBacking::Columnar(ColumnarGraphMmap::open(Arc::clone(&mmap))?)
+            }
+            other => {
+                return Err(Error::SerdeError(format!(
+                    "unsupported graph snapshot version {other}"
+                )));
+            }
+        };
         Ok(Self {
-            _mmap: Arc::new(mmap),
-            prepared,
+            _mmap: mmap,
+            backing,
         })
     }
 
-    /// Access parsed snapshot data.
-    pub fn prepared(&self) -> &PreparedGraphSnapshot {
-        &self.prepared
+    /// True when opened as columnar v2 (no full-graph bincode deserialize).
+    pub fn is_columnar(&self) -> bool {
+        matches!(self.backing, SnapshotBacking::Columnar(_))
     }
 
-    pub fn content_digest(&self) -> &str {
-        &self.prepared.content_digest
+    /// Access legacy prepared snapshot (materializes from columnar when needed).
+    pub fn prepared(&self) -> Result<PreparedGraphSnapshot> {
+        match &self.backing {
+            SnapshotBacking::Legacy(p) => Ok(p.clone()),
+            SnapshotBacking::Columnar(c) => c.to_prepared(),
+        }
+    }
+
+    pub fn content_digest(&self) -> Result<&str> {
+        match &self.backing {
+            SnapshotBacking::Legacy(p) => Ok(&p.content_digest),
+            SnapshotBacking::Columnar(c) => Ok(c.content_digest()),
+        }
     }
 
     pub fn node_count(&self) -> usize {
-        self.prepared.nodes.len()
+        match &self.backing {
+            SnapshotBacking::Legacy(p) => p.nodes.len(),
+            SnapshotBacking::Columnar(c) => c.node_count(),
+        }
     }
 
     pub fn edge_count(&self) -> usize {
-        self.prepared.edges.len()
+        match &self.backing {
+            SnapshotBacking::Legacy(p) => p.edges.len(),
+            SnapshotBacking::Columnar(c) => c.edge_count(),
+        }
     }
 
-    /// Typed edge list for graph projections (no backend required).
-    pub fn edge_topology_typed(&self) -> Vec<(Uuid, Uuid, EdgeType)> {
-        self.prepared
-            .edges
-            .iter()
-            .map(|e| (e.from, e.to, e.edge_type))
-            .collect()
+    /// Typed edge list for graph projections (columnar reads mmap columns directly).
+    pub fn edge_topology_typed(&self) -> Result<Vec<(Uuid, Uuid, EdgeType)>> {
+        match &self.backing {
+            SnapshotBacking::Legacy(p) => Ok(p
+                .edges
+                .iter()
+                .map(|e| (e.from, e.to, e.edge_type))
+                .collect()),
+            SnapshotBacking::Columnar(c) => c.edge_topology_typed(),
+        }
+    }
+
+    /// Columnar view when available.
+    pub fn columnar(&self) -> Option<&ColumnarGraphMmap> {
+        match &self.backing {
+            SnapshotBacking::Columnar(c) => Some(c),
+            SnapshotBacking::Legacy(_) => None,
+        }
     }
 
     /// Hydrate into an in-memory backend when mutation or legacy APIs are needed.
     pub fn hydrate_backend(&self) -> Result<MemoryBackend> {
-        self.prepared.hydrate_backend()
+        self.prepared()?.hydrate_backend()
     }
 }
 
@@ -174,8 +214,15 @@ impl SnapshotNodeStore {
     pub fn open(path: &Path) -> Result<Self> {
         let snapshot = MmappedGraphSnapshot::open(path)?;
         let mut id_to_index = HashMap::with_capacity(snapshot.node_count());
-        for (idx, node) in snapshot.prepared().nodes.iter().enumerate() {
-            id_to_index.insert(node.id, idx);
+        if let Some(col) = snapshot.columnar() {
+            for (idx, id) in col.node_ids_by_index() {
+                id_to_index.insert(id, idx);
+            }
+        } else {
+            let prepared = snapshot.prepared()?;
+            for (idx, node) in prepared.nodes.iter().enumerate() {
+                id_to_index.insert(node.id, idx);
+            }
         }
         Ok(Self {
             snapshot,
@@ -188,13 +235,17 @@ impl SnapshotNodeStore {
         &self.snapshot
     }
 
-    /// Prepared graph payload.
-    pub fn prepared(&self) -> &PreparedGraphSnapshot {
+    /// Legacy prepared payload (explicit materialize for columnar v2).
+    pub fn prepared(&self) -> Result<PreparedGraphSnapshot> {
         self.snapshot.prepared()
     }
 
-    pub fn content_digest(&self) -> &str {
+    pub fn content_digest(&self) -> Result<&str> {
         self.snapshot.content_digest()
+    }
+
+    pub fn is_columnar(&self) -> bool {
+        self.snapshot.is_columnar()
     }
 
     pub fn node_count(&self) -> usize {
@@ -205,53 +256,67 @@ impl SnapshotNodeStore {
         self.snapshot.edge_count()
     }
 
+    /// All node UUIDs indexed by this store (no full node materialize).
+    pub fn all_node_ids(&self) -> Vec<Uuid> {
+        self.id_to_index.keys().copied().collect()
+    }
+
+    /// Typed edge topology without hydrating a backend.
+    pub fn edge_topology_typed(&self) -> Result<Vec<(Uuid, Uuid, EdgeType)>> {
+        self.snapshot.edge_topology_typed()
+    }
+
     /// Lookup a node by UUID without hydrating [`MemoryBackend`].
-    pub fn get_node(&self, id: Uuid) -> Option<&Node> {
-        self.id_to_index
+    pub fn get_node(&self, id: Uuid) -> Result<Option<Node>> {
+        if let Some(col) = self.snapshot.columnar() {
+            return col.get_node(id);
+        }
+        let prepared = self.snapshot.prepared()?;
+        Ok(self
+            .id_to_index
             .get(&id)
-            .map(|&idx| &self.snapshot.prepared().nodes[idx])
+            .map(|&idx| prepared.nodes[idx].clone()))
     }
 
     /// Find nodes by bare name using the pre-built name index.
-    pub fn find_nodes_by_name(&self, name: &str) -> Vec<&Node> {
-        self.snapshot
-            .prepared()
+    pub fn find_nodes_by_name(&self, name: &str) -> Result<Vec<Node>> {
+        if let Some(col) = self.snapshot.columnar() {
+            return col.find_nodes_by_name(name);
+        }
+        let prepared = self.snapshot.prepared()?;
+        Ok(prepared
             .indexes
             .name_index
             .get(name)
             .map(|ids| {
                 ids.iter()
-                    .filter_map(|id| self.get_node(*id))
+                    .filter_map(|id| {
+                        self.id_to_index
+                            .get(id)
+                            .map(|&idx| prepared.nodes[idx].clone())
+                    })
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
     /// Filter impact-zone UUIDs to function nodes only.
-    pub fn filter_function_impact(&self, impact_zone_ids: &[Uuid]) -> Vec<Uuid> {
-        impact_zone_ids
-            .iter()
-            .copied()
-            .filter(|id| {
-                self.get_node(*id)
-                    .is_some_and(|n| n.node_type == NodeType::Function)
-            })
-            .collect()
+    pub fn filter_function_impact(&self, impact_zone_ids: &[Uuid]) -> Result<Vec<Uuid>> {
+        let mut out = Vec::new();
+        for id in impact_zone_ids {
+            if let Some(node) = self.get_node(*id)? {
+                if node.node_type == NodeType::Function {
+                    out.push(*id);
+                }
+            }
+        }
+        Ok(out)
     }
 }
 
-fn parse_payload(mmap: &[u8]) -> Result<PreparedGraphSnapshot> {
+fn parse_v1_payload(mmap: &[u8]) -> Result<PreparedGraphSnapshot> {
     if mmap.len() < 16 {
         return Err(Error::SerdeError("graph snapshot truncated".into()));
-    }
-    if mmap[0..4] != SNAPSHOT_MAGIC {
-        return Err(Error::SerdeError("invalid graph snapshot magic".into()));
-    }
-    let version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
-    if version != SNAPSHOT_VERSION {
-        return Err(Error::SerdeError(format!(
-            "unsupported graph snapshot version {version}"
-        )));
     }
     let payload_len = u64::from_le_bytes(mmap[8..16].try_into().unwrap()) as usize;
     if mmap.len() < 16 + payload_len {
@@ -272,7 +337,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn snapshot_round_trip() {
+    fn snapshot_round_trip_columnar_v2() {
         let mut backend = MemoryBackend::new();
         let n = Node::new(NodeType::Function, "main".into());
         let id = n.id;
@@ -287,6 +352,7 @@ mod tests {
         snap.write_to_path(&path).unwrap();
 
         let mmap = MmappedGraphSnapshot::open(&path).unwrap();
+        assert!(mmap.is_columnar());
         assert_eq!(mmap.node_count(), 1);
         assert_eq!(mmap.edge_count(), 1);
 

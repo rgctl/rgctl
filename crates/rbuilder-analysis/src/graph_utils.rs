@@ -11,7 +11,7 @@ use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use rbuilder_error::Result;
 use rbuilder_graph::backend::MemoryBackend;
-use rbuilder_graph::snapshot::PreparedGraphSnapshot;
+use rbuilder_graph::snapshot::{PreparedGraphSnapshot, SnapshotNodeStore};
 use rbuilder_graph::schema::EdgeType;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -97,6 +97,45 @@ impl PetGraphView {
             .iter()
             .map(|e| (e.from, e.to, e.edge_type))
             .collect::<Vec<_>>();
+
+        Self::wire_edges(
+            edge_topology,
+            &mut directed,
+            &mut undirected,
+            &uuid_to_index,
+            &uuid_to_undirected,
+        )?;
+
+        Ok(Self {
+            directed,
+            undirected,
+            uuid_to_index,
+            index_to_uuid,
+            undirected_to_uuid,
+        })
+    }
+
+    /// Build petgraph views from a mmap snapshot store (columnar v2: no full bincode deserialize).
+    pub fn from_snapshot_store(store: &SnapshotNodeStore) -> Result<Self> {
+        let node_count = store.node_count();
+        let edge_topology = store.edge_topology_typed()?;
+
+        let mut directed = DiGraph::<(), EdgeType>::with_capacity(node_count, edge_topology.len());
+        let mut undirected =
+            UnGraph::<(), EdgeType>::with_capacity(node_count, edge_topology.len());
+        let mut uuid_to_index = HashMap::with_capacity(node_count);
+        let mut index_to_uuid = HashMap::with_capacity(node_count);
+        let mut uuid_to_undirected = HashMap::with_capacity(node_count);
+        let mut undirected_to_uuid = HashMap::with_capacity(node_count);
+
+        for node_id in store.all_node_ids() {
+            let d_idx = directed.add_node(());
+            let u_idx = undirected.add_node(());
+            uuid_to_index.insert(node_id, d_idx);
+            index_to_uuid.insert(d_idx, node_id);
+            uuid_to_undirected.insert(node_id, u_idx);
+            undirected_to_uuid.insert(u_idx, node_id);
+        }
 
         Self::wire_edges(
             edge_topology,
@@ -238,7 +277,11 @@ mod tests {
             .unwrap();
 
         let prepared = rbuilder_graph::PreparedGraphSnapshot::from_backend(&backend).unwrap();
-        let view = PetGraphView::from_prepared(&prepared).unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("graph.snapshot.bin");
+        prepared.write_to_path(&path).unwrap();
+        let store = rbuilder_graph::SnapshotNodeStore::open(&path).unwrap();
+        let view = PetGraphView::from_snapshot_store(&store).unwrap();
         assert_eq!(view.directed.node_count(), 2);
         assert_eq!(view.directed.edge_count(), 1);
     }

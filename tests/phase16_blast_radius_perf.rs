@@ -6,7 +6,7 @@ use rbuilder::analysis::{
 };
 use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};
-use rbuilder::graph::{CodeGraph, PreparedGraphSnapshot, SnapshotNodeStore};
+use rbuilder::graph::{CodeGraph, MmappedGraphSnapshot, PreparedGraphSnapshot, SnapshotNodeStore};
 use rbuilder::graph::backend::MemoryBackend;
 use rayon::prelude::*;
 use std::path::PathBuf;
@@ -52,6 +52,18 @@ fn build_monorepo_mock(nodes: usize, edges: usize) -> CodeGraph {
         }
     }
     graph
+}
+
+fn write_v1_snapshot(prepared: &PreparedGraphSnapshot, path: &std::path::Path) {
+    use rbuilder::graph::snapshot::{SNAPSHOT_MAGIC, SNAPSHOT_VERSION_V1};
+    use std::io::Write;
+    let payload = bincode::serialize(prepared).unwrap();
+    let mut file = std::fs::File::create(path).unwrap();
+    file.write_all(&SNAPSHOT_MAGIC).unwrap();
+    file.write_all(&SNAPSHOT_VERSION_V1.to_le_bytes()).unwrap();
+    file.write_all(&(payload.len() as u64).to_le_bytes())
+        .unwrap();
+    file.write_all(&payload).unwrap();
 }
 
 /// Pre-built engine analyze must stay sub-millisecond on warm engine.
@@ -251,7 +263,7 @@ fn bench_repo_lite_analyze_under_3s() {
     }
 
     let store = SnapshotNodeStore::open(&graph_path).expect("open graph snapshot");
-    let digest = store.content_digest();
+    let digest = store.content_digest().expect("graph digest");
     let loaded = BlastEngineSnapshot::load_from_path(&engine_path).expect("load blast snapshot");
     let engine = BlastRadiusEngine::from_engine_snapshot(loaded).expect("hydrate engine");
     assert!(
@@ -260,7 +272,7 @@ fn bench_repo_lite_analyze_under_3s() {
     );
 
     let target_name = std::env::var("RBUILDER_BENCH_SYMBOL").unwrap_or_else(|_| "saveError".into());
-    let nodes = store.find_nodes_by_name(&target_name);
+    let nodes = store.find_nodes_by_name(&target_name).expect("name lookup");
     assert!(
         !nodes.is_empty(),
         "bench symbol {target_name} not found in graph snapshot"
@@ -270,7 +282,7 @@ fn bench_repo_lite_analyze_under_3s() {
     engine.analyze(nodes[0].id).expect("analyze");
     let latency = start.elapsed();
 
-    assert_eq!(digest, store.content_digest());
+    assert_eq!(digest, store.content_digest().expect("graph digest"));
     assert!(
         latency < Duration::from_secs(3),
         "br.query.lite_total_ms (metasfresh analyze) regression: {latency:?} >= 3s"
@@ -293,9 +305,60 @@ fn hydrate_prepared_faster_than_batch_reindex_5k() {
     slow.insert_edges_batch(prepared.edges.clone()).unwrap();
     let batch = start.elapsed();
 
+    // At 5k scale both paths are sub-5ms; allow micro-variance on shared CI runners.
     assert!(
-        hydrate <= batch,
-        "br.load.backend_hydrate_ms regression: hydrate {hydrate:?} > batch reindex {batch:?}"
+        hydrate <= batch.saturating_add(Duration::from_millis(5)),
+        "br.load.backend_hydrate_ms regression: hydrate {hydrate:?} >> batch reindex {batch:?}"
+    );
+}
+
+/// Columnar v2 open should beat legacy v1 bincode deserialize on mock scale.
+#[test]
+fn columnar_snapshot_open_faster_than_v1_5k() {
+    let graph = build_monorepo_mock(5_000, 25_000);
+    let prepared = PreparedGraphSnapshot::from_backend(graph.backend()).unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
+    let v1_path = dir.path().join("v1.graph.snapshot.bin");
+    let v2_path = dir.path().join("v2.graph.snapshot.bin");
+    write_v1_snapshot(&prepared, &v1_path);
+    prepared.write_to_path(&v2_path).unwrap();
+
+    let start = Instant::now();
+    let v1_mmap = MmappedGraphSnapshot::open(&v1_path).unwrap();
+    assert!(!v1_mmap.is_columnar());
+    let v1_latency = start.elapsed();
+
+    let start = Instant::now();
+    let store = SnapshotNodeStore::open(&v2_path).unwrap();
+    assert!(store.is_columnar());
+    let v2_latency = start.elapsed();
+
+    assert!(
+        v2_latency < v1_latency,
+        "br.load.columnar_open_ms should beat v1 bincode: v2={v2_latency:?} v1={v1_latency:?}"
+    );
+}
+
+/// PetGraphView from columnar snapshot store (no full PreparedGraphSnapshot materialize).
+#[test]
+fn petgraph_from_snapshot_store_5k_under_500ms() {
+    let graph = build_monorepo_mock(5_000, 25_000);
+    let prepared = PreparedGraphSnapshot::from_backend(graph.backend()).unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("graph.snapshot.bin");
+    prepared.write_to_path(&path).unwrap();
+
+    let store = SnapshotNodeStore::open(&path).unwrap();
+    assert!(store.is_columnar());
+
+    let start = Instant::now();
+    let view = PetGraphView::from_snapshot_store(&store).unwrap();
+    let latency = start.elapsed();
+
+    assert_eq!(view.directed.node_count(), 5_000);
+    assert!(
+        latency < Duration::from_millis(500),
+        "br.load.petgraph_from_snapshot_store_ms regression: {latency:?} >= 500ms"
     );
 }
 

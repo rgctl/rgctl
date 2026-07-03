@@ -293,13 +293,13 @@ pub fn candidates_from_backend(
 pub fn candidates_from_snapshot(
     store: &rbuilder_graph::snapshot::SnapshotNodeStore,
     target_name: &str,
-) -> Vec<MacroIndexEntry> {
-    store
-        .find_nodes_by_name(target_name)
+) -> Result<Vec<MacroIndexEntry>> {
+    Ok(store
+        .find_nodes_by_name(target_name)?
         .into_iter()
         .filter(|n| n.node_type == NodeType::Function)
-        .map(|n| node_to_candidate(n, target_name, 0.0, vec![], vec![]))
-        .collect()
+        .map(|n| node_to_candidate(&n, target_name, 0.0, vec![], vec![]))
+        .collect())
 }
 
 fn node_to_candidate(
@@ -515,7 +515,7 @@ impl MacroCallLookupDb {
         if snapshot_path.exists() {
             if let Ok(mmap) = rbuilder_graph::snapshot::MmappedGraphSnapshot::open(&snapshot_path) {
                 if let Some(stored) = Self::read_meta(&conn, "graph_digest")? {
-                    return Ok(stored == mmap.content_digest());
+                    return Ok(stored == mmap.content_digest()?);
                 }
                 let node_count: Option<String> = Self::read_meta(&conn, "node_count")?;
                 let edge_count: Option<String> = Self::read_meta(&conn, "edge_count")?;

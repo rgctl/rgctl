@@ -56,6 +56,8 @@ Policy evaluation and `--with-slices` force T2+ (full graph required today).
 | **SQLite unique lookup** | `phase16` | Synthetic row (100 callers, 500 impact names) | **< 15 ms** | Yes (release test) |
 | **SQLite FQN resolved** | `phase16` | Single candidate row | **< 50 ms** | Yes (release test) |
 | **PetGraph from prepared** | `phase16` + `blast_radius_benchmarks` | 150k / 700k mock | **< 30 s** | No (`#[ignore]`, needs `--ignored`) |
+| **PetGraph from columnar store** | `phase16` | 5k mock | **< 500 ms** | Yes (release test) |
+| **Columnar open vs v1** | `phase16` | 5k mock | v2 faster than v1 bincode | Yes (release test) |
 | **SnapshotNodeStore open** | `phase16` + `blast_radius_benchmarks` | 150k mock | **< 15 s** | No (`#[ignore]`) |
 | **Engine snapshot load** | `phase16` + `blast_radius_benchmarks` | 150k mock | **< 60 s** | No (`#[ignore]`) |
 | **Blast analyze (small)** | `benches/blast_radius_benchmarks.rs` | 5k mock | **< 5 ms** (bench assert) | No |
@@ -75,7 +77,7 @@ Policy evaluation and `--with-slices` force T2+ (full graph required today).
 | Component | Path | Status |
 |-----------|------|--------|
 | Criterion benches | `benches/blast_radius_benchmarks.rs` | ✅ Wired in `Cargo.toml` |
-| Release gate tests | `tests/phase16_blast_radius_perf.rs` | ✅ 3 CI gates + 3 ignored 150k gates |
+| Release gate tests | `tests/phase16_blast_radius_perf.rs` | ✅ CI gates + ignored 150k gates |
 
 ### Fixture tiers
 
@@ -126,6 +128,8 @@ Each metric should eventually have Criterion samples **and** a release gate wher
 | Metric ID | Description | Gate (150k mock) | Gate status |
 |-----------|-------------|------------------|-------------|
 | `br.load.petgraph_from_prepared_ms` | `PetGraphView::from_prepared` | < 30 s | ✅ ignored `phase16` |
+| `br.load.petgraph_from_snapshot_store_ms` | `PetGraphView::from_snapshot_store` (columnar v2) | < 500 ms (5k mock) | ✅ `phase16` |
+| `br.load.columnar_open_ms` | Columnar v2 open vs v1 bincode | v2 faster than v1 (5k mock) | ✅ `phase16` |
 | `br.load.snapshot_node_store_ms` | `SnapshotNodeStore::open` | < 15 s | ✅ ignored `phase16` |
 | `br.load.graph_snapshot_ms` | `MmappedGraphSnapshot::open` | < 15 s | ✅ `blast_radius_benchmarks` assert |
 | `br.load.engine_snapshot_ms` | Load + `from_engine_snapshot` | < 5 s (150k mock + metasfresh soft) | ✅ `phase16` |
@@ -174,7 +178,7 @@ br.query.sqlite_unique_ms regression: 42ms >= 15ms
 | No **end-to-end CLI** T1 subprocess gate on metasfresh | In-process soft gates only; T0 covered via `fast_path_ms` |
 | **T3** slice path without prior `discover --cfg` | Still rebuilds ICFG/PDG from source on large repos |
 | **metasfresh** not required in CI | Soft gates skip when checkout/cache absent |
-| **P2 columnar graph / query daemon** | Not started — see roadmap below |
+| **P2 columnar graph / query daemon** | Columnar v2 **done**; query daemon still open — see roadmap below |
 | `semantic-verification.sh` | Dominance only; no blast-radius |
 | **JSON lines** trend file | Not built |
 
@@ -205,7 +209,7 @@ Prioritized by impact on T0–T3. Status as of 2026-07-03.
 
 | # | Item | Status |
 |---|------|--------|
-| 8 | Columnar mmap graph — true zero-copy open | Open |
+| 8 | Columnar mmap graph — true zero-copy open | **Done** — v2 columnar `graph.snapshot.bin`; `ColumnarGraphMmap` + `SnapshotNodeStore` read mmap columns; v1 bincode still supported on read |
 | 9 | CFG/PDG mmap archive for `--with-slices` | **Done** — `CfgPdgArchive`; `to_interprocedural_cfg` + PDG preload; run `discover --cfg` first on large repos |
 | 10 | Ephemeral query daemon (amortize cold start) | Open |
 
@@ -251,11 +255,9 @@ cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 
 ## Recommended next steps
 
-1. **P2 #8 columnar mmap graph** — eliminate bincode deserialize on graph open.
+1. **P2 #10 query daemon** — amortize snapshot + engine load across repeated blast-radius invocations.
 
-2. **P2 #10 query daemon** — amortize snapshot + engine load across repeated blast-radius invocations.
-
-3. **P3 #11 `--depth`** — implement hop-limited impact zone or remove flag from CLI.
+2. **P3 #11 `--depth`** — implement hop-limited impact zone or remove flag from CLI.
 
 4. **Metasfresh T3 gate** — optional soft gate for `--with-slices` when fixture cache present.
 
@@ -289,3 +291,4 @@ cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 | `crates/rbuilder-analysis/src/macro_call_lookup.rs` | SQLite macro index (T0) |
 | `crates/rbuilder-analysis/src/blast_engine_snapshot.rs` | Engine v2 sparse+zstd |
 | `crates/rbuilder-graph/src/snapshot.rs` | Graph snapshot + `SnapshotNodeStore` |
+| `crates/rbuilder-graph/src/columnar_snapshot.rs` | Columnar v2 mmap layout + writer |

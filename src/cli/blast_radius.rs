@@ -128,7 +128,7 @@ fn resolve_target_uuid_impl(
     if let Some(id) = try_parse_symbol_uuid(&parsed.target_name) {
         let name = if let Some(store) = store {
             store
-                .get_node(id)
+                .get_node(id)?
                 .map(|n| n.name.clone())
                 .unwrap_or_else(|| parsed.target_name.clone())
         } else {
@@ -162,7 +162,7 @@ fn resolve_target_uuid_impl(
     }
 
     let mut candidates = if let Some(store) = store {
-        candidates_from_snapshot(store, &parsed.target_name)
+        candidates_from_snapshot(store, &parsed.target_name)?
     } else {
         candidates_from_backend(
             backend.expect("backend required when store absent"),
@@ -201,7 +201,7 @@ fn try_snapshot_lite_path(
     let (id, _resolved_name) = resolve_target_uuid_snapshot(ctx, parsed, store)?;
     let result = engine.analyze(id)?;
 
-    let impact_ids = store.filter_function_impact(&result.impact_zone_ids);
+    let impact_ids = store.filter_function_impact(&result.impact_zone_ids)?;
     let lookup = NodeLookup::Snapshot(store);
     let response = build_from_engine_result(
         &args.symbol,
@@ -277,7 +277,7 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
     let snapshot_store = ctx.open_snapshot_store()?;
     let graph_view = snapshot_store
         .as_ref()
-        .map(|store| PetGraphView::from_prepared(store.prepared()))
+        .map(|store| PetGraphView::from_snapshot_store(store))
         .transpose()?;
     let graph_view_ref = graph_view.as_ref();
 

@@ -118,7 +118,7 @@ impl NodeLookup<'_> {
     fn get_node(&self, id: Uuid) -> Option<Node> {
         match self {
             Self::Backend(backend) => (*backend).get_node(id).ok().flatten(),
-            Self::Snapshot(store) => store.get_node(id).cloned(),
+            Self::Snapshot(store) => store.get_node(id).ok().flatten(),
             Self::None => None,
         }
     }
@@ -131,7 +131,12 @@ impl NodeLookup<'_> {
                 .flatten()
                 .as_ref()
                 .map(symbol_context_from_node),
-            Self::Snapshot(store) => store.get_node(id).map(symbol_context_from_node),
+            Self::Snapshot(store) => store
+                .get_node(id)
+                .ok()
+                .flatten()
+                .as_ref()
+                .map(symbol_context_from_node),
             Self::None => None,
         }
     }
@@ -145,12 +150,10 @@ impl NodeLookup<'_> {
             }
         }
         if let Self::Snapshot(store) = self {
-            if let Some(node) = store
-                .find_nodes_by_name(name)
-                .into_iter()
-                .find(|n| n.name == name)
-            {
-                return Some(symbol_context_from_node(node));
+            if let Ok(nodes) = store.find_nodes_by_name(name) {
+                if let Some(node) = nodes.into_iter().find(|n| n.name == name) {
+                    return Some(symbol_context_from_node(&node));
+                }
             }
         }
         None

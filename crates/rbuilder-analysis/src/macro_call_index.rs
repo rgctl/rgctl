@@ -70,7 +70,7 @@ impl GraphFingerprint {
         if let Some(ref digest) = self.graph_digest {
             if snapshot_path.exists() {
                 let mmap = rbuilder_graph::snapshot::MmappedGraphSnapshot::open(&snapshot_path)?;
-                return Ok(mmap.content_digest() == digest);
+                return Ok(mmap.content_digest()? == digest);
             }
         }
         let graph_db = repo_root
@@ -408,7 +408,7 @@ impl MacroCallIndex {
                     &rbuilder_graph::snapshot::MmappedGraphSnapshot::default_path(repo_root),
                 )
                 .ok()
-                .map(|m| m.content_digest().to_string())
+                .and_then(|m| m.content_digest().ok().map(|d| d.to_string()))
             })
             .flatten()
             .or_else(|| {
