@@ -75,22 +75,13 @@ fn try_fast_cached_lookup(
         return Ok(None);
     }
     let id = resolve_symbol_uuid(&candidates, parsed)?;
-    let entry = index.get(id).expect("candidate entry");
-    if entry.direct_caller_names.is_empty() && entry.impact_function_names.is_empty() {
+    let cache_entry = candidates
+        .into_iter()
+        .find(|c| c.id == id)
+        .expect("candidate entry");
+    if cache_entry.direct_callers.is_empty() && cache_entry.impact_zone.is_empty() {
         return Ok(None);
     }
-
-    let cache_entry = crate::analysis::MacroIndexEntry {
-        id,
-        symbol_name: parsed.target_name.clone(),
-        class_name: parsed.class_filter.clone(),
-        file_path: parsed.file_filter.clone().unwrap_or_default(),
-        score: entry.score,
-        direct_caller_ids: entry.direct_caller_ids.clone(),
-        impact_zone_ids: entry.impact_zone_ids.clone(),
-        direct_callers: entry.direct_caller_names.clone(),
-        impact_zone: entry.impact_function_names.clone(),
-    };
 
     Ok(Some(build_from_cache_entry(
         &cache_entry,

@@ -15,6 +15,9 @@ fn test_cache_entry_omits_unresolved_topology_without_nil_uuid() {
         impact_zone_ids: vec![],
         direct_callers: vec!["caller".into()],
         impact_zone: vec![],
+        language: "rust".into(),
+        signature: None,
+        canonical_fqn: "target".into(),
     };
     let response = build_from_cache_entry(&entry, skipped_gatekeeping(), NodeLookup::None);
     assert!(response.topology.direct_callers.is_empty());

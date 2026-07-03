@@ -38,3 +38,18 @@ fn test_skipped_gatekeeping_always_has_empty_handoffs() {
     assert_eq!(gate.policy_status, "SKIPPED");
     assert!(gate.handoffs.is_empty());
 }
+
+#[test]
+fn test_blast_radius_target_v2_metadata() {
+    let doc = response_to_json(&fixture_response());
+    let target = doc.get("target").unwrap().as_object().unwrap();
+    for key in ["language", "canonical_fqn"] {
+        assert!(target.contains_key(key), "target missing v2 key '{key}'");
+    }
+    assert_eq!(target["language"].as_str(), Some("rust"));
+    assert_eq!(target["canonical_fqn"].as_str(), Some("c"));
+    assert!(
+        !target.contains_key("signature"),
+        "signature must be omitted when None"
+    );
+}

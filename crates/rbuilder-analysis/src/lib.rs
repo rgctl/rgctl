@@ -67,8 +67,10 @@ pub use flow_cache::{CachedAnalysis, CfgPdgCache, FlowCache, NodePdgCache};
 pub use graph_utils::PetGraphView;
 pub use macro_call_index::{GraphFingerprint, MacroCallIndex, MacroCallIndexEntry, SymbolContext};
 pub use macro_call_lookup::{
-    candidates_from_backend, candidates_from_snapshot, class_name_from_node, parse_fqn_symbol, resolve_symbol_uuid,
-    try_parse_symbol_uuid, MacroCallLookupDb, MacroCallLookupRow, MacroIndexEntry, ParsedSymbol,
+    canonical_fqn_from_node, canonical_fqn_from_qualified_name, candidates_from_backend,
+    candidates_from_snapshot, class_name_from_node, inferred_target_metadata, language_from_node,
+    parse_fqn_symbol, resolve_symbol_uuid, try_parse_symbol_uuid, MacroCallLookupDb,
+    MacroCallLookupRow, MacroIndexEntry, ParsedSymbol,
 };
 pub use interprocedural_cfg::InterproceduralCFG;
 pub use interprocedural_slicing::{InterproceduralSlice, InterproceduralSlicer};

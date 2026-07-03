@@ -103,6 +103,9 @@ fn sqlite_fqn_resolved_lookup_under_50ms() {
             impact_zone_ids: vec![Uuid::new_v4()],
             direct_callers: vec!["caller".into()],
             impact_zone: vec!["impact".into()],
+            language: "java".into(),
+            signature: Some("void saveError()".into()),
+            canonical_fqn: "MRequest::saveError".into(),
         }],
     )
     .unwrap();

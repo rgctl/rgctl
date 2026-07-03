@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+fn default_unknown_language() -> String {
+    "unknown".to_string()
+}
+
 /// Parsed symbol query with optional namespace/file filters.
 #[derive(Debug, Clone)]
 pub struct ParsedSymbol {
@@ -45,6 +49,15 @@ pub struct MacroIndexEntry {
     pub direct_callers: Vec<String>,
     /// Impact-zone function names.
     pub impact_zone: Vec<String>,
+    /// Lowercase language id (`java`, `rust`, `python`, …).
+    #[serde(default = "default_unknown_language")]
+    pub language: String,
+    /// Type-erased method signature when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    /// Language-agnostic `Class::method` identifier.
+    #[serde(default)]
+    pub canonical_fqn: String,
 }
 
 /// A row from the unique-symbol fast path (legacy compatibility).
@@ -105,7 +118,80 @@ pub fn parse_fqn_symbol(
     }
 }
 
-/// Extract the simple class name from a graph node.
+/// Extract lowercase language id from graph node metadata or file extension.
+pub fn language_from_node(node: &Node) -> String {
+    node.get_property("language")
+        .map(|s| s.to_ascii_lowercase())
+        .or_else(|| {
+            node.file_path.as_ref().and_then(|path| {
+                Path::new(path)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| match ext {
+                        "java" => "java".to_string(),
+                        "rs" => "rust".to_string(),
+                        "py" => "python".to_string(),
+                        _ => "unknown".to_string(),
+                    })
+            })
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Build a uniform `Class::method` identifier from graph node fields.
+pub fn canonical_fqn_from_node(node: &Node) -> String {
+    if let Some(qn) = node.qualified_name.as_deref() {
+        return canonical_fqn_from_qualified_name(qn, &node.name);
+    }
+    if let Some(class) = class_name_from_node(node) {
+        return format!("{class}::{}", node.name);
+    }
+    node.name.clone()
+}
+
+/// Convert language-native qualified names to canonical double-colon form.
+pub fn canonical_fqn_from_qualified_name(qualified_name: &str, fallback_name: &str) -> String {
+    if qualified_name.contains("::") && !qualified_name.contains('.') {
+        return qualified_name.to_string();
+    }
+    if let Some((scope, method)) = qualified_name.rsplit_once('.') {
+        let class = scope.rsplit('.').next().unwrap_or(scope);
+        return format!("{class}::{method}");
+    }
+    fallback_name.to_string()
+}
+
+/// Infer target metadata when only symbol/class/file hints are available.
+pub fn inferred_target_metadata(
+    symbol: &str,
+    class_context: Option<&str>,
+    file_path: &str,
+) -> (String, Option<String>, String) {
+    let language = Path::new(file_path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| match ext {
+            "java" => "java".to_string(),
+            "rs" => "rust".to_string(),
+            "py" => "python".to_string(),
+            _ => "unknown".to_string(),
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    let canonical_fqn = class_context
+        .map(|class| format!("{class}::{symbol}"))
+        .unwrap_or_else(|| symbol.to_string());
+    (language, None, canonical_fqn)
+}
+
+fn target_metadata_from_node(node: &Node) -> (String, Option<String>, String) {
+    (
+        language_from_node(node),
+        node.signature_text().map(str::to_string),
+        canonical_fqn_from_node(node),
+    )
+}
+
+/// Extract the simple class name from a graph node qualified name.
 pub fn class_name_from_node(node: &Node) -> Option<String> {
     node.qualified_name.as_ref().and_then(|qn| {
         qn.rsplit_once('.').map(|(class, _)| {
@@ -223,6 +309,7 @@ fn node_to_candidate(
     direct_callers: Vec<String>,
     impact_zone: Vec<String>,
 ) -> MacroIndexEntry {
+    let (language, signature, canonical_fqn) = target_metadata_from_node(node);
     MacroIndexEntry {
         id: node.id,
         symbol_name: symbol_name.to_string(),
@@ -233,6 +320,9 @@ fn node_to_candidate(
         impact_zone_ids: Vec::new(),
         direct_callers,
         impact_zone,
+        language,
+        signature,
+        canonical_fqn,
     }
 }
 
@@ -287,7 +377,18 @@ impl MacroCallLookupDb {
         )
         .map_err(|e| Error::QueryError(format!("init macro_call_index.db: {e}")))?;
         Self::migrate_uuid_columns(&conn)?;
+        Self::migrate_target_metadata_columns(&conn)?;
         Ok(conn)
+    }
+
+    fn migrate_target_metadata_columns(conn: &Connection) -> Result<()> {
+        for col in ["language", "signature", "canonical_fqn"] {
+            let sql = format!(
+                "ALTER TABLE macro_call_candidates ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"
+            );
+            let _ = conn.execute_batch(&sql);
+        }
+        Ok(())
     }
 
     fn migrate_uuid_columns(conn: &Connection) -> Result<()> {
@@ -419,8 +520,8 @@ impl MacroCallLookupDb {
                 .prepare(
                     "INSERT INTO macro_call_candidates
                      (symbol_name, node_id, class_name, file_path, score, direct_callers, impact_zone,
-                      direct_caller_ids, impact_zone_ids)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                      direct_caller_ids, impact_zone_ids, language, signature, canonical_fqn)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 )
                 .map_err(sql_err)?;
             for entry in entries {
@@ -440,6 +541,9 @@ impl MacroCallLookupDb {
                     impact,
                     direct_ids,
                     impact_ids,
+                    entry.language,
+                    entry.signature,
+                    entry.canonical_fqn,
                 ])
                 .map_err(sql_err)?;
             }
@@ -498,6 +602,9 @@ impl MacroCallLookupDb {
         let id_str: String = row.get(1).map_err(sql_err)?;
         let direct_ids_json: String = row.get(7).unwrap_or_else(|_| "[]".into());
         let impact_ids_json: String = row.get(8).unwrap_or_else(|_| "[]".into());
+        let language: String = row.get(9).unwrap_or_else(|_| "unknown".into());
+        let signature: Option<String> = row.get(10).ok().filter(|s: &String| !s.is_empty());
+        let canonical_fqn: String = row.get(11).unwrap_or_default();
         Ok(MacroIndexEntry {
             symbol_name: row.get(0).map_err(sql_err)?,
             id: Uuid::parse_str(&id_str).map_err(|e| {
@@ -510,6 +617,9 @@ impl MacroCallLookupDb {
             impact_zone_ids: Self::parse_uuid_list(&impact_ids_json)?,
             direct_callers: serde_json::from_str(&direct_json).map_err(json_err)?,
             impact_zone: serde_json::from_str(&impact_json).map_err(json_err)?,
+            language,
+            signature,
+            canonical_fqn,
         })
     }
 
@@ -522,7 +632,7 @@ impl MacroCallLookupDb {
         let mut stmt = conn
             .prepare(
                 "SELECT symbol_name, node_id, class_name, file_path, score, direct_callers, impact_zone,
-                        direct_caller_ids, impact_zone_ids
+                        direct_caller_ids, impact_zone_ids, language, signature, canonical_fqn
                  FROM macro_call_candidates WHERE symbol_name = ?1",
             )
             .map_err(sql_err)?;
@@ -626,6 +736,9 @@ mod tests {
                 impact_zone_ids: vec![],
                 direct_callers: vec![],
                 impact_zone: vec![],
+                language: "java".into(),
+                signature: None,
+                canonical_fqn: "OrderLine::getChangeType".into(),
             },
             MacroIndexEntry {
                 id: Uuid::new_v4(),
@@ -637,11 +750,26 @@ mod tests {
                 impact_zone_ids: vec![],
                 direct_callers: vec![],
                 impact_zone: vec![],
+                language: "java".into(),
+                signature: None,
+                canonical_fqn: "Invoice::getChangeType".into(),
             },
         ];
         let parsed = parse_fqn_symbol("OrderLine::getChangeType", None, None);
         let id = resolve_symbol_uuid(&candidates, &parsed).unwrap();
         assert_eq!(id, candidates[0].id);
+    }
+
+    #[test]
+    #[test]
+    fn canonical_fqn_java_dot_notation() {
+        use rbuilder_graph::schema::{Node, NodeType};
+        let node = Node::new(NodeType::Function, "process".into())
+            .with_qualified_name("com.example.OrderService.process".into());
+        assert_eq!(
+            canonical_fqn_from_node(&node),
+            "OrderService::process"
+        );
     }
 
     #[test]
@@ -662,6 +790,9 @@ mod tests {
                 impact_zone_ids: vec![Uuid::new_v4()],
                 direct_callers: vec!["main".into()],
                 impact_zone: vec!["a".into()],
+                language: "java".into(),
+                signature: Some("void saveError()".into()),
+                canonical_fqn: "Logger::saveError".into(),
             }],
         )
         .unwrap();

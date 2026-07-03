@@ -1,8 +1,9 @@
 //! Structured blast-radius CLI response (JSON and text).
 
 use crate::analysis::{
-    check_policies, BlastRadiusResult, CentralityAnalyzer, MacroIndexEntry, PetGraphView,
-    PolicyRegistry, PolicyViolation, SliceHandoffSeed,
+    check_policies, canonical_fqn_from_node, inferred_target_metadata, language_from_node,
+    BlastRadiusResult, CentralityAnalyzer, MacroIndexEntry, PetGraphView, PolicyRegistry,
+    PolicyViolation, SliceHandoffSeed,
 };
 use anyhow::Result;
 use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Current blast-radius JSON schema version.
-pub const BLAST_RADIUS_SCHEMA_VERSION: u32 = 1;
+pub const BLAST_RADIUS_SCHEMA_VERSION: u32 = 2;
 
 /// Resolved symbol with graph identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -21,10 +22,8 @@ pub struct SymbolContext {
     pub id: Uuid,
     /// Graph `qualified_name` when present, otherwise bare `name`.
     ///
-    /// **Schema v1:** language-native dot notation (e.g. Java `MRequest.beforeSave`).
-    /// Downstream tools should treat this as opaque display text keyed by [`Self::id`].
-    /// **Schema v2 (planned):** add `language`, structured signature, and a canonical
-    /// delimiter form (`Class::method`) so clients need not parse language-specific FQNs.
+    /// **Schema v1 (legacy `fqn` field):** language-native dot notation on topology entries.
+    /// **Schema v2:** prefer [`BlastRadiusTarget::canonical_fqn`] on the target block for routing.
     pub fqn: String,
     /// Project-relative source path (empty when unknown).
     pub file_path: String,
@@ -41,6 +40,13 @@ pub struct BlastRadiusTarget {
     pub class_context: Option<String>,
     /// Project-relative source path.
     pub file_path: String,
+    /// Lowercase language id (`java`, `rust`, `python`, …).
+    pub language: String,
+    /// Type-erased method signature for overload disambiguation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    /// Uniform `Class::method` identifier for polyglot routing.
+    pub canonical_fqn: String,
 }
 
 /// Quantitative impact metrics.
@@ -109,6 +115,14 @@ pub enum NodeLookup<'a> {
 }
 
 impl NodeLookup<'_> {
+    fn get_node(&self, id: Uuid) -> Option<Node> {
+        match self {
+            Self::Backend(backend) => (*backend).get_node(id).ok().flatten(),
+            Self::Snapshot(store) => store.get_node(id).cloned(),
+            Self::None => None,
+        }
+    }
+
     fn get(&self, id: Uuid) -> Option<SymbolContext> {
         match self {
             Self::Backend(backend) => (*backend)
@@ -174,6 +188,45 @@ fn contexts_from_id_name_pairs(
         .collect()
 }
 
+fn build_target(
+    id: Uuid,
+    symbol: &str,
+    class_context: Option<String>,
+    file_path: String,
+    node: Option<&Node>,
+    entry: Option<&MacroIndexEntry>,
+) -> BlastRadiusTarget {
+    let (language, signature, canonical_fqn) = if let Some(entry) = entry {
+        if !entry.canonical_fqn.is_empty() {
+            (
+                entry.language.clone(),
+                entry.signature.clone(),
+                entry.canonical_fqn.clone(),
+            )
+        } else {
+            inferred_target_metadata(symbol, class_context.as_deref(), &file_path)
+        }
+    } else if let Some(node) = node {
+        (
+            language_from_node(node),
+            node.signature_text().map(str::to_string),
+            canonical_fqn_from_node(node),
+        )
+    } else {
+        inferred_target_metadata(symbol, class_context.as_deref(), &file_path)
+    };
+
+    BlastRadiusTarget {
+        id,
+        symbol: symbol.to_string(),
+        class_context,
+        file_path,
+        language,
+        signature,
+        canonical_fqn,
+    }
+}
+
 /// Build a response from an SCC engine result and graph lookup.
 pub fn build_from_engine_result(
     target_symbol: &str,
@@ -184,19 +237,29 @@ pub fn build_from_engine_result(
     lookup: NodeLookup<'_>,
     gatekeeping: BlastRadiusGatekeeping,
 ) -> BlastRadiusResponse {
-    let target_node = lookup.get(result.symbol_id);
+    let target_node = lookup.get_node(result.symbol_id);
+    let file_path = target_node
+        .as_ref()
+        .and_then(|n| n.file_path.clone())
+        .unwrap_or_default();
     BlastRadiusResponse {
         schema_version: BLAST_RADIUS_SCHEMA_VERSION,
-        target: BlastRadiusTarget {
-            id: result.symbol_id,
-            symbol: target_symbol.to_string(),
-            class_context: class_context.or_else(|| {
-                target_node.as_ref().and_then(|ctx| class_from_fqn(&ctx.fqn))
+        target: build_target(
+            result.symbol_id,
+            target_symbol,
+            class_context.or_else(|| {
+                target_node
+                    .as_ref()
+                    .and_then(|node| class_from_fqn(
+                        node.qualified_name
+                            .as_deref()
+                            .unwrap_or(&node.name),
+                    ))
             }),
-            file_path: target_node
-                .map(|ctx| ctx.file_path)
-                .unwrap_or_default(),
-        },
+            file_path,
+            target_node.as_ref(),
+            None,
+        ),
         metrics: BlastRadiusMetrics {
             score: result.score,
             direct_callers_count: direct_ids.len(),
@@ -223,12 +286,14 @@ pub fn build_from_cache_entry(
         contexts_from_id_name_pairs(&entry.impact_zone_ids, &entry.impact_zone, &lookup);
     BlastRadiusResponse {
         schema_version: BLAST_RADIUS_SCHEMA_VERSION,
-        target: BlastRadiusTarget {
-            id: entry.id,
-            symbol: entry.symbol_name.clone(),
-            class_context: entry.class_name.clone(),
-            file_path: entry.file_path.clone(),
-        },
+        target: build_target(
+            entry.id,
+            &entry.symbol_name,
+            entry.class_name.clone(),
+            entry.file_path.clone(),
+            None,
+            Some(entry),
+        ),
         metrics: BlastRadiusMetrics {
             score: entry.score,
             direct_callers_count: direct_callers.len(),
@@ -384,6 +449,9 @@ mod output_tests {
             impact_zone_ids: vec![],
             direct_callers: vec![],
             impact_zone: vec![],
+            language: "rust".into(),
+            signature: None,
+            canonical_fqn: "t".into(),
         };
         let response = build_from_cache_entry(&entry, skipped_gatekeeping(), NodeLookup::None);
         assert!(response.topology.direct_callers.is_empty());
@@ -402,6 +470,9 @@ pub fn fixture_response() -> BlastRadiusResponse {
             symbol: "c".to_string(),
             class_context: None,
             file_path: "src/main.rs".to_string(),
+            language: "rust".to_string(),
+            signature: None,
+            canonical_fqn: "c".to_string(),
         },
         metrics: BlastRadiusMetrics {
             score: 65.0,

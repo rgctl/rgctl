@@ -83,6 +83,19 @@ pub struct SymbolContext {
     pub class_name: Option<String>,
     /// Source file path.
     pub file_path: String,
+    /// Lowercase language id extracted at discover time.
+    #[serde(default = "default_unknown_language")]
+    pub language: String,
+    /// Type-erased method signature when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    /// Language-agnostic `Class::method` identifier.
+    #[serde(default)]
+    pub canonical_fqn: String,
+}
+
+fn default_unknown_language() -> String {
+    "unknown".to_string()
 }
 
 /// Cached blast-radius metrics for a single function node.
@@ -136,6 +149,9 @@ impl MacroCallIndex {
         SymbolContext {
             class_name: crate::macro_call_lookup::class_name_from_node(node),
             file_path: node.file_path.clone().unwrap_or_default(),
+            language: crate::macro_call_lookup::language_from_node(node),
+            signature: node.signature_text().map(str::to_string),
+            canonical_fqn: crate::macro_call_lookup::canonical_fqn_from_node(node),
         }
     }
 
@@ -255,6 +271,9 @@ impl MacroCallIndex {
                     impact_zone_ids: entry.impact_zone_ids.clone(),
                     direct_callers: entry.direct_caller_names.clone(),
                     impact_zone: entry.impact_function_names.clone(),
+                    language: ctx.language.clone(),
+                    signature: ctx.signature.clone(),
+                    canonical_fqn: ctx.canonical_fqn.clone(),
                 })
             })
             .collect()
@@ -278,6 +297,9 @@ impl MacroCallIndex {
                         impact_zone_ids: entry.impact_zone_ids.clone(),
                         direct_callers: entry.direct_caller_names.clone(),
                         impact_zone: entry.impact_function_names.clone(),
+                        language: ctx.language.clone(),
+                        signature: ctx.signature.clone(),
+                        canonical_fqn: ctx.canonical_fqn.clone(),
                     })
                 })
             })

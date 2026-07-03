@@ -96,10 +96,21 @@ fn blast_radius_json_exit_zero_after_discover() {
     let doc: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("blast-radius stdout must be valid JSON");
 
-    assert_eq!(doc.get("schema_version").and_then(|v| v.as_u64()), Some(1));
+    assert_eq!(doc.get("schema_version").and_then(|v| v.as_u64()), Some(2));
     for key in ["target", "metrics", "topology", "gatekeeping"] {
         assert!(doc.get(key).is_some(), "blast-radius JSON missing '{key}'");
     }
+
+    let target = doc.get("target").unwrap().as_object().unwrap();
+    assert_eq!(target.get("language").and_then(|v| v.as_str()), Some("java"));
+    assert_eq!(
+        target.get("canonical_fqn").and_then(|v| v.as_str()),
+        Some("OrderService::process")
+    );
+    assert!(
+        target.get("signature").and_then(|v| v.as_str()).is_some(),
+        "Java overload should include signature text"
+    );
 }
 
 #[test]
