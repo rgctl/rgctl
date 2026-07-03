@@ -64,6 +64,9 @@ fn sqlite_unique_lookup_under_15ms() {
             score: 42.0,
             direct_callers: callers,
             impact_zone: impact,
+            direct_caller_ids: vec![],
+            impact_zone_ids: vec![],
+            node_id: Uuid::new_v4(),
         }],
     )
     .unwrap();
