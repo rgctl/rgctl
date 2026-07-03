@@ -269,6 +269,10 @@ _Update this table when a phase lands._
 | Dataflow index export | 7 | **done** | `dataflow_index.json` → PDG in `slice/` |
 | Dataflow tab (Sigma PDG) | 7 | **done** | `DataflowView.tsx`, worker `compute_dataflow` |
 | `tests/dashboard_harness.rs` | 7 | **done** | phase 7 + `dataflow_index.json` |
+| Taint index + detail export | 8 | **done** | `taint_index.json`, `taint/*.json` from `.rbuilder/analysis/` |
+| Taint tab (flows table) | 8 | **done** | `TaintView.tsx` — source→sink paths from archive |
+| `tests/dashboard_harness.rs` | 8 | **done** | phase 8 + `taint_index.json` |
+| `tests/dashboard_metasfresh.rs` | 8+ | **manual** | metasfresh `discover --all`; `./scripts/test-dashboard-metasfresh.sh` |
 
 ### Removed (Phase 0)
 

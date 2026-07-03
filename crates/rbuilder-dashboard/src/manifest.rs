@@ -5,6 +5,7 @@ use crate::cfg_export::CfgExportSummary;
 use crate::dataflow_export::DataflowExportSummary;
 use crate::metagraph::MetagraphPayload;
 use crate::slice_export::SliceExportSummary;
+use crate::taint_export::TaintExportSummary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -61,6 +62,12 @@ pub struct AnalysisSection {
     pub dataflow_index_path: String,
     pub dataflow_detail_dir: String,
     pub dataflow_function_count: usize,
+    pub taint_available: bool,
+    pub taint_index_path: String,
+    pub taint_detail_dir: String,
+    pub taint_function_count: usize,
+    pub taint_flow_count: usize,
+    pub taint_vulnerable_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +90,7 @@ impl DashboardManifest {
         slice: &SliceExportSummary,
         blast: &BlastExportSummary,
         dataflow: &DataflowExportSummary,
+        taint: &TaintExportSummary,
     ) -> Self {
         let mut phases = BTreeMap::new();
         phases.insert("0".into(), "complete".into());
@@ -121,6 +129,14 @@ impl DashboardManifest {
                 "pending".into()
             },
         );
+        phases.insert(
+            "8".into(),
+            if taint.available {
+                "complete".into()
+            } else {
+                "pending".into()
+            },
+        );
 
         let analysis = Some(AnalysisSection {
             cfg_available: cfg.available,
@@ -147,6 +163,12 @@ impl DashboardManifest {
             dataflow_index_path: crate::dataflow_export::DATAFLOW_INDEX_FILE.into(),
             dataflow_detail_dir: crate::slice_export::SLICE_DETAIL_DIR.into(),
             dataflow_function_count: dataflow.function_count,
+            taint_available: taint.available,
+            taint_index_path: crate::taint_export::TAINT_INDEX_FILE.into(),
+            taint_detail_dir: crate::taint_export::TAINT_DETAIL_DIR.into(),
+            taint_function_count: taint.function_count,
+            taint_flow_count: taint.total_flows,
+            taint_vulnerable_count: taint.vulnerable_flows,
         });
 
         Self {
@@ -227,6 +249,7 @@ mod tests {
             &SliceExportSummary::default(),
             &BlastExportSummary::default(),
             &DataflowExportSummary::default(),
+            &TaintExportSummary::default(),
         );
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["phases"]["2"], "complete");
@@ -234,10 +257,12 @@ mod tests {
         assert_eq!(v["phases"]["5"], "pending");
         assert_eq!(v["phases"]["6"], "pending");
         assert_eq!(v["phases"]["7"], "pending");
+        assert_eq!(v["phases"]["8"], "pending");
         assert_eq!(v["view"]["metanode_count"], 1);
         assert_eq!(v["analysis"]["cfg_available"], false);
         assert_eq!(v["analysis"]["slice_available"], false);
         assert_eq!(v["analysis"]["blast_available"], false);
         assert_eq!(v["analysis"]["dataflow_available"], false);
+        assert_eq!(v["analysis"]["taint_available"], false);
     }
 }

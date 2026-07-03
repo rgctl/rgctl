@@ -310,6 +310,10 @@ path = "tests/dashboard_bundle.rs"
 name = "dashboard_gbuilder"
 path = "tests/dashboard_gbuilder.rs"
 
+[[test]]
+name = "dashboard_metasfresh"
+path = "tests/dashboard_metasfresh.rs"
+
 [[bench]]
 name = "parsing"
 harness = false

@@ -23,23 +23,39 @@ pub fn rbuilder_bin() -> PathBuf {
 }
 
 pub fn run_discover(repo: &Path, languages: &str) -> Output {
+    run_discover_with_flags(repo, Some(languages), false)
+}
+
+/// Run `discover . --all` (CFG/PDG, security scan, full dashboard analysis exports).
+pub fn run_discover_all(repo: &Path, languages: Option<&str>) -> Output {
+    run_discover_with_flags(repo, languages, true)
+}
+
+fn run_discover_with_flags(repo: &Path, languages: Option<&str>, all: bool) -> Output {
     let bin = rbuilder_bin();
     assert!(
         bin.is_file(),
         "rbuilder binary not found at {} — run cargo build --release",
         bin.display()
     );
-    Command::new(&bin)
-        .args([
-            "-r",
-            repo.to_str().unwrap(),
-            "discover",
-            ".",
-            "--languages",
-            languages,
-        ])
-        .output()
-        .expect("spawn rbuilder discover")
+    let mut cmd = Command::new(&bin);
+    cmd.args(["-r", repo.to_str().unwrap(), "discover", "."]);
+    if all {
+        cmd.arg("--all");
+    }
+    if let Some(langs) = languages {
+        cmd.args(["--languages", langs]);
+    }
+    cmd.output().expect("spawn rbuilder discover")
+}
+
+/// Default metasfresh example checkout (override with env).
+pub const DEFAULT_METASFRESH_REPO: &str = "example/metasfresh-4.9.8b";
+
+pub fn metasfresh_repo_path() -> PathBuf {
+    std::env::var("RBUILDER_METASFRESH_REPO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_METASFRESH_REPO))
 }
 
 /// Assert Phase 0–2 bundle contract under `{repo}/.rbuilder/dashboard/`.
@@ -114,6 +130,18 @@ pub fn assert_dashboard_bundle_with_meta(
     assert_eq!(analysis["blast_index_path"], "blast_index.json");
     assert_eq!(analysis["dataflow_available"], dataflow_available);
     assert_eq!(analysis["dataflow_index_path"], "dataflow_index.json");
+
+    let taint_index: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("taint_index.json")).unwrap()).unwrap();
+    let taint_available = taint_index["available"].as_bool().unwrap_or(false);
+    assert_eq!(
+        manifest["phases"]["8"],
+        if taint_available { "complete" } else { "pending" }
+    );
+    assert!(dash.join("taint_index.json").is_file());
+    assert_eq!(taint_index["schema_version"], 1);
+    assert_eq!(analysis["taint_available"], taint_available);
+    assert_eq!(analysis["taint_index_path"], "taint_index.json");
 
     assert!(
         dash.join("slice_index.json").is_file(),
@@ -224,6 +252,62 @@ pub fn assert_dashboard_bundle_with_meta(
                 "assets/assets/ double nesting detected in bundle"
             );
         }
+    }
+}
+
+/// Assert dashboard bundle after `discover --all` (CFG, slice, dataflow must be present).
+pub fn assert_dashboard_bundle_all_analysis(
+    repo: &Path,
+    min_nodes: u64,
+    min_metanodes: u64,
+) {
+    assert_dashboard_bundle_with_meta(repo, min_nodes, min_metanodes);
+
+    let dash = repo.join(".rbuilder/dashboard");
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("manifest.json")).unwrap()).unwrap();
+    let analysis = &manifest["analysis"];
+
+    assert_eq!(manifest["phases"]["4"], "complete", "CFG phase should be complete after --all");
+    assert_eq!(manifest["phases"]["5"], "complete", "slice phase should be complete after --all");
+    assert_eq!(
+        manifest["phases"]["7"], "complete",
+        "dataflow phase should be complete after --all"
+    );
+    assert_eq!(analysis["cfg_available"], true);
+    assert_eq!(analysis["slice_available"], true);
+    assert_eq!(analysis["dataflow_available"], true);
+
+    assert!(
+        dash.join("cfg_pdg.archive.bin").is_file(),
+        "cfg_pdg.archive.bin expected in dashboard bundle after discover --all"
+    );
+
+    let cfg_index: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("cfg_index.json")).unwrap()).unwrap();
+    assert_eq!(cfg_index["available"], true);
+    assert!(
+        cfg_index["function_count"].as_u64().unwrap_or(0) > 0,
+        "cfg_index should list analyzed functions"
+    );
+
+    let slice_index: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("slice_index.json")).unwrap()).unwrap();
+    assert_eq!(slice_index["available"], true);
+    assert!(
+        slice_index["function_count"].as_u64().unwrap_or(0) > 0,
+        "slice_index should list PDG bundles"
+    );
+
+    let taint_index: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("taint_index.json")).unwrap()).unwrap();
+    if taint_index["available"].as_bool() == Some(true) {
+        assert_eq!(manifest["phases"]["8"], "complete");
+        assert_eq!(analysis["taint_available"], true);
+        assert!(
+            taint_index["total_flows"].as_u64().unwrap_or(0) > 0,
+            "taint_index available but reports zero flows"
+        );
     }
 }
 

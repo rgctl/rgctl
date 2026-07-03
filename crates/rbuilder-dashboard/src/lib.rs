@@ -7,9 +7,11 @@ mod dataflow_export;
 mod manifest;
 mod metagraph;
 mod slice_export;
+mod taint_export;
 
 pub use bundle::{default_dashboard_path, dist_embedded, DASHBOARD_DIR_NAME};
 pub use dataflow_export::{DataflowExportSummary, DATAFLOW_INDEX_FILE};
+pub use taint_export::{TaintExportSummary, TAINT_INDEX_FILE};
 pub use slice_export::{SliceExportSummary, SLICE_INDEX_FILE};
 pub use manifest::{
     AnalysisSection, DashboardManifest, MetricsSection, ViewSection, MANIFEST_SCHEMA_VERSION,
@@ -23,6 +25,7 @@ use manifest::DashboardManifest as Manifest;
 use metagraph::write_metagraph;
 use dataflow_export::export_dataflow_index;
 use slice_export::export_slice_bundle;
+use taint_export::export_taint_bundle;
 use rbuilder_graph::backend::MemoryBackend;
 use rbuilder_graph::schema::{EdgeType, NodeType};
 use std::fs;
@@ -49,6 +52,7 @@ pub fn export_dashboard_bundle(
     let cfg_summary = export_cfg_bundle(backend, repo_root, &out_dir)?;
     let slice_summary = export_slice_bundle(backend, repo_root, &out_dir)?;
     let dataflow_summary = export_dataflow_index(&slice_summary, &out_dir)?;
+    let taint_summary = export_taint_bundle(repo_root, &out_dir)?;
     let blast_summary = export_blast_bundle(repo_root, &out_dir)?;
     let manifest = Manifest::with_phases(
         node_count,
@@ -60,6 +64,7 @@ pub fn export_dashboard_bundle(
         &slice_summary,
         &blast_summary,
         &dataflow_summary,
+        &taint_summary,
     );
     let manifest_json =
         serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;

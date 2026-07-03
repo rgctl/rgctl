@@ -68,6 +68,12 @@ export interface AnalysisSection {
   dataflow_index_path: string;
   dataflow_detail_dir: string;
   dataflow_function_count: number;
+  taint_available: boolean;
+  taint_index_path: string;
+  taint_detail_dir: string;
+  taint_function_count: number;
+  taint_flow_count: number;
+  taint_vulnerable_count: number;
 }
 
 export interface DataflowIndexPayload {
@@ -109,6 +115,48 @@ export interface DataflowGraphEdge {
   target: string;
   kind: "data" | "control";
   variable?: string | null;
+}
+
+export interface TaintIndexPayload {
+  schema_version: number;
+  available: boolean;
+  detail_dir: string;
+  function_count: number;
+  total_flows: number;
+  vulnerable_flows: number;
+  functions: TaintFunctionEntry[];
+}
+
+export interface TaintFunctionEntry {
+  function_id: string;
+  name: string;
+  file_path?: string | null;
+  flow_count: number;
+  vulnerable_count: number;
+}
+
+export interface TaintBundlePayload {
+  schema_version: number;
+  function_id: string;
+  name: string;
+  file_path?: string | null;
+  flows: TaintFlowView[];
+}
+
+export interface TaintFlowView {
+  id: number;
+  variable: string;
+  source_type: string;
+  sink_type: string;
+  severity: number;
+  vulnerable: boolean;
+  sanitizers: string[];
+  source_line: number;
+  sink_line: number;
+  source_text: string;
+  sink_text: string;
+  path_lines: number[];
+  path_statements: string[];
 }
 
 export type SliceDirection = "backward" | "forward";

@@ -16,6 +16,8 @@
     "bootstrap": "^5.3.8",
     "codemirror": "^6.0.2",
     "graphology": "^0.26.0",
+    "graphology-layout": "^0.6.1",
+    "graphology-layout-forceatlas2": "^0.10.1",
     "preact": "^10.25.4",
     "sigma": "^3.0.2"
   },

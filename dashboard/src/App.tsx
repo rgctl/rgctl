@@ -2,6 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import { DataflowView } from "./DataflowView";
 import { BlastView } from "./BlastView";
 import { SliceView } from "./SliceView";
+import { TaintView } from "./TaintView";
 import { CfgView } from "./CfgView";
 import { FunctionsView } from "./FunctionsView";
 import { GraphView } from "./GraphView";
@@ -40,15 +41,17 @@ export function App() {
   const view = manifest?.view;
 
   return (
-    <div class="rb-app container-fluid py-3 px-4">
-      <header class="mb-3 flex-shrink-0">
+    <div class={`rb-app container-fluid px-3 px-md-4 ${tab === "graph" ? "rb-app--graph-focus py-2" : "py-3"}`}>
+      <header class={`flex-shrink-0 ${tab === "graph" ? "mb-2" : "mb-3"}`}>
         <div class="d-flex align-items-center gap-2 mb-1">
           <span class="rb-header-icon" aria-hidden="true">
             ⎇
           </span>
-          <h1 class="h4 mb-0 fw-semibold text-primary">rBuilder Analysis Dashboard</h1>
+          <h1 class={`mb-0 fw-semibold text-primary ${tab === "graph" ? "h5" : "h4"}`}>rBuilder Analysis Dashboard</h1>
         </div>
-        <p class="text-muted small mb-0">Comprehensive code analysis visualization</p>
+        {tab !== "graph" && (
+          <p class="text-muted small mb-0">Comprehensive code analysis visualization</p>
+        )}
       </header>
 
       {error && (
@@ -57,7 +60,7 @@ export function App() {
         </div>
       )}
 
-      <div class="card mb-3 shadow-sm">
+      <div class={`card shadow-sm ${tab === "graph" ? "rb-engine-bar mb-2" : "mb-3"}`}>
         <div class="card-body py-2 small d-flex flex-wrap gap-3">
           <span>
             Engine:{" "}
@@ -76,7 +79,7 @@ export function App() {
               Metanodes: {view.metanode_count} · Metaedges: {view.metaedge_count}
             </span>
           )}
-          {manifest && (
+          {manifest && tab !== "graph" && (
             <span class="text-success">
               Phases:{" "}
               {Object.entries(phases)
@@ -87,7 +90,8 @@ export function App() {
         </div>
       </div>
 
-      <div class="row row-cols-2 row-cols-md-4 g-3 mb-3 flex-shrink-0">
+      {tab !== "graph" && (
+      <div class="row row-cols-2 row-cols-md-4 g-3 mb-3 flex-shrink-0 rb-stats-row">
         <StatCard label="Total Nodes" value={manifest?.graph.node_count ?? "—"} />
         <StatCard label="Total Edges" value={manifest?.graph.edge_count ?? "—"} />
         <StatCard label="Functions" value={m?.function_count ?? "—"} />
@@ -97,6 +101,7 @@ export function App() {
         <StatCard label="High Blast Radius" value={m?.high_blast_radius_count ?? "—"} />
         <StatCard label="Filtered Nodes" value={manifest?.graph.node_count ?? "—"} />
       </div>
+      )}
 
       <div class="rb-tab-workspace">
         <ul class="nav nav-tabs mb-0 flex-shrink-0">
@@ -132,7 +137,9 @@ export function App() {
                       ? "rb-tab-panel-body--cfg p-3"
                       : tab === "dataflow"
                         ? "rb-tab-panel-body--cfg p-3"
-                        : "rb-tab-panel-body--scroll p-4"
+                        : tab === "taint"
+                          ? "rb-tab-panel-body--scroll p-3"
+                          : "rb-tab-panel-body--scroll p-4"
             }`}
           >
             <TabPanel
@@ -150,7 +157,7 @@ export function App() {
         </div>
       </div>
 
-      <footer class="text-muted small mt-3 flex-shrink-0">
+      <footer class={`text-muted small flex-shrink-0 ${tab === "graph" ? "mt-2 d-none d-lg-block" : "mt-3"}`}>
         <code>docs/dashboard-design.md</code> · manifest v{manifest?.schema_version ?? "?"} ·{" "}
         {manifest?.graph.payload_format ?? "columnar_v2"}
       </footer>
@@ -252,15 +259,18 @@ function TabPanel({
     );
   }
 
-  const placeholders: Record<Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast">, string> = {
-    taint: "Phase 8: taint from archive",
+  if (id === "taint") {
+    return <TaintView />;
+  }
+
+  const placeholders: Record<Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint">, string> = {
     guide: "CLI query reference",
   };
 
   return (
     <div>
       <h2 class="h5 mb-2">{TABS.find((t) => t.id === id)?.label}</h2>
-      <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast">]}</p>
+      <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint">]}</p>
       {id === "guide" && (
         <pre class="bg-light border rounded p-3 small mb-0">
           {`rbuilder discover .
