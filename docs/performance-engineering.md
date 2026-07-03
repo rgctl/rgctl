@@ -145,13 +145,13 @@ Each metric should eventually have Criterion samples **and** a release gate wher
 
 ### Slice path (`--with-slices`)
 
-| Metric ID | Description | Gate status |
-|-----------|-------------|-------------|
-| `br.slice.icfg_build_ms` | `InterproceduralCFG::build` | ❌ Informational |
-| `br.slice.per_seed_pdg_ms` | PDG per handoff seed | ❌ Informational |
-| `br.slice.total_ms` | `trace_blast_to_slices_with_blast` | ❌ Informational |
-| CFG/PDG archive | `discover --cfg` → `.rbuilder/analysis/cfg_pdg.archive.bin`; loaded by `--with-slices` | ✅ Write + preload (Sprint D partial) |
-| Handoffs JSON | `resolve_handoff_seeds` → `gatekeeping.handoffs` | ✅ I/O contract (decoupled from slice trace) |
+| Metric ID | Description | Target | Gate status |
+|-----------|-------------|--------|-------------|
+| `br.slice.icfg_build_ms` | `InterproceduralCFG::build` | — | Skipped when archive present |
+| `br.slice.per_seed_pdg_ms` | PDG per handoff seed | — | Preloaded from archive when present |
+| `br.slice.total_ms` | `blast-radius --with-slices` CLI | < 30 s (tiny + `--cfg`) | ✅ `subprocess_golden_path` |
+| CFG/PDG archive | `discover --cfg` → `cfg_pdg.archive.bin`; ICFG + PDG on slice | — | ✅ Done |
+| Handoffs JSON | `resolve_handoff_seeds` → `gatekeeping.handoffs` | — | ✅ I/O contract |
 
 ### Gate failure format
 
