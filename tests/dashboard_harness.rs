@@ -68,6 +68,7 @@ pub fn assert_dashboard_bundle_with_meta(
     assert_eq!(manifest["phases"]["0"], "complete");
     assert_eq!(manifest["phases"]["1"], "complete");
     assert_eq!(manifest["phases"]["2"], "complete");
+    assert_eq!(manifest["phases"]["3"], "complete");
 
     let view = &manifest["view"];
     assert_eq!(view["metagraph_path"], "metagraph.json");
@@ -79,11 +80,16 @@ pub fn assert_dashboard_bundle_with_meta(
     assert!(dash.join("metagraph.json").is_file(), "missing metagraph.json");
     let meta: Value =
         serde_json::from_slice(&std::fs::read(dash.join("metagraph.json")).unwrap()).unwrap();
-    assert_eq!(meta["schema_version"], 1);
+    assert_eq!(meta["schema_version"], 2);
     assert!(
         meta["nodes"].as_array().map(|a| a.len()).unwrap_or(0) as u64 >= min_metanodes,
         "metagraph nodes below minimum"
     );
+    let has_members = meta["nodes"]
+        .as_array()
+        .map(|nodes| nodes.iter().any(|n| n["member_indices"].as_array().map(|a| !a.is_empty()).unwrap_or(false)))
+        .unwrap_or(false);
+    assert!(has_members, "metagraph metanodes must include member_indices for LOD");
 
     let node_count = manifest["graph"]["node_count"].as_u64().unwrap_or(0);
     let edge_count = manifest["graph"]["edge_count"].as_u64().unwrap_or(0);

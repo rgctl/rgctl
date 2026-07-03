@@ -8,7 +8,7 @@ use std::f64::consts::PI;
 use std::path::Path;
 use uuid::Uuid;
 
-pub const METAGRAPH_SCHEMA_VERSION: u32 = 1;
+pub const METAGRAPH_SCHEMA_VERSION: u32 = 2;
 pub const METAGRAPH_FILE: &str = "metagraph.json";
 /// Above this raw node count the UI hides per-function nodes (community-only mode).
 pub const COMMUNITY_ONLY_THRESHOLD: u64 = 50_000;
@@ -35,6 +35,9 @@ pub struct Metanode {
     pub avg_complexity: f64,
     pub x: f64,
     pub y: f64,
+    /// Columnar row indices in `graph_payload.bin` for WASM LOD drill-down.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_indices: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,14 +54,17 @@ struct PackageBucket {
     classes: u32,
     complexity_sum: f64,
     complexity_count: u32,
+    member_indices: Vec<u32>,
 }
 
 /// Build package metagraph from indexed graph and write JSON beside the dashboard bundle.
 pub fn write_metagraph(
     backend: &MemoryBackend,
+    snapshot_path: &Path,
     out_dir: &Path,
     source_node_count: u64,
 ) -> Result<MetagraphPayload, String> {
+    let uuid_to_col = load_uuid_index_map(snapshot_path);
     let mut uuid_to_pkg: HashMap<Uuid, u32> = HashMap::new();
     let mut packages: HashMap<String, PackageBucket> = HashMap::new();
 
@@ -73,6 +79,7 @@ pub fn write_metagraph(
             classes: 0,
             complexity_sum: 0.0,
             complexity_count: 0,
+            member_indices: Vec::new(),
         });
         match n.node_type {
             NodeType::Function => bucket.functions += 1,
@@ -82,6 +89,9 @@ pub fn write_metagraph(
         if let Some(c) = n.properties.get("cyclomatic").and_then(|v| v.parse::<f64>().ok()) {
             bucket.complexity_sum += c;
             bucket.complexity_count += 1;
+        }
+        if let Some(col_idx) = uuid_to_col.get(&n.id) {
+            bucket.member_indices.push(*col_idx);
         }
     });
 
@@ -94,6 +104,7 @@ pub fn write_metagraph(
                 classes: 0,
                 complexity_sum: 0.0,
                 complexity_count: 0,
+                member_indices: Vec::new(),
             },
         );
     }
@@ -125,12 +136,14 @@ pub fn write_metagraph(
             classes: 0,
             complexity_sum: 0.0,
             complexity_count: 0,
+            member_indices: Vec::new(),
         };
         for b in tail {
             merged.functions += b.functions;
             merged.classes += b.classes;
             merged.complexity_sum += b.complexity_sum;
             merged.complexity_count += b.complexity_count;
+            merged.member_indices.extend(b.member_indices);
         }
         label_to_id.insert(merged.label.clone(), id);
         metanodes.push(bucket_to_metanode(id, merged));
@@ -213,6 +226,7 @@ fn bucket_to_metanode(id: u32, bucket: PackageBucket) -> Metanode {
         avg_complexity,
         x: 0.0,
         y: 0.0,
+        member_indices: bucket.member_indices,
     }
 }
 
@@ -256,6 +270,42 @@ pub fn package_label(file_path: &str) -> String {
 
 fn fs_write(path: std::path::PathBuf, bytes: &[u8]) -> Result<(), String> {
     std::fs::write(path, bytes).map_err(|e| e.to_string())
+}
+
+fn load_uuid_index_map(snapshot_path: &Path) -> HashMap<Uuid, u32> {
+    if !snapshot_path.is_file() {
+        return HashMap::new();
+    }
+    let Ok(bytes) = std::fs::read(snapshot_path) else {
+        return HashMap::new();
+    };
+    scan_columnar_uuid_indices(&bytes)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(raw, idx)| (Uuid::from_bytes(raw), idx))
+        .collect()
+}
+
+/// Scan columnar v2 node id column without pulling in memmap (export-time only).
+fn scan_columnar_uuid_indices(bytes: &[u8]) -> Result<HashMap<[u8; 16], u32>, String> {
+    const HEADER_SIZE: usize = 136;
+    const NODE_ROW_SIZE: usize = 64;
+    if bytes.len() < HEADER_SIZE || &bytes[0..4] != b"RBGR" {
+        return Err("not columnar v2".into());
+    }
+    let node_count = u64::from_le_bytes(bytes[12..20].try_into().unwrap()) as usize;
+    let offset_nodes = u64::from_le_bytes(bytes[92..100].try_into().unwrap()) as usize;
+    let end = offset_nodes + node_count * NODE_ROW_SIZE;
+    if end > bytes.len() {
+        return Err("node column out of range".into());
+    }
+    let mut map = HashMap::with_capacity(node_count);
+    for idx in 0..node_count {
+        let off = offset_nodes + idx * NODE_ROW_SIZE;
+        let id: [u8; 16] = bytes[off..off + 16].try_into().unwrap();
+        map.insert(id, idx as u32);
+    }
+    Ok(map)
 }
 
 #[cfg(test)]

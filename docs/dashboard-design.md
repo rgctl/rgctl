@@ -55,7 +55,7 @@ crates/rbuilder-wasm/           # WASM engine (Phase 1+)
 | **0** | Preact shell, bundle export, manifest | `crates/rbuilder-export/src/html.rs`, CDN D3 dashboard |
 | **1** | `graph_payload.bin`, WASM header parse, worker boot | JSON-in-HTML graph embed (already gone with html.rs) |
 | **2** | Sigma.js metanode view @ 50k+ | Placeholder graph renderer |
-| **3** | LOD, bitmask filters, inspector | Dropdown-only filters |
+| **3** | LOD drill-down, bitmask filters, function table | Placeholder function tab text |
 | **4** | CFG/dominance from `cfg_pdg.archive.bin` | `all_analyses.json`, dataflow tab |
 | **5** | Slice + CodeMirror | Client `computeBackwardSlice` |
 | **6** | Blast radius + depth slider in WASM | Client blast BFS |
@@ -204,7 +204,27 @@ Shared assertions: `tests/dashboard_harness.rs` → `assert_dashboard_bundle_wit
 | `metagraph.json` | Package-level metanodes + aggregated call edges |
 | `manifest.view` | Metagraph path, counts, `mode`, `community_only` flag |
 
-UI loads `./metagraph.json` in the Graph tab (Sigma.js). At ≥50k source nodes, `community_only` is set (no per-function LOD until Phase 3).
+UI loads `./metagraph.json` in the Graph tab (Sigma.js). At ≥50k source nodes, `community_only` is set; Phase 3 enables WASM drill-down into package members via `member_indices`.
+
+### Phase 3 — LOD + filters
+
+| Feature | Where |
+|---------|-------|
+| `member_indices` on metanodes | `metagraph.json` schema v2 |
+| WASM columnar expand / list | `EngineContext::expandIndices`, `listNodes` |
+| Worker messages | `expand`, `list_nodes` in `dashboard/src/worker.ts` |
+| Graph drill-down | Double-click metanode or **Drill down** in inspector |
+| Type bitmask filter | `NodeTypeFilter` — Function, Class, Struct, … |
+| Function table | `FunctionsView` — virtual scroll via WASM pagination |
+
+Worker protocol (v2):
+
+| Direction | Message | Payload |
+|-----------|---------|---------|
+| UI → worker | `{ type: "expand", indices, typeMask }` | columnar row indices |
+| worker → UI | `{ type: "subgraph", payload }` | nodes + internal call edges |
+| UI → worker | `{ type: "list_nodes", typeMask, offset, limit }` | paginated scan |
+| worker → UI | `{ type: "node_list", payload }` | `{ total, offset, items }` |
 
 ---
 
@@ -228,6 +248,11 @@ _Update this table when a phase lands._
 | Sigma.js graph | 2 | **done** | `GraphView.tsx` — package metagraph WebGL |
 | Community metanodes | 2 | **done** | `metagraph.json` export + inspector |
 | `tests/dashboard_harness.rs` | 2 | **done** | Asserts `metagraph.json`, `manifest.view`, phase 2 |
+| WASM columnar LOD | 3 | **done** | `expandIndices` / `listNodes` |
+| Graph drill-down | 3 | **done** | Sigma subgraph + breadcrumb |
+| Bitmask type filters | 3 | **done** | Graph + Functions tabs |
+| Functions virtual table | 3 | **done** | WASM paginated list |
+| `tests/dashboard_harness.rs` | 3 | **done** | phase 3 + `member_indices` |
 
 ### Removed (Phase 0)
 

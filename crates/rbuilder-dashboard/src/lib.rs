@@ -33,7 +33,7 @@ pub fn export_dashboard_bundle(
     let (node_count, edge_count, digest) = payload_stats(snapshot_path, backend)?;
     let metrics = collect_metrics(backend);
 
-    let meta = write_metagraph(backend, &out_dir, node_count)?;
+    let meta = write_metagraph(backend, snapshot_path, &out_dir, node_count)?;
     let manifest = Manifest::with_phases(
         node_count,
         edge_count,

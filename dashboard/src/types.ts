@@ -49,6 +49,7 @@ export interface Metanode {
   avg_complexity: number;
   x: number;
   y: number;
+  member_indices?: number[];
 }
 
 export interface Metaedge {
@@ -56,6 +57,41 @@ export interface Metaedge {
   target: number;
   weight: number;
   kind: string;
+}
+
+export interface SubgraphNode {
+  index: number;
+  name: string;
+  node_type: number;
+  node_type_name: string;
+  complexity: number;
+  file_path?: string | null;
+}
+
+export interface SubgraphEdge {
+  source: number;
+  target: number;
+  edge_type: number;
+}
+
+export interface SubgraphPayload {
+  nodes: SubgraphNode[];
+  edges: SubgraphEdge[];
+}
+
+export interface NodeListEntry {
+  index: number;
+  name: string;
+  node_type: number;
+  node_type_name: string;
+  complexity: number;
+  file_path?: string | null;
+}
+
+export interface NodeListPayload {
+  total: number;
+  offset: number;
+  items: NodeListEntry[];
 }
 
 export interface EngineReady {
@@ -66,9 +102,49 @@ export interface EngineReady {
   wasm: boolean;
 }
 
+/** Node-type bitmask (matches columnar u16 encoding). */
+export const NODE_TYPE_MASK = {
+  Function: 1 << 0,
+  Class: 1 << 1,
+  Struct: 1 << 2,
+  Enum: 1 << 3,
+  Interface: 1 << 4,
+  Module: 1 << 5,
+} as const;
+
+export const DEFAULT_GRAPH_TYPE_MASK =
+  NODE_TYPE_MASK.Function | NODE_TYPE_MASK.Class;
+
+export const NODE_TYPE_FILTER_OPTIONS = [
+  { bit: NODE_TYPE_MASK.Function, label: "Function" },
+  { bit: NODE_TYPE_MASK.Class, label: "Class" },
+  { bit: NODE_TYPE_MASK.Struct, label: "Struct" },
+  { bit: NODE_TYPE_MASK.Interface, label: "Interface" },
+  { bit: NODE_TYPE_MASK.Module, label: "Module" },
+] as const;
+
+export type WorkerInWithoutId =
+  | { type: "init" }
+  | { type: "expand"; indices: number[]; typeMask: number }
+  | { type: "list_nodes"; typeMask: number; offset: number; limit: number };
+
+export type WorkerIn =
+  | { type: "init" }
+  | { type: "expand"; requestId: number; indices: number[]; typeMask: number }
+  | { type: "list_nodes"; requestId: number; typeMask: number; offset: number; limit: number };
+
 export type WorkerOut =
-  | { type: "ready"; nodeCount: number; edgeCount: number; schemaVersion: number; digest: string; wasm: boolean }
-  | { type: "error"; message: string };
+  | {
+      type: "ready";
+      nodeCount: number;
+      edgeCount: number;
+      schemaVersion: number;
+      digest: string;
+      wasm: boolean;
+    }
+  | { type: "subgraph"; requestId: number; payload: SubgraphPayload }
+  | { type: "node_list"; requestId: number; payload: NodeListPayload }
+  | { type: "error"; requestId?: number; message: string };
 
 export async function loadManifest(): Promise<DashboardManifest> {
   const embedded = document.getElementById("rbuilder-manifest");
@@ -80,8 +156,4 @@ export async function loadManifest(): Promise<DashboardManifest> {
     throw new Error(`manifest.json: HTTP ${res.status}`);
   }
   return (await res.json()) as DashboardManifest;
-}
-
-export function startEngineWorker(): Worker {
-  return new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
 }

@@ -58,6 +58,7 @@ impl DashboardManifest {
         phases.insert("0".into(), "complete".into());
         phases.insert("1".into(), "complete".into());
         phases.insert("2".into(), "complete".into());
+        phases.insert("3".into(), "complete".into());
 
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
@@ -116,6 +117,7 @@ mod tests {
                 avg_complexity: 1.0,
                 x: 0.0,
                 y: 0.0,
+                member_indices: vec![0, 1],
             }],
             edges: vec![],
         };

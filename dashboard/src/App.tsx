@@ -1,12 +1,8 @@
 import { useEffect, useState } from "preact/hooks";
+import { FunctionsView } from "./FunctionsView";
 import { GraphView } from "./GraphView";
-import {
-  loadManifest,
-  startEngineWorker,
-  type DashboardManifest,
-  type EngineReady,
-  type WorkerOut,
-} from "./types";
+import { loadManifest, type DashboardManifest, type EngineReady } from "./types";
+import { useEngineWorker } from "./useEngineWorker";
 
 const TABS = [
   { id: "graph", label: "Graph Visualization" },
@@ -21,34 +17,17 @@ type TabId = (typeof TABS)[number]["id"];
 
 export function App() {
   const [manifest, setManifest] = useState<DashboardManifest | null>(null);
-  const [engine, setEngine] = useState<EngineReady | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [manifestError, setManifestError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>("graph");
+  const { engine, error: workerError, expand, listNodes, wasmReady } = useEngineWorker();
 
   useEffect(() => {
     loadManifest()
       .then(setManifest)
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-
-    const worker = startEngineWorker();
-    worker.onmessage = (ev: MessageEvent<WorkerOut>) => {
-      const data = ev.data;
-      if (data.type === "ready") {
-        setEngine({
-          nodeCount: data.nodeCount,
-          edgeCount: data.edgeCount,
-          schemaVersion: data.schemaVersion,
-          digest: data.digest,
-          wasm: data.wasm,
-        });
-      } else if (data.type === "error") {
-        setError(data.message);
-      }
-    };
-    worker.postMessage({ type: "init" });
-    return () => worker.terminate();
+      .catch((e) => setManifestError(e instanceof Error ? e.message : String(e)));
   }, []);
 
+  const error = manifestError ?? workerError;
   const m = manifest?.metrics;
   const phases = manifest?.phases ?? {};
   const view = manifest?.view;
@@ -57,7 +36,7 @@ export function App() {
     <div class="app">
       <header class="header">
         <h1>rBuilder Analysis Dashboard</h1>
-        <p class="subtitle">Phase 2 — Sigma.js package metagraph (WebGL)</p>
+        <p class="subtitle">Phase 3 — LOD drill-down, bitmask filters, function table</p>
       </header>
 
       {error && (
@@ -123,7 +102,14 @@ export function App() {
       </nav>
 
       <main class={tab === "graph" ? "panel panel-graph" : "panel"}>
-        <TabPanel id={tab} manifest={manifest} engine={engine} />
+        <TabPanel
+          id={tab}
+          manifest={manifest}
+          engine={engine}
+          wasmReady={wasmReady}
+          expand={expand}
+          listNodes={listNodes}
+        />
       </main>
 
       <footer class="footer">
@@ -147,22 +133,43 @@ function TabPanel({
   id,
   manifest,
   engine,
+  wasmReady,
+  expand,
+  listNodes,
 }: {
   id: TabId;
   manifest: DashboardManifest | null;
   engine: EngineReady | null;
+  wasmReady: boolean;
+  expand: (indices: number[], typeMask: number) => Promise<import("./types").SubgraphPayload>;
+  listNodes: (
+    typeMask: number,
+    offset: number,
+    limit: number,
+  ) => Promise<import("./types").NodeListPayload>;
 }) {
   if (id === "graph") {
     return (
       <GraphView
         communityOnly={manifest?.view?.community_only ?? false}
         sourceNodeCount={manifest?.graph.node_count ?? engine?.nodeCount ?? 0}
+        wasmReady={wasmReady}
+        expand={expand}
       />
     );
   }
 
-  const placeholders: Record<Exclude<TabId, "graph">, string> = {
-    functions: "Phase 3: virtualized function table (from payload indices)",
+  if (id === "functions") {
+    return (
+      <FunctionsView
+        wasmReady={wasmReady}
+        functionCount={manifest?.metrics.function_count ?? 0}
+        listNodes={listNodes}
+      />
+    );
+  }
+
+  const placeholders: Record<Exclude<TabId, "graph" | "functions">, string> = {
     cfg: "Phase 4: CFG + dominance from cfg_pdg.archive.bin",
     slice: "Phase 5: CodeMirror + WASM slice",
     blast: "Phase 6: blast engine + depth slider",
@@ -172,7 +179,7 @@ function TabPanel({
   return (
     <div class="tab-panel">
       <h2>{TABS.find((t) => t.id === id)?.label}</h2>
-      <p class="placeholder">{placeholders[id as Exclude<TabId, "graph">]}</p>
+      <p class="placeholder">{placeholders[id as Exclude<TabId, "graph" | "functions">]}</p>
       {id === "guide" && (
         <pre class="guide">
           {`rbuilder discover .
