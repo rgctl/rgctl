@@ -1,10 +1,8 @@
 name: Semantic Analysis Verification
 
+# Disabled by default — trigger manually from Actions → Run workflow.
 on:
-  push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
