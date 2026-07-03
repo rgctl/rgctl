@@ -91,6 +91,7 @@ rbuilder-semantic = { path = "crates/rbuilder-semantic", version = "0.1.0" }
 rbuilder-rules = { path = "crates/rbuilder-rules", version = "0.1.0" }
 rbuilder-core = { path = "crates/rbuilder-core", version = "0.1.0" }
 tempfile = "3"
+zstd = "0.13"
 rbuilder-lang-ansible = { path = "crates/rbuilder-lang-ansible", version = "0.1.0" }
 rbuilder-lang-assembly = { path = "crates/rbuilder-lang-assembly", version = "0.1.0" }
 rbuilder-lang-bash = { path = "crates/rbuilder-lang-bash", version = "0.1.0" }

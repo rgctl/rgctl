@@ -13,6 +13,7 @@
 
 use bit_set::BitSet;
 use petgraph::algo::{kosaraju_scc, toposort};
+use serde::{Deserialize, Serialize};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use rbuilder_error::{Error, Result};
@@ -323,10 +324,93 @@ impl BlastRadiusEngine {
             memory_mb: memory_bytes as f64 / (1024.0 * 1024.0),
         }
     }
+
+    /// Serialize engine state for mmap reload (sparse + zstd-compressed reachability).
+    pub fn to_engine_snapshot(&self, graph_digest: String) -> crate::blast_engine_snapshot::BlastEngineSnapshot {
+        use crate::blast_engine_snapshot::{
+            bitset_to_words, compress_words, words_popcount, ReachabilityRow,
+        };
+
+        let mut reachability_rows = Vec::new();
+        for (idx, bs) in self.reachability.iter().enumerate() {
+            let words = bitset_to_words(bs, self.scc_count);
+            if words_popcount(&words) <= 1 {
+                continue;
+            }
+            if let Ok(compressed) = compress_words(&words) {
+                reachability_rows.push(ReachabilityRow {
+                    scc_idx: idx as u32,
+                    compressed,
+                });
+            }
+        }
+
+        crate::blast_engine_snapshot::BlastEngineSnapshot {
+            graph_digest,
+            scc_count: self.scc_count,
+            dag_edges: self
+                .dag
+                .edge_indices()
+                .map(|e| {
+                    let (a, b) = self.dag.edge_endpoints(e).unwrap();
+                    (a.index(), b.index())
+                })
+                .collect(),
+            scc_members: self.scc_members.clone(),
+            scc_names: self.dag.node_weights().map(|n| n.name.clone()).collect(),
+            node_to_scc: self
+                .node_to_scc
+                .iter()
+                .map(|(uuid, idx)| (*uuid, idx.index()))
+                .collect(),
+            reachability_words: Vec::new(),
+            reachability_rows,
+        }
+    }
+
+    /// Reconstruct engine without running SCC decomposition.
+    pub fn from_engine_snapshot(
+        snapshot: crate::blast_engine_snapshot::BlastEngineSnapshot,
+    ) -> Result<Self> {
+        use crate::blast_engine_snapshot::reachability_from_snapshot;
+        use petgraph::graph::{DiGraph, NodeIndex};
+
+        let mut dag: DiGraph<SccNode, ()> = DiGraph::new();
+        for (id, members) in snapshot.scc_members.iter().enumerate() {
+            let name = snapshot
+                .scc_names
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| format!("SCC_{id}"));
+            dag.add_node(SccNode {
+                id,
+                members: members.clone(),
+                name,
+            });
+        }
+        for (from, to) in &snapshot.dag_edges {
+            dag.add_edge(NodeIndex::new(*from), NodeIndex::new(*to), ());
+        }
+
+        let mut node_to_scc = HashMap::new();
+        for (uuid, scc_id) in &snapshot.node_to_scc {
+            node_to_scc.insert(*uuid, NodeIndex::new(*scc_id));
+        }
+
+        let reachability = reachability_from_snapshot(&snapshot)?;
+
+        Ok(Self {
+            dag,
+            node_to_scc,
+            scc_members: snapshot.scc_members,
+            reachability,
+            scc_count: snapshot.scc_count,
+        })
+    }
 }
 
 /// Result of blast radius analysis.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlastRadiusResult {
     /// The analyzed function UUID
     pub symbol_id: Uuid,
@@ -456,6 +540,34 @@ mod tests {
         assert_eq!(result.direct_caller_ids.len(), 1);  // c
         assert_eq!(result.impact_zone_ids.len(), 3);    // a, b, c
         assert!(result.score > 0.0);
+    }
+
+    #[test]
+    fn test_engine_snapshot_round_trip() {
+        use crate::blast_engine_snapshot::BlastEngineSnapshot;
+        use std::path::Path;
+        use tempfile::TempDir;
+
+        let backend = build_with_cycle();
+        let engine = BlastRadiusEngine::build(&backend).unwrap();
+        let digest = "test-digest".to_string();
+        let snap = engine.to_engine_snapshot(digest.clone());
+
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join(BlastEngineSnapshot::default_path(Path::new(".")).file_name().unwrap());
+        snap.write_to_path(&path).unwrap();
+
+        let loaded = BlastEngineSnapshot::load_from_path(&path).unwrap();
+        assert_eq!(loaded.graph_digest, digest);
+        assert_eq!(loaded.scc_count, engine.scc_count);
+
+        let restored = BlastRadiusEngine::from_engine_snapshot(loaded).unwrap();
+        let nodes = backend.all_nodes().unwrap();
+        let id_a = nodes.iter().find(|n| n.name == "a").unwrap().id;
+        let original = engine.analyze(id_a).unwrap();
+        let roundtrip = restored.analyze(id_a).unwrap();
+        assert_eq!(original.score, roundtrip.score);
+        assert_eq!(original.impact_zone_ids.len(), roundtrip.impact_zone_ids.len());
     }
 
     #[test]
