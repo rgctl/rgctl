@@ -12,7 +12,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 /// Builds graph nodes and edges from extracted data.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct GraphBuilder {
     symbol_index: HashMap<String, Uuid>,
     file_nodes: HashMap<String, Uuid>,
@@ -34,32 +34,14 @@ struct ResolutionStats {
     total_calls: usize,
     hashmap_hits: usize,
     qualified_hint_scans: usize,
-    qualified_hint_hits: usize,      // O(1) index hits
+    qualified_hint_hits: usize, // O(1) index hits
     type_hint_scans: usize,
-    type_hint_hits: usize,           // O(1) index hits
+    type_hint_hits: usize, // O(1) index hits
     fuzzy_scans: usize,
-    fuzzy_hits: usize,               // O(1) index hits
+    fuzzy_hits: usize, // O(1) index hits
     total_time: std::time::Duration,
     line_lookups: usize,
     line_lookup_time: std::time::Duration,
-}
-
-impl Default for GraphBuilder {
-    fn default() -> Self {
-        Self {
-            symbol_index: HashMap::default(),
-            file_nodes: HashMap::default(),
-            config_key_nodes: HashMap::default(),
-            env_nodes: HashMap::default(),
-            nodes: Vec::default(),
-            edges: Vec::default(),
-            code_index: None,
-            resolution_stats: ResolutionStats::default(),
-            symbols_by_qualified: HashMap::default(),
-            symbols_by_suffix: HashMap::default(),
-            indexes_built: false,
-        }
-    }
 }
 
 impl GraphBuilder {
@@ -224,9 +206,7 @@ impl GraphBuilder {
         let symbol_count = self.symbol_index.len();
 
         // Build UUID → Node index for O(1) lookups (eliminates O(n²) nested loop)
-        let uuid_to_node: HashMap<Uuid, &Node> = self.nodes.iter()
-            .map(|n| (n.id, n))
-            .collect();
+        let uuid_to_node: HashMap<Uuid, &Node> = self.nodes.iter().map(|n| (n.id, n)).collect();
 
         // Build qualified name index and suffix index
         for (key, uuid) in &self.symbol_index {
@@ -285,7 +265,8 @@ impl GraphBuilder {
 
     /// Add a relation between symbols if both endpoints exist.
     pub fn add_relation(&mut self, relation: &Relation) -> Result<()> {
-        let from_id = self.resolve_symbol_tracked(&relation.from, &relation.location.file, None, None);
+        let from_id =
+            self.resolve_symbol_tracked(&relation.from, &relation.location.file, None, None);
 
         // Use hints for cross-file resolution (best-effort)
         // Hints are language plugin's best guess at the qualified name based on local context
@@ -311,7 +292,9 @@ impl GraphBuilder {
         usage_type: ConfigUsageKind,
     ) {
         let file_id = self.file_nodes.get(file_path).copied();
-        let code_node = self.find_symbol_at_line_tracked(file_path, line).or(file_id);
+        let code_node = self
+            .find_symbol_at_line_tracked(file_path, line)
+            .or(file_id);
 
         let Some(from_id) = code_node else {
             return;
@@ -360,7 +343,8 @@ impl GraphBuilder {
         let start = Instant::now();
         self.resolution_stats.line_lookups += 1;
 
-        let result = self.nodes
+        let result = self
+            .nodes
             .iter()
             .filter(|n| n.file_path.as_deref() == Some(file_path))
             .filter(|n| {
@@ -450,7 +434,8 @@ impl GraphBuilder {
 
         // 4. Fallback: suffix index lookup (O(1))
         self.resolution_stats.fuzzy_scans += 1;
-        let result = self.symbols_by_suffix
+        let result = self
+            .symbols_by_suffix
             .get(name)
             .and_then(|ids| ids.first())
             .copied();

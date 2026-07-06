@@ -3,7 +3,7 @@
 use rbuilder::analysis::{
     check_policies, default_behavioral_edges, BetweennessCentrality, BlastRadiusEngine,
     CentralityAnalyzer, CentralityScores, FastPageRank, FlatGraphIndex, PetGraphView,
-    PAGERANK_TOLERANCE, PolicyRegistry, PolicyViolation,
+    PolicyRegistry, PolicyViolation, PAGERANK_TOLERANCE,
 };
 use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};
@@ -52,7 +52,9 @@ fn star_contamination_module_pagerank_zero() {
         "module must not inherit rank from Contains edges"
     );
     assert!(
-        func_ids.iter().any(|id| scores.get(id).copied().unwrap_or(0.0) > 0.0),
+        func_ids
+            .iter()
+            .any(|id| scores.get(id).copied().unwrap_or(0.0) > 0.0),
         "call-connected functions must receive non-zero rank"
     );
 }
@@ -136,7 +138,11 @@ fn cyclic_sink_drainage_converges() {
     let index = FlatGraphIndex::from_view(&view, &[EdgeType::Calls]);
     let (ranks, stats) = FastPageRank::new(100, 0.85).compute_flat(&index);
 
-    assert!(stats.converged, "did not converge: delta={}", stats.max_delta);
+    assert!(
+        stats.converged,
+        "did not converge: delta={}",
+        stats.max_delta
+    );
     assert!(stats.max_delta < PAGERANK_TOLERANCE);
     assert!(ranks.iter().all(|r| r.is_finite()));
     assert!(ranks.iter().sum::<f64>() > 0.0);
@@ -167,7 +173,10 @@ fn cascade_hazard_reads_betweenness_scores() {
         .unwrap()
         .scores;
 
-    let bridge_bt = centrality.get(&id_bridge).map(|s| s.betweenness).unwrap_or(0.0);
+    let bridge_bt = centrality
+        .get(&id_bridge)
+        .map(|s| s.betweenness)
+        .unwrap_or(0.0);
     assert!(bridge_bt > 0.0);
 
     let engine = BlastRadiusEngine::build(backend).unwrap();
@@ -220,8 +229,18 @@ fn default_analyzer_skips_structural_edges() {
     insert_call(backend, id_a, id_b);
 
     let report = CentralityAnalyzer::new().analyze(backend).unwrap();
-    assert_eq!(report.scores.get(&id_mod).map(|s| s.pagerank).unwrap_or(0.0), 0.0);
-    assert_eq!(report.scores.get(&id_mod).map(|s| s.in_degree).unwrap_or(0), 0);
+    assert_eq!(
+        report
+            .scores
+            .get(&id_mod)
+            .map(|s| s.pagerank)
+            .unwrap_or(0.0),
+        0.0
+    );
+    assert_eq!(
+        report.scores.get(&id_mod).map(|s| s.in_degree).unwrap_or(0),
+        0
+    );
     assert!(report.scores.get(&id_a).map(|s| s.out_degree).unwrap_or(0) >= 1);
     assert!(default_behavioral_edges().contains(&EdgeType::Calls));
     assert!(!default_behavioral_edges().contains(&EdgeType::Contains));
@@ -265,7 +284,9 @@ fn kafka_module_behavioral_pagerank_isolated() {
             ..Default::default()
         },
     );
-    let (graph, _) = pipeline.process_repository(kafka_path).expect("kafka index");
+    let (graph, _) = pipeline
+        .process_repository(kafka_path)
+        .expect("kafka index");
     let backend = graph.backend();
 
     let view = PetGraphView::from_backend(backend).unwrap();

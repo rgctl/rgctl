@@ -15,10 +15,7 @@ use uuid::Uuid;
 const CALL_EDGES: &[EdgeType] = &[EdgeType::Calls];
 
 /// Resolve a symbol name to a unique node, rejecting ambiguous duplicates.
-pub fn resolve_unique_symbol(
-    backend: &MemoryBackend,
-    symbol_name: &str,
-) -> Result<(Uuid, String)> {
+pub fn resolve_unique_symbol(backend: &MemoryBackend, symbol_name: &str) -> Result<(Uuid, String)> {
     let nodes = backend.find_nodes_by_name(symbol_name)?;
     match nodes.len() {
         0 => Err(Error::NodeNotFound(symbol_name.to_string())),
@@ -104,7 +101,9 @@ impl<'a> BlastRadiusAnalyzer<'a> {
     /// Analyze blast radius by node id.
     pub fn analyze_by_id(&self, symbol_id: Uuid) -> Result<BlastRadiusReport> {
         // Look up name using backend
-        let node = self.backend.get_node(symbol_id)?
+        let node = self
+            .backend
+            .get_node(symbol_id)?
             .ok_or_else(|| Error::NodeNotFound(symbol_id.to_string()))?;
 
         let view = PetGraphView::from_backend(self.backend)?;
@@ -154,7 +153,8 @@ impl<'a> BlastRadiusAnalyzer<'a> {
         let mut data_flow_impact = Vec::new();
         let mut max_data_flow = 0usize;
         for caller_id in &direct_caller_ids {
-            let caller_name = self.backend
+            let caller_name = self
+                .backend
                 .get_node(*caller_id)
                 .ok()
                 .flatten()
@@ -197,7 +197,11 @@ impl<'a> BlastRadiusAnalyzer<'a> {
     }
 }
 
-fn incoming_callers(view: &PetGraphView, backend: &MemoryBackend, target_idx: NodeIndex) -> Vec<Uuid> {
+fn incoming_callers(
+    view: &PetGraphView,
+    backend: &MemoryBackend,
+    target_idx: NodeIndex,
+) -> Vec<Uuid> {
     view.incoming_filtered(target_idx, CALL_EDGES)
         .filter_map(|idx| {
             let uuid = view.index_to_uuid.get(&idx).copied()?;
@@ -214,9 +218,7 @@ fn incoming_callers(view: &PetGraphView, backend: &MemoryBackend, target_idx: No
 fn uuid_list_to_names(backend: &MemoryBackend, ids: &[Uuid]) -> Vec<String> {
     let mut names: Vec<String> = ids
         .iter()
-        .filter_map(|id| {
-            backend.get_node(*id).ok().flatten().map(|n| n.name.clone())
-        })
+        .filter_map(|id| backend.get_node(*id).ok().flatten().map(|n| n.name.clone()))
         .collect();
     names.sort();
     names
@@ -225,9 +227,7 @@ fn uuid_list_to_names(backend: &MemoryBackend, ids: &[Uuid]) -> Vec<String> {
 fn ids_to_names(backend: &MemoryBackend, ids: &HashSet<Uuid>) -> Vec<String> {
     let mut names: Vec<String> = ids
         .iter()
-        .filter_map(|id| {
-            backend.get_node(*id).ok().flatten().map(|n| n.name.clone())
-        })
+        .filter_map(|id| backend.get_node(*id).ok().flatten().map(|n| n.name.clone()))
         .collect();
     names.sort();
     names

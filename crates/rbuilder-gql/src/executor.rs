@@ -167,16 +167,14 @@ impl<'a> QueryExecutor<'a> {
             // Use indexed lookup for typed queries
             let node_ids = self.backend.find_node_ids_by_type(node_type)?;
             for node_id in node_ids {
-                if let Ok(Some(node)) = self.backend.with_node(node_id, |n| {
-                    if node_matches_pattern(n, pattern, binding) {
-                        Some(n.clone())
+                if let Ok(Some(Some(n))) = self.backend.with_node(node_id, |node| {
+                    if node_matches_pattern(node, pattern, binding) {
+                        Some(node.clone())
                     } else {
                         None
                     }
                 }) {
-                    if let Some(n) = node {
-                        matching_nodes.push(n);
-                    }
+                    matching_nodes.push(n);
                 }
             }
         } else {
@@ -219,7 +217,8 @@ impl<'a> QueryExecutor<'a> {
                         .get(&end_idx)
                         .copied()
                         .ok_or_else(|| Error::GraphError("missing node".into()))?;
-                    let end_node = self.backend
+                    let end_node = self
+                        .backend
                         .get_node(end_uuid)?
                         .ok_or_else(|| Error::NodeNotFound(end_uuid.to_string()))?;
                     if node_matches_pattern(&end_node, target, &row) {

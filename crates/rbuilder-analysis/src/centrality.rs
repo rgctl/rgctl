@@ -176,11 +176,14 @@ impl FastPageRank {
     pub fn compute_flat(&self, index: &FlatGraphIndex) -> (Vec<f64>, PageRankStats) {
         let node_count = index.node_count;
         if node_count == 0 {
-            return (Vec::new(), PageRankStats {
-                iterations_run: 0,
-                converged: true,
-                max_delta: 0.0,
-            });
+            return (
+                Vec::new(),
+                PageRankStats {
+                    iterations_run: 0,
+                    converged: true,
+                    max_delta: 0.0,
+                },
+            );
         }
 
         let mut current_ranks = vec![1.0 / node_count as f64; node_count];
@@ -191,9 +194,7 @@ impl FastPageRank {
             out_degrees[src] += 1;
         }
 
-        let sink_nodes: Vec<usize> = (0..node_count)
-            .filter(|&i| out_degrees[i] == 0)
-            .collect();
+        let sink_nodes: Vec<usize> = (0..node_count).filter(|&i| out_degrees[i] == 0).collect();
 
         let base_score = (1.0 - self.damping) / node_count as f64;
         let mut stats = PageRankStats {
@@ -434,8 +435,7 @@ impl CentralityAnalyzer {
         let (pagerank_map, _stats) = pagerank_engine.compute(view, allowed);
         let degree_map = DegreeCentrality::compute(view, allowed);
 
-        let betweenness_map =
-            BetweennessCentrality::compute(view, allowed, self.betweenness_limit);
+        let betweenness_map = BetweennessCentrality::compute(view, allowed, self.betweenness_limit);
 
         let mut scores: HashMap<Uuid, CentralityScores> = HashMap::new();
         for (uuid, (in_degree, out_degree)) in degree_map {
@@ -596,25 +596,13 @@ mod tests {
         backend.insert_node(helper).unwrap();
         backend.insert_node(leaf).unwrap();
         backend
-            .insert_edge(Edge::new(
-                id_main,
-                id_helper,
-                EdgeType::Calls,
-            ))
+            .insert_edge(Edge::new(id_main, id_helper, EdgeType::Calls))
             .unwrap();
         backend
-            .insert_edge(Edge::new(
-                id_helper,
-                id_leaf,
-                EdgeType::Calls,
-            ))
+            .insert_edge(Edge::new(id_helper, id_leaf, EdgeType::Calls))
             .unwrap();
         backend
-            .insert_edge(Edge::new(
-                id_leaf,
-                id_helper,
-                EdgeType::Calls,
-            ))
+            .insert_edge(Edge::new(id_leaf, id_helper, EdgeType::Calls))
             .unwrap();
 
         let report = CentralityAnalyzer::new().analyze(&backend).unwrap();
@@ -635,8 +623,7 @@ mod tests {
             .unwrap();
 
         let view = PetGraphView::from_backend(&backend).unwrap();
-        let (scores, _) =
-            FastPageRank::new(20, 0.85).compute(&view, &[EdgeType::Calls]);
+        let (scores, _) = FastPageRank::new(20, 0.85).compute(&view, &[EdgeType::Calls]);
         assert_eq!(scores.get(&id_mod).copied().unwrap_or(0.0), 0.0);
     }
 
@@ -656,18 +643,10 @@ mod tests {
                 .unwrap();
         }
         backend
-            .insert_edge(Edge::new(
-                nodes[3].id,
-                nodes[0].id,
-                EdgeType::Calls,
-            ))
+            .insert_edge(Edge::new(nodes[3].id, nodes[0].id, EdgeType::Calls))
             .unwrap();
         backend
-            .insert_edge(Edge::new(
-                nodes[2].id,
-                nodes[3].id,
-                EdgeType::Calls,
-            ))
+            .insert_edge(Edge::new(nodes[2].id, nodes[3].id, EdgeType::Calls))
             .unwrap();
 
         let view = PetGraphView::from_backend(&backend).unwrap();

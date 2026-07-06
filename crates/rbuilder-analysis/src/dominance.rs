@@ -56,10 +56,7 @@ impl DominatorTree {
             }
         }
 
-        debug_assert!(
-            verify_idom_acyclic(&idom),
-            "idom tree must be acyclic"
-        );
+        debug_assert!(verify_idom_acyclic(&idom), "idom tree must be acyclic");
 
         let frontiers = compute_dominance_frontiers(cfg, &idom, &reachable);
         Self {
@@ -137,7 +134,10 @@ pub fn verify_idom_acyclic(idom: &HashMap<BlockId, BlockId>) -> bool {
     true
 }
 
-fn compute_block_order(cfg: &ControlFlowGraph, reachable: &HashSet<BlockId>) -> HashMap<BlockId, usize> {
+fn compute_block_order(
+    cfg: &ControlFlowGraph,
+    reachable: &HashSet<BlockId>,
+) -> HashMap<BlockId, usize> {
     let mut order = HashMap::new();
     let mut stack = vec![cfg.entry];
     let mut visited = HashSet::new();
@@ -185,10 +185,8 @@ fn compute_dominance_frontiers(
     idom: &HashMap<BlockId, BlockId>,
     reachable: &HashSet<BlockId>,
 ) -> HashMap<BlockId, HashSet<BlockId>> {
-    let mut frontiers: HashMap<BlockId, HashSet<BlockId>> = reachable
-        .iter()
-        .map(|id| (*id, HashSet::new()))
-        .collect();
+    let mut frontiers: HashMap<BlockId, HashSet<BlockId>> =
+        reachable.iter().map(|id| (*id, HashSet::new())).collect();
 
     for block in reachable {
         let preds: Vec<BlockId> = cfg

@@ -5,11 +5,11 @@ use super::context::{language_from_path, CliContext};
 use super::slice_output::{
     cfg_topology_json, pdg_topology_json, taint_slice_json, text_slice_json,
 };
-use anyhow::{Context, Result};
+use crate::analysis::pdg::PdgNodeId;
 use crate::analysis::{
     build_cfg_for_function, BackwardSlicer, ProgramDependenceGraph, SliceCriterion, TaintAnalyzer,
 };
-use crate::analysis::pdg::PdgNodeId;
+use anyhow::{Context, Result};
 use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
@@ -27,8 +27,7 @@ pub struct SliceArgs {
 
 pub fn run(ctx: &CliContext, args: SliceArgs) -> Result<()> {
     let path = Path::new(&args.file);
-    let source = fs::read_to_string(path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let source = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let lang = args
         .language
         .clone()
@@ -85,24 +84,20 @@ pub fn run(ctx: &CliContext, args: SliceArgs) -> Result<()> {
         SliceView::Cfg => {
             cfg.prune_unreachable_blocks();
             if ctx.format == OutputFormat::Json {
-                let response = cfg_topology_json(
-                    &path.display().to_string(),
-                    &fn_name,
-                    &cfg,
-                );
+                let response = cfg_topology_json(&path.display().to_string(), &fn_name, &cfg);
                 ctx.emit_json_value(&serde_json::to_value(&response)?)?;
             } else {
-                println!("CFG: {} blocks, {} edges", cfg.blocks.len(), cfg.edges.len());
+                println!(
+                    "CFG: {} blocks, {} edges",
+                    cfg.blocks.len(),
+                    cfg.edges.len()
+                );
             }
         }
         SliceView::Pdg => {
             if ctx.format == OutputFormat::Json {
-                let response = pdg_topology_json(
-                    &path.display().to_string(),
-                    &fn_name,
-                    &pdg,
-                    false,
-                );
+                let response =
+                    pdg_topology_json(&path.display().to_string(), &fn_name, &pdg, false);
                 ctx.emit_json_value(&serde_json::to_value(&response)?)?;
             } else {
                 println!(
@@ -113,7 +108,15 @@ pub fn run(ctx: &CliContext, args: SliceArgs) -> Result<()> {
                 );
             }
         }
-        SliceView::Text => render_slice_text(ctx, path, &fn_name, &criterion, &slice, &pdg, args.direction)?,
+        SliceView::Text => render_slice_text(
+            ctx,
+            path,
+            &fn_name,
+            &criterion,
+            &slice,
+            &pdg,
+            args.direction,
+        )?,
     }
     Ok(())
 }

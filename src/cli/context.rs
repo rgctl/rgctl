@@ -36,8 +36,8 @@ impl CliContext {
         output: Option<PathBuf>,
         verbose: bool,
     ) -> Self {
-        let repo = repo
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let repo =
+            repo.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let db = db.unwrap_or_else(|| repo.join(".rbuilder").join("graph.db"));
         Self {
             repo,

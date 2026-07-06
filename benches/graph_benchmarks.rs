@@ -61,12 +61,7 @@ fn bench_incoming_filtered(c: &mut Criterion) {
     let idx = view.uuid_to_index[&hub];
 
     c.bench_function("incoming_filtered_calls_10k", |b| {
-        b.iter(|| {
-            black_box(
-                view.incoming_filtered(idx, &[EdgeType::Calls])
-                    .count(),
-            )
-        });
+        b.iter(|| black_box(view.incoming_filtered(idx, &[EdgeType::Calls]).count()));
     });
 }
 
@@ -146,20 +141,19 @@ fn bench_analyze_with_policy(c: &mut Criterion) {
             .unwrap()
             .id;
 
-        group.bench_with_input(BenchmarkId::new("topology", label), &target, |b, &target| {
-            b.iter(|| {
-                black_box(
-                    engine
-                        .analyze_with_policy(
-                            target,
-                            Some(backend),
-                            Some(&registry),
-                            None,
-                        )
-                        .unwrap(),
-                )
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("topology", label),
+            &target,
+            |b, &target| {
+                b.iter(|| {
+                    black_box(
+                        engine
+                            .analyze_with_policy(target, Some(backend), Some(&registry), None)
+                            .unwrap(),
+                    )
+                });
+            },
+        );
     }
     group.finish();
 }

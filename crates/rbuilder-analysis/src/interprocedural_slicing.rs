@@ -93,7 +93,8 @@ impl<'a> InterproceduralSlicer<'a> {
                 if self.is_parameter(current_func, var) {
                     for (caller_id, _) in self.icfg.caller_cfgs(current_func) {
                         let caller_pdg = self.pdg_for(caller_id)?;
-                        let call_sites = self.find_call_site_nodes(caller_pdg.as_ref(), current_func);
+                        let call_sites =
+                            self.find_call_site_nodes(caller_pdg.as_ref(), current_func);
                         for call_node in call_sites {
                             if slice.insert((caller_id, call_node)) {
                                 worklist.push_back((caller_id, call_node));

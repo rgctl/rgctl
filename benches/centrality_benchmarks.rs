@@ -79,7 +79,9 @@ fn bench_kafka_centrality_optional(c: &mut Criterion) {
             ..PipelineConfig::default()
         },
     );
-    let (graph, _) = pipeline.process_repository(kafka_path).expect("kafka index");
+    let (graph, _) = pipeline
+        .process_repository(kafka_path)
+        .expect("kafka index");
     let view = PetGraphView::from_backend(graph.backend()).unwrap();
     let engine = FastPageRank::new(20, 0.85);
 

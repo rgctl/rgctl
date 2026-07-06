@@ -169,7 +169,10 @@ impl MacroCallIndex {
         backend.get_node(id).ok().flatten().map(|n| n.name.clone())
     }
 
-    fn entry_from_result(backend: &MemoryBackend, result: &BlastRadiusResult) -> MacroCallIndexEntry {
+    fn entry_from_result(
+        backend: &MemoryBackend,
+        result: &BlastRadiusResult,
+    ) -> MacroCallIndexEntry {
         let direct_caller_names: Vec<String> = result
             .direct_caller_ids
             .iter()
@@ -272,7 +275,10 @@ impl MacroCallIndex {
     }
 
     /// Build candidate records for FQN disambiguation.
-    pub fn get_candidates(&self, target_name: &str) -> Vec<crate::macro_call_lookup::MacroIndexEntry> {
+    pub fn get_candidates(
+        &self,
+        target_name: &str,
+    ) -> Vec<crate::macro_call_lookup::MacroIndexEntry> {
         let Some(ids) = self.name_index.get(target_name) else {
             return vec![];
         };
@@ -382,7 +388,9 @@ impl MacroCallIndex {
         }
         let file = std::fs::File::open(path)?;
         let index = bincode::deserialize_from(file).map_err(|e| {
-            rbuilder_error::Error::SerdeError(format!("Failed to deserialize macro_call_index: {e}"))
+            rbuilder_error::Error::SerdeError(format!(
+                "Failed to deserialize macro_call_index: {e}"
+            ))
         })?;
         Ok(Some(index))
     }
@@ -427,7 +435,9 @@ impl MacroCallIndex {
         )?;
         crate::macro_call_lookup::MacroCallLookupDb::write_meta_with_digest(
             &lookup_path,
-            std::fs::metadata(graph_db_path).map(|m| m.len()).unwrap_or(0),
+            std::fs::metadata(graph_db_path)
+                .map(|m| m.len())
+                .unwrap_or(0),
             backend.node_count(),
             backend.edge_count(),
             index.graph_fingerprint.graph_digest.as_deref(),
@@ -479,6 +489,9 @@ mod tests {
         assert_eq!(loaded.node_count, 100);
         assert_eq!(loaded.edge_count, 200);
         assert_eq!(loaded.entries.get(&id).unwrap().score, 42.0);
-        assert_eq!(loaded.lookup_by_name("target").unwrap().unwrap().1.score, 42.0);
+        assert_eq!(
+            loaded.lookup_by_name("target").unwrap().unwrap().1.score,
+            42.0
+        );
     }
 }

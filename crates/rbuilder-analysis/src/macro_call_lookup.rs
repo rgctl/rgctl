@@ -194,9 +194,8 @@ fn target_metadata_from_node(node: &Node) -> (String, Option<String>, String) {
 /// Extract the simple class name from a graph node qualified name.
 pub fn class_name_from_node(node: &Node) -> Option<String> {
     node.qualified_name.as_ref().and_then(|qn| {
-        qn.rsplit_once('.').map(|(class, _)| {
-            class.rsplit('.').next().unwrap_or(class).to_string()
-        })
+        qn.rsplit_once('.')
+            .map(|(class, _)| class.rsplit('.').next().unwrap_or(class).to_string())
     })
 }
 
@@ -204,9 +203,7 @@ fn class_matches(entry_class: Option<&str>, filter: &str) -> bool {
     let Some(class) = entry_class else {
         return false;
     };
-    class == filter
-        || class.ends_with(&format!(".{filter}"))
-        || class.contains(filter)
+    class == filter || class.ends_with(&format!(".{filter}")) || class.contains(filter)
 }
 
 fn file_matches(entry_path: &str, filter: &str) -> bool {
@@ -373,9 +370,8 @@ impl MacroCallLookupDb {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(path).map_err(|e| {
-            Error::QueryError(format!("open macro_call_index.db: {e}"))
-        })?;
+        let conn = Connection::open(path)
+            .map_err(|e| Error::QueryError(format!("open macro_call_index.db: {e}")))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS macro_call_index (
                 symbol_name TEXT PRIMARY KEY,
@@ -439,12 +435,14 @@ impl MacroCallLookupDb {
     fn migrate_uuid_columns(conn: &Connection) -> Result<()> {
         for (table, cols) in [
             ("macro_call_index", ["direct_caller_ids", "impact_zone_ids"]),
-            ("macro_call_candidates", ["direct_caller_ids", "impact_zone_ids"]),
+            (
+                "macro_call_candidates",
+                ["direct_caller_ids", "impact_zone_ids"],
+            ),
         ] {
             for col in cols {
-                let sql = format!(
-                    "ALTER TABLE {table} ADD COLUMN {col} TEXT NOT NULL DEFAULT '[]'"
-                );
+                let sql =
+                    format!("ALTER TABLE {table} ADD COLUMN {col} TEXT NOT NULL DEFAULT '[]'");
                 let _ = conn.execute_batch(&sql);
             }
         }
@@ -452,7 +450,12 @@ impl MacroCallLookupDb {
     }
 
     /// Persist graph fingerprint metadata for cache validation.
-    pub fn write_meta(path: &Path, file_size: u64, node_count: usize, edge_count: usize) -> Result<()> {
+    pub fn write_meta(
+        path: &Path,
+        file_size: u64,
+        node_count: usize,
+        edge_count: usize,
+    ) -> Result<()> {
         Self::write_meta_with_digest(path, file_size, node_count, edge_count, None)
     }
 
@@ -520,10 +523,8 @@ impl MacroCallLookupDb {
                 let node_count: Option<String> = Self::read_meta(&conn, "node_count")?;
                 let edge_count: Option<String> = Self::read_meta(&conn, "edge_count")?;
                 if let (Some(nodes), Some(edges)) = (node_count, edge_count) {
-                    return Ok(
-                        nodes == mmap.node_count().to_string()
-                            && edges == mmap.edge_count().to_string(),
-                    );
+                    return Ok(nodes == mmap.node_count().to_string()
+                        && edges == mmap.edge_count().to_string());
                 }
             }
         }
@@ -593,8 +594,7 @@ impl MacroCallLookupDb {
                 let impact = serde_json::to_string(&entry.impact_zone).map_err(json_err)?;
                 let direct_ids =
                     serde_json::to_string(&entry.direct_caller_ids).map_err(json_err)?;
-                let impact_ids =
-                    serde_json::to_string(&entry.impact_zone_ids).map_err(json_err)?;
+                let impact_ids = serde_json::to_string(&entry.impact_zone_ids).map_err(json_err)?;
                 let direct_bin = encode_blob(&entry.direct_callers)?;
                 let impact_bin = encode_blob(&entry.impact_zone)?;
                 let direct_ids_bin = encode_blob(&entry.direct_caller_ids)?;
@@ -628,7 +628,8 @@ impl MacroCallLookupDb {
     pub fn replace_all(path: &Path, rows: &[MacroCallLookupRow]) -> Result<()> {
         let conn = Self::open(path)?;
         let tx = conn.unchecked_transaction().map_err(sql_err)?;
-        tx.execute("DELETE FROM macro_call_index", []).map_err(sql_err)?;
+        tx.execute("DELETE FROM macro_call_index", [])
+            .map_err(sql_err)?;
         {
             let mut stmt = tx
                 .prepare(
@@ -642,10 +643,8 @@ impl MacroCallLookupDb {
             for row in rows {
                 let direct = serde_json::to_string(&row.direct_callers).map_err(json_err)?;
                 let impact = serde_json::to_string(&row.impact_zone).map_err(json_err)?;
-                let direct_ids =
-                    serde_json::to_string(&row.direct_caller_ids).map_err(json_err)?;
-                let impact_ids =
-                    serde_json::to_string(&row.impact_zone_ids).map_err(json_err)?;
+                let direct_ids = serde_json::to_string(&row.direct_caller_ids).map_err(json_err)?;
+                let impact_ids = serde_json::to_string(&row.impact_zone_ids).map_err(json_err)?;
                 let direct_bin = encode_blob(&row.direct_callers)?;
                 let impact_bin = encode_blob(&row.impact_zone)?;
                 let direct_ids_bin = encode_blob(&row.direct_caller_ids)?;
@@ -725,7 +724,7 @@ impl MacroCallLookupDb {
         let mut matches = stmt.query(params![symbol_name]).map_err(sql_err)?;
         let mut found = Vec::new();
         while let Some(row) = matches.next().map_err(sql_err)? {
-            found.push(Self::row_to_entry(&row)?);
+            found.push(Self::row_to_entry(row)?);
         }
         Ok(found)
     }
@@ -856,10 +855,7 @@ mod tests {
         use rbuilder_graph::schema::{Node, NodeType};
         let node = Node::new(NodeType::Function, "process".into())
             .with_qualified_name("com.example.OrderService.process".into());
-        assert_eq!(
-            canonical_fqn_from_node(&node),
-            "OrderService::process"
-        );
+        assert_eq!(canonical_fqn_from_node(&node), "OrderService::process");
     }
 
     #[test]
@@ -915,7 +911,9 @@ mod tests {
             }],
         )
         .unwrap();
-        let row = MacroCallLookupDb::lookup(&db, "target_fn").unwrap().unwrap();
+        let row = MacroCallLookupDb::lookup(&db, "target_fn")
+            .unwrap()
+            .unwrap();
         assert_eq!(row.direct_callers.len(), 50);
         assert_eq!(row.impact_zone.len(), 200);
     }

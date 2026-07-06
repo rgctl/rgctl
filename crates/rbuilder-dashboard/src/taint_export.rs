@@ -114,7 +114,11 @@ pub fn export_taint_bundle(repo_root: &Path, out_dir: &Path) -> Result<TaintExpo
         });
     }
 
-    functions.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.function_id.cmp(&b.function_id)));
+    functions.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.function_id.cmp(&b.function_id))
+    });
 
     let available = !functions.is_empty();
     let index = TaintIndexPayload {
@@ -288,9 +292,10 @@ mod tests {
         assert_eq!(summary.total_flows, 1);
         assert_eq!(summary.vulnerable_flows, 1);
 
-        let bundle: TaintBundlePayload =
-            serde_json::from_slice(&fs::read(out.join(TAINT_DETAIL_DIR).join(format!("{fid}.json"))).unwrap())
-                .unwrap();
+        let bundle: TaintBundlePayload = serde_json::from_slice(
+            &fs::read(out.join(TAINT_DETAIL_DIR).join(format!("{fid}.json"))).unwrap(),
+        )
+        .unwrap();
         assert_eq!(bundle.flows.len(), 1);
         assert!(bundle.flows[0].vulnerable);
         assert_eq!(bundle.flows[0].source_type, "HttpParameter");

@@ -145,9 +145,9 @@ impl LanguagePlugin for GitlabCiPlugin {
                             relation_type: RelationType::DependsOn,
                             location: Self::loc(&file, 1),
                             metadata: serde_json::json!({}),
-                        to_qualified_hint: None,
-                        to_type_hint: None,
-                    });
+                            to_qualified_hint: None,
+                            to_type_hint: None,
+                        });
                     }
                 }
             }
@@ -203,4 +203,3 @@ build_job:
         assert_eq!(jobs.len(), 2);
     }
 }
-

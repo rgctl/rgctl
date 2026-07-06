@@ -430,13 +430,13 @@ fn test_call_graph_usability() {
     // We want the one that has outgoing calls, which is in ServiceImpl
     let all_nodes = backend.all_nodes().unwrap();
 
-    let process_method = all_nodes
-        .into_iter()
-        .find(|n| {
-            n.name == "process"
+    let process_method = all_nodes.into_iter().find(|n| {
+        n.name == "process"
             && n.node_type == NodeType::Function
-            && n.file_path.as_ref().map_or(false, |p| p.contains("ServiceImpl"))
-        });
+            && n.file_path
+                .as_ref()
+                .map_or(false, |p| p.contains("ServiceImpl"))
+    });
 
     assert!(
         process_method.is_some(),

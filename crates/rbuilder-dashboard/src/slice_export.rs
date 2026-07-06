@@ -240,13 +240,17 @@ mod tests {
     fn export_pdg_assigns_node_labels() {
         let mut cfg = ControlFlowGraph::new();
         let entry = cfg.entry;
-        cfg.blocks.get_mut(&entry).unwrap().statements.push(Statement {
-            kind: StatementKind::Assignment,
-            line: 1,
-            text: "x = 1".into(),
-            defined_vars: HashSet::from(["x".into()]),
-            used_vars: HashSet::new(),
-        });
+        cfg.blocks
+            .get_mut(&entry)
+            .unwrap()
+            .statements
+            .push(Statement {
+                kind: StatementKind::Assignment,
+                line: 1,
+                text: "x = 1".into(),
+                defined_vars: HashSet::from(["x".into()]),
+                used_vars: HashSet::new(),
+            });
         let pdg = ProgramDependenceGraph::build(&cfg, b"x = 1\n").unwrap();
         let exported = export_pdg(&pdg);
         assert!(!exported.nodes.is_empty());

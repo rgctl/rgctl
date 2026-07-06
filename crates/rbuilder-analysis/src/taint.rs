@@ -239,11 +239,13 @@ impl<'a> TaintAnalyzer<'a> {
             if text.contains("getParameter(")
                 || text.contains("getHeader(")
                 || text.contains("getQueryString(")
-                || text.contains("request.get") {
+                || text.contains("request.get")
+            {
                 self.sources.insert(*node_id, TaintSource::HttpParameter);
             } else if text.contains("FileInputStream")
                 || text.contains("Files.read")
-                || text.contains("BufferedReader") {
+                || text.contains("BufferedReader")
+            {
                 self.sources.insert(*node_id, TaintSource::FileInput);
             } else if text.contains("System.getenv") {
                 self.sources.insert(*node_id, TaintSource::EnvironmentVar);
@@ -258,20 +260,24 @@ impl<'a> TaintAnalyzer<'a> {
                 || text.contains("prepareStatement")
                 || text.contains("executeQuery")
                 || text.contains("executeUpdate")
-                || text.contains(".createQuery(") {
+                || text.contains(".createQuery(")
+            {
                 self.sinks.insert(*node_id, TaintSink::SqlQuery);
             } else if text.contains("Runtime.getRuntime().exec")
                 || text.contains("ProcessBuilder")
-                || text.contains(".exec(") {
+                || text.contains(".exec(")
+            {
                 self.sinks.insert(*node_id, TaintSink::ShellCommand);
             } else if text.contains("FileOutputStream")
                 || text.contains("FileWriter")
-                || text.contains("Files.write") {
+                || text.contains("Files.write")
+            {
                 self.sinks.insert(*node_id, TaintSink::FileWrite);
             } else if text.contains("PrintWriter")
                 || text.contains("response.getWriter")
                 || text.contains("innerHTML")
-                || text.contains("innerText") {
+                || text.contains("innerText")
+            {
                 self.sinks.insert(*node_id, TaintSink::HtmlRender);
             } else if text.contains("Logger.") || text.contains(".log(") {
                 self.sinks.insert(*node_id, TaintSink::LogOutput);
@@ -280,18 +286,21 @@ impl<'a> TaintAnalyzer<'a> {
             // Sanitizers
             if text.contains("Integer.parseInt")
                 || text.contains("Long.parseLong")
-                || text.contains("Double.parseDouble") {
+                || text.contains("Double.parseDouble")
+            {
                 self.sanitizers
                     .insert(*node_id, Sanitizer::TypeCast("numeric".into()));
             } else if text.contains("StringEscapeUtils")
                 || text.contains("HtmlUtils.htmlEscape")
-                || text.contains("ESAPI.encoder") {
+                || text.contains("ESAPI.encoder")
+            {
                 self.sanitizers.insert(*node_id, Sanitizer::HtmlEscape);
             } else if text.contains("prepareStatement") && text.contains("setString") {
                 self.sanitizers.insert(*node_id, Sanitizer::SqlParameterize);
             } else if text.contains("Pattern.matches")
                 || text.contains(".matches(")
-                || text.contains("Validator.") {
+                || text.contains("Validator.")
+            {
                 self.sanitizers
                     .insert(*node_id, Sanitizer::Validation("pattern".into()));
             }
@@ -347,8 +356,7 @@ impl<'a> TaintAnalyzer<'a> {
                     .cloned()
                     .unwrap_or_default();
                 self.check_sanitizer_policy(sink_id, &path, &variable)?;
-                let sanitizers =
-                    self.find_dominating_sanitizers_on_path(&path, sink_id, &variable);
+                let sanitizers = self.find_dominating_sanitizers_on_path(&path, sink_id, &variable);
                 let mut flow = TaintFlow {
                     source: *source_id,
                     source_type: *source_type,
@@ -389,7 +397,7 @@ impl<'a> TaintAnalyzer<'a> {
             }
         }
 
-        for (&san_id, _) in &self.sanitizers {
+        for &san_id in self.sanitizers.keys() {
             let node = &self.pdg.nodes[&san_id];
             if !self.node_affects_variable(node, variable) {
                 continue;
@@ -470,7 +478,10 @@ impl<'a> TaintAnalyzer<'a> {
             }
             if let Some(ref engine) = self.type_inference {
                 if let Some(typ) = engine.get_type(*node_id, variable) {
-                    if self.dom_tree.dominates(self.pdg.nodes[node_id].block, sink_block) {
+                    if self
+                        .dom_tree
+                        .dominates(self.pdg.nodes[node_id].block, sink_block)
+                    {
                         match typ {
                             InferredType::Int | InferredType::Float => {
                                 sanitizers.push(Sanitizer::TypeCast("numeric".into()));

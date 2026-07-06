@@ -200,10 +200,7 @@ fn cfg_detail(
         })
         .collect();
 
-    let entry = block_index
-        .get(&cfg.entry)
-        .copied()
-        .unwrap_or(0) as u32;
+    let entry = block_index.get(&cfg.entry).copied().unwrap_or(0) as u32;
     let exits: Vec<u32> = cfg
         .exits
         .iter()
@@ -329,12 +326,7 @@ mod tests {
             edge_type: CfgEdgeType::Next,
         });
 
-        let detail = cfg_detail(
-            &uuid::Uuid::new_v4(),
-            "foo",
-            Some("a.rs".into()),
-            &cfg,
-        );
+        let detail = cfg_detail(&uuid::Uuid::new_v4(), "foo", Some("a.rs".into()), &cfg);
         assert_eq!(detail.blocks.len(), 2);
         assert_eq!(detail.edges.len(), 1);
         assert_eq!(detail.edges[0].edge_type, "next");

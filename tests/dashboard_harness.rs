@@ -63,15 +63,14 @@ pub fn assert_dashboard_bundle(repo: &Path, min_nodes: u64) {
     assert_dashboard_bundle_with_meta(repo, min_nodes, 1);
 }
 
-pub fn assert_dashboard_bundle_with_meta(
-    repo: &Path,
-    min_nodes: u64,
-    min_metanodes: u64,
-) {
+pub fn assert_dashboard_bundle_with_meta(repo: &Path, min_nodes: u64, min_metanodes: u64) {
     let dash = repo.join(".rbuilder/dashboard");
 
     assert!(dash.join("index.html").is_file(), "missing index.html");
-    assert!(dash.join("manifest.json").is_file(), "missing manifest.json");
+    assert!(
+        dash.join("manifest.json").is_file(),
+        "missing manifest.json"
+    );
     assert!(
         dash.join("graph_payload.bin").is_file(),
         "missing graph_payload.bin"
@@ -99,7 +98,11 @@ pub fn assert_dashboard_bundle_with_meta(
     );
     assert_eq!(
         manifest["phases"]["5"],
-        if slice_available { "complete" } else { "pending" }
+        if slice_available {
+            "complete"
+        } else {
+            "pending"
+        }
     );
     assert_eq!(manifest["phases"]["6"], "complete");
 
@@ -108,7 +111,11 @@ pub fn assert_dashboard_bundle_with_meta(
     let dataflow_available = dataflow_index["available"].as_bool().unwrap_or(false);
     assert_eq!(
         manifest["phases"]["7"],
-        if dataflow_available { "complete" } else { "pending" }
+        if dataflow_available {
+            "complete"
+        } else {
+            "pending"
+        }
     );
     assert!(dash.join("dataflow_index.json").is_file());
     assert_eq!(dataflow_index["schema_version"], 1);
@@ -136,7 +143,11 @@ pub fn assert_dashboard_bundle_with_meta(
     let taint_available = taint_index["available"].as_bool().unwrap_or(false);
     assert_eq!(
         manifest["phases"]["8"],
-        if taint_available { "complete" } else { "pending" }
+        if taint_available {
+            "complete"
+        } else {
+            "pending"
+        }
     );
     assert!(dash.join("taint_index.json").is_file());
     assert_eq!(taint_index["schema_version"], 1);
@@ -174,7 +185,10 @@ pub fn assert_dashboard_bundle_with_meta(
         "expected >= {min_metanodes} metanodes"
     );
 
-    assert!(dash.join("metagraph.json").is_file(), "missing metagraph.json");
+    assert!(
+        dash.join("metagraph.json").is_file(),
+        "missing metagraph.json"
+    );
     let meta: Value =
         serde_json::from_slice(&std::fs::read(dash.join("metagraph.json")).unwrap()).unwrap();
     assert_eq!(meta["schema_version"], 2);
@@ -184,9 +198,19 @@ pub fn assert_dashboard_bundle_with_meta(
     );
     let has_members = meta["nodes"]
         .as_array()
-        .map(|nodes| nodes.iter().any(|n| n["member_indices"].as_array().map(|a| !a.is_empty()).unwrap_or(false)))
+        .map(|nodes| {
+            nodes.iter().any(|n| {
+                n["member_indices"]
+                    .as_array()
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false)
+            })
+        })
         .unwrap_or(false);
-    assert!(has_members, "metagraph metanodes must include member_indices for LOD");
+    assert!(
+        has_members,
+        "metagraph metanodes must include member_indices for LOD"
+    );
 
     let node_count = manifest["graph"]["node_count"].as_u64().unwrap_or(0);
     let edge_count = manifest["graph"]["edge_count"].as_u64().unwrap_or(0);
@@ -197,7 +221,11 @@ pub fn assert_dashboard_bundle_with_meta(
     assert!(edge_count > 0, "edge_count must be > 0");
 
     let payload = std::fs::read(dash.join("graph_payload.bin")).unwrap();
-    assert_eq!(&payload[0..4], b"RBGR", "payload must be columnar v2 RBGR magic");
+    assert_eq!(
+        &payload[0..4],
+        b"RBGR",
+        "payload must be columnar v2 RBGR magic"
+    );
 
     let header_nodes = u64::from_le_bytes(payload[12..20].try_into().unwrap());
     let header_edges = u64::from_le_bytes(payload[20..28].try_into().unwrap());
@@ -241,7 +269,10 @@ pub fn assert_dashboard_bundle_with_meta(
             })
         })
         .unwrap_or(false);
-    assert!(has_js, "assets/ must contain at least one .js or .wasm file");
+    assert!(
+        has_js,
+        "assets/ must contain at least one .js or .wasm file"
+    );
 
     // No double-nested asset paths from embed extract bug.
     if let Ok(entries) = std::fs::read_dir(dash.join("assets")) {
@@ -256,11 +287,7 @@ pub fn assert_dashboard_bundle_with_meta(
 }
 
 /// Assert dashboard bundle after `discover --all` (CFG, slice, dataflow must be present).
-pub fn assert_dashboard_bundle_all_analysis(
-    repo: &Path,
-    min_nodes: u64,
-    min_metanodes: u64,
-) {
+pub fn assert_dashboard_bundle_all_analysis(repo: &Path, min_nodes: u64, min_metanodes: u64) {
     assert_dashboard_bundle_with_meta(repo, min_nodes, min_metanodes);
 
     let dash = repo.join(".rbuilder/dashboard");
@@ -268,8 +295,14 @@ pub fn assert_dashboard_bundle_all_analysis(
         serde_json::from_slice(&std::fs::read(dash.join("manifest.json")).unwrap()).unwrap();
     let analysis = &manifest["analysis"];
 
-    assert_eq!(manifest["phases"]["4"], "complete", "CFG phase should be complete after --all");
-    assert_eq!(manifest["phases"]["5"], "complete", "slice phase should be complete after --all");
+    assert_eq!(
+        manifest["phases"]["4"], "complete",
+        "CFG phase should be complete after --all"
+    );
+    assert_eq!(
+        manifest["phases"]["5"], "complete",
+        "slice phase should be complete after --all"
+    );
     assert_eq!(
         manifest["phases"]["7"], "complete",
         "dataflow phase should be complete after --all"

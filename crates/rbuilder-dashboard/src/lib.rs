@@ -11,25 +11,25 @@ mod taint_export;
 
 pub use bundle::{default_dashboard_path, dist_embedded, DASHBOARD_DIR_NAME};
 pub use dataflow_export::{DataflowExportSummary, DATAFLOW_INDEX_FILE};
-pub use taint_export::{TaintExportSummary, TAINT_INDEX_FILE};
-pub use slice_export::{SliceExportSummary, SLICE_INDEX_FILE};
 pub use manifest::{
     AnalysisSection, DashboardManifest, MetricsSection, ViewSection, MANIFEST_SCHEMA_VERSION,
 };
-pub use metagraph::{MetagraphPayload, METAGRAPH_FILE, COMMUNITY_ONLY_THRESHOLD};
+pub use metagraph::{MetagraphPayload, COMMUNITY_ONLY_THRESHOLD, METAGRAPH_FILE};
+pub use slice_export::{SliceExportSummary, SLICE_INDEX_FILE};
+pub use taint_export::{TaintExportSummary, TAINT_INDEX_FILE};
 
 use blast_export::export_blast_bundle;
 use bundle::{extract_static_assets, inject_manifest_bootstrap};
 use cfg_export::export_cfg_bundle;
+use dataflow_export::export_dataflow_index;
 use manifest::DashboardManifest as Manifest;
 use metagraph::write_metagraph;
-use dataflow_export::export_dataflow_index;
-use slice_export::export_slice_bundle;
-use taint_export::export_taint_bundle;
 use rbuilder_graph::backend::MemoryBackend;
 use rbuilder_graph::schema::{EdgeType, NodeType};
+use slice_export::export_slice_bundle;
 use std::fs;
 use std::path::Path;
+use taint_export::export_taint_bundle;
 
 /// Write dashboard bundle: static UI, manifest, graph payload copy.
 pub fn export_dashboard_bundle(
@@ -66,8 +66,7 @@ pub fn export_dashboard_bundle(
         &dataflow_summary,
         &taint_summary,
     );
-    let manifest_json =
-        serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
+    let manifest_json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
     fs::write(out_dir.join("manifest.json"), &manifest_json).map_err(|e| e.to_string())?;
     inject_manifest_bootstrap(&out_dir, &manifest_json)?;
 

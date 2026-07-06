@@ -217,9 +217,9 @@ impl ChefParser {
                 relation_type: RelationType::DependsOnCookbook,
                 location: Self::loc(file, 1),
                 metadata: json!({}),
-                        to_qualified_hint: None,
-                        to_type_hint: None,
-                    });
+                to_qualified_hint: None,
+                to_type_hint: None,
+            });
         }
 
         (symbols, relations)
@@ -270,9 +270,9 @@ impl ChefParser {
             relation_type: RelationType::Defines,
             location: Self::loc(file, 1),
             metadata: json!({}),
-                        to_qualified_hint: None,
-                        to_type_hint: None,
-                    });
+            to_qualified_hint: None,
+            to_type_hint: None,
+        });
 
         for included in self.extract_included_recipes(source) {
             let target = if included.contains("::") {
@@ -299,9 +299,9 @@ impl ChefParser {
                 relation_type: RelationType::IncludesRecipe,
                 location: Self::loc(file, 1),
                 metadata: json!({}),
-                        to_qualified_hint: None,
-                        to_type_hint: None,
-                    });
+                to_qualified_hint: None,
+                to_type_hint: None,
+            });
         }
 
         let resources = self.extract_resources(source);
@@ -332,9 +332,9 @@ impl ChefParser {
                 relation_type: RelationType::DeclaresResource,
                 location: Self::loc(file, 1),
                 metadata: json!({}),
-                        to_qualified_hint: None,
-                        to_type_hint: None,
-                    });
+                to_qualified_hint: None,
+                to_type_hint: None,
+            });
 
             if res.0 == "template" {
                 if let Some(src) = res.2.get("source") {
@@ -426,9 +426,9 @@ impl ChefParser {
                 relation_type: RelationType::DefinesAttribute,
                 location: Self::loc(file, 1),
                 metadata: json!({}),
-                        to_qualified_hint: None,
-                        to_type_hint: None,
-                    });
+                to_qualified_hint: None,
+                to_type_hint: None,
+            });
         }
 
         (symbols, relations)
@@ -508,9 +508,9 @@ impl ChefParser {
                 relation_type: RelationType::References,
                 location: Self::loc(file, 1),
                 metadata: json!({}),
-                        to_qualified_hint: None,
-                        to_type_hint: None,
-                    });
+                to_qualified_hint: None,
+                to_type_hint: None,
+            });
         }
 
         (symbols, relations)
@@ -674,4 +674,3 @@ depends 'build-essential', '~> 5.0'
         assert!(symbols.is_empty());
     }
 }
-

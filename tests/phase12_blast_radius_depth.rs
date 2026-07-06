@@ -37,8 +37,7 @@ fn depth_one_excludes_transitive_callers_on_chain() {
     let view = PetGraphView::from_backend(backend).unwrap();
     let full = BlastRadiusEngine::filter_function_impact(backend, &result.impact_zone_ids).unwrap();
 
-    let limited =
-        filter_impact_by_caller_depth(&view, id_c, &full, 1);
+    let limited = filter_impact_by_caller_depth(&view, id_c, &full, 1);
     assert_eq!(limited, vec![id_b]);
     assert!(!limited.contains(&id_a));
 

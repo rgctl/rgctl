@@ -73,20 +73,26 @@ pub fn write_metagraph(
             return;
         }
         let label = package_label(n.file_path.as_deref().unwrap_or(""));
-        let bucket = packages.entry(label.clone()).or_insert_with(|| PackageBucket {
-            label: label.clone(),
-            functions: 0,
-            classes: 0,
-            complexity_sum: 0.0,
-            complexity_count: 0,
-            member_indices: Vec::new(),
-        });
+        let bucket = packages
+            .entry(label.clone())
+            .or_insert_with(|| PackageBucket {
+                label: label.clone(),
+                functions: 0,
+                classes: 0,
+                complexity_sum: 0.0,
+                complexity_count: 0,
+                member_indices: Vec::new(),
+            });
         match n.node_type {
             NodeType::Function => bucket.functions += 1,
             NodeType::Class => bucket.classes += 1,
             _ => {}
         }
-        if let Some(c) = n.properties.get("cyclomatic").and_then(|v| v.parse::<f64>().ok()) {
+        if let Some(c) = n
+            .properties
+            .get("cyclomatic")
+            .and_then(|v| v.parse::<f64>().ok())
+        {
             bucket.complexity_sum += c;
             bucket.complexity_count += 1;
         }

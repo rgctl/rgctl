@@ -40,6 +40,7 @@ pub struct CfgPdgRecord {
 pub struct CfgPdgArchive {
     /// Graph snapshot digest when written (optional invalidation).
     pub graph_digest: Option<String>,
+    /// CFG/PDG records keyed by function UUID.
     pub records: HashMap<Uuid, CfgPdgRecord>,
 }
 
@@ -133,7 +134,9 @@ fn parse_payload(mmap: &[u8]) -> Result<CfgPdgArchive> {
     }
     let payload_len = u64::from_le_bytes(mmap[8..16].try_into().unwrap()) as usize;
     if mmap.len() < 16 + payload_len {
-        return Err(Error::SerdeError("cfg_pdg archive payload truncated".into()));
+        return Err(Error::SerdeError(
+            "cfg_pdg archive payload truncated".into(),
+        ));
     }
     bincode::deserialize(&mmap[16..16 + payload_len]).map_err(serde_err)
 }

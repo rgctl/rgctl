@@ -26,7 +26,9 @@ fn test_rule_engine_integration() {
     backend.insert_node(auth).unwrap();
     backend.insert_node(legacy).unwrap();
 
-    let ruleset = Ruleset::from_file(Path::new("examples/rules/security-rules.json")).unwrap();
+    let rules_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/security-rules.json");
+    let ruleset = Ruleset::from_file(&rules_path).unwrap();
     let report = RuleEngine::apply_ruleset(backend, &ruleset, false).unwrap();
 
     assert!(report.rule_matches["critical_security_function"] >= 1);

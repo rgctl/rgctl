@@ -1,6 +1,6 @@
 //! Phase 15 community detection audit — isolation, determinism, modularity.
 
-use rbuilder::analysis::{CommunityDetector, PetGraphView, default_community_edge_types};
+use rbuilder::analysis::{default_community_edge_types, CommunityDetector, PetGraphView};
 use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};
 use rbuilder::graph::CodeGraph;
@@ -14,7 +14,11 @@ fn insert_call(backend: &mut rbuilder::graph::backend::MemoryBackend, from: Uuid
         .unwrap();
 }
 
-fn build_clique(backend: &mut rbuilder::graph::backend::MemoryBackend, prefix: &str, n: usize) -> Vec<Uuid> {
+fn build_clique(
+    backend: &mut rbuilder::graph::backend::MemoryBackend,
+    prefix: &str,
+    n: usize,
+) -> Vec<Uuid> {
     let mut ids = Vec::with_capacity(n);
     for i in 0..n {
         let node = Node::new(NodeType::Function, format!("{prefix}_{i}"));
@@ -149,11 +153,7 @@ fn modularity_singleton_partition_negative_q() {
         .map(|(i, idx)| (idx, i))
         .collect();
 
-    let q = CommunityDetector::new().calculate_modularity(
-        &view,
-        &labels,
-        &[EdgeType::Calls],
-    );
+    let q = CommunityDetector::new().calculate_modularity(&view, &labels, &[EdgeType::Calls]);
     assert!(q < 0.0, "singleton partition should yield Q < 0, got {q}");
     assert!(ids.len() == 10);
 }

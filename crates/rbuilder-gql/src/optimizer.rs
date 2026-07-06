@@ -112,14 +112,11 @@ impl<'a> QueryOptimizer<'a> {
     fn estimate_selectivity(&self, pattern: &crate::ast::Pattern) -> f64 {
         let total = self.backend.node_count().max(1) as f64;
         let type_sel = if let Some(node_type) = pattern.node.node_type {
-            // Use indexed count for typed queries (zero-copy)
-            let count = self
-                .backend
+            self.backend
                 .find_node_ids_by_type(node_type)
                 .map(|ids| ids.len() as f64)
                 .unwrap_or(total)
-                / total;
-            count
+                / total
         } else {
             1.0
         };

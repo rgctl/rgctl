@@ -2,9 +2,9 @@
 
 use super::args::ExportFormat;
 use super::context::CliContext;
-use anyhow::Result;
 use crate::export::{export_graphml, generate_dot, generate_mermaid};
 use crate::export::{GraphvizOptions, MermaidOptions};
+use anyhow::Result;
 
 pub struct ExportArgs {
     pub export_format: ExportFormat,
@@ -25,13 +25,8 @@ pub fn run(ctx: &CliContext, args: ExportArgs) -> Result<()> {
             std::fs::write(&args.export_output, graph.export_json()?)?;
         }
         ExportFormat::Graphviz => {
-            let dot = generate_dot(
-                backend,
-                &args.query,
-                GraphvizOptions::default(),
-                None,
-            )
-            .map_err(|e| anyhow::anyhow!(e))?;
+            let dot = generate_dot(backend, &args.query, GraphvizOptions::default(), None)
+                .map_err(|e| anyhow::anyhow!(e))?;
             std::fs::write(&args.export_output, dot)?;
         }
         ExportFormat::Mermaid => {

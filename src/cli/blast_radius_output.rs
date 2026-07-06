@@ -1,7 +1,7 @@
 //! Structured blast-radius CLI response (JSON and text).
 
 use crate::analysis::{
-    check_policies, canonical_fqn_from_node, inferred_target_metadata, language_from_node,
+    canonical_fqn_from_node, check_policies, inferred_target_metadata, language_from_node,
     BlastRadiusResult, CentralityAnalyzer, MacroIndexEntry, PetGraphView, PolicyRegistry,
     PolicyViolation, SliceHandoffSeed,
 };
@@ -175,9 +175,7 @@ fn symbol_context_from_node(node: &Node) -> SymbolContext {
 }
 
 fn contexts_from_ids(ids: &[Uuid], lookup: &NodeLookup<'_>) -> Vec<SymbolContext> {
-    ids.iter()
-        .filter_map(|id| lookup.get(*id))
-        .collect()
+    ids.iter().filter_map(|id| lookup.get(*id)).collect()
 }
 
 fn contexts_from_id_name_pairs(
@@ -234,6 +232,7 @@ fn build_target(
 }
 
 /// Build a response from an SCC engine result and graph lookup.
+#[allow(clippy::too_many_arguments)]
 pub fn build_from_engine_result(
     target_symbol: &str,
     class_context: Option<String>,
@@ -256,13 +255,9 @@ pub fn build_from_engine_result(
             result.symbol_id,
             target_symbol,
             class_context.or_else(|| {
-                target_node
-                    .as_ref()
-                    .and_then(|node| class_from_fqn(
-                        node.qualified_name
-                            .as_deref()
-                            .unwrap_or(&node.name),
-                    ))
+                target_node.as_ref().and_then(|node| {
+                    class_from_fqn(node.qualified_name.as_deref().unwrap_or(&node.name))
+                })
             }),
             file_path,
             target_node.as_ref(),
@@ -321,9 +316,8 @@ pub fn build_from_cache_entry(
 }
 
 fn class_from_fqn(fqn: &str) -> Option<String> {
-    fqn.rsplit_once('.').map(|(class, _)| {
-        class.rsplit('.').next().unwrap_or(class).to_string()
-    })
+    fqn.rsplit_once('.')
+        .map(|(class, _)| class.rsplit('.').next().unwrap_or(class).to_string())
 }
 
 /// Serialize the response to a JSON value.
@@ -334,14 +328,8 @@ pub fn response_to_json(response: &BlastRadiusResponse) -> serde_json::Value {
 /// Render human-readable terminal output.
 pub fn emit_text(response: &BlastRadiusResponse) -> String {
     let mut out = String::new();
-    out.push_str(&format!(
-        "Blast radius for '{}'\n",
-        response.target.symbol
-    ));
-    out.push_str(&format!(
-        "  Score: {:.1}/100\n",
-        response.metrics.score
-    ));
+    out.push_str(&format!("Blast radius for '{}'\n", response.target.symbol));
+    out.push_str(&format!("  Score: {:.1}/100\n", response.metrics.score));
     out.push_str(&format!(
         "  Direct callers: {}\n",
         response.metrics.direct_callers_count
@@ -412,13 +400,7 @@ pub fn evaluate_gatekeeping(
         }
     };
     let centrality = CentralityAnalyzer::new().analyze_with_view(view)?.scores;
-    match check_policies(
-        symbol_id,
-        impact_zone_ids,
-        reg,
-        backend,
-        Some(&centrality),
-    ) {
+    match check_policies(symbol_id, impact_zone_ids, reg, backend, Some(&centrality)) {
         Ok(()) => Ok(BlastRadiusGatekeeping {
             policy_status: "PASS".to_string(),
             violations: Vec::new(),
@@ -442,39 +424,6 @@ pub fn handoffs_from_seeds(seeds: &[SliceHandoffSeed]) -> Vec<SliceHandoff> {
             index: seed.param_index,
         })
         .collect()
-}
-
-#[cfg(test)]
-mod output_tests {
-    use super::*;
-    use uuid::Uuid;
-
-    #[test]
-    fn cache_topology_skips_unresolved_without_nil_uuid() {
-        let entry = MacroIndexEntry {
-            id: Uuid::new_v4(),
-            symbol_name: "t".into(),
-            class_name: None,
-            file_path: "f.rs".into(),
-            score: 0.0,
-            direct_caller_ids: vec![Uuid::new_v4()],
-            impact_zone_ids: vec![],
-            direct_callers: vec![],
-            impact_zone: vec![],
-            language: "rust".into(),
-            signature: None,
-            canonical_fqn: "t".into(),
-        };
-        let response = build_from_cache_entry(
-            &entry,
-            skipped_gatekeeping(),
-            NodeLookup::None,
-            &entry.impact_zone_ids,
-            entry.score,
-            None,
-        );
-        assert!(response.topology.direct_callers.is_empty());
-    }
 }
 
 /// Fixture response for schema sanity tests.
@@ -520,5 +469,38 @@ pub fn fixture_response() -> BlastRadiusResponse {
             ],
         },
         gatekeeping: skipped_gatekeeping(),
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn cache_topology_skips_unresolved_without_nil_uuid() {
+        let entry = MacroIndexEntry {
+            id: Uuid::new_v4(),
+            symbol_name: "t".into(),
+            class_name: None,
+            file_path: "f.rs".into(),
+            score: 0.0,
+            direct_caller_ids: vec![Uuid::new_v4()],
+            impact_zone_ids: vec![],
+            direct_callers: vec![],
+            impact_zone: vec![],
+            language: "rust".into(),
+            signature: None,
+            canonical_fqn: "t".into(),
+        };
+        let response = build_from_cache_entry(
+            &entry,
+            skipped_gatekeeping(),
+            NodeLookup::None,
+            &entry.impact_zone_ids,
+            entry.score,
+            None,
+        );
+        assert!(response.topology.direct_callers.is_empty());
     }
 }

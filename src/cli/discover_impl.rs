@@ -9,6 +9,7 @@ use std::path::Path;
 use std::time::Instant;
 use tracing::{debug, error, info, info_span, warn};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_full_analysis(
     ctx: &CliContext,
     path: &str,
@@ -24,16 +25,17 @@ pub(crate) fn run_full_analysis(
     let json_output = ctx.format == OutputFormat::Json;
     let human_output = !json_output;
     let run_start = Instant::now();
-    let db_path = db_path;
-    use crate::analysis::{CentralityAnalyzer, CommunityDetector, ComplexityAnalyzer, DependencyAnalyzer};
     use crate::analysis::graph_utils::PetGraphView;
+    use crate::analysis::{
+        CentralityAnalyzer, CommunityDetector, ComplexityAnalyzer, DependencyAnalyzer,
+    };
     use crate::config::secret_detector::SecretDetector;
     use crate::discovery::{DiscoveryConfig, FileDiscoverer};
     use crate::incremental::FileTracker;
     use crate::languages::registry::LanguageRegistry;
     use crate::pipeline::{PipelineConfig, ProcessingPipeline};
-    use rbuilder_graph::PreparedGraphSnapshot;
     use rayon::prelude::*;
+    use rbuilder_graph::PreparedGraphSnapshot;
     use std::path::Path;
     use std::sync::Arc;
 
@@ -97,7 +99,11 @@ pub(crate) fn run_full_analysis(
 
     // Index the repository
     let (graph, index_stats) = {
-        let _span = if verbose { Some(info_span!("indexing").entered()) } else { None };
+        let _span = if verbose {
+            Some(info_span!("indexing").entered())
+        } else {
+            None
+        };
         pipeline.process_repository(root)?
     };
 
@@ -126,7 +132,10 @@ pub(crate) fn run_full_analysis(
     }
 
     if index_stats.files_failed > 0 {
-        warn!(failed = index_stats.files_failed, "Skipped files due to errors");
+        warn!(
+            failed = index_stats.files_failed,
+            "Skipped files due to errors"
+        );
     }
 
     debug!("{}", mem_monitor.report());
@@ -143,7 +152,11 @@ pub(crate) fn run_full_analysis(
 
     // Build PetGraphView ONCE from prepared snapshot — reused for community, centrality, blast radius
     let petgraph_view = {
-        let _span = if verbose { Some(info_span!("topology").entered()) } else { None };
+        let _span = if verbose {
+            Some(info_span!("topology").entered())
+        } else {
+            None
+        };
         let view = PetGraphView::from_prepared(&prepared)?;
         debug!(
             nodes = view.directed.node_count(),
@@ -157,9 +170,13 @@ pub(crate) fn run_full_analysis(
     let community_result = CommunityDetector::new().detect_with_view(&petgraph_view)?;
     {
         // Collect data with compact IDs first
-        let community_data: Vec<_> = community_result.assignments.iter()
+        let community_data: Vec<_> = community_result
+            .assignments
+            .iter()
             .filter_map(|(node_id, community_id)| {
-                analysis_results.get_compact_id(*node_id).map(|compact_id| (compact_id, *community_id))
+                analysis_results
+                    .get_compact_id(*node_id)
+                    .map(|compact_id| (compact_id, *community_id))
             })
             .collect();
 
@@ -196,11 +213,13 @@ pub(crate) fn run_full_analysis(
     let complexity_report = ComplexityAnalyzer::analyze(graph.backend())?;
     {
         // Collect data with compact IDs first
-        let complexity_data: Vec<_> = complexity_report.functions.iter()
+        let complexity_data: Vec<_> = complexity_report
+            .functions
+            .iter()
             .filter_map(|func| {
-                analysis_results.get_compact_id(func.node.id).map(|compact_id| {
-                    (compact_id, func.cyclomatic as u32, func.cognitive as u32)
-                })
+                analysis_results
+                    .get_compact_id(func.node.id)
+                    .map(|compact_id| (compact_id, func.cyclomatic as u32, func.cognitive as u32))
             })
             .collect();
 
@@ -225,8 +244,14 @@ pub(crate) fn run_full_analysis(
         debug!("{}", mem_monitor.report());
     }
 
-    let high_complexity = complexity_report.by_level.get(&crate::analysis::ComplexityLevel::High).unwrap_or(&0);
-    let medium_complexity = complexity_report.by_level.get(&crate::analysis::ComplexityLevel::Medium).unwrap_or(&0);
+    let high_complexity = complexity_report
+        .by_level
+        .get(&crate::analysis::ComplexityLevel::High)
+        .unwrap_or(&0);
+    let medium_complexity = complexity_report
+        .by_level
+        .get(&crate::analysis::ComplexityLevel::Medium)
+        .unwrap_or(&0);
 
     if human_output {
         if verbose {
@@ -260,9 +285,13 @@ pub(crate) fn run_full_analysis(
     let centrality_report = CentralityAnalyzer::new().analyze_with_view(&petgraph_view)?;
     {
         // Collect data with compact IDs first
-        let centrality_data: Vec<_> = centrality_report.scores.iter()
+        let centrality_data: Vec<_> = centrality_report
+            .scores
+            .iter()
             .filter_map(|(node_id, scores)| {
-                analysis_results.get_compact_id(*node_id).map(|compact_id| (compact_id, scores))
+                analysis_results
+                    .get_compact_id(*node_id)
+                    .map(|compact_id| (compact_id, scores))
             })
             .collect();
 
@@ -278,12 +307,15 @@ pub(crate) fn run_full_analysis(
     }
 
     // Check if we have betweenness data
-    let has_betweenness = centrality_report.scores.values().any(|s| s.betweenness > 0.0);
+    let has_betweenness = centrality_report
+        .scores
+        .values()
+        .any(|s| s.betweenness > 0.0);
 
     if human_output {
         if let Some((top_id, top_score)) = centrality_report.top_pagerank.first() {
             if let Ok(Some(node)) = graph.backend().get_node(*top_id) {
-                let short_name = node.name.split('/').last().unwrap_or(&node.name);
+                let short_name = node.name.split('/').next_back().unwrap_or(&node.name);
 
                 if verbose {
                     info!(
@@ -299,8 +331,7 @@ pub(crate) fn run_full_analysis(
                 } else {
                     info!(
                         "[*] Top hotspot: {} (PageRank: {:.4})",
-                        short_name,
-                        top_score
+                        short_name, top_score
                     );
                 }
             }
@@ -311,7 +342,7 @@ pub(crate) fn run_full_analysis(
 
     // Dependency analysis
     let cycles = DependencyAnalyzer::find_circular_dependencies(graph.backend())?;
-    if cycles.len() > 0 && human_output {
+    if !cycles.is_empty() && human_output {
         if verbose {
             warn!(
                 count = cycles.len(),
@@ -365,8 +396,8 @@ pub(crate) fn run_full_analysis(
             println!("\n✓ Control flow analysis:");
         }
         use crate::analysis::{
-            build_cfg_for_function, AnalysisStorage, CfgPdgArchive, CfgPdgRecord,
-            DominatorTree, FunctionAnalysis, ProgramDependenceGraph,
+            build_cfg_for_function, AnalysisStorage, CfgPdgArchive, CfgPdgRecord, DominatorTree,
+            FunctionAnalysis, ProgramDependenceGraph,
         };
         use rbuilder_graph::code_index::hash_code;
 
@@ -381,138 +412,144 @@ pub(crate) fn run_full_analysis(
         let mut error_count = 0;
 
         for func_node in &functions {
-        // Get function source
-        let file_path = match &func_node.file_path {
-            Some(p) => p,
-            None => {
-                error_count += 1;
-                continue;
-            }
-        };
+            // Get function source
+            let file_path = match &func_node.file_path {
+                Some(p) => p,
+                None => {
+                    error_count += 1;
+                    continue;
+                }
+            };
 
-        let source = match std::fs::read_to_string(file_path) {
-            Ok(s) => s,
-            Err(_) => {
-                error_count += 1;
-                continue;
-            }
-        };
+            let source = match std::fs::read_to_string(file_path) {
+                Ok(s) => s,
+                Err(_) => {
+                    error_count += 1;
+                    continue;
+                }
+            };
 
-        // Determine language from file extension
-        let lang = if file_path.ends_with(".rs") {
-            "rust"
-        } else if file_path.ends_with(".py") {
-            "python"
-        } else if file_path.ends_with(".java") {
-            "java"
-        } else {
-            // Skip unsupported languages for CFG
-            error_count += 1;
-            continue;
-        };
-
-        // Build CFG
-        let cfg_result = build_cfg_for_function(lang, &source, &func_node.name);
-
-        let cfg_data = match cfg_result {
-            Ok(c) => Some(c),
-            Err(_) => {
-                error_count += 1;
-                continue;
-            }
-        };
-
-        // Build PDG
-        let pdg_data = if let Some(ref cfg) = cfg_data {
-            ProgramDependenceGraph::build(cfg, source.as_bytes()).ok()
-        } else {
-            None
-        };
-
-        // Build Dominance
-        let dom_data = cfg_data.as_ref().map(|cfg| DominatorTree::build(cfg));
-
-        // Run Taint Analysis
-        use crate::analysis::TaintAnalyzer;
-        let taint_data = if let (Some(ref cfg), Some(ref pdg)) = (&cfg_data, &pdg_data) {
-            let mut analyzer = TaintAnalyzer::new(pdg, cfg);
-            analyzer.detect_patterns(lang);
-            let flows = analyzer.analyze();
-            if flows.is_empty() {
-                None
+            // Determine language from file extension
+            let lang = if file_path.ends_with(".rs") {
+                "rust"
+            } else if file_path.ends_with(".py") {
+                "python"
+            } else if file_path.ends_with(".java") {
+                "java"
             } else {
-                Some(flows)
+                // Skip unsupported languages for CFG
+                error_count += 1;
+                continue;
+            };
+
+            // Build CFG
+            let cfg_result = build_cfg_for_function(lang, &source, &func_node.name);
+
+            let cfg_data = match cfg_result {
+                Ok(c) => Some(c),
+                Err(_) => {
+                    error_count += 1;
+                    continue;
+                }
+            };
+
+            // Build PDG
+            let pdg_data = if let Some(ref cfg) = cfg_data {
+                ProgramDependenceGraph::build(cfg, source.as_bytes()).ok()
+            } else {
+                None
+            };
+
+            // Build Dominance
+            let dom_data = cfg_data.as_ref().map(DominatorTree::build);
+
+            // Run Taint Analysis
+            use crate::analysis::TaintAnalyzer;
+            let taint_data = if let (Some(ref cfg), Some(ref pdg)) = (&cfg_data, &pdg_data) {
+                let mut analyzer = TaintAnalyzer::new(pdg, cfg);
+                analyzer.detect_patterns(lang);
+                let flows = analyzer.analyze();
+                if flows.is_empty() {
+                    None
+                } else {
+                    Some(flows)
+                }
+            } else {
+                None
+            };
+
+            // Store analysis
+            let analysis = FunctionAnalysis {
+                function_id: func_node.id,
+                function_name: func_node.name.clone(),
+                file_path: file_path.clone(),
+                cfg: cfg_data,
+                pdg: pdg_data,
+                dominance: dom_data,
+                taint: taint_data,
+            };
+
+            if storage.save_function(&analysis).is_ok() {
+                success_count += 1;
+                if let (Some(cfg), Some(pdg)) = (&analysis.cfg, &analysis.pdg) {
+                    cfg_archive.insert(CfgPdgRecord {
+                        function_id: func_node.id,
+                        code_hash: hash_code(&source),
+                        cfg: cfg.clone(),
+                        pdg: pdg.clone(),
+                    });
+                }
+            } else {
+                error_count += 1;
             }
-        } else {
-            None
-        };
-
-        // Store analysis
-        let analysis = FunctionAnalysis {
-            function_id: func_node.id,
-            function_name: func_node.name.clone(),
-            file_path: file_path.clone(),
-            cfg: cfg_data,
-            pdg: pdg_data,
-            dominance: dom_data,
-            taint: taint_data,
-        };
-
-        if storage.save_function(&analysis).is_ok() {
-            success_count += 1;
-            if let (Some(cfg), Some(pdg)) = (&analysis.cfg, &analysis.pdg) {
-                cfg_archive.insert(CfgPdgRecord {
-                    function_id: func_node.id,
-                    code_hash: hash_code(&source),
-                    cfg: cfg.clone(),
-                    pdg: pdg.clone(),
-                });
-            }
-        } else {
-            error_count += 1;
-        }
-    }
-
-    if !cfg_archive.records.is_empty() {
-        let archive_path = CfgPdgArchive::default_path(root);
-        if let Err(err) = cfg_archive.write_to_path(&archive_path) {
-            warn!(error = %err, "Failed to save cfg_pdg archive");
-        } else if verbose {
-            debug!(
-                path = %archive_path.display(),
-                entries = cfg_archive.records.len(),
-                "CFG/PDG archive saved"
-            );
-        }
-    }
-
-    if human_output {
-    if success_count > 0 {
-        println!("  CFG/PDG/Dominance: {} functions analyzed", success_count);
-        if error_count > 0 {
-            println!("  Skipped: {} functions (unsupported language or parse error)", error_count);
         }
 
-        // Taint analysis summary
-        let all_analyses = storage.load_all().unwrap_or_default();
-        let mut total_flows = 0;
-        let mut vulnerable_flows = 0;
-        for analysis in &all_analyses {
-            if let Some(ref flows) = analysis.taint {
-                total_flows += flows.len();
-                vulnerable_flows += flows.iter().filter(|f| f.is_vulnerable()).count();
+        if !cfg_archive.records.is_empty() {
+            let archive_path = CfgPdgArchive::default_path(root);
+            if let Err(err) = cfg_archive.write_to_path(&archive_path) {
+                warn!(error = %err, "Failed to save cfg_pdg archive");
+            } else if verbose {
+                debug!(
+                    path = %archive_path.display(),
+                    entries = cfg_archive.records.len(),
+                    "CFG/PDG archive saved"
+                );
             }
         }
-        if total_flows > 0 {
-            println!("  Taint flows: {} total ({} vulnerable)", total_flows, vulnerable_flows);
+
+        if human_output {
+            if success_count > 0 {
+                println!("  CFG/PDG/Dominance: {} functions analyzed", success_count);
+                if error_count > 0 {
+                    println!(
+                        "  Skipped: {} functions (unsupported language or parse error)",
+                        error_count
+                    );
+                }
+
+                // Taint analysis summary
+                let all_analyses = storage.load_all().unwrap_or_default();
+                let mut total_flows = 0;
+                let mut vulnerable_flows = 0;
+                for analysis in &all_analyses {
+                    if let Some(ref flows) = analysis.taint {
+                        total_flows += flows.len();
+                        vulnerable_flows += flows.iter().filter(|f| f.is_vulnerable()).count();
+                    }
+                }
+                if total_flows > 0 {
+                    println!(
+                        "  Taint flows: {} total ({} vulnerable)",
+                        total_flows, vulnerable_flows
+                    );
+                }
+            } else if !functions.is_empty() {
+                println!("  No functions analyzed (Rust/Python only)");
+            }
+            if verbose {
+                println!("{}", mem_monitor.report());
+            }
         }
-        } else if !functions.is_empty() {
-            println!("  No functions analyzed (Rust/Python only)");
-        }
-        if verbose {
-            println!("{}", mem_monitor.report());
-        }
-    }
     }
 
     // Blast radius analysis with SCC + Dense Bitsets engine
@@ -547,7 +584,12 @@ pub(crate) fn run_full_analysis(
     let query_start = Instant::now();
     let blast_results: Vec<(uuid::Uuid, crate::analysis::BlastRadiusResult)> = functions
         .par_iter()
-        .filter_map(|func_node| engine.analyze(func_node.id).ok().map(|result| (func_node.id, result)))
+        .filter_map(|func_node| {
+            engine
+                .analyze(func_node.id)
+                .ok()
+                .map(|result| (func_node.id, result))
+        })
         .collect();
 
     let mut high_impact_count = 0;
@@ -640,9 +682,12 @@ pub(crate) fn run_full_analysis(
     // Write blast radius results to columnar table
     {
         // Collect data with compact IDs first
-        let blast_data: Vec<_> = blast_updates.into_iter()
+        let blast_data: Vec<_> = blast_updates
+            .into_iter()
             .filter_map(|(node_id, result)| {
-                analysis_results.get_compact_id(node_id).map(|compact_id| (compact_id, result))
+                analysis_results
+                    .get_compact_id(node_id)
+                    .map(|compact_id| (compact_id, result))
             })
             .collect();
 
@@ -663,7 +708,10 @@ pub(crate) fn run_full_analysis(
     let total_time = blast_start.elapsed();
 
     if !max_impact_function.is_empty() && human_output {
-        let short_name = max_impact_function.split('/').last().unwrap_or(&max_impact_function);
+        let short_name = max_impact_function
+            .split('/')
+            .next_back()
+            .unwrap_or(&max_impact_function);
 
         if verbose {
             info!(
@@ -679,9 +727,7 @@ pub(crate) fn run_full_analysis(
         } else {
             info!(
                 "[!] Highest impact: {} (score: {:.1}/100, {} high-impact functions)",
-                short_name,
-                max_impact_score,
-                high_impact_count
+                short_name, max_impact_score, high_impact_count
             );
         }
     }
@@ -730,12 +776,8 @@ pub(crate) fn run_full_analysis(
 
     // Export static dashboard bundle (Phase 0+1 — see docs/dashboard-design.md)
     let dashboard_dir = root.join(".rbuilder/dashboard");
-    let dashboard_exported = rbuilder_dashboard::export_dashboard_bundle(
-        graph.backend(),
-        root,
-        &snapshot_path,
-    )
-    .is_ok();
+    let dashboard_exported =
+        rbuilder_dashboard::export_dashboard_bundle(graph.backend(), root, &snapshot_path).is_ok();
     if !dashboard_exported && verbose {
         debug!("Dashboard bundle skipped (run scripts/build-dashboard.sh then rebuild rbuilder)");
     }
@@ -744,16 +786,14 @@ pub(crate) fn run_full_analysis(
     let snapshot = mem_monitor.snapshot();
 
     if json_output {
-        let response = build_discover_response(&index_stats, run_start.elapsed().as_millis() as u64);
+        let response =
+            build_discover_response(&index_stats, run_start.elapsed().as_millis() as u64);
         ctx.emit_json_value(&serde_json::to_value(&response)?)?;
     } else {
         info!("[✓] Saved to .rbuilder/ ({:.1} MB total)", analysis_size);
 
         if dashboard_exported {
-            info!(
-                "[✓] Dashboard: {}/index.html",
-                dashboard_dir.display()
-            );
+            info!("[✓] Dashboard: {}/index.html", dashboard_dir.display());
         }
 
         info!(

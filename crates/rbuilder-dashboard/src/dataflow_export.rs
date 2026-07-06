@@ -49,13 +49,16 @@ pub fn export_dataflow_index(
     }
 
     let slice_index: crate::slice_export::SliceIndexPayload = serde_json::from_slice(
-        &fs::read(out_dir.join(crate::slice_export::SLICE_INDEX_FILE)).map_err(|e| e.to_string())?,
+        &fs::read(out_dir.join(crate::slice_export::SLICE_INDEX_FILE))
+            .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
 
     let mut functions = Vec::with_capacity(slice_index.functions.len());
     for entry in &slice_index.functions {
-        let bundle_path = out_dir.join(SLICE_DETAIL_DIR).join(format!("{}.json", entry.function_id));
+        let bundle_path = out_dir
+            .join(SLICE_DETAIL_DIR)
+            .join(format!("{}.json", entry.function_id));
         let data_edges = if bundle_path.is_file() {
             let bundle: serde_json::Value =
                 serde_json::from_slice(&fs::read(&bundle_path).map_err(|e| e.to_string())?)

@@ -11,8 +11,8 @@ use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use rbuilder_error::Result;
 use rbuilder_graph::backend::MemoryBackend;
-use rbuilder_graph::snapshot::{PreparedGraphSnapshot, SnapshotNodeStore};
 use rbuilder_graph::schema::EdgeType;
+use rbuilder_graph::snapshot::{PreparedGraphSnapshot, SnapshotNodeStore};
 use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
@@ -162,10 +162,9 @@ impl PetGraphView {
         uuid_to_undirected: &HashMap<Uuid, NodeIndex>,
     ) -> Result<()> {
         for (from_uuid, to_uuid, edge_type) in edge_topology {
-            if let (Some(&from), Some(&to)) = (
-                uuid_to_index.get(&from_uuid),
-                uuid_to_index.get(&to_uuid),
-            ) {
+            if let (Some(&from), Some(&to)) =
+                (uuid_to_index.get(&from_uuid), uuid_to_index.get(&to_uuid))
+            {
                 directed.add_edge(from, to, edge_type);
             }
 
@@ -212,8 +211,10 @@ impl PetGraphView {
 
     /// Build a call-only directed graph sharing the same node indices as [`Self::directed`].
     pub fn call_only_directed(&self) -> DiGraph<(), ()> {
-        let mut call_only =
-            DiGraph::<(), ()>::with_capacity(self.directed.node_count(), self.directed.edge_count());
+        let mut call_only = DiGraph::<(), ()>::with_capacity(
+            self.directed.node_count(),
+            self.directed.edge_count(),
+        );
         for _ in self.directed.node_indices() {
             call_only.add_node(());
         }
@@ -239,7 +240,11 @@ impl PetGraphView {
 const CALL_EDGES: &[EdgeType] = &[EdgeType::Calls];
 
 /// Upstream function callers within `max_depth` call hops of `target_id` (hop 1 = direct callers).
-pub fn caller_ids_within_depth(view: &PetGraphView, target_id: Uuid, max_depth: usize) -> HashSet<Uuid> {
+pub fn caller_ids_within_depth(
+    view: &PetGraphView,
+    target_id: Uuid,
+    max_depth: usize,
+) -> HashSet<Uuid> {
     if max_depth == 0 {
         return HashSet::new();
     }

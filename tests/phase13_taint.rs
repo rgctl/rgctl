@@ -523,7 +523,9 @@ def run(request):
 #[cfg(feature = "bundle-minimal")]
 #[test]
 fn test_partial_dominance_bypass() {
-    use rbuilder::analysis::{build_cfg_for_function, PolicyViolation, ProgramDependenceGraph, TaintAnalyzer};
+    use rbuilder::analysis::{
+        build_cfg_for_function, PolicyViolation, ProgramDependenceGraph, TaintAnalyzer,
+    };
 
     let code = r#"
 def handle(request):
@@ -546,7 +548,9 @@ def handle(request):
 #[cfg(feature = "bundle-minimal")]
 #[test]
 fn test_sanitizer_after_sink_trap() {
-    use rbuilder::analysis::{build_cfg_for_function, PolicyViolation, ProgramDependenceGraph, TaintAnalyzer};
+    use rbuilder::analysis::{
+        build_cfg_for_function, PolicyViolation, ProgramDependenceGraph, TaintAnalyzer,
+    };
 
     let code = r#"
 def handle(request):

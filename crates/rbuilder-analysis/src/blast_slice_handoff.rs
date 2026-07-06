@@ -63,11 +63,7 @@ pub fn resolve_handoff_seeds(
             .map(|n| n.name.clone())
             .unwrap_or_default();
         let edges = call_graph.call_edges_between(caller_id, symbol_id);
-        let params: Vec<String> = call_graph
-            .parameter_names(symbol_id)
-            .iter()
-            .cloned()
-            .collect();
+        let params: Vec<String> = call_graph.parameter_names(symbol_id).to_vec();
 
         for edge in edges {
             for (param_index, param_name) in params.iter().enumerate() {
@@ -112,11 +108,7 @@ pub fn resolve_handoff_seeds(
                 .map(|n| n.name.clone())
                 .unwrap_or_default();
             for edge in call_graph.call_edges_between(caller_id, impact_id) {
-                let params: Vec<String> = call_graph
-                    .parameter_names(impact_id)
-                    .iter()
-                    .cloned()
-                    .collect();
+                let params: Vec<String> = call_graph.parameter_names(impact_id).to_vec();
                 for (param_index, param_name) in params.iter().enumerate() {
                     seeds.push(SliceHandoffSeed {
                         callee_id: impact_id,
@@ -165,14 +157,7 @@ fn dedupe_seeds(seeds: Vec<SliceHandoffSeed>) -> Vec<SliceHandoffSeed> {
     let mut seen = HashSet::new();
     seeds
         .into_iter()
-        .filter(|s| {
-            seen.insert((
-                s.caller_id,
-                s.callee_id,
-                s.param_index,
-                s.call_site_line,
-            ))
-        })
+        .filter(|s| seen.insert((s.caller_id, s.callee_id, s.param_index, s.call_site_line)))
         .collect()
 }
 

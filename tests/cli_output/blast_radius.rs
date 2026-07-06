@@ -32,10 +32,7 @@ fn test_caller_depth_limit_serializes_when_set() {
     let mut response = fixture_response();
     response.metrics.caller_depth_limit = Some(5);
     let doc = response_to_json(&response);
-    assert_eq!(
-        doc["metrics"]["caller_depth_limit"].as_u64(),
-        Some(5)
-    );
+    assert_eq!(doc["metrics"]["caller_depth_limit"].as_u64(), Some(5));
 }
 
 #[test]
@@ -49,8 +46,8 @@ fn test_blast_radius_symbol_context_shape() {
 
 #[test]
 fn test_handoffs_from_seeds_populated() {
-    use rbuilder::cli::blast_radius_output::{handoffs_from_seeds, SliceHandoff};
     use rbuilder::analysis::SliceHandoffSeed;
+    use rbuilder::cli::blast_radius_output::{handoffs_from_seeds, SliceHandoff};
     use uuid::Uuid;
 
     let seeds = vec![SliceHandoffSeed {

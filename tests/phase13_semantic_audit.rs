@@ -4,8 +4,7 @@
 mod fixtures;
 
 use fixtures::{
-    dead_code_post_return, diamond_merge, interprocedural_handoff, loop_back_edge,
-    sanitizer_bypass,
+    dead_code_post_return, diamond_merge, interprocedural_handoff, loop_back_edge, sanitizer_bypass,
 };
 use rbuilder::analysis::{
     build_cfg_for_function, verify_idom_acyclic, DominatorTree, PolicyViolation,
@@ -41,15 +40,16 @@ fn fixture_dead_code_post_return_excluded() {
         .find(|s| s.text.contains("unreachable = 99"))
         .map(|s| s.line);
     if let Some(line) = dead_line {
-        let pdg = ProgramDependenceGraph::build(&cfg, dead_code_post_return::CODE.as_bytes())
-            .unwrap();
+        let pdg =
+            ProgramDependenceGraph::build(&cfg, dead_code_post_return::CODE.as_bytes()).unwrap();
         let dead_in_pdg = pdg.nodes.values().any(|n| n.statement.line == line);
         assert!(
-            !dead_in_pdg || !reachable.iter().any(|block| {
-                cfg.blocks
-                    .get(block)
-                    .is_some_and(|b| b.statements.iter().any(|s| s.line == line))
-            }),
+            !dead_in_pdg
+                || !reachable.iter().any(|block| {
+                    cfg.blocks
+                        .get(block)
+                        .is_some_and(|b| b.statements.iter().any(|s| s.line == line))
+                }),
             "dead code after return should not appear in reachable CFG blocks"
         );
     }
@@ -66,12 +66,8 @@ fn fixture_loop_back_edge_idom_acyclic() {
 #[cfg(feature = "bundle-minimal")]
 #[test]
 fn fixture_sanitizer_bypass_detected() {
-    let cfg = build_cfg_for_function(
-        "python",
-        sanitizer_bypass::CODE,
-        sanitizer_bypass::FN,
-    )
-    .unwrap();
+    let cfg =
+        build_cfg_for_function("python", sanitizer_bypass::CODE, sanitizer_bypass::FN).unwrap();
     let pdg = ProgramDependenceGraph::build(&cfg, sanitizer_bypass::CODE.as_bytes()).unwrap();
     let mut analyzer = TaintAnalyzer::new(&pdg, &cfg);
     analyzer.detect_patterns("python");
@@ -119,7 +115,9 @@ fn fixture_interprocedural_handoff_trace() {
     let blast = engine.analyze(id_process).unwrap();
     let seeds = resolve_handoff_seeds(&backend, &blast, id_process).unwrap();
     assert!(!seeds.is_empty());
-    assert!(seeds.iter().any(|s| s.caller_id == id_main && s.callee_id == id_process));
+    assert!(seeds
+        .iter()
+        .any(|s| s.caller_id == id_main && s.callee_id == id_process));
 
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
     assert!(icfg.get_cfg(id_process).is_some());

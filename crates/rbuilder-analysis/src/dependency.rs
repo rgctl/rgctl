@@ -63,9 +63,7 @@ impl DependencyAnalyzer {
                 .collect();
             let names: Vec<String> = uuids
                 .iter()
-                .filter_map(|id| {
-                    backend.get_node(*id).ok().flatten().map(|n| n.name.clone())
-                })
+                .filter_map(|id| backend.get_node(*id).ok().flatten().map(|n| n.name.clone()))
                 .collect();
 
             if uuids.len() >= 2 {
@@ -85,7 +83,8 @@ impl DependencyAnalyzer {
     ) -> Result<ImpactResult> {
         let view = PetGraphView::from_backend(backend)?;
         let nodes = backend.find_nodes_by_name(symbol_name)?;
-        let source_node = nodes.first()
+        let source_node = nodes
+            .first()
             .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?;
         let source = source_node.id;
         let source_idx = view
@@ -121,9 +120,7 @@ impl DependencyAnalyzer {
 
         let affected_names: Vec<String> = affected
             .iter()
-            .filter_map(|id| {
-                backend.get_node(*id).ok().flatten().map(|n| n.name.clone())
-            })
+            .filter_map(|id| backend.get_node(*id).ok().flatten().map(|n| n.name.clone()))
             .collect();
 
         Ok(ImpactResult {
@@ -139,7 +136,8 @@ impl DependencyAnalyzer {
     pub fn find_callers(backend: &MemoryBackend, symbol_name: &str) -> Result<Vec<String>> {
         let view = PetGraphView::from_backend(backend)?;
         let target_nodes = backend.find_nodes_by_name(symbol_name)?;
-        let target = target_nodes.first()
+        let target = target_nodes
+            .first()
             .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?
             .id;
         let target_idx = view.uuid_to_index[&target];
@@ -149,7 +147,11 @@ impl DependencyAnalyzer {
             .neighbors_directed(target_idx, petgraph::Direction::Incoming)
             .filter_map(|idx| view.index_to_uuid.get(&idx))
             .filter_map(|uuid| {
-                backend.get_node(*uuid).ok().flatten().map(|n| n.name.clone())
+                backend
+                    .get_node(*uuid)
+                    .ok()
+                    .flatten()
+                    .map(|n| n.name.clone())
             })
             .collect();
         Ok(callers)

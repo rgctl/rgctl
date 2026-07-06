@@ -103,11 +103,8 @@ impl ProgramDependenceGraph {
 
     fn build_data_dependencies(&mut self, cfg: &ControlFlowGraph, reaching: &ReachingDefs) {
         for block in cfg.blocks.values() {
-            let node_ids: Vec<PdgNodeId> = self
-                .block_nodes
-                .get(&block.id)
-                .cloned()
-                .unwrap_or_default();
+            let node_ids: Vec<PdgNodeId> =
+                self.block_nodes.get(&block.id).cloned().unwrap_or_default();
 
             for (idx, _stmt) in block.statements.iter().enumerate() {
                 let Some(use_node) = self.find_node_by_block_and_index(block.id, idx) else {

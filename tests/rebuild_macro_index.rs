@@ -46,7 +46,10 @@ fn rebuild_metasfresh_caches() {
     blast_snap
         .write_to_path(&BlastEngineSnapshot::default_path(repo))
         .expect("write blast snapshot");
-    eprintln!("Blast engine build + snapshot: {:.2}s", engine_start.elapsed().as_secs_f64());
+    eprintln!(
+        "Blast engine build + snapshot: {:.2}s",
+        engine_start.elapsed().as_secs_f64()
+    );
 
     let index = MacroCallIndex::rebuild_and_save(repo, &db, backend, &functions).expect("rebuild");
     assert!(!index.entries.is_empty());

@@ -147,9 +147,7 @@ impl CommunityDetector {
 
         let assignments = label_map
             .iter()
-            .filter_map(|(idx, &label)| {
-                view.index_to_uuid.get(idx).map(|uuid| (*uuid, label))
-            })
+            .filter_map(|(idx, &label)| view.index_to_uuid.get(idx).map(|uuid| (*uuid, label)))
             .collect();
 
         Ok(CommunityResult {
@@ -211,7 +209,10 @@ impl CommunityDetector {
 
         let mut q = 0.0;
         for (&community, &degree_sum) in &degree_sum_by_community {
-            let internal = internal_by_community.get(&community).copied().unwrap_or(0.0);
+            let internal = internal_by_community
+                .get(&community)
+                .copied()
+                .unwrap_or(0.0);
             let expected = (degree_sum * degree_sum) / (4.0 * m);
             q += (internal / m) - (expected / m);
         }
@@ -265,8 +266,8 @@ pub struct DashboardCommunity {
 /// propagation yields a single cluster on disconnected subgraphs.
 pub fn detect_communities(backend: &MemoryBackend) -> Result<Vec<DashboardCommunity>> {
     let view = PetGraphView::from_backend(backend)?;
-    let detection =
-        CommunityDetector::new().detect_with_view_filtered(&view, default_community_edge_types())?;
+    let detection = CommunityDetector::new()
+        .detect_with_view_filtered(&view, default_community_edge_types())?;
 
     let mut communities: Vec<DashboardCommunity> = detection
         .communities
@@ -353,9 +354,7 @@ fn build_dashboard_community(
     })
 }
 
-fn connected_components(
-    backend: &MemoryBackend,
-) -> Result<Vec<Vec<Uuid>>> {
+fn connected_components(backend: &MemoryBackend) -> Result<Vec<Vec<Uuid>>> {
     // Build adjacency list with zero-copy edge iteration
     let mut adj: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
     backend.for_each_edge(|edge| {
@@ -550,32 +549,16 @@ mod tests {
             .collect();
 
         backend
-            .insert_edge(Edge::new(
-                ids[0],
-                ids[1],
-                EdgeType::Calls,
-            ))
+            .insert_edge(Edge::new(ids[0], ids[1], EdgeType::Calls))
             .unwrap();
         backend
-            .insert_edge(Edge::new(
-                ids[2],
-                ids[3],
-                EdgeType::Calls,
-            ))
+            .insert_edge(Edge::new(ids[2], ids[3], EdgeType::Calls))
             .unwrap();
         backend
-            .insert_edge(Edge::new(
-                ids[0],
-                ids[2],
-                EdgeType::Uses,
-            ))
+            .insert_edge(Edge::new(ids[0], ids[2], EdgeType::Uses))
             .unwrap();
         backend
-            .insert_edge(Edge::new(
-                ids[4],
-                ids[0],
-                EdgeType::Calls,
-            ))
+            .insert_edge(Edge::new(ids[4], ids[0], EdgeType::Calls))
             .unwrap();
         backend
     }

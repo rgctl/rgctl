@@ -300,8 +300,9 @@ impl AnalysisResults {
     /// Save analysis results to a binary file.
     pub fn save(&self, path: &Path) -> Result<()> {
         let file = std::fs::File::create(path)?;
-        bincode::serialize_into(file, self)
-            .map_err(|e| rbuilder_error::Error::SerdeError(format!("Failed to serialize: {}", e)))?;
+        bincode::serialize_into(file, self).map_err(|e| {
+            rbuilder_error::Error::SerdeError(format!("Failed to serialize: {}", e))
+        })?;
         Ok(())
     }
 

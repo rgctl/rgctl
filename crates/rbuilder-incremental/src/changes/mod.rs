@@ -94,9 +94,11 @@ impl ChangeDetector {
                     continue;
                 }
                 if let Ok(result) = engine.analyze(node.id) {
-                    let impact_zone_size =
-                        BlastRadiusEngine::filter_function_impact(backend, &result.impact_zone_ids)?
-                            .len();
+                    let impact_zone_size = BlastRadiusEngine::filter_function_impact(
+                        backend,
+                        &result.impact_zone_ids,
+                    )?
+                    .len();
                     max_score = max_score.max(result.score);
                     details.push(ChangeDetail {
                         file: file.clone(),

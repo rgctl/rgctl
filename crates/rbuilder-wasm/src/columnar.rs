@@ -188,7 +188,11 @@ impl ColumnarView {
             .to_string()
     }
 
-    pub fn expand_indices(&self, indices: &[u32], type_mask: u32) -> Result<SubgraphPayload, String> {
+    pub fn expand_indices(
+        &self,
+        indices: &[u32],
+        type_mask: u32,
+    ) -> Result<SubgraphPayload, String> {
         let mut filtered: Vec<u32> = indices
             .iter()
             .copied()
@@ -398,16 +402,14 @@ impl ColumnarView {
 
     fn blast_score_for_index(&self, idx: u32) -> Result<f64, String> {
         let row = read_node_row(&self.bytes, self.offset_nodes as usize, idx as usize)?;
-        Ok(
-            extension_property_f64(
-                &self.bytes,
-                self.offset_extensions as usize,
-                row.extension_off,
-                row.extension_len,
-                "blast_radius_score",
-            )
-            .unwrap_or(0.0),
+        Ok(extension_property_f64(
+            &self.bytes,
+            self.offset_extensions as usize,
+            row.extension_off,
+            row.extension_len,
+            "blast_radius_score",
         )
+        .unwrap_or(0.0))
     }
 }
 
@@ -498,12 +500,7 @@ struct NodeExtension {
     properties: HashMap<String, String>,
 }
 
-fn extension_complexity(
-    bytes: &[u8],
-    ext_base: usize,
-    off: u32,
-    len: u32,
-) -> Option<f64> {
+fn extension_complexity(bytes: &[u8], ext_base: usize, off: u32, len: u32) -> Option<f64> {
     extension_property_f64(bytes, ext_base, off, len, "cyclomatic")
 }
 

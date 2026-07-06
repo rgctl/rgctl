@@ -160,12 +160,12 @@ pub fn check_policies(
             }
         }
 
-        let _ = backend.get_node(node_id).map_err(|_e| {
-            PolicyViolation::ScaleFailure {
+        let _ = backend
+            .get_node(node_id)
+            .map_err(|_e| PolicyViolation::ScaleFailure {
                 count: impact_zone_ids.len(),
                 max: registry.max_impact_nodes,
-            }
-        })?;
+            })?;
     }
 
     Ok(())
@@ -179,14 +179,8 @@ pub fn evaluate_policies(
     backend: &MemoryBackend,
     centrality: Option<&HashMap<Uuid, CentralityScores>>,
 ) -> RbResult<()> {
-    check_policies(
-        source_id,
-        impact_zone_ids,
-        registry,
-        backend,
-        centrality,
-    )
-    .map_err(|v| Error::GraphError(v.to_string()))
+    check_policies(source_id, impact_zone_ids, registry, backend, centrality)
+        .map_err(|v| Error::GraphError(v.to_string()))
 }
 
 #[cfg(test)]
@@ -203,10 +197,7 @@ mod tests {
         registry.max_impact_nodes = 5;
         assert_eq!(
             check_policies(source, &impact, &registry, &backend, None),
-            Err(PolicyViolation::ScaleFailure {
-                count: 6,
-                max: 5,
-            })
+            Err(PolicyViolation::ScaleFailure { count: 6, max: 5 })
         );
     }
 
@@ -256,7 +247,13 @@ mod tests {
         registry.centrality_alert_threshold = 0.5;
 
         assert_eq!(
-            check_policies(Uuid::new_v4(), &[bridge], &registry, &backend, Some(&centrality)),
+            check_policies(
+                Uuid::new_v4(),
+                &[bridge],
+                &registry,
+                &backend,
+                Some(&centrality)
+            ),
             Err(PolicyViolation::CascadeHazard {
                 node: bridge,
                 betweenness: 0.9,

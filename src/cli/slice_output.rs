@@ -1,7 +1,7 @@
 //! Structured slice CLI JSON responses with composable graph topology.
 
-use crate::analysis::cfg::{BlockId, ControlFlowGraph, CfgEdgeType};
-use crate::analysis::pdg::{ProgramDependenceGraph, PdgNodeId};
+use crate::analysis::cfg::{BlockId, CfgEdgeType, ControlFlowGraph};
+use crate::analysis::pdg::{PdgNodeId, ProgramDependenceGraph};
 use crate::analysis::{CodeSlice, SliceCriterion};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -117,16 +117,10 @@ fn block_label(index: usize) -> String {
 }
 
 fn cfg_edge_kind(edge_type: CfgEdgeType) -> String {
-    format!("{edge_type:?}")
-        .to_lowercase()
-        .replace('_', "")
+    format!("{edge_type:?}").to_lowercase().replace('_', "")
 }
 
-pub fn cfg_topology_json(
-    file: &str,
-    function: &str,
-    cfg: &ControlFlowGraph,
-) -> SliceCfgResponse {
+pub fn cfg_topology_json(file: &str, function: &str, cfg: &ControlFlowGraph) -> SliceCfgResponse {
     let index_map = block_index_map(cfg);
     let mut nodes = Vec::with_capacity(index_map.len());
     for (&block_id, &block_index) in &index_map {
@@ -224,7 +218,8 @@ pub fn pdg_topology_json(
         }
     }
     for dep in &pdg.control_deps {
-        if let (Some(&from), Some(&to)) = (id_map.get(&dep.controller), id_map.get(&dep.dependent)) {
+        if let (Some(&from), Some(&to)) = (id_map.get(&dep.controller), id_map.get(&dep.dependent))
+        {
             edges.push(PdgGraphEdge {
                 source: pdg_node_label(from),
                 target: pdg_node_label(to),
@@ -300,7 +295,8 @@ pub fn slice_subgraph_json(
         if !statement_ids.contains(&dep.controller) || !statement_ids.contains(&dep.dependent) {
             continue;
         }
-        if let (Some(&from), Some(&to)) = (id_map.get(&dep.controller), id_map.get(&dep.dependent)) {
+        if let (Some(&from), Some(&to)) = (id_map.get(&dep.controller), id_map.get(&dep.dependent))
+        {
             edges.push(PdgGraphEdge {
                 source: pdg_node_label(from),
                 target: pdg_node_label(to),

@@ -13,18 +13,18 @@
 
 use bit_set::BitSet;
 use petgraph::algo::{kosaraju_scc, toposort};
-use serde::{Deserialize, Serialize};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use rbuilder_error::{Error, Result};
 use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
 use rbuilder_graph::schema::NodeType;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::blast_engine_snapshot::ReachabilityStore;
 use crate::centrality::CentralityScores;
 use crate::policy::{evaluate_policies, PolicyRegistry};
-use crate::blast_engine_snapshot::ReachabilityStore;
 
 /// A strongly connected component in the condensed graph.
 #[derive(Debug, Clone)]
@@ -67,7 +67,10 @@ impl BlastRadiusEngine {
     }
 
     /// Build the engine from an existing topology view (avoids rebuilding petgraph).
-    pub fn build_from_view(backend: &MemoryBackend, view: &crate::graph_utils::PetGraphView) -> Result<Self> {
+    pub fn build_from_view(
+        backend: &MemoryBackend,
+        view: &crate::graph_utils::PetGraphView,
+    ) -> Result<Self> {
         let graph = view.call_only_directed();
 
         // Step 1: Find strongly connected components (call graph only)
@@ -77,7 +80,8 @@ impl BlastRadiusEngine {
         tracing::info!(
             scc_count,
             original_nodes = graph.node_count(),
-            reduction_percent = ((graph.node_count() - scc_count) as f64 / graph.node_count() as f64 * 100.0),
+            reduction_percent =
+                ((graph.node_count() - scc_count) as f64 / graph.node_count() as f64 * 100.0),
             "SCC decomposition complete"
         );
 
@@ -110,14 +114,21 @@ impl BlastRadiusEngine {
             // Choose representative name
             let name = if !members.is_empty() {
                 // Find first function node, or use first member
-                members.iter()
+                members
+                    .iter()
                     .find_map(|uuid| {
-                        backend.get_node(*uuid).ok().flatten()
+                        backend
+                            .get_node(*uuid)
+                            .ok()
+                            .flatten()
                             .filter(|n| n.node_type == NodeType::Function)
                             .map(|n| n.name.clone())
                     })
                     .unwrap_or_else(|| {
-                        backend.get_node(members[0]).ok().flatten()
+                        backend
+                            .get_node(members[0])
+                            .ok()
+                            .flatten()
                             .map(|n| n.name.clone())
                             .unwrap_or_else(|| format!("SCC_{}", scc_id))
                     })
@@ -145,14 +156,9 @@ impl BlastRadiusEngine {
             // Only add edges between different SCCs (skip self-loops)
             if from_scc != to_scc {
                 let edge_key = (from_scc, to_scc);
-                if !added_edges.contains_key(&edge_key) {
-                    dag.add_edge(
-                        scc_node_indices[from_scc],
-                        scc_node_indices[to_scc],
-                        (),
-                    );
-                    added_edges.insert(edge_key, ());
-                }
+                added_edges.entry(edge_key).or_insert_with(|| {
+                    dag.add_edge(scc_node_indices[from_scc], scc_node_indices[to_scc], ());
+                });
             }
         }
 
@@ -206,7 +212,11 @@ impl BlastRadiusEngine {
     }
 
     /// Analyze blast radius by unique symbol name.
-    pub fn analyze_by_name(&self, backend: &MemoryBackend, symbol_name: &str) -> Result<BlastRadiusResult> {
+    pub fn analyze_by_name(
+        &self,
+        backend: &MemoryBackend,
+        symbol_name: &str,
+    ) -> Result<BlastRadiusResult> {
         let (id, _) = crate::blast_radius::resolve_unique_symbol(backend, symbol_name)?;
         self.analyze(id)
     }
@@ -242,7 +252,8 @@ impl BlastRadiusEngine {
     }
 
     fn analyze_inner(&self, func_id: Uuid) -> Result<BlastRadiusResult> {
-        let scc_idx = self.node_to_scc
+        let scc_idx = self
+            .node_to_scc
             .get(&func_id)
             .ok_or_else(|| Error::NodeNotFound(func_id.to_string()))?;
 
@@ -261,7 +272,10 @@ impl BlastRadiusEngine {
 
         // Calculate direct callers from incoming call SCC edges
         let mut direct_caller_ids = Vec::new();
-        for incoming_scc in self.dag.neighbors_directed(*scc_idx, petgraph::Direction::Incoming) {
+        for incoming_scc in self
+            .dag
+            .neighbors_directed(*scc_idx, petgraph::Direction::Incoming)
+        {
             for &uuid in &self.scc_members[incoming_scc.index()] {
                 direct_caller_ids.push(uuid);
             }
@@ -327,8 +341,8 @@ impl BlastRadiusEngine {
         } else {
             self.scc_count * self.scc_count / 8
         };
-        let avg_scc_size = self.scc_members.iter().map(|m| m.len()).sum::<usize>() as f64
-            / self.scc_count as f64;
+        let avg_scc_size =
+            self.scc_members.iter().map(|m| m.len()).sum::<usize>() as f64 / self.scc_count as f64;
 
         EngineStats {
             scc_count: self.scc_count,
@@ -344,7 +358,10 @@ impl BlastRadiusEngine {
     }
 
     /// Serialize engine state for mmap reload (sparse + zstd-compressed reachability).
-    pub fn to_engine_snapshot(&self, graph_digest: String) -> crate::blast_engine_snapshot::BlastEngineSnapshot {
+    pub fn to_engine_snapshot(
+        &self,
+        graph_digest: String,
+    ) -> crate::blast_engine_snapshot::BlastEngineSnapshot {
         use crate::blast_engine_snapshot::{
             bitset_to_words, compress_words, words_popcount, ReachabilityRow,
         };
@@ -506,9 +523,15 @@ mod tests {
         backend.insert_node(c).unwrap();
         backend.insert_node(d).unwrap();
 
-        backend.insert_edge(Edge::new(id_a, id_b, EdgeType::Calls)).unwrap();
-        backend.insert_edge(Edge::new(id_b, id_c, EdgeType::Calls)).unwrap();
-        backend.insert_edge(Edge::new(id_c, id_d, EdgeType::Calls)).unwrap();
+        backend
+            .insert_edge(Edge::new(id_a, id_b, EdgeType::Calls))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(id_b, id_c, EdgeType::Calls))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(id_c, id_d, EdgeType::Calls))
+            .unwrap();
 
         backend
     }
@@ -521,7 +544,9 @@ mod tests {
         let id_b = nodes.iter().find(|n| n.name == "b").unwrap().id;
         let id_d = nodes.iter().find(|n| n.name == "d").unwrap().id;
 
-        backend.insert_edge(Edge::new(id_d, id_b, EdgeType::Calls)).unwrap();
+        backend
+            .insert_edge(Edge::new(id_d, id_b, EdgeType::Calls))
+            .unwrap();
 
         backend
     }
@@ -547,7 +572,9 @@ mod tests {
         assert_eq!(engine.scc_count, 2);
 
         // Find the large SCC
-        let large_scc = engine.scc_members.iter()
+        let large_scc = engine
+            .scc_members
+            .iter()
             .find(|members| members.len() == 3)
             .expect("Should have SCC with 3 members");
 
@@ -565,8 +592,8 @@ mod tests {
         let result = engine.analyze(id_d).unwrap();
 
         // d is called by c, and transitively by a, b
-        assert_eq!(result.direct_caller_ids.len(), 1);  // c
-        assert_eq!(result.impact_zone_ids.len(), 3);    // a, b, c
+        assert_eq!(result.direct_caller_ids.len(), 1); // c
+        assert_eq!(result.impact_zone_ids.len(), 3); // a, b, c
         assert!(result.score > 0.0);
     }
 
@@ -597,7 +624,11 @@ mod tests {
         let snap = engine.to_engine_snapshot(digest.clone());
 
         let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join(BlastEngineSnapshot::default_path(Path::new(".")).file_name().unwrap());
+        let path = tmp.path().join(
+            BlastEngineSnapshot::default_path(Path::new("."))
+                .file_name()
+                .unwrap(),
+        );
         snap.write_to_path(&path).unwrap();
 
         let loaded = BlastEngineSnapshot::load_from_path(&path).unwrap();
@@ -611,7 +642,10 @@ mod tests {
         let original = engine.analyze(id_a).unwrap();
         let roundtrip = restored.analyze(id_a).unwrap();
         assert_eq!(original.score, roundtrip.score);
-        assert_eq!(original.impact_zone_ids.len(), roundtrip.impact_zone_ids.len());
+        assert_eq!(
+            original.impact_zone_ids.len(),
+            roundtrip.impact_zone_ids.len()
+        );
     }
 
     #[test]
@@ -629,6 +663,6 @@ mod tests {
         let id_d = nodes.iter().find(|n| n.name == "d").unwrap().id;
         let reach_d = centrality[&id_d];
 
-        assert!(reach_d >= 4);  // Reaches at least itself and its SCC
+        assert!(reach_d >= 4); // Reaches at least itself and its SCC
     }
 }

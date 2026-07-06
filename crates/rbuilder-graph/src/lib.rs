@@ -3,9 +3,9 @@
 pub mod backend;
 pub mod code_graph;
 pub mod code_index;
+pub mod columnar_snapshot;
 pub mod export;
 pub mod intern;
-pub mod columnar_snapshot;
 pub mod migration;
 pub mod query;
 pub mod schema;
@@ -13,14 +13,13 @@ pub mod snapshot;
 
 pub use code_graph::CodeGraph;
 pub use code_index::{hash_code, CodeIndex, CodeLocation};
-pub use export::{export_json, import_json, GraphSnapshot};
 pub use columnar_snapshot::{ColumnarGraphMmap, COLUMNAR_SNAPSHOT_VERSION};
-pub use snapshot::{
-    MmappedGraphSnapshot, PreparedGraphSnapshot, PreparedIndexes, SnapshotNodeStore,
-    SNAPSHOT_FILE,
-};
+pub use export::{export_json, import_json, GraphSnapshot};
 pub use migration::{migrate_snapshot, migrate_v1_to_v2};
 pub use schema::{AccessType, CallType, GraphParameter, GRAPH_SCHEMA_VERSION};
+pub use snapshot::{
+    MmappedGraphSnapshot, PreparedGraphSnapshot, PreparedIndexes, SnapshotNodeStore, SNAPSHOT_FILE,
+};
 
 /// Normalize path separators for consistent comparison.
 pub fn normalize_path_str(path: &str) -> String {

@@ -173,7 +173,11 @@ fn bench_dominance_1000_blocks(c: &mut Criterion) {
     }
     code.push_str("    x\n}\n");
     let cfg = build_cfg_for_function("rust", &code, "nested").unwrap();
-    assert!(cfg.blocks.len() >= 500, "expected large CFG, got {}", cfg.blocks.len());
+    assert!(
+        cfg.blocks.len() >= 500,
+        "expected large CFG, got {}",
+        cfg.blocks.len()
+    );
 
     c.bench_function("phase13_dominance_1000_blocks", |b| {
         b.iter(|| {

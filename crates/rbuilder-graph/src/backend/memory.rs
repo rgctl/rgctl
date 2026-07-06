@@ -6,12 +6,12 @@ use crate::backend::trait_def::GraphBackend;
 use crate::intern::StringInterner;
 use crate::normalize_path_str;
 use crate::schema::{Edge, EdgeType, Node, NodeType};
+use petgraph::graph::{DiGraph, NodeIndex};
 use rbuilder_error::{Error, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use tracing::trace;
 use uuid::Uuid;
-use petgraph::graph::{DiGraph, NodeIndex};
 
 type PropertyIndex = HashMap<Arc<str>, HashMap<Arc<str>, Vec<Uuid>>>;
 
@@ -43,7 +43,7 @@ pub struct MemoryBackend {
     node_label_index: Arc<RwLock<HashMap<Arc<str>, Vec<Uuid>>>>,
     node_property_index: Arc<RwLock<PropertyIndex>>,
     edge_type_index: Arc<RwLock<HashMap<EdgeType, Vec<usize>>>>,
-    string_interner: Arc<StringInterner>,  // CRITICAL: Must be Arc-wrapped to share pool across clones
+    string_interner: Arc<StringInterner>, // CRITICAL: Must be Arc-wrapped to share pool across clones
     query_cache: Arc<RwLock<HashMap<String, Vec<Node>>>>,
 }
 
@@ -58,13 +58,15 @@ impl MemoryBackend {
             node_label_index: Arc::new(RwLock::new(HashMap::new())),
             node_property_index: Arc::new(RwLock::new(HashMap::new())),
             edge_type_index: Arc::new(RwLock::new(HashMap::new())),
-            string_interner: Arc::new(StringInterner::new()),  // Wrap in Arc
+            string_interner: Arc::new(StringInterner::new()), // Wrap in Arc
             query_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     /// Hydrate a backend from a prepared mmap snapshot (fast binary path).
-    pub fn from_prepared_snapshot(prepared: &crate::snapshot::PreparedGraphSnapshot) -> Result<Self> {
+    pub fn from_prepared_snapshot(
+        prepared: &crate::snapshot::PreparedGraphSnapshot,
+    ) -> Result<Self> {
         Self::hydrate_prepared(prepared)
     }
 
@@ -131,10 +133,7 @@ impl MemoryBackend {
     /// Get edge topology preserving edge types for typed graph projections.
     pub fn edge_topology_typed(&self) -> Result<Vec<(Uuid, Uuid, EdgeType)>> {
         let edges = read_lock(&self.edges)?;
-        Ok(edges
-            .iter()
-            .map(|e| (e.from, e.to, e.edge_type))
-            .collect())
+        Ok(edges.iter().map(|e| (e.from, e.to, e.edge_type)).collect())
     }
 
     // ========== ZERO-CLONE API (use these for performance) ==========
@@ -190,7 +189,10 @@ impl MemoryBackend {
     pub fn collect_nodes_by_type(&self, node_type: NodeType) -> Result<Vec<Node>> {
         let node_ids = self.find_node_ids_by_type(node_type)?;
         let nodes_map = read_lock(&self.nodes)?;
-        Ok(node_ids.iter().filter_map(|id| nodes_map.get(id).cloned()).collect())
+        Ok(node_ids
+            .iter()
+            .filter_map(|id| nodes_map.get(id).cloned())
+            .collect())
     }
 
     /// Get outgoing edge target IDs (returns UUIDs, not cloned edges).
@@ -371,8 +373,10 @@ impl MemoryBackend {
         let mut nodes = write_lock(&self.nodes)?;
 
         // Step 2: Collect old and new properties for property index update
-        let mut old_properties: Vec<(Uuid, HashMap<String, String>)> = Vec::with_capacity(updates.len());
-        let mut new_properties: Vec<(Uuid, HashMap<String, String>)> = Vec::with_capacity(updates.len());
+        let mut old_properties: Vec<(Uuid, HashMap<String, String>)> =
+            Vec::with_capacity(updates.len());
+        let mut new_properties: Vec<(Uuid, HashMap<String, String>)> =
+            Vec::with_capacity(updates.len());
 
         // Step 3: Update nodes and track property changes
         for (node_id, props_to_add) in updates {
@@ -666,7 +670,7 @@ impl MemoryBackend {
             // Intern strings once, share Arc across indexes (no clones!)
             let name_arc = self.string_interner.intern(&node.name);
             name_index
-                .entry(name_arc)  // Arc::clone is cheap (just pointer + refcount)
+                .entry(name_arc) // Arc::clone is cheap (just pointer + refcount)
                 .or_default()
                 .push(node.id);
 
@@ -699,10 +703,7 @@ impl MemoryBackend {
         for node in nodes {
             for label in &node.labels {
                 let label_arc = self.string_interner.intern(label);
-                label_index
-                    .entry(label_arc)
-                    .or_default()
-                    .push(node.id);
+                label_index.entry(label_arc).or_default().push(node.id);
             }
             for (key, value) in &node.properties {
                 let key_arc = self.string_interner.intern(key);
@@ -734,7 +735,8 @@ impl MemoryBackend {
         for (key, value) in &node.properties {
             let key_arc = self.string_interner.intern(key);
             let value_arc = self.string_interner.intern(value);
-            if let Some(values) = expect_write(&self.node_property_index).get_mut(key_arc.as_ref()) {
+            if let Some(values) = expect_write(&self.node_property_index).get_mut(key_arc.as_ref())
+            {
                 if let Some(ids) = values.get_mut(value_arc.as_ref()) {
                     ids.retain(|&x| x != node.id);
                 }
@@ -843,7 +845,11 @@ impl MemoryBackend {
     }
 
     /// Stream nodes of a specific type in batches.
-    pub fn stream_nodes_by_type(&self, node_type: NodeType, batch_size: usize) -> Result<NodeBatchIterator> {
+    pub fn stream_nodes_by_type(
+        &self,
+        node_type: NodeType,
+        batch_size: usize,
+    ) -> Result<NodeBatchIterator> {
         let ids: Vec<Uuid> = {
             let index = read_lock(&self.node_type_index)?;
             index.get(&node_type).cloned().unwrap_or_default()
@@ -881,7 +887,8 @@ impl MemoryBackend {
             let edges = read_lock(&self.edges)?;
             for edge in edges.iter() {
                 if let (Some(&from_idx), Some(&to_idx)) =
-                    (id_map.get(&edge.from), id_map.get(&edge.to)) {
+                    (id_map.get(&edge.from), id_map.get(&edge.to))
+                {
                     graph.add_edge(from_idx, to_idx, edge.edge_type);
                 }
             }
@@ -893,7 +900,11 @@ impl MemoryBackend {
     /// Calculate PageRank scores using Petgraph's optimized algorithm.
     ///
     /// Much faster than custom implementation (< 1 second vs 17+ minutes on large graphs).
-    pub fn calculate_pagerank(&self, damping: f64, iterations: usize) -> Result<HashMap<Uuid, f64>> {
+    pub fn calculate_pagerank(
+        &self,
+        damping: f64,
+        iterations: usize,
+    ) -> Result<HashMap<Uuid, f64>> {
         use petgraph::algo::page_rank;
 
         let (graph, id_map) = self.to_petgraph()?;
@@ -905,7 +916,8 @@ impl MemoryBackend {
         let reverse_map: HashMap<NodeIndex, Uuid> =
             id_map.iter().map(|(uuid, idx)| (*idx, *uuid)).collect();
 
-        Ok(scores.iter()
+        Ok(scores
+            .iter()
             .enumerate()
             .filter_map(|(idx_raw, &score)| {
                 let idx = NodeIndex::new(idx_raw);

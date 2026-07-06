@@ -112,7 +112,8 @@ fn b(flag: bool) {
     files.insert("rec.rs".into(), source.to_string());
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
     let slicer = InterproceduralSlicer::new(&icfg, &backend, &files).unwrap();
-    let pdg = ProgramDependenceGraph::build(icfg.get_cfg(id_b).unwrap(), source.as_bytes()).unwrap();
+    let pdg =
+        ProgramDependenceGraph::build(icfg.get_cfg(id_b).unwrap(), source.as_bytes()).unwrap();
     let marker_line = pdg
         .nodes
         .values()
@@ -187,9 +188,8 @@ fn kafka_example_exceeds_10k_source_lines() {
         return;
     }
 
-    let kafka_test = kafka_root.join(
-        "clients/src/test/java/org/apache/kafka/clients/admin/KafkaAdminClientTest.java",
-    );
+    let kafka_test = kafka_root
+        .join("clients/src/test/java/org/apache/kafka/clients/admin/KafkaAdminClientTest.java");
     let source = std::fs::read_to_string(&kafka_test).expect("read kafka test source");
     assert!(
         source.lines().count() >= 10_000,
@@ -212,7 +212,10 @@ fn kafka_example_exceeds_10k_source_lines() {
     let (graph, stats) = pipeline
         .process_repository(kafka_root)
         .expect("index kafka example");
-    assert!(graph.node_count() > 1_000, "kafka graph too small: {stats:?}");
+    assert!(
+        graph.node_count() > 1_000,
+        "kafka graph too small: {stats:?}"
+    );
 }
 
 #[cfg(feature = "bundle-minimal")]

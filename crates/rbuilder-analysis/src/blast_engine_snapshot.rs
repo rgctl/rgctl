@@ -113,7 +113,8 @@ pub(crate) fn words_popcount(words: &[u64]) -> u32 {
 
 pub(crate) fn compress_words(words: &[u64]) -> Result<Vec<u8>> {
     let raw: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-    zstd::encode_all(raw.as_slice(), 3).map_err(|e| Error::SerdeError(format!("zstd compress: {e}")))
+    zstd::encode_all(raw.as_slice(), 3)
+        .map_err(|e| Error::SerdeError(format!("zstd compress: {e}")))
 }
 
 pub(crate) fn decompress_words(compressed: &[u8], word_count: usize) -> Result<Vec<u64>> {
@@ -148,13 +149,6 @@ pub(crate) fn words_to_bitset(words: &[u64], bit_len: usize) -> BitSet {
     bs
 }
 
-pub(crate) fn reachability_from_snapshot(snapshot: &BlastEngineSnapshot) -> Result<Vec<BitSet>> {
-    let store = ReachabilityStore::from_snapshot(snapshot)?;
-    (0..store.scc_count())
-        .map(|idx| store.row_bitset(idx))
-        .collect()
-}
-
 /// Lazy or eager SCC reachability storage for [`BlastRadiusEngine`].
 pub struct ReachabilityStore {
     scc_count: usize,
@@ -171,6 +165,7 @@ enum ReachabilityBacking {
 }
 
 impl ReachabilityStore {
+    /// Build an eager in-memory store from pre-expanded SCC rows.
     pub fn from_eager(reachability: Vec<BitSet>, scc_count: usize) -> Self {
         Self {
             scc_count,
@@ -197,17 +192,23 @@ impl ReachabilityStore {
                 },
             });
         }
-        Ok(Self::from_eager(reachability_from_snapshot_eager_only(snapshot)?, scc_count))
+        Ok(Self::from_eager(
+            reachability_from_snapshot_eager_only(snapshot)?,
+            scc_count,
+        ))
     }
 
+    /// Number of SCCs in the condensed call graph.
     pub fn scc_count(&self) -> usize {
         self.scc_count
     }
 
+    /// True when rows are loaded on demand from compressed snapshot data.
     pub fn is_lazy(&self) -> bool {
         matches!(self.backing, ReachabilityBacking::Lazy { .. })
     }
 
+    /// Full eager row slice when the store is not lazy.
     pub fn eager_slice(&self) -> Option<&[BitSet]> {
         match &self.backing {
             ReachabilityBacking::Eager(v) => Some(v.as_slice()),
@@ -356,7 +357,10 @@ mod tests {
             reachability_words: vec![],
             reachability_rows: rows,
         };
-        let loaded = reachability_from_snapshot(&snap).unwrap();
+        let store = ReachabilityStore::from_snapshot(&snap).unwrap();
+        let loaded: Vec<BitSet> = (0..store.scc_count())
+            .map(|idx| store.row_bitset(idx).unwrap())
+            .collect();
         assert_eq!(loaded[2].contains(1), reachability[2].contains(1));
         assert_eq!(loaded[0].contains(0), true);
     }

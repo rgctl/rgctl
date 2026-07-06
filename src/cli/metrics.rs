@@ -6,11 +6,11 @@ use super::metrics_output::{
     build_metrics_response, metrics_response_to_json, MetricsCommunitiesSection,
     MetricsPagerankSection,
 };
-use anyhow::Result;
 use crate::analysis::{
-    BetweennessCentrality, CommunityDetector, FastPageRank, PetGraphView,
-    default_behavioral_edges, default_community_edge_types,
+    default_behavioral_edges, default_community_edge_types, BetweennessCentrality,
+    CommunityDetector, FastPageRank, PetGraphView,
 };
+use anyhow::Result;
 use rbuilder_graph::schema::EdgeType;
 use serde_json::json;
 
@@ -50,10 +50,7 @@ pub fn run(ctx: &CliContext, args: MetricsArgs) -> Result<()> {
 
     if args.betweenness || run_all {
         let bc = BetweennessCentrality::compute_unbounded(&view, &[EdgeType::Calls]);
-        let mut top: Vec<_> = bc
-            .iter()
-            .map(|(id, score)| (id, *score))
-            .collect();
+        let mut top: Vec<_> = bc.iter().map(|(id, score)| (id, *score)).collect();
         top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         top.truncate(20);
         betweenness = Some(

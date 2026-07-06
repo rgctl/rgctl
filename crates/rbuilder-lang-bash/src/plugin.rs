@@ -109,4 +109,3 @@ mod tests {
         assert_eq!(symbols[0].name, "deploy");
     }
 }
-

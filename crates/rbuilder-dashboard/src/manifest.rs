@@ -80,6 +80,7 @@ pub struct MetricsSection {
 }
 
 impl DashboardManifest {
+    #[allow(clippy::too_many_arguments)]
     pub fn with_phases(
         node_count: u64,
         edge_count: u64,
@@ -210,7 +211,7 @@ fn chrono_now_rfc3339() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metagraph::{Metanode, MetagraphPayload, COMMUNITY_ONLY_THRESHOLD};
+    use crate::metagraph::{MetagraphPayload, Metanode, COMMUNITY_ONLY_THRESHOLD};
 
     #[test]
     fn manifest_includes_view_section() {

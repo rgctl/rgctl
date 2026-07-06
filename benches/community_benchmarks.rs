@@ -3,7 +3,7 @@
 //! Run: `cargo bench --bench community_benchmarks`
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use rbuilder::analysis::{CommunityDetector, PetGraphView, default_community_edge_types};
+use rbuilder::analysis::{default_community_edge_types, CommunityDetector, PetGraphView};
 use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};
 use rbuilder::graph::CodeGraph;
@@ -43,18 +43,12 @@ fn bench_petgraph_view_community_large(c: &mut Criterion) {
     group.throughput(Throughput::Elements(150_000));
     group.bench_function("label_propagation_150k_700k", |b| {
         b.iter(|| {
-            black_box(
-                detector
-                    .detect_with_view_filtered(&view, allowed)
-                    .unwrap(),
-            );
+            black_box(detector.detect_with_view_filtered(&view, allowed).unwrap());
         });
     });
 
     let start = Instant::now();
-    detector
-        .detect_with_view_filtered(&view, allowed)
-        .unwrap();
+    detector.detect_with_view_filtered(&view, allowed).unwrap();
     let execution_time = start.elapsed();
     assert!(
         execution_time < Duration::from_millis(150),

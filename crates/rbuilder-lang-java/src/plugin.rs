@@ -54,7 +54,8 @@ impl JavaPlugin {
         })?;
 
         // Try to find the containing class for qualified name
-        let qualified_name = self.find_containing_class_name(node, source)
+        let qualified_name = self
+            .find_containing_class_name(node, source)
             .map(|class| format!("{}.{}", class, name));
 
         Ok(Symbol {
@@ -246,13 +247,7 @@ impl LanguagePlugin for JavaPlugin {
 
         // Extract method calls, inheritance, and implementations
         self.extract_calls(tree.root_node(), source, file_path, symbols, &mut relations)?;
-        self.extract_inheritance(
-            tree.root_node(),
-            source,
-            file_path,
-            symbols,
-            &mut relations,
-        )?;
+        self.extract_inheritance(tree.root_node(), source, file_path, symbols, &mut relations)?;
 
         Ok(relations)
     }
@@ -292,18 +287,20 @@ impl JavaPlugin {
                         // Try to find the qualified name from symbols in this file
                         let local_qualified = symbols
                             .iter()
-                            .find(|s| s.name == simple_name && s.symbol_type == SymbolType::Function)
+                            .find(|s| {
+                                s.name == simple_name && s.symbol_type == SymbolType::Function
+                            })
                             .and_then(|s| s.qualified_name.as_ref())
                             .cloned();
 
                         // Best-effort: try to infer the target class from the object
                         // For example: helper.transform() → infer "Helper" class
-                        let (to_qualified_hint, to_type_hint) = if let Some(object_node) = node.child_by_field_name("object") {
-                            
-                            self.infer_method_target(object_node, &simple_name, source, node)
-                        } else {
-                            (None, None)
-                        };
+                        let (to_qualified_hint, to_type_hint) =
+                            if let Some(object_node) = node.child_by_field_name("object") {
+                                self.infer_method_target(object_node, &simple_name, source, node)
+                            } else {
+                                (None, None)
+                            };
 
                         relations.push(Relation {
                             from: from_method.clone(),
@@ -339,7 +336,7 @@ impl JavaPlugin {
         node: Node,
         source: &[u8],
         file_path: &Path,
-        symbols: &[Symbol],
+        _symbols: &[Symbol],
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         let mut cursor = node.walk();
@@ -384,8 +381,11 @@ impl JavaPlugin {
                     if interface_node.kind() == "type_list" {
                         let mut type_cursor = interface_node.walk();
                         for type_node in interface_node.children(&mut type_cursor) {
-                            if type_node.kind() == "type_identifier" || type_node.kind() == "generic_type" {
-                                let interface_name = type_node.utf8_text(source).unwrap_or("").to_string();
+                            if type_node.kind() == "type_identifier"
+                                || type_node.kind() == "generic_type"
+                            {
+                                let interface_name =
+                                    type_node.utf8_text(source).unwrap_or("").to_string();
                                 if !interface_name.is_empty() {
                                     relations.push(Relation {
                                         from: class_name.clone(),
@@ -436,7 +436,7 @@ impl JavaPlugin {
 
         // Recurse into children
         for child in node.children(&mut cursor) {
-            self.extract_inheritance(child, source, file_path, symbols, relations)?;
+            self.extract_inheritance(child, source, file_path, _symbols, relations)?;
         }
 
         Ok(())
@@ -460,7 +460,12 @@ impl JavaPlugin {
     }
 
     /// Find the fully qualified name of the method containing a given node
-    fn find_containing_method(&self, node: Node, source: &[u8], _symbols: &[Symbol]) -> Option<String> {
+    fn find_containing_method(
+        &self,
+        node: Node,
+        source: &[u8],
+        _symbols: &[Symbol],
+    ) -> Option<String> {
         let mut current = node;
         let mut method_name = None;
         let mut class_name = None;
@@ -546,7 +551,7 @@ impl JavaPlugin {
             if let Some(type_name) = self.find_field_type(class_node, object_name, source) {
                 let qualified_hint = format!("{}.{}", type_name, method_name);
                 return (Some(qualified_hint), Some(type_name));
-            } 
+            }
         }
 
         // Fallback: check for local variable declarations
@@ -573,15 +578,13 @@ impl JavaPlugin {
     /// Find the type of a field in a class
     /// For example: `private Helper helper = new Helper();` → returns "Helper"
     fn find_field_type(&self, class_node: Node, field_name: &str, source: &[u8]) -> Option<String> {
-
         // Find the class_body node first
         let mut cursor = class_node.walk();
-        let class_body = class_node.children(&mut cursor).find(|child| child.kind() == "class_body");
+        let class_body = class_node
+            .children(&mut cursor)
+            .find(|child| child.kind() == "class_body");
 
-        let Some(class_body) = class_body else {
-            return None;
-        };
-
+        let class_body = class_body?;
 
         // Now search inside the class_body for field_declaration nodes
         let mut body_cursor = class_body.walk();
@@ -593,9 +596,10 @@ impl JavaPlugin {
                 let mut found_field = false;
 
                 for field_child in child.children(&mut field_cursor) {
-
                     // Extract the type
-                    if field_child.kind() == "type_identifier" || field_child.kind() == "generic_type" {
+                    if field_child.kind() == "type_identifier"
+                        || field_child.kind() == "generic_type"
+                    {
                         type_name = field_child.utf8_text(source).ok().map(|s| {
                             // Remove generics if present (e.g., "List<String>" → "List")
                             s.split('<').next().unwrap_or(s).to_string()
@@ -624,7 +628,12 @@ impl JavaPlugin {
 
     /// Find the type of a local variable
     /// For example: `Helper h = ...; h.transform()` → returns "Helper"
-    fn find_local_variable_type(&self, start_node: Node, var_name: &str, source: &[u8]) -> Option<String> {
+    fn find_local_variable_type(
+        &self,
+        start_node: Node,
+        var_name: &str,
+        source: &[u8],
+    ) -> Option<String> {
         // Walk up to find the containing method
         let mut current = start_node;
         while let Some(parent) = current.parent() {
@@ -638,7 +647,12 @@ impl JavaPlugin {
     }
 
     /// Search for local variable declarations in a method
-    fn search_local_variables(&self, method_node: Node, var_name: &str, source: &[u8]) -> Option<String> {
+    fn search_local_variables(
+        &self,
+        method_node: Node,
+        var_name: &str,
+        source: &[u8],
+    ) -> Option<String> {
         fn search_recursive(node: Node, var_name: &str, source: &[u8]) -> Option<String> {
             if node.kind() == "local_variable_declaration" {
                 let mut type_name = None;
@@ -647,9 +661,10 @@ impl JavaPlugin {
                 let mut local_cursor = node.walk();
                 for child in node.children(&mut local_cursor) {
                     if child.kind() == "type_identifier" || child.kind() == "generic_type" {
-                        type_name = child.utf8_text(source).ok().map(|s| {
-                            s.split('<').next().unwrap_or(s).to_string()
-                        });
+                        type_name = child
+                            .utf8_text(source)
+                            .ok()
+                            .map(|s| s.split('<').next().unwrap_or(s).to_string());
                     }
 
                     if child.kind() == "variable_declarator" {
@@ -728,7 +743,10 @@ public class Example {
             println!("  {:?}: {} -> {}", rel.relation_type, rel.from, rel.to);
         }
 
-        assert!(!relations.is_empty(), "Should extract at least one relation");
+        assert!(
+            !relations.is_empty(),
+            "Should extract at least one relation"
+        );
         assert!(
             relations
                 .iter()
@@ -753,7 +771,10 @@ public class Example {
             println!("  {:?}: {} -> {}", rel.relation_type, rel.from, rel.to);
         }
 
-        assert!(!relations.is_empty(), "Should extract at least one relation");
+        assert!(
+            !relations.is_empty(),
+            "Should extract at least one relation"
+        );
         assert!(
             relations
                 .iter()
@@ -778,7 +799,10 @@ public class Example {
             println!("  {:?}: {} -> {}", rel.relation_type, rel.from, rel.to);
         }
 
-        assert!(!relations.is_empty(), "Should extract at least one relation");
+        assert!(
+            !relations.is_empty(),
+            "Should extract at least one relation"
+        );
         assert!(
             relations
                 .iter()
@@ -787,4 +811,3 @@ public class Example {
         );
     }
 }
-

@@ -59,10 +59,7 @@ impl PreparedGraphSnapshot {
                 .entry(node.name.clone())
                 .or_default()
                 .push(node.id);
-            type_index
-                .entry(node.node_type)
-                .or_default()
-                .push(node.id);
+            type_index.entry(node.node_type).or_default().push(node.id);
         }
 
         let mut hasher = blake3::Hasher::new();
@@ -107,7 +104,9 @@ pub struct MmappedGraphSnapshot {
 impl MmappedGraphSnapshot {
     /// Default path under a repository root.
     pub fn default_path(repo_root: &Path) -> PathBuf {
-        repo_root.join(crate::code_graph::GRAPH_DIR).join(SNAPSHOT_FILE)
+        repo_root
+            .join(crate::code_graph::GRAPH_DIR)
+            .join(SNAPSHOT_FILE)
     }
 
     /// Open and parse a snapshot file via mmap (v1 bincode or v2 columnar).

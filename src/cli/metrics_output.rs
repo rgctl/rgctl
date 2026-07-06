@@ -57,10 +57,7 @@ pub fn metrics_response_to_json(response: &MetricsJsonResponse) -> Value {
 /// Wrap a legacy metrics object with schema version and normalize keys.
 pub fn wrap_metrics_payload(payload: &mut Value) {
     if let Some(obj) = payload.as_object_mut() {
-        obj.insert(
-            "schema_version".into(),
-            json!(METRICS_SCHEMA_VERSION),
-        );
+        obj.insert("schema_version".into(), json!(METRICS_SCHEMA_VERSION));
     }
 }
 
@@ -74,7 +71,9 @@ pub fn fixture_metrics_response() -> MetricsJsonResponse {
             iterations: 20,
             max_delta: 1e-9,
         }),
-        betweenness: Some(vec![json!({ "node": "00000000-0000-0000-0000-000000000001", "score": 0.5 })]),
+        betweenness: Some(vec![
+            json!({ "node": "00000000-0000-0000-0000-000000000001", "score": 0.5 }),
+        ]),
         communities: Some(MetricsCommunitiesSection {
             count: 2,
             modularity: 0.42,

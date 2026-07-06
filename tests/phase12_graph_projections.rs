@@ -3,9 +3,7 @@
 #[path = "graph_audit.rs"]
 mod graph_audit;
 
-use graph_audit::{
-    deep_chain, mixed_edge_hub, random_call_graph, star, structural_topology,
-};
+use graph_audit::{deep_chain, mixed_edge_hub, random_call_graph, star, structural_topology};
 use rbuilder::analysis::graph_utils::PetGraphView;
 use rbuilder::analysis::{
     check_policies, resolve_unique_symbol, BlastRadiusAnalyzer, BlastRadiusEngine,
@@ -30,10 +28,7 @@ fn sorted_function_impact(backend: &MemoryBackend, ids: &[Uuid]) -> Vec<Uuid> {
 fn test_type_isolation_incoming_filtered() {
     let backend = mixed_edge_hub();
     let view = PetGraphView::from_backend(&backend).unwrap();
-    let target_idx = view.uuid_to_index[&backend
-        .find_nodes_by_name("target")
-        .unwrap()[0]
-        .id];
+    let target_idx = view.uuid_to_index[&backend.find_nodes_by_name("target").unwrap()[0].id];
 
     let call_incoming: Vec<_> = view
         .incoming_filtered(target_idx, &[EdgeType::Calls])
@@ -85,10 +80,7 @@ fn test_policy_scale_exceeded() {
     registry.max_impact_nodes = 5;
     assert_eq!(
         check_policies(leaf, &result.impact_zone_ids, &registry, &backend, None),
-        Err(PolicyViolation::ScaleFailure {
-            count: 6,
-            max: 5,
-        })
+        Err(PolicyViolation::ScaleFailure { count: 6, max: 5 })
     );
 }
 
@@ -160,7 +152,13 @@ fn test_policy_centrality_bridge_block() {
     registry.centrality_alert_threshold = 0.5;
 
     assert_eq!(
-        check_policies(hub, &result.impact_zone_ids, &registry, &backend, Some(&centrality)),
+        check_policies(
+            hub,
+            &result.impact_zone_ids,
+            &registry,
+            &backend,
+            Some(&centrality)
+        ),
         Err(PolicyViolation::CascadeHazard {
             node: bridge,
             betweenness: 0.95,
@@ -175,8 +173,7 @@ fn test_phantom_symbol_rejects_ambiguous_name() {
     for ns in ["pkg::a", "pkg::b", "pkg::c"] {
         backend
             .insert_node(
-                Node::new(NodeType::Function, "handler".into())
-                    .with_qualified_name(ns.into()),
+                Node::new(NodeType::Function, "handler".into()).with_qualified_name(ns.into()),
             )
             .unwrap();
     }
@@ -268,7 +265,9 @@ fn test_gql_edge_accuracy() {
     }));
 
     let module_to_main = parse("MATCH (m)-[:CALLS]->(f) RETURN m, f").unwrap();
-    let cross = QueryExecutor::new(&backend).execute(&module_to_main).unwrap();
+    let cross = QueryExecutor::new(&backend)
+        .execute(&module_to_main)
+        .unwrap();
     assert!(!cross.rows.iter().any(|row| {
         row.values().any(|n| n.id == module_id) && row.values().any(|n| n.id == main_id)
     }));

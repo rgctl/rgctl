@@ -1,14 +1,14 @@
 //! Phase 16 blast-radius performance gates — snapshot, engine, and query paths.
 
+use rayon::prelude::*;
 use rbuilder::analysis::{
-    BlastEngineSnapshot, BlastRadiusEngine, MacroCallLookupDb, MacroCallLookupRow,
-    MacroIndexEntry, PetGraphView,
+    BlastEngineSnapshot, BlastRadiusEngine, MacroCallLookupDb, MacroCallLookupRow, MacroIndexEntry,
+    PetGraphView,
 };
 use rbuilder::graph::backend::GraphBackend;
+use rbuilder::graph::backend::MemoryBackend;
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};
 use rbuilder::graph::{CodeGraph, MmappedGraphSnapshot, PreparedGraphSnapshot, SnapshotNodeStore};
-use rbuilder::graph::backend::MemoryBackend;
-use rayon::prelude::*;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -21,12 +21,8 @@ fn bench_repo_root() -> Option<PathBuf> {
         }
         return None;
     }
-    let default =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example/metasfresh-4.9.8b");
-    if default
-        .join(".rbuilder/blast_engine.snapshot.bin")
-        .exists()
-    {
+    let default = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example/metasfresh-4.9.8b");
+    if default.join(".rbuilder/blast_engine.snapshot.bin").exists() {
         Some(default)
     } else {
         None
@@ -252,7 +248,9 @@ fn bench_repo_engine_snapshot_lazy_load_under_5s() {
 #[test]
 fn bench_repo_lite_analyze_under_3s() {
     let Some(repo) = bench_repo_root() else {
-        eprintln!("skip bench_repo_lite_analyze_under_3s: no RBUILDER_BENCH_REPO or metasfresh cache");
+        eprintln!(
+            "skip bench_repo_lite_analyze_under_3s: no RBUILDER_BENCH_REPO or metasfresh cache"
+        );
         return;
     };
     let graph_path = repo.join(".rbuilder/graph.snapshot.bin");

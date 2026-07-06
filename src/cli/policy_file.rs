@@ -1,7 +1,7 @@
 //! JSON policy file loader for CLI commands.
 
-use anyhow::{Context, Result};
 use crate::analysis::PolicyRegistry;
+use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;

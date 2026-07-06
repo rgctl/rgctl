@@ -192,4 +192,3 @@ jobs:
             .any(|r| r.relation_type == RelationType::DependsOn));
     }
 }
-

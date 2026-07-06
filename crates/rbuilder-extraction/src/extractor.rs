@@ -62,7 +62,7 @@ impl Extractor {
         let source = std::fs::read(path)?;
         let mut extraction = FileExtraction {
             path: path.to_path_buf(),
-            source: source.clone(),  // Cache source bytes
+            source: source.clone(), // Cache source bytes
             ..Default::default()
         };
 
@@ -129,8 +129,7 @@ impl Extractor {
             // Measure symbol processing
             let sym_start = Instant::now();
             for symbol in &extraction.symbols {
-                let body = source
-                    .and_then(|bytes| symbol_body_from_source(bytes, symbol));
+                let body = source.and_then(|bytes| symbol_body_from_source(bytes, symbol));
                 if let Some(body) = body.as_deref() {
                     builder.add_symbol_with_body(symbol, file_id, Some(body));
                 } else {

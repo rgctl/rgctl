@@ -117,7 +117,9 @@ impl ColumnarGraphMmap {
         let expected_nodes_end = offset_nodes as usize + node_count * NODE_ROW_SIZE;
         let expected_edges_end = offset_edges as usize + edge_count * EDGE_ROW_SIZE;
         if expected_nodes_end > mmap.len() || expected_edges_end > mmap.len() {
-            return Err(Error::SerdeError("columnar snapshot column out of range".into()));
+            return Err(Error::SerdeError(
+                "columnar snapshot column out of range".into(),
+            ));
         }
 
         let mut id_to_index = HashMap::with_capacity(node_count);
@@ -203,7 +205,9 @@ impl ColumnarGraphMmap {
         let Some(ids) = self.name_index.get(name) else {
             return Ok(Vec::new());
         };
-        ids.iter().map(|id| self.materialize_node(self.id_to_index[id])).collect()
+        ids.iter()
+            .map(|id| self.materialize_node(self.id_to_index[id]))
+            .collect()
     }
 
     fn materialize_node(&self, idx: usize) -> Result<Node> {
@@ -521,7 +525,10 @@ fn read_index_section(tail: &[u8], cursor: usize) -> Result<(HashMap<String, Vec
     Ok((index, 8 + len))
 }
 
-fn read_type_index_section(tail: &[u8], cursor: usize) -> Result<(HashMap<NodeType, Vec<Uuid>>, usize)> {
+fn read_type_index_section(
+    tail: &[u8],
+    cursor: usize,
+) -> Result<(HashMap<NodeType, Vec<Uuid>>, usize)> {
     if cursor + 8 > tail.len() {
         return Err(Error::SerdeError("type index truncated".into()));
     }
@@ -537,12 +544,7 @@ fn read_type_index_section(tail: &[u8], cursor: usize) -> Result<(HashMap<NodeTy
 }
 
 fn as_bytes<T: Sized>(val: &T) -> &[u8] {
-    unsafe {
-        std::slice::from_raw_parts(
-            (val as *const T) as *const u8,
-            std::mem::size_of::<T>(),
-        )
-    }
+    unsafe { std::slice::from_raw_parts((val as *const T) as *const u8, std::mem::size_of::<T>()) }
 }
 
 fn node_type_to_u16(t: NodeType) -> u16 {

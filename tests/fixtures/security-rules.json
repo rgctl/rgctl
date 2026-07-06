@@ -1,0 +1,36 @@
+{
+  "name": "security",
+  "version": "1.0",
+  "rules": [
+    {
+      "name": "critical_security_function",
+      "match": {
+        "type": "name_pattern",
+        "pattern": "(?i)(auth|login|verify|token)"
+      },
+      "actions": [
+        { "type": "add_label", "label": "security:critical" }
+      ]
+    },
+    {
+      "name": "high_complexity",
+      "match": {
+        "type": "complexity_gt",
+        "value": 15
+      },
+      "actions": [
+        { "type": "add_label", "label": "complexity:high" }
+      ]
+    },
+    {
+      "name": "deprecated_api",
+      "match": {
+        "type": "name_pattern",
+        "pattern": "(?i)legacy"
+      },
+      "actions": [
+        { "type": "add_label", "label": "api:deprecated" }
+      ]
+    }
+  ]
+}

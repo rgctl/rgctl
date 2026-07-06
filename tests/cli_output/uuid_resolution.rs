@@ -1,5 +1,5 @@
-use rbuilder::cli::blast_radius_output::{build_from_cache_entry, skipped_gatekeeping, NodeLookup};
 use rbuilder::analysis::MacroIndexEntry;
+use rbuilder::cli::blast_radius_output::{build_from_cache_entry, skipped_gatekeeping, NodeLookup};
 use uuid::Uuid;
 
 #[test]

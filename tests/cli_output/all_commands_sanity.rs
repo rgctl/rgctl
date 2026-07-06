@@ -164,14 +164,7 @@ fn test_all_cli_commands_json_schema_sanity() {
 
     // Re-ingest with JSON telemetry (sandbox db, isolated repo copy)
     let sandbox = Sandbox::new();
-    let discover_json = sandbox.run(&[
-        "-f",
-        "json",
-        "discover",
-        ".",
-        "--languages",
-        "java,rust",
-    ]);
+    let discover_json = sandbox.run(&["-f", "json", "discover", ".", "--languages", "java,rust"]);
     assert_success(&discover_json, "discover json mode");
     let discover_doc = sandbox.parse_stdout_json(&discover_json);
     assert_schema_version(&discover_doc, 2);
@@ -192,12 +185,7 @@ fn test_all_cli_commands_json_schema_sanity() {
     );
 
     // --- blast-radius v2 ---
-    let blast = sandbox.run(&[
-        "-f",
-        "json",
-        "blast-radius",
-        "OrderService::process",
-    ]);
+    let blast = sandbox.run(&["-f", "json", "blast-radius", "OrderService::process"]);
     assert_success(&blast, "blast-radius");
     let blast_doc = sandbox.parse_stdout_json(&blast);
     let blast_str = str::from_utf8(&blast.stdout).unwrap();
@@ -208,13 +196,7 @@ fn test_all_cli_commands_json_schema_sanity() {
     let target = blast_doc["target"].as_object().expect("target object");
     assert_keys_present(
         &Value::Object(target.clone()),
-        &[
-            "id",
-            "symbol",
-            "language",
-            "canonical_fqn",
-            "file_path",
-        ],
+        &["id", "symbol", "language", "canonical_fqn", "file_path"],
     );
     assert_eq!(target["language"].as_str(), Some("java"));
     assert_eq!(
@@ -233,23 +215,11 @@ fn test_all_cli_commands_json_schema_sanity() {
         "full closure must omit metrics.caller_depth_limit"
     );
 
-    let blast_depth = sandbox.run(&[
-        "-f",
-        "json",
-        "blast-radius",
-        "publishEvent",
-        "--depth",
-        "1",
-    ]);
+    let blast_depth = sandbox.run(&["-f", "json", "blast-radius", "publishEvent", "--depth", "1"]);
     assert_success(&blast_depth, "blast-radius --depth 1");
     let depth_doc = sandbox.parse_stdout_json(&blast_depth);
-    assert_eq!(
-        depth_doc["metrics"]["caller_depth_limit"].as_u64(),
-        Some(1)
-    );
-    let full_impact = pe_doc["metrics"]["impact_zone_size"]
-        .as_u64()
-        .unwrap_or(0);
+    assert_eq!(depth_doc["metrics"]["caller_depth_limit"].as_u64(), Some(1));
+    let full_impact = pe_doc["metrics"]["impact_zone_size"].as_u64().unwrap_or(0);
     let depth_impact = depth_doc["metrics"]["impact_zone_size"]
         .as_u64()
         .unwrap_or(0);
@@ -279,12 +249,7 @@ fn test_all_cli_commands_json_schema_sanity() {
     assert_eq!(handoffs[0]["callee"].as_str(), Some("publishEvent"));
 
     // --- gql v1 ---
-    let gql = sandbox.run(&[
-        "-f",
-        "json",
-        "gql",
-        "MATCH (n:Function) RETURN n LIMIT 2",
-    ]);
+    let gql = sandbox.run(&["-f", "json", "gql", "MATCH (n:Function) RETURN n LIMIT 2"]);
     assert_success(&gql, "gql");
     let gql_doc = sandbox.parse_stdout_json(&gql);
     assert_schema_version(&gql_doc, 1);
@@ -318,7 +283,9 @@ fn test_all_cli_commands_json_schema_sanity() {
     assert_schema_version(&metrics_doc, 1);
     assert!(metrics_doc.get("pagerank").is_some());
     assert_keys_absent_in_str(metrics_str, &["betweenness", "communities"]);
-    let top = metrics_doc["pagerank"]["top"].as_array().expect("pagerank.top");
+    let top = metrics_doc["pagerank"]["top"]
+        .as_array()
+        .expect("pagerank.top");
     assert!(top.len() <= 20);
 
     // --- metrics: betweenness-only omits other sections ---
@@ -327,7 +294,10 @@ fn test_all_cli_commands_json_schema_sanity() {
     let metrics_bc_str = str::from_utf8(&metrics_bc.stdout).unwrap();
     let metrics_bc_doc = sandbox.parse_stdout_json(&metrics_bc);
     assert_schema_version(&metrics_bc_doc, 1);
-    assert!(metrics_bc_doc.get("betweenness").and_then(|v| v.as_array()).is_some());
+    assert!(metrics_bc_doc
+        .get("betweenness")
+        .and_then(|v| v.as_array())
+        .is_some());
     assert_keys_absent_in_str(metrics_bc_str, &["pagerank", "communities"]);
 
     // --- metrics: communities-only omits other sections ---
@@ -471,7 +441,10 @@ fn test_all_cli_commands_json_schema_sanity() {
     if let Some(idom) = dom_doc["idom"].as_array() {
         for rel in idom {
             assert!(rel.get("block").and_then(|v| v.as_u64()).is_some());
-            assert!(rel.get("immediate_dominator").and_then(|v| v.as_u64()).is_some());
+            assert!(rel
+                .get("immediate_dominator")
+                .and_then(|v| v.as_u64())
+                .is_some());
         }
     }
 
@@ -517,9 +490,7 @@ fn test_all_cli_commands_json_schema_sanity() {
 }
 
 fn discover_json_metrics(sandbox: &Sandbox, extra: &[&str]) -> Value {
-    let mut args = vec![
-        "-f", "json", "discover", ".", "--languages", "java,rust",
-    ];
+    let mut args = vec!["-f", "json", "discover", ".", "--languages", "java,rust"];
     args.extend_from_slice(extra);
     let output = sandbox.run(&args);
     assert_success(&output, &format!("discover json {:?}", extra));

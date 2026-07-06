@@ -257,4 +257,3 @@ CREATE UNIQUE INDEX users_email_idx ON users (email);
         assert!(users.fields.iter().any(|f| f.name == "users_email_idx"));
     }
 }
-

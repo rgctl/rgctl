@@ -1,8 +1,8 @@
 //! Memory monitoring utilities for tracking resource usage during analysis.
 
-use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 
 /// Monitor for tracking memory usage throughout the analysis pipeline.
 pub struct MemoryMonitor {
@@ -127,7 +127,10 @@ mod tests {
     fn test_memory_monitor_creation() {
         let monitor = MemoryMonitor::new();
         let snapshot = monitor.snapshot();
-        assert!(snapshot.current_mb > 0.0, "Should have non-zero memory usage");
+        assert!(
+            snapshot.current_mb > 0.0,
+            "Should have non-zero memory usage"
+        );
         assert!(snapshot.peak_mb >= snapshot.current_mb);
     }
 

@@ -23,10 +23,10 @@ pub mod slice_output;
 
 pub use args::OutputFormat;
 
+use crate::BUILD_INFO;
 use args::{ExportFormat, InspectLayer, SliceDirection, SliceView};
 use clap::{Parser, Subcommand};
 use context::CliContext;
-use crate::BUILD_INFO;
 
 #[derive(Parser)]
 #[command(name = "rbuilder")]
@@ -216,7 +216,7 @@ impl Cli {
             verbose,
         );
 
-        let result = match self.command {
+        match self.command {
             Commands::Discover {
                 path,
                 languages,
@@ -309,9 +309,7 @@ impl Cli {
                     iterations,
                 },
             ),
-            Commands::Check { policy_file } => {
-                check::run(&ctx, check::CheckArgs { policy_file })
-            }
+            Commands::Check { policy_file } => check::run(&ctx, check::CheckArgs { policy_file }),
             Commands::Export {
                 export_format,
                 export_output,
@@ -328,9 +326,7 @@ impl Cli {
                 let socket = socket.unwrap_or_else(|| query_daemon::default_socket_path(&ctx.repo));
                 query_daemon::serve(&ctx, socket, idle_secs)
             }
-        };
-
-        result
+        }
     }
 }
 

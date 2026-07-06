@@ -4,10 +4,8 @@ use super::args::OutputFormat;
 use super::check_output::{build_check_response, violations_from_json_values};
 use super::context::CliContext;
 use super::policy_file::PolicyFile;
+use crate::analysis::{BlastRadiusEngine, CentralityAnalyzer, PetGraphView, PolicyViolation};
 use anyhow::Result;
-use crate::analysis::{
-    BlastRadiusEngine, CentralityAnalyzer, PetGraphView, PolicyViolation,
-};
 use rbuilder_graph::schema::NodeType;
 use serde_json::json;
 use std::path::Path;
@@ -34,12 +32,9 @@ pub fn run(ctx: &CliContext, args: CheckArgs) -> Result<()> {
         let Ok((id, _)) = crate::analysis::resolve_unique_symbol(backend, &symbol) else {
             continue;
         };
-        if let Err(err) = engine.analyze_with_policy(
-            id,
-            Some(backend),
-            Some(&registry),
-            Some(&centrality),
-        ) {
+        if let Err(err) =
+            engine.analyze_with_policy(id, Some(backend), Some(&registry), Some(&centrality))
+        {
             violation_rows.push(json!({
                 "symbol": symbol,
                 "error": err.to_string(),

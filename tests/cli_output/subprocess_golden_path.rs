@@ -82,14 +82,44 @@ fn discover_json_emits_telemetry_on_stdout() {
     let doc: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("discover stdout must be valid JSON");
     assert_eq!(doc.get("schema_version").and_then(|v| v.as_u64()), Some(2));
-    assert_eq!(doc.get("command").and_then(|v| v.as_str()), Some("discover"));
+    assert_eq!(
+        doc.get("command").and_then(|v| v.as_str()),
+        Some("discover")
+    );
 
     let metrics = doc.get("metrics").unwrap().as_object().unwrap();
-    assert!(metrics.get("files_discovered").and_then(|v| v.as_u64()).unwrap() >= 4);
-    assert!(metrics.get("files_indexed").and_then(|v| v.as_u64()).unwrap() >= 4);
-    assert!(metrics.get("nodes_generated").and_then(|v| v.as_u64()).unwrap() > 0);
-    assert!(metrics.get("edges_generated").and_then(|v| v.as_u64()).unwrap() > 0);
-    assert!(metrics.get("duration_ms").and_then(|v| v.as_u64()).is_some());
+    assert!(
+        metrics
+            .get("files_discovered")
+            .and_then(|v| v.as_u64())
+            .unwrap()
+            >= 4
+    );
+    assert!(
+        metrics
+            .get("files_indexed")
+            .and_then(|v| v.as_u64())
+            .unwrap()
+            >= 4
+    );
+    assert!(
+        metrics
+            .get("nodes_generated")
+            .and_then(|v| v.as_u64())
+            .unwrap()
+            > 0
+    );
+    assert!(
+        metrics
+            .get("edges_generated")
+            .and_then(|v| v.as_u64())
+            .unwrap()
+            > 0
+    );
+    assert!(metrics
+        .get("duration_ms")
+        .and_then(|v| v.as_u64())
+        .is_some());
 }
 
 #[test]
@@ -97,10 +127,7 @@ fn discover_initializes_tiny_polyglot_repo() {
     let dir = materialize_fixture();
     let repo = dir.path();
 
-    let output = run_rbuilder(
-        repo,
-        &["discover", ".", "--languages", "java,rust"],
-    );
+    let output = run_rbuilder(repo, &["discover", ".", "--languages", "java,rust"]);
 
     assert!(
         output.status.success(),
@@ -154,7 +181,10 @@ fn blast_radius_json_exit_zero_after_discover() {
     }
 
     let target = doc.get("target").unwrap().as_object().unwrap();
-    assert_eq!(target.get("language").and_then(|v| v.as_str()), Some("java"));
+    assert_eq!(
+        target.get("language").and_then(|v| v.as_str()),
+        Some("java")
+    );
     assert_eq!(
         target.get("canonical_fqn").and_then(|v| v.as_str()),
         Some("OrderService::process")
@@ -174,11 +204,7 @@ fn blast_radius_policy_violation_fails_closed_with_exit_one() {
     assert!(discover.status.success(), "discover setup failed");
 
     let policy_path = repo.join("strict_policy.json");
-    fs::write(
-        &policy_path,
-        r#"{"max_impact_nodes": 0}"#,
-    )
-    .expect("write policy file");
+    fs::write(&policy_path, r#"{"max_impact_nodes": 0}"#).expect("write policy file");
 
     let output = run_rbuilder(
         repo,
@@ -202,8 +228,8 @@ fn blast_radius_policy_violation_fails_closed_with_exit_one() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let doc: serde_json::Value =
-        serde_json::from_str(stdout.trim()).expect("violated blast-radius stdout must be valid JSON");
+    let doc: serde_json::Value = serde_json::from_str(stdout.trim())
+        .expect("violated blast-radius stdout must be valid JSON");
     assert_eq!(
         doc["gatekeeping"]["policy_status"].as_str(),
         Some("VIOLATED")
@@ -220,7 +246,13 @@ fn blast_radius_with_slices_populates_handoffs() {
 
     let output = run_rbuilder(
         repo,
-        &["-f", "json", "blast-radius", "publishEvent", "--with-slices"],
+        &[
+            "-f",
+            "json",
+            "blast-radius",
+            "publishEvent",
+            "--with-slices",
+        ],
     );
 
     assert!(
@@ -261,7 +293,13 @@ fn blast_radius_with_slices_under_30s_after_cfg_discover() {
     let start = Instant::now();
     let output = run_rbuilder(
         repo,
-        &["-f", "json", "blast-radius", "publishEvent", "--with-slices"],
+        &[
+            "-f",
+            "json",
+            "blast-radius",
+            "publishEvent",
+            "--with-slices",
+        ],
     );
     let latency = start.elapsed();
 
@@ -293,10 +331,7 @@ fn blast_radius_fast_path_under_150ms() {
     assert!(discover.status.success(), "discover setup failed");
 
     let start = Instant::now();
-    let output = run_rbuilder(
-        repo,
-        &["-f", "json", "blast-radius", "publishEvent"],
-    );
+    let output = run_rbuilder(repo, &["-f", "json", "blast-radius", "publishEvent"]);
     let latency = start.elapsed();
 
     assert!(
@@ -312,10 +347,7 @@ fn blast_radius_fast_path_under_150ms() {
     let doc: serde_json::Value =
         serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
             .expect("blast-radius stdout must be valid JSON");
-    assert_eq!(
-        doc["target"]["symbol"].as_str(),
-        Some("publishEvent")
-    );
+    assert_eq!(doc["target"]["symbol"].as_str(), Some("publishEvent"));
     assert!(doc.get("topology").is_some());
 }
 

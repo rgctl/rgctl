@@ -6,17 +6,17 @@ use super::blast_radius_output::{
     handoffs_from_seeds, response_to_json, skipped_gatekeeping, BlastRadiusResponse, NodeLookup,
 };
 use super::context::CliContext;
-use super::query_daemon;
-use anyhow::Result;
 use super::policy_file::PolicyFile;
+use super::query_daemon;
 use crate::analysis::{
     candidates_from_backend, candidates_from_snapshot, filter_impact_by_caller_depth,
     impact_score_from_counts, parse_fqn_symbol, resolve_handoff_seeds, resolve_symbol_uuid,
     trace_blast_to_slices_with_blast, try_load_engine, try_parse_symbol_uuid, BlastRadiusEngine,
-    BlastRadiusResult, MacroCallIndex, MacroIndexEntry, MacroCallLookupDb, PetGraphView,
+    BlastRadiusResult, MacroCallIndex, MacroCallLookupDb, MacroIndexEntry, PetGraphView,
 };
-use rbuilder_graph::SnapshotNodeStore;
 use crate::graph::backend::GraphBackend;
+use anyhow::Result;
+use rbuilder_graph::SnapshotNodeStore;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -115,10 +115,7 @@ fn try_fast_cached_lookup(
     parsed: &crate::analysis::ParsedSymbol,
 ) -> Result<Option<BlastRadiusResponse>> {
     let session = ctx.snapshot_session()?;
-    let lookup = node_lookup(
-        None,
-        session.as_ref().map(|s| s.store.as_ref()),
-    );
+    let lookup = node_lookup(None, session.as_ref().map(|s| s.store.as_ref()));
     let max_depth = max_caller_depth(args);
     let view = session
         .as_ref()
@@ -380,12 +377,9 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
         }
 
         if let Some(session) = ctx.snapshot_session()? {
-            if let Some(response) = query_daemon::try_client_blast_radius(
-                ctx,
-                &args,
-                &parsed,
-                session.digest.as_ref(),
-            )? {
+            if let Some(response) =
+                query_daemon::try_client_blast_radius(ctx, &args, &parsed, session.digest.as_ref())?
+            {
                 return emit_output(ctx, &response);
             }
 
@@ -433,7 +427,8 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
     let result = resolve_blast_result(backend, &ctx.repo, id, graph_digest.as_deref())?;
 
     let max_depth = max_caller_depth(&args);
-    let function_impact = BlastRadiusEngine::filter_function_impact(backend, &result.impact_zone_ids)?;
+    let function_impact =
+        BlastRadiusEngine::filter_function_impact(backend, &result.impact_zone_ids)?;
     let prepared = prepare_engine_impact(view_for_depth, id, &result, &function_impact, max_depth);
     let impact_ids = prepared.impact_ids;
 
@@ -460,10 +455,7 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
         handoffs,
     )?;
 
-    let lookup = node_lookup(
-        Some(backend),
-        snapshot_store.as_deref(),
-    );
+    let lookup = node_lookup(Some(backend), snapshot_store.as_deref());
     let response = build_from_engine_result(
         &args.symbol,
         parsed.class_filter.clone(),

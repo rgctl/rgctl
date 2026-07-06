@@ -5,8 +5,8 @@
 use super::blast_radius::{build_lite_response, BlastRadiusArgs};
 use super::blast_radius_output::BlastRadiusResponse;
 use super::context::CliContext;
-use anyhow::{Context, Result};
 use crate::analysis::{parse_fqn_symbol, try_load_engine, BlastRadiusEngine};
+use anyhow::{Context, Result};
 use rbuilder_graph::SnapshotNodeStore;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
@@ -101,8 +101,8 @@ impl DaemonState {
     }
 
     fn blast_radius(&self, _id: u64, params: &serde_json::Value) -> Result<serde_json::Value> {
-        let params: BlastRadiusParams = serde_json::from_value(params.clone())
-            .context("invalid blast_radius params")?;
+        let params: BlastRadiusParams =
+            serde_json::from_value(params.clone()).context("invalid blast_radius params")?;
         if let Some(digest) = &params.graph_digest {
             if digest != self.digest.as_ref() {
                 anyhow::bail!("graph digest mismatch (run discover and restart serve)");
@@ -153,8 +153,8 @@ fn handle_connection(state: &Arc<DaemonState>, mut stream: UnixStream) -> Result
         if line.len() > MAX_LINE_BYTES {
             anyhow::bail!("request line exceeds {MAX_LINE_BYTES} bytes");
         }
-        let request: RpcRequest = serde_json::from_str(line.trim())
-            .context("invalid JSON request line")?;
+        let request: RpcRequest =
+            serde_json::from_str(line.trim()).context("invalid JSON request line")?;
         let response = state.handle(request);
         write_response(&mut stream, &response)?;
     }
@@ -165,8 +165,9 @@ fn load_daemon_state(ctx: &CliContext) -> Result<Arc<DaemonState>> {
     let session = ctx
         .snapshot_session()?
         .context("graph snapshot not found (run `rbuilder discover` first)")?;
-    let engine = try_load_engine(&ctx.repo, session.digest.as_ref())?
-        .context("blast engine snapshot not found or digest mismatch (run `rbuilder discover` first)")?;
+    let engine = try_load_engine(&ctx.repo, session.digest.as_ref())?.context(
+        "blast engine snapshot not found or digest mismatch (run `rbuilder discover` first)",
+    )?;
     Ok(Arc::new(DaemonState {
         repo: ctx.repo.clone(),
         digest: session.digest,
@@ -308,10 +309,10 @@ pub fn try_client_blast_radius(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::BlastRadiusEngine;
     use crate::graph::backend::GraphBackend;
     use crate::graph::schema::{Edge, EdgeType, Node, NodeType};
     use crate::graph::{CodeGraph, PreparedGraphSnapshot};
-    use crate::analysis::BlastRadiusEngine;
     use std::thread;
     use tempfile::TempDir;
 
@@ -379,8 +380,7 @@ mod tests {
         reader.read_line(&mut response_line).unwrap();
         let response: RpcResponse = serde_json::from_str(response_line.trim()).unwrap();
         assert!(response.ok, "{:?}", response.error);
-        let value: BlastRadiusResponse =
-            serde_json::from_value(response.result.unwrap()).unwrap();
+        let value: BlastRadiusResponse = serde_json::from_value(response.result.unwrap()).unwrap();
         assert_eq!(value.target.symbol, "fn50");
 
         drop(client);

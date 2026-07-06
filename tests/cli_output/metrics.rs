@@ -1,6 +1,6 @@
 use rbuilder::cli::metrics_output::{
-    build_metrics_response, fixture_metrics_json, metrics_response_to_json,
-    MetricsPagerankSection, METRICS_SCHEMA_VERSION,
+    build_metrics_response, fixture_metrics_json, metrics_response_to_json, MetricsPagerankSection,
+    METRICS_SCHEMA_VERSION,
 };
 use serde_json::json;
 
@@ -14,7 +14,10 @@ fn test_metrics_json_schema_sanity() {
     );
 
     for section in ["pagerank", "betweenness", "communities"] {
-        assert!(doc.get(section).is_some(), "metrics missing section '{section}'");
+        assert!(
+            doc.get(section).is_some(),
+            "metrics missing section '{section}'"
+        );
     }
 
     let pr = doc.get("pagerank").unwrap().as_object().unwrap();
@@ -47,7 +50,9 @@ fn test_metrics_wrap_adds_schema_version() {
 fn test_metrics_betweenness_only_omits_other_sections() {
     let response = build_metrics_response(
         None,
-        Some(vec![json!({ "node": "00000000-0000-0000-0000-000000000001", "score": 0.5 })]),
+        Some(vec![
+            json!({ "node": "00000000-0000-0000-0000-000000000001", "score": 0.5 }),
+        ]),
         None,
     );
 
@@ -100,8 +105,14 @@ fn test_metrics_pagerank_only_omits_other_sections() {
 
     let doc = metrics_response_to_json(&response);
     assert!(doc.get("pagerank").is_some());
-    assert!(doc.get("betweenness").is_none(), "betweenness must be absent, not null/[]");
-    assert!(doc.get("communities").is_none(), "communities must be absent, not null/[]");
+    assert!(
+        doc.get("betweenness").is_none(),
+        "betweenness must be absent, not null/[]"
+    );
+    assert!(
+        doc.get("communities").is_none(),
+        "communities must be absent, not null/[]"
+    );
 
     let json_str = serde_json::to_string(&response).expect("metrics serializes");
     assert!(!json_str.contains("betweenness"));

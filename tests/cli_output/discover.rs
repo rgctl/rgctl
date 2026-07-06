@@ -11,7 +11,10 @@ fn test_discover_json_schema_sanity() {
         doc.get("schema_version").and_then(|v| v.as_u64()),
         Some(DISCOVER_SCHEMA_VERSION as u64)
     );
-    assert_eq!(doc.get("command").and_then(|v| v.as_str()), Some("discover"));
+    assert_eq!(
+        doc.get("command").and_then(|v| v.as_str()),
+        Some("discover")
+    );
 
     let metrics = doc.get("metrics").unwrap().as_object().unwrap();
     for key in [
@@ -22,7 +25,10 @@ fn test_discover_json_schema_sanity() {
         "edges_generated",
         "duration_ms",
     ] {
-        assert!(metrics.contains_key(key), "discover metrics missing '{key}'");
+        assert!(
+            metrics.contains_key(key),
+            "discover metrics missing '{key}'"
+        );
     }
 }
 

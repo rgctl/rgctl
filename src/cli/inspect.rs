@@ -3,10 +3,8 @@
 use super::args::{InspectLayer, OutputFormat, PdgEdgeLayer};
 use super::context::{language_from_path, CliContext};
 use super::inspect_output::{inspect_cfg_json, inspect_dom_json, inspect_pdg_json};
+use crate::analysis::{build_cfg_for_function, DominatorTree, ProgramDependenceGraph};
 use anyhow::Result;
-use crate::analysis::{
-    build_cfg_for_function, DominatorTree, ProgramDependenceGraph,
-};
 use std::path::Path;
 
 pub struct InspectArgs {
@@ -48,7 +46,10 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
                 }
             }
         }
-        InspectLayer::Pdg { edge_layer, def_use } => {
+        InspectLayer::Pdg {
+            edge_layer,
+            def_use,
+        } => {
             let (data, control) = match edge_layer {
                 PdgEdgeLayer::All => (pdg.data_deps.len(), pdg.control_deps.len()),
                 PdgEdgeLayer::Data => (pdg.data_deps.len(), 0),
