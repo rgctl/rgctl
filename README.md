@@ -49,7 +49,15 @@ rBuilder builds a queryable knowledge graph of your entire codebase with natural
 
 ## 🚀 Quick Start
 
+**New users:** start with **[Introduction](docs/Introduction.md)** (concepts and what each feature is for), then the **[User Guide](docs/user-guide.md)** — GitHub release install, PATH setup, coolstore example, and every CLI command.
+
+**JSON automation:** see **[JSON API](docs/json-api.md)** — parse `-f json` output programmatically.
+
 ### Installation
+
+**From GitHub releases (recommended):**
+
+Download the latest binary for your platform from **[github.com/sshaaf/rBuilder/releases](https://github.com/sshaaf/rBuilder/releases)**, extract it, and add it to your `PATH`. See [docs/user-guide.md](docs/user-guide.md) for step-by-step instructions.
 
 **From source:**
 ```bash

@@ -8,7 +8,7 @@
 //! - `subprocess_golden_path.rs` — discover + blast-radius golden paths
 //! - `all_commands_sanity.rs` — all JSON commands in one audit loop
 //!
-//! Documentation: `docs/cli-io-sanity-audit.md`
+//! Documentation: `docs/cli-io-sanity-qe.md`
 
 mod blast_radius;
 mod check;

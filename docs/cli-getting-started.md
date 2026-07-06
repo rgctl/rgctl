@@ -1,43 +1,36 @@
 # rBuilder CLI Getting Started
 
-This guide walks through indexing [coolstore-quarkus](https://github.com/sshaaf/coolstore-quarkus) — a Quarkus microservices demo with cart, catalog, inventory, order, and payment services — and querying it with the rBuilder CLI.
+> **Install from a release, PATH setup, and full command reference:** [user-guide.md](user-guide.md)
+
+This guide walks through indexing [Konveyor coolstore](https://github.com/konveyor-ecosystem/coolstore) — a Java e-commerce demo (use the **`quarkus`** branch) — and querying it with the rBuilder CLI.
 
 ## Prerequisites
 
-Build rBuilder from source:
+Install rBuilder (see [user-guide.md §1–2](user-guide.md#1-installation)), then clone the example:
 
 ```bash
-git clone https://github.com/sshaaf/rBuilder.git
-cd rBuilder
-cargo build --release
-export PATH="$PWD/target/release:$PATH"
-rbuilder --version
+git clone https://github.com/konveyor-ecosystem/coolstore.git
+cd coolstore
+git checkout quarkus
 ```
 
-Clone the example repository:
-
-```bash
-git clone https://github.com/sshaaf/coolstore-quarkus.git
-cd coolstore-quarkus
-```
-
-Coolstore layout (simplified):
+Coolstore layout on the `quarkus` branch (simplified):
 
 ```
-coolstore-quarkus/
-├── cart-service/        # CartService, CartResourceV1, …
-├── catalog-service/     # CatalogService, CatalogResource, …
-├── inventory-service/   # InventoryResource, …
-├── order-service/       # OrderResource, …
-├── payment-service/     # PaymentResource, …
-└── coolstore-fe/        # frontend
+coolstore/
+├── pom.xml
+├── src/main/java/com/redhat/coolstore/
+│   ├── rest/           # CartEndpoint, OrderEndpoint, ProductEndpoint, …
+│   ├── service/        # ShoppingCartService, OrderService, CatalogService, …
+│   └── model/          # Order, Product, ShoppingCart, …
+└── deploy/
 ```
 
 ---
 
 ## Step 1: Discover the codebase
 
-`discover` scans the repository, builds the knowledge graph, runs graph analytics, writes artifacts under `.rbuilder/`, and **generates the interactive HTML dashboard** at `.rbuilder/dashboard.html`.
+`discover` scans the repository, builds the knowledge graph, runs graph analytics, writes artifacts under `.rbuilder/`, and exports the static dashboard bundle at `.rbuilder/dashboard/`.
 
 ### Fast index (default)
 
@@ -57,11 +50,11 @@ rbuilder -f json discover . | jq '.metrics'
 
 See [cli-output-schemas.md](cli-output-schemas.md) §2 for the full `discover` JSON shape.
 
-Open the dashboard when indexing finishes:
+Preview the dashboard when indexing finishes (WASM requires serving the directory, not `file://`):
 
 ```bash
-open .rbuilder/dashboard.html   # macOS
-# xdg-open .rbuilder/dashboard.html   # Linux
+cd .rbuilder/dashboard && python3 -m http.server 8765
+# open http://localhost:8765
 ```
 
 ### Optional analysis modes
@@ -94,19 +87,20 @@ rbuilder discover . -v
 After a successful run you should see:
 
 ```
-coolstore-quarkus/.rbuilder/
-├── graph.db              # Graph cache (used by all query commands)
-├── graph.json            # Legacy mirror of graph topology
-├── analysis_results.bin  # Columnar analysis snapshot
-├── dashboard.html        # Interactive HTML dashboard (always written by discover)
-├── file_hashes.json      # Incremental file tracker
-└── analysis/             # Per-function CFG/PDG overlays (discover --cfg or --all only)
+coolstore/.rbuilder/
+├── graph.snapshot.bin      # Columnar mmap graph (primary cache)
+├── blast_engine.snapshot.bin
+├── macro_call_index.db
+├── analysis_results.bin
+├── file_hashes.json
+├── dashboard/              # Static UI bundle (index.html, manifest.json, …)
+└── analysis/               # Per-function CFG/PDG (discover --cfg or --all only)
 ```
 
 Point rBuilder at this repo for every subsequent command:
 
 ```bash
-export REPO="$PWD"   # coolstore-quarkus root
+export REPO="$PWD"   # coolstore root
 ```
 
 Or pass `-r` on each invocation:
@@ -138,10 +132,10 @@ rbuilder -r "$REPO" -f json gql 'MATCH (n:Class) RETURN n LIMIT 10'
 rbuilder -r "$REPO" -f json discover .
 
 # Mermaid diagram on stdout (or -o file.mmd)
-rbuilder -r "$REPO" -f mermaid inspect CartResourceV1 cfg
+rbuilder -r "$REPO" -f mermaid inspect CartEndpoint cfg
 ```
 
-> The HTML dashboard is **not** a global format flag. It is written automatically by `discover` to `.rbuilder/dashboard.html`. Re-run `discover` to refresh it after large changes.
+> The HTML dashboard lives under `.rbuilder/dashboard/`. Re-run `discover` to refresh it after large changes.
 
 ---
 
@@ -155,11 +149,11 @@ rbuilder -r "$REPO" -f mermaid inspect CartResourceV1 cfg
 rbuilder -r "$REPO" gql 'MATCH (n:Function) RETURN n'
 ```
 
-### Find cart-service REST endpoints
+### Find REST endpoints
 
 ```bash
 rbuilder -r "$REPO" gql \
-  "MATCH (n:Function) WHERE n.name LIKE '*Resource*' RETURN n"
+  "MATCH (n:Function) WHERE n.name LIKE '*Endpoint' RETURN n"
 ```
 
 ### Trace call relationships
@@ -199,7 +193,7 @@ rbuilder -r "$REPO" gql --macro-name call_chain 'unused'
 
 ```bash
 rbuilder -r "$REPO" gql --explain \
-  "MATCH (n:Function) WHERE n.name = 'CartService' RETURN n"
+  "MATCH (n:Function) WHERE n.name = 'ShoppingCartService' RETURN n"
 ```
 
 ### JSON for automation
@@ -217,21 +211,21 @@ rbuilder -r "$REPO" -f json gql \
 `blast-radius` answers “what breaks if I change this symbol?” using SCC-aware macro impact analysis.
 
 ```bash
-rbuilder -r "$REPO" blast-radius CartService
+rbuilder -r "$REPO" blast-radius ShoppingCartService
 ```
 
 Other useful targets in coolstore:
 
 ```bash
 rbuilder -r "$REPO" blast-radius CatalogService
-rbuilder -r "$REPO" blast-radius CartResourceV1
-rbuilder -r "$REPO" blast-radius InventoryResource
+rbuilder -r "$REPO" blast-radius CartEndpoint
+rbuilder -r "$REPO" blast-radius OrderService
 ```
 
 Limit transitive caller depth:
 
 ```bash
-rbuilder -r "$REPO" blast-radius CartService --depth 5
+rbuilder -r "$REPO" blast-radius ShoppingCartService --depth 5
 ```
 
 When `--depth` is set, `topology.impact_zone` includes only upstream callers within that many incoming call hops (hop 1 = direct callers). JSON output includes `metrics.caller_depth_limit` with the applied cap; omit `--depth` for the full transitive closure.
@@ -239,7 +233,7 @@ When `--depth` is set, `topology.impact_zone` includes only upstream callers wit
 With a policy file (enables cascade-hazard checks against centrality thresholds):
 
 ```bash
-rbuilder -r "$REPO" blast-radius CartService --policy-file policy.json
+rbuilder -r "$REPO" blast-radius ShoppingCartService --policy-file policy.json
 ```
 
 JSON output includes direct callers, impact zone, and interprocedural slice hand-offs:
@@ -250,7 +244,7 @@ JSON output (schema v1 — nested `target` / `metrics` / `topology` / `gatekeepi
 rbuilder -r "$REPO" -f json blast-radius CartService | jq '.metrics.score, .topology.direct_callers'
 ```
 
-Breaking change from the old flat JSON shape; see [blast-radius-json-schema-v1.md](blast-radius-json-schema-v1.md) and the full catalog [cli-output-schemas.md](cli-output-schemas.md).
+Breaking change from the old flat JSON shape; see [cli-output-schemas.md](cli-output-schemas.md) §1 and [json-api.md](json-api.md) §6.
 
 ### Optional: query daemon (repeated queries)
 
@@ -276,20 +270,20 @@ Backward slice — “what code influences this variable at this line?”:
 
 ```bash
 rbuilder -r "$REPO" slice \
-  cart-service/src/main/java/org/coolstore/cart/service/CartServiceImpl.java \
-  --line 42 \
+  src/main/java/com/redhat/coolstore/service/ShoppingCartService.java \
+  --line 45 \
   --variable cart \
-  --function CartServiceImpl
+  --function ShoppingCartService
 ```
 
 Forward slice:
 
 ```bash
 rbuilder -r "$REPO" slice \
-  cart-service/src/main/java/org/coolstore/cart/resource/CartResourceV1.java \
-  --line 30 \
-  --variable request \
-  --function CartResourceV1 \
+  src/main/java/com/redhat/coolstore/rest/CartEndpoint.java \
+  --line 37 \
+  --variable cartId \
+  --function CartEndpoint \
   --direction forward
 ```
 
@@ -297,10 +291,10 @@ Taint policy check (requires patterns in the function):
 
 ```bash
 rbuilder -r "$REPO" slice \
-  cart-service/src/main/java/org/coolstore/cart/service/CartServiceImpl.java \
-  --line 50 \
-  --variable input \
-  --function CartServiceImpl \
+  src/main/java/com/redhat/coolstore/service/ShoppingCartService.java \
+  --line 48 \
+  --variable cart \
+  --function ShoppingCartService \
   --taint
 ```
 
@@ -322,16 +316,16 @@ rbuilder -r "$REPO" -f mermaid slice ... --view cfg
 
 ```bash
 # Control-flow graph summary
-rbuilder -r "$REPO" inspect CartServiceImpl cfg
+rbuilder -r "$REPO" inspect ShoppingCartService cfg
 
 # CFG as Mermaid diagram
-rbuilder -r "$REPO" -f mermaid inspect CartServiceImpl cfg
+rbuilder -r "$REPO" -f mermaid inspect ShoppingCartService cfg
 
 # Program dependence graph
-rbuilder -r "$REPO" inspect CartServiceImpl pdg --edge-layer data
+rbuilder -r "$REPO" inspect ShoppingCartService pdg --edge-layer data
 
 # Dominator tree with frontiers
-rbuilder -r "$REPO" inspect CartServiceImpl dom --frontiers
+rbuilder -r "$REPO" inspect ShoppingCartService dom --frontiers
 ```
 
 ---
@@ -400,24 +394,23 @@ Exit code `1` when violations are found — suitable for CI pipelines.
 ## Recommended workflow
 
 ```bash
-# 1. Index and open dashboard
-cd coolstore-quarkus
+# 1. Index
+cd coolstore   # quarkus branch
 rbuilder discover .
-open .rbuilder/dashboard.html
 
 # 2. Explore structure
 rbuilder -r . gql --macro-name all_functions 'x' | head
 rbuilder -r . gql 'MATCH (a:Function)-[:CALLS]->(b:Function) RETURN a,b LIMIT 15'
 
 # 3. Change-impact before editing
-rbuilder -r . blast-radius CartResourceV1
+rbuilder -r . blast-radius CartEndpoint
 
 # 4. Deep dive on hot paths
 rbuilder -r . metrics --pagerank
 
 # 5. Line-level debugging on a specific change
-rbuilder -r . slice cart-service/.../CartServiceImpl.java \
-  --line 42 --variable cart --function CartServiceImpl
+rbuilder -r . slice src/main/java/com/redhat/coolstore/service/ShoppingCartService.java \
+  --line 45 --variable cart --function ShoppingCartService
 ```
 
 ---
@@ -426,7 +419,7 @@ rbuilder -r . slice cart-service/.../CartServiceImpl.java \
 
 | Command | Purpose |
 |---------|---------|
-| `discover` | Index repo, build `.rbuilder/graph.db`, and write `dashboard.html` |
+| `discover` | Index repo, build `.rbuilder/` artifacts |
 | `gql` | Graph query language |
 | `blast-radius` | SCC macro impact / caller analysis |
 | `slice` | Line-level program slice or taint trace |
@@ -451,7 +444,7 @@ rbuilder -r . slice cart-service/.../CartServiceImpl.java \
 Exact match:
 
 ```bash
-WHERE n.name = 'CartService'
+WHERE n.name = 'ShoppingCartService'
 ```
 
 Wildcard match (`*` = any substring):
@@ -496,6 +489,7 @@ Use the default mode first. Add `--cfg` or `--all` only when you need slicing, t
 
 ## Next steps
 
-- Open `.rbuilder/dashboard.html` after `discover` for interactive exploration (GQL, blast radius, slice overlays).
+- Serve `.rbuilder/dashboard/` for optional interactive exploration (see [dashboard-design.md](dashboard-design.md)).
 - Re-run `discover` after major refactors to refresh the graph and dashboard.
 - Use `-f json` on query commands and pipe to `jq` for scripting and CI integration.
+- **Programmatic parsing:** [json-api.md](json-api.md) — TypeScript shapes, exit codes, on-disk JSON catalogs.

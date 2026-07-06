@@ -303,7 +303,7 @@ When adding or fixing language support:
 | Add a CLI flag or subcommand | `src/cli/` + call into library crate |
 | Add `--depth` or query-tier behavior | `graph_utils` filter + `blast_radius.rs` paths (cache, daemon, lite, full) |
 | Add CLI JSON schema / field | `src/cli/<command>_output.rs` + `tests/cli_output/` (Layer 1) |
-| Add subprocess regression for CLI | `subprocess_golden_path.rs` (narrow) or `all_commands_sanity.rs` (full audit) + `tests/fixtures/` — see [`cli-io-sanity-audit.md`](cli-io-sanity-audit.md) |
+| Add subprocess regression for CLI | `subprocess_golden_path.rs` (narrow) or `all_commands_sanity.rs` (full audit) + `tests/fixtures/` — see [`cli-io-sanity-qe.md`](cli-io-sanity-qe.md) |
 | Add a query syntax or optimizer rule | `rbuilder-gql` |
 | Add HTML/Mermaid/GraphML output | `rbuilder-export` |
 | Add a discover-time cache file | `discover_impl` writer + relevant analysis/graph module reader |
@@ -312,4 +312,4 @@ When adding or fixing language support:
 
 ---
 
-*Related docs: [`dashboard-design.md`](dashboard-design.md), [`cli-output-schemas.md`](cli-output-schemas.md), [`cli-io-sanity-audit.md`](cli-io-sanity-audit.md), [`performance-engineering.md`](performance-engineering.md), [`CLI_STRUCTURE.txt`](CLI_STRUCTURE.txt), [`How-to-Blast-radius.md`](How-to-Blast-radius.md), [`cli-getting-started.md`](cli-getting-started.md).*
+*Related docs: [`user-guide.md`](user-guide.md), [`json-api.md`](json-api.md), [`dashboard-design.md`](dashboard-design.md), [`cli-output-schemas.md`](cli-output-schemas.md), [`cli-io-sanity-qe.md`](cli-io-sanity-qe.md), [`performance-engineering.md`](performance-engineering.md), [`CLI_STRUCTURE.txt`](CLI_STRUCTURE.txt), [`cli-getting-started.md`](cli-getting-started.md).*

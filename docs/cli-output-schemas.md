@@ -2,6 +2,8 @@
 
 Reference for JSON (and related) output shapes emitted by rBuilder CLI commands.
 
+**Programmatic parsing guide:** [json-api.md](json-api.md) — invocation, TypeScript shapes, jq recipes, on-disk JSON, exit codes.
+
 **Global flag:** `-f json` / `--format json`
 
 **Architecture:** Each JSON command has a typed serializer in `src/cli/*_output.rs`. Commands build domain results in workspace crates (`rbuilder-analysis`, `rbuilder-pipeline`, …) and serialize in the CLI layer only — see [Code_structure.md](Code_structure.md) §2 (CLI is thin).
@@ -19,7 +21,7 @@ Reference for JSON (and related) output shapes emitted by rBuilder CLI commands.
 | Composable graph topology | ✅ | — | — | — | — | ✅ | ✅ |
 | Stable node UUIDs (no nil) | ✅ | — | — | — | — | — | — |
 
-**Tests:** See [cli-io-sanity-audit.md](cli-io-sanity-audit.md) for the full coverage matrix, harness design, and extension guide.
+**Tests:** See [cli-io-sanity-qe.md](cli-io-sanity-qe.md) for the full coverage matrix, harness design, and extension guide.
 
 | Layer | Cargo target | Path | Covers |
 |-------|--------------|------|--------|
@@ -32,7 +34,7 @@ Reference for JSON (and related) output shapes emitted by rBuilder CLI commands.
 cargo test --test cli_output --test subprocess_golden_path --test all_commands_sanity
 ```
 
-Related: [blast-radius-json-schema-v1.md](blast-radius-json-schema-v1.md) (v1 break), [blast-radius-json-schema-v2.md](blast-radius-json-schema-v2.md) (v2 target metadata).
+**Source:** `src/cli/blast_radius_output.rs` — `BLAST_RADIUS_SCHEMA_VERSION` is **2**.
 
 ---
 
@@ -126,7 +128,47 @@ rbuilder -f json blast-radius <SYMBOL> [--depth N] [--policy-file PATH] [--with-
 | `violations` | array | Structured policy violations (always present; `[]` when none) |
 | `handoffs` | array | Slice seeds (always present; `[]` without `--with-slices`) |
 
-See v1 doc for `SliceHandoff` and `PolicyViolation` tag shapes.
+**`SliceHandoff`:** `{ "callee": string, "param": string, "index": number }`
+
+**`PolicyViolation`** (internally tagged; discriminant is `kind`):
+
+| `kind` | Fields |
+|--------|--------|
+| `domain_isolation` | `source_domain`, `reached_domain`, `node` |
+| `scale_failure` | `count`, `max` |
+| `cascade_hazard` | `node`, `betweenness`, `threshold` |
+| `sanitization_bypass` | `sink_line`, `path_trace`, `sanitizer_node` |
+
+### Schema history (migration)
+
+**Legacy flat JSON (removed)** — do not parse:
+
+```json
+{
+  "symbol": "CartService",
+  "score": 42.3,
+  "direct_callers": ["authenticate"],
+  "impact_zone": ["authenticate", "main"],
+  "handoffs": []
+}
+```
+
+**v1 (nested)** — replaced flat root keys with `target` / `metrics` / `topology` / `gatekeeping`. `schema_version: 1`.
+
+**v2 (current)** — adds `target.language`, `target.signature`, `target.canonical_fqn`, and optional `metrics.caller_depth_limit` when `--depth N` is set. `schema_version: 2`.
+
+| jq path (v2) | Replaces legacy |
+|--------------|-----------------|
+| `.metrics.score` | `.score` |
+| `.topology.direct_callers[].fqn` | `.direct_callers[]` (bare names) |
+| `.topology.impact_zone[].fqn` | `.impact_zone[]` |
+| `.target.id` | (new) |
+| `.target.canonical_fqn` | (new — prefer for routing) |
+| `.gatekeeping.handoffs` | `.handoffs` (always present in v1+) |
+
+**FQN policy:** route on `target.canonical_fqn` (`Class::method`) and `topology.*.id` (UUID). Treat `topology.*.fqn` as language-native display text only.
+
+**Cache:** target metadata is written at `discover` into `macro_call_index.db` / `.bin`. Re-run `discover` after upgrading rBuilder to populate v2 fields on cache hits.
 
 ### Example (Java, cache path)
 
@@ -238,10 +280,11 @@ Without `-f json`, discover remains human-readable text progress (unchanged).
 | `.rbuilder/macro_call_index.db` | Always | SQLite blast-radius cache (+ UUID + v2 target columns) |
 | `.rbuilder/macro_call_index.bin` | Always | Bincode macro index |
 | `.rbuilder/analysis_results.bin` | Always | Columnar analysis tables |
-| `.rbuilder/dashboard.html` | When export succeeds | HTML dashboard |
+| `.rbuilder/dashboard/` | When export succeeds | Static dashboard bundle (`index.html`, `manifest.json`, …) |
 | `.rbuilder/graph.db` / `.rbuilder/graph.json` | `--write-json-graph` only | Legacy full graph JSON |
-| `.rbuilder/analysis/cfg_pdg.archive.bin` | `--cfg` or `--all` | CFG + PDG for `--with-slices` (ICFG assembled from archived CFGs + live call graph) |
-| `.rbuilder/analysis/all_analyses.json` | `--cfg` / `--all` (verbose path) | Per-function CFG/taint JSON export |
+| `.rbuilder/analysis/cfg_pdg.archive.bin` | `--cfg` or `--all` | CFG + PDG for `--with-slices` |
+| `.rbuilder/analysis/*.json` | `--cfg` or `--all` | Per-function analysis storage (taint, CFG, PDG) |
+| `.rbuilder/dashboard/taint_index.json` | `--cfg` or `--all` | Dashboard taint catalog (see [json-api.md](json-api.md) §12) |
 
 ---
 
@@ -530,7 +573,7 @@ Block references use stable **`block_index`** integers (sorted by `start_line`),
 **Command:**
 
 ```bash
-rbuilder export --format json|graphml|graphviz|mermaid -o PATH [--query "…"]
+rbuilder export --export-format json --export-output graph.json [--query "…"]
 ```
 
 Writes to `-o`; stdout is a one-line summary unless output is redirected via global `-o`.

@@ -275,7 +275,7 @@ Prefer asserting in `all_commands_sanity.rs` if the flag affects JSON shape or e
 
 ## Related docs
 
-- [cli-output-schemas.md](cli-output-schemas.md) — field-by-field JSON reference
+- [cli-output-schemas.md](cli-output-schemas.md) — field-by-field JSON reference (blast-radius §1)
+- [json-api.md](json-api.md) — programmatic parsing guide
 - [performance-engineering.md](performance-engineering.md) — blast-radius latency tiers, perf gates, discover/snapshot flags
-- [blast-radius-json-schema-v2.md](blast-radius-json-schema-v2.md) — v2 target metadata
 - [Code_structure.md](Code_structure.md) — where to put CLI vs analysis changes

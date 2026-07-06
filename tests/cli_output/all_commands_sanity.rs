@@ -10,7 +10,7 @@
 //! - **Binary** — `CARGO_BIN_EXE_rbuilder` (built by `cargo test` for the active profile).
 //! - **Helpers** — schema version, key presence/absence, nil-UUID scan, exit-code checks.
 //!
-//! # Coverage (see `docs/cli-io-sanity-audit.md` for the full matrix)
+//! # Coverage (see `docs/cli-io-sanity-qe.md` for the full matrix)
 //!
 //! | Command | What this file asserts |
 //! |---------|------------------------|

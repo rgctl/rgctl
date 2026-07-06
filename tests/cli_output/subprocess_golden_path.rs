@@ -14,7 +14,7 @@
 //! | `blast_radius_with_slices_populates_handoffs` | `--with-slices` emits non-empty `gatekeeping.handoffs` |
 //! | `blast_radius_with_slices_under_30s_after_cfg_discover` | T3 slice path with CFG archive (`br.slice.total_ms`) |
 //!
-//! Full command matrix: `all_commands_sanity.rs` + `docs/cli-io-sanity-audit.md`.
+//! Full command matrix: `all_commands_sanity.rs` + `docs/cli-io-sanity-qe.md`.
 
 use std::fs;
 use std::path::{Path, PathBuf};

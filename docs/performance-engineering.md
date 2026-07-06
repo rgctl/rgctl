@@ -2,7 +2,7 @@
 
 This document captures blast-radius **query latency tiers**, the **benchmark landscape**, optimization roadmap, and how performance work relates to the CLI I/O contract.
 
-**Companion doc:** [cli-io-sanity-audit.md](cli-io-sanity-audit.md) — JSON schemas, exit codes, and subprocess correctness (orthogonal to wall-clock gates).
+**Companion doc:** [cli-io-sanity-qe.md](cli-io-sanity-qe.md) — JSON schemas, exit codes, and subprocess correctness (orthogonal to wall-clock gates).
 
 Last updated: 2026-07-03 (T3 complete: ICFG from CFG archive + br.slice.total_ms gate).
 
@@ -145,7 +145,7 @@ Each metric should eventually have Criterion samples **and** a release gate wher
 | `br.discover.snapshot_write_ms` | `PreparedGraphSnapshot::write_to_path` | ❌ |
 | `br.discover.engine_snapshot_write_ms` | v2 sparse+zstd write | ❌ |
 | `br.discover.macro_index_write_ms` | SQLite + macro index | ❌ |
-| Discover telemetry | `discover -f json` → `metrics.duration_ms` | ✅ I/O contract only ([cli-io-sanity-audit](cli-io-sanity-audit.md)) |
+| Discover telemetry | `discover -f json` → `metrics.duration_ms` | ✅ I/O contract only ([cli-io-sanity-qe](cli-io-sanity-qe.md)) |
 
 ### Slice path (`--with-slices`)
 
@@ -281,7 +281,7 @@ cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 | `tests/rebuild_macro_index.rs` | Manual metasfresh cache rebuild |
 | `tests/cli_output/subprocess_golden_path.rs` | Golden paths + `br.query.fast_path_ms` gate |
 | `tests/cli_output/all_commands_sanity.rs` | CLI I/O contract (not wall-clock) |
-| `docs/cli-io-sanity-audit.md` | I/O contract matrix |
+| `docs/cli-io-sanity-qe.md` | I/O contract matrix |
 | `scripts/semantic-verification.sh` | CI semantic + dominance perf |
 | `src/cli/context.rs` | Snapshot session cache (`SnapshotSession`) |
 | `src/cli/query_daemon.rs` | Ephemeral Unix-socket query daemon (`rbuilder serve`) |
