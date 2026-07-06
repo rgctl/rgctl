@@ -1,0 +1,75 @@
+# CI does not run on push or on every pull request.
+#
+# Triggers:
+#   - workflow_dispatch  — run manually from the Actions tab (any branch/ref).
+#   - pull_request       — only when a maintainer adds the `ci` label to the PR.
+#
+# Fork PRs: label must be added by a maintainer on the base-repo PR.
+name: CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      features:
+        description: Cargo features (default bundle-full)
+        required: false
+        default: bundle-full
+        type: string
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  FEATURES: ${{ github.event_name == 'workflow_dispatch' && inputs.features || 'bundle-full' }}
+
+jobs:
+  ci:
+    name: Format, lint, and test
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'ci')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ env.FEATURES }}
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --features "${{ env.FEATURES }}" -- -D warnings
+
+      - name: cargo test (unit and integration)
+        run: cargo test --features "${{ env.FEATURES }}" --workspace --lib --bins --tests
+
+      - name: CLI JSON contract (unit)
+        run: cargo test --features "${{ env.FEATURES }}" --test cli_output
+
+      - name: CLI subprocess golden paths
+        run: cargo test --release --features "${{ env.FEATURES }}" --test subprocess_golden_path
+
+      - name: CLI all-commands sanity
+        run: cargo test --release --features "${{ env.FEATURES }}" --test all_commands_sanity
+
+      - name: Blast-radius performance gates (release)
+        run: cargo test --release --features "${{ env.FEATURES }}" --test phase16_blast_radius_perf
