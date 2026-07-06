@@ -386,6 +386,7 @@ cd .rbuilder/dashboard && python3 -m http.server 8765
 | Exact JSON field tables | **[CLI output schemas](cli-output-schemas.md)** |
 | Dashboard architecture and phases | **[Dashboard design](dashboard-design.md)** |
 | Performance tiers and benchmarks | **[Performance engineering](performance-engineering.md)** |
+| Papers implemented, inspired, and contribution ideas | **[Further reading](further-reading.md#research-foundations-in-rbuilder)** |
 
 **Suggested first hour**
 

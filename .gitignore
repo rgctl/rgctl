@@ -12,6 +12,13 @@ Cargo.lock
 *~
 .DS_Store
 
+# scripts
+.scripts
+
+#misc
+skills-lock.json
+/dist
+
 # Generated graph data
 .rbuilder/
 /coverage
