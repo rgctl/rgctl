@@ -1,4 +1,5 @@
 //! Phase 13 semantic audit fixtures (5 core topologies).
+#![allow(dead_code, unused_imports, unused_macros)]
 
 #[path = "fixtures/mod.rs"]
 mod fixtures;

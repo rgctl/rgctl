@@ -1,4 +1,5 @@
 //! Boundary, stress, and differential tests for the macro→micro semantic pipeline.
+#![allow(dead_code, unused_imports, unused_macros)]
 
 #[path = "common/phase13.rs"]
 mod phase13;

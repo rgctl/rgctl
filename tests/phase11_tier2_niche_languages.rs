@@ -1,4 +1,5 @@
 //! Phase 11.1.2 — Tier 2 niche language plugin tests (bundle-extra)
+#![allow(dead_code, unused_imports, unused_macros)]
 
 use rbuilder::languages::registry::LanguageRegistry;
 use std::path::Path;

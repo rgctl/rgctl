@@ -1,4 +1,5 @@
 //! Phase 13: security / CWE analysis (10 tests — one per CWE id).
+#![allow(dead_code, unused_imports, unused_macros)]
 
 #[path = "common/phase13.rs"]
 mod phase13;

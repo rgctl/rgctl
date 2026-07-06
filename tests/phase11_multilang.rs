@@ -1,4 +1,5 @@
 //! Phase 11.3 — polyglot repository end-to-end integration tests
+#![allow(dead_code, unused_imports, unused_macros)]
 
 #[path = "common/polyglot.rs"]
 mod polyglot;

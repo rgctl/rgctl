@@ -1,4 +1,5 @@
 //! Phase 13: interprocedural analysis (20 tests).
+#![allow(dead_code, unused_imports, unused_macros)]
 
 #[path = "common/phase13.rs"]
 mod phase13;

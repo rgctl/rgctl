@@ -1,4 +1,5 @@
 //! Phase 11.2 — multi-modal plugin integration tests
+#![allow(dead_code, unused_imports, unused_macros)]
 
 use rbuilder::languages::plugin_trait::{LanguagePlugin, RelationType, SymbolType};
 use rbuilder::languages::registry::LanguageRegistry;

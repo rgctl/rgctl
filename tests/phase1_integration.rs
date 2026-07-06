@@ -1,4 +1,5 @@
 //! Phase 1 end-to-end integration tests
+#![allow(dead_code, unused_imports, unused_macros)]
 
 use rbuilder::graph::schema::NodeType;
 use rbuilder::graph::CodeGraph;

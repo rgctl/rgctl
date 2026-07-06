@@ -1,4 +1,5 @@
 //! Phase 8 integration tests: parallel processing, batch APIs, query optimization
+#![allow(dead_code, unused_imports, unused_macros)]
 
 use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::query::{execute, execute_chunks};

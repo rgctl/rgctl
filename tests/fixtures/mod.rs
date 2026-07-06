@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Semantic audit fixture code samples.
 
 pub mod dead_code_post_return {

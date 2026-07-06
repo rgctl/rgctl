@@ -1,4 +1,5 @@
 //! Phase 11.3 — automated polyglot performance threshold tests (CI-tracked).
+#![allow(dead_code, unused_imports, unused_macros)]
 
 #[path = "common/polyglot.rs"]
 mod polyglot;

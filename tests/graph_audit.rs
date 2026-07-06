@@ -1,4 +1,5 @@
 //! Synthetic graph builders for Strategy 2 audit tests.
+#![allow(dead_code, unused_imports, unused_macros)]
 
 use rbuilder::graph::backend::{GraphBackend, MemoryBackend};
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};
