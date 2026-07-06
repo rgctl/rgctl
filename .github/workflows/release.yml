@@ -1,0 +1,175 @@
+# Build release binaries for Linux, macOS (Apple Silicon + Intel), and Windows,
+# then publish a GitHub Release with downloadable archives.
+#
+# Triggers:
+#   - push tag v*     — primary release path (e.g. git tag v0.1.0 && git push origin v0.1.0)
+#   - workflow_dispatch — rebuild and (re)publish for an existing tag or draft from a ref
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v0.1.0). Used for asset names; defaults to the pushed tag or Cargo.toml version.
+        required: false
+        type: string
+      ref:
+        description: Git ref to build when not triggered by a tag push
+        required: false
+        default: main
+        type: string
+      draft:
+        description: Publish as draft release
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  FEATURES: bundle-full
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            bin: rbuilder
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+            bin: rbuilder
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            bin: rbuilder
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            bin: rbuilder.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || (inputs.tag != '' && inputs.tag || inputs.ref) }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --features "${{ env.FEATURES }}" --target ${{ matrix.target }} --bin rbuilder
+
+      - name: Package archive (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event_name == 'push' && github.ref_name || inputs.tag }}"
+          VERSION="${VERSION#v}"
+          if [[ -z "$VERSION" ]]; then
+            VERSION="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+          fi
+          STAGING="package"
+          mkdir -p "$STAGING"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$STAGING/rbuilder"
+          chmod +x "$STAGING/rbuilder"
+          ARCHIVE="rbuilder-${VERSION}-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "$STAGING" rbuilder
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Package archive (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $version = "${{ github.event_name == 'push' && github.ref_name || inputs.tag }}"
+          $version = $version -replace '^v',''
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = (Select-String -Path Cargo.toml -Pattern '^version' | Select-Object -First 1).Line -replace '.*"(.*)".*','$1'
+          }
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin }}" "package/rbuilder.exe"
+          $archive = "rbuilder-${version}-${{ matrix.target }}.zip"
+          Compress-Archive -Path package/rbuilder.exe -DestinationPath $archive -Force
+          echo "ARCHIVE=$archive" >> $env:GITHUB_ENV
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || (inputs.tag != '' && inputs.tag || inputs.ref) }}
+
+      - name: Download all platform archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          shasum -a 256 rbuilder-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ inputs.tag }}" ]]; then
+            TAG="${{ inputs.tag }}"
+          else
+            VERSION="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+            TAG="v${VERSION}"
+          fi
+          TAG="${TAG#v}"
+          TAG="v${TAG}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: rBuilder ${{ steps.meta.outputs.tag }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
+          prerelease: ${{ contains(steps.meta.outputs.tag, '-') }}
+          generate_release_notes: true
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
