@@ -118,10 +118,7 @@ pub fn verify_idom_acyclic(idom: &HashMap<BlockId, BlockId>) -> bool {
     for &node in idom.keys() {
         let mut seen = HashSet::new();
         let mut current = node;
-        loop {
-            let Some(&parent) = idom.get(&current) else {
-                break;
-            };
+        while let Some(&parent) = idom.get(&current) {
             if parent == current {
                 break;
             }
