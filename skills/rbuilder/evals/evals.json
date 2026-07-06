@@ -1,0 +1,23 @@
+{
+  "skill_name": "rbuilder",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "hey so my boss wants me to migrate this legacy Java EE monolith we have (it's in ~/projects/coolstore on the main branch) to Quarkus. I have no idea where to even start - there are like 200+ files and it's been around since 2015. Can you help me figure out which components are safe to migrate first and what the high-risk parts are? I really don't want to break production lol",
+      "expected_output": "Should trigger rbuilder skill, check for installation, offer to index the repository in fast mode, then provide a migration planning workflow including: identifying entry points, calculating blast radius for key components, finding communities/modules, identifying low-risk components to migrate first, and creating a phased migration plan.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "ok I'm looking at this function called ShoppingCartService::checkOutShoppingCart in src/main/java/com/redhat/coolstore/service/ShoppingCartService.java and i need to refactor it because the complexity is insane (like 50+ lines of nested ifs). But I'm worried about breaking stuff - can you tell me what would break if I change this function? Like which other parts of the code depend on it?",
+      "expected_output": "Should trigger rbuilder skill, check installation and indexing status, then run blast-radius analysis on ShoppingCartService::checkOutShoppingCart, showing direct callers, impact zone, risk score, and recommendations for safe refactoring.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I just inherited this massive TypeScript/React codebase from a dev who left the company (it's in ~/work/frontend-app). There's no documentation and I need to add a new feature to the authentication flow but I don't even know where to start. Can you help me understand the architecture - like what are the main modules, which functions are most critical, and how does data flow through the auth system?",
+      "expected_output": "Should trigger rbuilder skill, check installation, offer to index with appropriate language filters (typescript, -e node_modules), then run architecture analysis including: finding entry points, community detection to identify modules, PageRank to find critical functions, and GQL queries to trace auth-related call chains.",
+      "files": []
+    }
+  ]
+}
