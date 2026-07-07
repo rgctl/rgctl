@@ -173,3 +173,17 @@ jobs:
           files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trigger rbuilder-tests report
+        if: ${{ secrets.RBUILDER_TESTS_DISPATCH_TOKEN != '' && !(github.event_name == 'workflow_dispatch' && inputs.draft) }}
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.RBUILDER_TESTS_DISPATCH_TOKEN }}
+          repository: sshaaf/rbuilder-tests
+          event-type: rbuilder-released
+          client-payload: |
+            {
+              "tag": "${{ steps.meta.outputs.tag }}",
+              "rbuilder_repo": "${{ github.repository }}",
+              "rbuilder_sha": "${{ github.sha }}"
+            }

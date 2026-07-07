@@ -1,6 +1,8 @@
 //! Ephemeral query daemon — keeps mmap graph + blast engine warm across CLI invocations.
 //!
-//! Protocol: newline-delimited JSON-RPC-like messages over a Unix domain socket.
+//! Protocol: newline-delimited JSON-RPC-like messages over a local transport:
+//! - Unix: domain socket at `<repo>/.rbuilder/query.sock`
+//! - Windows: loopback TCP; port stored in `<repo>/.rbuilder/query.port`
 
 use super::blast_radius::{build_lite_response, BlastRadiusArgs};
 use super::blast_radius_output::BlastRadiusResponse;
@@ -9,8 +11,7 @@ use crate::analysis::{parse_fqn_symbol, try_load_engine, BlastRadiusEngine};
 use anyhow::{Context, Result};
 use rbuilder_graph::SnapshotNodeStore;
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -18,9 +19,16 @@ use std::time::{Duration, Instant};
 const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(200);
 
-/// Default Unix socket path under a repository root.
+/// Default local endpoint path under a repository root.
+#[cfg(unix)]
 pub fn default_socket_path(repo: &Path) -> PathBuf {
     repo.join(".rbuilder").join("query.sock")
+}
+
+/// Default port-file path under a repository root (Windows loopback daemon).
+#[cfg(windows)]
+pub fn default_socket_path(repo: &Path) -> PathBuf {
+    repo.join(".rbuilder").join("query.port")
 }
 
 fn daemon_disabled() -> bool {
@@ -131,7 +139,7 @@ impl DaemonState {
     }
 }
 
-fn write_response(stream: &mut UnixStream, response: &RpcResponse) -> Result<()> {
+fn write_response(stream: &mut impl Write, response: &RpcResponse) -> Result<()> {
     let line = serde_json::to_string(response)?;
     stream.write_all(line.as_bytes())?;
     stream.write_all(b"\n")?;
@@ -139,10 +147,10 @@ fn write_response(stream: &mut UnixStream, response: &RpcResponse) -> Result<()>
     Ok(())
 }
 
-fn handle_connection(state: &Arc<DaemonState>, mut stream: UnixStream) -> Result<()> {
+fn handle_connection<S: Read + Write>(state: &Arc<DaemonState>, mut stream: S) -> Result<()> {
     loop {
         let line = {
-            let mut reader = BufReader::new(&stream);
+            let mut reader = BufReader::new(&mut stream);
             let mut line = String::new();
             let bytes = reader.read_line(&mut line)?;
             if bytes == 0 {
@@ -176,89 +184,210 @@ fn load_daemon_state(ctx: &CliContext) -> Result<Arc<DaemonState>> {
     }))
 }
 
-/// Run the query daemon until idle timeout or fatal error.
-pub fn serve(ctx: &CliContext, socket_path: PathBuf, idle_secs: u64) -> Result<()> {
-    let state = load_daemon_state(ctx)?;
-    if socket_path.exists() {
-        std::fs::remove_file(&socket_path)
-            .with_context(|| format!("remove stale socket {}", socket_path.display()))?;
-    }
-    if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let listener = UnixListener::bind(&socket_path)
-        .with_context(|| format!("bind query socket {}", socket_path.display()))?;
-    eprintln!(
-        "rbuilder query daemon listening on {} (idle exit {}s)",
-        socket_path.display(),
-        idle_secs
-    );
-
-    let idle_limit = Duration::from_secs(idle_secs);
-    listener
-        .set_nonblocking(true)
-        .context("set_nonblocking on query listener")?;
-    let mut last_activity = Instant::now();
-
-    loop {
-        if last_activity.elapsed() >= idle_limit {
-            eprintln!("rbuilder query daemon exiting after idle timeout");
-            break;
-        }
-        match listener.accept() {
-            Ok((stream, _addr)) => {
-                last_activity = Instant::now();
-                if let Err(err) = handle_connection(&state, stream) {
-                    eprintln!("query daemon connection error: {err:#}");
-                }
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(err) => return Err(err.into()),
-        }
-    }
-
-    drop(listener);
-    let _ = std::fs::remove_file(&socket_path);
-    Ok(())
-}
-
-fn connect_socket(path: &Path) -> Result<Option<UnixStream>> {
-    let stream = match UnixStream::connect(path) {
-        Ok(stream) => stream,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) if err.kind() == std::io::ErrorKind::ConnectionRefused => return Ok(None),
-        Err(err) => return Err(err.into()),
-    };
-    stream
-        .set_read_timeout(Some(CONNECT_TIMEOUT))
-        .context("set_read_timeout on query client")?;
-    stream
-        .set_write_timeout(Some(CONNECT_TIMEOUT))
-        .context("set_write_timeout on query client")?;
-    Ok(Some(stream))
-}
-
-fn rpc_call(path: &Path, request: &RpcRequest) -> Result<Option<RpcResponse>> {
-    let Some(mut stream) = connect_socket(path)? else {
-        return Ok(None);
-    };
+fn rpc_call<S: Read + Write>(stream: &mut S, request: &RpcRequest) -> Result<RpcResponse> {
     let line = serde_json::to_string(request)?;
     stream.write_all(line.as_bytes())?;
     stream.write_all(b"\n")?;
     stream.flush()?;
 
-    let mut reader = BufReader::new(&stream);
+    let mut reader = BufReader::new(&mut *stream);
     let mut response_line = String::new();
     let bytes = reader.read_line(&mut response_line)?;
     if bytes == 0 {
-        return Ok(None);
+        anyhow::bail!("query daemon closed connection without response");
     }
-    let response: RpcResponse = serde_json::from_str(response_line.trim())
-        .context("invalid JSON response from query daemon")?;
-    Ok(Some(response))
+    serde_json::from_str(response_line.trim()).context("invalid JSON response from query daemon")
+}
+
+#[cfg(unix)]
+mod transport {
+    use super::*;
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    pub fn serve(ctx: &CliContext, socket_path: PathBuf, idle_secs: u64) -> Result<()> {
+        let state = load_daemon_state(ctx)?;
+        if socket_path.exists() {
+            std::fs::remove_file(&socket_path)
+                .with_context(|| format!("remove stale socket {}", socket_path.display()))?;
+        }
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let listener = UnixListener::bind(&socket_path)
+            .with_context(|| format!("bind query socket {}", socket_path.display()))?;
+        eprintln!(
+            "rbuilder query daemon listening on {} (idle exit {}s)",
+            socket_path.display(),
+            idle_secs
+        );
+
+        run_accept_loop(state, listener, idle_secs, || {
+            let _ = std::fs::remove_file(&socket_path);
+        })
+    }
+
+    pub fn rpc_call_endpoint(path: &Path, request: &RpcRequest) -> Result<Option<RpcResponse>> {
+        let Some(mut stream) = connect_socket(path)? else {
+            return Ok(None);
+        };
+        Ok(Some(super::rpc_call(&mut stream, request)?))
+    }
+
+    fn connect_socket(path: &Path) -> Result<Option<UnixStream>> {
+        let stream = match UnixStream::connect(path) {
+            Ok(stream) => stream,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) if err.kind() == std::io::ErrorKind::ConnectionRefused => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        stream
+            .set_read_timeout(Some(CONNECT_TIMEOUT))
+            .context("set_read_timeout on query client")?;
+        stream
+            .set_write_timeout(Some(CONNECT_TIMEOUT))
+            .context("set_write_timeout on query client")?;
+        Ok(Some(stream))
+    }
+
+    fn run_accept_loop(
+        state: Arc<DaemonState>,
+        listener: UnixListener,
+        idle_secs: u64,
+        cleanup: impl FnOnce(),
+    ) -> Result<()> {
+        let idle_limit = Duration::from_secs(idle_secs);
+        listener
+            .set_nonblocking(true)
+            .context("set_nonblocking on query listener")?;
+        let mut last_activity = Instant::now();
+
+        loop {
+            if last_activity.elapsed() >= idle_limit {
+                eprintln!("rbuilder query daemon exiting after idle timeout");
+                break;
+            }
+            match listener.accept() {
+                Ok((stream, _addr)) => {
+                    last_activity = Instant::now();
+                    if let Err(err) = handle_connection(&state, stream) {
+                        eprintln!("query daemon connection error: {err:#}");
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        drop(listener);
+        cleanup();
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+mod transport {
+    use super::*;
+    use std::net::{TcpListener, TcpStream};
+
+    pub fn serve(ctx: &CliContext, port_file: PathBuf, idle_secs: u64) -> Result<()> {
+        let state = load_daemon_state(ctx)?;
+        if let Some(parent) = port_file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").context("bind loopback query listener")?;
+        let port = listener
+            .local_addr()
+            .context("query listener local_addr")?
+            .port();
+        std::fs::write(&port_file, port.to_string())
+            .with_context(|| format!("write query port file {}", port_file.display()))?;
+
+        eprintln!(
+            "rbuilder query daemon listening on 127.0.0.1:{port} (port file {}, idle exit {}s)",
+            port_file.display(),
+            idle_secs
+        );
+
+        run_accept_loop(state, listener, idle_secs, || {
+            let _ = std::fs::remove_file(&port_file);
+        })
+    }
+
+    pub fn rpc_call_endpoint(path: &Path, request: &RpcRequest) -> Result<Option<RpcResponse>> {
+        let Some(mut stream) = connect_stream(path)? else {
+            return Ok(None);
+        };
+        Ok(Some(super::rpc_call(&mut stream, request)?))
+    }
+
+    fn connect_stream(port_file: &Path) -> Result<Option<TcpStream>> {
+        if !port_file.is_file() {
+            return Ok(None);
+        }
+        let port = std::fs::read_to_string(port_file)
+            .with_context(|| format!("read query port file {}", port_file.display()))?
+            .trim()
+            .parse::<u16>()
+            .with_context(|| format!("parse query port file {}", port_file.display()))?;
+        let stream = match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => stream,
+            Err(err) if err.kind() == std::io::ErrorKind::ConnectionRefused => return Ok(None),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        stream
+            .set_read_timeout(Some(CONNECT_TIMEOUT))
+            .context("set_read_timeout on query client")?;
+        stream
+            .set_write_timeout(Some(CONNECT_TIMEOUT))
+            .context("set_write_timeout on query client")?;
+        Ok(Some(stream))
+    }
+
+    fn run_accept_loop(
+        state: Arc<DaemonState>,
+        listener: TcpListener,
+        idle_secs: u64,
+        cleanup: impl FnOnce(),
+    ) -> Result<()> {
+        let idle_limit = Duration::from_secs(idle_secs);
+        listener
+            .set_nonblocking(true)
+            .context("set_nonblocking on query listener")?;
+        let mut last_activity = Instant::now();
+
+        loop {
+            if last_activity.elapsed() >= idle_limit {
+                eprintln!("rbuilder query daemon exiting after idle timeout");
+                break;
+            }
+            match listener.accept() {
+                Ok((stream, _addr)) => {
+                    last_activity = Instant::now();
+                    if let Err(err) = handle_connection(&state, stream) {
+                        eprintln!("query daemon connection error: {err:#}");
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        drop(listener);
+        cleanup();
+        Ok(())
+    }
+}
+
+/// Run the query daemon until idle timeout or fatal error.
+pub fn serve(ctx: &CliContext, endpoint_path: PathBuf, idle_secs: u64) -> Result<()> {
+    transport::serve(ctx, endpoint_path, idle_secs)
 }
 
 /// Try a warm-engine blast-radius query via the local query daemon.
@@ -275,7 +404,7 @@ pub fn try_client_blast_radius(
         return Ok(None);
     }
 
-    let socket = default_socket_path(&ctx.repo);
+    let endpoint = default_socket_path(&ctx.repo);
     let request = RpcRequest {
         id: 1,
         method: "blast_radius".into(),
@@ -288,7 +417,7 @@ pub fn try_client_blast_radius(
         }),
     };
 
-    let Some(response) = rpc_call(&socket, &request)? else {
+    let Some(response) = transport::rpc_call_endpoint(&endpoint, &request)? else {
         return Ok(None);
     };
     if !response.ok {
@@ -306,13 +435,14 @@ pub fn try_client_blast_radius(
     Ok(Some(serde_json::from_value(value)?))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::analysis::BlastRadiusEngine;
     use crate::graph::backend::GraphBackend;
     use crate::graph::schema::{Edge, EdgeType, Node, NodeType};
     use crate::graph::{CodeGraph, PreparedGraphSnapshot};
+    use std::os::unix::net::UnixStream;
     use std::thread;
     use tempfile::TempDir;
 
@@ -370,15 +500,7 @@ mod tests {
                 "graph_digest": state.digest.as_ref(),
             }),
         };
-        let line = serde_json::to_string(&request).unwrap();
-        client.write_all(line.as_bytes()).unwrap();
-        client.write_all(b"\n").unwrap();
-        client.flush().unwrap();
-
-        let mut reader = BufReader::new(&client);
-        let mut response_line = String::new();
-        reader.read_line(&mut response_line).unwrap();
-        let response: RpcResponse = serde_json::from_str(response_line.trim()).unwrap();
+        let response = rpc_call(&mut client, &request).unwrap();
         assert!(response.ok, "{:?}", response.error);
         let value: BlastRadiusResponse = serde_json::from_value(response.result.unwrap()).unwrap();
         assert_eq!(value.target.symbol, "fn50");

@@ -189,9 +189,12 @@ pub enum Commands {
         query: String,
     },
 
-    /// Keep graph + blast engine warm for repeated blast-radius queries (Unix socket).
+    /// Keep graph + blast engine warm for repeated blast-radius queries.
+    ///
+    /// Unix: domain socket (default `<repo>/.rbuilder/query.sock`).
+    /// Windows: loopback TCP; port written to `<repo>/.rbuilder/query.port`.
     Serve {
-        /// Unix socket path (default: `<repo>/.rbuilder/query.sock`)
+        /// Endpoint path (Unix socket or Windows port file; default under `<repo>/.rbuilder/`)
         #[arg(long, value_name = "PATH")]
         socket: Option<std::path::PathBuf>,
 
