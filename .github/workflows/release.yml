@@ -174,16 +174,26 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # secrets.* cannot appear in job/step `if:` — check token inside the step instead.
       - name: Trigger rbuilder-tests report
-        if: ${{ secrets.RBUILDER_TESTS_DISPATCH_TOKEN != '' && !(github.event_name == 'workflow_dispatch' && inputs.draft) }}
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.RBUILDER_TESTS_DISPATCH_TOKEN }}
-          repository: sshaaf/rbuilder-tests
-          event-type: rbuilder-released
-          client-payload: |
-            {
-              "tag": "${{ steps.meta.outputs.tag }}",
-              "rbuilder_repo": "${{ github.repository }}",
-              "rbuilder_sha": "${{ github.sha }}"
-            }
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.draft }}
+        env:
+          DISPATCH_TOKEN: ${{ secrets.RBUILDER_TESTS_DISPATCH_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DISPATCH_TOKEN}" ]]; then
+            echo "RBUILDER_TESTS_DISPATCH_TOKEN not set; skipping rbuilder-tests report dispatch"
+            exit 0
+          fi
+          payload="$(jq -nc \
+            --arg tag "$RELEASE_TAG" \
+            --arg repo "${{ github.repository }}" \
+            --arg sha "${{ github.sha }}" \
+            '{event_type:"rbuilder-released", client_payload:{tag:$tag, rbuilder_repo:$repo, rbuilder_sha:$sha}}')"
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${DISPATCH_TOKEN}" \
+            "https://api.github.com/repos/sshaaf/rbuilder-tests/dispatches" \
+            -d "$payload"
+          echo "Dispatched rbuilder-released for ${RELEASE_TAG}"
