@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import Graph from "graphology";
 import Sigma from "sigma";
 import { bundleDataUrl } from "./bundleUrl";
 import { listPdgVariables } from "./dataflowEngine";
-import { mountSigmaWhenReady } from "./sigmaMount";
+import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
+import { dataflowEntryToListItem } from "./functionListUtils";
+import { mountSigmaInWrap } from "./sigmaMount";
 import type {
-  DataflowFunctionEntry,
   DataflowGraphPayload,
   DataflowIndexPayload,
   SliceBundlePayload,
@@ -64,7 +65,7 @@ export function DataflowView({ computeDataflow }: DataflowViewProps) {
       .then((bundle: SliceBundlePayload) => {
         if (cancelled) return;
         setSource(bundle.source);
-        setVariables(listPdgVariables(bundle.pdg.nodes));
+        setVariables(listPdgVariables(bundle.pdg.nodes, bundle.pdg.edges));
         setVariable("");
         setGraph(null);
       })
@@ -119,122 +120,99 @@ export function DataflowView({ computeDataflow }: DataflowViewProps) {
   }
 
   return (
-    <div class="dataflow-view d-flex flex-column h-100 min-h-0 gap-3">
-      <div class="d-flex flex-wrap align-items-end gap-2 flex-shrink-0">
-        <FunctionSelect
-          functions={index.functions}
-          value={selectedId}
-          onChange={setSelectedId}
+    <FunctionListLayout
+      sidebar={
+        <FunctionListSidebar
           count={index.function_count}
+          items={index.functions.map(dataflowEntryToListItem)}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
         />
-        <div style={{ minWidth: "160px" }}>
-          <label class="form-label small mb-1" for="df-var">
-            Variable
-          </label>
-          <select
-            id="df-var"
-            class="form-select form-select-sm"
-            value={variable}
-            onChange={(e) => setVariable((e.target as HTMLSelectElement).value)}
-            disabled={!selectedId}
+      }
+    >
+      <div class="dataflow-view d-flex flex-column flex-grow-1 min-h-0 p-3">
+        <div class="d-flex flex-wrap align-items-end gap-2 flex-shrink-0">
+          <div style={{ minWidth: "160px" }}>
+            <label class="form-label small mb-1" for="df-var">
+              Variable
+            </label>
+            <select
+              id="df-var"
+              class="form-select form-select-sm"
+              value={variable}
+              onChange={(e) => setVariable((e.target as HTMLSelectElement).value)}
+              disabled={!selectedId}
+            >
+              <option value="">All data edges</option>
+              {variables.map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div class="form-check form-switch mb-0">
+            <input
+              class="form-check-input"
+              type="checkbox"
+              id="df-control"
+              checked={includeControl}
+              onChange={(e) => setIncludeControl((e.target as HTMLInputElement).checked)}
+            />
+            <label class="form-check-label small" for="df-control">
+              Control deps
+            </label>
+          </div>
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            disabled={!selectedId || computing}
+            onClick={() => void runDataflow()}
           >
-            <option value="">All data edges</option>
-            {variables.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
+            {computing ? "Building…" : "Show dataflow"}
+          </button>
         </div>
-        <div class="form-check form-switch mb-0">
-          <input
-            class="form-check-input"
-            type="checkbox"
-            id="df-control"
-            checked={includeControl}
-            onChange={(e) => setIncludeControl((e.target as HTMLInputElement).checked)}
-          />
-          <label class="form-check-label small" for="df-control">
-            Control deps
-          </label>
-        </div>
-        <button
-          type="button"
-          class="btn btn-primary btn-sm"
-          disabled={!selectedId || computing}
-          onClick={() => void runDataflow()}
-        >
-          {computing ? "Building…" : "Show dataflow"}
-        </button>
+
+        {error && <div class="alert alert-warning py-2 small mb-0 flex-shrink-0">{error}</div>}
+
+        {graph && (
+          <div class="analysis-graph-stage d-flex flex-column flex-lg-row gap-3 flex-grow-1 min-h-0">
+            <div class="analysis-graph-primary d-flex flex-column min-h-0">
+              <PdgGraph graph={graph} />
+            </div>
+            <div class="analysis-graph-side d-flex flex-column min-h-0">
+              <SourcePanel source={source} lines={graph.lines} graph={graph} />
+            </div>
+          </div>
+        )}
+
+        {selectedId && !graph && !computing && (
+          <p class="text-muted small mb-0">
+            Function loaded. Click <strong>Show dataflow</strong> to render the PDG graph.
+          </p>
+        )}
+
+        {!selectedId && (
+          <p class="text-muted small mb-0">
+            Select a function to explore PDG data dependencies (def→use edges from the CFG/PDG
+            archive).
+          </p>
+        )}
       </div>
-
-      {error && <div class="alert alert-warning py-2 small mb-0 flex-shrink-0">{error}</div>}
-
-      {graph && (
-        <div class="row g-3 flex-grow-1 min-h-0">
-          <div class="col-lg-8 d-flex flex-column min-h-0">
-            <PdgGraph graph={graph} />
-          </div>
-          <div class="col-lg-4 d-flex flex-column min-h-0">
-            <SourcePanel source={source} lines={graph.lines} graph={graph} />
-          </div>
-        </div>
-      )}
-
-      {!selectedId && (
-        <p class="text-muted small mb-0">
-          Select a function to explore PDG data dependencies (def→use edges from the CFG/PDG
-          archive).
-        </p>
-      )}
-    </div>
-  );
-}
-
-function FunctionSelect({
-  functions,
-  value,
-  onChange,
-  count,
-}: {
-  functions: DataflowFunctionEntry[];
-  value: string | null;
-  onChange: (id: string | null) => void;
-  count: number;
-}) {
-  return (
-    <div style={{ minWidth: "280px", maxWidth: "100%" }}>
-      <label class="form-label small mb-1" for="df-fn">
-        Function ({count} with PDG)
-      </label>
-      <select
-        id="df-fn"
-        class="form-select form-select-sm"
-        value={value ?? ""}
-        onChange={(e) => {
-          const v = (e.target as HTMLSelectElement).value;
-          onChange(v || null);
-        }}
-      >
-        <option value="">Select function…</option>
-        {functions.map((f) => (
-          <option key={f.function_id} value={f.function_id}>
-            {f.name} ({f.data_edges} data edges)
-          </option>
-        ))}
-      </select>
-    </div>
+    </FunctionListLayout>
   );
 }
 
 function PdgGraph({ graph }: { graph: DataflowGraphPayload }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current;
     const el = containerRef.current;
-    if (!el || graph.nodes.length === 0) return;
+    if (!wrap || !el || graph.nodes.length === 0) return;
 
-    return mountSigmaWhenReady(el, () => {
+    return mountSigmaInWrap(wrap, el, () => {
       const g = new Graph();
       const positions = layoutPdg(graph);
 
@@ -265,14 +243,7 @@ function PdgGraph({ graph }: { graph: DataflowGraphPayload }) {
         minCameraRatio: 0.08,
         maxCameraRatio: 10,
       });
-
-      const ro = new ResizeObserver(() => sigma.refresh());
-      ro.observe(el);
-
-      return () => {
-        ro.disconnect();
-        sigma.kill();
-      };
+      return { sigma };
     });
   }, [graph]);
 
@@ -285,7 +256,7 @@ function PdgGraph({ graph }: { graph: DataflowGraphPayload }) {
           {graph.variable ? ` · var ${graph.variable}` : ""}
         </span>
       </div>
-      <div class="dataflow-graph-wrap flex-grow-1 min-h-0">
+      <div ref={wrapRef} class="dataflow-graph-wrap analysis-graph-canvas-wrap flex-grow-1">
         {graph.nodes.length === 0 ? (
           <p class="text-muted small p-3 mb-0">No PDG nodes match this filter.</p>
         ) : (
@@ -361,11 +332,15 @@ function layoutPdg(graph: DataflowGraphPayload): Record<string, { x: number; y: 
     byLine.get(n.line)!.push(n.id);
   }
 
+  const sortedLines = [...byLine.keys()].sort((a, b) => a - b);
+  const lineIndex = new Map(sortedLines.map((line, i) => [line, i]));
+
   const out: Record<string, { x: number; y: number }> = {};
   for (const [line, ids] of byLine) {
+    const col = lineIndex.get(line) ?? 0;
     ids.forEach((id, i) => {
       out[id] = {
-        x: line * 40,
+        x: col * 80,
         y: (i - (ids.length - 1) / 2) * 60,
       };
     });

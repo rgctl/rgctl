@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { bundleDataUrl } from "./bundleUrl";
+import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
+import { taintEntryToListItem } from "./functionListUtils";
 import type {
   TaintBundlePayload,
   TaintFlowView,
@@ -101,49 +103,43 @@ export function TaintView() {
   }
 
   return (
-    <div class="d-flex flex-column gap-3">
-      <div class="d-flex flex-wrap align-items-end gap-3">
-        <div>
-          <label class="form-label small mb-1" for="taint-fn">
-            Function
-          </label>
-          <select
-            id="taint-fn"
-            class="form-select form-select-sm"
-            style={{ minWidth: "16rem" }}
-            value={selectedId ?? ""}
-            onChange={(e) => setSelectedId((e.target as HTMLSelectElement).value || null)}
-          >
-            <option value="">Select function…</option>
-            {functions.map((fn) => (
-              <option key={fn.function_id} value={fn.function_id}>
-                {fn.name}
-                {fn.vulnerable_count > 0 ? ` (${fn.vulnerable_count} vuln)` : ""}
-              </option>
-            ))}
-          </select>
+    <FunctionListLayout
+      sidebar={
+        <FunctionListSidebar
+          count={index.function_count}
+          items={functions.map(taintEntryToListItem)}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+        />
+      }
+    >
+      <div class="taint-view d-flex flex-column h-100 min-h-0 gap-3 p-3">
+        <div class="d-flex flex-wrap align-items-center gap-3 flex-shrink-0">
+          <div class="form-check mb-0">
+            <input
+              class="form-check-input"
+              type="checkbox"
+              id="taint-vuln-only"
+              checked={vulnerableOnly}
+              onChange={(e) => setVulnerableOnly((e.target as HTMLInputElement).checked)}
+            />
+            <label class="form-check-label small" for="taint-vuln-only">
+              Vulnerable only
+            </label>
+          </div>
+          <div class="small text-muted ms-auto">
+            {index.total_flows} flows · {index.vulnerable_flows} vulnerable · {index.function_count}{" "}
+            functions
+          </div>
         </div>
-        <div class="form-check mb-1">
-          <input
-            class="form-check-input"
-            type="checkbox"
-            id="taint-vuln-only"
-            checked={vulnerableOnly}
-            onChange={(e) => setVulnerableOnly((e.target as HTMLInputElement).checked)}
-          />
-          <label class="form-check-label small" for="taint-vuln-only">
-            Vulnerable only
-          </label>
-        </div>
-        <div class="small text-muted ms-auto">
-          {index.total_flows} flows · {index.vulnerable_flows} vulnerable · {index.function_count}{" "}
-          functions
-        </div>
-      </div>
 
-      {loading && <p class="text-muted small mb-0">Loading flows…</p>}
+        {loading && <p class="text-muted small mb-0">Loading flows…</p>}
 
-      {bundle && !loading && (
+        {!selectedId && !loading && (
+          <p class="text-muted small mb-0">Select a function to inspect taint flows.</p>
+        )}
+
+        {bundle && !loading && (
         <div class="row g-3">
           <div class="col-lg-7">
             <div class="table-responsive border rounded">
@@ -253,6 +249,7 @@ export function TaintView() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </FunctionListLayout>
   );
 }

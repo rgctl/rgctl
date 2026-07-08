@@ -103,7 +103,7 @@ export function App() {
       </div>
       )}
 
-      <div class="rb-tab-workspace">
+      <div class="rb-tab-workspace rb-tab-workspace--analysis">
         <ul class="nav nav-tabs mb-0 flex-shrink-0">
           {TABS.map((t) => (
             <li class="nav-item" key={t.id}>
@@ -120,7 +120,7 @@ export function App() {
 
         <div
           class={`card shadow-sm border-top-0 rounded-top-0 rb-tab-panel-card ${
-            tab === "graph" || tab === "cfg" || tab === "slice" || tab === "blast" || tab === "dataflow"
+            tab === "graph" || tab === "cfg" || tab === "slice" || tab === "blast" || tab === "dataflow" || tab === "taint"
               ? "graph-panel p-0"
               : "p-0"
           }`}
@@ -130,15 +130,15 @@ export function App() {
               tab === "graph"
                 ? ""
                 : tab === "cfg"
-                  ? "rb-tab-panel-body--cfg p-3"
+                  ? "rb-tab-panel-body--cfg p-0"
                   : tab === "slice"
-                    ? "rb-tab-panel-body--cfg p-3"
+                    ? "rb-tab-panel-body--cfg p-0"
                     : tab === "blast"
-                      ? "rb-tab-panel-body--cfg p-3"
+                      ? "rb-tab-panel-body--cfg p-0"
                       : tab === "dataflow"
-                        ? "rb-tab-panel-body--cfg p-3"
+                        ? "rb-tab-panel-body--cfg p-0"
                         : tab === "taint"
-                          ? "rb-tab-panel-body--scroll p-3"
+                          ? "rb-tab-panel-body--cfg p-0"
                           : "rb-tab-panel-body--scroll p-4"
             }`}
           >

@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import type { BlastRadiusPayload, NodeListEntry } from "./types";
 import { NODE_TYPE_MASK } from "./types";
+import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
+import { nodeEntryToListItem } from "./functionListUtils";
 
 export interface BlastViewProps {
   wasmReady: boolean;
@@ -14,10 +16,9 @@ export interface BlastViewProps {
 }
 
 export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: BlastViewProps) {
-  const [search, setSearch] = useState("");
   const [depth, setDepth] = useState(5);
   const [functions, setFunctions] = useState<NodeListEntry[]>([]);
-  const [selected, setSelected] = useState<NodeListEntry | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [result, setResult] = useState<BlastRadiusPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -41,7 +42,16 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
     void loadFunctions();
   }, [loadFunctions]);
 
-  const filtered = filterFunctions(functions, search);
+  const listItems = useMemo(() => functions.map(nodeEntryToListItem), [functions]);
+  const selected = useMemo(
+    () => functions.find((f) => String(f.index) === selectedId) ?? null,
+    [functions, selectedId],
+  );
+
+  const onSelectFunction = (id: string) => {
+    setSelectedId(id);
+    setResult(null);
+  };
 
   const runBlast = async () => {
     if (!selected) return;
@@ -67,46 +77,21 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
   }
 
   return (
-    <div class="blast-view d-flex flex-column h-100 min-h-0 gap-3">
-      <div class="d-flex flex-wrap align-items-end gap-2 flex-shrink-0">
-        <div class="flex-grow-1">
-          <label class="form-label small mb-1" for="blast-search">
-            Function ({functionCount.toLocaleString()} total)
-          </label>
-          <input
-            id="blast-search"
-            type="search"
-            class="form-control form-control-sm"
-            placeholder="Filter by name…"
-            value={search}
-            onInput={(e) => setSearch((e.target as HTMLInputElement).value)}
-          />
-        </div>
-        <div style={{ minWidth: "280px", maxWidth: "100%" }}>
-          <label class="form-label small mb-1" for="blast-fn">
-            Target
-          </label>
-          <select
-            id="blast-fn"
-            class="form-select form-select-sm"
-            value={selected?.index ?? ""}
-            onChange={(e) => {
-              const v = Number((e.target as HTMLSelectElement).value);
-              const fn = filtered.find((f) => f.index === v) ?? null;
-              setSelected(fn);
-              setResult(null);
-            }}
-          >
-            <option value="">Select function…</option>
-            {filtered.map((f) => (
-              <option key={f.index} value={f.index}>
-                {f.name}
-                {f.blast_score > 0 ? ` (score ${f.blast_score.toFixed(0)})` : ""}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
+    <FunctionListLayout
+      sidebar={
+        <FunctionListSidebar
+          count={functionCount}
+          items={listItems}
+          selectedId={selectedId}
+          onSelect={onSelectFunction}
+          loading={loading}
+        />
+      }
+    >
+      <div class="blast-view d-flex flex-column h-100 min-h-0 gap-3 p-3">
+        <div class="d-flex flex-wrap align-items-end gap-2 flex-shrink-0">
+          <div class="flex-grow-1" />
+          <div style={{ minWidth: "12rem" }}>
           <label class="form-label small mb-1" for="blast-depth">
             Caller depth: {depth}
           </label>
@@ -130,7 +115,6 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
         </button>
       </div>
 
-      {loading && <p class="text-muted small mb-0">Loading functions…</p>}
       {error && <div class="alert alert-warning py-2 small mb-0">{error}</div>}
 
       {result && (
@@ -214,12 +198,7 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
           BFS).
         </p>
       )}
-    </div>
+      </div>
+    </FunctionListLayout>
   );
-}
-
-function filterFunctions(list: NodeListEntry[], search: string): NodeListEntry[] {
-  const q = search.trim().toLowerCase();
-  if (!q) return list;
-  return list.filter((f) => f.name.toLowerCase().includes(q));
 }

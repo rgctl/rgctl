@@ -1,13 +1,57 @@
-/** Wait until an element has non-zero layout dimensions (flex panels settle async). */
+import type Sigma from "sigma";
+
+const MIN_SIGMA_SIZE = 32;
+/** WebGL max texture dimension on most GPUs; avoid texImage2D out-of-range errors. */
+const MAX_CANVAS_DIM = 4096;
+
+/** Wait until an element has usable layout dimensions (flex panels settle async). */
 export async function waitForContainerSize(
   el: HTMLElement,
-  maxFrames = 40,
+  maxFrames = 120,
+  minSize = MIN_SIGMA_SIZE,
 ): Promise<boolean> {
   for (let i = 0; i < maxFrames; i++) {
-    if (el.offsetHeight > 0 && el.offsetWidth > 0) return true;
+    if (isValidCanvasSize(el)) return true;
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
-  return el.offsetHeight > 0 && el.offsetWidth > 0;
+  return isValidCanvasSize(el);
+}
+
+export function clampCanvasDim(n: number): number {
+  return Math.max(MIN_SIGMA_SIZE, Math.min(MAX_CANVAS_DIM, Math.floor(n)));
+}
+
+export function isValidCanvasSize(el: HTMLElement): boolean {
+  const w = el.clientWidth;
+  const h = el.clientHeight;
+  return w >= MIN_SIGMA_SIZE && h >= MIN_SIGMA_SIZE && w <= MAX_CANVAS_DIM && h <= MAX_CANVAS_DIM;
+}
+
+/** Apply viewport-bounded fallback when flex layout has not sized the graph wrap yet. */
+export function ensureGraphWrapSize(wrap: HTMLElement): void {
+  if (isValidCanvasSize(wrap)) return;
+  const targetH = clampCanvasDim(window.innerHeight * 0.55);
+  wrap.style.flex = "1 1 auto";
+  wrap.style.width = "100%";
+  wrap.style.minHeight = "280px";
+  wrap.style.maxHeight = `${targetH}px`;
+  wrap.style.height = "100%";
+  wrap.style.overflow = "hidden";
+  wrap.style.position = "relative";
+}
+
+/** Keep WebGL backing store in sync when flex layout changes size. */
+export function observeSigmaResize(
+  sigma: { resize: (force?: boolean) => unknown; refresh: () => unknown },
+  container: HTMLElement,
+): () => void {
+  const ro = new ResizeObserver(() => {
+    if (!isValidCanvasSize(container)) return;
+    sigma.resize();
+    sigma.refresh();
+  });
+  ro.observe(container);
+  return () => ro.disconnect();
 }
 
 /**
@@ -24,12 +68,8 @@ export function mountSigmaWhenReady(
 
   const tryMount = () => {
     if (disposed || innerCleanup) return;
-    if (container.offsetHeight === 0 || container.offsetWidth === 0) return;
+    if (!isValidCanvasSize(container)) return;
     innerCleanup = mount() ?? undefined;
-    if (innerCleanup && ro) {
-      ro.disconnect();
-      ro = null;
-    }
   };
 
   void (async () => {
@@ -37,14 +77,69 @@ export function mountSigmaWhenReady(
     tryMount();
   })();
 
-  if (!innerCleanup) {
-    ro = new ResizeObserver(() => tryMount());
-    ro.observe(container);
-  }
+  ro = new ResizeObserver(() => tryMount());
+  ro.observe(container);
 
   return () => {
     disposed = true;
     ro?.disconnect();
     innerCleanup?.();
+  };
+}
+
+export interface SigmaMountHandle {
+  sigma: Sigma;
+}
+
+/**
+ * Mount Sigma inside a bounded graph wrap. The host is absolutely positioned to fill
+ * the wrap; never copy unbounded layout sizes onto the WebGL canvas.
+ */
+export function mountSigmaInWrap(
+  wrap: HTMLElement,
+  host: HTMLElement,
+  create: () => SigmaMountHandle,
+): () => void {
+  let disposed = false;
+  let sigma: Sigma | null = null;
+  let ro: ResizeObserver | null = null;
+
+  const tryMount = () => {
+    if (disposed || sigma) return;
+    ensureGraphWrapSize(wrap);
+    if (!isValidCanvasSize(wrap) || !isValidCanvasSize(host)) return;
+    const handle = create();
+    sigma = handle.sigma;
+    sigma.resize();
+    sigma.refresh();
+  };
+
+  const onResize = () => {
+    if (disposed) return;
+    if (!isValidCanvasSize(wrap)) return;
+    if (sigma) {
+      sigma.resize();
+      sigma.refresh();
+      return;
+    }
+    tryMount();
+  };
+
+  void (async () => {
+    await waitForContainerSize(wrap);
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+    if (!disposed) tryMount();
+  })();
+
+  ro = new ResizeObserver(onResize);
+  ro.observe(wrap);
+
+  return () => {
+    disposed = true;
+    ro?.disconnect();
+    sigma?.kill();
+    sigma = null;
   };
 }

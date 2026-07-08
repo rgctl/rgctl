@@ -25,6 +25,10 @@ export interface DataflowGraphEdge {
   variable?: string | null;
 }
 
+function nodeTouchesVariable(node: SlicePdgNode, variable: string): boolean {
+  return node.defined.includes(variable) || node.used.includes(variable);
+}
+
 export function computeDataflowGraph(
   nodes: SlicePdgNode[],
   edges: SlicePdgEdge[],
@@ -32,16 +36,30 @@ export function computeDataflowGraph(
   includeControl: boolean,
 ): DataflowGraphPayload {
   const varFilter = variable?.trim() || null;
+  const allDataEdges = edges.filter((e) => e.kind === "data");
 
-  let dataEdges = edges.filter((e) => e.kind === "data");
-  if (varFilter) {
-    dataEdges = dataEdges.filter((e) => e.variable === varFilter);
-  }
-
+  let dataEdges: SlicePdgEdge[];
   const nodeIds = new Set<string>();
-  for (const e of dataEdges) {
-    nodeIds.add(e.source);
-    nodeIds.add(e.target);
+
+  if (!varFilter) {
+    dataEdges = allDataEdges;
+    for (const n of nodes) nodeIds.add(n.id);
+  } else {
+    dataEdges = allDataEdges.filter((e) => e.variable === varFilter);
+    for (const e of dataEdges) {
+      nodeIds.add(e.source);
+      nodeIds.add(e.target);
+    }
+    for (const n of nodes) {
+      if (nodeTouchesVariable(n, varFilter)) {
+        nodeIds.add(n.id);
+      }
+    }
+    if (dataEdges.length === 0 && nodeIds.size > 0) {
+      dataEdges = allDataEdges.filter(
+        (e) => nodeIds.has(e.source) && nodeIds.has(e.target),
+      );
+    }
   }
 
   let controlEdges: SlicePdgEdge[] = [];
@@ -52,14 +70,6 @@ export function computeDataflowGraph(
         nodeIds.has(e.source) &&
         nodeIds.has(e.target),
     );
-  }
-
-  if (!varFilter && nodeIds.size === 0) {
-    for (const n of nodes) nodeIds.add(n.id);
-    dataEdges = edges.filter((e) => e.kind === "data");
-    if (includeControl) {
-      controlEdges = edges.filter((e) => e.kind === "control");
-    }
   }
 
   const filteredNodes = nodes
@@ -102,7 +112,17 @@ export function computeDataflowGraph(
   };
 }
 
-export function listPdgVariables(nodes: SlicePdgNode[]): string[] {
+/** Variables that have PDG data edges (preferred for the filter dropdown). */
+export function listPdgVariables(nodes: SlicePdgNode[], edges: SlicePdgEdge[]): string[] {
+  const fromEdges = new Set<string>();
+  for (const e of edges) {
+    if (e.kind === "data" && e.variable) {
+      fromEdges.add(e.variable);
+    }
+  }
+  if (fromEdges.size > 0) {
+    return [...fromEdges].sort((a, b) => a.localeCompare(b));
+  }
   const vars = new Set<string>();
   for (const n of nodes) {
     for (const v of n.defined) vars.add(v);
