@@ -48,6 +48,15 @@ pub fn node_to_location(node: Node, file: &str) -> SourceLocation {
 
 /// Extract symbol name from common tree-sitter child patterns.
 pub fn extract_name_from_node(node: Node, source: &[u8]) -> Result<Option<String>> {
+    if matches!(
+        node.kind(),
+        "method_declaration" | "local_function_statement" | "constructor_declaration"
+    ) {
+        if let Some(name) = node.child_by_field_name("name") {
+            return Ok(Some(name.utf8_text(source)?.to_string()));
+        }
+    }
+
     for field in ["name", "lhs", "pattern"] {
         if let Some(field_node) = node.child_by_field_name(field) {
             if let Some(name) = extract_name_from_node(field_node, source)? {

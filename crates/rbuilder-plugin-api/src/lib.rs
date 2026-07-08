@@ -8,8 +8,8 @@ mod error;
 mod registrar;
 
 pub use call_extraction::{
-    callee_name, containing_function, push_call_relation, walk_calls, GO_CALL_KINDS,
-    PYTHON_CALL_KINDS, RUST_CALL_KINDS,
+    callee_name, containing_function, push_call_relation, walk_calls, CSHARP_CALL_KINDS,
+    GO_CALL_KINDS, PYTHON_CALL_KINDS, RUST_CALL_KINDS,
 };
 
 pub use error::{Error, Result};

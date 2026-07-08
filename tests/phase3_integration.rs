@@ -52,7 +52,7 @@ fn test_java_plugin_extraction() {
 #[test]
 fn test_tier1_plugin_registry() {
     let registry = LanguageRegistry::new();
-    for id in ["rust", "python", "javascript", "typescript", "go", "java"] {
+    for id in ["rust", "python", "javascript", "typescript", "go", "java", "csharp"] {
         assert!(registry.has_plugin(id), "missing plugin {id}");
     }
 }

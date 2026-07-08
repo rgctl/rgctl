@@ -1,4 +1,4 @@
-//! Built-in language plugin integration tests
+//! Tier 1 language plugin integration tests
 
 use rbuilder::languages::registry::LanguageRegistry;
 use std::path::Path;
@@ -6,8 +6,16 @@ use std::path::Path;
 #[test]
 fn test_all_tier1_plugins_registered() {
     let registry = LanguageRegistry::new();
-    assert_eq!(registry.stats().language_plugins, 6);
-    for id in ["rust", "python", "javascript", "typescript", "go", "java"] {
+    assert_eq!(registry.stats().language_plugins, 7);
+    for id in [
+        "rust",
+        "python",
+        "javascript",
+        "typescript",
+        "go",
+        "java",
+        "csharp",
+    ] {
         assert!(registry.has_plugin(id), "missing plugin {id}");
     }
 }
@@ -22,6 +30,7 @@ fn test_extension_routing() {
         ("index.ts", "typescript"),
         ("main.go", "go"),
         ("App.java", "java"),
+        ("Program.cs", "csharp"),
     ] {
         let plugin = registry
             .get_plugin_for_file(Path::new(file))

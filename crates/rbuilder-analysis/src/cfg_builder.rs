@@ -167,7 +167,7 @@ impl<'a> CfgBuilder<'a> {
             // Rust + Python conditionals
             "if_statement" | "if_expression" => self.visit_if(node, source),
             "while_statement" | "while_expression" => self.visit_while(node, source),
-            "for_statement" | "for_expression" | "for_in_expression" => {
+            "for_statement" | "for_expression" | "for_in_expression" | "foreach_statement" => {
                 self.visit_for(node, source)
             }
             "loop_expression" => self.visit_loop(node, source),
@@ -184,7 +184,8 @@ impl<'a> CfgBuilder<'a> {
                 self.add_statement(node, source, StatementKind::Declaration)?;
                 Ok(())
             }
-            "short_var_declaration" | "var_declaration" | "const_declaration" => {
+            "short_var_declaration" | "var_declaration" | "const_declaration"
+            | "variable_declaration" | "local_declaration_statement" => {
                 self.add_statement(node, source, StatementKind::Declaration)?;
                 Ok(())
             }
@@ -252,7 +253,9 @@ impl<'a> CfgBuilder<'a> {
 
     fn classify_expression(node: Node, _source: &[u8]) -> StatementKind {
         match node.kind() {
-            "call_expression" | "function_call" | "method_call" => StatementKind::FunctionCall,
+            "call_expression" | "function_call" | "method_call" | "invocation_expression" => {
+                StatementKind::FunctionCall
+            }
             "assignment_expression" | "assignment" | "augmented_assignment" => {
                 StatementKind::Assignment
             }
@@ -550,21 +553,36 @@ impl<'a> CfgBuilder<'a> {
         if let Some(body) = node.child_by_field_name("body") {
             self.visit_block(body, source)?;
         }
-        let try_end = self.current_block;
+        let mut try_end = self.current_block;
         let merge = self.new_block();
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "except_clause" || child.kind() == "except_handler" {
+            if child.kind() == "except_clause"
+                || child.kind() == "except_handler"
+                || child.kind() == "catch_clause"
+            {
                 let handler = self.new_block();
                 self.cfg
                     .add_edge(try_block, handler, CfgEdgeType::Exception);
                 self.current_block = handler;
                 if let Some(block) = child.child_by_field_name("body") {
                     self.visit_block(block, source)?;
+                } else if child.kind() == "catch_clause" {
+                    if let Some(block) = find_child_kind(child, "block") {
+                        self.visit_block(block, source)?;
+                    }
                 }
                 self.cfg
                     .add_edge(self.current_block, merge, CfgEdgeType::Next);
+            } else if child.kind() == "finally_clause" {
+                let finally = self.new_block();
+                self.cfg.add_edge(try_end, finally, CfgEdgeType::Next);
+                self.current_block = finally;
+                if let Some(block) = find_child_kind(child, "block") {
+                    self.visit_block(block, source)?;
+                }
+                try_end = self.current_block;
             }
         }
 
@@ -574,6 +592,19 @@ impl<'a> CfgBuilder<'a> {
     }
 }
 
+fn find_child_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == kind {
+            return Some(child);
+        }
+        if let Some(found) = find_child_kind(child, kind) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 fn collect_switch_cases<'a>(node: Node<'a>, cases: &mut Vec<Node<'a>>) {
     match node.kind() {
         "expression_case"
@@ -581,7 +612,8 @@ fn collect_switch_cases<'a>(node: Node<'a>, cases: &mut Vec<Node<'a>>) {
         | "case_clause"
         | "default_case"
         | "default_statement"
-        | "communication_case" => cases.push(node),
+        | "communication_case"
+        | "switch_section" => cases.push(node),
         _ => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
@@ -783,6 +815,39 @@ func Keys(m map[string]int) int {
 }
 "#;
         let cfg = build_cfg_for_function("go", code, "Keys").unwrap();
+        assert!(cfg.has_cycle());
+    }
+
+    #[test]
+    fn test_csharp_if_else_cfg() {
+        let code = r#"
+public class Demo {
+    public int Abs(int x) {
+        if (x > 0) {
+            return x;
+        }
+        return -x;
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("csharp", code, "Abs").unwrap();
+        assert!(cfg.blocks.len() >= 4);
+    }
+
+    #[test]
+    fn test_csharp_loop_has_cycle() {
+        let code = r#"
+public class Demo {
+    public int Sum(int n) {
+        var total = 0;
+        for (int i = 0; i < n; i++) {
+            total += i;
+        }
+        return total;
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("csharp", code, "Sum").unwrap();
         assert!(cfg.has_cycle());
     }
 

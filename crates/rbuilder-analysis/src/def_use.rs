@@ -119,6 +119,23 @@ fn collect_def_use(
             }
         }
 
+        // C#
+        "variable_declaration" | "local_declaration_statement" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "variable_declarator" {
+                    if let Some(name) = child.child_by_field_name("name") {
+                        collect_pattern_defs(name, source, defined);
+                    }
+                    if let Some(value) = child.child_by_field_name("value") {
+                        collect_def_use(value, source, defined, used, false);
+                    }
+                } else if child.kind() == "variable_declaration" {
+                    collect_def_use(child, source, defined, used, false);
+                }
+            }
+        }
+
         // Shared identifiers
         "identifier" | "shorthand_field_identifier" | "field_identifier" | "type_identifier" => {
             if is_def_target {

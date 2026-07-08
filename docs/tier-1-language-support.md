@@ -18,7 +18,7 @@ rBuilder uses a **hybrid tiering** model:
 | **Tier 2** | Generic tree-sitter | `rbuilder-lang-{id}/` + `config.rs` | Kinds from `LanguageConfig` | Optional | Usually none |
 | **Tier 3** | Regex | `rbuilder-lang-{id}/` + regex patterns | Pattern-based symbols | No | No |
 
-**Tier 1 custom plugins today (indexing):** Rust, Python, TypeScript, JavaScript, Go, Java — see `languages.toml` (`handler = "custom"`).
+**Tier 1 custom plugins today (indexing):** Rust, Python, TypeScript, JavaScript, Go, Java, C# — see `languages.toml` (`handler = "custom"`).
 
 **Fully supported (analysis parity)** is a **subset** of Tier 1: languages that pass the [capability checklist](#2-capability-checklist--fully-supported) below. Today that bar is met most completely by **Java** and **Go**; Rust and Python have CFG + taint but shallower taint / fewer golden tests.
 
@@ -352,11 +352,11 @@ Copy into your PR description:
 |----------|------|-------|-----|-------|----------------|
 | Java | 1 custom | ✅ + Extends/Implements | ✅ | ✅ rich | gbuilder golden |
 | Go | 1 custom | ✅ | ✅ deep | ✅ rich | `dashboard_ecommerce_go` |
+| C# | 1 custom | ✅ | ✅ | ✅ | `csharp_phase13` / `csharp_cfg_analysis` |
 | Python | 1 custom | ✅ | ✅ | ✅ richest | — |
 | Rust | 1 custom | ✅ | ✅ | ⚠️ basic | — |
 | JS / TS | 1 custom | ❌ stub | ❌ | ✅ (JS patterns) | — |
 | C / C++ | 2 generic | ❌ | ❌ | ❌ | — |
-| C# | regex / partial | ❌ | ❌ | ❌ | — |
 
 Use this table to prioritize gaps; updating it when a language completes Layer E is encouraged.
 

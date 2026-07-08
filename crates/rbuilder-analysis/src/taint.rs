@@ -142,6 +142,7 @@ impl<'a> TaintAnalyzer<'a> {
             "rust" => self.detect_rust_patterns(),
             "go" => self.detect_go_patterns(),
             "java" => self.detect_java_patterns(),
+            "csharp" => self.detect_csharp_patterns(),
             _ => {}
         }
     }
@@ -366,6 +367,78 @@ impl<'a> TaintAnalyzer<'a> {
             {
                 self.sanitizers
                     .insert(*node_id, Sanitizer::Validation("pattern".into()));
+            }
+        }
+    }
+
+    fn detect_csharp_patterns(&mut self) {
+        for (node_id, node) in &self.pdg.nodes {
+            let text = &node.statement.text;
+
+            if text.contains("Request.Query")
+                || text.contains("Request.Form")
+                || text.contains("Request.Headers")
+                || text.contains("[FromQuery]")
+                || text.contains("[FromBody]")
+                || text.contains("HttpContext.Request")
+            {
+                self.sources.insert(*node_id, TaintSource::HttpParameter);
+            } else if text.contains("File.ReadAllText")
+                || text.contains("File.ReadAllBytes")
+                || text.contains("StreamReader")
+            {
+                self.sources.insert(*node_id, TaintSource::FileInput);
+            } else if text.contains("Environment.GetEnvironmentVariable") {
+                self.sources.insert(*node_id, TaintSource::EnvironmentVar);
+            } else if text.contains("args[") || text.contains("Environment.GetCommandLineArgs") {
+                self.sources.insert(*node_id, TaintSource::CommandLineArg);
+            } else if text.contains("ExecuteReader") || text.contains("SqlDataReader") {
+                self.sources.insert(*node_id, TaintSource::DatabaseResult);
+            }
+
+            if text.contains("ExecuteSqlRaw")
+                || text.contains("ExecuteSqlInterpolated")
+                || text.contains("FromSqlRaw")
+                || text.contains("SqlCommand")
+                || text.contains("ExecuteNonQuery")
+                || text.contains("ExecuteReader")
+            {
+                self.sinks.insert(*node_id, TaintSink::SqlQuery);
+            } else if text.contains("Process.Start")
+                || text.contains("ProcessStartInfo")
+            {
+                self.sinks.insert(*node_id, TaintSink::ShellCommand);
+            } else if text.contains("File.WriteAllText")
+                || text.contains("File.WriteAllBytes")
+                || text.contains("StreamWriter")
+            {
+                self.sinks.insert(*node_id, TaintSink::FileWrite);
+            } else if text.contains("Response.Write")
+                || text.contains("Html.Raw")
+                || text.contains("InnerHtml")
+            {
+                self.sinks.insert(*node_id, TaintSink::HtmlRender);
+            } else if text.contains("Log.")
+                || text.contains("Logger.")
+                || text.contains("Console.WriteLine")
+            {
+                self.sinks.insert(*node_id, TaintSink::LogOutput);
+            }
+
+            if text.contains("int.Parse")
+                || text.contains("long.Parse")
+                || text.contains("double.Parse")
+            {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::TypeCast("numeric".into()));
+            } else if text.contains("HtmlEncode")
+                || text.contains("WebUtility.HtmlEncode")
+                || text.contains("AntiXss")
+            {
+                self.sanitizers.insert(*node_id, Sanitizer::HtmlEscape);
+            } else if text.contains("AddWithValue") || text.contains("Parameters.Add") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::SqlParameterize);
             }
         }
     }

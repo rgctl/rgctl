@@ -74,7 +74,7 @@ cargo build --release
 ./target/release/rbuilder --version
 ```
 
-All six Tier 1 languages (Rust, Python, JavaScript, TypeScript, Go, Java) are always included in the binary.
+All seven Tier 1 languages (Rust, Python, JavaScript, TypeScript, Go, Java, C#) are always included in the binary.
 
 ---
 

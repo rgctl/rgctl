@@ -8,6 +8,7 @@ use tree_sitter::Node;
 pub const RUST_CALL_KINDS: &[&str] = &["call_expression", "macro_invocation"];
 pub const GO_CALL_KINDS: &[&str] = &["call_expression"];
 pub const PYTHON_CALL_KINDS: &[&str] = &["call"];
+pub const CSHARP_CALL_KINDS: &[&str] = &["invocation_expression"];
 
 /// Find the innermost function symbol containing `node`.
 pub fn containing_function<'a>(node: Node, symbols: &'a [Symbol]) -> Option<&'a Symbol> {
@@ -34,6 +35,9 @@ pub fn callee_name(node: Node, source: &[u8]) -> Option<String> {
         "parenthesized_expression" => node
             .named_child(0)
             .and_then(|inner| callee_name(inner, source)),
+        "invocation_expression" => node
+            .named_child(0)
+            .and_then(|n| callee_name(n, source)),
         _ => {
             if let Some(func) = node.child_by_field_name("function") {
                 return callee_name(func, source);

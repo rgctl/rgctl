@@ -14,3 +14,4 @@ rbuilder-lang-javascript = { workspace = true }
 rbuilder-lang-typescript = { workspace = true }
 rbuilder-lang-go = { workspace = true }
 rbuilder-lang-java = { workspace = true }
+rbuilder-lang-csharp = { workspace = true }

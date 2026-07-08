@@ -129,7 +129,7 @@ flowchart TB
 | **Analysis is graph-only** | Algorithms in `rbuilder-analysis` take `MemoryBackend`, `PetGraphView`, or snapshots — not raw source files (except CFG/PDG/slice paths that explicitly need source). |
 | **CLI is thin** | `src/cli/` parses args, resolves paths, calls library crates. Heavy logic belongs in workspace crates, not new `src/cli/*.rs` helpers. JSON shape lives in `*_output.rs`; graph/cache enrichment stays in `rbuilder-analysis`. |
 | **Errors are centralized** | Use `rbuilder_error::Error` / `Result` from `rbuilder-error`. Do not add ad-hoc error enums in the CLI. |
-| **All languages always linked** | The binary always includes all six Tier 1 language plugins via `rbuilder-languages`. |
+| **All languages always linked** | The binary always includes all seven Tier 1 language plugins via `rbuilder-languages`. |
 
 ### Layer responsibilities
 
@@ -258,7 +258,7 @@ Alphabetical list of workspace crates **excluding** individual `rbuilder-lang-*`
 |---|---|---|
 | **rbuilder** | `.` | CLI binary, command dispatch, language bundle wiring, public library root. |
 | **rbuilder-analysis** | `crates/rbuilder-analysis` | Graph algorithms: blast radius, centrality, community, CFG/PDG, slicing, taint, policies, caches, `PetGraphView`. |
-| **rbuilder-languages** | `crates/rbuilder-languages` | Registers all Tier 1 language plugins (Rust, Python, JS/TS, Go, Java). |
+| **rbuilder-languages** | `crates/rbuilder-languages` | Registers all Tier 1 language plugins (Rust, Python, JS/TS, Go, Java, C#). |
 | **rbuilder-config-formats** | `crates/rbuilder-config-formats` | Config file plugins (YAML, JSON, TOML, properties, markdown). |
 | **rbuilder-core** | `crates/rbuilder-core` | Facade crate re-exporting the stable library API for embedders. |
 | **rbuilder-error** | `crates/rbuilder-error` | Shared error types (`Error`, `Result`) for the whole workspace. |
