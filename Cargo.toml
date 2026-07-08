@@ -174,7 +174,7 @@ expect_used = "warn"
 
 [package]
 name = "rbuilder"
-version = "0.1.0"
+version = "0.0.3"
 edition = "2021"
 authors = ["rBuilder Contributors"]
 description = "A Code knowledge graph system"
