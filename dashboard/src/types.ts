@@ -54,6 +54,21 @@ export interface BlastCallerEntry {
   node_type_name: string;
 }
 
+export interface BlastIndexPayload {
+  schema_version: number;
+  available: boolean;
+  snapshot_path?: string | null;
+  snapshot_copied?: boolean;
+  functions?: BlastFunctionScore[];
+}
+
+export interface BlastFunctionScore {
+  index: number;
+  score: number;
+  direct: number;
+  zone: number;
+}
+
 export interface AnalysisSection {
   cfg_available: boolean;
   cfg_index_path: string;

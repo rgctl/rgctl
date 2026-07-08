@@ -458,6 +458,10 @@ body {
   font-size: 0.65rem;
 }
 
+.function-list-pagination {
+  background: #fff;
+}
+
 @media (max-width: 991.98px) {
   .function-list-sidebar--collapsed {
     flex: 0 0 auto;

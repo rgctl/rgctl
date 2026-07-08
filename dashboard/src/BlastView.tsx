@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
-import type { BlastRadiusPayload, NodeListEntry } from "./types";
+import type { BlastFunctionScore, BlastRadiusPayload, NodeListEntry } from "./types";
 import { NODE_TYPE_MASK } from "./types";
+import { bundleDataUrl } from "./bundleUrl";
 import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
-import { nodeEntryToListItem } from "./functionListUtils";
+import { blastEntryToListItem } from "./functionListUtils";
 
 const DEPTH_DEBOUNCE_MS = 300;
 
@@ -17,9 +18,31 @@ export interface BlastViewProps {
   blastRadius: (nodeIndex: number, maxDepth: number) => Promise<BlastRadiusPayload>;
 }
 
+function scoreMapFromIndex(functions: BlastFunctionScore[] | undefined): Map<number, BlastFunctionScore> {
+  const map = new Map<number, BlastFunctionScore>();
+  for (const row of functions ?? []) {
+    map.set(row.index, row);
+  }
+  return map;
+}
+
+function sortByImpactScore(
+  entries: NodeListEntry[],
+  scores: Map<number, BlastFunctionScore>,
+): NodeListEntry[] {
+  const scoreFor = (entry: NodeListEntry): number =>
+    scores.get(entry.index)?.score ?? entry.blast_score;
+
+  return [...entries].sort((a, b) => {
+    const diff = scoreFor(b) - scoreFor(a);
+    return diff !== 0 ? diff : a.name.localeCompare(b.name);
+  });
+}
+
 export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: BlastViewProps) {
   const [depth, setDepth] = useState(5);
   const [functions, setFunctions] = useState<NodeListEntry[]>([]);
+  const [scoreByIndex, setScoreByIndex] = useState<Map<number, BlastFunctionScore>>(() => new Map());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [result, setResult] = useState<BlastRadiusPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -28,25 +51,55 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
   const requestSeq = useRef(0);
   const prevSelectedId = useRef<string | null>(null);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetch(bundleDataUrl("blast_index.json"))
+      .then((r) => {
+        if (!r.ok) throw new Error(`blast_index.json HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data: { functions?: BlastFunctionScore[] }) => {
+        if (!cancelled) setScoreByIndex(scoreMapFromIndex(data.functions));
+      })
+      .catch(() => {
+        if (!cancelled) setScoreByIndex(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const loadFunctions = useCallback(async () => {
     if (!wasmReady) return;
     setLoading(true);
     setError(null);
     try {
-      const page = await listNodes(NODE_TYPE_MASK.Function, 0, 500);
-      setFunctions(page.items);
+      const pageSize = 500;
+      const target = Math.min(Math.max(functionCount, 1), 5000);
+      const all: NodeListEntry[] = [];
+      for (let offset = 0; offset < target; offset += pageSize) {
+        const page = await listNodes(NODE_TYPE_MASK.Function, offset, pageSize);
+        all.push(...page.items);
+        if (page.items.length === 0 || all.length >= page.total) break;
+      }
+      setFunctions(sortByImpactScore(all, scoreByIndex));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [wasmReady, listNodes]);
+  }, [wasmReady, listNodes, scoreByIndex, functionCount]);
 
   useEffect(() => {
     void loadFunctions();
   }, [loadFunctions]);
 
-  const listItems = useMemo(() => functions.map(nodeEntryToListItem), [functions]);
+  const listItems = useMemo(
+    () =>
+      functions.map((entry) => blastEntryToListItem(entry, scoreByIndex.get(entry.index) ?? null)),
+    [functions, scoreByIndex],
+  );
+
   const selected = useMemo(
     () => functions.find((f) => String(f.index) === selectedId) ?? null,
     [functions, selectedId],
@@ -222,8 +275,8 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
 
         {!selected && !loading && (
           <p class="text-muted small mb-0">
-            Select a function from the list to see its blast radius. Adjust caller depth to change
-            how far upstream to search.
+            Select a function from the list to see its blast radius. Functions are sorted by impact
+            score (highest first). Adjust caller depth to change how far upstream to search.
           </p>
         )}
       </div>

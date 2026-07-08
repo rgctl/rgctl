@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
-import { filterFunctionItems, shortPath, type FunctionListItem } from "./functionListUtils";
+import {
+  filterFunctionItems,
+  FUNCTION_LIST_PAGE_SIZE,
+  shortPath,
+  type FunctionListItem,
+} from "./functionListUtils";
 
 export interface FunctionListSidebarProps {
   title?: string;
@@ -38,30 +43,59 @@ export function FunctionListSidebar({
 }: FunctionListSidebarProps) {
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState(false);
+  const [page, setPage] = useState(0);
   const [focusIndex, setFocusIndex] = useState(-1);
   const listRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const filtered = filterFunctionItems(items, search);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / FUNCTION_LIST_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageStart = safePage * FUNCTION_LIST_PAGE_SIZE;
+  const pageItems = filtered.slice(pageStart, pageStart + FUNCTION_LIST_PAGE_SIZE);
   const totalLabel = count ?? items.length;
+  const rangeStart = filtered.length === 0 ? 0 : pageStart + 1;
+  const rangeEnd = Math.min(pageStart + FUNCTION_LIST_PAGE_SIZE, filtered.length);
+
+  useEffect(() => {
+    setPage(0);
+    setFocusIndex(-1);
+  }, [search]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, Math.max(0, pageCount - 1)));
+  }, [pageCount]);
 
   useEffect(() => {
     if (!selectedId) return;
     const idx = filtered.findIndex((item) => item.id === selectedId);
-    if (idx >= 0) setFocusIndex(idx);
+    if (idx < 0) return;
+    const selectedPage = Math.floor(idx / FUNCTION_LIST_PAGE_SIZE);
+    setPage(selectedPage);
+    setFocusIndex(idx - selectedPage * FUNCTION_LIST_PAGE_SIZE);
   }, [selectedId, filtered]);
 
   const selectAt = (index: number) => {
-    const item = filtered[index];
+    const item = pageItems[index];
     if (!item) return;
     setFocusIndex(index);
     onSelect(item.id);
   };
 
+  const goPrev = () => {
+    setPage((p) => Math.max(0, p - 1));
+    setFocusIndex(-1);
+  };
+
+  const goNext = () => {
+    setPage((p) => Math.min(pageCount - 1, p + 1));
+    setFocusIndex(-1);
+  };
+
   const onSearchKeyDown = (e: KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      if (filtered.length > 0) selectAt(Math.max(0, focusIndex < 0 ? 0 : focusIndex));
+      if (pageItems.length > 0) selectAt(Math.max(0, focusIndex < 0 ? 0 : focusIndex));
       listRef.current?.focus();
     } else if (e.key === "Enter" && focusIndex >= 0) {
       e.preventDefault();
@@ -70,10 +104,10 @@ export function FunctionListSidebar({
   };
 
   const onListKeyDown = (e: KeyboardEvent) => {
-    if (filtered.length === 0) return;
+    if (pageItems.length === 0) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      selectAt(Math.min(filtered.length - 1, (focusIndex < 0 ? 0 : focusIndex) + 1));
+      selectAt(Math.min(pageItems.length - 1, (focusIndex < 0 ? 0 : focusIndex) + 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       if (focusIndex <= 0) {
@@ -141,7 +175,7 @@ export function FunctionListSidebar({
                 <p class="text-muted small px-3 py-2 mb-0">{emptyMessage}</p>
               )}
               {!loading &&
-                filtered.map((item, index) => {
+                pageItems.map((item, index) => {
                   const active = item.id === selectedId;
                   const focused = index === focusIndex;
                   return (
@@ -171,6 +205,33 @@ export function FunctionListSidebar({
                   );
                 })}
             </div>
+
+            {!loading && filtered.length > 0 && (
+              <div class="function-list-pagination px-3 py-2 border-top flex-shrink-0 d-flex align-items-center justify-content-between gap-2">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-secondary"
+                  disabled={safePage <= 0}
+                  aria-label="Previous page"
+                  onClick={goPrev}
+                >
+                  Prev
+                </button>
+                <span class="small text-muted text-center flex-grow-1">
+                  {rangeStart}–{rangeEnd} of {filtered.length.toLocaleString()}
+                  {pageCount > 1 && ` · ${safePage + 1}/${pageCount}`}
+                </span>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-secondary"
+                  disabled={safePage >= pageCount - 1}
+                  aria-label="Next page"
+                  onClick={goNext}
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>

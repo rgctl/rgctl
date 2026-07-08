@@ -15,6 +15,8 @@ export interface FunctionListItem {
   badgeClass?: string;
 }
 
+export const FUNCTION_LIST_PAGE_SIZE = 30;
+
 export function shortPath(p: string): string {
   const parts = p.split(/[/\\]/);
   if (parts.length <= 2) return p;
@@ -84,5 +86,26 @@ export function nodeEntryToListItem(entry: NodeListEntry): FunctionListItem {
     name: entry.name,
     filePath: entry.file_path,
     meta: metaParts.join(" · "),
+  };
+}
+
+export function blastEntryToListItem(
+  entry: NodeListEntry,
+  score?: { score: number; direct: number; zone: number } | null,
+): FunctionListItem {
+  const metaParts: string[] = [];
+  if (score && score.score > 0) {
+    metaParts.push(`score ${score.score.toFixed(1)}`);
+    metaParts.push(`${score.direct} direct`);
+    metaParts.push(`${score.zone} zone`);
+  } else if (entry.blast_score > 0) {
+    metaParts.push(`score ${entry.blast_score.toFixed(0)}`);
+  }
+  if (entry.complexity > 0) metaParts.push(`cx ${entry.complexity.toFixed(1)}`);
+  return {
+    id: String(entry.index),
+    name: entry.name,
+    filePath: entry.file_path,
+    meta: metaParts.length > 0 ? metaParts.join(" · ") : undefined,
   };
 }
