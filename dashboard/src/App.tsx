@@ -6,6 +6,7 @@ import { TaintView } from "./TaintView";
 import { CfgView } from "./CfgView";
 import { FunctionsView } from "./FunctionsView";
 import { GraphView } from "./GraphView";
+import { NotificationMenu } from "./NotificationMenu";
 import { loadManifest, type DashboardManifest, type EngineReady } from "./types";
 import { useEngineWorker } from "./useEngineWorker";
 
@@ -37,21 +38,32 @@ export function App() {
 
   const error = manifestError ?? workerError;
   const m = manifest?.metrics;
-  const phases = manifest?.phases ?? {};
-  const view = manifest?.view;
 
   return (
     <div class={`rb-app container-fluid px-3 px-md-4 ${tab === "graph" ? "rb-app--graph-focus py-2" : "py-3"}`}>
       <header class={`flex-shrink-0 ${tab === "graph" ? "mb-2" : "mb-3"}`}>
-        <div class="d-flex align-items-center gap-2 mb-1">
-          <span class="rb-header-icon" aria-hidden="true">
-            ⎇
-          </span>
-          <h1 class={`mb-0 fw-semibold text-primary ${tab === "graph" ? "h5" : "h4"}`}>rBuilder Analysis Dashboard</h1>
+        <div class="d-flex align-items-start justify-content-between gap-3">
+          <div class="min-w-0">
+            <div class="d-flex align-items-center gap-2 mb-1">
+              <span class="rb-header-icon" aria-hidden="true">
+                ⎇
+              </span>
+              <h1 class={`mb-0 fw-semibold text-primary ${tab === "graph" ? "h5" : "h4"}`}>
+                rBuilder Analysis Dashboard
+              </h1>
+            </div>
+            {tab !== "graph" && (
+              <p class="text-muted small mb-0">Comprehensive code analysis visualization</p>
+            )}
+          </div>
+          <NotificationMenu
+            manifest={manifest}
+            engine={engine}
+            wasmReady={wasmReady}
+            manifestError={manifestError}
+            workerError={workerError}
+          />
         </div>
-        {tab !== "graph" && (
-          <p class="text-muted small mb-0">Comprehensive code analysis visualization</p>
-        )}
       </header>
 
       {error && (
@@ -59,36 +71,6 @@ export function App() {
           {error}
         </div>
       )}
-
-      <div class={`card shadow-sm ${tab === "graph" ? "rb-engine-bar mb-2" : "mb-3"}`}>
-        <div class="card-body py-2 small d-flex flex-wrap gap-3">
-          <span>
-            Engine:{" "}
-            <strong>
-              {engine ? (engine.wasm ? "WASM ✓" : "JS fallback") : "loading…"}
-            </strong>
-          </span>
-          {engine && (
-            <>
-              <span>Nodes: {engine.nodeCount.toLocaleString()}</span>
-              <span>Edges: {engine.edgeCount.toLocaleString()}</span>
-            </>
-          )}
-          {view && (
-            <span>
-              Metanodes: {view.metanode_count} · Metaedges: {view.metaedge_count}
-            </span>
-          )}
-          {manifest && tab !== "graph" && (
-            <span class="text-success">
-              Phases:{" "}
-              {Object.entries(phases)
-                .map(([k, v]) => `${k}=${v}`)
-                .join(", ")}
-            </span>
-          )}
-        </div>
-      </div>
 
       <div class="row row-cols-2 row-cols-md-4 g-3 mb-3 flex-shrink-0 rb-stats-row">
         <StatCard label="Total Nodes" value={manifest?.graph.node_count ?? "—"} />

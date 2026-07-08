@@ -222,6 +222,43 @@ body {
   line-height: 1;
 }
 
+.rb-notifications {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.rb-notifications-toggle {
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  padding: 0.2rem 0.45rem;
+}
+
+.rb-notifications-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.rb-notifications-badge {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.35rem;
+  font-size: 0.6rem;
+  min-width: 1.1rem;
+}
+
+.rb-notifications-panel {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  width: min(22rem, calc(100vw - 2rem));
+  z-index: 1080;
+}
+
+.rb-notifications-list {
+  max-height: min(24rem, calc(100vh - 8rem));
+  overflow: auto;
+}
+
 .stat-card {
   border-left: 4px solid var(--rb-stat-blue);
 }
