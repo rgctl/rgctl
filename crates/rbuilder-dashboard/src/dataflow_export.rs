@@ -24,6 +24,7 @@ pub struct DataflowFunctionEntry {
     pub file_path: Option<String>,
     pub pdg_nodes: usize,
     pub data_edges: usize,
+    pub block_count: usize,
 }
 
 #[derive(Debug, Default)]
@@ -54,6 +55,18 @@ pub fn export_dataflow_index(
     )
     .map_err(|e| e.to_string())?;
 
+    let cfg_index: Option<crate::cfg_export::CfgIndexPayload> = fs::read(out_dir.join(crate::cfg_export::CFG_INDEX_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let block_counts: std::collections::HashMap<String, usize> = cfg_index
+        .map(|idx| {
+            idx.functions
+                .into_iter()
+                .map(|f| (f.function_id, f.block_count))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let mut functions = Vec::with_capacity(slice_index.functions.len());
     for entry in &slice_index.functions {
         let bundle_path = out_dir
@@ -80,6 +93,10 @@ pub fn export_dataflow_index(
             file_path: entry.file_path.clone(),
             pdg_nodes: entry.pdg_nodes,
             data_edges,
+            block_count: block_counts
+                .get(&entry.function_id)
+                .copied()
+                .unwrap_or(0),
         });
     }
 

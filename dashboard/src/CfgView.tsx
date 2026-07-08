@@ -4,6 +4,7 @@ import Sigma from "sigma";
 import { bundleDataUrl } from "./bundleUrl";
 import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
 import { cfgEntryToListItem, shortPath } from "./functionListUtils";
+import { GraphZoomControls } from "./GraphZoomControls";
 import { mountSigmaInWrap } from "./sigmaMount";
 import type { CfgDetailPayload, CfgIndexPayload } from "./types";
 import { ViewLegend } from "./ViewLegend";
@@ -200,6 +201,7 @@ function CfgGraph({ detail }: { detail: CfgDetailPayload }) {
       </div>
       <div ref={wrapRef} class="cfg-graph-wrap analysis-graph-canvas-wrap flex-grow-1">
         <div ref={containerRef} class="sigma-host" />
+        <GraphZoomControls sigmaRef={sigmaRef} />
       </div>
       <ViewLegend
         hint="Nodes"

@@ -8,26 +8,16 @@ import { FunctionsView } from "./FunctionsView";
 import { GraphView } from "./GraphView";
 import { NotificationMenu } from "./NotificationMenu";
 import { TabPanelStack } from "./TabDocPanel";
+import { DASHBOARD_TABS } from "./tabIcons";
 import { type TabId } from "./tabDocs";
 import { loadManifest, type DashboardManifest, type EngineReady } from "./types";
 import { useEngineWorker } from "./useEngineWorker";
-
-const TABS = [
-  { id: "graph", label: "Graph Visualization" },
-  { id: "functions", label: "Functions" },
-  { id: "cfg", label: "CFG / PDG Analysis" },
-  { id: "dataflow", label: "Dataflow" },
-  { id: "taint", label: "Taint Analysis" },
-  { id: "guide", label: "Query Guide" },
-  { id: "slice", label: "Program Slicing" },
-  { id: "blast", label: "Blast Radius" },
-] as const;
 
 export function App() {
   const [manifest, setManifest] = useState<DashboardManifest | null>(null);
   const [manifestError, setManifestError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>("graph");
-  const { engine, error: workerError, expand, listNodes, computeSlice, blastRadius, computeDataflow, wasmReady } =
+  const { engine, error: workerError, expand, listNodes, computeSlice, blastRadius, wasmReady } =
     useEngineWorker();
 
   useEffect(() => {
@@ -84,15 +74,16 @@ export function App() {
       </div>
 
       <div class="rb-tab-workspace rb-tab-workspace--analysis">
-        <ul class="nav nav-tabs mb-0 flex-shrink-0">
-          {TABS.map((t) => (
+        <ul class="nav nav-tabs mb-0 flex-shrink-0 rb-main-tabs">
+          {DASHBOARD_TABS.map((t) => (
             <li class="nav-item" key={t.id}>
               <button
                 type="button"
-                class={`nav-link ${tab === t.id ? "active" : ""}`}
+                class={`nav-link d-inline-flex align-items-center gap-1 ${tab === t.id ? "active" : ""}`}
                 onClick={() => setTab(t.id)}
               >
-                {t.label}
+                <i class={`bi ${t.icon} rb-tab-icon`} aria-hidden="true" />
+                <span>{t.label}</span>
               </button>
             </li>
           ))}
@@ -131,7 +122,6 @@ export function App() {
               listNodes={listNodes}
               computeSlice={computeSlice}
               blastRadius={blastRadius}
-              computeDataflow={computeDataflow}
             />
           </div>
         </div>
@@ -167,7 +157,6 @@ function TabPanel({
   listNodes,
   computeSlice,
   blastRadius,
-  computeDataflow,
 }: {
   id: TabId;
   manifest: DashboardManifest | null;
@@ -189,11 +178,6 @@ function TabPanel({
     nodeIndex: number,
     maxDepth: number,
   ) => Promise<import("./types").BlastRadiusPayload>;
-  computeDataflow: (
-    functionId: string,
-    variable: string | null,
-    includeControl: boolean,
-  ) => Promise<import("./types").DataflowGraphPayload>;
 }) {
   if (id === "graph") {
     return (
@@ -231,7 +215,7 @@ function TabPanel({
   if (id === "dataflow") {
     return (
       <TabPanelStack tabId={id}>
-        <DataflowView computeDataflow={computeDataflow} />
+        <DataflowView />
       </TabPanelStack>
     );
   }
@@ -272,7 +256,7 @@ function TabPanel({
   return (
     <TabPanelStack tabId={id}>
       <div class="p-4">
-        <h2 class="h5 mb-2">{TABS.find((t) => t.id === id)?.label}</h2>
+        <h2 class="h5 mb-2">{DASHBOARD_TABS.find((t) => t.id === id)?.label}</h2>
         <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint">]}</p>
         {id === "guide" && (
           <pre class="bg-light border rounded p-3 small mb-0">

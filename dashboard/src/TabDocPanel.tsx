@@ -7,7 +7,7 @@ export interface TabDocPanelProps {
   defaultOpen?: boolean;
 }
 
-export function TabDocPanel({ tabId, defaultOpen = tabId !== "graph" }: TabDocPanelProps) {
+export function TabDocPanel({ tabId, defaultOpen = false }: TabDocPanelProps) {
   const [open, setOpen] = useState(defaultOpen);
   const doc = TAB_DOCS[tabId];
 

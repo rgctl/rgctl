@@ -78,8 +78,8 @@ export const TAB_DOCS: Record<TabId, TabDocContent> = {
     ],
     usage: [
       "Pick a function from the sidebar list.",
-      "Optionally choose a variable from the dropdown.",
-      "Click Show dataflow to render the PDG subgraph.",
+      "Choose Data Flow (CFG + PDG) or Dominator Tree from the view dropdown.",
+      "Optionally filter by variable; toggle control deps and CFG edges.",
     ],
   },
   taint: {

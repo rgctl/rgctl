@@ -32,6 +32,7 @@ import {
   sigmaProgramForNodeType,
 } from "./graphColors";
 import { layoutForceAtlas2, shortGraphLabel } from "./graphLayout";
+import { GraphZoomControls } from "./GraphZoomControls";
 import { mountSigmaWhenReady } from "./sigmaMount";
 import { SIGMA_NODE_PROGRAM_CLASSES } from "./sigmaPrograms";
 
@@ -260,16 +261,6 @@ export function GraphView({
     highlightRef.current = { hover: null, selected: null };
   };
 
-  const fitView = () => {
-    sigmaRef.current?.getCamera().animatedReset({ duration: 300 });
-  };
-
-  const zoom = (ratio: number) => {
-    const cam = sigmaRef.current?.getCamera();
-    if (!cam) return;
-    cam.animate({ ratio: cam.ratio * ratio }, { duration: 200 });
-  };
-
   const flyToSearch = () => {
     if (!meta || !sigmaRef.current) return;
     const nodeId = firstMatchingNodeId(meta.nodes, filterRef.current);
@@ -357,35 +348,7 @@ export function GraphView({
         <div class="graph-stage graph-stage--fullbleed">
           <div class="graph-canvas-wrap">
             <div class="sigma-host" ref={containerRef} />
-            <div class="graph-zoom-controls" role="group" aria-label="Zoom">
-              <button
-                type="button"
-                class="graph-zoom-btn"
-                onClick={() => zoom(0.75)}
-                title="Zoom in"
-                aria-label="Zoom in"
-              >
-                +
-              </button>
-              <button
-                type="button"
-                class="graph-zoom-btn"
-                onClick={fitView}
-                title="Fit view"
-                aria-label="Fit view"
-              >
-                ⊡
-              </button>
-              <button
-                type="button"
-                class="graph-zoom-btn"
-                onClick={() => zoom(1.33)}
-                title="Zoom out"
-                aria-label="Zoom out"
-              >
-                −
-              </button>
-            </div>
+            <GraphZoomControls sigmaRef={sigmaRef} />
           </div>
           <div class="graph-legend px-2 py-1 bg-white small d-flex flex-wrap gap-2 gap-md-3 border-top align-items-center">
             {level === "metagraph" ? (

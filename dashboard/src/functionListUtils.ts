@@ -48,11 +48,12 @@ export function cfgEntryToListItem(entry: CfgFunctionEntry): FunctionListItem {
 }
 
 export function dataflowEntryToListItem(entry: DataflowFunctionEntry): FunctionListItem {
+  const blocks = entry.block_count ?? 0;
   return {
     id: entry.function_id,
     name: entry.name,
     filePath: entry.file_path,
-    meta: `${entry.pdg_nodes} node${entry.pdg_nodes === 1 ? "" : "s"} · ${entry.data_edges} data edges`,
+    meta: `${entry.data_edges} data flow${entry.data_edges === 1 ? "" : "s"} · ${blocks} block${blocks === 1 ? "" : "s"}`,
   };
 }
 

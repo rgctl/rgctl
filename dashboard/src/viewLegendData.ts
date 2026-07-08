@@ -28,17 +28,35 @@ export const CFG_NODE_LEGEND: LegendEntry[] = [
 ];
 
 export const PDG_EDGE_COLORS = {
-  data: "#198754",
-  control: "#fd7e14",
+  data: "#f093fb",
+  control: "#4facfe",
+  cfg: "#999999",
+  dominates: "#999999",
+} as const;
+
+export const PDG_NODE_COLORS = {
+  statement: "#667eea",
+  block: "#667eea",
+  frontier: "#f093fb",
 } as const;
 
 export const PDG_EDGE_LEGEND: LegendEntry[] = [
-  { label: "data dependency", color: PDG_EDGE_COLORS.data, kind: "line" },
+  { label: "control flow", color: PDG_EDGE_COLORS.cfg, kind: "line" },
+  { label: "data flow", color: PDG_EDGE_COLORS.data, kind: "line" },
   { label: "control dependency", color: PDG_EDGE_COLORS.control, kind: "line" },
 ];
 
 export const PDG_NODE_LEGEND: LegendEntry[] = [
-  { label: "statement (L# = line)", color: "#0d6efd", kind: "dot" },
+  { label: "statement / block", color: PDG_NODE_COLORS.statement, kind: "dot" },
+];
+
+export const DOMINATOR_NODE_LEGEND: LegendEntry[] = [
+  { label: "regular block", color: PDG_NODE_COLORS.block, kind: "dot" },
+  { label: "has dominance frontier", color: PDG_NODE_COLORS.frontier, kind: "dot" },
+];
+
+export const DOMINATOR_EDGE_LEGEND: LegendEntry[] = [
+  { label: "dominates", color: PDG_EDGE_COLORS.dominates, kind: "line" },
 ];
 
 export const SLICE_HIGHLIGHT = {
