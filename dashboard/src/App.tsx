@@ -7,6 +7,8 @@ import { CfgView } from "./CfgView";
 import { FunctionsView } from "./FunctionsView";
 import { GraphView } from "./GraphView";
 import { NotificationMenu } from "./NotificationMenu";
+import { TabPanelStack } from "./TabDocPanel";
+import { type TabId } from "./tabDocs";
 import { loadManifest, type DashboardManifest, type EngineReady } from "./types";
 import { useEngineWorker } from "./useEngineWorker";
 
@@ -20,8 +22,6 @@ const TABS = [
   { id: "slice", label: "Program Slicing" },
   { id: "blast", label: "Blast Radius" },
 ] as const;
-
-type TabId = (typeof TABS)[number]["id"];
 
 export function App() {
   const [manifest, setManifest] = useState<DashboardManifest | null>(null);
@@ -119,7 +119,7 @@ export function App() {
                         ? "rb-tab-panel-body--cfg p-0"
                         : tab === "taint"
                           ? "rb-tab-panel-body--cfg p-0"
-                          : "rb-tab-panel-body--scroll p-4"
+                          : "rb-tab-panel-body--scroll p-0"
             }`}
           >
             <TabPanel
@@ -197,50 +197,72 @@ function TabPanel({
 }) {
   if (id === "graph") {
     return (
-      <GraphView
-        communityOnly={manifest?.view?.community_only ?? false}
-        sourceNodeCount={manifest?.graph.node_count ?? engine?.nodeCount ?? 0}
-        wasmReady={wasmReady}
-        expand={expand}
-      />
+      <TabPanelStack tabId={id}>
+        <GraphView
+          communityOnly={manifest?.view?.community_only ?? false}
+          sourceNodeCount={manifest?.graph.node_count ?? engine?.nodeCount ?? 0}
+          wasmReady={wasmReady}
+          expand={expand}
+        />
+      </TabPanelStack>
     );
   }
 
   if (id === "functions") {
     return (
-      <FunctionsView
-        wasmReady={wasmReady}
-        functionCount={manifest?.metrics.function_count ?? 0}
-        listNodes={listNodes}
-      />
+      <TabPanelStack tabId={id}>
+        <FunctionsView
+          wasmReady={wasmReady}
+          functionCount={manifest?.metrics.function_count ?? 0}
+          listNodes={listNodes}
+        />
+      </TabPanelStack>
     );
   }
 
   if (id === "cfg") {
-    return <CfgView />;
+    return (
+      <TabPanelStack tabId={id}>
+        <CfgView />
+      </TabPanelStack>
+    );
   }
 
   if (id === "dataflow") {
-    return <DataflowView computeDataflow={computeDataflow} />;
+    return (
+      <TabPanelStack tabId={id}>
+        <DataflowView computeDataflow={computeDataflow} />
+      </TabPanelStack>
+    );
   }
 
   if (id === "slice") {
-    return <SliceView computeSlice={computeSlice} />;
+    return (
+      <TabPanelStack tabId={id}>
+        <SliceView computeSlice={computeSlice} />
+      </TabPanelStack>
+    );
   }
 
   if (id === "blast") {
     return (
-      <BlastView
-        wasmReady={wasmReady}
-        functionCount={manifest?.metrics.function_count ?? 0}
-        listNodes={listNodes}
-        blastRadius={blastRadius}
-      />
+      <TabPanelStack tabId={id}>
+        <BlastView
+          wasmReady={wasmReady}
+          functionCount={manifest?.metrics.function_count ?? 0}
+          listNodes={listNodes}
+          blastRadius={blastRadius}
+        />
+      </TabPanelStack>
     );
   }
 
   if (id === "taint") {
-    return <TaintView />;
+    return (
+      <TabPanelStack tabId={id}>
+        <TaintView />
+      </TabPanelStack>
+    );
   }
 
   const placeholders: Record<Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint">, string> = {
@@ -248,16 +270,18 @@ function TabPanel({
   };
 
   return (
-    <div>
-      <h2 class="h5 mb-2">{TABS.find((t) => t.id === id)?.label}</h2>
-      <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint">]}</p>
-      {id === "guide" && (
-        <pre class="bg-light border rounded p-3 small mb-0">
-          {`rbuilder discover .
+    <TabPanelStack tabId={id}>
+      <div class="p-4">
+        <h2 class="h5 mb-2">{TABS.find((t) => t.id === id)?.label}</h2>
+        <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint">]}</p>
+        {id === "guide" && (
+          <pre class="bg-light border rounded p-3 small mb-0">
+            {`rbuilder discover .
 rbuilder -f json blast-radius OrderService::process --depth 5
 rbuilder gql "MATCH (n:Function) RETURN n LIMIT 10"`}
-        </pre>
-      )}
-    </div>
+          </pre>
+        )}
+      </div>
+    </TabPanelStack>
   );
 }

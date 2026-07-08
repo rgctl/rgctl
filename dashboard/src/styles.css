@@ -259,6 +259,34 @@ body {
   overflow: auto;
 }
 
+.rb-tab-doc-panel {
+  background: #f8f9fa;
+}
+
+.rb-tab-doc-toggle {
+  color: inherit;
+}
+
+.rb-tab-doc-toggle:hover,
+.rb-tab-doc-toggle:focus {
+  color: inherit;
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.rb-tab-doc-chevron {
+  width: 0.75rem;
+  color: #6c757d;
+  flex-shrink: 0;
+}
+
+.rb-tab-panel-stack {
+  min-height: 0;
+}
+
+.rb-tab-panel-main {
+  min-height: 0;
+}
+
 .stat-card {
   border-left: 4px solid var(--rb-stat-blue);
 }
