@@ -1,4 +1,5 @@
 import { NODE_TYPE_FILTER_OPTIONS } from "./types";
+import { nodeTypeColorForBit } from "./graphColors";
 
 export interface NodeTypeFilterProps {
   mask: number;
@@ -30,7 +31,14 @@ export function NodeTypeFilter({
               disabled={disabled}
               onChange={() => toggle(opt.bit)}
             />
-            <span class="form-check-label">{opt.label}</span>
+            <span class="form-check-label d-inline-flex align-items-center gap-1">
+              <span
+                class="graph-node-type-swatch"
+                style={{ background: nodeTypeColorForBit(opt.bit) }}
+                aria-hidden="true"
+              />
+              {opt.label}
+            </span>
           </label>
         ))}
       </div>

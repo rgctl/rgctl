@@ -401,6 +401,31 @@ body {
   vertical-align: middle;
 }
 
+.legend-shape {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+  background: #6c757d;
+}
+
+.legend-shape--circle {
+  border-radius: 50%;
+}
+
+.graph-node-type-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.graph-legend-community {
+  white-space: nowrap;
+}
+
 /* legacy selectors kept for other tabs */
 .graph-main-col {
   min-height: 0;

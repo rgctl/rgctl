@@ -1,4 +1,5 @@
 import { NodeTypeFilter } from "./NodeTypeFilter";
+import { normalizeGraphColor } from "./graphColors";
 import type { CommunitiesPayload, Metanode, SubgraphNode } from "./types";
 
 export interface GraphSidebarProps {
@@ -103,7 +104,10 @@ export function GraphSidebar({
                   class={`graph-sidebar-item w-100 text-start ${selectedCommunityId === c.id ? "active" : ""}`}
                   onClick={() => onSelectCommunity(c.id)}
                 >
-                  <span class="graph-sidebar-swatch" style={{ background: c.color }} />
+                    <span
+                      class="graph-sidebar-swatch"
+                      style={{ background: normalizeGraphColor(c.color) }}
+                    />
                   <span class="flex-grow-1 text-truncate">{c.label}</span>
                   <span class="text-muted small ms-1">{c.package_count}</span>
                 </button>

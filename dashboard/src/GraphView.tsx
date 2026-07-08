@@ -21,8 +21,19 @@ import {
   filterState,
   type GraphFilterState,
 } from "./graphExplore";
-import { communityColor, layoutForceAtlas2, shortGraphLabel } from "./graphLayout";
+import {
+  buildCommunityColorMap,
+  fadeColor,
+  NODE_TYPE_LEGEND,
+  nodeTypeSizeScale,
+  resolveCommunityColor,
+  resolveNodeTypeColor,
+  sigmaProgramForMetanode,
+  sigmaProgramForNodeType,
+} from "./graphColors";
+import { layoutForceAtlas2, shortGraphLabel } from "./graphLayout";
 import { mountSigmaWhenReady } from "./sigmaMount";
+import { SIGMA_NODE_PROGRAM_CLASSES } from "./sigmaPrograms";
 
 export interface GraphViewProps {
   communityOnly: boolean;
@@ -32,13 +43,6 @@ export interface GraphViewProps {
 }
 
 type ViewLevel = "metagraph" | "subgraph";
-
-const LEGEND = [
-  { label: "Function", color: "#0d6efd" },
-  { label: "Class", color: "#d63384" },
-  { label: "Interface", color: "#0dcaf0" },
-  { label: "Module", color: "#dc3545" },
-];
 
 export function GraphView({
   communityOnly,
@@ -69,6 +73,7 @@ export function GraphView({
   const [level, setLevel] = useState<ViewLevel>("metagraph");
   const [subgraph, setSubgraph] = useState<SubgraphPayload | null>(null);
   const [drillLabel, setDrillLabel] = useState<string | null>(null);
+  const [drillCommunityId, setDrillCommunityId] = useState<number | null>(null);
   const [typeMask, setTypeMask] = useState(DEFAULT_GRAPH_TYPE_MASK);
   const [expanding, setExpanding] = useState(false);
   const [subHover, setSubHover] = useState<SubgraphNode | null>(null);
@@ -76,6 +81,9 @@ export function GraphView({
   const [showCalls, setShowCalls] = useState(true);
   const [selectedCommunityId, setSelectedCommunityId] = useState<number | null>(null);
   const [soloCommunity, setSoloCommunity] = useState(false);
+
+  const communityColorMapRef = useRef(buildCommunityColorMap(null));
+  communityColorMapRef.current = buildCommunityColorMap(communities);
 
   const refreshGraph = useCallback(() => {
     sigmaRef.current?.refresh();
@@ -162,6 +170,7 @@ export function GraphView({
           adjacencyRef,
           highlightRef,
           filterRef,
+          communityColorMapRef,
           showCalls,
           {
             setHover: (n) => {
@@ -228,6 +237,7 @@ export function GraphView({
         const payload = await expand(indices, typeMask);
         setSubgraph(payload);
         setDrillLabel(node.label);
+        setDrillCommunityId(node.community_id ?? null);
         setLevel("subgraph");
         setSelected(null);
         setHover(null);
@@ -245,6 +255,7 @@ export function GraphView({
     setLevel("metagraph");
     setSubgraph(null);
     setDrillLabel(null);
+    setDrillCommunityId(null);
     setSubHover(null);
     highlightRef.current = { hover: null, selected: null };
   };
@@ -376,16 +387,37 @@ export function GraphView({
               </button>
             </div>
           </div>
-          <div class="graph-legend px-2 py-1 bg-white small d-flex flex-wrap gap-2 gap-md-3 border-top">
+          <div class="graph-legend px-2 py-1 bg-white small d-flex flex-wrap gap-2 gap-md-3 border-top align-items-center">
             {level === "metagraph" ? (
-              <span class="text-muted">Colors = Louvain communities · hover highlights neighborhood</span>
+              <>
+                <span class="text-muted">Color = Louvain community (matches sidebar)</span>
+                {(communities?.communities ?? []).slice(0, 6).map((c) => (
+                  <span key={c.id} class="graph-legend-community">
+                    <span
+                      class="legend-dot"
+                      style={{ background: resolveCommunityColor(c.id, communityColorMapRef.current) }}
+                    />
+                    {c.label}
+                  </span>
+                ))}
+                {(communities?.communities.length ?? 0) > 6 && (
+                  <span class="text-muted">+{(communities?.communities.length ?? 0) - 6} more</span>
+                )}
+              </>
             ) : (
-              LEGEND.map((item) => (
-                <span key={item.label}>
-                  <span class="legend-dot" style={{ background: item.color }} />
-                  {item.label}
-                </span>
-              ))
+              <>
+                <span class="text-muted">Color and shape = node type</span>
+                {NODE_TYPE_LEGEND.map((item) => (
+                  <span key={item.label}>
+                    <span
+                      class={`legend-shape legend-shape--${item.program}`}
+                      style={{ background: item.color }}
+                      title={item.hint}
+                    />
+                    {item.label}
+                  </span>
+                ))}
+              </>
             )}
           </div>
         </div>
@@ -428,6 +460,7 @@ function mountMetagraph(
   adjacencyRef: { current: Map<string, Set<string>> },
   highlightRef: { current: { hover: string | null; selected: string | null } },
   filterRef: { current: GraphFilterState },
+  colorMapRef: { current: Map<number, string> },
   showCalls: boolean,
   handlers: {
     setHover: (n: Metanode | null) => void;
@@ -438,16 +471,18 @@ function mountMetagraph(
   const graph = new Graph();
 
   for (const n of meta.nodes) {
-    const cid = n.community_id ?? 0;
+    const color = resolveCommunityColor(n.community_id, colorMapRef.current);
+    const nodeType = sigmaProgramForMetanode(n.functions, n.classes);
     graph.addNode(String(n.id), {
       label: shortGraphLabel(n.label),
       fullLabel: n.label,
       x: n.x,
       y: n.y,
       size: Math.max(6, Math.log(n.size + 1) * 4.5),
+      type: nodeType,
       meta: n,
-      color: communityColor(cid),
-      baseColor: communityColor(cid),
+      color,
+      baseColor: color,
     });
   }
 
@@ -506,25 +541,21 @@ function mountSubgraph(
 ) {
   const graph = new Graph();
 
-  const typeColors: Record<number, string> = {
-    0: "#0d6efd",
-    1: "#d63384",
-    4: "#0dcaf0",
-    5: "#dc3545",
-  };
-
   const positions = deterministicPositions(payload.nodes.length, payload.nodes[0]?.index ?? 0);
   payload.nodes.forEach((node, i) => {
     const pos = positions[i] ?? { x: 0, y: 0 };
+    const color = resolveNodeTypeColor(node.node_type);
+    const baseSize = Math.max(4, Math.log(node.complexity + 2) * 2.5);
     graph.addNode(String(node.index), {
       label: shortGraphLabel(node.name),
       fullLabel: node.name,
       x: pos.x,
       y: pos.y,
-      size: Math.max(4, Math.log(node.complexity + 2) * 2.5),
+      size: baseSize * nodeTypeSizeScale(node.node_type),
+      type: sigmaProgramForNodeType(node.node_type),
       meta: node,
-      color: typeColors[node.node_type] ?? "#6c757d",
-      baseColor: typeColors[node.node_type] ?? "#6c757d",
+      color,
+      baseColor: color,
     });
   });
 
@@ -561,13 +592,7 @@ function mountSubgraph(
   };
 }
 
-function metaSigmaOptions(
-  graph: Graph,
-  adjacencyRef: { current: Map<string, Set<string>> },
-  highlightRef: { current: { hover: string | null; selected: string | null } },
-  filterRef: { current: GraphFilterState },
-  showCalls: boolean,
-) {
+function baseSigmaRenderOptions() {
   return {
     renderEdgeLabels: false,
     labelFont: "system-ui, sans-serif",
@@ -580,6 +605,19 @@ function metaSigmaOptions(
     minCameraRatio: 0.02,
     maxCameraRatio: 20,
     enableEdgeEvents: false,
+    nodeProgramClasses: SIGMA_NODE_PROGRAM_CLASSES,
+  };
+}
+
+function metaSigmaOptions(
+  graph: Graph,
+  adjacencyRef: { current: Map<string, Set<string>> },
+  highlightRef: { current: { hover: string | null; selected: string | null } },
+  filterRef: { current: GraphFilterState },
+  showCalls: boolean,
+) {
+  return {
+    ...baseSigmaRenderOptions(),
     nodeReducer(node: string, data: Record<string, unknown>) {
       const meta = data.meta as Metanode;
       const filters = filterRef.current;
@@ -601,9 +639,9 @@ function metaSigmaOptions(
       return {
         ...data,
         color,
+        type: data.type as string,
         label: showLabel ? (data.label as string) : "",
         zIndex: node === focus ? 3 : node === hover ? 2 : 0,
-        borderColor: node === focus || node === selected ? "#212529" : undefined,
       };
     },
     edgeReducer(edge: string, data: Record<string, unknown>) {
@@ -641,17 +679,7 @@ function subgraphSigmaOptions(
   showCalls: boolean,
 ) {
   return {
-    renderEdgeLabels: false,
-    labelFont: "system-ui, sans-serif",
-    labelSize: 12,
-    labelWeight: "600" as const,
-    defaultNodeColor: "#0d6efd",
-    defaultEdgeColor: "#c8cdd3",
-    labelColor: { color: "#212529" },
-    labelRenderedSizeThreshold: 8,
-    minCameraRatio: 0.02,
-    maxCameraRatio: 20,
-    enableEdgeEvents: false,
+    ...baseSigmaRenderOptions(),
     nodeReducer(node: string, data: Record<string, unknown>) {
       const member = data.meta as SubgraphNode;
       const visible = passesSubgraphNodeType(member, filterRef.current.typeMask);
@@ -663,8 +691,8 @@ function subgraphSigmaOptions(
       return {
         ...data,
         label: show ? (data.label as string) : "",
+        type: data.type as string,
         zIndex: show ? 2 : 0,
-        borderColor: show ? "#212529" : undefined,
       };
     },
     edgeReducer(edge: string, data: Record<string, unknown>) {
@@ -679,12 +707,6 @@ function subgraphSigmaOptions(
       return { ...data, size: (data.size as number) * 0.85, color: "#d0d5db" };
     },
   };
-}
-
-function fadeColor(hsl: string, alpha: number): string {
-  const m = /hsl\((\d+)\s+([\d.]+%)\s+([\d.]+%)\)/.exec(hsl);
-  if (!m) return hsl;
-  return `hsla(${m[1]} ${m[2]} ${m[3]} / ${alpha})`;
 }
 
 function addAggregatedEdges(

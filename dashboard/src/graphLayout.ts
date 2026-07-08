@@ -1,6 +1,7 @@
 import Graph from "graphology";
 import circular from "graphology-layout/circular";
 import forceAtlas2 from "graphology-layout-forceatlas2";
+import { communityColorHex } from "./graphColors";
 
 /** Spread nodes with ForceAtlas2 (better than fixed circle for package graphs). */
 export function layoutForceAtlas2(graph: Graph, iterations?: number): void {
@@ -60,12 +61,12 @@ export function componentColors(
   const colors = new Map<string, string>();
   for (const id of nodeIds) {
     const idx = roots.get(find(id)) ?? 0;
-    colors.set(id, communityColor(idx));
+    colors.set(id, communityColorHex(idx));
   }
   return colors;
 }
 
-/** Stable HSL palette keyed by Louvain community id. */
+/** @deprecated Use communityColorHex from graphColors.ts */
 export function communityColor(index: number): string {
   const hue = (index * 47 + 210) % 360;
   return `hsl(${hue} 58% 52%)`;
