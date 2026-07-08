@@ -90,7 +90,6 @@ export function App() {
         </div>
       </div>
 
-      {tab !== "graph" && (
       <div class="row row-cols-2 row-cols-md-4 g-3 mb-3 flex-shrink-0 rb-stats-row">
         <StatCard label="Total Nodes" value={manifest?.graph.node_count ?? "—"} />
         <StatCard label="Total Edges" value={manifest?.graph.edge_count ?? "—"} />
@@ -101,7 +100,6 @@ export function App() {
         <StatCard label="High Blast Radius" value={m?.high_blast_radius_count ?? "—"} />
         <StatCard label="Filtered Nodes" value={manifest?.graph.node_count ?? "—"} />
       </div>
-      )}
 
       <div class="rb-tab-workspace rb-tab-workspace--analysis">
         <ul class="nav nav-tabs mb-0 flex-shrink-0">

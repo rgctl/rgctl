@@ -246,7 +246,7 @@ body {
 }
 
 .rb-app--graph-focus .graph-panel {
-  min-height: min(560px, calc(100vh - 8.5rem));
+  min-height: min(480px, calc(100vh - 14rem));
 }
 
 .rb-tab-workspace--analysis .graph-panel {
@@ -254,12 +254,12 @@ body {
 }
 
 .rb-app--graph-focus .rb-tab-workspace {
-  min-height: calc(100vh - 8.5rem);
+  min-height: calc(100vh - 14rem);
 }
 
 @media (min-width: 992px) {
   .rb-app--graph-focus .rb-tab-workspace {
-    min-height: calc(100vh - 7.5rem);
+    min-height: calc(100vh - 13rem);
   }
 }
 
