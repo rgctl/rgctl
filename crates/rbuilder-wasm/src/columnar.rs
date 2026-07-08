@@ -63,6 +63,8 @@ pub struct SubgraphNode {
     pub node_type_name: &'static str,
     pub complexity: f64,
     pub file_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub community_id: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -389,6 +391,13 @@ impl ColumnarView {
             row.extension_len,
         )
         .unwrap_or(0.0);
+        let community_id = extension_property_usize(
+            &self.bytes,
+            self.offset_extensions as usize,
+            row.extension_off,
+            row.extension_len,
+            "community",
+        );
 
         Ok(SubgraphNode {
             index: idx,
@@ -397,6 +406,7 @@ impl ColumnarView {
             node_type_name: node_type_name(row.node_type),
             complexity,
             file_path,
+            community_id,
         })
     }
 
@@ -521,6 +531,25 @@ fn extension_property_f64(
     }
     let ext: NodeExtension = bincode::deserialize(&bytes[start..end]).ok()?;
     ext.properties.get(key).and_then(|v| v.parse::<f64>().ok())
+}
+
+fn extension_property_usize(
+    bytes: &[u8],
+    ext_base: usize,
+    off: u32,
+    len: u32,
+    key: &str,
+) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let start = ext_base + off as usize;
+    let end = start + len as usize;
+    if end > bytes.len() {
+        return None;
+    }
+    let ext: NodeExtension = bincode::deserialize(&bytes[start..end]).ok()?;
+    ext.properties.get(key).and_then(|v| v.parse::<usize>().ok())
 }
 
 fn impact_score_from_counts(direct_count: usize, impact_count: usize) -> f64 {

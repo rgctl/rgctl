@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import Graph from "graphology";
 import Sigma from "sigma";
+import { GraphSidebar } from "./GraphSidebar";
 import { NodeTypeFilter } from "./NodeTypeFilter";
 import type {
+  CommunitiesPayload,
   MetagraphPayload,
   Metanode,
   SubgraphNode,
@@ -10,7 +12,16 @@ import type {
 } from "./types";
 import { DEFAULT_GRAPH_TYPE_MASK } from "./types";
 import { bundleDataUrl } from "./bundleUrl";
-import { componentColors, layoutForceAtlas2, shortGraphLabel } from "./graphLayout";
+import {
+  buildUndirectedAdjacency,
+  deterministicPositions,
+  firstMatchingNodeId,
+  neighborhoodIds,
+  passesFilters,
+  type CategoryFilter,
+  type GraphFilterState,
+} from "./graphExplore";
+import { communityColor, layoutForceAtlas2, shortGraphLabel } from "./graphLayout";
 import { mountSigmaWhenReady } from "./sigmaMount";
 
 export interface GraphViewProps {
@@ -37,11 +48,20 @@ export function GraphView({
 }: GraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
+  const adjacencyRef = useRef<Map<string, Set<string>>>(new Map());
+  const filterRef = useRef<GraphFilterState>({
+    search: "",
+    communityId: null,
+    category: "all",
+    soloCommunity: false,
+  });
   const highlightRef = useRef<{ hover: string | null; selected: string | null }>({
     hover: null,
     selected: null,
   });
+
   const [meta, setMeta] = useState<MetagraphPayload | null>(null);
+  const [communities, setCommunities] = useState<CommunitiesPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hover, setHover] = useState<Metanode | null>(null);
   const [selected, setSelected] = useState<Metanode | null>(null);
@@ -54,23 +74,51 @@ export function GraphView({
   const [subHover, setSubHover] = useState<SubgraphNode | null>(null);
   const [search, setSearch] = useState("");
   const [showCalls, setShowCalls] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [selectedCommunityId, setSelectedCommunityId] = useState<number | null>(null);
+  const [category, setCategory] = useState<CategoryFilter>("all");
+  const [soloCommunity, setSoloCommunity] = useState(false);
 
-  const refreshHighlight = useCallback((hoverId: string | null, selectedId: string | null) => {
-    highlightRef.current = { hover: hoverId, selected: selectedId };
+  const refreshGraph = useCallback(() => {
     sigmaRef.current?.refresh();
   }, []);
 
+  const syncFilters = useCallback(() => {
+    filterRef.current = {
+      search,
+      communityId: selectedCommunityId,
+      category,
+      soloCommunity,
+    };
+    refreshGraph();
+  }, [search, selectedCommunityId, category, soloCommunity, refreshGraph]);
+
+  useEffect(() => {
+    syncFilters();
+  }, [syncFilters]);
+
+  const refreshHighlight = useCallback(
+    (hoverId: string | null, selectedId: string | null) => {
+      highlightRef.current = { hover: hoverId, selected: selectedId };
+      refreshGraph();
+    },
+    [refreshGraph],
+  );
+
   useEffect(() => {
     let cancelled = false;
-    fetch(bundleDataUrl("metagraph.json"))
-      .then((r) => {
+    Promise.all([
+      fetch(bundleDataUrl("metagraph.json")).then((r) => {
         if (!r.ok) throw new Error(`metagraph.json HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((data: MetagraphPayload) => {
+        return r.json() as Promise<MetagraphPayload>;
+      }),
+      fetch(bundleDataUrl("communities.json"))
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+    ])
+      .then(([metaData, communitiesData]) => {
         if (!cancelled) {
-          setMeta(data);
+          setMeta(metaData);
+          setCommunities(communitiesData as CommunitiesPayload | null);
           setLoadState("ready");
         }
       })
@@ -85,40 +133,41 @@ export function GraphView({
     };
   }, []);
 
-  const filteredMeta = meta
-    ? {
-        ...meta,
-        nodes: search.trim()
-          ? meta.nodes.filter((n) =>
-              n.label.toLowerCase().includes(search.trim().toLowerCase()),
-            )
-          : meta.nodes,
-      }
-    : null;
+  const visibleMetaCount =
+    meta?.nodes.filter((n) => passesFilters(n, filterRef.current)).length ?? 0;
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    if (level === "metagraph" && !filteredMeta) return;
+    if (level === "metagraph" && !meta) return;
     if (level === "subgraph" && !subgraph) return;
 
     return mountSigmaWhenReady(container, () => {
-      if (level === "metagraph" && filteredMeta) {
-        return renderMetagraph(filteredMeta, container, sigmaRef, highlightRef, showCalls, {
-          setHover: (n) => {
-            setHover(n);
-            refreshHighlight(n ? String(n.id) : null, highlightRef.current.selected);
+      if (level === "metagraph" && meta) {
+        return mountMetagraph(
+          meta,
+          container,
+          sigmaRef,
+          adjacencyRef,
+          highlightRef,
+          filterRef,
+          showCalls,
+          {
+            setHover: (n) => {
+              setHover(n);
+              refreshHighlight(n ? String(n.id) : null, highlightRef.current.selected);
+            },
+            setSelected: (n) => {
+              setSelected(n);
+              refreshHighlight(highlightRef.current.hover, n ? String(n.id) : null);
+            },
+            onDrill: (m) => void drillInto(m),
           },
-          setSelected: (n) => {
-            setSelected(n);
-            refreshHighlight(highlightRef.current.hover, n ? String(n.id) : null);
-          },
-          onDrill: (m) => void drillInto(m),
-        });
+        );
       }
       if (level === "subgraph" && subgraph) {
-        return renderSubgraph(
+        return mountSubgraph(
           subgraph,
           container,
           sigmaRef,
@@ -131,17 +180,15 @@ export function GraphView({
         );
       }
     });
-  }, [filteredMeta, level, subgraph, showCalls, search, refreshHighlight]);
+  }, [meta, level, subgraph, showCalls, refreshHighlight]);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      sigmaRef.current?.refresh();
-    });
+    const ro = new ResizeObserver(() => refreshGraph());
     ro.observe(el);
     return () => ro.disconnect();
-  }, [level, subgraph, filteredMeta]);
+  }, [level, subgraph, meta, refreshGraph]);
 
   const prevMask = useRef(typeMask);
 
@@ -201,9 +248,24 @@ export function GraphView({
     cam.animate({ ratio: cam.ratio * ratio }, { duration: 200 });
   };
 
+  const flyToSearch = () => {
+    if (!meta || !sigmaRef.current) return;
+    const nodeId = firstMatchingNodeId(meta.nodes, filterRef.current);
+    if (!nodeId) return;
+    const graph = sigmaRef.current.getGraph();
+    if (!graph.hasNode(nodeId)) return;
+    const x = graph.getNodeAttribute(nodeId, "x") as number;
+    const y = graph.getNodeAttribute(nodeId, "y") as number;
+    highlightRef.current.selected = nodeId;
+    const m = graph.getNodeAttribute(nodeId, "meta") as Metanode;
+    setSelected(m);
+    refreshHighlight(highlightRef.current.hover, nodeId);
+    sigmaRef.current.getCamera().animate({ x, y, ratio: 0.45 }, { duration: 450 });
+  };
+
   return (
     <div class="graph-panel h-100">
-      <div class="graph-toolbar border-bottom bg-white px-2 px-md-3 py-2 flex-shrink-0">
+      <div class="graph-toolbar graph-toolbar--slim border-bottom bg-white px-2 px-md-3 py-1 flex-shrink-0">
         <div class="d-flex flex-wrap align-items-center gap-2">
           <div class="d-flex align-items-center gap-2 flex-shrink-0">
             {level === "subgraph" ? (
@@ -227,16 +289,31 @@ export function GraphView({
               </button>
             </div>
           </div>
-          <input
-            type="search"
-            class="form-control form-control-sm graph-search"
-            placeholder="Filter packages…"
-            value={search}
-            onInput={(e) => setSearch((e.target as HTMLInputElement).value)}
-          />
-          <div class="graph-toolbar-filters flex-grow-1 min-w-0">
-            <NodeTypeFilter mask={typeMask} onChange={setTypeMask} disabled={!wasmReady || level === "metagraph"} />
+          <div class="d-flex flex-grow-1 min-w-0 gap-1">
+            <input
+              type="search"
+              class="form-control form-control-sm graph-search"
+              placeholder="Search packages…"
+              value={search}
+              onInput={(e) => setSearch((e.target as HTMLInputElement).value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") flyToSearch();
+              }}
+            />
+            <button
+              type="button"
+              class="btn btn-outline-secondary btn-sm flex-shrink-0"
+              title="Fly to first search match"
+              onClick={flyToSearch}
+            >
+              Go
+            </button>
           </div>
+          {level === "subgraph" && (
+            <div class="graph-toolbar-filters flex-grow-1 min-w-0">
+              <NodeTypeFilter mask={typeMask} onChange={setTypeMask} disabled={!wasmReady} />
+            </div>
+          )}
           <div class="d-flex align-items-center gap-2 flex-shrink-0">
             <div class="form-check form-switch mb-0">
               <input
@@ -250,20 +327,13 @@ export function GraphView({
                 Calls
               </label>
             </div>
-            <button
-              type="button"
-              class={`btn btn-sm ${inspectorOpen ? "btn-outline-secondary" : "btn-primary"}`}
-              onClick={() => setInspectorOpen((v) => !v)}
-            >
-              {inspectorOpen ? "Hide panel" : "Inspector"}
-            </button>
           </div>
         </div>
-        <p class="small text-muted mb-0 mt-1">
+        <p class="small text-muted mb-0 mt-1 graph-toolbar-hint">
           {level === "subgraph" && subgraph
-            ? `${drillLabel} · ${subgraph.nodes.length} nodes · ${subgraph.edges.length} edges · scroll/zoom to navigate`
-            : filteredMeta
-              ? `${filteredMeta.nodes.length} packages · ${filteredMeta.edges.length} cross-package calls · ${sourceNodeCount.toLocaleString()} nodes · hover for labels`
+            ? `${drillLabel} · ${subgraph.nodes.length} nodes · ${subgraph.edges.length} edges`
+            : meta
+              ? `${visibleMetaCount} / ${meta.nodes.length} packages · ${meta.edges.length} cross-package calls · ${sourceNodeCount.toLocaleString()} nodes`
               : loadState}
           {expanding ? " · expanding…" : ""}
         </p>
@@ -276,13 +346,13 @@ export function GraphView({
       )}
 
       <div class="graph-body flex-grow-1 min-h-0">
-        <div class={`graph-stage ${inspectorOpen ? "graph-stage--with-inspector" : ""}`}>
+        <div class="graph-stage graph-stage--fullbleed">
           <div class="graph-canvas-wrap">
             <div class="sigma-host" ref={containerRef} />
           </div>
           <div class="graph-legend px-2 py-1 bg-white small d-flex flex-wrap gap-2 gap-md-3 border-top">
             {level === "metagraph" ? (
-              <span class="text-muted">Colors = connected package clusters</span>
+              <span class="text-muted">Colors = Louvain communities · hover highlights neighborhood</span>
             ) : (
               LEGEND.map((item) => (
                 <span key={item.label}>
@@ -293,39 +363,37 @@ export function GraphView({
             )}
           </div>
         </div>
-        {inspectorOpen && (
-          <aside class="graph-inspector border-start bg-white">
-            <div class="graph-inspector-inner p-3">
-              <h3 class="h6 mb-3">Inspector</h3>
-              {level === "subgraph" && subHover ? (
-                <SubgraphDetail node={subHover} />
-              ) : (selected ?? hover) ? (
-                <MetanodeDetail
-                  node={selected ?? hover!}
-                  isSelected={!!selected}
-                  onDrill={wasmReady ? () => void drillInto(selected ?? hover!) : undefined}
-                  drilling={expanding}
-                />
-              ) : (
-                <p class="text-muted small mb-0">
-                  {level === "subgraph"
-                    ? "Hover a node for details."
-                    : "Hover or click a package. Double-click or Drill down to expand members."}
-                </p>
-              )}
-            </div>
-          </aside>
-        )}
+        <GraphSidebar
+          level={level}
+          communities={communities}
+          selectedCommunityId={selectedCommunityId}
+          onSelectCommunity={setSelectedCommunityId}
+          category={category}
+          onCategoryChange={setCategory}
+          soloCommunity={soloCommunity}
+          onSoloCommunityChange={setSoloCommunity}
+          visibleCount={visibleMetaCount}
+          totalCount={meta?.nodes.length ?? 0}
+          drillLabel={drillLabel}
+          onBack={backToMeta}
+          hover={hover}
+          selected={selected}
+          subHover={subHover}
+          onDrill={wasmReady && level === "metagraph" ? () => void drillInto(selected ?? hover!) : undefined}
+          drilling={expanding}
+        />
       </div>
     </div>
   );
 }
 
-function renderMetagraph(
+function mountMetagraph(
   meta: MetagraphPayload,
   container: HTMLDivElement,
   sigmaRef: { current: Sigma | null },
+  adjacencyRef: { current: Map<string, Set<string>> },
   highlightRef: { current: { hover: string | null; selected: string | null } },
+  filterRef: { current: GraphFilterState },
   showCalls: boolean,
   handlers: {
     setHover: (n: Metanode | null) => void;
@@ -334,9 +402,9 @@ function renderMetagraph(
   },
 ) {
   const graph = new Graph();
-  const visibleIds = new Set(meta.nodes.map((n) => n.id));
 
   for (const n of meta.nodes) {
+    const cid = n.community_id ?? 0;
     graph.addNode(String(n.id), {
       label: shortGraphLabel(n.label),
       fullLabel: n.label,
@@ -344,27 +412,20 @@ function renderMetagraph(
       y: n.y,
       size: Math.max(6, Math.log(n.size + 1) * 4.5),
       meta: n,
-      color: "#6f42c1",
+      color: communityColor(cid),
+      baseColor: communityColor(cid),
     });
   }
 
   const edgeList: Array<{ source: string; target: string; weight?: number }> = [];
   if (showCalls) {
     for (const e of meta.edges) {
-      if (!visibleIds.has(e.source) || !visibleIds.has(e.target)) continue;
       edgeList.push({ source: String(e.source), target: String(e.target), weight: e.weight });
     }
     addAggregatedEdges(graph, edgeList);
   }
 
-  const colors = componentColors(
-    [...graph.nodes()],
-    edgeList.map((e) => ({ source: e.source, target: e.target })),
-  );
-  graph.forEachNode((node) => {
-    graph.setNodeAttribute(node, "color", colors.get(node) ?? "#6f42c1");
-  });
-
+  adjacencyRef.current = buildUndirectedAdjacency(edgeList);
   layoutForceAtlas2(graph);
 
   if (sigmaRef.current) {
@@ -375,10 +436,7 @@ function renderMetagraph(
   const sigma = new Sigma(
     graph,
     container,
-    sigmaOptions(highlightRef, (node, data) => ({
-      ...data,
-      label: data.label as string,
-    })),
+    metaSigmaOptions(graph, adjacencyRef, highlightRef, filterRef, showCalls),
   );
   sigma.on("enterNode", ({ node }) => {
     handlers.setHover(graph.getNodeAttribute(node, "meta") as Metanode);
@@ -403,7 +461,7 @@ function renderMetagraph(
   };
 }
 
-function renderSubgraph(
+function mountSubgraph(
   payload: SubgraphPayload,
   container: HTMLDivElement,
   sigmaRef: { current: Sigma | null },
@@ -420,17 +478,20 @@ function renderSubgraph(
     5: "#dc3545",
   };
 
-  for (const node of payload.nodes) {
+  const positions = deterministicPositions(payload.nodes.length, payload.nodes[0]?.index ?? 0);
+  payload.nodes.forEach((node, i) => {
+    const pos = positions[i] ?? { x: 0, y: 0 };
     graph.addNode(String(node.index), {
       label: shortGraphLabel(node.name),
       fullLabel: node.name,
-      x: Math.random() * 10,
-      y: Math.random() * 10,
+      x: pos.x,
+      y: pos.y,
       size: Math.max(4, Math.log(node.complexity + 2) * 2.5),
       meta: node,
       color: typeColors[node.node_type] ?? "#6c757d",
+      baseColor: typeColors[node.node_type] ?? "#6c757d",
     });
-  }
+  });
 
   const edgeList: Array<{ source: string; target: string; weight?: number }> = [];
   if (showCalls) {
@@ -450,10 +511,7 @@ function renderSubgraph(
   const sigma = new Sigma(
     graph,
     container,
-    sigmaOptions(highlightRef, (node, data) => ({
-      ...data,
-      label: data.label as string,
-    })),
+    subgraphSigmaOptions(highlightRef),
   );
   sigma.on("enterNode", ({ node }) => {
     setSubHover(graph.getNodeAttribute(node, "meta") as SubgraphNode);
@@ -468,9 +526,81 @@ function renderSubgraph(
   };
 }
 
-function sigmaOptions(
+function metaSigmaOptions(
+  graph: Graph,
+  adjacencyRef: { current: Map<string, Set<string>> },
   highlightRef: { current: { hover: string | null; selected: string | null } },
-  labelOf: (node: string, data: Record<string, unknown>) => Record<string, unknown>,
+  filterRef: { current: GraphFilterState },
+  showCalls: boolean,
+) {
+  return {
+    renderEdgeLabels: false,
+    labelFont: "system-ui, sans-serif",
+    labelSize: 12,
+    labelWeight: "600" as const,
+    defaultNodeColor: "#0d6efd",
+    defaultEdgeColor: "#c8cdd3",
+    labelColor: { color: "#212529" },
+    labelRenderedSizeThreshold: 8,
+    minCameraRatio: 0.02,
+    maxCameraRatio: 20,
+    enableEdgeEvents: false,
+    nodeReducer(node: string, data: Record<string, unknown>) {
+      const meta = data.meta as Metanode;
+      const filters = filterRef.current;
+      const visible = passesFilters(meta, filters);
+      const { hover, selected } = highlightRef.current;
+      const focus = hover ?? selected;
+      const hood = neighborhoodIds(focus, adjacencyRef.current);
+      const inFocus = focus ? hood.has(node) : true;
+      const showLabel = visible && (!focus || node === focus || node === hover);
+
+      let color = (data.baseColor as string) ?? (data.color as string);
+      if (focus && visible) {
+        color = inFocus ? color : fadeColor(color, 0.18);
+      }
+      if (!visible) {
+        return { ...data, hidden: true, label: "" };
+      }
+
+      return {
+        ...data,
+        color,
+        label: showLabel ? (data.label as string) : "",
+        zIndex: node === focus ? 3 : node === hover ? 2 : 0,
+        borderColor: node === focus || node === selected ? "#212529" : undefined,
+      };
+    },
+    edgeReducer(edge: string, data: Record<string, unknown>) {
+      if (!showCalls) return { ...data, hidden: true };
+      const [source, target] = graph.extremities(edge);
+      const filters = filterRef.current;
+      const srcMeta = graph.getNodeAttribute(source, "meta") as Metanode;
+      const tgtMeta = graph.getNodeAttribute(target, "meta") as Metanode;
+      const visible =
+        passesFilters(srcMeta, filters) && passesFilters(tgtMeta, filters);
+      if (!visible) return { ...data, hidden: true };
+      if (filters.soloCommunity && filters.communityId !== null) {
+        const cid = filters.communityId;
+        if (srcMeta.community_id !== cid || tgtMeta.community_id !== cid) {
+          return { ...data, hidden: true };
+        }
+      }
+      const { hover, selected } = highlightRef.current;
+      const focus = hover ?? selected;
+      if (focus) {
+        const hood = neighborhoodIds(focus, adjacencyRef.current);
+        if (!hood.has(source) || !hood.has(target)) {
+          return { ...data, hidden: true };
+        }
+      }
+      return { ...data, size: (data.size as number) * 0.85, color: "#d0d5db" };
+    },
+  };
+}
+
+function subgraphSigmaOptions(
+  highlightRef: { current: { hover: string | null; selected: string | null } },
 ) {
   return {
     renderEdgeLabels: false,
@@ -487,10 +617,9 @@ function sigmaOptions(
     nodeReducer(node: string, data: Record<string, unknown>) {
       const { hover, selected } = highlightRef.current;
       const show = node === hover || node === selected;
-      const base = labelOf(node, data);
       return {
-        ...base,
-        label: show ? (base.label as string) : "",
+        ...data,
+        label: show ? (data.label as string) : "",
         zIndex: show ? 2 : 0,
         borderColor: show ? "#212529" : undefined,
       };
@@ -499,6 +628,12 @@ function sigmaOptions(
       return { ...data, size: (data.size as number) * 0.85, color: "#d0d5db" };
     },
   };
+}
+
+function fadeColor(hsl: string, alpha: number): string {
+  const m = /hsl\((\d+)\s+([\d.]+%)\s+([\d.]+%)\)/.exec(hsl);
+  if (!m) return hsl;
+  return `hsla(${m[1]} ${m[2]} ${m[3]} / ${alpha})`;
 }
 
 function addAggregatedEdges(
@@ -521,66 +656,4 @@ function addAggregatedEdges(
       color: "#c8cdd3",
     });
   }
-}
-
-function MetanodeDetail({
-  node,
-  isSelected,
-  onDrill,
-  drilling,
-}: {
-  node: Metanode;
-  isSelected: boolean;
-  onDrill?: () => void;
-  drilling?: boolean;
-}) {
-  return (
-    <>
-      <dl class="row small mb-0">
-        <dt class="col-5 text-muted">{isSelected ? "Selected" : "Hover"}</dt>
-        <dd class="col-7 mb-1">
-          <code class="small text-break">{node.label}</code>
-        </dd>
-        <dt class="col-5 text-muted">Members</dt>
-        <dd class="col-7 mb-1">{node.size.toLocaleString()}</dd>
-        <dt class="col-5 text-muted">Functions</dt>
-        <dd class="col-7 mb-1">{node.functions.toLocaleString()}</dd>
-        <dt class="col-5 text-muted">Classes</dt>
-        <dd class="col-7 mb-1">{node.classes.toLocaleString()}</dd>
-        <dt class="col-5 text-muted">Avg complexity</dt>
-        <dd class="col-7 mb-1">{node.avg_complexity.toFixed(1)}</dd>
-      </dl>
-      {onDrill && (
-        <button
-          type="button"
-          class="btn btn-primary btn-sm w-100 mt-3"
-          disabled={drilling}
-          onClick={onDrill}
-        >
-          {drilling ? "Expanding…" : "Drill down"}
-        </button>
-      )}
-    </>
-  );
-}
-
-function SubgraphDetail({ node }: { node: SubgraphNode }) {
-  return (
-    <dl class="row small mb-0">
-      <dt class="col-5 text-muted">Name</dt>
-      <dd class="col-7 mb-1">
-        <code class="small text-break">{node.name}</code>
-      </dd>
-      <dt class="col-5 text-muted">Type</dt>
-      <dd class="col-7 mb-1">{node.node_type_name}</dd>
-      <dt class="col-5 text-muted">Complexity</dt>
-      <dd class="col-7 mb-1">{node.complexity.toFixed(1)}</dd>
-      {node.file_path && (
-        <>
-          <dt class="col-5 text-muted">File</dt>
-          <dd class="col-7 mb-1 text-break">{node.file_path}</dd>
-        </>
-      )}
-    </dl>
-  );
 }

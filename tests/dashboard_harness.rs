@@ -191,11 +191,30 @@ pub fn assert_dashboard_bundle_with_meta(repo: &Path, min_nodes: u64, min_metano
     );
     let meta: Value =
         serde_json::from_slice(&std::fs::read(dash.join("metagraph.json")).unwrap()).unwrap();
-    assert_eq!(meta["schema_version"], 2);
+    assert_eq!(meta["schema_version"], 3);
     assert!(
         meta["nodes"].as_array().map(|a| a.len()).unwrap_or(0) as u64 >= min_metanodes,
         "metagraph nodes below minimum"
     );
+    assert!(
+        dash.join("communities.json").is_file(),
+        "missing communities.json"
+    );
+    let communities: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("communities.json")).unwrap()).unwrap();
+    assert_eq!(communities["schema_version"], 1);
+    assert!(
+        communities["communities"].as_array().map(|a| !a.is_empty()).unwrap_or(false),
+        "communities.json must list at least one community"
+    );
+    assert_eq!(view["communities_path"], "communities.json");
+
+    let has_community_id = meta["nodes"]
+        .as_array()
+        .map(|nodes| nodes.iter().any(|n| n.get("community_id").is_some()))
+        .unwrap_or(false);
+    assert!(has_community_id, "metanodes should carry community_id");
+
     let has_members = meta["nodes"]
         .as_array()
         .map(|nodes| {

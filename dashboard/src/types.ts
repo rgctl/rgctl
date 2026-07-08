@@ -31,6 +31,9 @@ export interface ViewSection {
   mode: string;
   community_only: boolean;
   threshold_community_only: number;
+  communities_path?: string | null;
+  communities_schema_version?: number | null;
+  community_count?: number | null;
 }
 
 export interface BlastRadiusPayload {
@@ -279,6 +282,21 @@ export interface Metanode {
   x: number;
   y: number;
   member_indices?: number[];
+  community_id?: number | null;
+}
+
+export interface CommunitySummary {
+  id: number;
+  label: string;
+  color: string;
+  member_count: number;
+  package_count: number;
+}
+
+export interface CommunitiesPayload {
+  schema_version: number;
+  modularity: number;
+  communities: CommunitySummary[];
 }
 
 export interface Metaedge {
@@ -295,6 +313,7 @@ export interface SubgraphNode {
   node_type_name: string;
   complexity: number;
   file_path?: string | null;
+  community_id?: number | null;
 }
 
 export interface SubgraphEdge {

@@ -21,7 +21,7 @@ export function layoutForceAtlas2(graph: Graph, iterations?: number): void {
   });
 }
 
-/** Weakly-connected components for community coloring. */
+/** Weakly-connected components for community coloring (fallback). */
 export function componentColors(
   nodeIds: string[],
   edges: Array<{ source: string; target: string }>,
@@ -65,7 +65,8 @@ export function componentColors(
   return colors;
 }
 
-function communityColor(index: number): string {
+/** Stable HSL palette keyed by Louvain community id. */
+export function communityColor(index: number): string {
   const hue = (index * 47 + 210) % 360;
   return `hsl(${hue} 58% 52%)`;
 }

@@ -1,5 +1,8 @@
 //! Package-level metagraph for Phase 2 community / macro visualization.
 
+use crate::communities::{summarize_communities, CommunitiesPayload, COMMUNITIES_FILE};
+use rbuilder_analysis::community::CommunityDetector;
+use rbuilder_analysis::graph_utils::PetGraphView;
 use rbuilder_graph::backend::MemoryBackend;
 use rbuilder_graph::schema::{EdgeType, NodeType};
 use serde::{Deserialize, Serialize};
@@ -8,7 +11,7 @@ use std::f64::consts::PI;
 use std::path::Path;
 use uuid::Uuid;
 
-pub const METAGRAPH_SCHEMA_VERSION: u32 = 2;
+pub const METAGRAPH_SCHEMA_VERSION: u32 = 3;
 pub const METAGRAPH_FILE: &str = "metagraph.json";
 /// Above this raw node count the UI hides per-function nodes (community-only mode).
 pub const COMMUNITY_ONLY_THRESHOLD: u64 = 50_000;
@@ -38,6 +41,16 @@ pub struct Metanode {
     /// Columnar row indices in `graph_payload.bin` for WASM LOD drill-down.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub member_indices: Vec<u32>,
+    /// Louvain community id (majority vote of member nodes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub community_id: Option<usize>,
+}
+
+/// Metagraph plus community summary written beside the bundle.
+#[derive(Debug, Clone)]
+pub struct MetagraphExport {
+    pub meta: MetagraphPayload,
+    pub communities: CommunitiesPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +68,7 @@ struct PackageBucket {
     complexity_sum: f64,
     complexity_count: u32,
     member_indices: Vec<u32>,
+    community_votes: HashMap<usize, u32>,
 }
 
 /// Build package metagraph from indexed graph and write JSON beside the dashboard bundle.
@@ -63,10 +77,12 @@ pub fn write_metagraph(
     snapshot_path: &Path,
     out_dir: &Path,
     source_node_count: u64,
-) -> Result<MetagraphPayload, String> {
+) -> Result<MetagraphExport, String> {
     let uuid_to_col = load_uuid_index_map(snapshot_path);
     let mut uuid_to_pkg: HashMap<Uuid, u32> = HashMap::new();
     let mut packages: HashMap<String, PackageBucket> = HashMap::new();
+
+    let (community_assignments, modularity) = detect_node_communities(backend)?;
 
     let _ = backend.for_each_node(|n| {
         if !matches!(n.node_type, NodeType::Function | NodeType::Class) {
@@ -82,7 +98,11 @@ pub fn write_metagraph(
                 complexity_sum: 0.0,
                 complexity_count: 0,
                 member_indices: Vec::new(),
+                community_votes: HashMap::new(),
             });
+        if let Some(cid) = community_assignments.get(&n.id) {
+            *bucket.community_votes.entry(*cid).or_insert(0) += 1;
+        }
         match n.node_type {
             NodeType::Function => bucket.functions += 1,
             NodeType::Class => bucket.classes += 1,
@@ -111,6 +131,7 @@ pub fn write_metagraph(
                 complexity_sum: 0.0,
                 complexity_count: 0,
                 member_indices: Vec::new(),
+                community_votes: HashMap::new(),
             },
         );
     }
@@ -143,7 +164,13 @@ pub fn write_metagraph(
             complexity_sum: 0.0,
             complexity_count: 0,
             member_indices: Vec::new(),
+            community_votes: HashMap::new(),
         };
+        for b in &tail {
+            for (cid, votes) in &b.community_votes {
+                *merged.community_votes.entry(*cid).or_insert(0) += votes;
+            }
+        }
         for b in tail {
             merged.functions += b.functions;
             merged.classes += b.classes;
@@ -211,9 +238,29 @@ pub fn write_metagraph(
         edges,
     };
 
+    let communities = summarize_communities(modularity, &payload.nodes);
+
     let json = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
     fs_write(out_dir.join(METAGRAPH_FILE), json.as_bytes())?;
-    Ok(payload)
+
+    let communities_json =
+        serde_json::to_string_pretty(&communities).map_err(|e| e.to_string())?;
+    fs_write(out_dir.join(COMMUNITIES_FILE), communities_json.as_bytes())?;
+
+    Ok(MetagraphExport {
+        meta: payload,
+        communities,
+    })
+}
+
+fn detect_node_communities(
+    backend: &MemoryBackend,
+) -> Result<(HashMap<Uuid, usize>, f64), String> {
+    let view = PetGraphView::from_backend(backend).map_err(|e| e.to_string())?;
+    let result = CommunityDetector::new()
+        .detect_with_view(&view)
+        .map_err(|e| e.to_string())?;
+    Ok((result.assignments, result.modularity))
 }
 
 fn bucket_to_metanode(id: u32, bucket: PackageBucket) -> Metanode {
@@ -223,6 +270,11 @@ fn bucket_to_metanode(id: u32, bucket: PackageBucket) -> Metanode {
     } else {
         0.0
     };
+    let community_id = bucket
+        .community_votes
+        .into_iter()
+        .max_by_key(|(_, votes)| *votes)
+        .map(|(cid, _)| cid);
     Metanode {
         id,
         label: bucket.label,
@@ -233,6 +285,7 @@ fn bucket_to_metanode(id: u32, bucket: PackageBucket) -> Metanode {
         x: 0.0,
         y: 0.0,
         member_indices: bucket.member_indices,
+        community_id,
     }
 }
 

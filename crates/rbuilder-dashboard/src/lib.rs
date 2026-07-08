@@ -3,6 +3,7 @@
 mod blast_export;
 mod bundle;
 mod cfg_export;
+mod communities;
 mod dataflow_export;
 mod manifest;
 mod metagraph;
@@ -10,11 +11,14 @@ mod slice_export;
 mod taint_export;
 
 pub use bundle::{default_dashboard_path, dist_embedded, DASHBOARD_DIR_NAME};
+pub use communities::{CommunitiesPayload, COMMUNITIES_FILE, COMMUNITIES_SCHEMA_VERSION};
 pub use dataflow_export::{DataflowExportSummary, DATAFLOW_INDEX_FILE};
 pub use manifest::{
     AnalysisSection, DashboardManifest, MetricsSection, ViewSection, MANIFEST_SCHEMA_VERSION,
 };
-pub use metagraph::{MetagraphPayload, COMMUNITY_ONLY_THRESHOLD, METAGRAPH_FILE};
+pub use metagraph::{
+    MetagraphExport, MetagraphPayload, COMMUNITY_ONLY_THRESHOLD, METAGRAPH_FILE,
+};
 pub use slice_export::{SliceExportSummary, SLICE_INDEX_FILE};
 pub use taint_export::{TaintExportSummary, TAINT_INDEX_FILE};
 
@@ -48,7 +52,7 @@ pub fn export_dashboard_bundle(
     let (node_count, edge_count, digest) = payload_stats(snapshot_path, backend)?;
     let metrics = collect_metrics(backend);
 
-    let meta = write_metagraph(backend, snapshot_path, &out_dir, node_count)?;
+    let export = write_metagraph(backend, snapshot_path, &out_dir, node_count)?;
     let cfg_summary = export_cfg_bundle(backend, repo_root, &out_dir)?;
     let slice_summary = export_slice_bundle(backend, repo_root, &out_dir)?;
     let dataflow_summary = export_dataflow_index(&slice_summary, &out_dir)?;
@@ -59,7 +63,7 @@ pub fn export_dashboard_bundle(
         edge_count,
         digest,
         metrics,
-        &meta,
+        &export,
         &cfg_summary,
         &slice_summary,
         &blast_summary,

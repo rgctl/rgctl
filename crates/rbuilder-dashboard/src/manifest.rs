@@ -3,7 +3,7 @@
 use crate::blast_export::BlastExportSummary;
 use crate::cfg_export::CfgExportSummary;
 use crate::dataflow_export::DataflowExportSummary;
-use crate::metagraph::MetagraphPayload;
+use crate::metagraph::MetagraphExport;
 use crate::slice_export::SliceExportSummary;
 use crate::taint_export::TaintExportSummary;
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,12 @@ pub struct ViewSection {
     pub mode: String,
     pub community_only: bool,
     pub threshold_community_only: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub communities_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub communities_schema_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub community_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,7 +92,7 @@ impl DashboardManifest {
         edge_count: u64,
         digest: String,
         metrics: MetricsSection,
-        meta: &MetagraphPayload,
+        export: &MetagraphExport,
         cfg: &CfgExportSummary,
         slice: &SliceExportSummary,
         blast: &BlastExportSummary,
@@ -172,6 +178,9 @@ impl DashboardManifest {
             taint_vulnerable_count: taint.vulnerable_flows,
         });
 
+        let meta = &export.meta;
+        let communities = &export.communities;
+
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             dashboard_version: env!("CARGO_PKG_VERSION").into(),
@@ -191,6 +200,21 @@ impl DashboardManifest {
                 mode: meta.mode.clone(),
                 community_only: meta.community_only,
                 threshold_community_only: meta.threshold_community_only,
+                communities_path: if communities.communities.is_empty() {
+                    None
+                } else {
+                    Some(crate::communities::COMMUNITIES_FILE.into())
+                },
+                communities_schema_version: if communities.communities.is_empty() {
+                    None
+                } else {
+                    Some(communities.schema_version)
+                },
+                community_count: if communities.communities.is_empty() {
+                    None
+                } else {
+                    Some(communities.communities.len() as u32)
+                },
             },
             analysis,
             metrics,
@@ -211,12 +235,13 @@ fn chrono_now_rfc3339() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metagraph::{MetagraphPayload, Metanode, COMMUNITY_ONLY_THRESHOLD};
+    use crate::communities::CommunitiesPayload;
+    use crate::metagraph::{MetagraphExport, MetagraphPayload, Metanode, COMMUNITY_ONLY_THRESHOLD};
 
     #[test]
     fn manifest_includes_view_section() {
         let meta = MetagraphPayload {
-            schema_version: 1,
+            schema_version: 3,
             mode: "package_metagraph".into(),
             community_only: false,
             threshold_community_only: COMMUNITY_ONLY_THRESHOLD,
@@ -231,8 +256,23 @@ mod tests {
                 x: 0.0,
                 y: 0.0,
                 member_indices: vec![0, 1],
+                community_id: Some(0),
             }],
             edges: vec![],
+        };
+        let export = MetagraphExport {
+            meta,
+            communities: CommunitiesPayload {
+                schema_version: 1,
+                modularity: 0.5,
+                communities: vec![crate::communities::CommunitySummary {
+                    id: 0,
+                    label: "Community 0".into(),
+                    color: "hsl(210 58% 52%)".into(),
+                    member_count: 10,
+                    package_count: 1,
+                }],
+            },
         };
         let m = DashboardManifest::with_phases(
             100,
@@ -245,7 +285,7 @@ mod tests {
                 avg_complexity: 1.0,
                 high_blast_radius_count: 0,
             },
-            &meta,
+            &export,
             &CfgExportSummary::default(),
             &SliceExportSummary::default(),
             &BlastExportSummary::default(),
@@ -260,6 +300,8 @@ mod tests {
         assert_eq!(v["phases"]["7"], "pending");
         assert_eq!(v["phases"]["8"], "pending");
         assert_eq!(v["view"]["metanode_count"], 1);
+        assert_eq!(v["view"]["communities_path"], "communities.json");
+        assert_eq!(v["view"]["community_count"], 1);
         assert_eq!(v["analysis"]["cfg_available"], false);
         assert_eq!(v["analysis"]["slice_available"], false);
         assert_eq!(v["analysis"]["blast_available"], false);
