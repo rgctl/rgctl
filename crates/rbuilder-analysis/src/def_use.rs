@@ -74,6 +74,16 @@ fn collect_def_use(
             }
         }
 
+        // Go
+        "short_var_declaration" | "var_declaration" | "assignment_statement" => {
+            if let Some(left) = node.child_by_field_name("left") {
+                collect_pattern_defs(left, source, defined);
+            }
+            if let Some(right) = node.child_by_field_name("right") {
+                collect_def_use(right, source, defined, used, false);
+            }
+        }
+
         // Shared identifiers
         "identifier" | "shorthand_field_identifier" | "field_identifier" | "type_identifier" => {
             if is_def_target {

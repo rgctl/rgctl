@@ -2,10 +2,11 @@
 
 use crate::cfg::{BasicBlock, BlockId, CfgEdgeType, ControlFlowGraph, Statement, StatementKind};
 use crate::def_use::extract_def_use;
+use crate::language_profile::{function_kinds_for, parse_source};
 use rbuilder_error::{Error, Result};
 use rbuilder_plugin_helpers::extract_name_from_node;
 use std::collections::HashSet;
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Node, Tree};
 use uuid::Uuid;
 
 /// Build a CFG for a named function in source text.
@@ -16,41 +17,22 @@ pub fn build_cfg_for_function(
 ) -> Result<ControlFlowGraph> {
     let bytes = source.as_bytes();
     let tree = parse_language(language, bytes)?;
-    let func_node = find_function_by_name(tree.root_node(), bytes, function_name)
+    let function_kinds = function_kinds_for(language)?;
+    let func_node = find_function_by_name(tree.root_node(), bytes, function_name, function_kinds)
         .ok_or_else(|| Error::NotFound(format!("function '{function_name}' not found")))?;
     build_cfg_from_function_node(language, func_node, bytes)
 }
 
 fn parse_language(language: &str, source: &[u8]) -> Result<Tree> {
-    let mut parser = Parser::new();
-    match language.to_lowercase().as_str() {
-        "rust" | "rs" => {
-            parser
-                .set_language(&tree_sitter_rust::LANGUAGE.into())
-                .map_err(|e| Error::PluginError(format!("Rust grammar: {e}")))?;
-        }
-        "python" | "py" => {
-            parser
-                .set_language(&tree_sitter_python::LANGUAGE.into())
-                .map_err(|e| Error::PluginError(format!("Python grammar: {e}")))?;
-        }
-        "java" => {
-            parser
-                .set_language(&tree_sitter_java::LANGUAGE.into())
-                .map_err(|e| Error::PluginError(format!("Java grammar: {e}")))?;
-        }
-        other => return Err(Error::UnsupportedLanguage(other.to_string())),
-    }
-
-    parser.parse(source, None).ok_or_else(|| Error::ParseError {
-        file: "source".into(),
-        line: 0,
-        message: "Failed to parse source".to_string(),
-    })
+    parse_source(language, source)
 }
 
-fn find_function_by_name<'a>(node: Node<'a>, source: &[u8], name: &str) -> Option<Node<'a>> {
-    let function_kinds = ["function_item", "function_definition", "method_declaration"];
+fn find_function_by_name<'a>(
+    node: Node<'a>,
+    source: &[u8],
+    name: &str,
+    function_kinds: &[&str],
+) -> Option<Node<'a>> {
     if function_kinds.contains(&node.kind()) {
         if let Ok(Some(func_name)) = extract_name_from_node(node, source) {
             if func_name == name {
@@ -60,7 +42,7 @@ fn find_function_by_name<'a>(node: Node<'a>, source: &[u8], name: &str) -> Optio
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if let Some(found) = find_function_by_name(child, source, name) {
+        if let Some(found) = find_function_by_name(child, source, name, function_kinds) {
             return Some(found);
         }
     }
@@ -202,8 +184,13 @@ impl<'a> CfgBuilder<'a> {
                 self.add_statement(node, source, StatementKind::Declaration)?;
                 Ok(())
             }
+            "short_var_declaration" | "var_declaration" | "const_declaration" => {
+                self.add_statement(node, source, StatementKind::Declaration)?;
+                Ok(())
+            }
             "assignment"
             | "assignment_expression"
+            | "assignment_statement"
             | "augmented_assignment"
             | "augmented_assignment_expression"
             | "compound_assignment_expr" => {
@@ -287,7 +274,10 @@ impl<'a> CfgBuilder<'a> {
         let mut true_end = true_block;
         if !is_constant_false(&cond_text) {
             self.current_block = true_block;
-            if let Some(consequence) = node.child_by_field_name("consequence") {
+            if let Some(consequence) = node
+                .child_by_field_name("consequence")
+                .or_else(|| node.child_by_field_name("body"))
+            {
                 self.visit_block(consequence, source)?;
             }
             true_end = self.current_block;
@@ -296,7 +286,10 @@ impl<'a> CfgBuilder<'a> {
         let mut false_end = false_block;
         self.current_block = false_block;
         if !is_constant_true(&cond_text) {
-            if let Some(alternative) = node.child_by_field_name("alternative") {
+            if let Some(alternative) = node
+                .child_by_field_name("alternative")
+                .or_else(|| node.child_by_field_name("else"))
+            {
                 self.visit_block(alternative, source)?;
             } else if let Some(else_clause) = node.child_by_field_name("else_clause") {
                 self.visit_block(else_clause, source)?;
@@ -510,6 +503,7 @@ fn is_block_like(kind: &str) -> bool {
         kind,
         "block"
             | "statement_block"
+            | "statement_list"
             | "compound_statement"
             | "source_file"
             | "function_body"
@@ -595,6 +589,45 @@ def example(x):
 "#;
         let cfg = build_cfg_for_function("python", code, "example").unwrap();
         assert!(cfg.blocks.len() >= 4);
+    }
+
+    #[test]
+    fn test_go_method_if_cfg() {
+        let code = r#"
+package handler
+
+func (h *AuthHandler) Login(c *gin.Context) {
+    if c == nil {
+        return
+    }
+    return
+}
+"#;
+        let cfg = build_cfg_for_function("go", code, "Login").unwrap();
+        assert!(cfg.blocks.len() >= 4);
+        let if_true = cfg
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == CfgEdgeType::IfTrue)
+            .count();
+        assert!(if_true >= 1);
+    }
+
+    #[test]
+    fn test_go_for_loop_has_cycle() {
+        let code = r#"
+package demo
+
+func Sum(n int) int {
+    total := 0
+    for i := 0; i < n; i++ {
+        total += i
+    }
+    return total
+}
+"#;
+        let cfg = build_cfg_for_function("go", code, "Sum").unwrap();
+        assert!(cfg.has_cycle());
     }
 
     #[test]

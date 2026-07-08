@@ -9,10 +9,19 @@ use std::process::{Command, Output};
 /// Default golden repo for dashboard phase gates (override with env).
 pub const DEFAULT_GOLDEN_REPO: &str = "/Users/sshaaf/git/java/gbuilder";
 
+/// Default Go ecommerce test repo (override with env).
+pub const DEFAULT_GO_REPO: &str = "/Users/sshaaf/git/rust/rbuilder-tests/ecommerce-go";
+
 pub fn golden_repo_path() -> PathBuf {
     std::env::var("RBUILDER_DASHBOARD_GOLDEN_REPO")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_GOLDEN_REPO))
+}
+
+pub fn ecommerce_go_repo_path() -> PathBuf {
+    std::env::var("RBUILDER_GO_REPO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_GO_REPO))
 }
 
 pub fn rbuilder_bin() -> PathBuf {
@@ -129,7 +138,11 @@ pub fn assert_dashboard_bundle_with_meta(repo: &Path, min_nodes: u64, min_metano
     );
     let blast_index: Value =
         serde_json::from_slice(&std::fs::read(dash.join("blast_index.json")).unwrap()).unwrap();
-    assert_eq!(blast_index["schema_version"], 1);
+    let blast_schema = blast_index["schema_version"].as_u64().unwrap_or(0);
+    assert!(
+        blast_schema == 1 || blast_schema == 2,
+        "unexpected blast_index schema_version: {blast_schema}"
+    );
     assert_eq!(blast_index["available"], true);
 
     let analysis = &manifest["analysis"];

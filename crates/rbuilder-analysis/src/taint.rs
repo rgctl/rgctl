@@ -139,6 +139,7 @@ impl<'a> TaintAnalyzer<'a> {
             "python" | "py" => self.detect_python_patterns(),
             "javascript" | "js" | "typescript" | "ts" => self.detect_js_patterns(),
             "rust" | "rs" => self.detect_rust_patterns(),
+            "go" | "golang" => self.detect_go_patterns(),
             "java" => self.detect_java_patterns(),
             _ => {}
         }
@@ -227,6 +228,51 @@ impl<'a> TaintAnalyzer<'a> {
             if text.contains(".parse::<") {
                 self.sanitizers
                     .insert(*node_id, Sanitizer::TypeCast("typed".into()));
+            }
+        }
+    }
+
+    fn detect_go_patterns(&mut self) {
+        for (node_id, node) in &self.pdg.nodes {
+            let text = &node.statement.text;
+
+            if text.contains("Query(")
+                || text.contains("Param(")
+                || text.contains("PostForm(")
+                || text.contains("ShouldBindJSON")
+                || text.contains("FormValue(")
+            {
+                self.sources.insert(*node_id, TaintSource::HttpParameter);
+            } else if text.contains("os.Getenv") || text.contains("os.LookupEnv") {
+                self.sources.insert(*node_id, TaintSource::EnvironmentVar);
+            } else if text.contains("os.Args") {
+                self.sources.insert(*node_id, TaintSource::CommandLineArg);
+            } else if text.contains("ReadFile(") || text.contains("io.ReadAll") {
+                self.sources.insert(*node_id, TaintSource::FileInput);
+            }
+
+            if text.contains(".Exec(")
+                || text.contains(".Query(")
+                || text.contains(".QueryRow(")
+                || text.contains("db.Exec")
+            {
+                self.sinks.insert(*node_id, TaintSink::SqlQuery);
+            } else if text.contains("exec.Command") || text.contains("exec.CommandContext") {
+                self.sinks.insert(*node_id, TaintSink::ShellCommand);
+            } else if text.contains("template.HTML(") || text.contains("c.HTML(") {
+                self.sinks.insert(*node_id, TaintSink::HtmlRender);
+            } else if text.contains("fmt.Fprintf") && text.contains("ResponseWriter") {
+                self.sinks.insert(*node_id, TaintSink::HtmlRender);
+            }
+
+            if text.contains("strconv.Atoi")
+                || text.contains("strconv.ParseInt")
+                || text.contains("strconv.ParseFloat")
+            {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::TypeCast("numeric".into()));
+            } else if text.contains("html.EscapeString") {
+                self.sanitizers.insert(*node_id, Sanitizer::HtmlEscape);
             }
         }
     }
