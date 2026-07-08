@@ -163,7 +163,7 @@ If you add a new workspace crate that external tools should use, export it throu
 | `rbuilder-lang-*` | Per-language implementations (see note below). |
 | `rbuilder-macros` | `#[derive(LanguagePlugin)]` and related proc macros. |
 
-**Language crates (`rbuilder-lang-*`):** One crate per language or config dialect (e.g. `rbuilder-lang-java`, `rbuilder-lang-github-actions`). Each registers a plugin with the registry. **Do not add parsing logic for an existing language in another crate** — extend the relevant `rbuilder-lang-*` plugin instead.
+**Language crates (`rbuilder-lang-*`):** One crate per language or config dialect (e.g. `rbuilder-lang-java`, `rbuilder-lang-github-actions`). Each registers a plugin with the registry. **Do not add parsing logic for an existing language in another language crate** — extend the relevant `rbuilder-lang-*` plugin instead. For Tier 1 / full analysis parity, see [tier-1-language-support.md](tier-1-language-support.md).
 
 #### Ingestion pipeline
 

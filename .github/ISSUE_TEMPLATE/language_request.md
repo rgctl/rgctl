@@ -29,7 +29,7 @@ assignees: ''
 
 ## Language Tier
 
-Based on the [hybrid tiering architecture](../../LANGUAGE_GUIDE.md), which tier would be most appropriate?
+Based on the [Tier 1 language support guide](../../docs/tier-1-language-support.md), which tier would be most appropriate?
 
 - [ ] **Tier 1 (Custom)** - Need type inference or complex relationships
 - [ ] **Tier 2 (Tree-sitter)** - Basic tree-sitter extraction sufficient
