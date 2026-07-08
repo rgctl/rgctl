@@ -12,6 +12,7 @@ pub mod discover_output;
 mod export;
 mod gql;
 pub mod gql_output;
+mod http_serve;
 mod inspect;
 pub mod inspect_output;
 mod metrics;
@@ -189,16 +190,44 @@ pub enum Commands {
         query: String,
     },
 
-    /// Keep graph + blast engine warm for repeated blast-radius queries.
+    /// Serve the analysis dashboard and GQL query API over HTTP.
     ///
-    /// Unix: domain socket (default `<repo>/.rbuilder/query.sock`).
-    /// Windows: loopback TCP; port written to `<repo>/.rbuilder/query.port`.
+    /// Default: dashboard at `/` and query API at `/api/query` (alias `/graphql`).
+    /// Use `--daemon` for the legacy blast-radius query socket instead.
     Serve {
-        /// Endpoint path (Unix socket or Windows port file; default under `<repo>/.rbuilder/`)
+        /// Bind host [default: 127.0.0.1]
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// HTTP port [default: 8080]
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+
+        /// Dashboard directory [default: `<repo>/.rbuilder/dashboard`]
+        #[arg(long, value_name = "DIR")]
+        dashboard_dir: Option<std::path::PathBuf>,
+
+        /// Open the dashboard in the default browser
+        #[arg(long)]
+        open: bool,
+
+        /// Serve the query API only (no dashboard static files)
+        #[arg(long)]
+        query_only: bool,
+
+        /// Serve the dashboard only (no query API)
+        #[arg(long)]
+        dashboard_only: bool,
+
+        /// Legacy blast-radius query daemon (Unix socket or Windows port file)
+        #[arg(long, conflicts_with_all = ["host", "port", "open", "query_only", "dashboard_only", "dashboard_dir"])]
+        daemon: bool,
+
+        /// Daemon endpoint path (Unix socket or Windows port file; default under `<repo>/.rbuilder/`)
         #[arg(long, value_name = "PATH")]
         socket: Option<std::path::PathBuf>,
 
-        /// Exit after this many seconds without requests
+        /// Daemon idle exit in seconds [default: 300]
         #[arg(long, default_value_t = 300)]
         idle_secs: u64,
     },
@@ -325,9 +354,34 @@ impl Cli {
                     query,
                 },
             ),
-            Commands::Serve { socket, idle_secs } => {
-                let socket = socket.unwrap_or_else(|| query_daemon::default_socket_path(&ctx.repo));
-                query_daemon::serve(&ctx, socket, idle_secs)
+            Commands::Serve {
+                host,
+                port,
+                dashboard_dir,
+                open,
+                query_only,
+                dashboard_only,
+                daemon,
+                socket,
+                idle_secs,
+            } => {
+                if daemon {
+                    let socket =
+                        socket.unwrap_or_else(|| query_daemon::default_socket_path(&ctx.repo));
+                    query_daemon::serve(&ctx, socket, idle_secs)
+                } else {
+                    http_serve::serve(
+                        &ctx,
+                        http_serve::HttpServeArgs {
+                            host,
+                            port,
+                            dashboard_dir,
+                            open,
+                            query_only,
+                            dashboard_only,
+                        },
+                    )
+                }
             }
         }
     }

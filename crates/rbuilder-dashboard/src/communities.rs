@@ -35,7 +35,7 @@ pub fn summarize_communities(modularity: f64, metanodes: &[Metanode]) -> Communi
         let entry = by_id.entry(cid).or_insert_with(|| CommunitySummary {
             id: cid,
             label: format!("Community {cid}"),
-            color: community_color_hsl(cid),
+            color: community_color_hex(cid),
             member_count: 0,
             package_count: 0,
         });
@@ -53,7 +53,34 @@ pub fn summarize_communities(modularity: f64, metanodes: &[Metanode]) -> Communi
     }
 }
 
-/// Stable HSL palette aligned with the dashboard graph layout.
+/// Stable hex palette keyed by Louvain community id (Sigma-compatible).
+pub fn community_color_hex(index: usize) -> String {
+    let hue = (index * 47 + 210) % 360;
+    hsl_to_hex(hue as f64, 0.58, 0.52)
+}
+
+fn hsl_to_hex(h: f64, s: f64, l: f64) -> String {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+    let (rp, gp, bp) = if h < 60.0 {
+        (c, x, 0.0)
+    } else if h < 120.0 {
+        (x, c, 0.0)
+    } else if h < 180.0 {
+        (0.0, c, x)
+    } else if h < 240.0 {
+        (0.0, x, c)
+    } else if h < 300.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    let to_byte = |v: f64| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    format!("#{:02x}{:02x}{:02x}", to_byte(rp), to_byte(gp), to_byte(bp))
+}
+
+#[allow(dead_code)]
 pub fn community_color_hsl(index: usize) -> String {
     let hue = (index * 47 + 210) % 360;
     format!("hsl({hue} 58% 52%)")

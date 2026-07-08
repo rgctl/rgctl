@@ -268,7 +268,7 @@ mod tests {
                 communities: vec![crate::communities::CommunitySummary {
                     id: 0,
                     label: "Community 0".into(),
-                    color: "hsl(210 58% 52%)".into(),
+                    color: "#5a8fd4".into(),
                     member_count: 10,
                     package_count: 1,
                 }],

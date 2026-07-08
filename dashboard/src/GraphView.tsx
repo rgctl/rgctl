@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import Graph from "graphology";
 import Sigma from "sigma";
 import { GraphSidebar } from "./GraphSidebar";
-import { NodeTypeFilter } from "./NodeTypeFilter";
 import type {
   CommunitiesPayload,
   MetagraphPayload,
@@ -18,11 +17,24 @@ import {
   firstMatchingNodeId,
   neighborhoodIds,
   passesFilters,
-  type CategoryFilter,
+  passesSubgraphNodeType,
+  filterState,
   type GraphFilterState,
 } from "./graphExplore";
-import { communityColor, layoutForceAtlas2, shortGraphLabel } from "./graphLayout";
+import {
+  buildCommunityColorMap,
+  fadeColor,
+  NODE_TYPE_LEGEND,
+  nodeTypeSizeScale,
+  resolveCommunityColor,
+  resolveNodeTypeColor,
+  sigmaProgramForMetanode,
+  sigmaProgramForNodeType,
+} from "./graphColors";
+import { layoutForceAtlas2, shortGraphLabel } from "./graphLayout";
+import { GraphZoomControls } from "./GraphZoomControls";
 import { mountSigmaWhenReady } from "./sigmaMount";
+import { SIGMA_NODE_PROGRAM_CLASSES } from "./sigmaPrograms";
 
 export interface GraphViewProps {
   communityOnly: boolean;
@@ -32,13 +44,6 @@ export interface GraphViewProps {
 }
 
 type ViewLevel = "metagraph" | "subgraph";
-
-const LEGEND = [
-  { label: "Function", color: "#0d6efd" },
-  { label: "Class", color: "#d63384" },
-  { label: "Interface", color: "#0dcaf0" },
-  { label: "Module", color: "#dc3545" },
-];
 
 export function GraphView({
   communityOnly,
@@ -52,7 +57,7 @@ export function GraphView({
   const filterRef = useRef<GraphFilterState>({
     search: "",
     communityId: null,
-    category: "all",
+    typeMask: DEFAULT_GRAPH_TYPE_MASK,
     soloCommunity: false,
   });
   const highlightRef = useRef<{ hover: string | null; selected: string | null }>({
@@ -69,28 +74,26 @@ export function GraphView({
   const [level, setLevel] = useState<ViewLevel>("metagraph");
   const [subgraph, setSubgraph] = useState<SubgraphPayload | null>(null);
   const [drillLabel, setDrillLabel] = useState<string | null>(null);
+  const [drillCommunityId, setDrillCommunityId] = useState<number | null>(null);
   const [typeMask, setTypeMask] = useState(DEFAULT_GRAPH_TYPE_MASK);
   const [expanding, setExpanding] = useState(false);
   const [subHover, setSubHover] = useState<SubgraphNode | null>(null);
   const [search, setSearch] = useState("");
   const [showCalls, setShowCalls] = useState(true);
   const [selectedCommunityId, setSelectedCommunityId] = useState<number | null>(null);
-  const [category, setCategory] = useState<CategoryFilter>("all");
   const [soloCommunity, setSoloCommunity] = useState(false);
+
+  const communityColorMapRef = useRef(buildCommunityColorMap(null));
+  communityColorMapRef.current = buildCommunityColorMap(communities);
 
   const refreshGraph = useCallback(() => {
     sigmaRef.current?.refresh();
   }, []);
 
   const syncFilters = useCallback(() => {
-    filterRef.current = {
-      search,
-      communityId: selectedCommunityId,
-      category,
-      soloCommunity,
-    };
+    filterRef.current = filterState(search, selectedCommunityId, typeMask, soloCommunity);
     refreshGraph();
-  }, [search, selectedCommunityId, category, soloCommunity, refreshGraph]);
+  }, [search, selectedCommunityId, typeMask, soloCommunity, refreshGraph]);
 
   useEffect(() => {
     syncFilters();
@@ -133,8 +136,24 @@ export function GraphView({
     };
   }, []);
 
+  const activeFilters = filterState(search, selectedCommunityId, typeMask, soloCommunity);
+
   const visibleMetaCount =
-    meta?.nodes.filter((n) => passesFilters(n, filterRef.current)).length ?? 0;
+    meta?.nodes.filter((n) => passesFilters(n, activeFilters)).length ?? 0;
+
+  const scopedMetaTotal =
+    meta?.nodes.filter((n) =>
+      selectedCommunityId === null ? true : n.community_id === selectedCommunityId,
+    ).length ?? 0;
+
+  const visibleSubgraphCount =
+    subgraph?.nodes.filter((n) => passesSubgraphNodeType(n, typeMask)).length ?? 0;
+
+  const communityLabel =
+    selectedCommunityId !== null
+      ? (communities?.communities.find((c) => c.id === selectedCommunityId)?.label ??
+        `Community ${selectedCommunityId}`)
+      : null;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -152,6 +171,7 @@ export function GraphView({
           adjacencyRef,
           highlightRef,
           filterRef,
+          communityColorMapRef,
           showCalls,
           {
             setHover: (n) => {
@@ -172,6 +192,7 @@ export function GraphView({
           container,
           sigmaRef,
           highlightRef,
+          filterRef,
           (n) => {
             setSubHover(n);
             refreshHighlight(n ? String(n.index) : null, highlightRef.current.selected);
@@ -217,6 +238,7 @@ export function GraphView({
         const payload = await expand(indices, typeMask);
         setSubgraph(payload);
         setDrillLabel(node.label);
+        setDrillCommunityId(node.community_id ?? null);
         setLevel("subgraph");
         setSelected(null);
         setHover(null);
@@ -234,18 +256,9 @@ export function GraphView({
     setLevel("metagraph");
     setSubgraph(null);
     setDrillLabel(null);
+    setDrillCommunityId(null);
     setSubHover(null);
     highlightRef.current = { hover: null, selected: null };
-  };
-
-  const fitView = () => {
-    sigmaRef.current?.getCamera().animatedReset({ duration: 300 });
-  };
-
-  const zoom = (ratio: number) => {
-    const cam = sigmaRef.current?.getCamera();
-    if (!cam) return;
-    cam.animate({ ratio: cam.ratio * ratio }, { duration: 200 });
   };
 
   const flyToSearch = () => {
@@ -277,17 +290,6 @@ export function GraphView({
                 {communityOnly ? "Community view" : "Package graph"}
               </span>
             )}
-            <div class="btn-group btn-group-sm" role="group" aria-label="Zoom">
-              <button type="button" class="btn btn-outline-secondary" onClick={() => zoom(0.75)} title="Zoom in">
-                +
-              </button>
-              <button type="button" class="btn btn-outline-secondary" onClick={fitView} title="Fit view">
-                ⊡
-              </button>
-              <button type="button" class="btn btn-outline-secondary" onClick={() => zoom(1.33)} title="Zoom out">
-                −
-              </button>
-            </div>
           </div>
           <div class="d-flex flex-grow-1 min-w-0 gap-1">
             <input
@@ -309,11 +311,6 @@ export function GraphView({
               Go
             </button>
           </div>
-          {level === "subgraph" && (
-            <div class="graph-toolbar-filters flex-grow-1 min-w-0">
-              <NodeTypeFilter mask={typeMask} onChange={setTypeMask} disabled={!wasmReady} />
-            </div>
-          )}
           <div class="d-flex align-items-center gap-2 flex-shrink-0">
             <div class="form-check form-switch mb-0">
               <input
@@ -331,9 +328,11 @@ export function GraphView({
         </div>
         <p class="small text-muted mb-0 mt-1 graph-toolbar-hint">
           {level === "subgraph" && subgraph
-            ? `${drillLabel} · ${subgraph.nodes.length} nodes · ${subgraph.edges.length} edges`
+            ? `${drillLabel ?? "Package"} · ${visibleSubgraphCount} / ${subgraph.nodes.length} members · ${subgraph.edges.length} edges`
             : meta
-              ? `${visibleMetaCount} / ${meta.nodes.length} packages · ${meta.edges.length} cross-package calls · ${sourceNodeCount.toLocaleString()} nodes`
+              ? selectedCommunityId !== null
+                ? `${visibleMetaCount} / ${scopedMetaTotal} packages in ${communityLabel} · ${sourceNodeCount.toLocaleString()} nodes`
+                : `${visibleMetaCount} / ${meta.nodes.length} packages · ${meta.edges.length} cross-package calls · ${sourceNodeCount.toLocaleString()} nodes`
               : loadState}
           {expanding ? " · expanding…" : ""}
         </p>
@@ -349,17 +348,39 @@ export function GraphView({
         <div class="graph-stage graph-stage--fullbleed">
           <div class="graph-canvas-wrap">
             <div class="sigma-host" ref={containerRef} />
+            <GraphZoomControls sigmaRef={sigmaRef} />
           </div>
-          <div class="graph-legend px-2 py-1 bg-white small d-flex flex-wrap gap-2 gap-md-3 border-top">
+          <div class="graph-legend px-2 py-1 bg-white small d-flex flex-wrap gap-2 gap-md-3 border-top align-items-center">
             {level === "metagraph" ? (
-              <span class="text-muted">Colors = Louvain communities · hover highlights neighborhood</span>
+              <>
+                <span class="text-muted">Color = Louvain community (matches sidebar)</span>
+                {(communities?.communities ?? []).slice(0, 6).map((c) => (
+                  <span key={c.id} class="graph-legend-community">
+                    <span
+                      class="legend-dot"
+                      style={{ background: resolveCommunityColor(c.id, communityColorMapRef.current) }}
+                    />
+                    {c.label}
+                  </span>
+                ))}
+                {(communities?.communities.length ?? 0) > 6 && (
+                  <span class="text-muted">+{(communities?.communities.length ?? 0) - 6} more</span>
+                )}
+              </>
             ) : (
-              LEGEND.map((item) => (
-                <span key={item.label}>
-                  <span class="legend-dot" style={{ background: item.color }} />
-                  {item.label}
-                </span>
-              ))
+              <>
+                <span class="text-muted">Color and shape = node type</span>
+                {NODE_TYPE_LEGEND.map((item) => (
+                  <span key={item.label}>
+                    <span
+                      class={`legend-shape legend-shape--${item.program}`}
+                      style={{ background: item.color }}
+                      title={item.hint}
+                    />
+                    {item.label}
+                  </span>
+                ))}
+              </>
             )}
           </div>
         </div>
@@ -368,14 +389,22 @@ export function GraphView({
           communities={communities}
           selectedCommunityId={selectedCommunityId}
           onSelectCommunity={setSelectedCommunityId}
-          category={category}
-          onCategoryChange={setCategory}
+          typeMask={typeMask}
+          onTypeMaskChange={setTypeMask}
+          typeFilterDisabled={level === "subgraph" && !wasmReady}
           soloCommunity={soloCommunity}
           onSoloCommunityChange={setSoloCommunity}
-          visibleCount={visibleMetaCount}
-          totalCount={meta?.nodes.length ?? 0}
+          visibleCount={level === "subgraph" ? visibleSubgraphCount : visibleMetaCount}
+          totalCount={
+            level === "subgraph"
+              ? (subgraph?.nodes.length ?? 0)
+              : selectedCommunityId !== null
+                ? scopedMetaTotal
+                : (meta?.nodes.length ?? 0)
+          }
           drillLabel={drillLabel}
           onBack={backToMeta}
+          communityLabel={communityLabel}
           hover={hover}
           selected={selected}
           subHover={subHover}
@@ -394,6 +423,7 @@ function mountMetagraph(
   adjacencyRef: { current: Map<string, Set<string>> },
   highlightRef: { current: { hover: string | null; selected: string | null } },
   filterRef: { current: GraphFilterState },
+  colorMapRef: { current: Map<number, string> },
   showCalls: boolean,
   handlers: {
     setHover: (n: Metanode | null) => void;
@@ -404,16 +434,18 @@ function mountMetagraph(
   const graph = new Graph();
 
   for (const n of meta.nodes) {
-    const cid = n.community_id ?? 0;
+    const color = resolveCommunityColor(n.community_id, colorMapRef.current);
+    const nodeType = sigmaProgramForMetanode(n.functions, n.classes);
     graph.addNode(String(n.id), {
       label: shortGraphLabel(n.label),
       fullLabel: n.label,
       x: n.x,
       y: n.y,
       size: Math.max(6, Math.log(n.size + 1) * 4.5),
+      type: nodeType,
       meta: n,
-      color: communityColor(cid),
-      baseColor: communityColor(cid),
+      color,
+      baseColor: color,
     });
   }
 
@@ -466,30 +498,27 @@ function mountSubgraph(
   container: HTMLDivElement,
   sigmaRef: { current: Sigma | null },
   highlightRef: { current: { hover: string | null; selected: string | null } },
+  filterRef: { current: GraphFilterState },
   setSubHover: (n: SubgraphNode | null) => void,
   showCalls: boolean,
 ) {
   const graph = new Graph();
 
-  const typeColors: Record<number, string> = {
-    0: "#0d6efd",
-    1: "#d63384",
-    4: "#0dcaf0",
-    5: "#dc3545",
-  };
-
   const positions = deterministicPositions(payload.nodes.length, payload.nodes[0]?.index ?? 0);
   payload.nodes.forEach((node, i) => {
     const pos = positions[i] ?? { x: 0, y: 0 };
+    const color = resolveNodeTypeColor(node.node_type);
+    const baseSize = Math.max(4, Math.log(node.complexity + 2) * 2.5);
     graph.addNode(String(node.index), {
       label: shortGraphLabel(node.name),
       fullLabel: node.name,
       x: pos.x,
       y: pos.y,
-      size: Math.max(4, Math.log(node.complexity + 2) * 2.5),
+      size: baseSize * nodeTypeSizeScale(node.node_type),
+      type: sigmaProgramForNodeType(node.node_type),
       meta: node,
-      color: typeColors[node.node_type] ?? "#6c757d",
-      baseColor: typeColors[node.node_type] ?? "#6c757d",
+      color,
+      baseColor: color,
     });
   });
 
@@ -511,7 +540,7 @@ function mountSubgraph(
   const sigma = new Sigma(
     graph,
     container,
-    subgraphSigmaOptions(highlightRef),
+    subgraphSigmaOptions(graph, highlightRef, filterRef, showCalls),
   );
   sigma.on("enterNode", ({ node }) => {
     setSubHover(graph.getNodeAttribute(node, "meta") as SubgraphNode);
@@ -526,13 +555,7 @@ function mountSubgraph(
   };
 }
 
-function metaSigmaOptions(
-  graph: Graph,
-  adjacencyRef: { current: Map<string, Set<string>> },
-  highlightRef: { current: { hover: string | null; selected: string | null } },
-  filterRef: { current: GraphFilterState },
-  showCalls: boolean,
-) {
+function baseSigmaRenderOptions() {
   return {
     renderEdgeLabels: false,
     labelFont: "system-ui, sans-serif",
@@ -545,6 +568,19 @@ function metaSigmaOptions(
     minCameraRatio: 0.02,
     maxCameraRatio: 20,
     enableEdgeEvents: false,
+    nodeProgramClasses: SIGMA_NODE_PROGRAM_CLASSES,
+  };
+}
+
+function metaSigmaOptions(
+  graph: Graph,
+  adjacencyRef: { current: Map<string, Set<string>> },
+  highlightRef: { current: { hover: string | null; selected: string | null } },
+  filterRef: { current: GraphFilterState },
+  showCalls: boolean,
+) {
+  return {
+    ...baseSigmaRenderOptions(),
     nodeReducer(node: string, data: Record<string, unknown>) {
       const meta = data.meta as Metanode;
       const filters = filterRef.current;
@@ -566,9 +602,9 @@ function metaSigmaOptions(
       return {
         ...data,
         color,
+        type: data.type as string,
         label: showLabel ? (data.label as string) : "",
         zIndex: node === focus ? 3 : node === hover ? 2 : 0,
-        borderColor: node === focus || node === selected ? "#212529" : undefined,
       };
     },
     edgeReducer(edge: string, data: Record<string, unknown>) {
@@ -600,40 +636,40 @@ function metaSigmaOptions(
 }
 
 function subgraphSigmaOptions(
+  graph: Graph,
   highlightRef: { current: { hover: string | null; selected: string | null } },
+  filterRef: { current: GraphFilterState },
+  showCalls: boolean,
 ) {
   return {
-    renderEdgeLabels: false,
-    labelFont: "system-ui, sans-serif",
-    labelSize: 12,
-    labelWeight: "600" as const,
-    defaultNodeColor: "#0d6efd",
-    defaultEdgeColor: "#c8cdd3",
-    labelColor: { color: "#212529" },
-    labelRenderedSizeThreshold: 8,
-    minCameraRatio: 0.02,
-    maxCameraRatio: 20,
-    enableEdgeEvents: false,
+    ...baseSigmaRenderOptions(),
     nodeReducer(node: string, data: Record<string, unknown>) {
+      const member = data.meta as SubgraphNode;
+      const visible = passesSubgraphNodeType(member, filterRef.current.typeMask);
       const { hover, selected } = highlightRef.current;
       const show = node === hover || node === selected;
+      if (!visible) {
+        return { ...data, hidden: true, label: "" };
+      }
       return {
         ...data,
         label: show ? (data.label as string) : "",
+        type: data.type as string,
         zIndex: show ? 2 : 0,
-        borderColor: show ? "#212529" : undefined,
       };
     },
-    edgeReducer(_edge: string, data: Record<string, unknown>) {
+    edgeReducer(edge: string, data: Record<string, unknown>) {
+      if (!showCalls) return { ...data, hidden: true };
+      const [source, target] = graph.extremities(edge);
+      const mask = filterRef.current.typeMask;
+      const src = graph.getNodeAttribute(source, "meta") as SubgraphNode;
+      const tgt = graph.getNodeAttribute(target, "meta") as SubgraphNode;
+      if (!passesSubgraphNodeType(src, mask) || !passesSubgraphNodeType(tgt, mask)) {
+        return { ...data, hidden: true };
+      }
       return { ...data, size: (data.size as number) * 0.85, color: "#d0d5db" };
     },
   };
-}
-
-function fadeColor(hsl: string, alpha: number): string {
-  const m = /hsl\((\d+)\s+([\d.]+%)\s+([\d.]+%)\)/.exec(hsl);
-  if (!m) return hsl;
-  return `hsla(${m[1]} ${m[2]} ${m[3]} / ${alpha})`;
 }
 
 function addAggregatedEdges(

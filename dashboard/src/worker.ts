@@ -181,8 +181,8 @@ async function handleComputeDataflow(
   const payload = computeDataflowGraph(
     bundle.pdg.nodes,
     bundle.pdg.edges,
-    variable,
-    includeControl,
+    null,
+    { variable, includeControl },
   );
   const out: WorkerOut = { type: "dataflow_result", requestId, payload };
   self.postMessage(out);

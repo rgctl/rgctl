@@ -15,10 +15,13 @@ import {
 import { java } from "@codemirror/lang-java";
 import { basicSetup } from "codemirror";
 import { bundleDataUrl } from "./bundleUrl";
+import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
+import { shortPath, sliceEntryToListItem } from "./functionListUtils";
+import { ViewLegend } from "./ViewLegend";
+import { SLICE_LEGEND } from "./viewLegendData";
 import type {
   SliceBundlePayload,
   SliceDirection,
-  SliceFunctionEntry,
   SliceIndexPayload,
   SliceResultPayload,
 } from "./types";
@@ -133,14 +136,18 @@ export function SliceView({ computeSlice }: SliceViewProps) {
   }
 
   return (
-    <div class="slice-view d-flex flex-column h-100 min-h-0 gap-3">
-      <div class="d-flex flex-wrap align-items-end gap-2 flex-shrink-0">
-        <FunctionSelect
-          functions={index.functions}
-          value={selectedId}
-          onChange={setSelectedId}
+    <FunctionListLayout
+      sidebar={
+        <FunctionListSidebar
           count={index.function_count}
+          items={index.functions.map(sliceEntryToListItem)}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
         />
+      }
+    >
+      <div class="slice-view d-flex flex-column h-100 min-h-0 gap-3 p-3">
+        <div class="d-flex flex-wrap align-items-end gap-2 flex-shrink-0">
         <div>
           <label class="form-label small mb-1" for="slice-line">
             Line
@@ -222,44 +229,8 @@ export function SliceView({ computeSlice }: SliceViewProps) {
           Select a function, set line + variable, then compute a slice.
         </p>
       )}
-    </div>
-  );
-}
-
-function FunctionSelect({
-  functions,
-  value,
-  onChange,
-  count,
-}: {
-  functions: SliceFunctionEntry[];
-  value: string | null;
-  onChange: (id: string | null) => void;
-  count: number;
-}) {
-  return (
-    <div style={{ minWidth: "280px", maxWidth: "100%" }}>
-      <label class="form-label small mb-1" for="slice-fn">
-        Function ({count})
-      </label>
-      <select
-        id="slice-fn"
-        class="form-select form-select-sm"
-        value={value ?? ""}
-        onChange={(e) => {
-          const v = (e.target as HTMLSelectElement).value;
-          onChange(v || null);
-        }}
-      >
-        <option value="">Select function…</option>
-        {functions.map((f) => (
-          <option key={f.function_id} value={f.function_id}>
-            {f.name}
-            {f.file_path ? ` — ${shortPath(f.file_path)}` : ""}
-          </option>
-        ))}
-      </select>
-    </div>
+      </div>
+    </FunctionListLayout>
   );
 }
 
@@ -322,6 +293,9 @@ function SourceEditor({
         {filePath && <span class="text-muted fw-normal ms-2">{shortPath(filePath)}</span>}
       </div>
       <div ref={hostRef} class="slice-editor-host flex-grow-1 min-h-0 overflow-auto" />
+      {highlightLines.length > 0 && (
+        <ViewLegend hint="Source highlights" items={SLICE_LEGEND} />
+      )}
     </div>
   );
 }
@@ -358,9 +332,4 @@ function lineDecorations(
     );
   }
   return builder.finish();
-}
-
-function shortPath(p: string): string {
-  const parts = p.split(/[/\\]/);
-  return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : p;
 }

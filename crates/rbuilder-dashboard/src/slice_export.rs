@@ -1,5 +1,6 @@
 //! Export PDG + source bundles for dashboard slicing (Phase 5).
 
+use rbuilder_analysis::cfg::ControlFlowGraph;
 use rbuilder_analysis::cfg_pdg_archive::CfgPdgArchive;
 use rbuilder_analysis::pdg::{PdgNodeId, ProgramDependenceGraph};
 use rbuilder_graph::backend::MemoryBackend;
@@ -53,6 +54,9 @@ pub struct SlicePdgNode {
     pub line: usize,
     pub label: String,
     pub kind: String,
+    /// CFG block index (matches `cfg/{id}.json` block `id`); omitted in older bundles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_index: Option<u32>,
     pub defined: Vec<String>,
     pub used: Vec<String>,
 }
@@ -113,7 +117,7 @@ pub fn export_slice_bundle(
             .and_then(|p| read_source_cached(p, &mut source_cache))
             .unwrap_or_default();
         let total_lines = source.lines().count().max(1);
-        let pdg = export_pdg(&record.pdg);
+        let pdg = export_pdg(&record.pdg, &record.cfg);
 
         let bundle = SliceBundlePayload {
             schema_version: 1,
@@ -171,7 +175,8 @@ fn read_source_cached(path: &str, cache: &mut HashMap<PathBuf, String>) -> Optio
     Some(text)
 }
 
-fn export_pdg(pdg: &ProgramDependenceGraph) -> SlicePdgPayload {
+fn export_pdg(pdg: &ProgramDependenceGraph, cfg: &ControlFlowGraph) -> SlicePdgPayload {
+    let block_index_map = index_cfg_blocks(cfg);
     let mut ordered: Vec<_> = pdg.nodes.values().collect();
     ordered.sort_by_key(|n| (n.statement.line, n.id));
 
@@ -189,6 +194,7 @@ fn export_pdg(pdg: &ProgramDependenceGraph) -> SlicePdgPayload {
             line: n.statement.line,
             label: n.statement.text.clone(),
             kind: format!("{:?}", n.statement.kind),
+            block_index: block_index_map.get(&n.block).copied().map(|i| i as u32),
             defined: n.defined_vars.iter().cloned().collect(),
             used: n.used_vars.iter().cloned().collect(),
         })
@@ -224,6 +230,20 @@ fn pdg_node_label(index: usize) -> String {
     format!("node_{index}")
 }
 
+fn index_cfg_blocks(cfg: &ControlFlowGraph) -> HashMap<uuid::Uuid, usize> {
+    let mut ids: Vec<uuid::Uuid> = cfg.blocks.keys().copied().collect();
+    ids.sort_by_key(|id| {
+        cfg.blocks
+            .get(id)
+            .map(|b| (b.start_line, b.end_line))
+            .unwrap_or((0, 0))
+    });
+    ids.into_iter()
+        .enumerate()
+        .map(|(idx, id)| (id, idx))
+        .collect()
+}
+
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
     fs::write(path, json).map_err(|e| e.to_string())
@@ -252,8 +272,9 @@ mod tests {
                 used_vars: HashSet::new(),
             });
         let pdg = ProgramDependenceGraph::build(&cfg, b"x = 1\n").unwrap();
-        let exported = export_pdg(&pdg);
+        let exported = export_pdg(&pdg, &cfg);
         assert!(!exported.nodes.is_empty());
         assert_eq!(exported.nodes[0].id, "node_0");
+        assert_eq!(exported.nodes[0].block_index, Some(0));
     }
 }

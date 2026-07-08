@@ -819,8 +819,7 @@ pub(crate) fn run_full_analysis(
         info!("   rbuilder slice <file> --line <N> --variable <VAR>");
         if dashboard_exported {
             info!(
-                "   open {}/index.html   # View dashboard (or serve directory for WASM)",
-                dashboard_dir.display()
+                "   rbuilder serve --open   # Dashboard + query API at http://127.0.0.1:8080"
             );
         }
     }

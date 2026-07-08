@@ -54,6 +54,21 @@ export interface BlastCallerEntry {
   node_type_name: string;
 }
 
+export interface BlastIndexPayload {
+  schema_version: number;
+  available: boolean;
+  snapshot_path?: string | null;
+  snapshot_copied?: boolean;
+  functions?: BlastFunctionScore[];
+}
+
+export interface BlastFunctionScore {
+  index: number;
+  score: number;
+  direct: number;
+  zone: number;
+}
+
 export interface AnalysisSection {
   cfg_available: boolean;
   cfg_index_path: string;
@@ -93,30 +108,38 @@ export interface DataflowFunctionEntry {
   file_path?: string | null;
   pdg_nodes: number;
   data_edges: number;
+  block_count?: number;
 }
 
 export interface DataflowGraphPayload {
+  view_mode: "dataflow" | "dominator";
   variable: string | null;
   include_control: boolean;
+  include_cfg: boolean;
   nodes: DataflowGraphNode[];
   edges: DataflowGraphEdge[];
   lines: number[];
   data_edge_count: number;
   control_edge_count: number;
+  cfg_edge_count: number;
 }
 
 export interface DataflowGraphNode {
   id: string;
   line: number;
   label: string;
+  display_label: string;
+  kind: "statement" | "block";
   defined: string[];
   used: string[];
+  block_index?: number;
+  frontier_size?: number;
 }
 
 export interface DataflowGraphEdge {
   source: string;
   target: string;
-  kind: "data" | "control";
+  kind: "data" | "control" | "cfg" | "dominates";
   variable?: string | null;
 }
 
@@ -199,6 +222,7 @@ export interface SlicePdgNode {
   line: number;
   label: string;
   kind: string;
+  block_index?: number;
   defined: string[];
   used: string[];
 }
