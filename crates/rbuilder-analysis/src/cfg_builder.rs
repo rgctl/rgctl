@@ -545,7 +545,10 @@ impl<'a> CfgBuilder<'a> {
 
         let mut has_default = false;
         for case in cases {
-            let is_default = matches!(case.kind(), "default_case" | "default_statement");
+            let is_default = matches!(
+                case.kind(),
+                "default_case" | "default_statement" | "switch_default"
+            );
             if is_default {
                 has_default = true;
             }
@@ -649,11 +652,13 @@ fn collect_switch_cases<'a>(node: Node<'a>, cases: &mut Vec<Node<'a>>) {
         "expression_case"
         | "type_case"
         | "case_clause"
-        |         "default_case"
+        | "default_case"
         | "default_statement"
         | "case_statement"
         | "communication_case"
-        | "switch_section" => cases.push(node),
+        | "switch_section"
+        | "switch_case"
+        | "switch_default" => cases.push(node),
         _ => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
@@ -962,6 +967,24 @@ int sum_vec(int* arr, int n) {
 "#;
         let cfg = build_cfg_for_function("cpp", code, "sum_vec").unwrap();
         assert!(cfg.has_cycle());
+    }
+
+    #[test]
+    fn test_javascript_switch_cfg() {
+        let code = r#"
+function classify(v) {
+    switch (v) {
+        case 1:
+            return "one";
+        case 2:
+            return "two";
+        default:
+            return "other";
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("javascript", code, "classify").unwrap();
+        assert!(cfg.blocks.len() >= 5);
     }
 
     #[test]

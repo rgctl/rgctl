@@ -86,16 +86,24 @@ const PROFILES: &[LanguageAnalysisProfile] = &[
         id: "javascript",
         aliases: &["js"],
         extensions: &["js", "jsx", "mjs", "cjs"],
-        function_kinds: &[],
-        cfg_enabled: false,
+        function_kinds: &[
+            "function_declaration",
+            "method_definition",
+            "arrow_function",
+        ],
+        cfg_enabled: true,
         taint_enabled: true,
     },
     LanguageAnalysisProfile {
         id: "typescript",
         aliases: &["ts"],
         extensions: &["ts", "tsx"],
-        function_kinds: &[],
-        cfg_enabled: false,
+        function_kinds: &[
+            "function_declaration",
+            "method_definition",
+            "arrow_function",
+        ],
+        cfg_enabled: true,
         taint_enabled: true,
     },
     LanguageAnalysisProfile {
@@ -172,6 +180,8 @@ fn grammar_for(profile: &LanguageAnalysisProfile) -> Result<Language> {
         "csharp" => Ok(tree_sitter_c_sharp::LANGUAGE.into()),
         "c" => Ok(tree_sitter_c::LANGUAGE.into()),
         "cpp" => Ok(tree_sitter_cpp::LANGUAGE.into()),
+        "javascript" => Ok(tree_sitter_javascript::LANGUAGE.into()),
+        "typescript" => Ok(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
         other => Err(Error::UnsupportedLanguage(other.to_string())),
     }
 }
@@ -233,12 +243,20 @@ mod tests {
     }
 
     #[test]
-    fn javascript_not_cfg_enabled() {
+    fn javascript_cfg_enabled() {
         assert_eq!(
             cfg_language_id_from_path(Path::new("app.js")),
-            None
+            Some("javascript")
         );
         assert_eq!(language_id_from_path(Path::new("app.js")), Some("javascript"));
+    }
+
+    #[test]
+    fn typescript_cfg_enabled() {
+        assert_eq!(
+            cfg_language_id_from_path(Path::new("app.ts")),
+            Some("typescript")
+        );
     }
 
     #[test]
@@ -250,15 +268,25 @@ mod tests {
 
     #[test]
     fn cfg_enabled_languages_have_taint() {
-        for id in ["rust", "python", "java", "go", "csharp", "c", "cpp"] {
+        for id in [
+            "rust",
+            "python",
+            "java",
+            "go",
+            "csharp",
+            "c",
+            "cpp",
+            "javascript",
+            "typescript",
+        ] {
             assert!(taint_enabled_for(id), "{id} should have taint");
             assert!(profile_for_language(id).unwrap().cfg_enabled);
         }
     }
 
     #[test]
-    fn javascript_has_taint_without_cfg() {
-        assert!(!profile_for_language("javascript").unwrap().cfg_enabled);
+    fn javascript_has_taint_and_cfg() {
+        assert!(profile_for_language("javascript").unwrap().cfg_enabled);
         assert!(taint_enabled_for("javascript"));
         assert!(taint_enabled_for("js"));
     }

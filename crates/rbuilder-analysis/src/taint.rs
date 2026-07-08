@@ -217,21 +217,57 @@ impl<'a> TaintAnalyzer<'a> {
     fn detect_rust_patterns(&mut self) {
         for (node_id, node) in &self.pdg.nodes {
             let text = &node.statement.text;
-            if text.contains("env::var") {
+
+            if text.contains("Path(")
+                || text.contains("Query(")
+                || text.contains("Json(")
+                || text.contains("Form(")
+                || text.contains("RawBody(")
+                || text.contains("TypedHeader(")
+                || text.contains("axum::extract")
+                || text.contains("Extension(")
+            {
+                self.sources.insert(*node_id, TaintSource::HttpParameter);
+            } else if text.contains("env::var") || text.contains("std::env::var") {
                 self.sources.insert(*node_id, TaintSource::EnvironmentVar);
-            } else if text.contains("env::args") {
+            } else if text.contains("env::args") || text.contains("std::env::args") {
                 self.sources.insert(*node_id, TaintSource::CommandLineArg);
-            } else if text.contains("File::open") || text.contains("read_to_string") {
+            } else if text.contains("File::open")
+                || text.contains("read_to_string")
+                || text.contains("std::fs::read")
+            {
                 self.sources.insert(*node_id, TaintSource::FileInput);
+            } else if text.contains("reqwest::")
+                || text.contains("hyper::")
+                || text.contains("TcpStream::connect")
+            {
+                self.sources.insert(*node_id, TaintSource::NetworkInput);
             }
-            if text.contains("Command::new") {
-                self.sinks.insert(*node_id, TaintSink::ShellCommand);
-            } else if text.contains("query(") || text.contains("execute(") {
+
+            if text.contains("sqlx::query")
+                || text.contains("query_as")
+                || text.contains(".execute(")
+                || text.contains("fetch_one(")
+                || text.contains("fetch_all(")
+                || text.contains("fetch_optional(")
+            {
                 self.sinks.insert(*node_id, TaintSink::SqlQuery);
+            } else if text.contains("Command::new") || text.contains("std::process::Command") {
+                self.sinks.insert(*node_id, TaintSink::ShellCommand);
+            } else if text.contains("format!") && text.contains("Html") {
+                self.sinks.insert(*node_id, TaintSink::HtmlRender);
+            } else if text.contains("std::fs::write") || text.contains("write_all(") {
+                self.sinks.insert(*node_id, TaintSink::FileWrite);
             }
-            if text.contains(".parse::<") {
+
+            if text.contains(".bind(") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::SqlParameterize);
+            } else if text.contains(".parse::<") || text.contains("FromStr") {
                 self.sanitizers
                     .insert(*node_id, Sanitizer::TypeCast("typed".into()));
+            } else if text.contains("html_escape") || text.contains("ammonia::") {
+                self.sanitizers.insert(*node_id, Sanitizer::HtmlEscape);
             }
         }
     }
@@ -728,6 +764,24 @@ def handle_request(request):
         let flows = analyzer.vulnerable_flows();
         assert!(!flows.is_empty(), "expected vulnerable SQL flow");
         assert_eq!(flows[0].source_type, TaintSource::HttpParameter);
+        assert_eq!(flows[0].sink_type, TaintSink::SqlQuery);
+    }
+
+    #[test]
+    fn test_taint_rust_sqlx_env_flow() {
+        let code = r#"
+fn bad() {
+    let id = std::env::var("ID").unwrap();
+    sqlx::query(&format!("SELECT * FROM users WHERE id = {}", id)).execute(pool);
+}
+"#;
+        let cfg = build_cfg_for_function("rust", code, "bad").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+        let mut analyzer = TaintAnalyzer::new(&pdg, &cfg);
+        analyzer.detect_patterns("rust");
+        let flows = analyzer.vulnerable_flows();
+        assert!(!flows.is_empty(), "expected env -> sqlx SQL flow");
+        assert_eq!(flows[0].source_type, TaintSource::EnvironmentVar);
         assert_eq!(flows[0].sink_type, TaintSink::SqlQuery);
     }
 

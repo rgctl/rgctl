@@ -180,6 +180,9 @@ rbuilder-lang-go = { workspace = true }
 rbuilder-lang-csharp = { workspace = true }
 rbuilder-lang-c = { workspace = true }
 rbuilder-lang-cpp = { workspace = true }
+rbuilder-lang-javascript = { workspace = true }
+rbuilder-lang-typescript = { workspace = true }
+rbuilder-lang-rust = { workspace = true }
 
 [features]
 default = []
@@ -249,6 +252,34 @@ path = "tests/c_phase13.rs"
 [[test]]
 name = "dashboard_ecommerce_cpp"
 path = "tests/dashboard_ecommerce_cpp.rs"
+
+[[test]]
+name = "dashboard_ecommerce_python"
+path = "tests/dashboard_ecommerce_python.rs"
+
+[[test]]
+name = "dashboard_ecommerce_rust"
+path = "tests/dashboard_ecommerce_rust.rs"
+
+[[test]]
+name = "dashboard_ecommerce_javascript"
+path = "tests/dashboard_ecommerce_javascript.rs"
+
+[[test]]
+name = "dashboard_ecommerce_typescript"
+path = "tests/dashboard_ecommerce_typescript.rs"
+
+[[test]]
+name = "js_phase13"
+path = "tests/js_phase13.rs"
+
+[[test]]
+name = "rust_phase13"
+path = "tests/rust_phase13.rs"
+
+[[test]]
+name = "javascript_cfg_analysis"
+path = "tests/javascript_cfg_analysis.rs"
 
 [[test]]
 name = "cpp_cfg_analysis"

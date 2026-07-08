@@ -21,6 +21,18 @@ pub const DEFAULT_C_REPO: &str = "/Users/sshaaf/git/rust/rbuilder-tests/ecommerc
 /// Default C++ ecommerce test repo (override with env).
 pub const DEFAULT_CPP_REPO: &str = "/Users/sshaaf/git/rust/rbuilder-tests/ecommerce-cpp";
 
+/// Default Python ecommerce test repo (override with env).
+pub const DEFAULT_PYTHON_REPO: &str = "/Users/sshaaf/git/rust/rbuilder-tests/ecommerce-python";
+
+/// Default Rust ecommerce test repo (override with env).
+pub const DEFAULT_RUST_REPO: &str = "/Users/sshaaf/git/rust/rbuilder-tests/ecommerce-rust";
+
+/// Default JavaScript ecommerce test repo (override with env).
+pub const DEFAULT_JAVASCRIPT_REPO: &str = "/Users/sshaaf/git/rust/rbuilder-tests/ecommerce-javascript";
+
+/// Default TypeScript ecommerce test repo (override with env).
+pub const DEFAULT_TYPESCRIPT_REPO: &str = "/Users/sshaaf/git/rust/rbuilder-tests/ecommerce-typescript";
+
 pub fn golden_repo_path() -> PathBuf {
     std::env::var("RBUILDER_DASHBOARD_GOLDEN_REPO")
         .map(PathBuf::from)
@@ -49,6 +61,30 @@ pub fn ecommerce_cpp_repo_path() -> PathBuf {
     std::env::var("RBUILDER_CPP_REPO")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_CPP_REPO))
+}
+
+pub fn ecommerce_python_repo_path() -> PathBuf {
+    std::env::var("RBUILDER_PYTHON_REPO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_PYTHON_REPO))
+}
+
+pub fn ecommerce_rust_repo_path() -> PathBuf {
+    std::env::var("RBUILDER_RUST_REPO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_RUST_REPO))
+}
+
+pub fn ecommerce_javascript_repo_path() -> PathBuf {
+    std::env::var("RBUILDER_JAVASCRIPT_REPO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_JAVASCRIPT_REPO))
+}
+
+pub fn ecommerce_typescript_repo_path() -> PathBuf {
+    std::env::var("RBUILDER_TYPESCRIPT_REPO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_TYPESCRIPT_REPO))
 }
 
 pub fn rbuilder_bin() -> PathBuf {
