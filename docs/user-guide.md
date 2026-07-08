@@ -74,17 +74,7 @@ cargo build --release
 ./target/release/rbuilder --version
 ```
 
-**Smaller binary (fewer languages):**
-
-```bash
-cargo build --release --no-default-features --features bundle-minimal
-```
-
-**All bundled languages:**
-
-```bash
-cargo build --release --features bundle-full
-```
+All six Tier 1 languages (Rust, Python, JavaScript, TypeScript, Go, Java) are always included in the binary.
 
 ---
 

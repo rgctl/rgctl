@@ -1,5 +1,0 @@
----
-galaxy_info:
-  role_name: common
-  description: Shared baseline configuration
-dependencies: []

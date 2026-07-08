@@ -32,7 +32,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  FEATURES: bundle-full
+  FEATURES: ""
 
 jobs:
   build:

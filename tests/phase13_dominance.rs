@@ -25,8 +25,6 @@ macro_rules! dom_cfg_test {
         }
     };
 }
-
-#[cfg(feature = "bundle-minimal")]
 dom_test!(
     dominance_entry_dominates_all,
     "rust",
@@ -45,8 +43,6 @@ fn test(x: i32) -> i32 {
         }
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 dom_test!(
     dominance_entry_idom_self,
     "rust",
@@ -56,8 +52,6 @@ dom_test!(
         assert_eq!(dominator.idom.get(&flow_cfg.entry), Some(&flow_cfg.entry));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 dom_test!(
     dominance_branch_then_block,
     "rust",
@@ -76,8 +70,6 @@ fn branch(x: i32) -> i32 {
         assert!(dominator.dominates(flow_cfg.entry, flow_cfg.entry));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 dom_test!(
     dominance_after_if_merge,
     "rust",
@@ -97,8 +89,6 @@ fn merge(x: i32) -> i32 {
         }
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 dom_test!(
     dominance_frontiers_on_branch,
     "rust",
@@ -115,16 +105,12 @@ fn branch(x: i32) {
         assert!(has_frontier || flow_cfg.blocks.len() <= 2);
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 dom_cfg_test!(dominance_frontier_api_empty, {
     let (flow_cfg, dominator) = build_dominance("rust", r#"fn leaf() {}"#, "leaf");
     let block = *flow_cfg.blocks.keys().next().unwrap();
     let frontier = dominator.frontier(block);
     assert!(frontier.is_empty() || flow_cfg.blocks.len() > 1);
 });
-
-#[cfg(feature = "bundle-minimal")]
 dom_test!(
     dominance_reflexive,
     "rust",
@@ -136,8 +122,6 @@ dom_test!(
         }
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 dom_test!(
     dominance_loop_body,
     "rust",
@@ -160,8 +144,6 @@ fn sum(n: i32) -> i32 {
         }
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 dom_test!(
     dominance_nested_if,
     "rust",
@@ -181,8 +163,6 @@ fn nested(a: i32, b: i32) -> i32 {
         assert!(dominator.dominates(flow_cfg.entry, flow_cfg.entry));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 dom_cfg_test!(pdg_control_deps_with_dominance, {
     let code = r#"
 fn test(x: i32, y: i32) -> i32 {
@@ -198,8 +178,6 @@ fn test(x: i32, y: i32) -> i32 {
     let dominator = DominatorTree::build(&flow_cfg);
     assert!(!pdg.control_deps.is_empty() || dominator.frontiers.is_empty());
 });
-
-#[cfg(feature = "bundle-minimal")]
 dom_test!(
     dominance_early_return,
     "rust",
@@ -218,8 +196,6 @@ fn early(x: i32) -> i32 {
         }
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 dom_test!(
     dominance_python_if,
     "python",
@@ -236,8 +212,6 @@ def branch(x):
         }
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 dom_test!(
     dominance_python_while,
     "python",
@@ -258,42 +232,30 @@ def loop(n):
 );
 
 dom_cfg_test!(dominance_frontiers_map_size, {
-    #[cfg(feature = "bundle-minimal")]
-    {
-        let (flow_cfg, dominator) =
-            build_dominance("rust", r#"fn g(x: i32) { if x > 0 { let y = 1; } }"#, "g");
-        assert_eq!(dominator.frontiers.len(), flow_cfg.blocks.len());
-    }
-    #[cfg(not(feature = "bundle-minimal"))]
-    {
-        let (flow_cfg, dominator) =
-            build_dominance("python", r#"def g(x):\n    if x > 0:\n        y = 1"#, "g");
-        assert_eq!(dominator.frontiers.len(), flow_cfg.blocks.len());
-    }
+    let (flow_cfg, dominator) =
+        build_dominance("rust", r#"fn g(x: i32) { if x > 0 { let y = 1; } }"#, "g");
+    assert_eq!(dominator.frontiers.len(), flow_cfg.blocks.len());
 });
 
 dom_cfg_test!(dominance_non_entry_not_self_idom, {
-    #[cfg(feature = "bundle-minimal")]
-    {
-        let (flow_cfg, dominator) = build_dominance(
-            "rust",
-            r#"
+    let (flow_cfg, dominator) = build_dominance(
+        "rust",
+        r#"
 fn wide(x: i32) -> i32 {
     if x > 0 { 1 } else { 2 }
 }
 "#,
-            "wide",
-        );
-        if flow_cfg.blocks.len() > 2 {
-            let non_entry = flow_cfg
-                .blocks
-                .keys()
-                .find(|b| **b != flow_cfg.entry)
-                .copied()
-                .unwrap();
-            let idom = dominator.idom.get(&non_entry).copied().unwrap();
-            assert!(dominator.dominates(flow_cfg.entry, non_entry));
-            assert!(dominator.dominates(idom, non_entry));
-        }
+        "wide",
+    );
+    if flow_cfg.blocks.len() > 2 {
+        let non_entry = flow_cfg
+            .blocks
+            .keys()
+            .find(|b| **b != flow_cfg.entry)
+            .copied()
+            .unwrap();
+        let idom = dominator.idom.get(&non_entry).copied().unwrap();
+        assert!(dominator.dominates(flow_cfg.entry, non_entry));
+        assert!(dominator.dominates(idom, non_entry));
     }
 });

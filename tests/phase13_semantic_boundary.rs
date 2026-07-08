@@ -14,8 +14,6 @@ use rbuilder::analysis::{
 use rbuilder::graph::backend::{GraphBackend, MemoryBackend};
 use rbuilder::graph::schema::{Edge, EdgeType, GraphParameter, Node, NodeType};
 use std::collections::{HashMap, HashSet};
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn alias_handoff_interprocedural_slice() {
     let mut backend = MemoryBackend::new();
@@ -71,8 +69,6 @@ fn read_input() -> String { String::new() }
     assert!(slice.functions.contains(&id_helper));
     assert!(slice.functions.contains(&id_process) || slice.functions.contains(&id_main));
 }
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn mutually_recursive_slice_no_refcell_panic() {
     let mut backend = MemoryBackend::new();
@@ -132,8 +128,6 @@ fn b(flag: bool) {
         .unwrap();
     assert!(slice.functions.contains(&id_b));
 }
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn irreducible_cfg_maintains_acyclic_idom() {
     let mut cfg = ControlFlowGraph::new();
@@ -218,8 +212,6 @@ fn kafka_example_exceeds_10k_source_lines() {
         "kafka graph too small: {stats:?}"
     );
 }
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn linear_block_pdg_memory_scaling() {
     let mut code = String::from("fn linear() {\n    let v0 = 0;\n");
@@ -237,8 +229,6 @@ fn linear_block_pdg_memory_scaling() {
         "PDG footprint {approx_bytes} exceeds 50MB budget"
     );
 }
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn differential_forward_taint_backward_slice_coherence() {
     let templates = [
@@ -294,8 +284,6 @@ def g(request):
         }
     }
 }
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn handoff_index_one_leaves_other_param_slices_empty_of_mutation() {
     let mut backend = MemoryBackend::new();
@@ -358,8 +346,6 @@ fn foo(x: i32, y: i32, z: i32) -> i32 {
         }
     }
 }
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn nested_loop_dominance_under_stress() {
     let mut code = String::from("fn nested(mut x: i32) -> i32 {\n");

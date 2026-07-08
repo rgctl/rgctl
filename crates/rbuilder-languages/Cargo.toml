@@ -1,0 +1,16 @@
+[package]
+name = "rbuilder-languages"
+version = "0.1.0"
+edition = "2021"
+description = "Built-in Tier 1 language plugins for rBuilder"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-registry = { workspace = true }
+rbuilder-config-formats = { workspace = true }
+rbuilder-lang-rust = { workspace = true }
+rbuilder-lang-python = { workspace = true }
+rbuilder-lang-javascript = { workspace = true }
+rbuilder-lang-typescript = { workspace = true }
+rbuilder-lang-go = { workspace = true }
+rbuilder-lang-java = { workspace = true }

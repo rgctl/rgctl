@@ -1,4 +1,4 @@
-//! Monolith registry wrapper — delegates to bundle crates.
+//! Monolith registry wrapper — wires built-in language plugins.
 
 pub use rbuilder_registry::{plugin_abi, plugin_loader, RegistryStats};
 
@@ -7,7 +7,7 @@ use std::sync::Once;
 
 static INIT: Once = Once::new();
 
-/// Wire the bundle registry builder for `rbuilder_registry::full_registry()`.
+/// Wire the built-in language registry for `rbuilder_registry::full_registry()`.
 pub fn ensure_initialized() {
     INIT.call_once(|| {
         rbuilder_registry::set_full_registry_builder(build_registry_inner);
@@ -15,54 +15,20 @@ pub fn ensure_initialized() {
 }
 
 fn build_registry_inner() -> InnerRegistry {
-    #[cfg(feature = "bundle-extra")]
-    {
-        rbuilder_bundle_extra::default_registry()
-    }
-    #[cfg(all(feature = "bundle-full", not(feature = "bundle-extra")))]
-    {
-        rbuilder_bundle_full::default_registry()
-    }
-    #[cfg(all(
-        feature = "bundle-extended",
-        not(any(feature = "bundle-full", feature = "bundle-extra"))
-    ))]
-    {
-        rbuilder_bundle_extended::default_registry()
-    }
-    #[cfg(all(
-        feature = "bundle-minimal",
-        not(any(
-            feature = "bundle-extended",
-            feature = "bundle-full",
-            feature = "bundle-extra"
-        ))
-    ))]
-    {
-        rbuilder_bundle_minimal::default_registry()
-    }
-    #[cfg(not(any(
-        feature = "bundle-minimal",
-        feature = "bundle-extended",
-        feature = "bundle-full",
-        feature = "bundle-extra"
-    )))]
-    {
-        InnerRegistry::with_config_formats()
-    }
+    rbuilder_languages::default_registry()
 }
 
-/// Build a registry using the active bundle feature.
+/// Build a registry with all built-in language plugins.
 pub fn build_registry() -> LanguageRegistry {
     ensure_initialized();
     LanguageRegistry(build_registry_inner())
 }
 
-/// Registry with bundle-selected language plugins.
+/// Registry with built-in language plugins.
 pub struct LanguageRegistry(InnerRegistry);
 
 impl LanguageRegistry {
-    /// Create a registry with config formats and bundle language plugins.
+    /// Create a registry with config formats and all language plugins.
     pub fn new() -> Self {
         build_registry()
     }
@@ -129,7 +95,7 @@ mod tests {
     fn test_registry_creation() {
         let registry = LanguageRegistry::new();
         let stats = registry.stats();
-        assert!(stats.language_plugins >= 1);
+        assert_eq!(stats.language_plugins, 6);
         assert_eq!(stats.config_plugins, 4);
     }
 

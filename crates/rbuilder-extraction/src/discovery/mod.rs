@@ -189,7 +189,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn discoverer() -> FileDiscoverer {
-        FileDiscoverer::new(Arc::new(rbuilder_bundle_full::default_registry()))
+        FileDiscoverer::new(Arc::new(rbuilder_languages::default_registry()))
     }
 
     fn write_file(path: &Path, contents: &str) {
@@ -251,7 +251,7 @@ mod tests {
             ..DiscoveryConfig::default()
         };
         let files =
-            FileDiscoverer::with_config(Arc::new(rbuilder_bundle_full::default_registry()), config)
+            FileDiscoverer::with_config(Arc::new(rbuilder_languages::default_registry()), config)
                 .discover(root)
                 .unwrap();
 
@@ -276,7 +276,7 @@ mod tests {
             ..DiscoveryConfig::default()
         };
         let files =
-            FileDiscoverer::with_config(Arc::new(rbuilder_bundle_full::default_registry()), config)
+            FileDiscoverer::with_config(Arc::new(rbuilder_languages::default_registry()), config)
                 .discover(root)
                 .unwrap();
 
@@ -312,7 +312,7 @@ mod tests {
             ..DiscoveryConfig::default()
         };
         let files =
-            FileDiscoverer::with_config(Arc::new(rbuilder_bundle_full::default_registry()), config)
+            FileDiscoverer::with_config(Arc::new(rbuilder_languages::default_registry()), config)
                 .discover(root)
                 .unwrap();
 
@@ -358,7 +358,7 @@ mod tests {
             ..DiscoveryConfig::default()
         };
         let result =
-            FileDiscoverer::with_config(Arc::new(rbuilder_bundle_full::default_registry()), config)
+            FileDiscoverer::with_config(Arc::new(rbuilder_languages::default_registry()), config)
                 .discover(temp_dir.path());
         assert!(matches!(result, Err(Error::ConfigError(_))));
     }

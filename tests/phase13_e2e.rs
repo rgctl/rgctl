@@ -23,8 +23,6 @@ macro_rules! e2e_test {
         }
     };
 }
-
-#[cfg(feature = "bundle-minimal")]
 e2e_test!(e2e_taint_security_sql_pipeline, {
     let code = r#"
 def handle(request):
@@ -36,8 +34,6 @@ def handle(request):
     assert!(default_cwe_patterns().iter().any(|p| p.cwe_id == "CWE-89"));
     assert!(vulns[0].recommendation.contains("parameterized"));
 });
-
-#[cfg(feature = "bundle-minimal")]
 e2e_test!(e2e_interprocedural_dominance_slice, {
     let (backend, files) = build_sample_backend_with_chain(4);
     let cg = call_graph_from(&backend);
@@ -72,8 +68,6 @@ e2e_test!(e2e_interprocedural_dominance_slice, {
         .unwrap();
     assert!(slice.functions.contains(&leaf));
 });
-
-#[cfg(feature = "bundle-minimal")]
 e2e_test!(e2e_type_inference_taint_sanitized, {
     let code = r#"
 def handle(request):
@@ -107,9 +101,6 @@ e2e_test!(e2e_gql_optimize_execute_large_graph, {
         "app.rs".into(),
         "fn f0() { f1(); }\nfn f1() { f2(1); }\nfn f2(input: i32) -> i32 { input }\n".into(),
     );
-    #[cfg(feature = "bundle-minimal")]
-    {
-        let icfg = InterproceduralCFG::build(&chain_backend, &files).unwrap();
-        assert!(!icfg.function_cfgs.is_empty());
-    }
+    let icfg = InterproceduralCFG::build(&chain_backend, &files).unwrap();
+    assert!(!icfg.function_cfgs.is_empty());
 });

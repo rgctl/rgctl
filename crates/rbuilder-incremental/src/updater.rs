@@ -427,7 +427,7 @@ mod tests {
         fs::create_dir_all(main.parent().unwrap()).unwrap();
         fs::write(&main, "fn main() {}\n").unwrap();
 
-        let pipeline = ProcessingPipeline::new(Arc::new(rbuilder_bundle_full::default_registry()));
+        let pipeline = ProcessingPipeline::new(Arc::new(rbuilder_languages::default_registry()));
         let (mut graph, _) = pipeline.process_repository(root).unwrap();
         let initial_count = graph.node_count();
 
@@ -439,7 +439,7 @@ mod tests {
 
         fs::write(&main, "fn main() { helper(); }\nfn helper() {}\n").unwrap();
 
-        let updater = IncrementalUpdater::new(Arc::new(rbuilder_bundle_full::default_registry()));
+        let updater = IncrementalUpdater::new(Arc::new(rbuilder_languages::default_registry()));
         let result = updater.update(&mut graph, root).unwrap();
 
         assert!(result.files_changed >= 1 || result.nodes_added > 0);
@@ -453,7 +453,7 @@ mod tests {
         let root = temp.path();
         fs::write(root.join("lib.rs"), "fn alpha() {}\n").unwrap();
 
-        let registry = Arc::new(rbuilder_bundle_full::default_registry());
+        let registry = Arc::new(rbuilder_languages::default_registry());
         let pipeline = ProcessingPipeline::new(Arc::clone(&registry));
         let (mut graph, _) = pipeline.process_repository(root).unwrap();
 

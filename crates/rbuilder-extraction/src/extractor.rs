@@ -230,7 +230,7 @@ mod tests {
         let path = temp.path().join("main.rs");
         fs::write(&path, "fn hello() {}\nfn world() {}\n").unwrap();
 
-        let registry = Arc::new(rbuilder_bundle_full::default_registry());
+        let registry = Arc::new(rbuilder_languages::default_registry());
         let extractor = Extractor::new(registry);
         let result = extractor.extract_file(&path).unwrap();
 
@@ -244,7 +244,7 @@ mod tests {
         let path = temp.path().join("config.yaml");
         fs::write(&path, "server:\n  port: 8080\n").unwrap();
 
-        let registry = Arc::new(rbuilder_bundle_full::default_registry());
+        let registry = Arc::new(rbuilder_languages::default_registry());
         let extractor = Extractor::new(registry);
         let result = extractor.extract_file(&path).unwrap();
 
@@ -260,7 +260,7 @@ mod tests {
         let path = temp.path().join("lib.rs");
         fs::write(&path, "pub fn add(a: i32, b: i32) -> i32 { a + b }\n").unwrap();
 
-        let registry = Arc::new(rbuilder_bundle_full::default_registry());
+        let registry = Arc::new(rbuilder_languages::default_registry());
         let extractor = Extractor::new(registry);
         let extraction = extractor.extract_file(&path).unwrap();
 

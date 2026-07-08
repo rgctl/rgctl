@@ -33,8 +33,6 @@ macro_rules! taint_vuln_test {
 }
 
 // --- SQL injection (3) ---
-
-#[cfg(feature = "bundle-minimal")]
 taint_vuln_test!(
     taint_sql_injection_python,
     "python",
@@ -52,8 +50,6 @@ def handle_request(request):
         assert_eq!(flows[0].severity, 10);
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_sql_severity_ten,
     "python",
@@ -69,8 +65,6 @@ def q(request):
             .any(|f| f.severity == 10 && f.sink_type == TaintSink::SqlQuery));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_rust_sql_sink_detected,
     "rust",
@@ -86,8 +80,6 @@ fn run() {
         assert!(flows.is_empty() || flows.iter().any(|f| f.sink_type == TaintSink::SqlQuery));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_rust_command_new,
     "rust",
@@ -109,8 +101,6 @@ fn run(cmd: String) {
 );
 
 // --- XSS (3) ---
-
-#[cfg(feature = "bundle-minimal")]
 taint_vuln_test!(
     taint_xss_python_render,
     "python",
@@ -150,8 +140,6 @@ fn handler(input: &str) {
 );
 
 // --- Command injection (4) ---
-
-#[cfg(feature = "bundle-minimal")]
 taint_vuln_test!(
     taint_command_os_system,
     "python",
@@ -166,8 +154,6 @@ def run(request):
         assert_eq!(flows[0].severity, 10);
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_vuln_test!(
     taint_command_subprocess,
     "python",
@@ -181,8 +167,6 @@ def run(request):
         assert!(flows.iter().any(|f| f.sink_type == TaintSink::ShellCommand));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_file_to_shell_severity,
     "python",
@@ -201,8 +185,6 @@ def run():
 );
 
 // --- Sanitizers (4) ---
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_sanitizer_int_cast,
     "python",
@@ -237,8 +219,6 @@ def handle_request(request):
         assert!(vuln.len() <= all.len());
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_sanitizer_html_escape,
     "python",
@@ -255,8 +235,6 @@ def show(request):
             .any(|f| !f.sanitizers.is_empty() || !f.is_vulnerable()));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_sanitizer_shlex,
     "python",
@@ -274,8 +252,6 @@ def run(request):
             .any(|s| matches!(s, rbuilder::analysis::Sanitizer::ShellEscape))));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_rust_parse_sanitizer,
     "rust",
@@ -297,8 +273,6 @@ fn run(input: &str) {
 );
 
 // --- Sources (5) ---
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_source_file_input,
     "python",
@@ -314,8 +288,6 @@ def load():
             .any(|f| f.source_type == TaintSource::FileInput));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_source_env_var,
     "python",
@@ -331,8 +303,6 @@ def load():
             .any(|f| f.source_type == TaintSource::EnvironmentVar));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_source_argv,
     "python",
@@ -349,8 +319,6 @@ def main():
         assert!(flows.iter().any(|f| f.sink_type == TaintSink::CodeEval));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_rust_env_var_source,
     "rust",
@@ -367,8 +335,6 @@ fn run() {
             .any(|f| f.source_type == TaintSource::EnvironmentVar));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_rust_file_input,
     "rust",
@@ -462,8 +428,6 @@ taint_test!(
         assert_eq!(flow.severity, 5);
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_vulnerable_subset_of_all,
     "python",
@@ -487,8 +451,6 @@ def handle(request):
         assert!(!flows.is_empty());
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_test!(
     taint_network_input_severity_default,
     "python",
@@ -504,8 +466,6 @@ def forward(request):
             .any(|f| f.source_type == TaintSource::HttpParameter));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 taint_vuln_test!(
     taint_python_code_eval,
     "python",
@@ -520,8 +480,6 @@ def run(request):
         assert_eq!(flows[0].severity, 10);
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn test_partial_dominance_bypass() {
     use rbuilder::analysis::{
@@ -545,8 +503,6 @@ def handle(request):
         "partial branch sanitizer must not dominate merge sink: {result:?}"
     );
 }
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn test_sanitizer_after_sink_trap() {
     use rbuilder::analysis::{
@@ -569,8 +525,6 @@ def handle(request):
         "sanitizer after sink must be flagged: {result:?}"
     );
 }
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn test_dominating_sanitizer_passes_policy() {
     use rbuilder::analysis::{build_cfg_for_function, ProgramDependenceGraph, TaintAnalyzer};

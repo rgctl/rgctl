@@ -22,54 +22,13 @@ members = [
     "crates/rbuilder-semantic",
     "crates/rbuilder-rules",
     "crates/rbuilder-core",
-    "crates/rbuilder-lang-ansible",
-    "crates/rbuilder-lang-assembly",
-    "crates/rbuilder-lang-bash",
-    "crates/rbuilder-lang-c",
-    "crates/rbuilder-lang-chef",
-    "crates/rbuilder-lang-clojure",
-    "crates/rbuilder-lang-cobol",
-    "crates/rbuilder-lang-cpp",
-    "crates/rbuilder-lang-crystal",
-    "crates/rbuilder-lang-csharp",
-    "crates/rbuilder-lang-dart",
-    "crates/rbuilder-lang-dockerfile",
-    "crates/rbuilder-lang-elixir",
-    "crates/rbuilder-lang-erlang",
-    "crates/rbuilder-lang-fortran",
-    "crates/rbuilder-lang-fsharp",
-    "crates/rbuilder-lang-github-actions",
-    "crates/rbuilder-lang-gitlab-ci",
     "crates/rbuilder-lang-go",
-    "crates/rbuilder-lang-haskell",
     "crates/rbuilder-lang-java",
     "crates/rbuilder-lang-javascript",
-    "crates/rbuilder-lang-julia",
-    "crates/rbuilder-lang-kotlin",
-    "crates/rbuilder-lang-lua",
-    "crates/rbuilder-lang-markdown",
-    "crates/rbuilder-lang-nim",
-    "crates/rbuilder-lang-ocaml",
-    "crates/rbuilder-lang-pascal",
-    "crates/rbuilder-lang-perl",
-    "crates/rbuilder-lang-php",
-    "crates/rbuilder-lang-puppet",
     "crates/rbuilder-lang-python",
-    "crates/rbuilder-lang-r",
-    "crates/rbuilder-lang-ruby",
     "crates/rbuilder-lang-rust",
-    "crates/rbuilder-lang-scala",
-    "crates/rbuilder-lang-scheme",
-    "crates/rbuilder-lang-sql",
-    "crates/rbuilder-lang-swift",
     "crates/rbuilder-lang-typescript",
-    "crates/rbuilder-lang-verilog",
-    "crates/rbuilder-lang-vhdl",
-    "crates/rbuilder-lang-zig",
-    "crates/rbuilder-bundle-extended",
-    "crates/rbuilder-bundle-extra",
-    "crates/rbuilder-bundle-full",
-    "crates/rbuilder-bundle-minimal",
+    "crates/rbuilder-languages",
 ]
 resolver = "2"
 
@@ -96,54 +55,13 @@ rbuilder-rules = { path = "crates/rbuilder-rules", version = "0.1.0" }
 rbuilder-core = { path = "crates/rbuilder-core", version = "0.1.0" }
 tempfile = "3"
 zstd = "0.13"
-rbuilder-lang-ansible = { path = "crates/rbuilder-lang-ansible", version = "0.1.0" }
-rbuilder-lang-assembly = { path = "crates/rbuilder-lang-assembly", version = "0.1.0" }
-rbuilder-lang-bash = { path = "crates/rbuilder-lang-bash", version = "0.1.0" }
-rbuilder-lang-c = { path = "crates/rbuilder-lang-c", version = "0.1.0" }
-rbuilder-lang-chef = { path = "crates/rbuilder-lang-chef", version = "0.1.0" }
-rbuilder-lang-clojure = { path = "crates/rbuilder-lang-clojure", version = "0.1.0" }
-rbuilder-lang-cobol = { path = "crates/rbuilder-lang-cobol", version = "0.1.0" }
-rbuilder-lang-cpp = { path = "crates/rbuilder-lang-cpp", version = "0.1.0" }
-rbuilder-lang-crystal = { path = "crates/rbuilder-lang-crystal", version = "0.1.0" }
-rbuilder-lang-csharp = { path = "crates/rbuilder-lang-csharp", version = "0.1.0" }
-rbuilder-lang-dart = { path = "crates/rbuilder-lang-dart", version = "0.1.0" }
-rbuilder-lang-dockerfile = { path = "crates/rbuilder-lang-dockerfile", version = "0.1.0" }
-rbuilder-lang-elixir = { path = "crates/rbuilder-lang-elixir", version = "0.1.0" }
-rbuilder-lang-erlang = { path = "crates/rbuilder-lang-erlang", version = "0.1.0" }
-rbuilder-lang-fortran = { path = "crates/rbuilder-lang-fortran", version = "0.1.0" }
-rbuilder-lang-fsharp = { path = "crates/rbuilder-lang-fsharp", version = "0.1.0" }
-rbuilder-lang-github-actions = { path = "crates/rbuilder-lang-github-actions", version = "0.1.0" }
-rbuilder-lang-gitlab-ci = { path = "crates/rbuilder-lang-gitlab-ci", version = "0.1.0" }
 rbuilder-lang-go = { path = "crates/rbuilder-lang-go", version = "0.1.0" }
-rbuilder-lang-haskell = { path = "crates/rbuilder-lang-haskell", version = "0.1.0" }
 rbuilder-lang-java = { path = "crates/rbuilder-lang-java", version = "0.1.0" }
 rbuilder-lang-javascript = { path = "crates/rbuilder-lang-javascript", version = "0.1.0" }
-rbuilder-lang-julia = { path = "crates/rbuilder-lang-julia", version = "0.1.0" }
-rbuilder-lang-kotlin = { path = "crates/rbuilder-lang-kotlin", version = "0.1.0" }
-rbuilder-lang-lua = { path = "crates/rbuilder-lang-lua", version = "0.1.0" }
-rbuilder-lang-markdown = { path = "crates/rbuilder-lang-markdown", version = "0.1.0" }
-rbuilder-lang-nim = { path = "crates/rbuilder-lang-nim", version = "0.1.0" }
-rbuilder-lang-ocaml = { path = "crates/rbuilder-lang-ocaml", version = "0.1.0" }
-rbuilder-lang-pascal = { path = "crates/rbuilder-lang-pascal", version = "0.1.0" }
-rbuilder-lang-perl = { path = "crates/rbuilder-lang-perl", version = "0.1.0" }
-rbuilder-lang-php = { path = "crates/rbuilder-lang-php", version = "0.1.0" }
-rbuilder-lang-puppet = { path = "crates/rbuilder-lang-puppet", version = "0.1.0" }
 rbuilder-lang-python = { path = "crates/rbuilder-lang-python", version = "0.1.0" }
-rbuilder-lang-r = { path = "crates/rbuilder-lang-r", version = "0.1.0" }
-rbuilder-lang-ruby = { path = "crates/rbuilder-lang-ruby", version = "0.1.0" }
 rbuilder-lang-rust = { path = "crates/rbuilder-lang-rust", version = "0.1.0" }
-rbuilder-lang-scala = { path = "crates/rbuilder-lang-scala", version = "0.1.0" }
-rbuilder-lang-scheme = { path = "crates/rbuilder-lang-scheme", version = "0.1.0" }
-rbuilder-lang-sql = { path = "crates/rbuilder-lang-sql", version = "0.1.0" }
-rbuilder-lang-swift = { path = "crates/rbuilder-lang-swift", version = "0.1.0" }
 rbuilder-lang-typescript = { path = "crates/rbuilder-lang-typescript", version = "0.1.0" }
-rbuilder-lang-verilog = { path = "crates/rbuilder-lang-verilog", version = "0.1.0" }
-rbuilder-lang-vhdl = { path = "crates/rbuilder-lang-vhdl", version = "0.1.0" }
-rbuilder-lang-zig = { path = "crates/rbuilder-lang-zig", version = "0.1.0" }
-rbuilder-bundle-extended = { path = "crates/rbuilder-bundle-extended", version = "0.1.0" }
-rbuilder-bundle-extra = { path = "crates/rbuilder-bundle-extra", version = "0.1.0" }
-rbuilder-bundle-full = { path = "crates/rbuilder-bundle-full", version = "0.1.0" }
-rbuilder-bundle-minimal = { path = "crates/rbuilder-bundle-minimal", version = "0.1.0" }
+rbuilder-languages = { path = "crates/rbuilder-languages", version = "0.1.0" }
 tree-sitter = "0.25"
 
 [workspace.lints.rust]
@@ -205,14 +123,7 @@ rbuilder-project-config = { workspace = true }
 rbuilder-incremental = { workspace = true }
 rbuilder-semantic = { workspace = true }
 rbuilder-rules = { workspace = true }
-
-rbuilder-bundle-minimal = { workspace = true, optional = true }
-rbuilder-bundle-extended = { workspace = true, optional = true }
-rbuilder-bundle-full = { workspace = true, optional = true }
-rbuilder-bundle-extra = { workspace = true, optional = true }
-rbuilder-lang-ansible = { workspace = true, optional = true }
-rbuilder-lang-chef = { workspace = true, optional = true }
-rbuilder-lang-puppet = { workspace = true, optional = true }
+rbuilder-languages = { workspace = true }
 
 rbuilder-macros = { path = "rbuilder-macros", optional = true }
 
@@ -259,22 +170,11 @@ pretty_assertions = "1"
 insta = "1"
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 rbuilder-dashboard = { workspace = true }
-rbuilder-lang-ansible = { workspace = true }
-rbuilder-lang-chef = { workspace = true }
 rbuilder-lang-go = { workspace = true }
-rbuilder-lang-puppet = { workspace = true }
 
 
 [features]
-default = ["bundle-full"]
-
-all-languages = ["bundle-extra"]
-
-bundle-minimal = ["dep:rbuilder-bundle-minimal"]
-bundle-extended = ["dep:rbuilder-bundle-extended", "iac-langs"]
-bundle-full = ["dep:rbuilder-bundle-full", "iac-langs"]
-bundle-extra = ["dep:rbuilder-bundle-extra", "iac-langs"]
-iac-langs = ["dep:rbuilder-lang-ansible", "dep:rbuilder-lang-chef", "dep:rbuilder-lang-puppet"]
+default = []
 
 proc-macros = ["rbuilder-macros"]
 
@@ -339,18 +239,12 @@ name = "graph"
 harness = false
 
 [[bench]]
-name = "phase11_polyglot"
-harness = false
-required-features = ["bundle-extended"]
-
-[[bench]]
 name = "graph_benchmarks"
 harness = false
 
 [[bench]]
 name = "phase13_analysis"
 harness = false
-required-features = ["bundle-minimal"]
 
 [[bench]]
 name = "centrality_benchmarks"

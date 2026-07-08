@@ -1,3 +1,0 @@
----
-app_name: myapp
-db_password: "{{ vault_db_password }}"

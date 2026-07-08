@@ -25,8 +25,6 @@ macro_rules! conf_test {
         }
     };
 }
-
-#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_int_literal,
     "python",
@@ -39,8 +37,6 @@ def example():
         assert!(has_type(inferred, "x", InferredType::Int));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_string_literal,
     "python",
@@ -53,8 +49,6 @@ def example():
         assert!(has_type(inferred, "y", InferredType::String));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_float_literal,
     "python",
@@ -67,8 +61,6 @@ def example():
         assert!(has_type(inferred, "z", InferredType::Float));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_list_literal,
     "python",
@@ -83,8 +75,6 @@ def example():
         }));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_dict_literal,
     "python",
@@ -99,8 +89,6 @@ def example():
         }));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_string_method,
     "python",
@@ -113,8 +101,6 @@ def process(data):
         assert!(has_type(inferred, "data", InferredType::String));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_append_method,
     "python",
@@ -130,8 +116,6 @@ def process():
         }));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_literal_confidence,
     "python",
@@ -145,8 +129,6 @@ def example():
         assert!(x.confidence >= 0.9);
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_method_confidence,
     "python",
@@ -160,8 +142,6 @@ def process(data):
         assert!(data.confidence >= 0.85);
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_chained_assignment,
     "python",
@@ -175,8 +155,6 @@ def example():
         assert!(inferred.iter().any(|t| t.variable == "x"));
     }
 );
-
-#[cfg(feature = "bundle-minimal")]
 type_test!(
     type_python_strip_method_confidence,
     "python",
