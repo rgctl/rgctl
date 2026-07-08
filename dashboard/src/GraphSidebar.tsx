@@ -1,4 +1,4 @@
-import type { CategoryFilter } from "./graphExplore";
+import { NodeTypeFilter } from "./NodeTypeFilter";
 import type { CommunitiesPayload, Metanode, SubgraphNode } from "./types";
 
 export interface GraphSidebarProps {
@@ -6,8 +6,9 @@ export interface GraphSidebarProps {
   communities: CommunitiesPayload | null;
   selectedCommunityId: number | null;
   onSelectCommunity: (id: number | null) => void;
-  category: CategoryFilter;
-  onCategoryChange: (category: CategoryFilter) => void;
+  typeMask: number;
+  onTypeMaskChange: (mask: number) => void;
+  typeFilterDisabled?: boolean;
   soloCommunity: boolean;
   onSoloCommunityChange: (solo: boolean) => void;
   visibleCount: number;
@@ -19,22 +20,17 @@ export interface GraphSidebarProps {
   subHover: SubgraphNode | null;
   onDrill?: () => void;
   drilling?: boolean;
+  communityLabel?: string | null;
 }
-
-const CATEGORIES: Array<{ id: CategoryFilter; label: string }> = [
-  { id: "all", label: "All packages" },
-  { id: "functions", label: "Functions only" },
-  { id: "classes", label: "Classes only" },
-  { id: "both", label: "Mixed" },
-];
 
 export function GraphSidebar({
   level,
   communities,
   selectedCommunityId,
   onSelectCommunity,
-  category,
-  onCategoryChange,
+  typeMask,
+  onTypeMaskChange,
+  typeFilterDisabled,
   soloCommunity,
   onSoloCommunityChange,
   visibleCount,
@@ -46,8 +42,11 @@ export function GraphSidebar({
   subHover,
   onDrill,
   drilling,
+  communityLabel,
 }: GraphSidebarProps) {
   const focus = selected ?? hover;
+  const showCommunities = level === "metagraph";
+  const unit = level === "subgraph" ? "members" : "packages";
 
   return (
     <aside class="graph-sidebar border-start bg-white">
@@ -61,6 +60,12 @@ export function GraphSidebar({
           >
             Packages
           </button>
+          {level === "subgraph" && communityLabel && (
+            <>
+              <span class="text-muted mx-1">/</span>
+              <span class="text-truncate d-inline-block graph-breadcrumb-leaf">{communityLabel}</span>
+            </>
+          )}
           {level === "subgraph" && drillLabel && (
             <>
               <span class="text-muted mx-1">/</span>
@@ -69,72 +74,75 @@ export function GraphSidebar({
               </span>
             </>
           )}
+          {level === "metagraph" && communityLabel && (
+            <>
+              <span class="text-muted mx-1">/</span>
+              <span class="fw-semibold text-truncate d-inline-block graph-breadcrumb-leaf">
+                {communityLabel}
+              </span>
+            </>
+          )}
         </nav>
 
-        {level === "metagraph" && (
-          <>
-            <section class="graph-sidebar-section px-3 py-2 border-bottom">
-              <h3 class="graph-sidebar-heading">Communities</h3>
-              <p class="text-muted small mb-2">
-                {visibleCount} / {totalCount} packages visible
-              </p>
-              <div class="graph-sidebar-list">
+        {showCommunities && (
+          <section class="graph-sidebar-section px-3 py-2 border-bottom">
+            <h3 class="graph-sidebar-heading">Communities</h3>
+            <div class="graph-sidebar-list">
+              <button
+                type="button"
+                class={`graph-sidebar-item w-100 text-start ${selectedCommunityId === null ? "active" : ""}`}
+                onClick={() => onSelectCommunity(null)}
+              >
+                <span class="graph-sidebar-swatch" style={{ background: "#6c757d" }} />
+                All communities
+              </button>
+              {(communities?.communities ?? []).map((c) => (
                 <button
+                  key={c.id}
                   type="button"
-                  class={`graph-sidebar-item w-100 text-start ${selectedCommunityId === null ? "active" : ""}`}
-                  onClick={() => onSelectCommunity(null)}
+                  class={`graph-sidebar-item w-100 text-start ${selectedCommunityId === c.id ? "active" : ""}`}
+                  onClick={() => onSelectCommunity(c.id)}
                 >
-                  <span class="graph-sidebar-swatch" style={{ background: "#6c757d" }} />
-                  All communities
+                  <span class="graph-sidebar-swatch" style={{ background: c.color }} />
+                  <span class="flex-grow-1 text-truncate">{c.label}</span>
+                  <span class="text-muted small ms-1">{c.package_count}</span>
                 </button>
-                {(communities?.communities ?? []).map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    class={`graph-sidebar-item w-100 text-start ${selectedCommunityId === c.id ? "active" : ""}`}
-                    onClick={() => onSelectCommunity(c.id)}
-                  >
-                    <span class="graph-sidebar-swatch" style={{ background: c.color }} />
-                    <span class="flex-grow-1 text-truncate">{c.label}</span>
-                    <span class="text-muted small ms-1">{c.package_count}</span>
-                  </button>
-                ))}
+              ))}
+            </div>
+            {selectedCommunityId !== null && (
+              <div class="form-check form-switch mt-2 mb-0">
+                <input
+                  class="form-check-input"
+                  type="checkbox"
+                  id="solo-community"
+                  checked={soloCommunity}
+                  onChange={(e) => onSoloCommunityChange((e.target as HTMLInputElement).checked)}
+                />
+                <label class="form-check-label small" for="solo-community">
+                  Solo community (hide cross-links)
+                </label>
               </div>
-              {selectedCommunityId !== null && (
-                <div class="form-check form-switch mt-2 mb-0">
-                  <input
-                    class="form-check-input"
-                    type="checkbox"
-                    id="solo-community"
-                    checked={soloCommunity}
-                    onChange={(e) => onSoloCommunityChange((e.target as HTMLInputElement).checked)}
-                  />
-                  <label class="form-check-label small" for="solo-community">
-                    Solo community (hide cross-links)
-                  </label>
-                </div>
-              )}
-            </section>
-
-            <section class="graph-sidebar-section px-3 py-2 border-bottom">
-              <h3 class="graph-sidebar-heading">Categories</h3>
-              <div class="d-flex flex-column gap-1">
-                {CATEGORIES.map((opt) => (
-                  <label key={opt.id} class="form-check small mb-0">
-                    <input
-                      class="form-check-input"
-                      type="radio"
-                      name="graph-category"
-                      checked={category === opt.id}
-                      onChange={() => onCategoryChange(opt.id)}
-                    />
-                    <span class="form-check-label">{opt.label}</span>
-                  </label>
-                ))}
-              </div>
-            </section>
-          </>
+            )}
+          </section>
         )}
+
+        <section class="graph-sidebar-section px-3 py-2 border-bottom">
+          <h3 class="graph-sidebar-heading">Node types</h3>
+          <p class="text-muted small mb-2">
+            {visibleCount} / {totalCount} {unit} visible
+          </p>
+          <NodeTypeFilter
+            mask={typeMask}
+            onChange={onTypeMaskChange}
+            disabled={typeFilterDisabled}
+            layout="sidebar"
+          />
+          {level === "metagraph" && (
+            <p class="text-muted small mb-0 mt-2">
+              Struct, interface, and module filters apply after drill-down.
+            </p>
+          )}
+        </section>
 
         <section class="graph-sidebar-section px-3 py-3 flex-grow-1 min-h-0 overflow-auto">
           <h3 class="graph-sidebar-heading">Inspector</h3>

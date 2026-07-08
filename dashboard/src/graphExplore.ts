@@ -1,25 +1,43 @@
-import type { Metanode } from "./types";
-
-export type CategoryFilter = "all" | "functions" | "classes" | "both";
+import type { Metanode, SubgraphNode } from "./types";
+import { NODE_TYPE_MASK } from "./types";
 
 export interface GraphFilterState {
   search: string;
   communityId: number | null;
-  category: CategoryFilter;
+  typeMask: number;
   soloCommunity: boolean;
 }
 
-export function passesCategory(node: Metanode, category: CategoryFilter): boolean {
-  switch (category) {
-    case "functions":
-      return node.functions > 0 && node.classes === 0;
-    case "classes":
-      return node.classes > 0 && node.functions === 0;
-    case "both":
-      return node.functions > 0 && node.classes > 0;
-    default:
-      return true;
-  }
+export function nodeTypeBit(nodeType: number): number {
+  if (nodeType < 32) return 1 << nodeType;
+  return 0;
+}
+
+/** Package rollup: filter by whether the package contains selected member types. */
+export function passesMetanodeTypeMask(node: Metanode, mask: number): boolean {
+  const fn = NODE_TYPE_MASK.Function;
+  const cl = NODE_TYPE_MASK.Class;
+  const rollupMask = fn | cl;
+  const selected = mask & rollupMask;
+  if (selected === 0) return true;
+
+  let match = false;
+  if (selected & fn) match ||= node.functions > 0;
+  if (selected & cl) match ||= node.classes > 0;
+  return match;
+}
+
+export function passesSubgraphNodeType(node: SubgraphNode, mask: number): boolean {
+  return (nodeTypeBit(node.node_type) & mask) !== 0;
+}
+
+export function filterState(
+  search: string,
+  communityId: number | null,
+  typeMask: number,
+  soloCommunity: boolean,
+): GraphFilterState {
+  return { search, communityId, typeMask, soloCommunity };
 }
 
 export function passesSearch(node: Metanode, query: string): boolean {
@@ -36,7 +54,7 @@ export function passesCommunity(node: Metanode, communityId: number | null): boo
 export function passesFilters(node: Metanode, filters: GraphFilterState): boolean {
   if (!passesSearch(node, filters.search)) return false;
   if (!passesCommunity(node, filters.communityId)) return false;
-  if (!passesCategory(node, filters.category)) return false;
+  if (!passesMetanodeTypeMask(node, filters.typeMask)) return false;
   if (filters.soloCommunity && filters.communityId !== null) {
     return node.community_id === filters.communityId;
   }
@@ -91,10 +109,7 @@ export function firstMatchingNodeId(
   const q = filters.search.trim().toLowerCase();
   if (!q) return null;
   const hit = nodes.find(
-    (n) =>
-      passesCommunity(n, filters.communityId) &&
-      passesCategory(n, filters.category) &&
-      n.label.toLowerCase().includes(q),
+    (n) => passesFilters(n, filters) && n.label.toLowerCase().includes(q),
   );
   return hit ? String(hit.id) : null;
 }
