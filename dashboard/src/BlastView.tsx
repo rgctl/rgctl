@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { BlastRadiusPayload, NodeListEntry } from "./types";
 import { NODE_TYPE_MASK } from "./types";
 import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
 import { nodeEntryToListItem } from "./functionListUtils";
+
+const DEPTH_DEBOUNCE_MS = 300;
 
 export interface BlastViewProps {
   wasmReady: boolean;
@@ -23,6 +25,8 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [computing, setComputing] = useState(false);
+  const requestSeq = useRef(0);
+  const prevSelectedId = useRef<string | null>(null);
 
   const loadFunctions = useCallback(async () => {
     if (!wasmReady) return;
@@ -48,25 +52,51 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
     [functions, selectedId],
   );
 
-  const onSelectFunction = (id: string) => {
-    setSelectedId(id);
-    setResult(null);
-  };
+  const runBlast = useCallback(
+    async (nodeIndex: number, maxDepth: number) => {
+      const seq = ++requestSeq.current;
+      setComputing(true);
+      setError(null);
+      try {
+        const payload = await blastRadius(nodeIndex, maxDepth);
+        if (seq !== requestSeq.current) return;
+        setResult(payload);
+      } catch (e) {
+        if (seq !== requestSeq.current) return;
+        setError(e instanceof Error ? e.message : String(e));
+        setResult(null);
+      } finally {
+        if (seq === requestSeq.current) {
+          setComputing(false);
+        }
+      }
+    },
+    [blastRadius],
+  );
 
-  const runBlast = async () => {
-    if (!selected) return;
-    setComputing(true);
-    setError(null);
-    try {
-      const payload = await blastRadius(selected.index, depth);
-      setResult(payload);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setResult(null);
-    } finally {
+  useEffect(() => {
+    if (!selected) {
+      requestSeq.current += 1;
       setComputing(false);
+      setResult(null);
+      prevSelectedId.current = null;
+      return;
     }
-  };
+
+    const selectionChanged = prevSelectedId.current !== selectedId;
+    prevSelectedId.current = selectedId;
+
+    if (selectionChanged) {
+      void runBlast(selected.index, depth);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void runBlast(selected.index, depth);
+    }, DEPTH_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [selectedId, selected, depth, runBlast]);
 
   if (!wasmReady) {
     return (
@@ -83,121 +113,119 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
           count={functionCount}
           items={listItems}
           selectedId={selectedId}
-          onSelect={onSelectFunction}
+          onSelect={setSelectedId}
           loading={loading}
         />
       }
     >
       <div class="blast-view d-flex flex-column h-100 min-h-0 gap-3 p-3">
-        <div class="d-flex flex-wrap align-items-end gap-2 flex-shrink-0">
+        <div class="d-flex flex-wrap align-items-center gap-3 flex-shrink-0">
           <div class="flex-grow-1" />
           <div style={{ minWidth: "12rem" }}>
-          <label class="form-label small mb-1" for="blast-depth">
-            Caller depth: {depth}
-          </label>
-          <input
-            id="blast-depth"
-            type="range"
-            class="form-range"
-            min={1}
-            max={15}
-            value={depth}
-            onInput={(e) => setDepth(Number((e.target as HTMLInputElement).value))}
-          />
-        </div>
-        <button
-          type="button"
-          class="btn btn-primary btn-sm"
-          disabled={!selected || computing}
-          onClick={() => void runBlast()}
-        >
-          {computing ? "Analyzing…" : "Compute blast radius"}
-        </button>
-      </div>
-
-      {error && <div class="alert alert-warning py-2 small mb-0">{error}</div>}
-
-      {result && (
-        <div class="flex-grow-1 min-h-0 d-flex flex-column gap-2">
-          <div class="row g-2 flex-shrink-0">
-            <div class="col-md-3">
-              <div class="card h-100">
-                <div class="card-body py-2 small">
-                  <div class="text-muted">Impact score</div>
-                  <div class="fs-4 fw-semibold text-primary">{result.score.toFixed(1)}</div>
-                </div>
-              </div>
-            </div>
-            <div class="col-md-3">
-              <div class="card h-100">
-                <div class="card-body py-2 small">
-                  <div class="text-muted">Direct callers</div>
-                  <div class="fs-4 fw-semibold">{result.direct_caller_count}</div>
-                </div>
-              </div>
-            </div>
-            <div class="col-md-3">
-              <div class="card h-100">
-                <div class="card-body py-2 small">
-                  <div class="text-muted">Impact zone</div>
-                  <div class="fs-4 fw-semibold">{result.impact_zone_count}</div>
-                </div>
-              </div>
-            </div>
-            <div class="col-md-3">
-              <div class="card h-100">
-                <div class="card-body py-2 small">
-                  <div class="text-muted">Depth limit</div>
-                  <div class="fs-4 fw-semibold">{result.depth_limit}</div>
-                </div>
-              </div>
-            </div>
+            <label class="form-label small mb-1" for="blast-depth">
+              Caller depth: {depth}
+            </label>
+            <input
+              id="blast-depth"
+              type="range"
+              class="form-range"
+              min={1}
+              max={15}
+              value={depth}
+              disabled={!selected || computing}
+              onInput={(e) => setDepth(Number((e.target as HTMLInputElement).value))}
+            />
           </div>
+          {computing && (
+            <span class="text-muted small" aria-live="polite">
+              Analyzing blast radius…
+            </span>
+          )}
+        </div>
 
-          <div class="card flex-grow-1 min-h-0">
-            <div class="card-header py-2 small fw-semibold">
-              Callers of <code>{result.seed_name}</code>
+        {error && <div class="alert alert-warning py-2 small mb-0">{error}</div>}
+
+        {result && (
+          <div class="flex-grow-1 min-h-0 d-flex flex-column gap-2">
+            <div class="row g-2 flex-shrink-0">
+              <div class="col-md-3">
+                <div class="card h-100">
+                  <div class="card-body py-2 small">
+                    <div class="text-muted">Impact score</div>
+                    <div class="fs-4 fw-semibold text-primary">{result.score.toFixed(1)}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-md-3">
+                <div class="card h-100">
+                  <div class="card-body py-2 small">
+                    <div class="text-muted">Direct callers</div>
+                    <div class="fs-4 fw-semibold">{result.direct_caller_count}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-md-3">
+                <div class="card h-100">
+                  <div class="card-body py-2 small">
+                    <div class="text-muted">Impact zone</div>
+                    <div class="fs-4 fw-semibold">{result.impact_zone_count}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-md-3">
+                <div class="card h-100">
+                  <div class="card-body py-2 small">
+                    <div class="text-muted">Depth limit</div>
+                    <div class="fs-4 fw-semibold">{result.depth_limit}</div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="table-responsive flex-grow-1 min-h-0 overflow-auto">
-              <table class="table table-sm table-striped mb-0 small">
-                <thead>
-                  <tr>
-                    <th>Depth</th>
-                    <th>Name</th>
-                    <th>Type</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.callers.length === 0 ? (
+
+            <div class="card flex-grow-1 min-h-0">
+              <div class="card-header py-2 small fw-semibold">
+                Callers of <code>{result.seed_name}</code>
+              </div>
+              <div class="table-responsive flex-grow-1 min-h-0 overflow-auto">
+                <table class="table table-sm table-striped mb-0 small">
+                  <thead>
                     <tr>
-                      <td colSpan={3} class="text-muted">
-                        No callers within depth {result.depth_limit}.
-                      </td>
+                      <th>Depth</th>
+                      <th>Name</th>
+                      <th>Type</th>
                     </tr>
-                  ) : (
-                    result.callers.map((c) => (
-                      <tr key={`${c.index}-${c.depth}`}>
-                        <td>{c.depth}</td>
-                        <td>
-                          <code>{c.name}</code>
+                  </thead>
+                  <tbody>
+                    {result.callers.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} class="text-muted">
+                          No callers within depth {result.depth_limit}.
                         </td>
-                        <td>{c.node_type_name}</td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    ) : (
+                      result.callers.map((c) => (
+                        <tr key={`${c.index}-${c.depth}`}>
+                          <td>{c.depth}</td>
+                          <td>
+                            <code>{c.name}</code>
+                          </td>
+                          <td>{c.node_type_name}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {!selected && !loading && (
-        <p class="text-muted small mb-0">
-          Pick a function and adjust caller depth to explore upstream impact (WASM reverse call-graph
-          BFS).
-        </p>
-      )}
+        {!selected && !loading && (
+          <p class="text-muted small mb-0">
+            Select a function from the list to see its blast radius. Adjust caller depth to change
+            how far upstream to search.
+          </p>
+        )}
       </div>
     </FunctionListLayout>
   );

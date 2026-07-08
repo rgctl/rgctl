@@ -67,6 +67,40 @@ async function testDataflow(page) {
   return { tab: "dataflow", fnName, panel, metrics, webglErrors };
 }
 
+async function testBlastAutoCompute(page) {
+  await page.getByRole("button", { name: "Blast Radius", exact: true }).click();
+  await page.waitForTimeout(500);
+
+  const computeBtn = page.getByRole("button", { name: "Compute blast radius" });
+  if ((await computeBtn.count()) > 0) {
+    throw new Error("Compute blast radius button should be removed");
+  }
+
+  const firstFn = page.locator(".function-list-item").first();
+  await firstFn.waitFor({ state: "visible", timeout: 10000 });
+  const fnName = await firstFn.locator(".function-list-item-name").textContent();
+  await firstFn.click();
+
+  await page.getByText("Callers of", { exact: false }).waitFor({ state: "visible", timeout: 15000 });
+
+  await page.locator("#blast-depth").fill("7");
+  await page.waitForTimeout(500);
+
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector(".card-body .fs-4.fw-semibold.text-primary");
+      return el && el.textContent && el.textContent.trim().length > 0;
+    },
+    { timeout: 15000 },
+  );
+
+  return {
+    fnName,
+    headerText: await page.locator(".card-header").filter({ hasText: "Callers of" }).textContent(),
+    rowCount: await page.locator("table tbody tr").count(),
+  };
+}
+
 async function testCfg(page) {
   await page.getByRole("button", { name: "CFG / PDG Analysis" }).click();
   await page.waitForTimeout(500);
@@ -99,9 +133,10 @@ await page.waitForTimeout(2000);
 
 const dataflow = await testDataflow(page);
 const dataflowVar = await testDataflowVariableFilter(page);
+const blast = await testBlastAutoCompute(page);
 const cfg = await testCfg(page);
 
-console.log(JSON.stringify({ dataflow, dataflowVar, cfg }, null, 2));
+console.log(JSON.stringify({ dataflow, dataflowVar, blast, cfg }, null, 2));
 
 const ok =
   dataflow.metrics.found &&
@@ -114,6 +149,8 @@ const ok =
   dataflowVar.metrics.canvasH >= 32 &&
   dataflowVar.summary &&
   !dataflowVar.summary.includes("0 data · 0 control") &&
+  blast.rowCount > 0 &&
+  blast.headerText?.includes("Callers of") &&
   cfg.metrics.found &&
   cfg.metrics.hostH >= 32 &&
   cfg.metrics.hostH <= 4096 &&
