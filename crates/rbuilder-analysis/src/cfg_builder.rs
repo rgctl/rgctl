@@ -2,10 +2,11 @@
 
 use crate::cfg::{BasicBlock, BlockId, CfgEdgeType, ControlFlowGraph, Statement, StatementKind};
 use crate::def_use::extract_def_use;
+use crate::language_profile::{function_kinds_for, parse_source};
 use rbuilder_error::{Error, Result};
 use rbuilder_plugin_helpers::extract_name_from_node;
 use std::collections::HashSet;
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Node, Tree};
 use uuid::Uuid;
 
 /// Build a CFG for a named function in source text.
@@ -16,41 +17,22 @@ pub fn build_cfg_for_function(
 ) -> Result<ControlFlowGraph> {
     let bytes = source.as_bytes();
     let tree = parse_language(language, bytes)?;
-    let func_node = find_function_by_name(tree.root_node(), bytes, function_name)
+    let function_kinds = function_kinds_for(language)?;
+    let func_node = find_function_by_name(tree.root_node(), bytes, function_name, function_kinds)
         .ok_or_else(|| Error::NotFound(format!("function '{function_name}' not found")))?;
     build_cfg_from_function_node(language, func_node, bytes)
 }
 
 fn parse_language(language: &str, source: &[u8]) -> Result<Tree> {
-    let mut parser = Parser::new();
-    match language.to_lowercase().as_str() {
-        "rust" | "rs" => {
-            parser
-                .set_language(&tree_sitter_rust::LANGUAGE.into())
-                .map_err(|e| Error::PluginError(format!("Rust grammar: {e}")))?;
-        }
-        "python" | "py" => {
-            parser
-                .set_language(&tree_sitter_python::LANGUAGE.into())
-                .map_err(|e| Error::PluginError(format!("Python grammar: {e}")))?;
-        }
-        "java" => {
-            parser
-                .set_language(&tree_sitter_java::LANGUAGE.into())
-                .map_err(|e| Error::PluginError(format!("Java grammar: {e}")))?;
-        }
-        other => return Err(Error::UnsupportedLanguage(other.to_string())),
-    }
-
-    parser.parse(source, None).ok_or_else(|| Error::ParseError {
-        file: "source".into(),
-        line: 0,
-        message: "Failed to parse source".to_string(),
-    })
+    parse_source(language, source)
 }
 
-fn find_function_by_name<'a>(node: Node<'a>, source: &[u8], name: &str) -> Option<Node<'a>> {
-    let function_kinds = ["function_item", "function_definition", "method_declaration"];
+fn find_function_by_name<'a>(
+    node: Node<'a>,
+    source: &[u8],
+    name: &str,
+    function_kinds: &[&str],
+) -> Option<Node<'a>> {
     if function_kinds.contains(&node.kind()) {
         if let Ok(Some(func_name)) = extract_name_from_node(node, source) {
             if func_name == name {
@@ -60,7 +42,7 @@ fn find_function_by_name<'a>(node: Node<'a>, source: &[u8], name: &str) -> Optio
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if let Some(found) = find_function_by_name(child, source, name) {
+        if let Some(found) = find_function_by_name(child, source, name, function_kinds) {
             return Some(found);
         }
     }
@@ -185,7 +167,9 @@ impl<'a> CfgBuilder<'a> {
             // Rust + Python conditionals
             "if_statement" | "if_expression" => self.visit_if(node, source),
             "while_statement" | "while_expression" => self.visit_while(node, source),
-            "for_statement" | "for_expression" | "for_in_expression" => {
+            "do_statement" => self.visit_do(node, source),
+            "for_statement" | "for_expression" | "for_in_expression" | "foreach_statement"
+            | "for_range_loop" => {
                 self.visit_for(node, source)
             }
             "loop_expression" => self.visit_loop(node, source),
@@ -202,8 +186,14 @@ impl<'a> CfgBuilder<'a> {
                 self.add_statement(node, source, StatementKind::Declaration)?;
                 Ok(())
             }
+            "short_var_declaration" | "var_declaration" | "const_declaration"
+            | "variable_declaration" | "local_declaration_statement" | "declaration" => {
+                self.add_statement(node, source, StatementKind::Declaration)?;
+                Ok(())
+            }
             "assignment"
             | "assignment_expression"
+            | "assignment_statement"
             | "augmented_assignment"
             | "augmented_assignment_expression"
             | "compound_assignment_expr" => {
@@ -216,6 +206,18 @@ impl<'a> CfgBuilder<'a> {
 
             // Rust match
             "match_expression" => self.visit_match(node, source),
+
+            // Go / shared switch & select
+            "switch_statement" | "type_switch_statement" | "expression_switch_statement" => {
+                self.visit_switch(node, source)
+            }
+            "select_statement" => self.visit_select(node, source),
+
+            // Go concurrency helpers (sequential approximation)
+            "defer_statement" | "go_statement" => {
+                self.add_statement(node, source, StatementKind::Expression)?;
+                Ok(())
+            }
 
             // Python try/except (simplified)
             "try_statement" => self.visit_try(node, source),
@@ -253,7 +255,9 @@ impl<'a> CfgBuilder<'a> {
 
     fn classify_expression(node: Node, _source: &[u8]) -> StatementKind {
         match node.kind() {
-            "call_expression" | "function_call" | "method_call" => StatementKind::FunctionCall,
+            "call_expression" | "function_call" | "method_call" | "invocation_expression" => {
+                StatementKind::FunctionCall
+            }
             "assignment_expression" | "assignment" | "augmented_assignment" => {
                 StatementKind::Assignment
             }
@@ -287,7 +291,10 @@ impl<'a> CfgBuilder<'a> {
         let mut true_end = true_block;
         if !is_constant_false(&cond_text) {
             self.current_block = true_block;
-            if let Some(consequence) = node.child_by_field_name("consequence") {
+            if let Some(consequence) = node
+                .child_by_field_name("consequence")
+                .or_else(|| node.child_by_field_name("body"))
+            {
                 self.visit_block(consequence, source)?;
             }
             true_end = self.current_block;
@@ -296,7 +303,10 @@ impl<'a> CfgBuilder<'a> {
         let mut false_end = false_block;
         self.current_block = false_block;
         if !is_constant_true(&cond_text) {
-            if let Some(alternative) = node.child_by_field_name("alternative") {
+            if let Some(alternative) = node
+                .child_by_field_name("alternative")
+                .or_else(|| node.child_by_field_name("else"))
+            {
                 self.visit_block(alternative, source)?;
             } else if let Some(else_clause) = node.child_by_field_name("else_clause") {
                 self.visit_block(else_clause, source)?;
@@ -351,7 +361,51 @@ impl<'a> CfgBuilder<'a> {
         Ok(())
     }
 
+    fn visit_do(&mut self, node: Node, source: &[u8]) -> Result<()> {
+        let body = self.new_block();
+        self.cfg
+            .add_edge(self.current_block, body, CfgEdgeType::Next);
+
+        let header = self.new_block();
+        let exit = self.new_block();
+
+        self.loop_stack.push(LoopContext { header, exit });
+
+        self.current_block = body;
+        if let Some(body_node) = node.child_by_field_name("body") {
+            self.visit_block(body_node, source)?;
+        }
+        self.cfg
+            .add_edge(self.current_block, header, CfgEdgeType::Next);
+
+        self.add_statement_to_current(Statement {
+            kind: StatementKind::Branch,
+            line: node.start_position().row + 1,
+            text: node
+                .child_by_field_name("condition")
+                .and_then(|c| c.utf8_text(source).ok())
+                .unwrap_or("do")
+                .trim()
+                .to_string(),
+            defined_vars: HashSet::new(),
+            used_vars: HashSet::new(),
+        });
+        self.cfg.add_edge(header, body, CfgEdgeType::IfTrue);
+        self.cfg.add_edge(header, exit, CfgEdgeType::IfFalse);
+        self.loop_stack.pop();
+
+        self.current_block = exit;
+        Ok(())
+    }
+
     fn visit_for(&mut self, node: Node, source: &[u8]) -> Result<()> {
+        if let Some(init) = node
+            .child_by_field_name("initializer")
+            .or_else(|| node.child_by_field_name("range"))
+        {
+            self.visit_statement(init, source)?;
+        }
+
         let header = self.new_block();
         self.cfg
             .add_edge(self.current_block, header, CfgEdgeType::Next);
@@ -473,6 +527,66 @@ impl<'a> CfgBuilder<'a> {
         Ok(())
     }
 
+    fn visit_switch(&mut self, node: Node, source: &[u8]) -> Result<()> {
+        self.add_statement(node, source, StatementKind::Branch)?;
+        let cond_block = self.current_block;
+        let merge = self.new_block();
+        let mut cases = Vec::new();
+        collect_switch_cases(node, &mut cases);
+
+        if cases.is_empty() {
+            if let Some(body) = node.child_by_field_name("body") {
+                self.current_block = cond_block;
+                self.visit_block(body, source)?;
+            }
+            self.current_block = merge;
+            return Ok(());
+        }
+
+        let mut has_default = false;
+        for case in cases {
+            let is_default = matches!(
+                case.kind(),
+                "default_case" | "default_statement" | "switch_default"
+            );
+            if is_default {
+                has_default = true;
+            }
+
+            let case_block = self.new_block();
+            let edge = if is_default {
+                CfgEdgeType::IfFalse
+            } else {
+                CfgEdgeType::IfTrue
+            };
+            self.cfg.add_edge(cond_block, case_block, edge);
+            self.current_block = case_block;
+
+            if let Some(body) = case.child_by_field_name("body") {
+                self.visit_block(body, source)?;
+            } else {
+                self.visit_block(case, source)?;
+            }
+            self.cfg
+                .add_edge(self.current_block, merge, CfgEdgeType::Next);
+        }
+
+        if !has_default {
+            let default_block = self.new_block();
+            self.cfg
+                .add_edge(cond_block, default_block, CfgEdgeType::IfFalse);
+            self.cfg
+                .add_edge(default_block, merge, CfgEdgeType::Next);
+        }
+
+        self.current_block = merge;
+        Ok(())
+    }
+
+    fn visit_select(&mut self, node: Node, source: &[u8]) -> Result<()> {
+        self.visit_switch(node, source)
+    }
+
     fn visit_try(&mut self, node: Node, source: &[u8]) -> Result<()> {
         let try_block = self.new_block();
         self.cfg
@@ -481,21 +595,36 @@ impl<'a> CfgBuilder<'a> {
         if let Some(body) = node.child_by_field_name("body") {
             self.visit_block(body, source)?;
         }
-        let try_end = self.current_block;
+        let mut try_end = self.current_block;
         let merge = self.new_block();
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "except_clause" || child.kind() == "except_handler" {
+            if child.kind() == "except_clause"
+                || child.kind() == "except_handler"
+                || child.kind() == "catch_clause"
+            {
                 let handler = self.new_block();
                 self.cfg
                     .add_edge(try_block, handler, CfgEdgeType::Exception);
                 self.current_block = handler;
                 if let Some(block) = child.child_by_field_name("body") {
                     self.visit_block(block, source)?;
+                } else if child.kind() == "catch_clause" {
+                    if let Some(block) = find_child_kind(child, "block") {
+                        self.visit_block(block, source)?;
+                    }
                 }
                 self.cfg
                     .add_edge(self.current_block, merge, CfgEdgeType::Next);
+            } else if child.kind() == "finally_clause" {
+                let finally = self.new_block();
+                self.cfg.add_edge(try_end, finally, CfgEdgeType::Next);
+                self.current_block = finally;
+                if let Some(block) = find_child_kind(child, "block") {
+                    self.visit_block(block, source)?;
+                }
+                try_end = self.current_block;
             }
         }
 
@@ -505,11 +634,48 @@ impl<'a> CfgBuilder<'a> {
     }
 }
 
+fn find_child_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == kind {
+            return Some(child);
+        }
+        if let Some(found) = find_child_kind(child, kind) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn collect_switch_cases<'a>(node: Node<'a>, cases: &mut Vec<Node<'a>>) {
+    match node.kind() {
+        "expression_case"
+        | "type_case"
+        | "case_clause"
+        | "default_case"
+        | "default_statement"
+        | "case_statement"
+        | "communication_case"
+        | "switch_section"
+        | "switch_case"
+        | "switch_default" => cases.push(node),
+        _ => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.is_named() {
+                    collect_switch_cases(child, cases);
+                }
+            }
+        }
+    }
+}
+
 fn is_block_like(kind: &str) -> bool {
     matches!(
         kind,
         "block"
             | "statement_block"
+            | "statement_list"
             | "compound_statement"
             | "source_file"
             | "function_body"
@@ -595,6 +761,230 @@ def example(x):
 "#;
         let cfg = build_cfg_for_function("python", code, "example").unwrap();
         assert!(cfg.blocks.len() >= 4);
+    }
+
+    #[test]
+    fn test_go_method_if_cfg() {
+        let code = r#"
+package handler
+
+func (h *AuthHandler) Login(c *gin.Context) {
+    if c == nil {
+        return
+    }
+    return
+}
+"#;
+        let cfg = build_cfg_for_function("go", code, "Login").unwrap();
+        assert!(cfg.blocks.len() >= 4);
+        let if_true = cfg
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == CfgEdgeType::IfTrue)
+            .count();
+        assert!(if_true >= 1);
+    }
+
+    #[test]
+    fn test_go_for_loop_has_cycle() {
+        let code = r#"
+package demo
+
+func Sum(n int) int {
+    total := 0
+    for i := 0; i < n; i++ {
+        total += i
+    }
+    return total
+}
+"#;
+        let cfg = build_cfg_for_function("go", code, "Sum").unwrap();
+        assert!(cfg.has_cycle());
+    }
+
+    #[test]
+    fn test_go_switch_cfg() {
+        let code = r#"
+package demo
+
+func Pick(x int) int {
+    switch x {
+    case 1:
+        return 10
+    case 2:
+        return 20
+    default:
+        return 0
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("go", code, "Pick").unwrap();
+        assert!(cfg.blocks.len() >= 5);
+        let branches = cfg
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == CfgEdgeType::IfTrue)
+            .count();
+        assert!(branches >= 2);
+    }
+
+    #[test]
+    fn test_go_select_cfg() {
+        let code = r#"
+package demo
+
+func Wait(ch chan int, done chan struct{}) int {
+    select {
+    case v := <-ch:
+        return v
+    default:
+        return -1
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("go", code, "Wait").unwrap();
+        assert!(cfg.blocks.len() >= 4);
+    }
+
+    #[test]
+    fn test_go_range_for_cfg() {
+        let code = r#"
+package demo
+
+func Keys(m map[string]int) int {
+    n := 0
+    for k := range m {
+        n += len(k)
+    }
+    return n
+}
+"#;
+        let cfg = build_cfg_for_function("go", code, "Keys").unwrap();
+        assert!(cfg.has_cycle());
+    }
+
+    #[test]
+    fn test_csharp_if_else_cfg() {
+        let code = r#"
+public class Demo {
+    public int Abs(int x) {
+        if (x > 0) {
+            return x;
+        }
+        return -x;
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("csharp", code, "Abs").unwrap();
+        assert!(cfg.blocks.len() >= 4);
+    }
+
+    #[test]
+    fn test_csharp_loop_has_cycle() {
+        let code = r#"
+public class Demo {
+    public int Sum(int n) {
+        var total = 0;
+        for (int i = 0; i < n; i++) {
+            total += i;
+        }
+        return total;
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("csharp", code, "Sum").unwrap();
+        assert!(cfg.has_cycle());
+    }
+
+    #[test]
+    fn test_c_if_else_cfg() {
+        let code = r#"
+int abs_val(int x) {
+    if (x > 0) {
+        return x;
+    }
+    return -x;
+}
+"#;
+        let cfg = build_cfg_for_function("c", code, "abs_val").unwrap();
+        assert!(cfg.blocks.len() >= 4);
+    }
+
+    #[test]
+    fn test_c_for_loop_has_cycle() {
+        let code = r#"
+int sum_n(int n) {
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        total += i;
+    }
+    return total;
+}
+"#;
+        let cfg = build_cfg_for_function("c", code, "sum_n").unwrap();
+        assert!(cfg.has_cycle());
+    }
+
+    #[test]
+    fn test_c_switch_cfg() {
+        let code = r#"
+int classify(int x) {
+    switch (x) {
+        case 1: return 10;
+        case 2: return 20;
+        default: return 0;
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("c", code, "classify").unwrap();
+        assert!(cfg.blocks.len() >= 4);
+    }
+
+    #[test]
+    fn test_cpp_if_else_cfg() {
+        let code = r#"
+int abs_val(int x) {
+    if (x > 0) {
+        return x;
+    }
+    return -x;
+}
+"#;
+        let cfg = build_cfg_for_function("cpp", code, "abs_val").unwrap();
+        assert!(cfg.blocks.len() >= 4);
+    }
+
+    #[test]
+    fn test_cpp_range_for_has_cycle() {
+        let code = r#"
+int sum_vec(int* arr, int n) {
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        total += arr[i];
+    }
+    return total;
+}
+"#;
+        let cfg = build_cfg_for_function("cpp", code, "sum_vec").unwrap();
+        assert!(cfg.has_cycle());
+    }
+
+    #[test]
+    fn test_javascript_switch_cfg() {
+        let code = r#"
+function classify(v) {
+    switch (v) {
+        case 1:
+            return "one";
+        case 2:
+            return "two";
+        default:
+            return "other";
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("javascript", code, "classify").unwrap();
+        assert!(cfg.blocks.len() >= 5);
     }
 
     #[test]

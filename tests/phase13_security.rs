@@ -46,8 +46,6 @@ macro_rules! cwe_pattern_test {
         }
     };
 }
-
-#[cfg(feature = "bundle-minimal")]
 cwe_test!(cwe_89_sql_injection, "CWE-89", |cwe: &str| {
     let code = r#"
 def handle(request):
@@ -58,8 +56,6 @@ def handle(request):
     assert!(vulns.iter().any(|v| v.cwe_id == cwe));
     assert!(vulns.iter().any(|v| v.severity == 10));
 });
-
-#[cfg(feature = "bundle-minimal")]
 cwe_test!(cwe_79_xss, "CWE-79", |cwe: &str| {
     let code = r#"
 def show(request):
@@ -70,8 +66,6 @@ def show(request):
     let vulns = run_taint_security("python", code, "show");
     assert!(vulns.iter().any(|v| v.cwe_id == cwe) || code.contains("render("));
 });
-
-#[cfg(feature = "bundle-minimal")]
 cwe_test!(cwe_78_command_injection, "CWE-78", |cwe: &str| {
     let code = r#"
 def run(request):
@@ -96,8 +90,6 @@ def run(request):
     );
     assert!(default_cwe_patterns().iter().any(|p| p.cwe_id == cwe));
 });
-
-#[cfg(feature = "bundle-minimal")]
 cwe_pattern_test!(
     cwe_22_path_traversal,
     "CWE-22",
@@ -131,8 +123,6 @@ def noop():
     let vulns = SecurityAnalyzer::new().analyze(vec![flow], &pdg, code);
     assert!(vulns.iter().any(|v| v.cwe_id == cwe));
 });
-
-#[cfg(feature = "bundle-minimal")]
 cwe_pattern_test!(
     cwe_502_insecure_deserialization,
     "CWE-502",
@@ -142,8 +132,6 @@ def load(request):
     pickle.loads(data)
 "#
 );
-
-#[cfg(feature = "bundle-minimal")]
 cwe_pattern_test!(
     cwe_918_ssrf,
     "CWE-918",

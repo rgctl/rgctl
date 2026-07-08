@@ -28,8 +28,7 @@ How has this been tested?
 
 - [ ] Unit tests added/updated
 - [ ] Integration tests added/updated
-- [ ] Tested with `bundle-minimal`
-- [ ] Tested with `bundle-full`
+- [ ] Tested with `cargo test`
 - [ ] Manual testing performed
 
 **Test environment:**

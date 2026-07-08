@@ -15,4 +15,4 @@ rayon = "1.7"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-rbuilder-bundle-full = { workspace = true }
+rbuilder-languages = { workspace = true }

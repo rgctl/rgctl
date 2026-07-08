@@ -31,7 +31,7 @@ flowchart TB
         RUNTIME["rbuilder-lang-runtime<br/>generic TS/regex plugins"]
         CFG["rbuilder-config-formats<br/>yaml/json/toml/properties"]
         REG["rbuilder-registry<br/>LanguageRegistry"]
-        BUNDLE["rbuilder-bundle-*<br/>compile-time language sets"]
+        LANGS["rbuilder-languages<br/>all Tier 1 plugins"]
         LANG["rbuilder-lang-*<br/>(language implementations)"]
     end
 
@@ -85,8 +85,8 @@ flowchart TB
 
     REG --> API
     REG --> CFG
-    BUNDLE --> REG
-    BUNDLE --> LANG
+    LANGS --> REG
+    LANGS --> LANG
     LANG --> API
     LANG --> HELP
     LANG --> RUNTIME
@@ -129,7 +129,7 @@ flowchart TB
 | **Analysis is graph-only** | Algorithms in `rbuilder-analysis` take `MemoryBackend`, `PetGraphView`, or snapshots — not raw source files (except CFG/PDG/slice paths that explicitly need source). |
 | **CLI is thin** | `src/cli/` parses args, resolves paths, calls library crates. Heavy logic belongs in workspace crates, not new `src/cli/*.rs` helpers. JSON shape lives in `*_output.rs`; graph/cache enrichment stays in `rbuilder-analysis`. |
 | **Errors are centralized** | Use `rbuilder_error::Error` / `Result` from `rbuilder-error`. Do not add ad-hoc error enums in the CLI. |
-| **Bundles control compile time** | Which languages ship in a binary is selected via `rbuilder-bundle-minimal` / `extended` / `full` / `extra` feature flags — not by linking random lang crates from CLI. |
+| **All languages always linked** | The binary always includes all seven Tier 1 language plugins via `rbuilder-languages`. |
 
 ### Layer responsibilities
 
@@ -159,11 +159,11 @@ If you add a new workspace crate that external tools should use, export it throu
 | `rbuilder-lang-runtime` | Config-driven generic plugins (tree-sitter / regex) for simple languages. |
 | `rbuilder-config-formats` | Non-code config parsers (YAML, JSON, TOML, properties, markdown config). |
 | `rbuilder-registry` | `LanguageRegistry`, dynamic plugin loading, `full_registry()`. |
-| `rbuilder-bundle-*` | Curated sets of lang crates registered at compile time (minimal → full → extra). |
+| `rbuilder-languages` | Registers all Tier 1 lang crates at link time. |
 | `rbuilder-lang-*` | Per-language implementations (see note below). |
 | `rbuilder-macros` | `#[derive(LanguagePlugin)]` and related proc macros. |
 
-**Language crates (`rbuilder-lang-*`):** One crate per language or config dialect (e.g. `rbuilder-lang-java`, `rbuilder-lang-github-actions`). Each registers a plugin with the registry. **Do not add parsing logic for an existing language in another crate** — extend the relevant `rbuilder-lang-*` plugin instead.
+**Language crates (`rbuilder-lang-*`):** One crate per language or config dialect (e.g. `rbuilder-lang-java`, `rbuilder-lang-github-actions`). Each registers a plugin with the registry. **Do not add parsing logic for an existing language in another language crate** — extend the relevant `rbuilder-lang-*` plugin instead. For Tier 1 / full analysis parity, see [tier-1-language-support.md](tier-1-language-support.md).
 
 #### Ingestion pipeline
 
@@ -258,10 +258,7 @@ Alphabetical list of workspace crates **excluding** individual `rbuilder-lang-*`
 |---|---|---|
 | **rbuilder** | `.` | CLI binary, command dispatch, language bundle wiring, public library root. |
 | **rbuilder-analysis** | `crates/rbuilder-analysis` | Graph algorithms: blast radius, centrality, community, CFG/PDG, slicing, taint, policies, caches, `PetGraphView`. |
-| **rbuilder-bundle-extended** | `crates/rbuilder-bundle-extended` | Language bundle: minimal set plus infra languages (Dockerfile, CI, Ansible, …). |
-| **rbuilder-bundle-extra** | `crates/rbuilder-bundle-extra` | Largest bundle: extended set plus niche languages (Swift, Scala, Erlang, …). |
-| **rbuilder-bundle-full** | `crates/rbuilder-bundle-full` | Standard full bundle: most common programming languages. |
-| **rbuilder-bundle-minimal** | `crates/rbuilder-bundle-minimal` | Smallest bundle: Rust, Python, JS/TS, Go only (+ config formats). |
+| **rbuilder-languages** | `crates/rbuilder-languages` | Registers all Tier 1 language plugins (Rust, Python, JS/TS, Go, Java, C#). |
 | **rbuilder-config-formats** | `crates/rbuilder-config-formats` | Config file plugins (YAML, JSON, TOML, properties, markdown). |
 | **rbuilder-core** | `crates/rbuilder-core` | Facade crate re-exporting the stable library API for embedders. |
 | **rbuilder-error** | `crates/rbuilder-error` | Shared error types (`Error`, `Result`) for the whole workspace. |
@@ -283,12 +280,12 @@ Alphabetical list of workspace crates **excluding** individual `rbuilder-lang-*`
 
 ### Language implementations (`rbuilder-lang-*`)
 
-There are many crates named `rbuilder-lang-<language>` (and a few for CI/config dialects). Each implements `LanguagePlugin` (or a config plugin) for one language or format. They are registered only through **`rbuilder-registry`** and **`rbuilder-bundle-*`** — not linked directly from analysis or graph code.
+There are many crates named `rbuilder-lang-<language>` (and a few for CI/config dialects). Each implements `LanguagePlugin` (or a config plugin) for one language or format. They are registered through **`rbuilder-registry`** and **`rbuilder-languages`** — not linked directly from analysis or graph code.
 
 When adding or fixing language support:
 
 1. Change or add a **`rbuilder-lang-*`** crate.
-2. Register it in the appropriate **`rbuilder-bundle-*`** crate.
+2. Register it in **`rbuilder-languages`**.
 3. Do **not** add language-specific parsing to `rbuilder-analysis` or `src/cli/`.
 
 ---

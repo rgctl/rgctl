@@ -160,7 +160,7 @@ mod tests {
             ..PipelineConfig::default()
         };
         let pipeline = ProcessingPipeline::with_config(
-            Arc::new(rbuilder_bundle_full::default_registry()),
+            Arc::new(rbuilder_languages::default_registry()),
             config,
         );
         let (graph, stats) = pipeline.process_repository(temp.path()).unwrap();

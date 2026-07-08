@@ -16,7 +16,6 @@ fn write(path: &std::path::Path, contents: &str) {
 }
 
 #[test]
-#[cfg(feature = "bundle-extended")]
 fn test_end_to_end_multi_language_repo() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -30,7 +29,7 @@ fn test_end_to_end_multi_language_repo() {
         "import os\ndef run():\n    host = os.environ['DB_HOST']\n",
     );
     write(&root.join("config.yaml"), "database:\n  host: localhost\n");
-    write(&root.join("README.md"), "# Demo\n\n## Setup\n");
+    write(&root.join("settings.json"), "{\"debug\": true}\n");
 
     let pipeline = ProcessingPipeline::with_config(
         LanguageRegistry::new().into(),

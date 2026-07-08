@@ -26,50 +26,23 @@ macro_rules! perf_test {
 }
 
 perf_test!(perf_taint_large_function, 5000, {
-    #[cfg(feature = "bundle-minimal")]
-    {
-        let mut body = String::from("def big(request):\n    x = request.GET['a']\n");
-        for i in 0..200 {
-            body.push_str(&format!("    v{i} = x + {i}\n"));
-        }
-        body.push_str("    cursor.execute(x)\n");
-        let flows = analyze_taint("python", &body, "big");
-        assert!(!flows.is_empty());
+    let mut body = String::from("def big(request):\n    x = request.GET['a']\n");
+    for i in 0..200 {
+        body.push_str(&format!("    v{i} = x + {i}\n"));
     }
-    #[cfg(not(feature = "bundle-minimal"))]
-    {
-        let code = r#"
-fn big(x: i32) {
-    let mut acc = x;
-    for _ in 0..200 { acc += 1; }
-    std::process::Command::new("echo");
-}
-"#;
-        let _ = analyze_taint("rust", code, "big");
-    }
+    body.push_str("    cursor.execute(x)\n");
+    let flows = analyze_taint("python", &body, "big");
+    assert!(!flows.is_empty());
 });
 
 perf_test!(perf_dominance_large_cfg, 3000, {
-    #[cfg(feature = "bundle-minimal")]
-    {
-        let mut code = String::from("fn big(mut x: i32) -> i32 {\n");
-        for i in 0..100 {
-            code.push_str(&format!("    if x > {i} {{ x += {i}; }}\n"));
-        }
-        code.push_str("    x\n}\n");
-        let (_cfg, dom) = build_dominance("rust", &code, "big");
-        assert!(!dom.idom.is_empty());
+    let mut code = String::from("fn big(mut x: i32) -> i32 {\n");
+    for i in 0..100 {
+        code.push_str(&format!("    if x > {i} {{ x += {i}; }}\n"));
     }
-    #[cfg(not(feature = "bundle-minimal"))]
-    {
-        let mut code = String::from("def big(x):\n");
-        for i in 0..100 {
-            code.push_str(&format!("    if x > {i}:\n        x += {i}\n"));
-        }
-        code.push_str("    return x\n");
-        let (_cfg, dom) = build_dominance("python", &code, "big");
-        assert!(!dom.idom.is_empty());
-    }
+    code.push_str("    x\n}\n");
+    let (_cfg, dom) = build_dominance("rust", &code, "big");
+    assert!(!dom.idom.is_empty());
 });
 
 perf_test!(perf_call_graph_large_chain, 2000, {

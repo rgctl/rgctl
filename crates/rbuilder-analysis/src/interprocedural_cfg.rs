@@ -3,6 +3,7 @@
 use crate::callgraph::CallGraph;
 use crate::cfg::ControlFlowGraph;
 use crate::cfg_builder::build_cfg_for_function;
+use crate::language_profile::language_id_from_path;
 use rbuilder_error::Result;
 use rbuilder_graph::backend::MemoryBackend;
 use std::collections::HashMap;
@@ -92,14 +93,8 @@ fn resolve_source<'a>(
     })
 }
 
-fn detect_language(file_path: &str) -> &str {
-    match Path::new(file_path).extension().and_then(|e| e.to_str()) {
-        Some("py") => "python",
-        Some("js") | Some("mjs") | Some("cjs") => "javascript",
-        Some("ts") | Some("tsx") => "typescript",
-        Some("rb") => "ruby",
-        _ => "rust",
-    }
+fn detect_language(file_path: &str) -> &'static str {
+    language_id_from_path(Path::new(file_path)).unwrap_or("rust")
 }
 
 #[cfg(test)]

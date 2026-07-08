@@ -1,7 +1,0 @@
-{
-  "name": "nginx",
-  "version": "1.2.0",
-  "dependencies": [
-    { "name": "common", "version_requirement": ">= 0.1.0" }
-  ]
-}

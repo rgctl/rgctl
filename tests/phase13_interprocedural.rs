@@ -118,8 +118,6 @@ ip_test!(recursive_mutual_pair, {
     assert!(recursive.contains(&id_b));
     assert!(cg.topological_order().is_err());
 });
-
-#[cfg(feature = "bundle-minimal")]
 ip_test!(icfg_builds_per_function_cfg, {
     let backend = sample_backend();
     let source = r#"
@@ -136,8 +134,6 @@ fn helper(input: i32) -> i32 {
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
     assert_eq!(icfg.function_cfgs.len(), 2);
 });
-
-#[cfg(feature = "bundle-minimal")]
 ip_test!(icfg_get_cfg_by_id, {
     let backend = sample_backend();
     let source = r#"
@@ -150,8 +146,6 @@ fn helper(x: i32) -> i32 { x + 1 }
     let helper_id = icfg.call_graph.id_by_name("helper").unwrap();
     assert!(icfg.get_cfg(helper_id).is_some());
 });
-
-#[cfg(feature = "bundle-minimal")]
 ip_test!(icfg_caller_cfgs, {
     let backend = sample_backend();
     let source = r#"
@@ -165,8 +159,6 @@ fn helper(x: i32) -> i32 { x + 1 }
     let callers = icfg.caller_cfgs(helper_id);
     assert_eq!(callers.len(), 1);
 });
-
-#[cfg(feature = "bundle-minimal")]
 ip_test!(interprocedural_slice_helper, {
     let backend = sample_backend();
     let source = r#"
@@ -202,8 +194,6 @@ fn helper(input: i32) -> i32 {
         .unwrap();
     assert!(slice.functions.contains(&helper_id));
 });
-
-#[cfg(feature = "bundle-minimal")]
 ip_test!(multi_hop_slice_three_deep, {
     let (backend, files) = build_sample_backend_with_chain(4);
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
@@ -253,8 +243,6 @@ ip_test!(graph_parameter_stored_on_node, {
     });
     assert_eq!(cg.parameter_names(id), &["x"]);
 });
-
-#[cfg(feature = "bundle-minimal")]
 ip_test!(slice_reduction_percent_non_negative, {
     let (backend, files) = build_backend_with_parameters();
     let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
@@ -320,8 +308,6 @@ ip_test!(topological_order_preserves_edge_direction, {
         assert!(pos[&edge.from] < pos[&edge.to]);
     }
 });
-
-#[cfg(feature = "bundle-minimal")]
 ip_test!(test_multi_argument_index_isolation, {
     use rbuilder::analysis::{
         criterion_for_parameter, filter_handoff_seeds_by_index, resolve_handoff_seeds,

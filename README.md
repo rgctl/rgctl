@@ -110,7 +110,7 @@ Walkthrough on a real Java repo → **[coolstore example](docs/user-guide.md#3-e
 ```bash
 git clone https://github.com/sshaaf/rBuilder.git
 cd rBuilder
-cargo build --release --features bundle-full
+cargo build --release
 ```
 
 **Discover** (build the graph + reachability caches):

@@ -3,8 +3,15 @@
 //! This module defines the core plugin system for language and configuration format support.
 //! Plugins enable extraction of symbols, relationships, and complexity metrics from source code.
 
+mod call_extraction;
 mod error;
 mod registrar;
+
+pub use call_extraction::{
+    callee_name, containing_function, push_call_relation, walk_calls, C_CALL_KINDS,
+    CPP_CALL_KINDS, CSHARP_CALL_KINDS, GO_CALL_KINDS, JS_CALL_KINDS, PYTHON_CALL_KINDS,
+    RUST_CALL_KINDS, TS_CALL_KINDS,
+};
 
 pub use error::{Error, Result};
 pub use registrar::ConfigFormatRegistrar;

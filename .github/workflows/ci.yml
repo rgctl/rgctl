@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       features:
-        description: Cargo features (default bundle-full)
+        description: Optional Cargo features (e.g. proc-macros)
         required: false
-        default: bundle-full
+        default: ""
         type: string
   pull_request:
     types: [opened, synchronize, reopened, labeled]
@@ -28,7 +28,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  FEATURES: ${{ github.event_name == 'workflow_dispatch' && inputs.features || 'bundle-full' }}
+  FEATURES: ${{ github.event_name == 'workflow_dispatch' && inputs.features || '' }}
 
 jobs:
   ci:

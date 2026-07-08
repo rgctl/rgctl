@@ -48,6 +48,21 @@ pub fn node_to_location(node: Node, file: &str) -> SourceLocation {
 
 /// Extract symbol name from common tree-sitter child patterns.
 pub fn extract_name_from_node(node: Node, source: &[u8]) -> Result<Option<String>> {
+    if matches!(
+        node.kind(),
+        "method_declaration" | "local_function_statement" | "constructor_declaration"
+            | "function_definition"
+    ) {
+        if let Some(name) = node.child_by_field_name("name") {
+            return Ok(Some(name.utf8_text(source)?.to_string()));
+        }
+        if let Some(decl) = node.child_by_field_name("declarator") {
+            if let Some(name) = extract_c_function_name(decl, source) {
+                return Ok(Some(name));
+            }
+        }
+    }
+
     for field in ["name", "lhs", "pattern"] {
         if let Some(field_node) = node.child_by_field_name(field) {
             if let Some(name) = extract_name_from_node(field_node, source)? {
@@ -91,6 +106,32 @@ pub fn extract_name_from_node(node: Node, source: &[u8]) -> Result<Option<String
     }
 
     Ok(None)
+}
+
+fn extract_c_function_name(node: Node, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "identifier" | "field_identifier" | "destructor_name" => {
+            node.utf8_text(source).ok().map(str::to_string)
+        }
+        "qualified_identifier" => node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok().map(str::to_string)),
+        "function_declarator" | "pointer_declarator" | "reference_declarator"
+        | "parenthesized_declarator" => node
+            .child_by_field_name("declarator")
+            .and_then(|inner| extract_c_function_name(inner, source)),
+        _ => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.is_named() {
+                    if let Some(name) = extract_c_function_name(child, source) {
+                        return Some(name);
+                    }
+                }
+            }
+            None
+        }
+    }
 }
 
 /// Generic parameter extraction from parameter_list / parameters nodes.

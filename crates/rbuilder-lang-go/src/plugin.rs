@@ -409,11 +409,34 @@ impl LanguagePlugin for GoPlugin {
 
     fn extract_relations(
         &self,
-        _file_path: &Path,
-        _source: &[u8],
-        _symbols: &[Symbol],
+        file_path: &Path,
+        source: &[u8],
+        symbols: &[Symbol],
     ) -> Result<Vec<Relation>> {
-        Ok(vec![])
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_go::LANGUAGE.into())
+            .map_err(|e| Error::PluginError(format!("Failed to set Go grammar: {e}")))?;
+
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::ParseError {
+                file: file_path.to_path_buf(),
+                line: 0,
+                message: "Failed to parse Go source".to_string(),
+            })?;
+
+        let mut relations = Vec::new();
+        walk_calls(
+            tree.root_node(),
+            source,
+            file_path,
+            symbols,
+            GO_CALL_KINDS,
+            "go",
+            &mut relations,
+        );
+        Ok(relations)
     }
 
     fn calculate_complexity(
@@ -526,5 +549,28 @@ mod tests {
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "Reader");
         assert_eq!(symbols[0].symbol_type, SymbolType::Interface);
+    }
+
+    #[test]
+    fn test_extract_relations_calls() {
+        let source = br#"
+package demo
+
+func caller() {
+    helper()
+}
+
+func helper() {}
+"#;
+        let plugin = GoPlugin::new().unwrap();
+        let path = Path::new("test.go");
+        let symbols = plugin.extract_symbols(path, source).unwrap();
+        let relations = plugin.extract_relations(path, source, &symbols).unwrap();
+        assert!(
+            relations
+                .iter()
+                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "helper"),
+            "expected Calls -> helper, got {relations:?}"
+        );
     }
 }

@@ -396,8 +396,9 @@ pub(crate) fn run_full_analysis(
             println!("\n✓ Control flow analysis:");
         }
         use crate::analysis::{
-            build_cfg_for_function, AnalysisStorage, CfgPdgArchive, CfgPdgRecord, DominatorTree,
-            FunctionAnalysis, ProgramDependenceGraph,
+            build_cfg_for_function, cfg_language_id_from_path, cfg_language_list,
+            AnalysisStorage, CfgPdgArchive, CfgPdgRecord, DominatorTree, FunctionAnalysis,
+            ProgramDependenceGraph,
         };
         use rbuilder_graph::code_index::hash_code;
 
@@ -429,17 +430,12 @@ pub(crate) fn run_full_analysis(
                 }
             };
 
-            // Determine language from file extension
-            let lang = if file_path.ends_with(".rs") {
-                "rust"
-            } else if file_path.ends_with(".py") {
-                "python"
-            } else if file_path.ends_with(".java") {
-                "java"
-            } else {
-                // Skip unsupported languages for CFG
-                error_count += 1;
-                continue;
+            let lang = match cfg_language_id_from_path(std::path::Path::new(file_path)) {
+                Some(lang) => lang,
+                None => {
+                    error_count += 1;
+                    continue;
+                }
             };
 
             // Build CFG
@@ -544,7 +540,10 @@ pub(crate) fn run_full_analysis(
                     );
                 }
             } else if !functions.is_empty() {
-                println!("  No functions analyzed (Rust/Python only)");
+                println!(
+                    "  No functions analyzed (CFG supported: {})",
+                    cfg_language_list()
+                );
             }
             if verbose {
                 println!("{}", mem_monitor.report());

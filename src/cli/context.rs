@@ -152,12 +152,7 @@ impl CliContext {
 }
 
 pub fn language_from_path(path: &Path) -> String {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("py") => "python".into(),
-        Some("java") => "java".into(),
-        Some("js") | Some("jsx") => "javascript".into(),
-        Some("ts") | Some("tsx") => "typescript".into(),
-        Some("go") => "go".into(),
-        _ => "rust".into(),
-    }
+    crate::analysis::language_id_from_path(path)
+        .unwrap_or("rust")
+        .to_string()
 }

@@ -29,7 +29,7 @@ pub fn init() {
     languages::ensure_registry_initialized();
 }
 
-/// Build a code graph from a repository using the active language bundle.
+/// Build a code graph from a repository using all built-in language plugins.
 pub fn code_graph_from_repository(root: &std::path::Path) -> Result<CodeGraph> {
     use rbuilder_pipeline::ProcessingPipeline;
     use std::sync::Arc;

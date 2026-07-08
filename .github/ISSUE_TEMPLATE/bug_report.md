@@ -35,7 +35,7 @@ Paste error output here
 - **rBuilder version**: (run `rbuilder --version`)
 - **OS**: (e.g., macOS 13.4, Ubuntu 22.04, Windows 11)
 - **Rust version**: (run `rustc --version`)
-- **Feature flags**: (e.g., `bundle-minimal`, `bundle-full`, custom)
+- **Feature flags**: (e.g., `proc-macros`, custom)
 
 ## Minimal Reproducible Example
 

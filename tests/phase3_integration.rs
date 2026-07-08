@@ -4,7 +4,6 @@ use rbuilder::graph::backend::GraphBackend;
 use rbuilder::graph::schema::{Node, NodeType};
 use rbuilder::graph::CodeGraph;
 use rbuilder::languages::plugin_loader::{PluginLoader, PluginRegistry, PLUGIN_REGISTRY_FILE};
-#[cfg(feature = "bundle-extended")]
 use rbuilder::languages::registry::LanguageRegistry;
 use rbuilder::rules::{RuleEngine, Ruleset};
 use std::fs;
@@ -37,7 +36,6 @@ fn test_rule_engine_integration() {
 }
 
 #[test]
-#[cfg(feature = "bundle-extended")]
 fn test_java_plugin_extraction() {
     let temp = TempDir::new().unwrap();
     fs::write(
@@ -52,12 +50,11 @@ fn test_java_plugin_extraction() {
 }
 
 #[test]
-#[cfg(feature = "bundle-extended")]
-fn test_kotlin_and_csharp_plugins() {
+fn test_tier1_plugin_registry() {
     let registry = LanguageRegistry::new();
-    assert!(registry.has_plugin("kotlin"));
-    assert!(registry.has_plugin("csharp"));
-    assert!(registry.has_plugin("java"));
+    for id in ["rust", "python", "javascript", "typescript", "go", "java", "csharp", "c", "cpp"] {
+        assert!(registry.has_plugin(id), "missing plugin {id}");
+    }
 }
 
 #[test]

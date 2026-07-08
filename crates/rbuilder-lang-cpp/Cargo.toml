@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 rbuilder-plugin-api = { workspace = true }
 rbuilder-registry = { workspace = true }
-rbuilder-lang-runtime = { workspace = true }
+rbuilder-plugin-helpers = { workspace = true }
 tree-sitter = { workspace = true }
-tree-sitter-cpp = "0.23"
+tree-sitter-cpp = "0.23.4"
+serde_json = "1"

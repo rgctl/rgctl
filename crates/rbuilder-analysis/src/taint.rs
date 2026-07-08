@@ -2,6 +2,7 @@
 
 use crate::cfg::ControlFlowGraph;
 use crate::dominance::DominatorTree;
+use crate::language_profile::canonical_language_id;
 use crate::pdg::{PdgNodeId, ProgramDependenceGraph};
 use crate::policy::PolicyViolation;
 use crate::type_inference::{InferredType, TypeInferenceEngine};
@@ -135,11 +136,15 @@ impl<'a> TaintAnalyzer<'a> {
 
     /// Detect sources, sinks, and sanitizers from statement patterns.
     pub fn detect_patterns(&mut self, language: &str) {
-        match language {
-            "python" | "py" => self.detect_python_patterns(),
-            "javascript" | "js" | "typescript" | "ts" => self.detect_js_patterns(),
-            "rust" | "rs" => self.detect_rust_patterns(),
+        match canonical_language_id(language).unwrap_or(language) {
+            "python" => self.detect_python_patterns(),
+            "javascript" | "typescript" => self.detect_js_patterns(),
+            "rust" => self.detect_rust_patterns(),
+            "go" => self.detect_go_patterns(),
             "java" => self.detect_java_patterns(),
+            "csharp" => self.detect_csharp_patterns(),
+            "c" => self.detect_c_patterns(),
+            "cpp" => self.detect_cpp_patterns(),
             _ => {}
         }
     }
@@ -212,21 +217,118 @@ impl<'a> TaintAnalyzer<'a> {
     fn detect_rust_patterns(&mut self) {
         for (node_id, node) in &self.pdg.nodes {
             let text = &node.statement.text;
-            if text.contains("env::var") {
+
+            if text.contains("Path(")
+                || text.contains("Query(")
+                || text.contains("Json(")
+                || text.contains("Form(")
+                || text.contains("RawBody(")
+                || text.contains("TypedHeader(")
+                || text.contains("axum::extract")
+                || text.contains("Extension(")
+            {
+                self.sources.insert(*node_id, TaintSource::HttpParameter);
+            } else if text.contains("env::var") || text.contains("std::env::var") {
                 self.sources.insert(*node_id, TaintSource::EnvironmentVar);
-            } else if text.contains("env::args") {
+            } else if text.contains("env::args") || text.contains("std::env::args") {
                 self.sources.insert(*node_id, TaintSource::CommandLineArg);
-            } else if text.contains("File::open") || text.contains("read_to_string") {
+            } else if text.contains("File::open")
+                || text.contains("read_to_string")
+                || text.contains("std::fs::read")
+            {
                 self.sources.insert(*node_id, TaintSource::FileInput);
+            } else if text.contains("reqwest::")
+                || text.contains("hyper::")
+                || text.contains("TcpStream::connect")
+            {
+                self.sources.insert(*node_id, TaintSource::NetworkInput);
             }
-            if text.contains("Command::new") {
-                self.sinks.insert(*node_id, TaintSink::ShellCommand);
-            } else if text.contains("query(") || text.contains("execute(") {
+
+            if text.contains("sqlx::query")
+                || text.contains("query_as")
+                || text.contains(".execute(")
+                || text.contains("fetch_one(")
+                || text.contains("fetch_all(")
+                || text.contains("fetch_optional(")
+            {
                 self.sinks.insert(*node_id, TaintSink::SqlQuery);
+            } else if text.contains("Command::new") || text.contains("std::process::Command") {
+                self.sinks.insert(*node_id, TaintSink::ShellCommand);
+            } else if text.contains("format!") && text.contains("Html") {
+                self.sinks.insert(*node_id, TaintSink::HtmlRender);
+            } else if text.contains("std::fs::write") || text.contains("write_all(") {
+                self.sinks.insert(*node_id, TaintSink::FileWrite);
             }
-            if text.contains(".parse::<") {
+
+            if text.contains(".bind(") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::SqlParameterize);
+            } else if text.contains(".parse::<") || text.contains("FromStr") {
                 self.sanitizers
                     .insert(*node_id, Sanitizer::TypeCast("typed".into()));
+            } else if text.contains("html_escape") || text.contains("ammonia::") {
+                self.sanitizers.insert(*node_id, Sanitizer::HtmlEscape);
+            }
+        }
+    }
+
+    fn detect_go_patterns(&mut self) {
+        for (node_id, node) in &self.pdg.nodes {
+            let text = &node.statement.text;
+
+            if text.contains("Query(")
+                || text.contains("Param(")
+                || text.contains("PostForm(")
+                || text.contains("ShouldBindJSON")
+                || text.contains("BindJSON")
+                || text.contains("FormValue(")
+                || text.contains("GetHeader(")
+                || text.contains("Cookie(")
+            {
+                self.sources.insert(*node_id, TaintSource::HttpParameter);
+            } else if text.contains("os.Getenv") || text.contains("os.LookupEnv") {
+                self.sources.insert(*node_id, TaintSource::EnvironmentVar);
+            } else if text.contains("os.Args") {
+                self.sources.insert(*node_id, TaintSource::CommandLineArg);
+            } else if text.contains("ReadFile(")
+                || text.contains("io.ReadAll")
+                || text.contains("ioutil.ReadAll")
+                || text.contains("json.Unmarshal")
+                || text.contains("io.ReadCloser")
+            {
+                self.sources.insert(*node_id, TaintSource::FileInput);
+            } else if text.contains("http.Get(") || text.contains("http.Post(") {
+                self.sources.insert(*node_id, TaintSource::NetworkInput);
+            }
+
+            if text.contains(".Exec(")
+                || text.contains(".Query(")
+                || text.contains(".QueryRow(")
+                || text.contains("db.Exec")
+                || text.contains("sql.Open")
+            {
+                self.sinks.insert(*node_id, TaintSink::SqlQuery);
+            } else if text.contains("exec.Command") || text.contains("exec.CommandContext") {
+                self.sinks.insert(*node_id, TaintSink::ShellCommand);
+            } else if text.contains("template.HTML(") || text.contains("c.HTML(") {
+                self.sinks.insert(*node_id, TaintSink::HtmlRender);
+            } else if text.contains("fmt.Fprintf") && text.contains("ResponseWriter") {
+                self.sinks.insert(*node_id, TaintSink::HtmlRender);
+            } else if text.contains("os.WriteFile") || text.contains("ioutil.WriteFile") {
+                self.sinks.insert(*node_id, TaintSink::FileWrite);
+            }
+
+            if text.contains("strconv.Atoi")
+                || text.contains("strconv.ParseInt")
+                || text.contains("strconv.ParseFloat")
+            {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::TypeCast("numeric".into()));
+            } else if text.contains("html.EscapeString") {
+                self.sanitizers.insert(*node_id, Sanitizer::HtmlEscape);
+            } else if text.contains("Prepare(") || text.contains("PrepareContext(") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::SqlParameterize);
             }
         }
     }
@@ -303,6 +405,147 @@ impl<'a> TaintAnalyzer<'a> {
             {
                 self.sanitizers
                     .insert(*node_id, Sanitizer::Validation("pattern".into()));
+            }
+        }
+    }
+
+    fn detect_csharp_patterns(&mut self) {
+        for (node_id, node) in &self.pdg.nodes {
+            let text = &node.statement.text;
+
+            if text.contains("Request.Query")
+                || text.contains("Request.Form")
+                || text.contains("Request.Headers")
+                || text.contains("[FromQuery]")
+                || text.contains("[FromBody]")
+                || text.contains("HttpContext.Request")
+            {
+                self.sources.insert(*node_id, TaintSource::HttpParameter);
+            } else if text.contains("File.ReadAllText")
+                || text.contains("File.ReadAllBytes")
+                || text.contains("StreamReader")
+            {
+                self.sources.insert(*node_id, TaintSource::FileInput);
+            } else if text.contains("Environment.GetEnvironmentVariable") {
+                self.sources.insert(*node_id, TaintSource::EnvironmentVar);
+            } else if text.contains("args[") || text.contains("Environment.GetCommandLineArgs") {
+                self.sources.insert(*node_id, TaintSource::CommandLineArg);
+            } else if text.contains("ExecuteReader") || text.contains("SqlDataReader") {
+                self.sources.insert(*node_id, TaintSource::DatabaseResult);
+            }
+
+            if text.contains("ExecuteSqlRaw")
+                || text.contains("ExecuteSqlInterpolated")
+                || text.contains("FromSqlRaw")
+                || text.contains("SqlCommand")
+                || text.contains("ExecuteNonQuery")
+                || text.contains("ExecuteReader")
+            {
+                self.sinks.insert(*node_id, TaintSink::SqlQuery);
+            } else if text.contains("Process.Start")
+                || text.contains("ProcessStartInfo")
+            {
+                self.sinks.insert(*node_id, TaintSink::ShellCommand);
+            } else if text.contains("File.WriteAllText")
+                || text.contains("File.WriteAllBytes")
+                || text.contains("StreamWriter")
+            {
+                self.sinks.insert(*node_id, TaintSink::FileWrite);
+            } else if text.contains("Response.Write")
+                || text.contains("Html.Raw")
+                || text.contains("InnerHtml")
+            {
+                self.sinks.insert(*node_id, TaintSink::HtmlRender);
+            } else if text.contains("Log.")
+                || text.contains("Logger.")
+                || text.contains("Console.WriteLine")
+            {
+                self.sinks.insert(*node_id, TaintSink::LogOutput);
+            }
+
+            if text.contains("int.Parse")
+                || text.contains("long.Parse")
+                || text.contains("double.Parse")
+            {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::TypeCast("numeric".into()));
+            } else if text.contains("HtmlEncode")
+                || text.contains("WebUtility.HtmlEncode")
+                || text.contains("AntiXss")
+            {
+                self.sanitizers.insert(*node_id, Sanitizer::HtmlEscape);
+            } else if text.contains("AddWithValue") || text.contains("Parameters.Add") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::SqlParameterize);
+            }
+        }
+    }
+
+    fn detect_c_patterns(&mut self) {
+        for (node_id, node) in &self.pdg.nodes {
+            let text = &node.statement.text;
+
+            if text.contains("getenv(")
+                || text.contains("getenv_s(")
+                || text.contains("getchar(")
+                || text.contains("fgets(")
+                || text.contains("read(")
+                || text.contains("recv(")
+                || text.contains("QUERY_STRING")
+            {
+                self.sources.insert(*node_id, TaintSource::HttpParameter);
+            } else if text.contains("fread(") || text.contains("fopen(") {
+                self.sources.insert(*node_id, TaintSource::FileInput);
+            } else if text.contains("argv[") {
+                self.sources.insert(*node_id, TaintSource::CommandLineArg);
+            }
+
+            if text.contains("sqlite3_exec(")
+                || text.contains("mysql_query(")
+                || text.contains("PQexec(")
+                || ((text.contains("sprintf(") || text.contains("snprintf("))
+                    && (text.contains("SELECT")
+                        || text.contains("INSERT")
+                        || text.contains("UPDATE")
+                        || text.contains("DELETE")))
+            {
+                self.sinks.insert(*node_id, TaintSink::SqlQuery);
+            } else if text.contains("system(") || text.contains("popen(") {
+                self.sinks.insert(*node_id, TaintSink::ShellCommand);
+            } else if text.contains("fprintf(")
+                || (text.contains("printf(")
+                    && !text.contains("sprintf(")
+                    && !text.contains("snprintf("))
+            {
+                self.sinks.insert(*node_id, TaintSink::HtmlRender);
+            } else if text.contains("fwrite(") {
+                self.sinks.insert(*node_id, TaintSink::FileWrite);
+            }
+
+            if text.contains("atoi(") || text.contains("strtol(") || text.contains("strtoul(") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::TypeCast("numeric".into()));
+            } else if text.contains("snprintf(") && text.contains("%") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::SqlParameterize);
+            }
+        }
+    }
+
+    fn detect_cpp_patterns(&mut self) {
+        self.detect_c_patterns();
+        for (node_id, node) in &self.pdg.nodes {
+            let text = &node.statement.text;
+
+            if text.contains("std::getline") || text.contains("std::cin") {
+                self.sources.insert(*node_id, TaintSource::HttpParameter);
+            }
+            if text.contains("std::system(") {
+                self.sinks.insert(*node_id, TaintSink::ShellCommand);
+            }
+            if text.contains("std::stoi") || text.contains("std::stol") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::TypeCast("numeric".into()));
             }
         }
     }
@@ -521,6 +764,24 @@ def handle_request(request):
         let flows = analyzer.vulnerable_flows();
         assert!(!flows.is_empty(), "expected vulnerable SQL flow");
         assert_eq!(flows[0].source_type, TaintSource::HttpParameter);
+        assert_eq!(flows[0].sink_type, TaintSink::SqlQuery);
+    }
+
+    #[test]
+    fn test_taint_rust_sqlx_env_flow() {
+        let code = r#"
+fn bad() {
+    let id = std::env::var("ID").unwrap();
+    sqlx::query(&format!("SELECT * FROM users WHERE id = {}", id)).execute(pool);
+}
+"#;
+        let cfg = build_cfg_for_function("rust", code, "bad").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+        let mut analyzer = TaintAnalyzer::new(&pdg, &cfg);
+        analyzer.detect_patterns("rust");
+        let flows = analyzer.vulnerable_flows();
+        assert!(!flows.is_empty(), "expected env -> sqlx SQL flow");
+        assert_eq!(flows[0].source_type, TaintSource::EnvironmentVar);
         assert_eq!(flows[0].sink_type, TaintSink::SqlQuery);
     }
 

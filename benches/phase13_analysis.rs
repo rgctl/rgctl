@@ -1,6 +1,6 @@
 //! Phase 13 advanced analysis benchmarks.
 //!
-//! Run: `cargo bench --features bundle-minimal --bench phase13_analysis`
+//! Run: `cargo bench --bench phase13_analysis`
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use rbuilder::analysis::{

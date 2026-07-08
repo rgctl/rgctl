@@ -95,7 +95,7 @@ public class DerivedClass extends BaseClass {
 #[test]
 fn test_edge_extraction_calls() {
     let repo = create_java_test_repo();
-    let registry = Arc::new(rbuilder_bundle_full::default_registry());
+    let registry = Arc::new(rbuilder_languages::default_registry());
     let pipeline = ProcessingPipeline::with_config(
         registry,
         PipelineConfig {
@@ -136,7 +136,7 @@ fn test_edge_extraction_calls() {
 #[test]
 fn test_edge_extraction_implements() {
     let repo = create_java_test_repo();
-    let registry = Arc::new(rbuilder_bundle_full::default_registry());
+    let registry = Arc::new(rbuilder_languages::default_registry());
     let pipeline = ProcessingPipeline::with_config(
         registry,
         PipelineConfig {
@@ -173,7 +173,7 @@ fn test_edge_extraction_implements() {
 #[test]
 fn test_edge_extraction_extends() {
     let repo = create_java_test_repo();
-    let registry = Arc::new(rbuilder_bundle_full::default_registry());
+    let registry = Arc::new(rbuilder_languages::default_registry());
     let pipeline = ProcessingPipeline::with_config(
         registry,
         PipelineConfig {
@@ -210,7 +210,7 @@ fn test_edge_extraction_extends() {
 #[test]
 fn test_edge_type_diversity() {
     let repo = create_java_test_repo();
-    let registry = Arc::new(rbuilder_bundle_full::default_registry());
+    let registry = Arc::new(rbuilder_languages::default_registry());
     let pipeline = ProcessingPipeline::with_config(
         registry,
         PipelineConfig {
@@ -245,7 +245,7 @@ fn test_edge_type_diversity() {
 #[test]
 fn test_analysis_persistence_community() {
     let repo = create_java_test_repo();
-    let registry = Arc::new(rbuilder_bundle_full::default_registry());
+    let registry = Arc::new(rbuilder_languages::default_registry());
     let pipeline = ProcessingPipeline::with_config(
         registry,
         PipelineConfig {
@@ -302,7 +302,7 @@ fn test_analysis_persistence_community() {
 #[test]
 fn test_analysis_persistence_centrality() {
     let repo = create_java_test_repo();
-    let registry = Arc::new(rbuilder_bundle_full::default_registry());
+    let registry = Arc::new(rbuilder_languages::default_registry());
     let pipeline = ProcessingPipeline::with_config(
         registry,
         PipelineConfig {
@@ -359,7 +359,7 @@ fn test_analysis_persistence_centrality() {
 #[test]
 fn test_analysis_persistence_complexity() {
     let repo = create_java_test_repo();
-    let registry = Arc::new(rbuilder_bundle_full::default_registry());
+    let registry = Arc::new(rbuilder_languages::default_registry());
     let pipeline = ProcessingPipeline::with_config(
         registry,
         PipelineConfig {
@@ -414,7 +414,7 @@ fn test_analysis_persistence_complexity() {
 #[test]
 fn test_call_graph_usability() {
     let repo = create_java_test_repo();
-    let registry = Arc::new(rbuilder_bundle_full::default_registry());
+    let registry = Arc::new(rbuilder_languages::default_registry());
     let pipeline = ProcessingPipeline::with_config(
         registry,
         PipelineConfig {
@@ -470,7 +470,7 @@ fn test_call_graph_usability() {
 #[test]
 fn test_full_pipeline_edge_count() {
     let repo = create_java_test_repo();
-    let registry = Arc::new(rbuilder_bundle_full::default_registry());
+    let registry = Arc::new(rbuilder_languages::default_registry());
     let pipeline = ProcessingPipeline::with_config(
         registry,
         PipelineConfig {

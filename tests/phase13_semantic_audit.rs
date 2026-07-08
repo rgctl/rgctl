@@ -14,8 +14,6 @@ use rbuilder::analysis::{
 use rbuilder::graph::backend::{GraphBackend, MemoryBackend};
 use rbuilder::graph::schema::{Edge, EdgeType, GraphParameter, Node, NodeType};
 use std::collections::HashMap;
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn fixture_diamond_merge_frontiers() {
     let cfg = build_cfg_for_function("rust", diamond_merge::CODE, diamond_merge::FN).unwrap();
@@ -23,8 +21,6 @@ fn fixture_diamond_merge_frontiers() {
     assert!(verify_idom_acyclic(&dom.idom));
     assert!(dom.frontiers.values().any(|f| !f.is_empty()));
 }
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn fixture_dead_code_post_return_excluded() {
     let cfg = build_cfg_for_function(
@@ -55,16 +51,12 @@ fn fixture_dead_code_post_return_excluded() {
         );
     }
 }
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn fixture_loop_back_edge_idom_acyclic() {
     let cfg = build_cfg_for_function("rust", loop_back_edge::CODE, loop_back_edge::FN).unwrap();
     let dom = DominatorTree::build(&cfg);
     assert!(verify_idom_acyclic(&dom.idom));
 }
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn fixture_sanitizer_bypass_detected() {
     let cfg =
@@ -83,8 +75,6 @@ fn fixture_sanitizer_bypass_detected() {
         "unexpected policy result: {policy:?}"
     );
 }
-
-#[cfg(feature = "bundle-minimal")]
 #[test]
 fn fixture_interprocedural_handoff_trace() {
     use rbuilder::analysis::{resolve_handoff_seeds, BlastRadiusEngine, InterproceduralCFG};

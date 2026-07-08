@@ -22,4 +22,4 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-rbuilder-bundle-full = { workspace = true }
+rbuilder-languages = { workspace = true }
