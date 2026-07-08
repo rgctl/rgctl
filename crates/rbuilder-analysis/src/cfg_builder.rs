@@ -167,6 +167,7 @@ impl<'a> CfgBuilder<'a> {
             // Rust + Python conditionals
             "if_statement" | "if_expression" => self.visit_if(node, source),
             "while_statement" | "while_expression" => self.visit_while(node, source),
+            "do_statement" => self.visit_do(node, source),
             "for_statement" | "for_expression" | "for_in_expression" | "foreach_statement" => {
                 self.visit_for(node, source)
             }
@@ -185,7 +186,7 @@ impl<'a> CfgBuilder<'a> {
                 Ok(())
             }
             "short_var_declaration" | "var_declaration" | "const_declaration"
-            | "variable_declaration" | "local_declaration_statement" => {
+            | "variable_declaration" | "local_declaration_statement" | "declaration" => {
                 self.add_statement(node, source, StatementKind::Declaration)?;
                 Ok(())
             }
@@ -353,6 +354,43 @@ impl<'a> CfgBuilder<'a> {
         }
         self.cfg
             .add_edge(self.current_block, header, CfgEdgeType::Jump);
+        self.loop_stack.pop();
+
+        self.current_block = exit;
+        Ok(())
+    }
+
+    fn visit_do(&mut self, node: Node, source: &[u8]) -> Result<()> {
+        let body = self.new_block();
+        self.cfg
+            .add_edge(self.current_block, body, CfgEdgeType::Next);
+
+        let header = self.new_block();
+        let exit = self.new_block();
+
+        self.loop_stack.push(LoopContext { header, exit });
+
+        self.current_block = body;
+        if let Some(body_node) = node.child_by_field_name("body") {
+            self.visit_block(body_node, source)?;
+        }
+        self.cfg
+            .add_edge(self.current_block, header, CfgEdgeType::Next);
+
+        self.add_statement_to_current(Statement {
+            kind: StatementKind::Branch,
+            line: node.start_position().row + 1,
+            text: node
+                .child_by_field_name("condition")
+                .and_then(|c| c.utf8_text(source).ok())
+                .unwrap_or("do")
+                .trim()
+                .to_string(),
+            defined_vars: HashSet::new(),
+            used_vars: HashSet::new(),
+        });
+        self.cfg.add_edge(header, body, CfgEdgeType::IfTrue);
+        self.cfg.add_edge(header, exit, CfgEdgeType::IfFalse);
         self.loop_stack.pop();
 
         self.current_block = exit;
@@ -610,8 +648,9 @@ fn collect_switch_cases<'a>(node: Node<'a>, cases: &mut Vec<Node<'a>>) {
         "expression_case"
         | "type_case"
         | "case_clause"
-        | "default_case"
+        |         "default_case"
         | "default_statement"
+        | "case_statement"
         | "communication_case"
         | "switch_section" => cases.push(node),
         _ => {
@@ -849,6 +888,50 @@ public class Demo {
 "#;
         let cfg = build_cfg_for_function("csharp", code, "Sum").unwrap();
         assert!(cfg.has_cycle());
+    }
+
+    #[test]
+    fn test_c_if_else_cfg() {
+        let code = r#"
+int abs_val(int x) {
+    if (x > 0) {
+        return x;
+    }
+    return -x;
+}
+"#;
+        let cfg = build_cfg_for_function("c", code, "abs_val").unwrap();
+        assert!(cfg.blocks.len() >= 4);
+    }
+
+    #[test]
+    fn test_c_for_loop_has_cycle() {
+        let code = r#"
+int sum_n(int n) {
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        total += i;
+    }
+    return total;
+}
+"#;
+        let cfg = build_cfg_for_function("c", code, "sum_n").unwrap();
+        assert!(cfg.has_cycle());
+    }
+
+    #[test]
+    fn test_c_switch_cfg() {
+        let code = r#"
+int classify(int x) {
+    switch (x) {
+        case 1: return 10;
+        case 2: return 20;
+        default: return 0;
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("c", code, "classify").unwrap();
+        assert!(cfg.blocks.len() >= 4);
     }
 
     #[test]

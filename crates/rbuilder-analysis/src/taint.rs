@@ -143,6 +143,7 @@ impl<'a> TaintAnalyzer<'a> {
             "go" => self.detect_go_patterns(),
             "java" => self.detect_java_patterns(),
             "csharp" => self.detect_csharp_patterns(),
+            "c" => self.detect_c_patterns(),
             _ => {}
         }
     }
@@ -437,6 +438,57 @@ impl<'a> TaintAnalyzer<'a> {
             {
                 self.sanitizers.insert(*node_id, Sanitizer::HtmlEscape);
             } else if text.contains("AddWithValue") || text.contains("Parameters.Add") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::SqlParameterize);
+            }
+        }
+    }
+
+    fn detect_c_patterns(&mut self) {
+        for (node_id, node) in &self.pdg.nodes {
+            let text = &node.statement.text;
+
+            if text.contains("getenv(")
+                || text.contains("getenv_s(")
+                || text.contains("getchar(")
+                || text.contains("fgets(")
+                || text.contains("read(")
+                || text.contains("recv(")
+                || text.contains("QUERY_STRING")
+            {
+                self.sources.insert(*node_id, TaintSource::HttpParameter);
+            } else if text.contains("fread(") || text.contains("fopen(") {
+                self.sources.insert(*node_id, TaintSource::FileInput);
+            } else if text.contains("argv[") {
+                self.sources.insert(*node_id, TaintSource::CommandLineArg);
+            }
+
+            if text.contains("sqlite3_exec(")
+                || text.contains("mysql_query(")
+                || text.contains("PQexec(")
+                || ((text.contains("sprintf(") || text.contains("snprintf("))
+                    && (text.contains("SELECT")
+                        || text.contains("INSERT")
+                        || text.contains("UPDATE")
+                        || text.contains("DELETE")))
+            {
+                self.sinks.insert(*node_id, TaintSink::SqlQuery);
+            } else if text.contains("system(") || text.contains("popen(") {
+                self.sinks.insert(*node_id, TaintSink::ShellCommand);
+            } else if text.contains("fprintf(")
+                || (text.contains("printf(")
+                    && !text.contains("sprintf(")
+                    && !text.contains("snprintf("))
+            {
+                self.sinks.insert(*node_id, TaintSink::HtmlRender);
+            } else if text.contains("fwrite(") {
+                self.sinks.insert(*node_id, TaintSink::FileWrite);
+            }
+
+            if text.contains("atoi(") || text.contains("strtol(") || text.contains("strtoul(") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::TypeCast("numeric".into()));
+            } else if text.contains("snprintf(") && text.contains("%") {
                 self.sanitizers
                     .insert(*node_id, Sanitizer::SqlParameterize);
             }

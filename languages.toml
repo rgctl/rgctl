@@ -98,3 +98,15 @@ class_kinds = ["class_declaration", "struct_declaration", "interface_declaration
 import_kinds = ["using_directive"]
 enable_complexity = true
 enable_type_inference = false
+
+[languages.c]
+handler = "custom"
+plugin = "CPlugin"
+module = "crate::languages::builtin::c"
+crate = "tree-sitter-c"
+extensions = ["c", "h"]
+function_kinds = ["function_definition"]
+class_kinds = ["struct_specifier", "enum_specifier"]
+import_kinds = ["preprocessor_include"]
+enable_complexity = true
+enable_type_inference = false

@@ -352,11 +352,12 @@ Copy into your PR description:
 |----------|------|-------|-----|-------|----------------|
 | Java | 1 custom | ✅ + Extends/Implements | ✅ | ✅ rich | gbuilder golden |
 | Go | 1 custom | ✅ | ✅ deep | ✅ rich | `dashboard_ecommerce_go` |
-| C# | 1 custom | ✅ | ✅ | ✅ | `csharp_phase13` / `csharp_cfg_analysis` |
+| C# | 1 custom | ✅ | ✅ | ✅ | `dashboard_ecommerce_csharp` |
+| C | 1 custom | ✅ | ✅ | ✅ | `dashboard_ecommerce_c` |
 | Python | 1 custom | ✅ | ✅ | ✅ richest | — |
 | Rust | 1 custom | ✅ | ✅ | ⚠️ basic | — |
 | JS / TS | 1 custom | ❌ stub | ❌ | ✅ (JS patterns) | — |
-| C / C++ | 2 generic | ❌ | ❌ | ❌ | — |
+| C++ | — | ❌ | ❌ | ❌ | — |
 
 Use this table to prioritize gaps; updating it when a language completes Layer E is encouraged.
 

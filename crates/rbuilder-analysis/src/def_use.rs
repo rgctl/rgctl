@@ -136,6 +136,32 @@ fn collect_def_use(
             }
         }
 
+        // C
+        "declaration" => {
+            if let Some(decl) = node.child_by_field_name("declarator") {
+                collect_declarator_defs(decl, source, defined);
+            }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "init_declarator" {
+                    if let Some(name) = child.child_by_field_name("declarator") {
+                        collect_declarator_defs(name, source, defined);
+                    }
+                    if let Some(value) = child.child_by_field_name("value") {
+                        collect_def_use(value, source, defined, used, false);
+                    }
+                }
+            }
+        }
+        "init_declarator" => {
+            if let Some(name) = node.child_by_field_name("declarator") {
+                collect_declarator_defs(name, source, defined);
+            }
+            if let Some(value) = node.child_by_field_name("value") {
+                collect_def_use(value, source, defined, used, false);
+            }
+        }
+
         // Shared identifiers
         "identifier" | "shorthand_field_identifier" | "field_identifier" | "type_identifier" => {
             if is_def_target {
@@ -188,6 +214,30 @@ fn is_binding_pattern(kind: &str) -> bool {
             | "rest_pattern"
             | "wildcard_pattern"
     )
+}
+
+fn collect_declarator_defs(node: Node, source: &[u8], defined: &mut HashSet<String>) {
+    match node.kind() {
+        "identifier" => {
+            if let Ok(name) = node.utf8_text(source) {
+                defined.insert(name.to_string());
+            }
+        }
+        "pointer_declarator" | "function_declarator" | "array_declarator"
+        | "parenthesized_declarator" => {
+            if let Some(inner) = node.child_by_field_name("declarator") {
+                collect_declarator_defs(inner, source, defined);
+            }
+        }
+        _ => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.is_named() {
+                    collect_declarator_defs(child, source, defined);
+                }
+            }
+        }
+    }
 }
 
 fn collect_pattern_defs(node: Node, source: &[u8], defined: &mut HashSet<String>) {

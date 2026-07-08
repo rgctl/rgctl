@@ -15,6 +15,9 @@ pub const DEFAULT_GO_REPO: &str = "/Users/sshaaf/git/rust/rbuilder-tests/ecommer
 /// Default C# ecommerce test repo (override with env).
 pub const DEFAULT_CSHARP_REPO: &str = "/Users/sshaaf/git/rust/rbuilder-tests/ecommerce-csharp";
 
+/// Default C ecommerce test repo (override with env).
+pub const DEFAULT_C_REPO: &str = "/Users/sshaaf/git/rust/rbuilder-tests/ecommerce-c";
+
 pub fn golden_repo_path() -> PathBuf {
     std::env::var("RBUILDER_DASHBOARD_GOLDEN_REPO")
         .map(PathBuf::from)
@@ -31,6 +34,12 @@ pub fn ecommerce_csharp_repo_path() -> PathBuf {
     std::env::var("RBUILDER_CSHARP_REPO")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_CSHARP_REPO))
+}
+
+pub fn ecommerce_c_repo_path() -> PathBuf {
+    std::env::var("RBUILDER_C_REPO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_C_REPO))
 }
 
 pub fn rbuilder_bin() -> PathBuf {

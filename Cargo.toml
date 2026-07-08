@@ -29,6 +29,7 @@ members = [
     "crates/rbuilder-lang-rust",
     "crates/rbuilder-lang-typescript",
     "crates/rbuilder-lang-csharp",
+    "crates/rbuilder-lang-c",
     "crates/rbuilder-languages",
 ]
 resolver = "2"
@@ -63,6 +64,7 @@ rbuilder-lang-python = { path = "crates/rbuilder-lang-python", version = "0.1.0"
 rbuilder-lang-rust = { path = "crates/rbuilder-lang-rust", version = "0.1.0" }
 rbuilder-lang-typescript = { path = "crates/rbuilder-lang-typescript", version = "0.1.0" }
 rbuilder-lang-csharp = { path = "crates/rbuilder-lang-csharp", version = "0.1.0" }
+rbuilder-lang-c = { path = "crates/rbuilder-lang-c", version = "0.1.0" }
 rbuilder-languages = { path = "crates/rbuilder-languages", version = "0.1.0" }
 tree-sitter = "0.25"
 
@@ -174,6 +176,7 @@ reqwest = { version = "0.12", features = ["blocking", "json"] }
 rbuilder-dashboard = { workspace = true }
 rbuilder-lang-go = { workspace = true }
 rbuilder-lang-csharp = { workspace = true }
+rbuilder-lang-c = { workspace = true }
 
 
 [features]
@@ -228,6 +231,18 @@ path = "tests/dashboard_ecommerce_go.rs"
 [[test]]
 name = "dashboard_ecommerce_csharp"
 path = "tests/dashboard_ecommerce_csharp.rs"
+
+[[test]]
+name = "dashboard_ecommerce_c"
+path = "tests/dashboard_ecommerce_c.rs"
+
+[[test]]
+name = "c_cfg_analysis"
+path = "tests/c_cfg_analysis.rs"
+
+[[test]]
+name = "c_phase13"
+path = "tests/c_phase13.rs"
 
 [[test]]
 name = "go_cfg_analysis"

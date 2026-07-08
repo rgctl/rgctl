@@ -59,6 +59,14 @@ const PROFILES: &[LanguageAnalysisProfile] = &[
         taint_enabled: true,
     },
     LanguageAnalysisProfile {
+        id: "c",
+        aliases: &[],
+        extensions: &["c", "h"],
+        function_kinds: &["function_definition"],
+        cfg_enabled: true,
+        taint_enabled: true,
+    },
+    LanguageAnalysisProfile {
         id: "go",
         aliases: &["golang"],
         extensions: &["go"],
@@ -154,6 +162,7 @@ fn grammar_for(profile: &LanguageAnalysisProfile) -> Result<Language> {
         "java" => Ok(tree_sitter_java::LANGUAGE.into()),
         "go" => Ok(tree_sitter_go::LANGUAGE.into()),
         "csharp" => Ok(tree_sitter_c_sharp::LANGUAGE.into()),
+        "c" => Ok(tree_sitter_c::LANGUAGE.into()),
         other => Err(Error::UnsupportedLanguage(other.to_string())),
     }
 }
@@ -232,7 +241,7 @@ mod tests {
 
     #[test]
     fn cfg_enabled_languages_have_taint() {
-        for id in ["rust", "python", "java", "go", "csharp"] {
+        for id in ["rust", "python", "java", "go", "csharp", "c"] {
             assert!(taint_enabled_for(id), "{id} should have taint");
             assert!(profile_for_language(id).unwrap().cfg_enabled);
         }
