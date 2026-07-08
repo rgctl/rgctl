@@ -168,7 +168,8 @@ impl<'a> CfgBuilder<'a> {
             "if_statement" | "if_expression" => self.visit_if(node, source),
             "while_statement" | "while_expression" => self.visit_while(node, source),
             "do_statement" => self.visit_do(node, source),
-            "for_statement" | "for_expression" | "for_in_expression" | "foreach_statement" => {
+            "for_statement" | "for_expression" | "for_in_expression" | "foreach_statement"
+            | "for_range_loop" => {
                 self.visit_for(node, source)
             }
             "loop_expression" => self.visit_loop(node, source),
@@ -932,6 +933,35 @@ int classify(int x) {
 "#;
         let cfg = build_cfg_for_function("c", code, "classify").unwrap();
         assert!(cfg.blocks.len() >= 4);
+    }
+
+    #[test]
+    fn test_cpp_if_else_cfg() {
+        let code = r#"
+int abs_val(int x) {
+    if (x > 0) {
+        return x;
+    }
+    return -x;
+}
+"#;
+        let cfg = build_cfg_for_function("cpp", code, "abs_val").unwrap();
+        assert!(cfg.blocks.len() >= 4);
+    }
+
+    #[test]
+    fn test_cpp_range_for_has_cycle() {
+        let code = r#"
+int sum_vec(int* arr, int n) {
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        total += arr[i];
+    }
+    return total;
+}
+"#;
+        let cfg = build_cfg_for_function("cpp", code, "sum_vec").unwrap();
+        assert!(cfg.has_cycle());
     }
 
     #[test]

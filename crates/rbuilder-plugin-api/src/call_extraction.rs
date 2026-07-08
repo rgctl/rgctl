@@ -10,6 +10,7 @@ pub const GO_CALL_KINDS: &[&str] = &["call_expression"];
 pub const PYTHON_CALL_KINDS: &[&str] = &["call"];
 pub const CSHARP_CALL_KINDS: &[&str] = &["invocation_expression"];
 pub const C_CALL_KINDS: &[&str] = &["call_expression"];
+pub const CPP_CALL_KINDS: &[&str] = &["call_expression"];
 
 /// Find the innermost function symbol containing `node`.
 pub fn containing_function<'a>(node: Node, symbols: &'a [Symbol]) -> Option<&'a Symbol> {

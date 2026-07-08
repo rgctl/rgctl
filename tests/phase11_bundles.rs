@@ -6,7 +6,7 @@ use std::path::Path;
 #[test]
 fn test_all_tier1_plugins_registered() {
     let registry = LanguageRegistry::new();
-    assert_eq!(registry.stats().language_plugins, 8);
+    assert_eq!(registry.stats().language_plugins, 9);
     for id in [
         "rust",
         "python",
@@ -16,6 +16,7 @@ fn test_all_tier1_plugins_registered() {
         "java",
         "csharp",
         "c",
+        "cpp",
     ] {
         assert!(registry.has_plugin(id), "missing plugin {id}");
     }
@@ -34,6 +35,8 @@ fn test_extension_routing() {
         ("Program.cs", "csharp"),
         ("main.c", "c"),
         ("types.h", "c"),
+        ("main.cpp", "cpp"),
+        ("types.hpp", "cpp"),
     ] {
         let plugin = registry
             .get_plugin_for_file(Path::new(file))

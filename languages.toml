@@ -99,6 +99,19 @@ import_kinds = ["using_directive"]
 enable_complexity = true
 enable_type_inference = false
 
+[languages.cpp]
+handler = "custom"
+plugin = "CppPlugin"
+module = "crate::languages::builtin::cpp"
+crate = "tree-sitter-cpp"
+extensions = ["cpp", "cc", "cxx", "hpp", "hh", "hxx"]
+aliases = ["c++", "cxx"]
+function_kinds = ["function_definition"]
+class_kinds = ["class_specifier", "struct_specifier", "enum_specifier"]
+import_kinds = ["preproc_include", "using_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
 [languages.c]
 handler = "custom"
 plugin = "CPlugin"

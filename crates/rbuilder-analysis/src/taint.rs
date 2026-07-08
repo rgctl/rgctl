@@ -144,6 +144,7 @@ impl<'a> TaintAnalyzer<'a> {
             "java" => self.detect_java_patterns(),
             "csharp" => self.detect_csharp_patterns(),
             "c" => self.detect_c_patterns(),
+            "cpp" => self.detect_cpp_patterns(),
             _ => {}
         }
     }
@@ -491,6 +492,24 @@ impl<'a> TaintAnalyzer<'a> {
             } else if text.contains("snprintf(") && text.contains("%") {
                 self.sanitizers
                     .insert(*node_id, Sanitizer::SqlParameterize);
+            }
+        }
+    }
+
+    fn detect_cpp_patterns(&mut self) {
+        self.detect_c_patterns();
+        for (node_id, node) in &self.pdg.nodes {
+            let text = &node.statement.text;
+
+            if text.contains("std::getline") || text.contains("std::cin") {
+                self.sources.insert(*node_id, TaintSource::HttpParameter);
+            }
+            if text.contains("std::system(") {
+                self.sinks.insert(*node_id, TaintSink::ShellCommand);
+            }
+            if text.contains("std::stoi") || text.contains("std::stol") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::TypeCast("numeric".into()));
             }
         }
     }

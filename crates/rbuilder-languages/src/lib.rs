@@ -12,6 +12,7 @@ pub fn register_languages(registry: &mut LanguageRegistry) {
     rbuilder_lang_java::register(registry);
     rbuilder_lang_csharp::register(registry);
     rbuilder_lang_c::register(registry);
+    rbuilder_lang_cpp::register(registry);
 }
 
 /// Default registry with config formats and all built-in languages.

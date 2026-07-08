@@ -1,0 +1,14 @@
+[package]
+name = "rbuilder-lang-cpp"
+version = "0.1.0"
+edition = "2021"
+description = "rBuilder language plugin: cpp"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rbuilder-plugin-api = { workspace = true }
+rbuilder-registry = { workspace = true }
+rbuilder-plugin-helpers = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-cpp = "0.23.4"
+serde_json = "1"

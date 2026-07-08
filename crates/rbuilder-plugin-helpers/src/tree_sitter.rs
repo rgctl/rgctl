@@ -110,8 +110,14 @@ pub fn extract_name_from_node(node: Node, source: &[u8]) -> Result<Option<String
 
 fn extract_c_function_name(node: Node, source: &[u8]) -> Option<String> {
     match node.kind() {
-        "identifier" => node.utf8_text(source).ok().map(str::to_string),
-        "function_declarator" | "pointer_declarator" | "parenthesized_declarator" => node
+        "identifier" | "field_identifier" | "destructor_name" => {
+            node.utf8_text(source).ok().map(str::to_string)
+        }
+        "qualified_identifier" => node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok().map(str::to_string)),
+        "function_declarator" | "pointer_declarator" | "reference_declarator"
+        | "parenthesized_declarator" => node
             .child_by_field_name("declarator")
             .and_then(|inner| extract_c_function_name(inner, source)),
         _ => {
