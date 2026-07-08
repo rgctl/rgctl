@@ -67,8 +67,9 @@ pub use dominance::{verify_idom_acyclic, DominatorTree};
 pub use flow_cache::{CachedAnalysis, CfgPdgCache, FlowCache, NodePdgCache};
 pub use graph_utils::{filter_impact_by_caller_depth, PetGraphView};
 pub use language_profile::{
-    cfg_language_id_from_path, cfg_language_ids, cfg_language_list, function_kinds_for,
-    language_id_from_path, parse_source, profile_for_language, LanguageAnalysisProfile,
+    canonical_language_id, cfg_language_id_from_path, cfg_language_ids, cfg_language_list,
+    function_kinds_for, language_id_from_path, parse_source, profile_for_language,
+    taint_enabled_for, LanguageAnalysisProfile,
 };
 pub use interprocedural_cfg::InterproceduralCFG;
 pub use interprocedural_slicing::{InterproceduralSlice, InterproceduralSlicer};

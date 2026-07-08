@@ -261,6 +261,7 @@ reqwest = { version = "0.12", features = ["blocking", "json"] }
 rbuilder-dashboard = { workspace = true }
 rbuilder-lang-ansible = { workspace = true }
 rbuilder-lang-chef = { workspace = true }
+rbuilder-lang-go = { workspace = true }
 rbuilder-lang-puppet = { workspace = true }
 
 

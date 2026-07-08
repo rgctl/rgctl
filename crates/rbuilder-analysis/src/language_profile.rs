@@ -17,6 +17,8 @@ pub struct LanguageAnalysisProfile {
     pub function_kinds: &'static [&'static str],
     /// Whether `discover --cfg` runs CFG/PDG/taint for this language.
     pub cfg_enabled: bool,
+    /// Whether taint pattern detection is available.
+    pub taint_enabled: bool,
 }
 
 const PROFILES: &[LanguageAnalysisProfile] = &[
@@ -26,6 +28,7 @@ const PROFILES: &[LanguageAnalysisProfile] = &[
         extensions: &["rs"],
         function_kinds: &["function_item"],
         cfg_enabled: true,
+        taint_enabled: true,
     },
     LanguageAnalysisProfile {
         id: "python",
@@ -33,6 +36,7 @@ const PROFILES: &[LanguageAnalysisProfile] = &[
         extensions: &["py"],
         function_kinds: &["function_definition"],
         cfg_enabled: true,
+        taint_enabled: true,
     },
     LanguageAnalysisProfile {
         id: "java",
@@ -40,6 +44,7 @@ const PROFILES: &[LanguageAnalysisProfile] = &[
         extensions: &["java"],
         function_kinds: &["method_declaration", "constructor_declaration"],
         cfg_enabled: true,
+        taint_enabled: true,
     },
     LanguageAnalysisProfile {
         id: "go",
@@ -47,6 +52,7 @@ const PROFILES: &[LanguageAnalysisProfile] = &[
         extensions: &["go"],
         function_kinds: &["function_declaration", "method_declaration"],
         cfg_enabled: true,
+        taint_enabled: true,
     },
     LanguageAnalysisProfile {
         id: "javascript",
@@ -54,6 +60,7 @@ const PROFILES: &[LanguageAnalysisProfile] = &[
         extensions: &["js", "jsx", "mjs", "cjs"],
         function_kinds: &[],
         cfg_enabled: false,
+        taint_enabled: true,
     },
     LanguageAnalysisProfile {
         id: "typescript",
@@ -61,6 +68,7 @@ const PROFILES: &[LanguageAnalysisProfile] = &[
         extensions: &["ts", "tsx"],
         function_kinds: &[],
         cfg_enabled: false,
+        taint_enabled: true,
     },
     LanguageAnalysisProfile {
         id: "ruby",
@@ -68,6 +76,7 @@ const PROFILES: &[LanguageAnalysisProfile] = &[
         extensions: &["rb"],
         function_kinds: &[],
         cfg_enabled: false,
+        taint_enabled: false,
     },
 ];
 
@@ -105,6 +114,18 @@ pub fn cfg_language_ids() -> Vec<&'static str> {
 /// Human-readable list for CLI messages.
 pub fn cfg_language_list() -> String {
     cfg_language_ids().join(", ")
+}
+
+/// Normalize a CLI or path-derived language id to its canonical profile id.
+pub fn canonical_language_id(language: &str) -> Option<&'static str> {
+    profile_for_language(language).map(|p| p.id)
+}
+
+/// Whether taint pattern detection is enabled for this language id or alias.
+pub fn taint_enabled_for(language: &str) -> bool {
+    profile_for_language(language)
+        .map(|p| p.taint_enabled)
+        .unwrap_or(false)
 }
 
 fn profile_for_extension(ext: &str) -> Option<&'static LanguageAnalysisProfile> {
@@ -187,5 +208,27 @@ mod tests {
             None
         );
         assert_eq!(language_id_from_path(Path::new("app.js")), Some("javascript"));
+    }
+
+    #[test]
+    fn canonical_language_id_normalizes_aliases() {
+        assert_eq!(canonical_language_id("py"), Some("python"));
+        assert_eq!(canonical_language_id("rs"), Some("rust"));
+        assert_eq!(canonical_language_id("golang"), Some("go"));
+    }
+
+    #[test]
+    fn cfg_enabled_languages_have_taint() {
+        for id in ["rust", "python", "java", "go"] {
+            assert!(taint_enabled_for(id), "{id} should have taint");
+            assert!(profile_for_language(id).unwrap().cfg_enabled);
+        }
+    }
+
+    #[test]
+    fn javascript_has_taint_without_cfg() {
+        assert!(!profile_for_language("javascript").unwrap().cfg_enabled);
+        assert!(taint_enabled_for("javascript"));
+        assert!(taint_enabled_for("js"));
     }
 }

@@ -2,6 +2,7 @@
 
 use crate::cfg::ControlFlowGraph;
 use crate::dominance::DominatorTree;
+use crate::language_profile::canonical_language_id;
 use crate::pdg::{PdgNodeId, ProgramDependenceGraph};
 use crate::policy::PolicyViolation;
 use crate::type_inference::{InferredType, TypeInferenceEngine};
@@ -135,11 +136,11 @@ impl<'a> TaintAnalyzer<'a> {
 
     /// Detect sources, sinks, and sanitizers from statement patterns.
     pub fn detect_patterns(&mut self, language: &str) {
-        match language {
-            "python" | "py" => self.detect_python_patterns(),
-            "javascript" | "js" | "typescript" | "ts" => self.detect_js_patterns(),
-            "rust" | "rs" => self.detect_rust_patterns(),
-            "go" | "golang" => self.detect_go_patterns(),
+        match canonical_language_id(language).unwrap_or(language) {
+            "python" => self.detect_python_patterns(),
+            "javascript" | "typescript" => self.detect_js_patterns(),
+            "rust" => self.detect_rust_patterns(),
+            "go" => self.detect_go_patterns(),
             "java" => self.detect_java_patterns(),
             _ => {}
         }
@@ -240,21 +241,32 @@ impl<'a> TaintAnalyzer<'a> {
                 || text.contains("Param(")
                 || text.contains("PostForm(")
                 || text.contains("ShouldBindJSON")
+                || text.contains("BindJSON")
                 || text.contains("FormValue(")
+                || text.contains("GetHeader(")
+                || text.contains("Cookie(")
             {
                 self.sources.insert(*node_id, TaintSource::HttpParameter);
             } else if text.contains("os.Getenv") || text.contains("os.LookupEnv") {
                 self.sources.insert(*node_id, TaintSource::EnvironmentVar);
             } else if text.contains("os.Args") {
                 self.sources.insert(*node_id, TaintSource::CommandLineArg);
-            } else if text.contains("ReadFile(") || text.contains("io.ReadAll") {
+            } else if text.contains("ReadFile(")
+                || text.contains("io.ReadAll")
+                || text.contains("ioutil.ReadAll")
+                || text.contains("json.Unmarshal")
+                || text.contains("io.ReadCloser")
+            {
                 self.sources.insert(*node_id, TaintSource::FileInput);
+            } else if text.contains("http.Get(") || text.contains("http.Post(") {
+                self.sources.insert(*node_id, TaintSource::NetworkInput);
             }
 
             if text.contains(".Exec(")
                 || text.contains(".Query(")
                 || text.contains(".QueryRow(")
                 || text.contains("db.Exec")
+                || text.contains("sql.Open")
             {
                 self.sinks.insert(*node_id, TaintSink::SqlQuery);
             } else if text.contains("exec.Command") || text.contains("exec.CommandContext") {
@@ -263,6 +275,8 @@ impl<'a> TaintAnalyzer<'a> {
                 self.sinks.insert(*node_id, TaintSink::HtmlRender);
             } else if text.contains("fmt.Fprintf") && text.contains("ResponseWriter") {
                 self.sinks.insert(*node_id, TaintSink::HtmlRender);
+            } else if text.contains("os.WriteFile") || text.contains("ioutil.WriteFile") {
+                self.sinks.insert(*node_id, TaintSink::FileWrite);
             }
 
             if text.contains("strconv.Atoi")
@@ -273,6 +287,9 @@ impl<'a> TaintAnalyzer<'a> {
                     .insert(*node_id, Sanitizer::TypeCast("numeric".into()));
             } else if text.contains("html.EscapeString") {
                 self.sanitizers.insert(*node_id, Sanitizer::HtmlEscape);
+            } else if text.contains("Prepare(") || text.contains("PrepareContext(") {
+                self.sanitizers
+                    .insert(*node_id, Sanitizer::SqlParameterize);
             }
         }
     }

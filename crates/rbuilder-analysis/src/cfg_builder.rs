@@ -204,6 +204,18 @@ impl<'a> CfgBuilder<'a> {
             // Rust match
             "match_expression" => self.visit_match(node, source),
 
+            // Go / shared switch & select
+            "switch_statement" | "type_switch_statement" | "expression_switch_statement" => {
+                self.visit_switch(node, source)
+            }
+            "select_statement" => self.visit_select(node, source),
+
+            // Go concurrency helpers (sequential approximation)
+            "defer_statement" | "go_statement" => {
+                self.add_statement(node, source, StatementKind::Expression)?;
+                Ok(())
+            }
+
             // Python try/except (simplified)
             "try_statement" => self.visit_try(node, source),
 
@@ -345,6 +357,13 @@ impl<'a> CfgBuilder<'a> {
     }
 
     fn visit_for(&mut self, node: Node, source: &[u8]) -> Result<()> {
+        if let Some(init) = node
+            .child_by_field_name("initializer")
+            .or_else(|| node.child_by_field_name("range"))
+        {
+            self.visit_statement(init, source)?;
+        }
+
         let header = self.new_block();
         self.cfg
             .add_edge(self.current_block, header, CfgEdgeType::Next);
@@ -466,6 +485,63 @@ impl<'a> CfgBuilder<'a> {
         Ok(())
     }
 
+    fn visit_switch(&mut self, node: Node, source: &[u8]) -> Result<()> {
+        self.add_statement(node, source, StatementKind::Branch)?;
+        let cond_block = self.current_block;
+        let merge = self.new_block();
+        let mut cases = Vec::new();
+        collect_switch_cases(node, &mut cases);
+
+        if cases.is_empty() {
+            if let Some(body) = node.child_by_field_name("body") {
+                self.current_block = cond_block;
+                self.visit_block(body, source)?;
+            }
+            self.current_block = merge;
+            return Ok(());
+        }
+
+        let mut has_default = false;
+        for case in cases {
+            let is_default = matches!(case.kind(), "default_case" | "default_statement");
+            if is_default {
+                has_default = true;
+            }
+
+            let case_block = self.new_block();
+            let edge = if is_default {
+                CfgEdgeType::IfFalse
+            } else {
+                CfgEdgeType::IfTrue
+            };
+            self.cfg.add_edge(cond_block, case_block, edge);
+            self.current_block = case_block;
+
+            if let Some(body) = case.child_by_field_name("body") {
+                self.visit_block(body, source)?;
+            } else {
+                self.visit_block(case, source)?;
+            }
+            self.cfg
+                .add_edge(self.current_block, merge, CfgEdgeType::Next);
+        }
+
+        if !has_default {
+            let default_block = self.new_block();
+            self.cfg
+                .add_edge(cond_block, default_block, CfgEdgeType::IfFalse);
+            self.cfg
+                .add_edge(default_block, merge, CfgEdgeType::Next);
+        }
+
+        self.current_block = merge;
+        Ok(())
+    }
+
+    fn visit_select(&mut self, node: Node, source: &[u8]) -> Result<()> {
+        self.visit_switch(node, source)
+    }
+
     fn visit_try(&mut self, node: Node, source: &[u8]) -> Result<()> {
         let try_block = self.new_block();
         self.cfg
@@ -495,6 +571,25 @@ impl<'a> CfgBuilder<'a> {
         self.cfg.add_edge(try_end, merge, CfgEdgeType::Next);
         self.current_block = merge;
         Ok(())
+    }
+}
+
+fn collect_switch_cases<'a>(node: Node<'a>, cases: &mut Vec<Node<'a>>) {
+    match node.kind() {
+        "expression_case"
+        | "type_case"
+        | "case_clause"
+        | "default_case"
+        | "default_statement"
+        | "communication_case" => cases.push(node),
+        _ => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.is_named() {
+                    collect_switch_cases(child, cases);
+                }
+            }
+        }
     }
 }
 
@@ -627,6 +722,67 @@ func Sum(n int) int {
 }
 "#;
         let cfg = build_cfg_for_function("go", code, "Sum").unwrap();
+        assert!(cfg.has_cycle());
+    }
+
+    #[test]
+    fn test_go_switch_cfg() {
+        let code = r#"
+package demo
+
+func Pick(x int) int {
+    switch x {
+    case 1:
+        return 10
+    case 2:
+        return 20
+    default:
+        return 0
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("go", code, "Pick").unwrap();
+        assert!(cfg.blocks.len() >= 5);
+        let branches = cfg
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == CfgEdgeType::IfTrue)
+            .count();
+        assert!(branches >= 2);
+    }
+
+    #[test]
+    fn test_go_select_cfg() {
+        let code = r#"
+package demo
+
+func Wait(ch chan int, done chan struct{}) int {
+    select {
+    case v := <-ch:
+        return v
+    default:
+        return -1
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("go", code, "Wait").unwrap();
+        assert!(cfg.blocks.len() >= 4);
+    }
+
+    #[test]
+    fn test_go_range_for_cfg() {
+        let code = r#"
+package demo
+
+func Keys(m map[string]int) int {
+    n := 0
+    for k := range m {
+        n += len(k)
+    }
+    return n
+}
+"#;
+        let cfg = build_cfg_for_function("go", code, "Keys").unwrap();
         assert!(cfg.has_cycle());
     }
 

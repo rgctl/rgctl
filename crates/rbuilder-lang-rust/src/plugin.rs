@@ -410,12 +410,34 @@ impl LanguagePlugin for RustPlugin {
 
     fn extract_relations(
         &self,
-        _file_path: &Path,
-        _source: &[u8],
-        _symbols: &[Symbol],
+        file_path: &Path,
+        source: &[u8],
+        symbols: &[Symbol],
     ) -> Result<Vec<Relation>> {
-        // Placeholder - will be implemented after basic symbol extraction works
-        Ok(vec![])
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .map_err(|e| Error::PluginError(format!("Failed to set Rust grammar: {e}")))?;
+
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::ParseError {
+                file: file_path.to_path_buf(),
+                line: 0,
+                message: "Failed to parse Rust source".to_string(),
+            })?;
+
+        let mut relations = Vec::new();
+        walk_calls(
+            tree.root_node(),
+            source,
+            file_path,
+            symbols,
+            RUST_CALL_KINDS,
+            "rust",
+            &mut relations,
+        );
+        Ok(relations)
     }
 
     fn calculate_complexity(
@@ -676,5 +698,26 @@ fn second() {}
         assert_eq!(symbols.len(), 2);
         assert_eq!(symbols[0].location.start_line, 2); // first() on line 2
         assert_eq!(symbols[1].location.start_line, 4); // second() on line 4
+    }
+
+    #[test]
+    fn test_extract_relations_calls() {
+        let source = br#"
+fn caller() {
+    helper();
+}
+
+fn helper() {}
+"#;
+        let plugin = RustPlugin::new().unwrap();
+        let path = Path::new("test.rs");
+        let symbols = plugin.extract_symbols(path, source).unwrap();
+        let relations = plugin.extract_relations(path, source, &symbols).unwrap();
+        assert!(
+            relations
+                .iter()
+                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "helper"),
+            "expected Calls -> helper, got {relations:?}"
+        );
     }
 }

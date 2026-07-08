@@ -69,8 +69,17 @@ fn collect_def_use(
             if let Some(left) = node.child_by_field_name("left") {
                 collect_pattern_defs(left, source, defined);
             }
+            if let Some(init) = node.child_by_field_name("initializer") {
+                collect_def_use(init, source, defined, used, false);
+            }
             if let Some(body) = node.child_by_field_name("body") {
                 collect_def_use(body, source, defined, used, false);
+            }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if matches!(child.kind(), "range_clause" | "for_clause") {
+                    collect_def_use(child, source, defined, used, false);
+                }
             }
         }
 
@@ -81,6 +90,32 @@ fn collect_def_use(
             }
             if let Some(right) = node.child_by_field_name("right") {
                 collect_def_use(right, source, defined, used, false);
+            }
+        }
+        "range_clause" => {
+            if let Some(left) = node.child_by_field_name("left") {
+                collect_pattern_defs(left, source, defined);
+            }
+            if let Some(right) = node.child_by_field_name("right") {
+                collect_def_use(right, source, defined, used, false);
+            }
+        }
+        "expression_list" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.is_named() {
+                    if is_def_target {
+                        collect_pattern_defs(child, source, defined);
+                    } else {
+                        collect_pattern_defs(child, source, defined);
+                        collect_def_use(child, source, defined, used, false);
+                    }
+                }
+            }
+        }
+        "parameter_declaration" => {
+            if let Some(name) = node.child_by_field_name("name") {
+                collect_pattern_defs(name, source, defined);
             }
         }
 
@@ -190,6 +225,14 @@ mod tests {
         parser.parse(source, None).unwrap()
     }
 
+    fn parse_go(source: &str) -> tree_sitter::Tree {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_go::LANGUAGE.into())
+            .unwrap();
+        parser.parse(source, None).unwrap()
+    }
+
     fn find_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
         if node.kind() == kind {
             return Some(node);
@@ -231,5 +274,22 @@ mod tests {
         let uses = extract_used_variables(root, source.as_bytes());
         assert!(uses.contains("x"));
         assert!(uses.contains("y"));
+    }
+
+    #[test]
+    fn test_go_short_var_and_range_def_use() {
+        let source = "package demo\nfunc f(m map[string]int) {\n    x := 1\n    for k, v := range m {\n        use(k, v, x)\n    }\n}\n";
+        let tree = parse_go(source);
+        let assign = find_kind(tree.root_node(), "short_var_declaration").unwrap();
+        let (defs, _uses) = extract_def_use(assign, source.as_bytes());
+        assert!(defs.contains("x"));
+
+        let for_node = find_kind(tree.root_node(), "for_statement").unwrap();
+        let (for_defs, for_uses) = extract_def_use(for_node, source.as_bytes());
+        assert!(
+            for_defs.contains("k") || for_defs.contains("v"),
+            "for defs: {for_defs:?}"
+        );
+        assert!(for_uses.contains("m"));
     }
 }
