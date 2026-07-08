@@ -4,6 +4,7 @@ import { NODE_TYPE_MASK } from "./types";
 import { bundleDataUrl } from "./bundleUrl";
 import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
 import { blastEntryToListItem } from "./functionListUtils";
+import { ViewLegend } from "./ViewLegend";
 
 const DEPTH_DEBOUNCE_MS = 300;
 
@@ -173,7 +174,10 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
     >
       <div class="blast-view d-flex flex-column h-100 min-h-0 gap-3 p-3">
         <div class="d-flex flex-wrap align-items-center gap-3 flex-shrink-0">
-          <div class="flex-grow-1" />
+          <ViewLegend
+            hint="Sidebar meta: impact score · direct callers · impact zone"
+            class="flex-grow-1 border rounded mb-0"
+          />
           <div style={{ minWidth: "12rem" }}>
             <label class="form-label small mb-1" for="blast-depth">
               Caller depth: {depth}

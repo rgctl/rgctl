@@ -6,6 +6,8 @@ import { listPdgVariables } from "./dataflowEngine";
 import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
 import { dataflowEntryToListItem } from "./functionListUtils";
 import { mountSigmaInWrap } from "./sigmaMount";
+import { ViewLegend } from "./ViewLegend";
+import { PDG_EDGE_COLORS, PDG_EDGE_LEGEND, PDG_NODE_LEGEND } from "./viewLegendData";
 import type {
   DataflowGraphPayload,
   DataflowIndexPayload,
@@ -230,7 +232,7 @@ function PdgGraph({ graph }: { graph: DataflowGraphPayload }) {
         const key = `${edge.source}->${edge.target}:${edge.kind}`;
         if (!g.hasEdge(key)) {
           g.addEdgeWithKey(key, edge.source, edge.target, {
-            color: edge.kind === "data" ? "#198754" : "#fd7e14",
+            color: edge.kind === "data" ? PDG_EDGE_COLORS.data : PDG_EDGE_COLORS.control,
             size: edge.kind === "data" ? 2 : 1,
           });
         }
@@ -263,16 +265,8 @@ function PdgGraph({ graph }: { graph: DataflowGraphPayload }) {
           <div ref={containerRef} class="sigma-host" />
         )}
       </div>
-      <div class="border-top py-1 px-3 small d-flex gap-3 flex-shrink-0">
-        <span>
-          <span class="d-inline-block rounded me-1" style={{ width: 10, height: 10, background: "#198754" }} />
-          data
-        </span>
-        <span>
-          <span class="d-inline-block rounded me-1" style={{ width: 10, height: 10, background: "#fd7e14" }} />
-          control
-        </span>
-      </div>
+      <ViewLegend hint="Nodes" items={PDG_NODE_LEGEND} class="border-top-0 border-bottom" />
+      <ViewLegend hint="Edges" items={PDG_EDGE_LEGEND} />
     </div>
   );
 }

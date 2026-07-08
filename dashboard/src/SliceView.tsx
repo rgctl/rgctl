@@ -17,6 +17,8 @@ import { basicSetup } from "codemirror";
 import { bundleDataUrl } from "./bundleUrl";
 import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
 import { shortPath, sliceEntryToListItem } from "./functionListUtils";
+import { ViewLegend } from "./ViewLegend";
+import { SLICE_LEGEND } from "./viewLegendData";
 import type {
   SliceBundlePayload,
   SliceDirection,
@@ -291,6 +293,9 @@ function SourceEditor({
         {filePath && <span class="text-muted fw-normal ms-2">{shortPath(filePath)}</span>}
       </div>
       <div ref={hostRef} class="slice-editor-host flex-grow-1 min-h-0 overflow-auto" />
+      {highlightLines.length > 0 && (
+        <ViewLegend hint="Source highlights" items={SLICE_LEGEND} />
+      )}
     </div>
   );
 }

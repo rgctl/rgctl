@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { bundleDataUrl } from "./bundleUrl";
 import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
 import { taintEntryToListItem } from "./functionListUtils";
+import { ViewLegend } from "./ViewLegend";
+import { TAINT_SEVERITY_LEGEND, TAINT_STATUS_LEGEND } from "./viewLegendData";
 import type {
   TaintBundlePayload,
   TaintFlowView,
@@ -189,6 +191,11 @@ export function TaintView() {
                 </tbody>
               </table>
             </div>
+            <ViewLegend
+              hint="Badges"
+              items={[...TAINT_SEVERITY_LEGEND, ...TAINT_STATUS_LEGEND]}
+              class="mt-2 border rounded"
+            />
           </div>
 
           <div class="col-lg-5">

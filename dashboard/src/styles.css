@@ -645,7 +645,36 @@ body {
   overflow-y: auto;
 }
 
-.graph-legend {
+.graph-legend,
+.view-legend {
+  flex-shrink: 0;
+}
+
+.view-legend:not(.border-top) {
+  border-top: none;
+}
+
+.view-legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.view-legend-square {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.view-legend-line {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  border-radius: 1px;
   flex-shrink: 0;
 }
 

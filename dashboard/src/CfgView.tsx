@@ -6,15 +6,13 @@ import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
 import { cfgEntryToListItem, shortPath } from "./functionListUtils";
 import { mountSigmaInWrap } from "./sigmaMount";
 import type { CfgDetailPayload, CfgIndexPayload } from "./types";
-
-const EDGE_COLORS: Record<string, string> = {
-  next: "#6c757d",
-  if_true: "#198754",
-  if_false: "#dc3545",
-  jump: "#fd7e14",
-  return: "#0d6efd",
-  exception: "#6f42c1",
-};
+import { ViewLegend } from "./ViewLegend";
+import {
+  CFG_EDGE_COLORS,
+  CFG_EDGE_LEGEND,
+  CFG_NODE_COLORS,
+  CFG_NODE_LEGEND,
+} from "./viewLegendData";
 
 export function CfgView() {
   const [index, setIndex] = useState<CfgIndexPayload | null>(null);
@@ -155,7 +153,11 @@ function CfgGraph({ detail }: { detail: CfgDetailPayload }) {
           x: positions[block.id]?.x ?? 0,
           y: positions[block.id]?.y ?? 0,
           size: isEntry || isExit ? 14 : 10,
-          color: isEntry ? "#198754" : isExit ? "#dc3545" : "#0d6efd",
+          color: isEntry
+            ? CFG_NODE_COLORS.entry
+            : isExit
+              ? CFG_NODE_COLORS.exit
+              : CFG_NODE_COLORS.block,
         });
       }
 
@@ -163,7 +165,7 @@ function CfgGraph({ detail }: { detail: CfgDetailPayload }) {
         const key = `${edge.from}->${edge.to}:${edge.edge_type}`;
         if (!g.hasEdge(key)) {
           g.addEdgeWithKey(key, String(edge.from), String(edge.to), {
-            color: EDGE_COLORS[edge.edge_type] ?? "#adb5bd",
+            color: CFG_EDGE_COLORS[edge.edge_type] ?? "#adb5bd",
             size: 2,
           });
         }
@@ -199,22 +201,12 @@ function CfgGraph({ detail }: { detail: CfgDetailPayload }) {
       <div ref={wrapRef} class="cfg-graph-wrap analysis-graph-canvas-wrap flex-grow-1">
         <div ref={containerRef} class="sigma-host" />
       </div>
-      <div class="border-top py-1 px-3 small d-flex flex-wrap gap-2 flex-shrink-0">
-        {Object.entries(EDGE_COLORS).map(([k, c]) => (
-          <span key={k} class="d-inline-flex align-items-center gap-1">
-            <span
-              style={{
-                width: "10px",
-                height: "10px",
-                background: c,
-                display: "inline-block",
-                borderRadius: "2px",
-              }}
-            />
-            {k.replace("_", " ")}
-          </span>
-        ))}
-      </div>
+      <ViewLegend
+        hint="Nodes"
+        items={CFG_NODE_LEGEND}
+        class="border-top-0 border-bottom"
+      />
+      <ViewLegend hint="Edges" items={CFG_EDGE_LEGEND} />
     </div>
   );
 }
