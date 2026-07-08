@@ -248,6 +248,8 @@ sysinfo = "0.30"
 pulldown-cmark = "0.9"
 bincode = "1.3"
 ignore = "0.4"
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -255,6 +257,7 @@ proptest = "1"
 tempfile = "3"
 pretty_assertions = "1"
 insta = "1"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
 rbuilder-dashboard = { workspace = true }
 rbuilder-lang-ansible = { workspace = true }
 rbuilder-lang-chef = { workspace = true }
@@ -301,6 +304,10 @@ path = "tests/cli_output/subprocess_golden_path.rs"
 [[test]]
 name = "all_commands_sanity"
 path = "tests/cli_output/all_commands_sanity.rs"
+
+[[test]]
+name = "http_serve"
+path = "tests/http_serve.rs"
 
 [[test]]
 name = "dashboard_bundle"
