@@ -162,6 +162,8 @@ fn helper() -> i32 { 42 }
             archive.insert(CfgPdgRecord {
                 function_id: id,
                 code_hash: hash_code(source),
+                function_name: String::new(),
+                file_path: None,
                 cfg,
                 pdg: pdg.clone(),
             });

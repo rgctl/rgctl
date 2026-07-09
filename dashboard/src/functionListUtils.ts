@@ -21,7 +21,6 @@ export const FUNCTION_METRICS_BATCH_SIZE = 500;
 export type FunctionSortKey =
   | "name"
   | "node_type_name"
-  | "complexity"
   | "pagerank"
   | "betweenness"
   | "harmonic"
@@ -32,8 +31,6 @@ export type SortDirection = "asc" | "desc";
 export const FUNCTION_COLUMN_TOOLTIPS: Record<FunctionSortKey, string> = {
   name: "Symbol name from the indexed graph.",
   node_type_name: "Node kind (Function, Class, Module, etc.).",
-  complexity:
-    "Cyclomatic complexity from static analysis. Higher means more branching paths through the function.",
   pagerank:
     "PageRank (PR): global influence on the behavioral call graph. Scores are normalized fractions that sum to ~1 across all nodes, so values look small (e.g. 2.46e-4 = 0.000246). Rank order matters more than the absolute number.",
   betweenness:
@@ -77,10 +74,6 @@ export function functionCellTooltip(column: FunctionSortKey, entry: NodeListEntr
     }
     case "node_type_name":
       return `${base}\nThis row: ${entry.node_type_name}`;
-    case "complexity":
-      return entry.complexity > 0
-        ? `${base}\nValue: ${entry.complexity.toFixed(2)}`
-        : `${base}\n— not computed or zero`;
     case "pagerank": {
       const v = formatCentralityTooltip(entry.pagerank);
       return v ? `${base}\nValue: ${v}` : `${base}\n— no score`;
@@ -126,7 +119,6 @@ export function sortNodeEntries(
       case "node_type_name":
         cmp = a[sortKey].localeCompare(b[sortKey]);
         break;
-      case "complexity":
       case "pagerank":
       case "betweenness":
       case "harmonic":
@@ -140,7 +132,7 @@ export function sortNodeEntries(
             ? metricSortValue(b.blast_score)
             : metricSortValue(b[sortKey]);
         cmp = av - bv;
-        if (cmp === 0 && sortKey !== "complexity") {
+        if (cmp === 0) {
           cmp = a.name.localeCompare(b.name);
         }
         break;
@@ -197,20 +189,27 @@ export function cfgEntryToListItem(entry: CfgFunctionEntry): FunctionListItem {
 
 export function dataflowEntryToListItem(entry: DataflowFunctionEntry): FunctionListItem {
   const blocks = entry.block_count ?? 0;
+  const metaParts: string[] = [];
+  if (entry.file_path) metaParts.push(fileLabel(entry.file_path) ?? entry.file_path);
+  metaParts.push(`${entry.data_edges} data flow${entry.data_edges === 1 ? "" : "s"}`);
+  metaParts.push(`${blocks} block${blocks === 1 ? "" : "s"}`);
   return {
     id: entry.function_id,
     name: entry.name,
     filePath: entry.file_path,
-    meta: `${entry.data_edges} data flow${entry.data_edges === 1 ? "" : "s"} · ${blocks} block${blocks === 1 ? "" : "s"}`,
+    meta: metaParts.join(" · "),
   };
 }
 
 export function sliceEntryToListItem(entry: SliceFunctionEntry): FunctionListItem {
+  const metaParts: string[] = [];
+  if (entry.file_path) metaParts.push(fileLabel(entry.file_path) ?? entry.file_path);
+  metaParts.push(`${entry.pdg_nodes} node${entry.pdg_nodes === 1 ? "" : "s"}`);
   return {
     id: entry.function_id,
     name: entry.name,
     filePath: entry.file_path,
-    meta: `${entry.pdg_nodes} node${entry.pdg_nodes === 1 ? "" : "s"}`,
+    meta: metaParts.join(" · "),
   };
 }
 
@@ -228,7 +227,6 @@ export function taintEntryToListItem(entry: TaintFunctionEntry): FunctionListIte
 export function nodeEntryToListItem(entry: NodeListEntry): FunctionListItem {
   const metaParts: string[] = [];
   if (entry.file_path) metaParts.push(fileLabel(entry.file_path) ?? entry.file_path);
-  metaParts.push(`cx ${entry.complexity.toFixed(1)}`);
   if (entry.pagerank !== undefined && entry.pagerank > 0) {
     metaParts.push(`pr ${entry.pagerank.toFixed(4)}`);
   }
@@ -253,7 +251,6 @@ export function blastEntryToListItem(
   } else if (entry.blast_score > 0) {
     metaParts.push(`score ${entry.blast_score.toFixed(0)}`);
   }
-  if (entry.complexity > 0) metaParts.push(`cx ${entry.complexity.toFixed(1)}`);
   return {
     id: String(entry.index),
     name: entry.name,

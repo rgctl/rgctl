@@ -490,6 +490,8 @@ pub(crate) fn run_full_analysis(
                     cfg_archive.insert(CfgPdgRecord {
                         function_id: func_node.id,
                         code_hash: hash_code(&source),
+                        function_name: func_node.name.clone(),
+                        file_path: Some(file_path.clone()),
                         cfg: cfg.clone(),
                         pdg: pdg.clone(),
                     });

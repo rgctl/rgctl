@@ -29,6 +29,12 @@ pub struct CfgPdgRecord {
     pub function_id: Uuid,
     /// BLAKE3 of source body at index time.
     pub code_hash: String,
+    /// Function symbol name at index time (survives graph re-index).
+    #[serde(default)]
+    pub function_name: String,
+    /// Source file path at index time.
+    #[serde(default)]
+    pub file_path: Option<String>,
     /// Control-flow graph.
     pub cfg: ControlFlowGraph,
     /// Program dependence graph.
@@ -164,6 +170,8 @@ mod tests {
         archive.insert(CfgPdgRecord {
             function_id: id,
             code_hash: hash_code(code),
+            function_name: "add".into(),
+            file_path: None,
             cfg,
             pdg,
         });

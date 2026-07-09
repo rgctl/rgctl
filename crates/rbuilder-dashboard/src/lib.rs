@@ -5,6 +5,7 @@ mod bundle;
 mod cfg_export;
 mod communities;
 mod dataflow_export;
+mod function_meta;
 mod function_metrics_export;
 mod manifest;
 mod metagraph;

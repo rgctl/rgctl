@@ -66,7 +66,6 @@ export function App() {
         <StatCard label="Total Nodes" value={manifest?.graph.node_count ?? "—"} />
         <StatCard label="Total Edges" value={manifest?.graph.edge_count ?? "—"} />
         <StatCard label="Functions" value={m?.function_count ?? "—"} />
-        <StatCard label="Avg Complexity" value={m ? m.avg_complexity.toFixed(1) : "—"} />
         <StatCard label="Classes" value={m?.class_count ?? "—"} />
         <StatCard label="Call Edges" value={m?.calls_count ?? "—"} />
         <StatCard label="High Blast Radius" value={m?.high_blast_radius_count ?? "—"} />

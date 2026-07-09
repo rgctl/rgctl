@@ -31,7 +31,6 @@ interface ColumnDef {
 const COLUMNS: ColumnDef[] = [
   { key: "name", label: "Name", className: "fn-name" },
   { key: "node_type_name", label: "Type" },
-  { key: "complexity", label: "Cx" },
   { key: "pagerank", label: "PR" },
   { key: "betweenness", label: "BC" },
   { key: "harmonic", label: "Harm" },
@@ -46,7 +45,7 @@ function nextSort(
   if (currentKey === clicked) {
     return { key: clicked, dir: currentDir === "desc" ? "asc" : "desc" };
   }
-  const defaultDesc: FunctionSortKey[] = ["pagerank", "betweenness", "harmonic", "blast_score", "complexity"];
+  const defaultDesc: FunctionSortKey[] = ["pagerank", "betweenness", "harmonic", "blast_score"];
   return { key: clicked, dir: defaultDesc.includes(clicked) ? "desc" : "asc" };
 }
 
@@ -186,13 +185,13 @@ export function FunctionsView({ wasmReady, functionCount, listNodes }: Functions
           <tbody>
             {loading && rows.length === 0 ? (
               <tr>
-                <td colSpan={7} class="text-muted small">
+                <td colSpan={6} class="text-muted small">
                   Loading…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={7} class="text-muted small">
+                <td colSpan={6} class="text-muted small">
                   {search.trim() ? "No nodes match your search." : "No nodes match this filter."}
                 </td>
               </tr>
@@ -204,9 +203,6 @@ export function FunctionsView({ wasmReady, functionCount, listNodes }: Functions
                   </td>
                   <td class="small text-muted" title={functionCellTooltip("node_type_name", entry)}>
                     {entry.node_type_name}
-                  </td>
-                  <td class="small text-muted" title={functionCellTooltip("complexity", entry)}>
-                    {entry.complexity > 0 ? entry.complexity.toFixed(1) : "—"}
                   </td>
                   <td class="small text-muted" title={functionCellTooltip("pagerank", entry)}>
                     {formatCentrality(entry.pagerank)}

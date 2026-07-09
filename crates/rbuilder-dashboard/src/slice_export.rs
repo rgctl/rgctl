@@ -1,10 +1,10 @@
 //! Export PDG + source bundles for dashboard slicing (Phase 5).
 
+use crate::function_meta::{function_meta_map, resolve_function_meta};
 use rbuilder_analysis::cfg::ControlFlowGraph;
 use rbuilder_analysis::cfg_pdg_archive::CfgPdgArchive;
 use rbuilder_analysis::pdg::{PdgNodeId, ProgramDependenceGraph};
 use rbuilder_graph::backend::MemoryBackend;
-use rbuilder_graph::schema::NodeType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -96,7 +96,7 @@ pub fn export_slice_bundle(
     }
 
     let archive = CfgPdgArchive::load_from_path(&archive_path).map_err(|e| e.to_string())?;
-    let names = function_names(backend);
+    let meta_map = function_meta_map(repo_root, backend);
     let detail_dir = out_dir.join(SLICE_DETAIL_DIR);
     if detail_dir.exists() {
         fs::remove_dir_all(&detail_dir).map_err(|e| e.to_string())?;
@@ -107,10 +107,14 @@ pub fn export_slice_bundle(
     let mut source_cache: HashMap<PathBuf, String> = HashMap::new();
 
     for (function_id, record) in &archive.records {
-        let (name, file_path) = names
-            .get(function_id)
-            .cloned()
-            .unwrap_or_else(|| (function_id.to_string(), None));
+        let (name, file_path) = resolve_function_meta(
+            function_id,
+            &record.function_name,
+            &record.file_path,
+            repo_root,
+            backend,
+            &meta_map,
+        );
 
         let source = file_path
             .as_ref()
@@ -153,16 +157,6 @@ pub fn export_slice_bundle(
         available: true,
         function_count: index.function_count,
     })
-}
-
-fn function_names(backend: &MemoryBackend) -> HashMap<Uuid, (String, Option<String>)> {
-    let mut out = HashMap::new();
-    let _ = backend.for_each_node(|n| {
-        if n.node_type == NodeType::Function {
-            out.insert(n.id, (n.name.clone(), n.file_path.clone()));
-        }
-    });
-    out
 }
 
 fn read_source_cached(path: &str, cache: &mut HashMap<PathBuf, String>) -> Option<String> {

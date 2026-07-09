@@ -36,20 +36,20 @@ export const TAB_DOCS: Record<TabId, TabDocContent> = {
   },
   functions: {
     title: "Function inventory",
-    goal: "Browse and filter indexed nodes — functions, classes, and other symbols — with complexity and blast scores.",
+    goal: "Browse and filter indexed nodes — functions, classes, and other symbols — with centrality and blast scores.",
     description:
-      "Like a structural inventory of the graph: see names, types, cyclomatic complexity, PageRank, betweenness, harmonic centrality, and blast-radius scores from discover. Use this to find hotspots before diving into CFG, blast radius, or slicing views.",
+      "Like a structural inventory of the graph: see names, types, PageRank, betweenness, harmonic centrality, and blast-radius scores from discover. Use this to find hotspots before diving into CFG, blast radius, or slicing views.",
     benefits: [
       "Fast orientation in unfamiliar repos",
       "Filter by node type to focus on functions or classes",
-      "Spot high-complexity or high-impact symbols at a glance",
+      "Spot high-centrality or high-impact symbols at a glance",
     ],
     usage: [
       "Choose a node-type filter at the top.",
       "Search by function name or file path.",
       "Click column headers to sort (PR, BC, Harm, Blast, etc.). Hover headers and cells for metric explanations.",
       "Page through results with Prev / Next (30 per page).",
-      "Use blast and complexity columns to prioritize reading order.",
+      "Use blast and centrality columns to prioritize reading order.",
     ],
   },
   cfg: {

@@ -23,7 +23,7 @@ await page.waitForSelector(".functions-view table tbody tr", { timeout: 15000 })
 
 const defaultRows = await tableRows(page);
 const topName = defaultRows[0]?.[0] ?? "";
-const topPr = parsePr(defaultRows[0]?.[3] ?? "0");
+const topPr = parsePr(defaultRows[0]?.[2] ?? "0");
 
 await page.getByPlaceholder("Search by name or file…").fill("parseFile");
 await page.waitForTimeout(400);
@@ -64,7 +64,7 @@ const report = {
   defaultTopPr: topPr,
   defaultSortByPr: topPr > 0.005,
   searchFoundParseFile: Boolean(searchHit),
-  parseFilePr: searchHit?.[3],
+  parseFilePr: searchHit?.[2],
   nameSortAscending:
     nameSorted.length >= 2 ? nameSorted[0][0].localeCompare(nameSorted[1][0]) <= 0 : true,
   prHeaderTooltip: await prHelp.locator(".functions-col-help-popup").textContent(),
@@ -80,7 +80,7 @@ const ok =
   report.searchFoundParseFile &&
   report.nameSortAscending &&
   (report.prHeaderTooltip?.includes("normalized") ?? false) &&
-  report.infoIcons === 7 &&
+  report.infoIcons === 6 &&
   report.overlapsSearch === false &&
   report.popupBelowSearch === true;
 
