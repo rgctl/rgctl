@@ -89,7 +89,7 @@ pub fn export_function_metrics(
         });
     }
 
-    rows.sort_by(|a, b| a.index.cmp(&b.index));
+    rows.sort_by_key(|a| a.index);
 
     let payload = FunctionMetricsPayload {
         schema_version: 2,

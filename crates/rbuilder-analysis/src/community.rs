@@ -36,7 +36,10 @@ pub enum HubStripPolicy {
     /// No hub stripping.
     Off,
     /// Freeze nodes with degree > μ + kσ on the community edge projection.
-    Statistical { k: f64 },
+    Statistical {
+        /// Standard-deviation multiplier for the hub cutoff.
+        k: f64,
+    },
     /// Freeze the top `p` fraction of nodes by degree (0.0–1.0).
     Percentile(f64),
 }

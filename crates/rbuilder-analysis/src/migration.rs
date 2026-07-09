@@ -1,6 +1,6 @@
-//! Community-level migration graph and scheduling planner.
+//! Package-level migration graph and scheduling planner.
 //!
-//! Builds a macro graph of Louvain communities connected by call edges, aggregates
+//! Builds a macro graph of packages/modules connected by call edges, aggregates
 //! centrality and blast-radius metrics, and produces a dependency-aware roadmap using
 //! Kahn topological scheduling with priority tie-breaking.
 
@@ -12,7 +12,9 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::cmp::Ordering;
 use uuid::Uuid;
 
+/// JSON schema version for [`MigrationGraphPayload`].
 pub const MIGRATION_GRAPH_SCHEMA_VERSION: u32 = 2;
+/// JSON schema version for [`MigrationPlanPayload`].
 pub const MIGRATION_PLAN_SCHEMA_VERSION: u32 = 2;
 
 /// Cap macro nodes (matches dashboard metagraph); tail merges into `(other)`.
@@ -37,6 +39,7 @@ impl MigrationOrderMode {
         }
     }
 
+    /// Stable string name for JSON export (`scheduled` or `priority`).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Scheduled => "scheduled",
@@ -94,6 +97,7 @@ impl MigrationWeights {
         }
     }
 
+    /// Human-readable label for a preset id (falls back to Hybrid Default).
     pub fn preset_label(preset: &str) -> &'static str {
         match preset {
             "foundational_first" => "Foundational First",
@@ -104,67 +108,93 @@ impl MigrationWeights {
     }
 }
 
-/// Per-community aggregated metrics for the migration macro graph.
+/// Per-package aggregated metrics for the migration macro graph.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MigrationCommunityNode {
+    /// Stable macro node id (0..n-1).
     pub id: usize,
+    /// Package / module label derived from member file paths.
     pub label: String,
+    /// Number of indexed functions in this package.
     pub member_count: u32,
+    /// Mean PageRank of member functions.
     pub avg_pagerank: f64,
+    /// Mean harmonic centrality of member functions.
     pub avg_harmonic: f64,
+    /// Mean betweenness centrality of member functions.
     pub avg_betweenness: f64,
+    /// Maximum blast radius among member functions.
     pub max_blast: f64,
     /// Majority Louvain / label-propagation community of member functions (for layout clustering).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub louvain_community_id: Option<usize>,
 }
 
-/// Directed inter-community call edge (caller → callee).
+/// Directed inter-package call edge (caller macro node → callee macro node).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MigrationCommunityEdge {
+    /// Caller package macro node id.
     pub source: usize,
+    /// Callee package macro node id.
     pub target: usize,
+    /// Aggregated call count between the two packages.
     pub weight: u32,
+    /// Edge kind (currently always `calls`).
     pub kind: String,
 }
 
-/// Community macro graph exported to the dashboard bundle.
+/// Package macro graph exported to the dashboard bundle.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MigrationGraphPayload {
+    /// Payload schema version.
     pub schema_version: u32,
     /// `package_macro` — one node per package/module (not raw Louvain community).
     pub mode: String,
+    /// Modularity of the underlying label-propagation partition.
     pub modularity: f64,
+    /// Macro nodes (packages/modules).
     pub communities: Vec<MigrationCommunityNode>,
+    /// Inter-package call edges.
     pub edges: Vec<MigrationCommunityEdge>,
 }
 
-/// One community in a migration roadmap (both schedule and priority rank).
+/// One package in a migration roadmap (both schedule and priority rank).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MigrationPlanStep {
     /// Display row number in the current `order_mode` sort (1..n).
     pub step: u32,
+    /// Macro node id (package).
     pub community_id: usize,
+    /// Package / module label.
     pub label: String,
+    /// Weighted multi-objective priority score.
     pub priority_score: f64,
     /// Position in dependency-aware topological schedule (1..n).
     pub schedule_step: u32,
     /// Position when sorted by priority score descending (1..n).
     pub priority_rank: u32,
+    /// Mean PageRank of member functions.
     pub avg_pagerank: f64,
+    /// Mean harmonic centrality of member functions.
     pub avg_harmonic: f64,
+    /// Maximum blast radius among member functions.
     pub max_blast: f64,
 }
 
-/// Full migration plan (CLI / dashboard).
+/// Full migration plan (CLI / dashboard export).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MigrationPlanPayload {
+    /// Payload schema version.
     pub schema_version: u32,
+    /// Preset id (e.g. `hybrid_default`).
     pub preset: String,
+    /// Human-readable preset name.
     pub preset_label: String,
+    /// α/β/γ weights used for scoring.
     pub weights: MigrationWeights,
     /// Controls `steps` row order: `scheduled` or `priority`.
     pub order_mode: String,
+    /// Ordered roadmap rows.
     pub steps: Vec<MigrationPlanStep>,
 }
 
@@ -580,7 +610,6 @@ mod tests {
     use crate::results::AnalysisResults;
     use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
     use rbuilder_graph::schema::{Edge, EdgeType, Node, NodeType};
-    use uuid::Uuid;
 
     fn build_fixture_graph() -> (MemoryBackend, AnalysisResults) {
         let mut na = Node::new(NodeType::Function, "svc_a".to_string());
