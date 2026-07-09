@@ -14,6 +14,7 @@ export interface MigrationCommunityNode {
   avg_harmonic: number;
   avg_betweenness: number;
   max_blast: number;
+  louvain_community_id?: number | null;
 }
 
 export interface MigrationCommunityEdge {
@@ -25,6 +26,7 @@ export interface MigrationCommunityEdge {
 
 export interface MigrationGraphPayload {
   schema_version: number;
+  mode?: string;
   modularity: number;
   communities: MigrationCommunityNode[];
   edges: MigrationCommunityEdge[];

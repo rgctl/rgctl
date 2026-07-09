@@ -48,7 +48,8 @@ describe("communityPriorityScores", () => {
 
 describe("computeMigrationPlan", () => {
   const graph: MigrationGraphPayload = {
-    schema_version: 1,
+    schema_version: 2,
+    mode: "package_macro",
     modularity: 0.5,
     communities: [
       {

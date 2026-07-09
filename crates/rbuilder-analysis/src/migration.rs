@@ -12,8 +12,11 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::cmp::Ordering;
 use uuid::Uuid;
 
-pub const MIGRATION_GRAPH_SCHEMA_VERSION: u32 = 1;
+pub const MIGRATION_GRAPH_SCHEMA_VERSION: u32 = 2;
 pub const MIGRATION_PLAN_SCHEMA_VERSION: u32 = 2;
+
+/// Cap macro nodes (matches dashboard metagraph); tail merges into `(other)`.
+pub const MAX_MIGRATION_MACRO_NODES: usize = 256;
 
 /// How the exported `steps` array is sorted (each row always carries both ranks).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +114,9 @@ pub struct MigrationCommunityNode {
     pub avg_harmonic: f64,
     pub avg_betweenness: f64,
     pub max_blast: f64,
+    /// Majority Louvain / label-propagation community of member functions (for layout clustering).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub louvain_community_id: Option<usize>,
 }
 
 /// Directed inter-community call edge (caller → callee).
@@ -126,6 +132,8 @@ pub struct MigrationCommunityEdge {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MigrationGraphPayload {
     pub schema_version: u32,
+    /// `package_macro` — one node per package/module (not raw Louvain community).
+    pub mode: String,
     pub modularity: f64,
     pub communities: Vec<MigrationCommunityNode>,
     pub edges: Vec<MigrationCommunityEdge>,
@@ -161,25 +169,56 @@ pub struct MigrationPlanPayload {
 }
 
 #[derive(Default)]
-struct CommunityAgg {
+struct MacroAgg {
+    label: String,
     member_count: u32,
     pagerank_sum: f64,
     harmonic_sum: f64,
     betweenness_sum: f64,
     max_blast: f64,
+    louvain_votes: HashMap<usize, u32>,
 }
 
-/// Build the community-level migration graph from indexed analysis results.
+/// Derive a stable package / module label from a source file path.
+pub fn package_label(file_path: &str) -> String {
+    let path = file_path.replace('\\', "/");
+    if let Some(idx) = path.find("/java/") {
+        let after = &path[idx + 6..];
+        if let Some(parent) = std::path::Path::new(after).parent() {
+            let pkg = parent.to_string_lossy().replace('/', ".");
+            if !pkg.is_empty() {
+                return pkg;
+            }
+        }
+    }
+    if let Some(idx) = path.find("/src/") {
+        let after = &path[idx + 5..];
+        if let Some(parent) = std::path::Path::new(after).parent() {
+            let pkg = parent.to_string_lossy().replace('/', ".");
+            if !pkg.is_empty() {
+                return pkg;
+            }
+        }
+    }
+    std::path::Path::new(&path)
+        .parent()
+        .map(|p| p.to_string_lossy().replace('/', "."))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "root".into())
+}
+
+/// Build the package-level migration macro graph from indexed analysis results.
 pub fn build_migration_graph(
     backend: &MemoryBackend,
     results: &AnalysisResults,
 ) -> Option<MigrationGraphPayload> {
-    let community_table = results.community.as_ref()?;
+    let community_table = results.community.as_ref();
     let centrality = results.centrality.as_ref();
     let blast = results.blast_radius.as_ref();
+    let modularity = community_table.map(|c| c.modularity).unwrap_or(0.0);
 
-    let mut agg: HashMap<usize, CommunityAgg> = HashMap::new();
-    let mut uuid_to_community: HashMap<Uuid, usize> = HashMap::new();
+    let mut agg: HashMap<String, MacroAgg> = HashMap::new();
+    let mut uuid_to_pkg: HashMap<Uuid, usize> = HashMap::new();
 
     let _ = backend.for_each_node(|n| {
         if !matches!(n.node_type, NodeType::Function) {
@@ -188,11 +227,11 @@ pub fn build_migration_graph(
         let Some(compact_id) = results.get_compact_id(n.id) else {
             return;
         };
-        let Some(cid) = community_table.get(compact_id) else {
-            return;
-        };
-        uuid_to_community.insert(n.id, cid);
-        let entry = agg.entry(cid).or_default();
+        let label = package_label(n.file_path.as_deref().unwrap_or(""));
+        let entry = agg.entry(label.clone()).or_insert_with(|| MacroAgg {
+            label,
+            ..Default::default()
+        });
         entry.member_count += 1;
 
         if let Some(c) = centrality {
@@ -213,45 +252,83 @@ pub fn build_migration_graph(
                 entry.max_blast = entry.max_blast.max(b.scores[idx] as f64);
             }
         }
+        if let Some(table) = community_table {
+            if let Some(cid) = table.get(compact_id) {
+                *entry.louvain_votes.entry(cid).or_insert(0) += 1;
+            }
+        }
     });
 
     if agg.is_empty() {
         return None;
     }
 
+    let mut ranked: Vec<MacroAgg> = agg.into_values().collect();
+    ranked.sort_by_key(|a| std::cmp::Reverse(a.member_count));
+
+    let tail = if ranked.len() > MAX_MIGRATION_MACRO_NODES {
+        ranked.split_off(MAX_MIGRATION_MACRO_NODES - 1)
+    } else {
+        vec![]
+    };
+    let top = ranked;
+
+    let mut communities: Vec<MigrationCommunityNode> = Vec::new();
+    let mut label_to_id: HashMap<String, usize> = HashMap::new();
+
+    for (idx, bucket) in top.into_iter().enumerate() {
+        label_to_id.insert(bucket.label.clone(), idx);
+        communities.push(macro_to_node(idx, bucket));
+    }
+
+    if !tail.is_empty() {
+        let id = communities.len();
+        let mut merged = MacroAgg {
+            label: "(other)".into(),
+            ..Default::default()
+        };
+        for b in tail {
+            merged.member_count += b.member_count;
+            merged.pagerank_sum += b.pagerank_sum;
+            merged.harmonic_sum += b.harmonic_sum;
+            merged.betweenness_sum += b.betweenness_sum;
+            merged.max_blast = merged.max_blast.max(b.max_blast);
+            for (cid, votes) in b.louvain_votes {
+                *merged.louvain_votes.entry(cid).or_insert(0) += votes;
+            }
+        }
+        label_to_id.insert(merged.label.clone(), id);
+        communities.push(macro_to_node(id, merged));
+    }
+
+    let _ = backend.for_each_node(|n| {
+        if !matches!(n.node_type, NodeType::Function) {
+            return;
+        }
+        let label = package_label(n.file_path.as_deref().unwrap_or(""));
+        let pkg_id = *label_to_id
+            .get(&label)
+            .or_else(|| label_to_id.get("(other)"))
+            .unwrap_or(&0);
+        uuid_to_pkg.insert(n.id, pkg_id);
+    });
+
     let mut edge_weights: HashMap<(usize, usize), u32> = HashMap::new();
     let _ = backend.for_each_edge(|e| {
         if e.edge_type != EdgeType::Calls {
             return;
         }
-        let Some(&from_c) = uuid_to_community.get(&e.from) else {
+        let Some(&from_p) = uuid_to_pkg.get(&e.from) else {
             return;
         };
-        let Some(&to_c) = uuid_to_community.get(&e.to) else {
+        let Some(&to_p) = uuid_to_pkg.get(&e.to) else {
             return;
         };
-        if from_c == to_c {
+        if from_p == to_p {
             return;
         }
-        *edge_weights.entry((from_c, to_c)).or_insert(0) += 1;
+        *edge_weights.entry((from_p, to_p)).or_insert(0) += 1;
     });
-
-    let mut communities: Vec<MigrationCommunityNode> = agg
-        .into_iter()
-        .map(|(id, a)| {
-            let count = a.member_count.max(1) as f64;
-            MigrationCommunityNode {
-                id,
-                label: format!("Community {id}"),
-                member_count: a.member_count,
-                avg_pagerank: a.pagerank_sum / count,
-                avg_harmonic: a.harmonic_sum / count,
-                avg_betweenness: a.betweenness_sum / count,
-                max_blast: a.max_blast,
-            }
-        })
-        .collect();
-    communities.sort_by_key(|c| c.id);
 
     let edges: Vec<MigrationCommunityEdge> = edge_weights
         .into_iter()
@@ -265,10 +342,30 @@ pub fn build_migration_graph(
 
     Some(MigrationGraphPayload {
         schema_version: MIGRATION_GRAPH_SCHEMA_VERSION,
-        modularity: community_table.modularity,
+        mode: "package_macro".into(),
+        modularity,
         communities,
         edges,
     })
+}
+
+fn macro_to_node(id: usize, bucket: MacroAgg) -> MigrationCommunityNode {
+    let count = bucket.member_count.max(1) as f64;
+    let louvain_community_id = bucket
+        .louvain_votes
+        .into_iter()
+        .max_by_key(|(_, votes)| *votes)
+        .map(|(cid, _)| cid);
+    MigrationCommunityNode {
+        id,
+        label: bucket.label,
+        member_count: bucket.member_count,
+        avg_pagerank: bucket.pagerank_sum / count,
+        avg_harmonic: bucket.harmonic_sum / count,
+        avg_betweenness: bucket.betweenness_sum / count,
+        max_blast: bucket.max_blast,
+        louvain_community_id,
+    }
 }
 
 /// Compute a migration roadmap from a community graph and strategy weights.
@@ -486,9 +583,12 @@ mod tests {
     use uuid::Uuid;
 
     fn build_fixture_graph() -> (MemoryBackend, AnalysisResults) {
-        let na = Node::new(NodeType::Function, "svc_a".to_string());
-        let nb = Node::new(NodeType::Function, "svc_b".to_string());
-        let nc = Node::new(NodeType::Function, "svc_c".to_string());
+        let mut na = Node::new(NodeType::Function, "svc_a".to_string());
+        na.file_path = Some("src/main/java/com/foo/a/A.java".into());
+        let mut nb = Node::new(NodeType::Function, "svc_b".to_string());
+        nb.file_path = Some("src/main/java/com/foo/b/B.java".into());
+        let mut nc = Node::new(NodeType::Function, "svc_c".to_string());
+        nc.file_path = Some("src/main/java/com/foo/b/C.java".into());
         let a = na.id;
         let b = nb.id;
         let c = nc.id;
@@ -527,16 +627,29 @@ mod tests {
     fn build_migration_graph_aggregates_and_edges() {
         let (backend, results) = build_fixture_graph();
         let graph = build_migration_graph(&backend, &results).expect("graph");
+        assert_eq!(graph.mode, "package_macro");
         assert_eq!(graph.communities.len(), 2);
         assert_eq!(graph.edges.len(), 1);
-        assert_eq!(graph.edges[0].source, 0);
-        assert_eq!(graph.edges[0].target, 1);
 
-        let c0 = graph.communities.iter().find(|c| c.id == 0).unwrap();
-        let c1 = graph.communities.iter().find(|c| c.id == 1).unwrap();
-        assert_eq!(c0.member_count, 1);
-        assert_eq!(c1.member_count, 2);
-        assert!((c1.max_blast - 80.0).abs() < f64::EPSILON);
+        let pkg_b = graph.communities.iter().find(|c| c.label == "com.foo.b").unwrap();
+        let pkg_a = graph.communities.iter().find(|c| c.label == "com.foo.a").unwrap();
+        assert_eq!(pkg_a.member_count, 1);
+        assert_eq!(pkg_b.member_count, 2);
+        assert!((pkg_b.max_blast - 80.0).abs() < f64::EPSILON);
+        assert_eq!(graph.edges[0].source, pkg_a.id);
+        assert_eq!(graph.edges[0].target, pkg_b.id);
+    }
+
+    #[test]
+    fn package_label_java_and_rust() {
+        assert_eq!(
+            package_label("src/main/java/com/example/foo/Bar.java"),
+            "com.example.foo"
+        );
+        assert_eq!(
+            package_label("src/graph/detection/mod.rs"),
+            "src.graph.detection"
+        );
     }
 
     #[test]
@@ -550,9 +663,19 @@ mod tests {
             MigrationOrderMode::Scheduled,
         );
         assert_eq!(plan.steps.len(), 2);
-        assert_eq!(plan.steps[0].community_id, 1);
+        let callee = graph
+            .communities
+            .iter()
+            .find(|c| c.label == "com.foo.b")
+            .unwrap();
+        let caller = graph
+            .communities
+            .iter()
+            .find(|c| c.label == "com.foo.a")
+            .unwrap();
+        assert_eq!(plan.steps[0].community_id, callee.id);
         assert_eq!(plan.steps[0].schedule_step, 1);
-        assert_eq!(plan.steps[1].community_id, 0);
+        assert_eq!(plan.steps[1].community_id, caller.id);
         assert_eq!(plan.steps[1].schedule_step, 2);
     }
 
@@ -581,7 +704,8 @@ mod tests {
     #[test]
     fn scoring_prefers_high_pagerank_under_foundational_preset() {
         let graph = MigrationGraphPayload {
-            schema_version: 1,
+            schema_version: 2,
+            mode: "package_macro".into(),
             modularity: 0.5,
             communities: vec![
                 MigrationCommunityNode {
@@ -592,6 +716,7 @@ mod tests {
                     avg_harmonic: 0.1,
                     avg_betweenness: 0.0,
                     max_blast: 10.0,
+                    louvain_community_id: None,
                 },
                 MigrationCommunityNode {
                     id: 1,
@@ -601,6 +726,7 @@ mod tests {
                     avg_harmonic: 0.1,
                     avg_betweenness: 0.0,
                     max_blast: 10.0,
+                    louvain_community_id: None,
                 },
             ],
             edges: vec![],
@@ -618,7 +744,8 @@ mod tests {
     #[test]
     fn tie_break_by_lowest_community_id() {
         let graph = MigrationGraphPayload {
-            schema_version: 1,
+            schema_version: 2,
+            mode: "package_macro".into(),
             modularity: 0.5,
             communities: vec![
                 MigrationCommunityNode {
@@ -629,6 +756,7 @@ mod tests {
                     avg_harmonic: 0.5,
                     avg_betweenness: 0.0,
                     max_blast: 0.0,
+                    louvain_community_id: None,
                 },
                 MigrationCommunityNode {
                     id: 2,
@@ -638,6 +766,7 @@ mod tests {
                     avg_harmonic: 0.5,
                     avg_betweenness: 0.0,
                     max_blast: 0.0,
+                    louvain_community_id: None,
                 },
             ],
             edges: vec![],

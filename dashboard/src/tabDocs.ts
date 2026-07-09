@@ -153,16 +153,16 @@ export const TAB_DOCS: Record<TabId, TabDocContent> = {
     title: "Migration planner",
     goal: "Build a step-by-step microservice extraction roadmap from graph metrics and communities.",
     description:
-      "Combines PageRank, harmonic centrality, and blast radius into a weighted priority score per community, then schedules extraction order respecting cross-community call dependencies. Tune presets or sliders to explore strategies.",
+      "Combines PageRank, harmonic centrality, and blast radius into a weighted priority score per package/module, then schedules extraction order respecting cross-package call dependencies. Tune presets or sliders to explore strategies.",
     benefits: [
       "Data-driven migration ordering instead of guesswork",
       "Interactive what-if tuning for architecture reviews",
-      "Community-level macro graph aligned with Louvain detection",
+      "Package-level macro graph with meaningful module labels",
     ],
     usage: [
       "Adjust roadmap sort, strategy preset, and α/β/γ weight sliders at the top.",
-      "Review the community graph for dependencies and relative priority by node size.",
-      "Browse the paginated communities table for scheduled step, rank, and metrics.",
+      "Review the package graph for dependencies and relative priority by node size.",
+      "Browse the paginated packages table for scheduled step, rank, and metrics.",
     ],
   },
 };

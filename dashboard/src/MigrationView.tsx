@@ -9,6 +9,7 @@ import { GraphZoomControls } from "./GraphZoomControls";
 import { mountSigmaWhenReady } from "./sigmaMount";
 import { SIGMA_NODE_PROGRAM_CLASSES } from "./sigmaPrograms";
 import { computeMigrationPlan } from "./migration/engine";
+import { addLouvainLayoutEdges, migrationEdgeLayoutWeight } from "./migration/layoutWeights";
 import { MIGRATION_PRESETS, matchPreset, presetById } from "./migration/presets";
 import type {
   MigrationGraphPayload,
@@ -30,12 +31,12 @@ const MIGRATION_COLUMN_TOOLTIPS = {
     "Dependency-aware order: callees are scheduled before callers. Lower numbers migrate earlier.",
   priority_rank:
     "Score-only rank: highest priority score is rank 1. Ignores call dependencies.",
-  label: "Louvain community label aggregated from member functions.",
+  label: "Package / module label derived from source file paths (Java package, Rust module, etc.).",
   priority_score:
-    "Weighted score: α·PageRank + β·Harmonic − γ·Max blast (each metric min–max normalized across communities).",
-  avg_pagerank: "Average PageRank centrality of functions in this community.",
-  avg_harmonic: "Average harmonic centrality of functions in this community.",
-  max_blast: "Maximum blast radius among functions in this community (higher = more downstream impact).",
+    "Weighted score: α·PageRank + β·Harmonic − γ·Max blast (each metric min–max normalized across packages).",
+  avg_pagerank: "Average PageRank centrality of functions in this package.",
+  avg_harmonic: "Average harmonic centrality of functions in this package.",
+  max_blast: "Maximum blast radius among functions in this package (higher = more downstream impact).",
 } as const;
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
@@ -319,8 +320,8 @@ function MigrationRoadmapTable({
   return (
     <section class="migration-section migration-table-section">
       <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
-        <h2 class="h6 fw-semibold mb-0">{plan.preset_label} communities</h2>
-        <span class="badge text-bg-secondary">{plan.steps.length.toLocaleString()} communities</span>
+        <h2 class="h6 fw-semibold mb-0">{plan.preset_label} packages</h2>
+        <span class="badge text-bg-secondary">{plan.steps.length.toLocaleString()} packages</span>
       </div>
       <div class="table-responsive border rounded">
         <table class="table table-sm table-hover align-middle mb-0">
@@ -337,7 +338,7 @@ function MigrationRoadmapTable({
                 tooltip={MIGRATION_COLUMN_TOOLTIPS.priority_rank}
                 active={orderMode === "priority"}
               />
-              <MigrationColumnHeader label="Community" tooltip={MIGRATION_COLUMN_TOOLTIPS.label} />
+              <MigrationColumnHeader label="Package" tooltip={MIGRATION_COLUMN_TOOLTIPS.label} />
               <MigrationColumnHeader label="Priority" tooltip={MIGRATION_COLUMN_TOOLTIPS.priority_score} />
               <MigrationColumnHeader label="Avg PR" tooltip={MIGRATION_COLUMN_TOOLTIPS.avg_pagerank} />
               <MigrationColumnHeader label="Avg Harm" tooltip={MIGRATION_COLUMN_TOOLTIPS.avg_harmonic} />
@@ -461,6 +462,8 @@ function MigrationGraphPanel({
       sigmaRef.current = null;
       graphRef.current = null;
 
+      const nodeById = new Map(graph.communities.map((n) => [n.id, n]));
+
       const g = new Graph();
       for (const node of graph.communities) {
         const score = scoreByCommunity.get(node.id) ?? 0;
@@ -469,19 +472,25 @@ function MigrationGraphPanel({
           x: Math.random(),
           y: Math.random(),
           size: scoreSize(score, scoreRange.min, scoreRange.max),
-          color: communityColorHex(node.id),
+          color: communityColorHex(node.louvain_community_id ?? node.id),
         });
       }
 
       for (const edge of graph.edges) {
         const key = `${edge.source}->${edge.target}`;
         if (g.hasNode(String(edge.source)) && g.hasNode(String(edge.target)) && !g.hasEdge(key)) {
+          const source = nodeById.get(edge.source);
+          const target = nodeById.get(edge.target);
+          const layoutWeight = migrationEdgeLayoutWeight(source, target, edge.weight);
           g.addEdgeWithKey(key, String(edge.source), String(edge.target), {
             size: Math.max(0.5, edge.weight * 0.15),
             color: "#c8cdd3",
+            weight: layoutWeight,
           });
         }
       }
+
+      addLouvainLayoutEdges(g, graph.communities);
 
       layoutForceAtlas2(g, graph.communities.length > 120 ? 160 : graph.communities.length > 40 ? 200 : 140);
 
@@ -494,6 +503,7 @@ function MigrationGraphPanel({
         labelColor: { color: "#212529" },
         labelRenderedSizeThreshold: 6,
         nodeProgramClasses: SIGMA_NODE_PROGRAM_CLASSES,
+        edgeReducer: (_edge, data) => (data.layoutOnly ? { ...data, size: 0, color: "transparent" } : data),
       });
 
       graphRef.current = g;
@@ -530,10 +540,10 @@ function MigrationGraphPanel({
 
   return (
     <section class="migration-section migration-graph-section mb-4">
-      <h2 class="h6 fw-semibold mb-2">Community graph</h2>
+      <h2 class="h6 fw-semibold mb-2">Package graph</h2>
       <p class="small text-muted mb-2">
-        Node color = community · size = priority score · layout reloads when data changes; sizes
-        update live when weights change.
+        Node color = Louvain cluster · size = priority score · strong layout pull within clusters,
+        weak pull across clusters · sizes update live when weights change.
       </p>
       <div class="migration-graph-panel analysis-graph-canvas-wrap border rounded">
         <div class="graph-canvas-wrap position-relative">

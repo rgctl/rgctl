@@ -87,6 +87,7 @@ pub fn write_migration_plan_from_repo(
 fn write_empty_graph(out_dir: &Path) -> Result<(), String> {
     let payload = MigrationGraphPayload {
         schema_version: rbuilder_analysis::MIGRATION_GRAPH_SCHEMA_VERSION,
+        mode: "package_macro".into(),
         modularity: 0.0,
         communities: Vec::new(),
         edges: Vec::new(),

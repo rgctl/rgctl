@@ -44,7 +44,7 @@ await page.getByRole("button", { name: "Migration", exact: true }).click();
 await page.waitForSelector(".migration-view", { timeout: 15000 });
 
 const tuningVisible = await page.getByRole("heading", { name: "Metrics & tuning" }).count();
-const graphHeadingVisible = await page.getByRole("heading", { name: "Community graph" }).count();
+const graphHeadingVisible = await page.getByRole("heading", { name: "Package graph" }).count();
 const tableHeadingVisible = await page.locator(".migration-table-section h2").count();
 const columnHelpCount = await page.locator(".migration-table-section .functions-col-help").count();
 

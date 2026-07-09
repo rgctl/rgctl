@@ -118,7 +118,8 @@ await browser.close();
 
 const ok =
   report.pageRowCount > 0 &&
-  report.totalCommunities >= 300 &&
+  report.totalCommunities >= 10 &&
+  report.totalCommunities <= 256 &&
   report.presetChangedOrderOrScore &&
   report.graph.found &&
   report.graph.canvasW > 0;

@@ -291,7 +291,8 @@ pub fn assert_dashboard_bundle_with_meta(repo: &Path, min_nodes: u64, min_metano
     );
     let migration_graph: Value =
         serde_json::from_slice(&std::fs::read(dash.join("migration_graph.json")).unwrap()).unwrap();
-    assert_eq!(migration_graph["schema_version"], 1);
+    assert_eq!(migration_graph["schema_version"], 2);
+    assert_eq!(migration_graph["mode"], "package_macro");
     assert!(
         migration_graph["communities"]
             .as_array()
