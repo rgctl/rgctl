@@ -81,6 +81,7 @@ export interface AnalysisSection {
   slice_function_count: number;
   blast_available: boolean;
   blast_index_path: string;
+  function_metrics_path?: string;
   blast_snapshot_path?: string | null;
   dataflow_available: boolean;
   dataflow_index_path: string;
@@ -92,6 +93,10 @@ export interface AnalysisSection {
   taint_function_count: number;
   taint_flow_count: number;
   taint_vulnerable_count: number;
+  migration_graph_path?: string | null;
+  migration_plan_path?: string | null;
+  migration_available?: boolean;
+  migration_community_count?: number | null;
 }
 
 export interface DataflowIndexPayload {
@@ -358,6 +363,9 @@ export interface NodeListEntry {
   node_type_name: string;
   complexity: number;
   blast_score: number;
+  pagerank?: number;
+  betweenness?: number;
+  harmonic?: number;
   file_path?: string | null;
 }
 

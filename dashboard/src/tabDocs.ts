@@ -6,7 +6,8 @@ export type TabId =
   | "taint"
   | "guide"
   | "slice"
-  | "blast";
+  | "blast"
+  | "migration";
 
 export interface TabDocContent {
   title: string;
@@ -36,18 +37,20 @@ export const TAB_DOCS: Record<TabId, TabDocContent> = {
   },
   functions: {
     title: "Function inventory",
-    goal: "Browse and filter indexed nodes — functions, classes, and other symbols — with complexity and blast scores.",
+    goal: "Browse and filter indexed nodes — functions, classes, and other symbols — with centrality and blast scores.",
     description:
-      "Like a structural inventory of the graph: see names, types, cyclomatic complexity, and precomputed blast-radius scores. Use this to find hotspots before diving into CFG, blast radius, or slicing views.",
+      "Like a structural inventory of the graph: see names, types, PageRank, betweenness, harmonic centrality, and blast-radius scores from discover. Use this to find hotspots before diving into CFG, blast radius, or slicing views.",
     benefits: [
       "Fast orientation in unfamiliar repos",
       "Filter by node type to focus on functions or classes",
-      "Spot high-complexity or high-impact symbols at a glance",
+      "Spot high-centrality or high-impact symbols at a glance",
     ],
     usage: [
       "Choose a node-type filter at the top.",
+      "Search by function name or file path.",
+      "Click column headers to sort (PR, BC, Harm, Blast, etc.). Hover headers and cells for metric explanations.",
       "Page through results with Prev / Next (30 per page).",
-      "Use blast and complexity columns to prioritize reading order.",
+      "Use blast and centrality columns to prioritize reading order.",
     ],
   },
   cfg: {
@@ -144,6 +147,22 @@ export const TAB_DOCS: Record<TabId, TabDocContent> = {
       "Pick a high-impact function from the sorted list (search and paginate as needed).",
       "Adjust caller depth to widen or narrow the impact zone.",
       "Review the caller table and impact metrics in the detail panel.",
+    ],
+  },
+  migration: {
+    title: "Migration planner",
+    goal: "Build a step-by-step microservice extraction roadmap from graph metrics and communities.",
+    description:
+      "Combines PageRank, harmonic centrality, and blast radius into a weighted priority score per package/module, then schedules extraction order respecting cross-package call dependencies. Tune presets or sliders to explore strategies.",
+    benefits: [
+      "Data-driven migration ordering instead of guesswork",
+      "Interactive what-if tuning for architecture reviews",
+      "Package-level macro graph with meaningful module labels",
+    ],
+    usage: [
+      "Adjust roadmap sort, strategy preset, and α/β/γ weight sliders at the top.",
+      "Review the package graph for dependencies and relative priority by node size.",
+      "Browse the paginated packages table for scheduled step, rank, and metrics.",
     ],
   },
 };

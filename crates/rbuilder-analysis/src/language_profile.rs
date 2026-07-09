@@ -120,7 +120,7 @@ const PROFILES: &[LanguageAnalysisProfile] = &[
 pub fn profile_for_language(language: &str) -> Option<&'static LanguageAnalysisProfile> {
     let key = language.to_lowercase();
     PROFILES.iter().find(|p| {
-        p.id == key.as_str() || p.aliases.iter().any(|alias| *alias == key.as_str())
+        p.id == key.as_str() || p.aliases.contains(&key.as_str())
     })
 }
 
@@ -168,7 +168,7 @@ fn profile_for_extension(ext: &str) -> Option<&'static LanguageAnalysisProfile> 
     let ext = ext.to_lowercase();
     PROFILES
         .iter()
-        .find(|p| p.extensions.iter().any(|e| *e == ext.as_str()))
+        .find(|p| p.extensions.contains(&ext.as_str()))
 }
 
 fn grammar_for(profile: &LanguageAnalysisProfile) -> Result<Language> {

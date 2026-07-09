@@ -41,6 +41,8 @@ pub struct CentralityScores {
     pub pagerank: f64,
     /// Betweenness centrality (approximate for large graphs)
     pub betweenness: f64,
+    /// Normalized out-harmonic centrality (skipped on large graphs)
+    pub harmonic: f64,
     /// In-degree (filtered)
     pub in_degree: usize,
     /// Out-degree (filtered)
@@ -56,6 +58,8 @@ pub struct CentralityReport {
     pub top_pagerank: Vec<(Uuid, f64)>,
     /// Top nodes by betweenness
     pub top_betweenness: Vec<(Uuid, f64)>,
+    /// Approximation metadata and timings (large graphs).
+    pub approx_stats: crate::centrality_approx::CentralityApproxStats,
 }
 
 /// PageRank iteration statistics.
@@ -335,6 +339,58 @@ impl BetweennessCentrality {
     }
 }
 
+/// Normalized out-harmonic centrality via all-pairs BFS on filtered edges.
+pub struct HarmonicCentrality;
+
+impl HarmonicCentrality {
+    /// Compute normalized harmonic scores for graphs up to `max_nodes` (skips larger graphs).
+    pub fn compute(
+        view: &PetGraphView,
+        allowed_types: &[EdgeType],
+        max_nodes: usize,
+    ) -> HashMap<Uuid, f64> {
+        use std::collections::VecDeque;
+
+        let n = view.directed.node_count();
+        if n == 0 || n > max_nodes {
+            return HashMap::new();
+        }
+
+        let norm_factor = if n <= 1 {
+            0.0
+        } else {
+            1.0 / (n as f64 - 1.0)
+        };
+
+        let mut result = HashMap::with_capacity(n);
+        for start in view.directed.node_indices() {
+            let mut sum_reciprocal = 0.0;
+            let mut visited = vec![false; n];
+            let mut queue = VecDeque::new();
+            visited[start.index()] = true;
+            queue.push_back((start, 0u32));
+
+            while let Some((current, dist)) = queue.pop_front() {
+                if dist > 0 {
+                    sum_reciprocal += 1.0 / f64::from(dist);
+                }
+                for next in view.outgoing_filtered(current, allowed_types) {
+                    if !visited[next.index()] {
+                        visited[next.index()] = true;
+                        queue.push_back((next, dist + 1));
+                    }
+                }
+            }
+
+            if let Some(uuid) = view.get_uuid(start) {
+                result.insert(uuid, sum_reciprocal * norm_factor);
+            }
+        }
+
+        result
+    }
+}
+
 /// Degree centrality using filtered adjacency views.
 pub struct DegreeCentrality;
 
@@ -379,12 +435,22 @@ fn is_structural_container(node_type: NodeType) -> bool {
     )
 }
 
+fn flat_scores_to_uuid_map(view: &PetGraphView, flat: &[f64]) -> HashMap<Uuid, f64> {
+    view.index_to_uuid
+        .iter()
+        .filter_map(|(idx, uuid)| flat.get(idx.index()).copied().map(|s| (*uuid, s)))
+        .collect()
+}
+
 /// Centrality analysis engine with configurable edge-type isolation.
 pub struct CentralityAnalyzer {
     damping: f64,
     iterations: usize,
     allowed_types: Vec<EdgeType>,
-    betweenness_limit: usize,
+    exact_limit: usize,
+    sample_pivots: usize,
+    sample_seed: u64,
+    hyperball_rounds: usize,
 }
 
 impl Default for CentralityAnalyzer {
@@ -393,7 +459,10 @@ impl Default for CentralityAnalyzer {
             damping: 0.85,
             iterations: 20,
             allowed_types: default_behavioral_edges().to_vec(),
-            betweenness_limit: 500,
+            exact_limit: crate::centrality_approx::DEFAULT_EXACT_CENTRALITY_LIMIT,
+            sample_pivots: crate::centrality_approx::DEFAULT_SAMPLE_PIVOTS,
+            sample_seed: 0xA5A5_5A5A_C3C3_3C3C,
+            hyperball_rounds: crate::centrality_approx::DEFAULT_HYPERBALL_ROUNDS,
         }
     }
 }
@@ -417,9 +486,33 @@ impl CentralityAnalyzer {
         self
     }
 
-    /// Maximum graph size for exact betweenness (Brandes).
+    /// Maximum graph size for exact Brandes / BFS harmonic.
+    pub fn with_exact_limit(mut self, max_nodes: usize) -> Self {
+        self.exact_limit = max_nodes;
+        self
+    }
+
+    /// Pivot count for sampled betweenness on graphs larger than [`Self::exact_limit`].
+    pub fn with_sample_pivots(mut self, pivots: usize) -> Self {
+        self.sample_pivots = pivots.max(1);
+        self
+    }
+
+    /// Seed for reproducible pivot sampling.
+    pub fn with_sample_seed(mut self, seed: u64) -> Self {
+        self.sample_seed = seed;
+        self
+    }
+
+    /// HyperBall propagation rounds for approximate harmonic centrality.
+    pub fn with_hyperball_rounds(mut self, rounds: usize) -> Self {
+        self.hyperball_rounds = rounds.max(1);
+        self
+    }
+
+    /// Deprecated alias for [`Self::with_exact_limit`].
     pub fn with_betweenness_limit(mut self, max_nodes: usize) -> Self {
-        self.betweenness_limit = max_nodes;
+        self.exact_limit = max_nodes;
         self
     }
 
@@ -430,12 +523,55 @@ impl CentralityAnalyzer {
 
     /// Calculate centrality metrics for all nodes using the configured edge filter.
     pub fn analyze_with_view(&self, view: &PetGraphView) -> Result<CentralityReport> {
+        use crate::centrality_approx::{
+            BetweennessMode, CentralityApproxStats, HarmonicMode, HyperBallHarmonic,
+            SampledBetweenness,
+        };
+        use std::time::Instant;
+
         let allowed = &self.allowed_types;
+        let n = view.directed.node_count();
+        let index = FlatGraphIndex::from_view(view, allowed);
+
         let pagerank_engine = FastPageRank::new(self.iterations, self.damping);
         let (pagerank_map, _stats) = pagerank_engine.compute(view, allowed);
         let degree_map = DegreeCentrality::compute(view, allowed);
 
-        let betweenness_map = BetweennessCentrality::compute(view, allowed, self.betweenness_limit);
+        let mut approx_stats = CentralityApproxStats::default();
+        let betweenness_map = if n == 0 {
+            HashMap::new()
+        } else if n <= self.exact_limit {
+            approx_stats.betweenness_mode = Some(BetweennessMode::Exact);
+            let start = Instant::now();
+            let map = BetweennessCentrality::compute_unbounded(view, allowed);
+            approx_stats.betweenness_ms = start.elapsed().as_millis() as u64;
+            map
+        } else {
+            let pivots = self.sample_pivots.min(n);
+            approx_stats.betweenness_mode = Some(BetweennessMode::Sampled { pivots });
+            let start = Instant::now();
+            let flat = SampledBetweenness::compute_flat(&index, pivots, self.sample_seed);
+            approx_stats.betweenness_ms = start.elapsed().as_millis() as u64;
+            flat_scores_to_uuid_map(view, &flat)
+        };
+
+        let harmonic_map = if n == 0 {
+            HashMap::new()
+        } else if n <= self.exact_limit {
+            approx_stats.harmonic_mode = Some(HarmonicMode::Exact);
+            let start = Instant::now();
+            let map = HarmonicCentrality::compute(view, allowed, self.exact_limit);
+            approx_stats.harmonic_ms = start.elapsed().as_millis() as u64;
+            map
+        } else {
+            approx_stats.harmonic_mode = Some(HarmonicMode::HyperBall {
+                rounds: self.hyperball_rounds,
+            });
+            let start = Instant::now();
+            let flat = HyperBallHarmonic::compute_flat(&index, self.hyperball_rounds);
+            approx_stats.harmonic_ms = start.elapsed().as_millis() as u64;
+            flat_scores_to_uuid_map(view, &flat)
+        };
 
         let mut scores: HashMap<Uuid, CentralityScores> = HashMap::new();
         for (uuid, (in_degree, out_degree)) in degree_map {
@@ -444,6 +580,7 @@ impl CentralityAnalyzer {
                 CentralityScores {
                     pagerank: pagerank_map.get(&uuid).copied().unwrap_or(0.0),
                     betweenness: betweenness_map.get(&uuid).copied().unwrap_or(0.0),
+                    harmonic: harmonic_map.get(&uuid).copied().unwrap_or(0.0),
                     in_degree,
                     out_degree,
                 },
@@ -473,6 +610,7 @@ impl CentralityAnalyzer {
             scores,
             top_pagerank,
             top_betweenness,
+            approx_stats,
         })
     }
 
@@ -501,15 +639,11 @@ pub struct CentralityScore {
     pub degree: usize,
     /// Betweenness centrality (0–1)
     pub betweenness: f64,
-    /// Closeness centrality (0–1, approximate)
-    pub closeness: f64,
     /// Cyclomatic complexity when known
     pub complexity: Option<i64>,
     /// Combined risk: degree × complexity
     pub risk_score: f64,
 }
-
-const DASHBOARD_CENTRALITY_LIMIT: usize = 500;
 
 /// Degree centrality for dashboard (behavioral edges only; skips module/file containers).
 pub fn degree_centrality(backend: &MemoryBackend) -> Result<Vec<CentralityScore>> {
@@ -522,15 +656,11 @@ pub fn degree_centrality(backend: &MemoryBackend) -> Result<Vec<CentralityScore>
     let allowed = default_behavioral_edges();
     let degree_map = DegreeCentrality::compute(&view, allowed);
 
-    let betweenness = if node_count <= DASHBOARD_CENTRALITY_LIMIT {
-        CentralityAnalyzer::new()
-            .analyze_with_view(&view)
-            .ok()
-            .map(|r| r.scores)
-            .unwrap_or_default()
-    } else {
-        HashMap::new()
-    };
+    let betweenness = CentralityAnalyzer::new()
+        .analyze_with_view(&view)
+        .ok()
+        .map(|r| r.scores)
+        .unwrap_or_default();
 
     let mut scores: Vec<CentralityScore> = Vec::new();
     backend.for_each_node(|node| {
@@ -554,7 +684,6 @@ pub fn degree_centrality(backend: &MemoryBackend) -> Result<Vec<CentralityScore>
             file_path: node.file_path.clone(),
             degree,
             betweenness: bt,
-            closeness: closeness_estimate(degree, node_count),
             complexity,
             risk_score,
         });
@@ -568,13 +697,6 @@ pub fn degree_centrality(backend: &MemoryBackend) -> Result<Vec<CentralityScore>
         })
     });
     Ok(scores)
-}
-
-fn closeness_estimate(degree: usize, node_count: usize) -> f64 {
-    if node_count <= 1 || degree == 0 {
-        return 0.0;
-    }
-    (degree as f64 / (node_count - 1) as f64).min(1.0)
 }
 
 #[cfg(test)]
@@ -607,6 +729,25 @@ mod tests {
 
         let report = CentralityAnalyzer::new().analyze(&backend).unwrap();
         assert!(report.scores[&id_main].pagerank > 0.0);
+    }
+
+    #[test]
+    fn test_harmonic_rewards_reachability() {
+        let mut backend = MemoryBackend::new();
+        let hub = Node::new(NodeType::Function, "hub".to_string());
+        let leaf = Node::new(NodeType::Function, "leaf".to_string());
+        let id_hub = hub.id;
+        let id_leaf = leaf.id;
+        backend.insert_node(hub).unwrap();
+        backend.insert_node(leaf).unwrap();
+        backend
+            .insert_edge(Edge::new(id_hub, id_leaf, EdgeType::Calls))
+            .unwrap();
+
+        let view = PetGraphView::from_backend(&backend).unwrap();
+        let scores = HarmonicCentrality::compute(&view, &[EdgeType::Calls], 500);
+        assert!(scores.get(&id_hub).copied().unwrap_or(0.0) > 0.0);
+        assert_eq!(scores.get(&id_leaf).copied().unwrap_or(0.0), 0.0);
     }
 
     #[test]

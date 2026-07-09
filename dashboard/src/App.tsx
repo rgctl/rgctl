@@ -6,6 +6,7 @@ import { TaintView } from "./TaintView";
 import { CfgView } from "./CfgView";
 import { FunctionsView } from "./FunctionsView";
 import { GraphView } from "./GraphView";
+import { MigrationView } from "./MigrationView";
 import { NotificationMenu } from "./NotificationMenu";
 import { TabPanelStack } from "./TabDocPanel";
 import { DASHBOARD_TABS } from "./tabIcons";
@@ -66,7 +67,6 @@ export function App() {
         <StatCard label="Total Nodes" value={manifest?.graph.node_count ?? "—"} />
         <StatCard label="Total Edges" value={manifest?.graph.edge_count ?? "—"} />
         <StatCard label="Functions" value={m?.function_count ?? "—"} />
-        <StatCard label="Avg Complexity" value={m ? m.avg_complexity.toFixed(1) : "—"} />
         <StatCard label="Classes" value={m?.class_count ?? "—"} />
         <StatCard label="Call Edges" value={m?.calls_count ?? "—"} />
         <StatCard label="High Blast Radius" value={m?.high_blast_radius_count ?? "—"} />
@@ -91,7 +91,7 @@ export function App() {
 
         <div
           class={`card shadow-sm border-top-0 rounded-top-0 rb-tab-panel-card ${
-            tab === "graph" || tab === "cfg" || tab === "slice" || tab === "blast" || tab === "dataflow" || tab === "taint"
+            tab === "graph" || tab === "cfg" || tab === "slice" || tab === "blast" || tab === "dataflow" || tab === "taint" || tab === "migration"
               ? "graph-panel p-0"
               : "p-0"
           }`}
@@ -110,7 +110,9 @@ export function App() {
                         ? "rb-tab-panel-body--cfg p-0"
                         : tab === "taint"
                           ? "rb-tab-panel-body--cfg p-0"
-                          : "rb-tab-panel-body--scroll p-0"
+                          : tab === "migration"
+                            ? "rb-tab-panel-body--cfg p-0"
+                            : "rb-tab-panel-body--scroll p-0"
             }`}
           >
             <TabPanel
@@ -249,7 +251,15 @@ function TabPanel({
     );
   }
 
-  const placeholders: Record<Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint">, string> = {
+  if (id === "migration") {
+    return (
+      <TabPanelStack tabId={id}>
+        <MigrationView />
+      </TabPanelStack>
+    );
+  }
+
+  const placeholders: Record<Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint" | "migration">, string> = {
     guide: "CLI query reference",
   };
 
@@ -257,7 +267,7 @@ function TabPanel({
     <TabPanelStack tabId={id}>
       <div class="p-4">
         <h2 class="h5 mb-2">{DASHBOARD_TABS.find((t) => t.id === id)?.label}</h2>
-        <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint">]}</p>
+        <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint" | "migration">]}</p>
         {id === "guide" && (
           <pre class="bg-light border rounded p-3 small mb-0">
             {`rbuilder discover .

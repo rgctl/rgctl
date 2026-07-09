@@ -12,6 +12,12 @@ pub struct DiscoverArgs {
     pub all: bool,
     /// Also write legacy JSON graph files (`graph.db` / `graph.json`).
     pub write_json_graph: bool,
+    /// Write a migration roadmap JSON after analysis completes.
+    pub     export_migration_plan: bool,
+    /// Preset strategy for `--export-migration-plan` (default: hybrid_default).
+    pub migration_preset: String,
+    /// Roadmap row order: `scheduled` (deps) or `priority` (score rank).
+    pub migration_order: String,
 }
 
 pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
@@ -36,6 +42,9 @@ pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
         args.cfg,
         args.all,
         args.write_json_graph,
+        args.export_migration_plan,
+        &args.migration_preset,
+        &args.migration_order,
         &ctx.db,
     )
 }

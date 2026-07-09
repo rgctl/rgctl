@@ -126,7 +126,7 @@ fn export_function_scores(
     Ok(scores)
 }
 
-fn scan_columnar_uuid_indices(bytes: &[u8]) -> Result<HashMap<Uuid, u32>, String> {
+pub(crate) fn scan_columnar_uuid_indices(bytes: &[u8]) -> Result<HashMap<Uuid, u32>, String> {
     if bytes.len() < HEADER_SIZE || &bytes[0..4] != b"RBGR" {
         return Err("not columnar v2".into());
     }

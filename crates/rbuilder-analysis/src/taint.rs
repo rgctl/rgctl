@@ -308,11 +308,14 @@ impl<'a> TaintAnalyzer<'a> {
                 || text.contains("sql.Open")
             {
                 self.sinks.insert(*node_id, TaintSink::SqlQuery);
-            } else if text.contains("exec.Command") || text.contains("exec.CommandContext") {
+            } else if text.contains("exec.Command")
+                || text.contains("exec.CommandContext")
+            {
                 self.sinks.insert(*node_id, TaintSink::ShellCommand);
-            } else if text.contains("template.HTML(") || text.contains("c.HTML(") {
-                self.sinks.insert(*node_id, TaintSink::HtmlRender);
-            } else if text.contains("fmt.Fprintf") && text.contains("ResponseWriter") {
+            } else if text.contains("template.HTML(")
+                || text.contains("c.HTML(")
+                || (text.contains("fmt.Fprintf") && text.contains("ResponseWriter"))
+            {
                 self.sinks.insert(*node_id, TaintSink::HtmlRender);
             } else if text.contains("os.WriteFile") || text.contains("ioutil.WriteFile") {
                 self.sinks.insert(*node_id, TaintSink::FileWrite);

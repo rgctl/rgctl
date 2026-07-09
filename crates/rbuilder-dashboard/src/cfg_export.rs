@@ -1,10 +1,10 @@
 //! Export CFG/dominance previews from `cfg_pdg.archive.bin` for the dashboard.
 
+use crate::function_meta::{function_meta_map, resolve_function_meta};
 use rbuilder_analysis::cfg::{CfgEdgeType, ControlFlowGraph};
 use rbuilder_analysis::cfg_pdg_archive::CfgPdgArchive;
 use rbuilder_analysis::dominance::DominatorTree;
 use rbuilder_graph::backend::MemoryBackend;
-use rbuilder_graph::schema::NodeType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -80,19 +80,19 @@ pub fn export_cfg_bundle(
     let index_path = out_dir.join(CFG_INDEX_FILE);
 
     if !archive_path.is_file() {
-        let index = CfgIndexPayload {
-            schema_version: 1,
-            available: false,
-            archive_path: None,
-            function_count: 0,
-            functions: vec![],
-        };
-        write_json(&index_path, &index)?;
+        write_empty_cfg_index(&index_path)?;
         return Ok(CfgExportSummary::default());
     }
 
-    let archive = CfgPdgArchive::load_from_path(&archive_path).map_err(|e| e.to_string())?;
-    let names = function_names(backend);
+    let archive = match CfgPdgArchive::load_from_path(&archive_path) {
+        Ok(archive) => archive,
+        Err(_) => {
+            // Stale or corrupt archive from a prior `--cfg` run must not block dashboard export.
+            write_empty_cfg_index(&index_path)?;
+            return Ok(CfgExportSummary::default());
+        }
+    };
+    let meta_map = function_meta_map(repo_root, backend);
 
     let detail_dir = out_dir.join(CFG_DETAIL_DIR);
     if detail_dir.exists() {
@@ -103,10 +103,14 @@ pub fn export_cfg_bundle(
     let mut functions = Vec::with_capacity(archive.records.len());
 
     for (function_id, record) in &archive.records {
-        let (name, file_path) = names
-            .get(function_id)
-            .cloned()
-            .unwrap_or_else(|| (function_id.to_string(), None));
+        let (name, file_path) = resolve_function_meta(
+            function_id,
+            &record.function_name,
+            &record.file_path,
+            repo_root,
+            backend,
+            &meta_map,
+        );
 
         let detail = cfg_detail(function_id, &name, file_path.clone(), &record.cfg);
         write_json(&detail_dir.join(format!("{function_id}.json")), &detail)?;
@@ -139,16 +143,6 @@ pub fn export_cfg_bundle(
         function_count: index.function_count,
         archive_copied: true,
     })
-}
-
-fn function_names(backend: &MemoryBackend) -> HashMap<Uuid, (String, Option<String>)> {
-    let mut out = HashMap::new();
-    let _ = backend.for_each_node(|n| {
-        if n.node_type == NodeType::Function {
-            out.insert(n.id, (n.name.clone(), n.file_path.clone()));
-        }
-    });
-    out
 }
 
 fn cfg_detail(
@@ -286,6 +280,17 @@ fn truncate(s: &str, max: usize) -> String {
         return s.to_string();
     }
     s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
+}
+
+fn write_empty_cfg_index(index_path: &Path) -> Result<(), String> {
+    let index = CfgIndexPayload {
+        schema_version: 1,
+        available: false,
+        archive_path: None,
+        function_count: 0,
+        functions: vec![],
+    };
+    write_json(index_path, &index)
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {

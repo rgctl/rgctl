@@ -5,8 +5,11 @@ mod bundle;
 mod cfg_export;
 mod communities;
 mod dataflow_export;
+mod function_meta;
+mod function_metrics_export;
 mod manifest;
 mod metagraph;
+mod migration_export;
 mod slice_export;
 mod taint_export;
 
@@ -19,10 +22,16 @@ pub use manifest::{
 pub use metagraph::{
     MetagraphExport, MetagraphPayload, COMMUNITY_ONLY_THRESHOLD, METAGRAPH_FILE,
 };
+pub use migration_export::{
+    export_default_migration_plan, export_migration_graph, write_migration_plan,
+    write_migration_plan_from_repo, MigrationExportSummary, MIGRATION_GRAPH_FILE,
+    MIGRATION_PLAN_FILE,
+};
 pub use slice_export::{SliceExportSummary, SLICE_INDEX_FILE};
 pub use taint_export::{TaintExportSummary, TAINT_INDEX_FILE};
 
 use blast_export::export_blast_bundle;
+use function_metrics_export::export_function_metrics;
 use bundle::{extract_static_assets, inject_manifest_bootstrap};
 use cfg_export::export_cfg_bundle;
 use dataflow_export::export_dataflow_index;
@@ -58,6 +67,12 @@ pub fn export_dashboard_bundle(
     let dataflow_summary = export_dataflow_index(&slice_summary, &out_dir)?;
     let taint_summary = export_taint_bundle(repo_root, &out_dir)?;
     let blast_summary = export_blast_bundle(repo_root, &out_dir)?;
+    export_function_metrics(repo_root, snapshot_path, &out_dir)?;
+    let (migration_summary, migration_graph) =
+        migration_export::export_migration_graph(backend, repo_root, &out_dir)?;
+    if let Some(ref graph) = migration_graph {
+        migration_export::export_default_migration_plan(graph, &out_dir)?;
+    }
     let manifest = Manifest::with_phases(
         node_count,
         edge_count,
@@ -69,6 +84,7 @@ pub fn export_dashboard_bundle(
         &blast_summary,
         &dataflow_summary,
         &taint_summary,
+        &migration_summary,
     );
     let manifest_json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
     fs::write(out_dir.join("manifest.json"), &manifest_json).map_err(|e| e.to_string())?;

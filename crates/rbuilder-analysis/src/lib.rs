@@ -8,6 +8,7 @@ pub mod blast_radius_scc;
 pub mod blast_slice_handoff;
 pub mod callgraph;
 pub mod centrality;
+pub mod centrality_approx;
 pub mod cfg;
 pub mod cfg_builder;
 pub mod cfg_pdg_archive;
@@ -24,6 +25,7 @@ pub mod interprocedural_cfg;
 pub mod interprocedural_slicing;
 pub mod macro_call_index;
 pub mod macro_call_lookup;
+pub mod migration;
 pub mod pdg;
 pub mod policy;
 pub mod results;
@@ -48,7 +50,12 @@ pub use callgraph::CallGraph;
 pub use centrality::{
     default_behavioral_edges, degree_centrality, BetweennessCentrality, CentralityAnalyzer,
     CentralityReport, CentralityScore, CentralityScores, DegreeCentrality, FastPageRank,
-    FlatGraphIndex, PageRankStats, PAGERANK_TOLERANCE, STRUCTURAL_EDGE_TYPES,
+    FlatGraphIndex, HarmonicCentrality, PageRankStats, PAGERANK_TOLERANCE, STRUCTURAL_EDGE_TYPES,
+};
+pub use centrality_approx::{
+    BetweennessMode, CentralityApproxStats, HarmonicMode, HyperBallHarmonic,
+    SampledBetweenness, DEFAULT_EXACT_CENTRALITY_LIMIT, DEFAULT_HYPERBALL_ROUNDS,
+    DEFAULT_SAMPLE_PIVOTS, HYPERBALL_EXACT_THRESHOLD, HYPERLOGLOG_PRECISION,
 };
 pub use cfg::{
     BasicBlock, BlockId, CfgEdge, CfgEdgeType, ControlFlowGraph, Statement, StatementKind,
@@ -57,7 +64,8 @@ pub use cfg_builder::build_cfg_for_function;
 pub use cfg_pdg_archive::{CfgPdgArchive, CfgPdgRecord, CFG_PDG_ARCHIVE_FILE};
 pub use community::{
     default_community_edge_types, detect_communities, Community, CommunityDetector,
-    CommunityResult, DashboardCommunity,
+    CommunityResult, DashboardCommunity, HubStripPolicy, TieBreakStrategy,
+    DEFAULT_HUB_SIGMA_K, DEFAULT_MAX_FROZEN_FRACTION, DEFAULT_MIN_NODES_FOR_HUB_STRIP,
 };
 pub use complexity::{classify_complexity, ComplexityAnalyzer, ComplexityLevel, ComplexityReport};
 pub use dataflow::{compute_reaching_definitions, Definition, ReachingDefs};
@@ -79,6 +87,12 @@ pub use macro_call_lookup::{
     canonical_fqn_from_qualified_name, class_name_from_node, inferred_target_metadata,
     language_from_node, parse_fqn_symbol, resolve_symbol_uuid, try_parse_symbol_uuid,
     MacroCallLookupDb, MacroCallLookupRow, MacroIndexEntry, ParsedSymbol,
+};
+pub use migration::{
+    build_migration_graph, compute_migration_plan, MigrationCommunityEdge,
+    MigrationCommunityNode, MigrationGraphPayload, MigrationOrderMode, MigrationPlanPayload,
+    MigrationPlanStep, MigrationWeights, MIGRATION_GRAPH_SCHEMA_VERSION,
+    MIGRATION_PLAN_SCHEMA_VERSION,
 };
 pub use pdg::{
     ControlDependency, DataDepType, DataDependency, PdgNode, PdgNodeId, ProgramDependenceGraph,

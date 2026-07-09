@@ -18,6 +18,7 @@ export function layoutForceAtlas2(graph: Graph, iterations?: number): void {
       strongGravityMode: false,
       slowDown: 2,
       barnesHutOptimize: graph.order > 80,
+      edgeWeightInfluence: 1,
     },
   });
 }

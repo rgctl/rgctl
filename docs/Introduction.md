@@ -19,11 +19,12 @@ This document explains **what rBuilder is**, how a **code knowledge graph** work
 8. [Taint analysis](#taint-analysis)
 9. [CFG, PDG, and dominance (deep structure)](#cfg-pdg-and-dominance-deep-structure)
 10. [Graph metrics (architecture hotspots)](#graph-metrics-architecture-hotspots)
-11. [Export and sharing](#export-and-sharing)
-12. [CI policy checks](#ci-policy-checks)
-13. [Query daemon (repeated analysis)](#query-daemon-repeated-analysis)
-14. [Dashboard (visual exploration)](#dashboard-visual-exploration)
-15. [Where to go next](#where-to-go-next)
+11. [Migration planner (package roadmap)](#migration-planner-package-roadmap)
+12. [Export and sharing](#export-and-sharing)
+13. [CI policy checks](#ci-policy-checks)
+14. [Query daemon (repeated analysis)](#query-daemon-repeated-analysis)
+15. [Dashboard (visual exploration)](#dashboard-visual-exploration)
+16. [Where to go next](#where-to-go-next)
 
 ---
 
@@ -87,6 +88,7 @@ You do not need graph theory to use the CLI; it helps to know that **indexing bu
      ┌─────┴─────┬─────────────┬──────────────┐
      ▼           ▼             ▼              ▼
    gql      blast-radius    slice/inspect   metrics/export
+                                              migration plan
 ```
 
 1. **Once per repo (or after big changes):** run `discover` to build `.rbuilder/`.  
@@ -113,6 +115,7 @@ Default discover is tuned for speed. Deeper modes trade time for semantic detail
 - **Incremental-friendly** file tracking for faster re-runs after small changes  
 - **CI-friendly** telemetry with `-f json` (file counts, nodes, edges, duration)  
 - **Optional security scan** (`--security`) and **optional CFG/PDG/taint** (`--cfg`, `--all`)
+- **Optional migration roadmap** (`--export-migration-plan`, with `--migration-preset` and `--migration-order scheduled|priority`)
 
 ### How to run it
 
@@ -277,6 +280,43 @@ Discover already computes many analytics during indexing; `metrics` exposes them
 
 ---
 
+## Migration planner (package roadmap)
+
+### Goal
+
+Answer: **“In what order should we migrate or extract packages, given centrality, blast risk, and call dependencies?”** — a concrete roadmap, not just a hotspot list.
+
+### Description
+
+The **migration planner** aggregates per-function metrics into **package-level macro nodes** (Java-style package paths, Rust/C `/src/` module paths), builds a **call graph between packages**, and ranks packages with a tunable score:
+
+`Priority = α·PageRank + β·Harmonic − γ·Blast`
+
+Two orderings are available:
+
+- **Scheduled step** — Kahn topological sort so callees appear before callers (dependency-aware)  
+- **Priority rank** — score-only ordering without dependency constraints  
+
+Strategy **presets** (Hybrid Default, Risk Mitigation, Hotspot First) adjust α/β/γ. The dashboard **Migration** tab lets you tune weights live and explore a ForceAtlas2 layout (cluster color from Louvain communities, node size from priority). CLI export writes `migration_graph.json` and `migration_plan.json` under `.rbuilder/` when you run `discover` with `--export-migration-plan` (typically with `--all` so harmonic and blast metrics are available).
+
+### Key benefits
+
+- **Actionable batches** — migrate by package, not anonymous community ids  
+- **Risk-aware ordering** — balance architectural importance against blast impact  
+- **Dual views** — strict dependency schedule vs. pure priority for planning debates  
+- **Agent-ready JSON** — same plan the dashboard shows, exportable at discover time
+
+### How to run it
+
+```bash
+rbuilder discover . --all --export-migration-plan
+rbuilder serve   # optional: warm daemon; open dashboard → Migration tab
+```
+
+→ Engineering detail: **[Migration planner design](migration-planner-design.md)**  
+
+---
+
 ## Export and sharing
 
 ### Goal
@@ -351,13 +391,13 @@ Useful for interactive sessions or batch jobs that fire hundreds of impact queri
 
 ### Goal
 
-**Explore** the graph interactively in a browser — package overview, drill-down, CFG, slice, blast radius, dataflow, and taint — without memorizing CLI syntax.
+**Explore** the graph interactively in a browser — package overview, drill-down, CFG, slice, blast radius, dataflow, taint, and **Migration** (package roadmap) — without memorizing CLI syntax.
 
 ### Description
 
-After `discover`, rBuilder writes a static bundle under **`.rbuilder/dashboard/`** (`index.html`, `manifest.json`, graph payload, metagraph, and per-feature indexes). Serve that folder over HTTP (WASM graph engine requires a real server, not `file://`).
+After `discover`, rBuilder writes a static bundle under **`.rbuilder/dashboard/`** (`index.html`, `manifest.json`, graph payload, metagraph, migration indexes when exported, and per-feature indexes). Serve that folder over HTTP (WASM graph engine requires a real server, not `file://`).
 
-The dashboard complements the CLI: same underlying graph and analysis artifacts.
+The dashboard complements the CLI: same underlying graph and analysis artifacts. The **Migration** tab mirrors the Rust planner in TypeScript for live preset and weight changes.
 
 ### Key benefits
 
@@ -384,6 +424,7 @@ cd .rbuilder/dashboard && python3 -m http.server 8765
 | Install, PATH, coolstore walkthrough, every command | **[User Guide](user-guide.md)** |
 | Parse `-f json` in scripts or CI | **[JSON API](json-api.md)** |
 | Exact JSON field tables | **[CLI output schemas](cli-output-schemas.md)** |
+| Plan a package-by-package migration roadmap | **[Migration planner design](migration-planner-design.md)** · **[Building a migration plan](building-migration-plan.md)** |
 | Dashboard architecture and phases | **[Dashboard design](dashboard-design.md)** |
 | Performance tiers and benchmarks | **[Performance engineering](performance-engineering.md)** |
 | Papers implemented, inspired, and contribution ideas | **[Further reading](further-reading.md#research-foundations-in-rbuilder)** |
@@ -393,7 +434,7 @@ cd .rbuilder/dashboard && python3 -m http.server 8765
 1. Read this introduction (you are here).  
 2. Follow [User Guide §1–4](user-guide.md#1-installation) — install, clone [coolstore](https://github.com/konveyor-ecosystem/coolstore), run `discover`.  
 3. Run one **GQL** query and one **blast-radius** on a function you recognize.  
-4. Optionally open the **dashboard** or try `-f json` with [JSON API](json-api.md).
+4. Optionally open the **dashboard** (try the **Migration** tab after `discover --all --export-migration-plan`) or try `-f json` with [JSON API](json-api.md).
 
 ---
 

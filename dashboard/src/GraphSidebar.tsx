@@ -202,8 +202,6 @@ function MetanodeDetail({
         <dd class="col-7 mb-1">{node.functions.toLocaleString()}</dd>
         <dt class="col-5 text-muted">Classes</dt>
         <dd class="col-7 mb-1">{node.classes.toLocaleString()}</dd>
-        <dt class="col-5 text-muted">Avg complexity</dt>
-        <dd class="col-7 mb-1">{node.avg_complexity.toFixed(1)}</dd>
       </dl>
       {onDrill && (
         <button
@@ -228,8 +226,6 @@ function SubgraphDetail({ node }: { node: SubgraphNode }) {
       </dd>
       <dt class="col-5 text-muted">Type</dt>
       <dd class="col-7 mb-1">{node.node_type_name}</dd>
-      <dt class="col-5 text-muted">Complexity</dt>
-      <dd class="col-7 mb-1">{node.complexity.toFixed(1)}</dd>
       {node.community_id != null && (
         <>
           <dt class="col-5 text-muted">Community</dt>

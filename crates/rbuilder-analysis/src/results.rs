@@ -94,6 +94,8 @@ pub struct CentralityTable {
     pub pagerank: Vec<f32>,
     /// Betweenness centrality (indexed by CompactId)
     pub betweenness: Vec<f32>,
+    /// Harmonic centrality (indexed by CompactId)
+    pub harmonic: Vec<f32>,
     /// In-degree (indexed by CompactId)
     pub in_degree: Vec<u32>,
     /// Out-degree (indexed by CompactId)
@@ -106,6 +108,7 @@ impl CentralityTable {
         Self {
             pagerank: vec![0.0; node_count],
             betweenness: vec![0.0; node_count],
+            harmonic: vec![0.0; node_count],
             in_degree: vec![0; node_count],
             out_degree: vec![0; node_count],
         }
@@ -116,6 +119,7 @@ impl CentralityTable {
         Some(CentralityMetrics {
             pagerank: *self.pagerank.get(id as usize)?,
             betweenness: *self.betweenness.get(id as usize)?,
+            harmonic: *self.harmonic.get(id as usize)?,
             in_degree: *self.in_degree.get(id as usize)?,
             out_degree: *self.out_degree.get(id as usize)?,
         })
@@ -129,6 +133,8 @@ pub struct CentralityMetrics {
     pub pagerank: f32,
     /// Betweenness centrality score
     pub betweenness: f32,
+    /// Harmonic centrality score (normalized 0–1)
+    pub harmonic: f32,
     /// Number of incoming edges
     pub in_degree: u32,
     /// Number of outgoing edges
