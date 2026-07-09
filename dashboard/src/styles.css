@@ -882,3 +882,47 @@ body {
 code {
   font-size: 0.85em;
 }
+
+.migration-view {
+  min-height: 420px;
+}
+
+.migration-section + .migration-section {
+  margin-top: 0.25rem;
+}
+
+.migration-graph-section {
+  position: relative;
+  z-index: 1;
+}
+
+.migration-graph-panel .graph-canvas-wrap {
+  min-height: 360px;
+  height: 360px;
+}
+
+.migration-table-section {
+  position: relative;
+  z-index: 2;
+}
+
+.migration-table-section .table-responsive {
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.migration-table-section thead,
+.migration-table-section th {
+  overflow: visible;
+}
+
+.migration-table-section .functions-col-help-popup {
+  z-index: 1090;
+}
+
+.migration-table-section .functions-sort-header-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+}

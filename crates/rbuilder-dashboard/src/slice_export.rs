@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
 
 pub const SLICE_INDEX_FILE: &str = "slice_index.json";
 pub const SLICE_DETAIL_DIR: &str = "slice";
@@ -85,17 +84,17 @@ pub fn export_slice_bundle(
     let index_path = out_dir.join(SLICE_INDEX_FILE);
 
     if !archive_path.is_file() {
-        let index = SliceIndexPayload {
-            schema_version: 1,
-            available: false,
-            function_count: 0,
-            functions: vec![],
-        };
-        write_json(&index_path, &index)?;
+        write_empty_slice_index(&index_path)?;
         return Ok(SliceExportSummary::default());
     }
 
-    let archive = CfgPdgArchive::load_from_path(&archive_path).map_err(|e| e.to_string())?;
+    let archive = match CfgPdgArchive::load_from_path(&archive_path) {
+        Ok(archive) => archive,
+        Err(_) => {
+            write_empty_slice_index(&index_path)?;
+            return Ok(SliceExportSummary::default());
+        }
+    };
     let meta_map = function_meta_map(repo_root, backend);
     let detail_dir = out_dir.join(SLICE_DETAIL_DIR);
     if detail_dir.exists() {
@@ -236,6 +235,16 @@ fn index_cfg_blocks(cfg: &ControlFlowGraph) -> HashMap<uuid::Uuid, usize> {
         .enumerate()
         .map(|(idx, id)| (id, idx))
         .collect()
+}
+
+fn write_empty_slice_index(index_path: &Path) -> Result<(), String> {
+    let index = SliceIndexPayload {
+        schema_version: 1,
+        available: false,
+        function_count: 0,
+        functions: vec![],
+    };
+    write_json(index_path, &index)
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {

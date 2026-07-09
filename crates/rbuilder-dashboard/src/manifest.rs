@@ -4,6 +4,7 @@ use crate::blast_export::BlastExportSummary;
 use crate::cfg_export::CfgExportSummary;
 use crate::dataflow_export::DataflowExportSummary;
 use crate::metagraph::MetagraphExport;
+use crate::migration_export::MigrationExportSummary;
 use crate::slice_export::SliceExportSummary;
 use crate::taint_export::TaintExportSummary;
 use serde::{Deserialize, Serialize};
@@ -76,6 +77,13 @@ pub struct AnalysisSection {
     pub taint_function_count: usize,
     pub taint_flow_count: usize,
     pub taint_vulnerable_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration_graph_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration_plan_path: Option<String>,
+    pub migration_available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration_community_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +108,7 @@ impl DashboardManifest {
         blast: &BlastExportSummary,
         dataflow: &DataflowExportSummary,
         taint: &TaintExportSummary,
+        migration: &MigrationExportSummary,
     ) -> Self {
         let mut phases = BTreeMap::new();
         phases.insert("0".into(), "complete".into());
@@ -179,6 +188,22 @@ impl DashboardManifest {
             taint_function_count: taint.function_count,
             taint_flow_count: taint.total_flows,
             taint_vulnerable_count: taint.vulnerable_flows,
+            migration_graph_path: if migration.available {
+                Some(crate::migration_export::MIGRATION_GRAPH_FILE.into())
+            } else {
+                None
+            },
+            migration_plan_path: if migration.available {
+                Some(crate::migration_export::MIGRATION_PLAN_FILE.into())
+            } else {
+                None
+            },
+            migration_available: migration.available,
+            migration_community_count: if migration.available {
+                Some(migration.community_count as u32)
+            } else {
+                None
+            },
         });
 
         let meta = &export.meta;
@@ -239,6 +264,7 @@ fn chrono_now_rfc3339() -> String {
 mod tests {
     use super::*;
     use crate::communities::CommunitiesPayload;
+    use crate::migration_export::MigrationExportSummary;
     use crate::metagraph::{MetagraphExport, MetagraphPayload, Metanode, COMMUNITY_ONLY_THRESHOLD};
 
     #[test]
@@ -294,6 +320,7 @@ mod tests {
             &BlastExportSummary::default(),
             &DataflowExportSummary::default(),
             &TaintExportSummary::default(),
+            &MigrationExportSummary::default(),
         );
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["phases"]["2"], "complete");

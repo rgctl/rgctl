@@ -15,6 +15,8 @@ pub struct FunctionMetricRow {
     pub betweenness: f32,
     pub harmonic: f32,
     pub blast: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub community_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,8 +64,18 @@ pub fn export_function_metrics(
         let blast_score = blast
             .and_then(|b| b.scores.get(compact_id).copied())
             .unwrap_or(0.0);
+        let community_id = results
+            .community
+            .as_ref()
+            .and_then(|c| c.get(compact_id as u32))
+            .map(|id| id as u32);
 
-        if pagerank <= 0.0 && betweenness <= 0.0 && harmonic <= 0.0 && blast_score <= 0.0 {
+        if pagerank <= 0.0
+            && betweenness <= 0.0
+            && harmonic <= 0.0
+            && blast_score <= 0.0
+            && community_id.is_none()
+        {
             continue;
         }
 
@@ -73,13 +85,14 @@ pub fn export_function_metrics(
             betweenness,
             harmonic,
             blast: blast_score,
+            community_id,
         });
     }
 
     rows.sort_by(|a, b| a.index.cmp(&b.index));
 
     let payload = FunctionMetricsPayload {
-        schema_version: 1,
+        schema_version: 2,
         rows: rows.clone(),
     };
     let json = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
@@ -90,7 +103,7 @@ pub fn export_function_metrics(
 
 fn write_empty(out_dir: &Path) -> Result<(), String> {
     let payload = FunctionMetricsPayload {
-        schema_version: 1,
+        schema_version: 2,
         rows: Vec::new(),
     };
     let json = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;

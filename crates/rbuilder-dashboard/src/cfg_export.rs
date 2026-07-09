@@ -80,18 +80,18 @@ pub fn export_cfg_bundle(
     let index_path = out_dir.join(CFG_INDEX_FILE);
 
     if !archive_path.is_file() {
-        let index = CfgIndexPayload {
-            schema_version: 1,
-            available: false,
-            archive_path: None,
-            function_count: 0,
-            functions: vec![],
-        };
-        write_json(&index_path, &index)?;
+        write_empty_cfg_index(&index_path)?;
         return Ok(CfgExportSummary::default());
     }
 
-    let archive = CfgPdgArchive::load_from_path(&archive_path).map_err(|e| e.to_string())?;
+    let archive = match CfgPdgArchive::load_from_path(&archive_path) {
+        Ok(archive) => archive,
+        Err(_) => {
+            // Stale or corrupt archive from a prior `--cfg` run must not block dashboard export.
+            write_empty_cfg_index(&index_path)?;
+            return Ok(CfgExportSummary::default());
+        }
+    };
     let meta_map = function_meta_map(repo_root, backend);
 
     let detail_dir = out_dir.join(CFG_DETAIL_DIR);
@@ -280,6 +280,17 @@ fn truncate(s: &str, max: usize) -> String {
         return s.to_string();
     }
     s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
+}
+
+fn write_empty_cfg_index(index_path: &Path) -> Result<(), String> {
+    let index = CfgIndexPayload {
+        schema_version: 1,
+        available: false,
+        archive_path: None,
+        function_count: 0,
+        functions: vec![],
+    };
+    write_json(index_path, &index)
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {

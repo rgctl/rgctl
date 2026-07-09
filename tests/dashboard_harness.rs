@@ -285,6 +285,37 @@ pub fn assert_dashboard_bundle_with_meta(repo: &Path, min_nodes: u64, min_metano
     );
     assert_eq!(view["communities_path"], "communities.json");
 
+    assert!(
+        dash.join("migration_graph.json").is_file(),
+        "missing migration_graph.json"
+    );
+    let migration_graph: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("migration_graph.json")).unwrap()).unwrap();
+    assert_eq!(migration_graph["schema_version"], 1);
+    assert!(
+        migration_graph["communities"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false),
+        "migration_graph.json must list communities"
+    );
+    assert!(
+        dash.join("migration_plan.json").is_file(),
+        "missing migration_plan.json"
+    );
+    assert_eq!(analysis["migration_available"], true);
+    assert_eq!(analysis["migration_graph_path"], "migration_graph.json");
+    assert_eq!(analysis["migration_plan_path"], "migration_plan.json");
+    let migration_plan: Value =
+        serde_json::from_slice(&std::fs::read(dash.join("migration_plan.json")).unwrap()).unwrap();
+    assert_eq!(migration_plan["schema_version"], 2);
+    assert_eq!(migration_plan["order_mode"], "scheduled");
+    assert!(
+        migration_plan["steps"][0]["schedule_step"].as_u64().is_some()
+            && migration_plan["steps"][0]["priority_rank"].as_u64().is_some(),
+        "migration plan steps must include schedule_step and priority_rank"
+    );
+
     let has_community_id = meta["nodes"]
         .as_array()
         .map(|nodes| nodes.iter().any(|n| n.get("community_id").is_some()))

@@ -6,7 +6,8 @@ export type TabId =
   | "taint"
   | "guide"
   | "slice"
-  | "blast";
+  | "blast"
+  | "migration";
 
 export interface TabDocContent {
   title: string;
@@ -146,6 +147,22 @@ export const TAB_DOCS: Record<TabId, TabDocContent> = {
       "Pick a high-impact function from the sorted list (search and paginate as needed).",
       "Adjust caller depth to widen or narrow the impact zone.",
       "Review the caller table and impact metrics in the detail panel.",
+    ],
+  },
+  migration: {
+    title: "Migration planner",
+    goal: "Build a step-by-step microservice extraction roadmap from graph metrics and communities.",
+    description:
+      "Combines PageRank, harmonic centrality, and blast radius into a weighted priority score per community, then schedules extraction order respecting cross-community call dependencies. Tune presets or sliders to explore strategies.",
+    benefits: [
+      "Data-driven migration ordering instead of guesswork",
+      "Interactive what-if tuning for architecture reviews",
+      "Community-level macro graph aligned with Louvain detection",
+    ],
+    usage: [
+      "Adjust roadmap sort, strategy preset, and α/β/γ weight sliders at the top.",
+      "Review the community graph for dependencies and relative priority by node size.",
+      "Browse the paginated communities table for scheduled step, rank, and metrics.",
     ],
   },
 };

@@ -93,6 +93,10 @@ export interface AnalysisSection {
   taint_function_count: number;
   taint_flow_count: number;
   taint_vulnerable_count: number;
+  migration_graph_path?: string | null;
+  migration_plan_path?: string | null;
+  migration_available?: boolean;
+  migration_community_count?: number | null;
 }
 
 export interface DataflowIndexPayload {

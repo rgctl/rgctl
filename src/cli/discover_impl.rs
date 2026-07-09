@@ -19,6 +19,9 @@ pub(crate) fn run_full_analysis(
     cfg: bool,
     all: bool,
     write_json_graph: bool,
+    export_migration_plan: bool,
+    migration_preset: &str,
+    migration_order: &str,
     db_path: &Path,
 ) -> Result<()> {
     let verbose = ctx.verbose;
@@ -776,10 +779,59 @@ pub(crate) fn run_full_analysis(
 
     // Export static dashboard bundle (Phase 0+1 — see docs/dashboard-design.md)
     let dashboard_dir = root.join(".rbuilder/dashboard");
-    let dashboard_exported =
-        rbuilder_dashboard::export_dashboard_bundle(graph.backend(), root, &snapshot_path).is_ok();
-    if !dashboard_exported && verbose {
-        debug!("Dashboard bundle skipped (run scripts/build-dashboard.sh then rebuild rbuilder)");
+    match rbuilder_dashboard::export_dashboard_bundle(graph.backend(), root, &snapshot_path) {
+        Ok(()) => {
+            if human_output {
+                info!("[✓] Dashboard: {}/index.html", dashboard_dir.display());
+            }
+        }
+        Err(e) => {
+            if human_output {
+                warn!("[!] Dashboard export failed: {e}");
+            } else if verbose {
+                debug!(error = %e, "Dashboard bundle export failed");
+            }
+        }
+    }
+
+    if export_migration_plan {
+        let plan_path = ctx
+            .output
+            .clone()
+            .unwrap_or_else(|| root.join(".rbuilder/migration_plan.json"));
+        match rbuilder_dashboard::write_migration_plan_from_repo(
+            graph.backend(),
+            root,
+            &plan_path,
+            migration_preset,
+            rbuilder_analysis::MigrationOrderMode::parse(migration_order),
+        ) {
+            Ok(plan) => {
+                if json_output && ctx.output.is_none() {
+                    ctx.emit_json_value(&serde_json::to_value(&plan)?)?;
+                    return Ok(());
+                }
+                if human_output {
+                    info!(
+                        "[✓] Migration plan ({}): {} steps → {}",
+                        plan.preset_label,
+                        plan.steps.len(),
+                        plan_path.display()
+                    );
+                }
+            }
+            Err(e) => {
+                if human_output {
+                    warn!("[!] Migration plan export skipped: {e}");
+                } else if json_output && ctx.output.is_none() {
+                    ctx.emit_json_value(&serde_json::json!({
+                        "error": e,
+                        "migration_plan": null
+                    }))?;
+                    return Ok(());
+                }
+            }
+        }
     }
 
     let analysis_size = std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0);
@@ -791,10 +843,6 @@ pub(crate) fn run_full_analysis(
         ctx.emit_json_value(&serde_json::to_value(&response)?)?;
     } else {
         info!("[✓] Saved to .rbuilder/ ({:.1} MB total)", analysis_size);
-
-        if dashboard_exported {
-            info!("[✓] Dashboard: {}/index.html", dashboard_dir.display());
-        }
 
         info!(
             "[✓] Completed in {:.1}s (peak memory: {:.0} MB)",
@@ -817,7 +865,7 @@ pub(crate) fn run_full_analysis(
         info!("[i] Next steps:");
         info!("   rbuilder gql \"MATCH (n:Function) RETURN n\"  # Query the graph");
         info!("   rbuilder slice <file> --line <N> --variable <VAR>");
-        if dashboard_exported {
+        if dashboard_dir.join("manifest.json").is_file() {
             info!(
                 "   rbuilder serve --open   # Dashboard + query API at http://127.0.0.1:8080"
             );

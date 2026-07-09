@@ -25,6 +25,7 @@ pub mod interprocedural_cfg;
 pub mod interprocedural_slicing;
 pub mod macro_call_index;
 pub mod macro_call_lookup;
+pub mod migration;
 pub mod pdg;
 pub mod policy;
 pub mod results;
@@ -86,6 +87,12 @@ pub use macro_call_lookup::{
     canonical_fqn_from_qualified_name, class_name_from_node, inferred_target_metadata,
     language_from_node, parse_fqn_symbol, resolve_symbol_uuid, try_parse_symbol_uuid,
     MacroCallLookupDb, MacroCallLookupRow, MacroIndexEntry, ParsedSymbol,
+};
+pub use migration::{
+    build_migration_graph, compute_migration_plan, MigrationCommunityEdge,
+    MigrationCommunityNode, MigrationGraphPayload, MigrationOrderMode, MigrationPlanPayload,
+    MigrationPlanStep, MigrationWeights, MIGRATION_GRAPH_SCHEMA_VERSION,
+    MIGRATION_PLAN_SCHEMA_VERSION,
 };
 pub use pdg::{
     ControlDependency, DataDepType, DataDependency, PdgNode, PdgNodeId, ProgramDependenceGraph,

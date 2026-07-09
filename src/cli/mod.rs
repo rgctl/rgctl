@@ -82,6 +82,26 @@ pub enum Commands {
         /// Write legacy JSON graph files (`graph.db` / `graph.json`); default is snapshot-only.
         #[arg(long = "write-json-graph")]
         write_json_graph: bool,
+
+        /// Write a migration roadmap JSON after analysis (default: `.rbuilder/migration_plan.json`).
+        #[arg(long = "export-migration-plan")]
+        export_migration_plan: bool,
+
+        /// Strategy preset for migration plan export.
+        #[arg(
+            long = "migration-preset",
+            default_value = "hybrid_default",
+            value_parser = ["hybrid_default", "foundational_first", "dense_cluster", "risk_mitigation"]
+        )]
+        migration_preset: String,
+
+        /// Roadmap sort order for migration plan export: scheduled (dependency-aware) or priority (score rank).
+        #[arg(
+            long = "migration-order",
+            default_value = "scheduled",
+            value_parser = ["scheduled", "priority"]
+        )]
+        migration_order: String,
     },
 
     /// Execute graph query language
@@ -258,6 +278,9 @@ impl Cli {
                 cfg,
                 all,
                 write_json_graph,
+                export_migration_plan,
+                migration_preset,
+                migration_order,
             } => discover::run(
                 &ctx,
                 discover::DiscoverArgs {
@@ -268,6 +291,9 @@ impl Cli {
                     cfg,
                     all,
                     write_json_graph,
+                    export_migration_plan,
+                    migration_preset,
+                    migration_order,
                 },
             ),
             Commands::Gql {

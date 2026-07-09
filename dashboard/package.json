@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:unit": "vitest run src/migration"
   },
   "dependencies": {
     "@codemirror/lang-java": "^6.0.2",
@@ -26,6 +28,7 @@
     "@preact/preset-vite": "^2.10.1",
     "playwright": "^1.61.1",
     "typescript": "~5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "vitest": "^3.0.5"
   }
 }
