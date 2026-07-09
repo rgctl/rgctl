@@ -63,6 +63,8 @@ pub struct AnalysisSection {
     pub slice_function_count: usize,
     pub blast_available: bool,
     pub blast_index_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function_metrics_path: Option<String>,
     pub blast_snapshot_path: Option<String>,
     pub dataflow_available: bool,
     pub dataflow_index_path: String,
@@ -161,6 +163,7 @@ impl DashboardManifest {
             slice_function_count: slice.function_count,
             blast_available: blast.available,
             blast_index_path: crate::blast_export::BLAST_INDEX_FILE.into(),
+            function_metrics_path: Some(crate::function_metrics_export::FUNCTION_METRICS_FILE.into()),
             blast_snapshot_path: if blast.snapshot_copied {
                 Some(crate::blast_export::BLAST_SNAPSHOT_BUNDLE_NAME.into())
             } else {

@@ -13,7 +13,16 @@ import type {
   WorkerOut,
 } from "./types";
 
+interface FunctionMetricRow {
+  index: number;
+  pagerank: number;
+  betweenness: number;
+  harmonic: number;
+  blast: number;
+}
+
 let engine: EngineContext | null = null;
+let metricsByIndex: Map<number, FunctionMetricRow> | null = null;
 const sliceBundleCache = new Map<string, SliceBundlePayload>();
 
 self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
@@ -62,6 +71,41 @@ self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
   }
 };
 
+async function loadFunctionMetrics() {
+  if (metricsByIndex !== null) return;
+  metricsByIndex = new Map();
+  try {
+    const res = await fetch(bundleDataUrl("function_metrics.json"));
+    if (!res.ok) return;
+    const data = (await res.json()) as { rows?: FunctionMetricRow[] };
+    for (const row of data.rows ?? []) {
+      metricsByIndex.set(row.index, row);
+    }
+  } catch {
+    // optional bundle asset
+  }
+}
+
+function enrichNodeList(payload: NodeListPayload): NodeListPayload {
+  if (!metricsByIndex || metricsByIndex.size === 0) {
+    return payload;
+  }
+  return {
+    ...payload,
+    items: payload.items.map((item) => {
+      const m = metricsByIndex!.get(item.index);
+      if (!m) return item;
+      return {
+        ...item,
+        pagerank: m.pagerank,
+        betweenness: m.betweenness,
+        harmonic: m.harmonic,
+        blast_score: m.blast,
+      };
+    }),
+  };
+}
+
 async function handleInit() {
   const payloadRes = await fetch(bundleDataUrl("graph_payload.bin"));
   if (!payloadRes.ok) {
@@ -92,6 +136,8 @@ async function handleInit() {
     edgeCount = Number(new DataView(bytes.buffer).getBigUint64(20, true));
     digest = new TextDecoder().decode(bytes.slice(28, 92)).replace(/\0+$/, "");
   }
+
+  await loadFunctionMetrics();
 
   const out: WorkerOut = {
     type: "ready",
@@ -124,7 +170,7 @@ async function handleListNodes(
     throw new Error("WASM engine not loaded — list_nodes requires wasm");
   }
   const json = engine.listNodes(typeMask >>> 0, offset >>> 0, limit >>> 0);
-  const payload = JSON.parse(json) as NodeListPayload;
+  const payload = enrichNodeList(JSON.parse(json) as NodeListPayload);
   const out: WorkerOut = { type: "node_list", requestId, payload };
   self.postMessage(out);
 }

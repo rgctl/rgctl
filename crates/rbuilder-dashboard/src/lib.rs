@@ -5,6 +5,7 @@ mod bundle;
 mod cfg_export;
 mod communities;
 mod dataflow_export;
+mod function_metrics_export;
 mod manifest;
 mod metagraph;
 mod slice_export;
@@ -23,6 +24,7 @@ pub use slice_export::{SliceExportSummary, SLICE_INDEX_FILE};
 pub use taint_export::{TaintExportSummary, TAINT_INDEX_FILE};
 
 use blast_export::export_blast_bundle;
+use function_metrics_export::export_function_metrics;
 use bundle::{extract_static_assets, inject_manifest_bootstrap};
 use cfg_export::export_cfg_bundle;
 use dataflow_export::export_dataflow_index;
@@ -58,6 +60,7 @@ pub fn export_dashboard_bundle(
     let dataflow_summary = export_dataflow_index(&slice_summary, &out_dir)?;
     let taint_summary = export_taint_bundle(repo_root, &out_dir)?;
     let blast_summary = export_blast_bundle(repo_root, &out_dir)?;
+    export_function_metrics(repo_root, snapshot_path, &out_dir)?;
     let manifest = Manifest::with_phases(
         node_count,
         edge_count,

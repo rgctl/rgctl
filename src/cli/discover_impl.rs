@@ -279,9 +279,7 @@ pub(crate) fn run_full_analysis(
 
     debug!("{}", mem_monitor.report());
 
-    // Centrality analysis - write to columnar table
-    // PageRank is fast (< 1s even on 187K nodes)
-    // Betweenness auto-skips internally for graphs > 500 nodes
+    // Centrality analysis — exact below 500 nodes; sampled betweenness + HyperBall harmonic above.
     let centrality_report = CentralityAnalyzer::new().analyze_with_view(&petgraph_view)?;
     {
         // Collect data with compact IDs first
@@ -301,6 +299,7 @@ pub(crate) fn run_full_analysis(
             let idx = compact_id as usize;
             table.pagerank[idx] = scores.pagerank as f32;
             table.betweenness[idx] = scores.betweenness as f32;
+            table.harmonic[idx] = scores.harmonic as f32;
             table.in_degree[idx] = scores.in_degree as u32;
             table.out_degree[idx] = scores.out_degree as u32;
         }
