@@ -10,6 +10,23 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use uuid::Uuid;
 
+/// Lazy per-function PDG cache used during interprocedural slicing.
+struct PdgCache(RefCell<HashMap<Uuid, Rc<ProgramDependenceGraph>>>);
+
+impl PdgCache {
+    fn new() -> Self {
+        Self(RefCell::new(HashMap::new()))
+    }
+
+    fn borrow_map(&self) -> std::cell::Ref<'_, HashMap<Uuid, Rc<ProgramDependenceGraph>>> {
+        self.0.borrow()
+    }
+
+    fn borrow_map_mut(&self) -> std::cell::RefMut<'_, HashMap<Uuid, Rc<ProgramDependenceGraph>>> {
+        self.0.borrow_mut()
+    }
+}
+
 /// Result of interprocedural backward slicing.
 #[derive(Debug, Clone)]
 pub struct InterproceduralSlice {
@@ -30,7 +47,7 @@ pub struct InterproceduralSlicer<'a> {
     icfg: &'a InterproceduralCFG,
     backend: &'a MemoryBackend,
     source_files: HashMap<String, String>,
-    pdgs: RefCell<HashMap<Uuid, Rc<ProgramDependenceGraph>>>,
+    pdg_cache: PdgCache,
     function_names: HashMap<Uuid, String>,
 }
 
@@ -51,14 +68,14 @@ impl<'a> InterproceduralSlicer<'a> {
             icfg,
             backend,
             source_files: source_files.clone(),
-            pdgs: RefCell::new(HashMap::new()),
+            pdg_cache: PdgCache::new(),
             function_names,
         })
     }
 
     /// Pre-populate PDGs from a discover-time archive (skips lazy rebuild when present).
     pub fn preload_pdgs(&self, archive: &crate::cfg_pdg_archive::CfgPdgArchive) {
-        let mut pdgs = self.pdgs.borrow_mut();
+        let mut pdgs = self.pdg_cache.borrow_map_mut();
         for (function_id, record) in &archive.records {
             pdgs.insert(*function_id, Rc::new(record.pdg.clone()));
         }
@@ -109,8 +126,8 @@ impl<'a> InterproceduralSlicer<'a> {
         let lines: HashSet<usize> = slice
             .iter()
             .filter_map(|(func_id, node_id)| {
-                self.pdgs
-                    .borrow()
+                self.pdg_cache
+                    .borrow_map()
                     .get(func_id)
                     .and_then(|p| p.nodes.get(node_id))
                     .map(|n| n.statement.line)
@@ -134,7 +151,7 @@ impl<'a> InterproceduralSlicer<'a> {
     }
 
     fn pdg_for(&self, function: Uuid) -> Result<Rc<ProgramDependenceGraph>> {
-        if let Some(pdg) = self.pdgs.borrow().get(&function).cloned() {
+        if let Some(pdg) = self.pdg_cache.borrow_map().get(&function).cloned() {
             return Ok(pdg);
         }
 
@@ -158,7 +175,7 @@ impl<'a> InterproceduralSlicer<'a> {
             })
             .ok_or_else(|| Error::NotFound(format!("source for {file_path}")))?;
         let pdg = Rc::new(ProgramDependenceGraph::build(cfg, source.as_bytes())?);
-        self.pdgs.borrow_mut().insert(function, Rc::clone(&pdg));
+        self.pdg_cache.borrow_map_mut().insert(function, Rc::clone(&pdg));
         Ok(pdg)
     }
 

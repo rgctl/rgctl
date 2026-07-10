@@ -297,6 +297,10 @@ path = "tests/go_cfg_analysis.rs"
 name = "dashboard_metasfresh"
 path = "tests/dashboard_metasfresh.rs"
 
+[[test]]
+name = "discover_perf_baselines"
+path = "tests/discover_perf_baselines.rs"
+
 [[bench]]
 name = "parsing"
 harness = false

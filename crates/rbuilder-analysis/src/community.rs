@@ -6,7 +6,7 @@
 //! high-degree utility nodes, and deterministic importance-weighted tie-breaking.
 
 use crate::centrality::FastPageRank;
-use crate::graph_utils::PetGraphView;
+use crate::graph_utils::{edge_type_set, PetGraphView};
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rbuilder_error::Result;
@@ -503,9 +503,10 @@ fn build_filtered_neighbor_lists(
 ) -> Vec<Vec<usize>> {
     let node_count = view.directed.node_count();
     let mut neighbors = vec![Vec::new(); node_count];
+    let allowed = edge_type_set(allowed_types);
 
     for edge in view.directed.edge_references() {
-        if allowed_types.contains(edge.weight()) {
+        if allowed.contains(edge.weight()) {
             let s = edge.source().index();
             let t = edge.target().index();
             neighbors[s].push(t);
@@ -672,89 +673,6 @@ fn connected_components(backend: &MemoryBackend) -> Result<Vec<Vec<Uuid>>> {
         }
     }
     Ok(components)
-}
-
-#[allow(dead_code)]
-fn most_common_type(nodes: &[&rbuilder_graph::schema::Node]) -> NodeType {
-    let mut counts = HashMap::new();
-    for node in nodes {
-        *counts.entry(node.node_type).or_insert(0) += 1;
-    }
-    counts
-        .into_iter()
-        .max_by_key(|(_, count)| *count)
-        .map(|(t, _)| t)
-        .unwrap_or(NodeType::Function)
-}
-
-#[allow(dead_code)]
-fn avg_complexity(nodes: &[&rbuilder_graph::schema::Node]) -> f64 {
-    if nodes.is_empty() {
-        return 0.0;
-    }
-    let sum: f64 = nodes.iter().map(|n| node_complexity(n) as f64).sum();
-    sum / nodes.len() as f64
-}
-
-#[allow(dead_code)]
-fn node_complexity(node: &rbuilder_graph::schema::Node) -> i64 {
-    node.get_property("cyclomatic")
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(0)
-}
-
-#[allow(dead_code)]
-fn infer_community_label(nodes: &[&rbuilder_graph::schema::Node], idx: usize) -> String {
-    let paths: Vec<_> = nodes.iter().filter_map(|n| n.file_path.as_ref()).collect();
-
-    if let Some(common) = find_common_path_prefix(&paths) {
-        if !common.is_empty() {
-            return common;
-        }
-    }
-
-    let names: Vec<_> = nodes.iter().map(|n| n.name.as_str()).collect();
-    if names
-        .iter()
-        .any(|n| n.contains("auth") || n.contains("Auth"))
-    {
-        return "auth cluster".into();
-    }
-    if names.iter().any(|n| n.contains("api") || n.contains("Api")) {
-        return "API layer".into();
-    }
-    if names
-        .iter()
-        .any(|n| n.contains("db") || n.contains("database") || n.contains("query"))
-    {
-        return "database layer".into();
-    }
-
-    format!("cluster_{idx}")
-}
-
-#[allow(dead_code)]
-fn find_common_path_prefix(paths: &[&String]) -> Option<String> {
-    if paths.is_empty() {
-        return None;
-    }
-    let first = paths[0].as_str();
-    let mut prefix_len = first.len();
-    for path in &paths[1..] {
-        prefix_len = first
-            .chars()
-            .zip(path.chars())
-            .take(prefix_len)
-            .take_while(|(a, b)| a == b)
-            .count();
-    }
-    if prefix_len == 0 {
-        return None;
-    }
-    if let Some(last_slash) = first[..prefix_len].rfind('/') {
-        return Some(first[..last_slash].to_string());
-    }
-    Some(first[..prefix_len].to_string())
 }
 
 // Zero-copy helper: work with String references instead of Node references

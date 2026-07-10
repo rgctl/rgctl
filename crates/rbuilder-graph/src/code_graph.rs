@@ -37,6 +37,10 @@ impl CodeGraph {
     /// Build a graph from a repository path.
     ///
     /// Prefer [`rbuilder_pipeline::code_graph_from_repository`] in workspace builds.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use rbuilder_pipeline::code_graph_from_repository from the workspace root crate"
+    )]
     pub fn from_repository(root: &Path) -> Result<Self> {
         let _ = root;
         Err(Error::Other(
@@ -152,6 +156,8 @@ impl Default for CodeGraph {
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use super::*;
     use crate::schema::NodeType;
     use std::fs;

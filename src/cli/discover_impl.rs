@@ -343,7 +343,8 @@ pub(crate) fn run_full_analysis(
     debug!("{}", mem_monitor.report());
 
     // Dependency analysis
-    let cycles = DependencyAnalyzer::find_circular_dependencies(graph.backend())?;
+    let cycles =
+        DependencyAnalyzer::find_circular_dependencies_with_view(&petgraph_view, graph.backend())?;
     if !cycles.is_empty() && human_output {
         if verbose {
             warn!(
@@ -835,7 +836,7 @@ pub(crate) fn run_full_analysis(
     }
 
     let analysis_size = std::fs::metadata(&analysis_path)?.len() as f64 / (1024.0 * 1024.0);
-    let snapshot = mem_monitor.snapshot();
+    let snapshot = mem_monitor.snapshot()?;
 
     if json_output {
         let response =

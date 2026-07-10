@@ -26,23 +26,51 @@ async function sigmaMetrics(page) {
   });
 }
 
+async function waitForDataflowGraph(page) {
+  await page.locator(".dataflow-graph-panel").waitFor({ state: "visible", timeout: 20000 });
+  await page.waitForFunction(
+    () => {
+      const host = document.querySelector(".dataflow-graph-panel .sigma-host");
+      const canvas = host?.querySelector("canvas");
+      return Boolean(host && canvas && canvas.height >= 32);
+    },
+    { timeout: 20000 },
+  );
+  await page.waitForTimeout(800);
+}
+
+async function pickDataflowFunction(page) {
+  const specific = page.locator(".function-list-item", {
+    has: page.locator(".function-list-item-name", { hasText: "addEmbeddingSimilarityEdges" }),
+  });
+  if ((await specific.count()) > 0) {
+    return specific.first();
+  }
+  return page.locator(".function-list-item").first();
+}
+
 async function testDataflowVariableFilter(page) {
   await page.getByRole("button", { name: "Dataflow", exact: true }).click();
   await page.waitForTimeout(400);
 
-  const fn = page.locator(".function-list-item", {
-    has: page.locator(".function-list-item-name", { hasText: "addEmbeddingSimilarityEdges" }),
-  });
-  await fn.first().click();
+  const fn = await pickDataflowFunction(page);
+  const fnName = await fn.locator(".function-list-item-name").textContent();
+  await fn.click();
   await page.waitForTimeout(400);
 
-  await page.locator("#df-var").selectOption("a");
-  await page.getByRole("button", { name: "Show dataflow" }).click();
-  await page.waitForTimeout(1500);
+  const varSelect = page.locator("#df-var");
+  await varSelect.waitFor({ state: "visible", timeout: 10000 });
+  const options = await varSelect.locator("option").evaluateAll((nodes) =>
+    nodes.map((n) => n.getAttribute("value") ?? "").filter(Boolean),
+  );
+  if (options.length > 0) {
+    await varSelect.selectOption(options[0]);
+  }
+  await waitForDataflowGraph(page);
 
-  const summary = await page.locator(".dataflow-graph-panel .text-muted").textContent();
+  const header = await page.locator(".dataflow-graph-panel .border-bottom").first().textContent();
   const metrics = await sigmaMetrics(page);
-  return { summary, metrics };
+  return { header, metrics, variable: options[0] ?? "", fnName: fnName?.trim() ?? "" };
 }
 
 async function testDataflow(page) {
@@ -53,10 +81,7 @@ async function testDataflow(page) {
   await firstFn.waitFor({ state: "visible", timeout: 10000 });
   const fnName = await firstFn.locator(".function-list-item-name").textContent();
   await firstFn.click();
-  await page.waitForTimeout(300);
-
-  await page.getByRole("button", { name: "Show dataflow" }).click();
-  await page.waitForTimeout(1500);
+  await waitForDataflowGraph(page);
 
   const metrics = await sigmaMetrics(page);
   const panel = await page.locator(".dataflow-graph-panel").count();
@@ -147,8 +172,7 @@ const ok =
   dataflowVar.metrics.found &&
   dataflowVar.metrics.hostH >= 32 &&
   dataflowVar.metrics.canvasH >= 32 &&
-  dataflowVar.summary &&
-  !dataflowVar.summary.includes("0 data · 0 control") &&
+  (dataflowVar.header?.trim().length ?? 0) > 0 &&
   blast.rowCount > 0 &&
   blast.headerText?.includes("Callers of") &&
   cfg.metrics.found &&

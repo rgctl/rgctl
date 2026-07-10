@@ -2,9 +2,12 @@
 //!
 //! Computes downstream impact of changing a symbol, optionally enriched with PDG data
 //! from [`FlowCache`].
+//!
+//! For large graphs requiring full transitive closure, prefer [`crate::BlastRadiusEngine`].
+//! This BFS-based analyzer uses [`crate::graph_utils::TraversalConfig`] (default depth 10).
 
 use crate::flow_cache::FlowCache;
-use crate::graph_utils::PetGraphView;
+use crate::graph_utils::{PetGraphView, TraversalConfig, DEFAULT_TRAVERSAL_DEPTH};
 use petgraph::graph::NodeIndex;
 use rbuilder_error::{Error, Result};
 use rbuilder_graph::backend::{GraphBackend, MemoryBackend};
@@ -75,7 +78,7 @@ impl<'a> BlastRadiusAnalyzer<'a> {
         Self {
             backend,
             flow_cache: None,
-            max_depth: usize::MAX,
+            max_depth: DEFAULT_TRAVERSAL_DEPTH,
         }
     }
 
@@ -85,9 +88,15 @@ impl<'a> BlastRadiusAnalyzer<'a> {
         self
     }
 
-    /// Limit transitive caller traversal depth (default 10).
+    /// Limit transitive caller traversal depth (default [`DEFAULT_TRAVERSAL_DEPTH`]).
     pub fn with_max_depth(mut self, max_depth: usize) -> Self {
         self.max_depth = max_depth;
+        self
+    }
+
+    /// Set traversal limits from [`TraversalConfig`].
+    pub fn with_traversal_config(mut self, config: TraversalConfig) -> Self {
+        self.max_depth = config.max_depth;
         self
     }
 
@@ -96,6 +105,16 @@ impl<'a> BlastRadiusAnalyzer<'a> {
         let (source_id, source_name) = resolve_unique_symbol(self.backend, symbol_name)?;
         let view = PetGraphView::from_backend(self.backend)?;
         self.analyze_node(&view, source_id, &source_name)
+    }
+
+    /// Analyze blast radius by symbol name with a pre-built topology view.
+    pub fn analyze_with_view(
+        &self,
+        view: &PetGraphView,
+        symbol_name: &str,
+    ) -> Result<BlastRadiusReport> {
+        let (source_id, source_name) = resolve_unique_symbol(self.backend, symbol_name)?;
+        self.analyze_node(view, source_id, &source_name)
     }
 
     /// Analyze blast radius by node id.
@@ -143,7 +162,10 @@ impl<'a> BlastRadiusAnalyzer<'a> {
                 if let Some(uuid) = view.index_to_uuid.get(&pred) {
                     if let Ok(Some(node)) = self.backend.get_node(*uuid) {
                         if node.node_type == NodeType::Function && *uuid != symbol_id {
-                            queue.push_back((*uuid, depth + 1));
+                            let next_depth = depth + 1;
+                            if next_depth <= self.max_depth {
+                                queue.push_back((*uuid, next_depth));
+                            }
                         }
                     }
                 }
@@ -389,5 +411,32 @@ mod tests {
         assert_eq!(report.data_flow_depth, 1);
         assert_eq!(report.data_flow_impact.len(), 1);
         assert_eq!(report.data_flow_impact[0].caller, id_b);
+    }
+
+    #[test]
+    fn default_depth_limits_long_call_chain() {
+        let mut backend = MemoryBackend::new();
+        let mut ids = Vec::new();
+        for i in 0..12 {
+            let node = Node::new(NodeType::Function, format!("f{i}"));
+            ids.push(node.id);
+            backend.insert_node(node).unwrap();
+        }
+        for i in 0..11 {
+            backend
+                .insert_edge(Edge::new(ids[i], ids[i + 1], EdgeType::Calls))
+                .unwrap();
+        }
+        let view = PetGraphView::from_backend(&backend).unwrap();
+        let limited = BlastRadiusAnalyzer::new(&backend)
+            .analyze_with_view(&view, "f11")
+            .unwrap();
+        let full = BlastRadiusAnalyzer::new(&backend)
+            .with_traversal_config(TraversalConfig::unlimited())
+            .analyze_with_view(&view, "f11")
+            .unwrap();
+        assert!(full.impact_zone.contains(&"f0".to_string()));
+        assert!(!limited.impact_zone.contains(&"f0".to_string()));
+        assert!(limited.impact_zone.contains(&"f1".to_string()));
     }
 }

@@ -1,4 +1,6 @@
 //! Storage and retrieval of CFG/PDG/Dominance analysis results.
+//!
+//! Persists per-function analysis artifacts to disk (JSON/bincode). Not graph topology.
 
 use crate::cfg::ControlFlowGraph;
 use crate::dominance::DominatorTree;

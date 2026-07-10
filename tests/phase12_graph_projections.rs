@@ -250,7 +250,12 @@ fn test_deep_chain_parity() {
         sorted_function_impact(&backend, &scc.impact_zone_ids).len(),
         14
     );
-    assert_eq!(bfs.impact_zone.len(), 14);
+    let bfs_unlimited = BlastRadiusAnalyzer::new(&backend)
+        .with_traversal_config(rbuilder::analysis::TraversalConfig::unlimited())
+        .analyze_by_id(leaf)
+        .unwrap();
+    assert_eq!(bfs_unlimited.impact_zone.len(), 14);
+    assert_eq!(bfs.impact_zone.len(), 10);
 }
 
 #[test]

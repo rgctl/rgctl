@@ -1,20 +1,36 @@
-//! rBuilder core library facade
+//! rBuilder core library facade — one dependency for graph, analysis, pipeline, and plugins.
+#![warn(missing_docs)]
 
+/// Process memory monitoring utilities.
 pub mod memory;
 
+/// Graph and program analysis algorithms (`rbuilder-analysis`).
 pub use rbuilder_analysis as analysis;
+/// Shared error types.
 pub use rbuilder_error::{Error, Result};
+/// Export helpers for analysis artifacts.
 pub use rbuilder_export as export;
+/// Language extraction and discovery.
 pub use rbuilder_extraction as extraction;
+/// Graph query language (GQL).
 pub use rbuilder_gql as gql;
+/// Graph storage and query layer.
 pub use rbuilder_graph as graph;
+/// Incremental update pipeline.
 pub use rbuilder_incremental as incremental;
+/// Multi-stage processing pipeline.
 pub use rbuilder_pipeline as pipeline;
+/// Language plugin API types.
 pub use rbuilder_plugin_api as plugin;
+/// Project configuration parsing.
 pub use rbuilder_project_config as config;
+/// Language registry.
 pub use rbuilder_registry as registry;
+/// Rule engine.
 pub use rbuilder_rules as rules;
+/// Security scanning helpers.
 pub use rbuilder_security as security;
+/// Semantic analysis (signatures, IDL).
 pub use rbuilder_semantic as semantic;
 
 pub use rbuilder_extraction::discovery;
@@ -40,5 +56,5 @@ pub use rbuilder_semantic::{
     FunctionSignature, IdlFormat, IdlGenerator, SignatureExtractor, TypeInferencer,
 };
 
-/// Version information
+/// Crate version string (matches `CARGO_PKG_VERSION`).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

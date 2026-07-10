@@ -810,4 +810,39 @@ def handle_request(request):
             "sanitized flow should reduce vulnerabilities"
         );
     }
+
+    #[test]
+    fn test_taint_no_sql_flow_without_user_input() {
+        let code = r#"
+def safe_query():
+    query = "SELECT 1"
+    cursor.execute(query)
+"#;
+        let cfg = build_cfg_for_function("python", code, "safe_query").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+        let mut analyzer = TaintAnalyzer::new(&pdg, &cfg);
+        analyzer.detect_patterns("python");
+        assert!(
+            analyzer.vulnerable_flows().is_empty(),
+            "static SQL without user input should not taint"
+        );
+    }
+
+    #[test]
+    fn test_taint_multi_hop_python() {
+        let code = r#"
+def handle(request):
+    user = request.GET['user']
+    msg = user
+    payload = msg
+    cursor.execute("SELECT * FROM t WHERE u = '" + payload + "'")
+"#;
+        let cfg = build_cfg_for_function("python", code, "handle").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+        let mut analyzer = TaintAnalyzer::new(&pdg, &cfg);
+        analyzer.detect_patterns("python");
+        let flows = analyzer.vulnerable_flows();
+        assert!(!flows.is_empty(), "multi-hop assignment chain should reach sink");
+        assert_eq!(flows[0].source_type, TaintSource::HttpParameter);
+    }
 }

@@ -1,4 +1,7 @@
 //! Reaching-definitions data-flow analysis.
+//!
+//! **Algorithm:** iterative gen/kill dataflow on the CFG worklist.
+//! **Complexity:** O(n · d) blocks × definition-set size; worklist membership is O(1).
 
 use crate::cfg::{BasicBlock, BlockId, ControlFlowGraph};
 use crate::pdg::ProgramDependenceGraph;
@@ -45,8 +48,10 @@ pub fn compute_reaching_definitions(
     }
 
     let mut worklist: VecDeque<BlockId> = cfg.blocks.keys().copied().collect();
+    let mut on_worklist: HashSet<BlockId> = worklist.iter().copied().collect();
 
     while let Some(block_id) = worklist.pop_front() {
+        on_worklist.remove(&block_id);
         let in_b: HashSet<Definition> = cfg
             .predecessors(block_id)
             .iter()
@@ -66,7 +71,7 @@ pub fn compute_reaching_definitions(
             out_set.insert(block_id, out_b);
             in_set.insert(block_id, in_b);
             for succ in cfg.successors(block_id) {
-                if !worklist.contains(&succ) {
+                if on_worklist.insert(succ) {
                     worklist.push_back(succ);
                 }
             }
@@ -146,5 +151,39 @@ fn example(condition: bool) {
             .filter(|d| d.variable == "x")
             .collect();
         assert!(x_defs.len() >= 2);
+    }
+
+    #[test]
+    fn test_reaching_definitions_diamond_merge() {
+        let code = r#"
+fn diamond(cond: bool) {
+    let mut x = 1;
+    if cond {
+        x = 2;
+    } else {
+        x = 3;
+    }
+    let y = x;
+    let _z = y;
+}
+"#;
+        let cfg = build_cfg_for_function("rust", code, "diamond").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+        let reaching = compute_reaching_definitions(&cfg, &pdg);
+
+        let merge_block = cfg
+            .blocks
+            .values()
+            .find(|b| b.statements.iter().any(|s| s.text.contains("_z")))
+            .expect("merge block");
+
+        let x_defs: Vec<_> = reaching.in_set[&merge_block.id]
+            .iter()
+            .filter(|d| d.variable == "x")
+            .collect();
+        assert!(
+            x_defs.len() >= 2,
+            "diamond merge should see multiple reaching definitions for x"
+        );
     }
 }

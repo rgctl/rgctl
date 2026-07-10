@@ -92,6 +92,8 @@ impl CfgPdgArchive {
     /// Load archive from disk (mmap parse).
     pub fn load_from_path(path: &Path) -> Result<Self> {
         let file = File::open(path)?;
+        // SAFETY: The file is opened read-only and lives for the lifetime of the returned
+        // archive; we only read the mapped bytes and do not mutate through the mapping.
         let mmap = unsafe { Mmap::map(&file)? };
         parse_payload(&mmap)
     }

@@ -1,4 +1,7 @@
 //! Pattern-based type inference for dynamic languages (Phase 13.3).
+//!
+//! **Algorithm:** heuristic propagation over PDG def-use and literal patterns.
+//! **Complexity:** O(S) statements per function.
 
 use crate::cfg::ControlFlowGraph;
 use crate::pdg::{PdgNodeId, ProgramDependenceGraph};

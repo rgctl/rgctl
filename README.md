@@ -21,6 +21,27 @@ Together: **rBuilder** is the **reachability builder** — it constructs the gra
 
 ---
 
+#### RBuilder Analysis - Repository graph algorithms
+
+| Module | Graph Input | Algorithm | Complexity | Notes |
+|--------|-------------|-----------|------------|-------|
+| `graph_utils` | Backend/snapshot | Topology projection | O(V+E) | Builds DiGraph + UnGraph; `call_only_directed()` filters Calls |
+| `centrality` | `PetGraphView` → `FlatGraphIndex` | PageRank (power iteration) | O(k·E) per iter | Default 20 iters, damping 0.85; excludes structural edges |
+| `centrality` | Flat index | Brandes betweenness | O(V·E) | Exact when V ≤ 500 |
+| `centrality` | Flat index | Degree centrality | O(E) | In/out on filtered projection |
+| `centrality_approx` | Flat index | Sampled Brandes (RANDES) | O(k·(V+E)) | 512 pivots default; normalized |
+| `centrality_approx` | Flat index | HyperBall harmonic | O(r·E) | Exact set propagation ≤8192 nodes; HLL p=14 above |
+| `community` | `PetGraphView` undirected filter | Label propagation + modularity | O(iters·E) | Hub stripping (μ+kσ); importance tie-break via PageRank |
+| `dependency` | `PetGraphView` directed | Kosaraju SCC | O(V+E) | Cycles require ≥2 nodes with call edges |
+| `dependency` | Directed BFS (reverse) | Impact radius | O(V+E) capped | **Hard depth cap = 10** |
+| `blast_radius_scc` | Call-only DiGraph | Kosaraju → DAG → topo → bitset reachability | Build O(V²/64), query O(1) | Primary engine for large graphs |
+| `blast_radius` | `PetGraphView` Calls filter | Reverse BFS + optional PDG depth | O(V+E) | Depth default `usize::MAX` (inconsistent with dependency) |
+| `callgraph` | Backend | Zero-clone u32 adjacency build | O(V+E) | Column-oriented metadata; lazy legacy cache |
+| `migration` | Communities + cross-package edges | Weighted topo sort / greedy order | O(V+E) | JSON payload for dashboard |
+| `complexity` | Backend node properties | Aggregation + classification | O(F) | Reads precomputed cyclomatic/cognitive from graph nodes |
+
+
+
 ## Built for agents
 
 **Goal:** make LLM-assisted development **more accurate** while **using fewer tokens**.

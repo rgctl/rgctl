@@ -1,6 +1,7 @@
-//! Complexity metrics aggregation and classification
+//! Complexity metrics aggregation and classification.
 //!
-//! Task 2.1.2: Cyclomatic/cognitive complexity analysis from graph properties.
+//! **Algorithm:** reads precomputed cyclomatic/cognitive properties from graph nodes.
+//! **Complexity:** O(F) over function nodes.
 
 use rbuilder_error::Result;
 use rbuilder_graph::backend::MemoryBackend;

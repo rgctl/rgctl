@@ -2,6 +2,9 @@
 //!
 //! Hot columns (node ids, types, edge topology) are fixed-width in the mmap.
 //! Open parses only the header + small index sections — not the full node/edge vectors.
+//!
+//! **Complexity:** open is O(N) for id→index map only; `find_nodes_by_name` uses the embedded
+//! name index without hydrating a [`MemoryBackend`] or calling [`Self::to_prepared`].
 
 use crate::schema::{Edge, EdgeType, GraphParameter, Node, NodeType};
 use memmap2::Mmap;
@@ -63,6 +66,9 @@ struct EdgeRow {
 }
 
 /// Parsed columnar snapshot backed by mmap (no full graph deserialize at open).
+///
+/// Prefer [`Self::find_nodes_by_name`] and [`Self::edge_topology_typed`] for read-only access;
+/// call [`Self::to_prepared`] only when a full in-memory backend is required.
 pub struct ColumnarGraphMmap {
     mmap: Arc<Mmap>,
     schema_version: u32,
@@ -146,30 +152,37 @@ impl ColumnarGraphMmap {
         })
     }
 
+    /// Graph schema version stored in the snapshot header.
     pub fn schema_version(&self) -> u32 {
         self.schema_version
     }
 
+    /// Number of nodes in the snapshot.
     pub fn node_count(&self) -> usize {
         self.node_count
     }
 
+    /// Number of edges in the snapshot.
     pub fn edge_count(&self) -> usize {
         self.edge_count
     }
 
+    /// BLAKE3 content digest for cache invalidation.
     pub fn content_digest(&self) -> &str {
         &self.digest_hex
     }
 
+    /// Name → node id index parsed at open time.
     pub fn name_index(&self) -> &HashMap<String, Vec<Uuid>> {
         &self.name_index
     }
 
+    /// Node type → node id index parsed at open time.
     pub fn type_index(&self) -> &HashMap<NodeType, Vec<Uuid>> {
         &self.type_index
     }
 
+    /// Clone embedded indexes for backend hydration.
     pub fn prepared_indexes(&self) -> PreparedIndexes {
         PreparedIndexes {
             name_index: self.name_index.clone(),
@@ -177,10 +190,12 @@ impl ColumnarGraphMmap {
         }
     }
 
+    /// Iterate `(column_index, node_id)` pairs without materializing nodes.
     pub fn node_ids_by_index(&self) -> impl Iterator<Item = (usize, Uuid)> + '_ {
         self.id_to_index.iter().map(|(id, idx)| (*idx, *id))
     }
 
+    /// Read typed edge topology directly from mmap columns.
     pub fn edge_topology_typed(&self) -> Result<Vec<(Uuid, Uuid, EdgeType)>> {
         let mut out = Vec::with_capacity(self.edge_count);
         for idx in 0..self.edge_count {
@@ -194,6 +209,7 @@ impl ColumnarGraphMmap {
         Ok(out)
     }
 
+    /// Materialize a single node by id (reads cold extension blob).
     pub fn get_node(&self, id: Uuid) -> Result<Option<Node>> {
         let Some(&idx) = self.id_to_index.get(&id) else {
             return Ok(None);
@@ -201,6 +217,7 @@ impl ColumnarGraphMmap {
         Ok(Some(self.materialize_node(idx)?))
     }
 
+    /// Find nodes by exact name via the embedded name index.
     pub fn find_nodes_by_name(&self, name: &str) -> Result<Vec<Node>> {
         let Some(ids) = self.name_index.get(name) else {
             return Ok(Vec::new());
@@ -382,10 +399,10 @@ impl PreparedGraphSnapshot {
         file.extend_from_slice(&type_index_bytes);
 
         for row in &node_rows {
-            file.extend_from_slice(as_bytes(row));
+            file.extend_from_slice(&encode_node_row(row));
         }
         for row in &edge_rows {
-            file.extend_from_slice(as_bytes(row));
+            file.extend_from_slice(&encode_edge_row(row));
         }
         file.extend_from_slice(&strings.bytes);
         file.extend_from_slice(&extensions_blob);
@@ -543,8 +560,32 @@ fn read_type_index_section(
     Ok((index, 8 + len))
 }
 
-fn as_bytes<T: Sized>(val: &T) -> &[u8] {
-    unsafe { std::slice::from_raw_parts((val as *const T) as *const u8, std::mem::size_of::<T>()) }
+fn encode_node_row(row: &NodeRow) -> [u8; NODE_ROW_SIZE] {
+    let mut buf = [0u8; NODE_ROW_SIZE];
+    buf[0..16].copy_from_slice(&row.id);
+    buf[16..18].copy_from_slice(&row.node_type.to_le_bytes());
+    buf[18..20].copy_from_slice(&row._pad.to_le_bytes());
+    buf[20..24].copy_from_slice(&row.name_off.to_le_bytes());
+    buf[24..28].copy_from_slice(&row.name_len.to_le_bytes());
+    buf[28..32].copy_from_slice(&row.file_path_off.to_le_bytes());
+    buf[32..36].copy_from_slice(&row.file_path_len.to_le_bytes());
+    buf[36..40].copy_from_slice(&row.signature_off.to_le_bytes());
+    buf[40..44].copy_from_slice(&row.signature_len.to_le_bytes());
+    buf[44..48].copy_from_slice(&row.start_line.to_le_bytes());
+    buf[48..52].copy_from_slice(&row.end_line.to_le_bytes());
+    buf[52..56].copy_from_slice(&row.extension_off.to_le_bytes());
+    buf[56..60].copy_from_slice(&row.extension_len.to_le_bytes());
+    buf[60..64].copy_from_slice(&row._pad_end.to_le_bytes());
+    buf
+}
+
+fn encode_edge_row(row: &EdgeRow) -> [u8; EDGE_ROW_SIZE] {
+    let mut buf = [0u8; EDGE_ROW_SIZE];
+    buf[0..16].copy_from_slice(&row.from);
+    buf[16..32].copy_from_slice(&row.to);
+    buf[32] = row.edge_type;
+    buf[33..40].copy_from_slice(&row._pad);
+    buf
 }
 
 fn node_type_to_u16(t: NodeType) -> u16 {
@@ -725,14 +766,68 @@ mod tests {
         prepared.write_columnar_to_path(&path).unwrap();
 
         let file = std::fs::File::open(&path).unwrap();
+        // SAFETY: test file is read-only; mapping covers the written snapshot bytes only.
         let mmap = Arc::new(unsafe { Mmap::map(&file).unwrap() });
         let col = ColumnarGraphMmap::open(mmap).unwrap();
         assert_eq!(col.node_count(), 1);
         assert_eq!(col.edge_count(), 1);
         assert_eq!(col.content_digest(), prepared.content_digest);
+        assert!(col.name_index().contains_key("main"));
         assert_eq!(col.find_nodes_by_name("main").unwrap().len(), 1);
 
         let loaded = col.to_prepared().unwrap();
         assert_eq!(loaded.nodes[0].name, "main");
+    }
+
+    #[test]
+    fn columnar_name_index_lookup_without_prepared() {
+        let mut backend = crate::backend::MemoryBackend::new();
+        let n = Node::new(NodeType::Function, "lookup_me".into());
+        backend.insert_node(n).unwrap();
+        let prepared = PreparedGraphSnapshot::from_backend(&backend).unwrap();
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("graph.snapshot.bin");
+        prepared.write_columnar_to_path(&path).unwrap();
+
+        let file = std::fs::File::open(&path).unwrap();
+        // SAFETY: test file is read-only; mapping covers the written snapshot bytes only.
+        let mmap = Arc::new(unsafe { Mmap::map(&file).unwrap() });
+        let col = ColumnarGraphMmap::open(mmap).unwrap();
+        assert_eq!(col.find_nodes_by_name("lookup_me").unwrap().len(), 1);
+        assert!(!col.name_index().is_empty());
+    }
+
+    #[test]
+    #[ignore = "manual: timing comparison for columnar open vs full hydrate"]
+    fn columnar_open_vs_hydrate_timing() {
+        let mut backend = crate::backend::MemoryBackend::new();
+        for i in 0..1000 {
+            backend
+                .insert_node(Node::new(NodeType::Function, format!("fn{i}")))
+                .unwrap();
+        }
+        let prepared = PreparedGraphSnapshot::from_backend(&backend).unwrap();
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("graph.snapshot.bin");
+        prepared.write_columnar_to_path(&path).unwrap();
+
+        let open_start = std::time::Instant::now();
+        let file = std::fs::File::open(&path).unwrap();
+        // SAFETY: test file is read-only; mapping covers the written snapshot bytes only.
+        let mmap = Arc::new(unsafe { Mmap::map(&file).unwrap() });
+        let col = ColumnarGraphMmap::open(mmap).unwrap();
+        let open_elapsed = open_start.elapsed();
+
+        let hydrate_start = std::time::Instant::now();
+        let _backend = col.to_prepared().unwrap().hydrate_backend().unwrap();
+        let hydrate_elapsed = hydrate_start.elapsed();
+
+        eprintln!(
+            "columnar open: {:?}, full hydrate: {:?} (nodes={})",
+            open_elapsed,
+            hydrate_elapsed,
+            col.node_count()
+        );
+        assert!(open_elapsed <= hydrate_elapsed);
     }
 }

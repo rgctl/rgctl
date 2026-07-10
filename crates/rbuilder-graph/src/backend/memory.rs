@@ -1,6 +1,7 @@
 //! In-memory graph backend
 //!
-//! Simple in-memory implementation of GraphBackend for testing and small repositories.
+//! **Structure:** `HashMap<Uuid, Node>` + `Vec<Edge>` under `RwLock`, with secondary indexes
+//! (name, type, label, property, edge-type). **Complexity:** O(1) indexed lookup; O(E) edge scans.
 
 use crate::backend::trait_def::GraphBackend;
 use crate::intern::StringInterner;
@@ -83,20 +84,20 @@ impl MemoryBackend {
         }
 
         {
-            let mut name_index = expect_write(&backend.node_name_index);
+            let mut name_index = write_lock(&backend.node_name_index)?;
             for (name, ids) in &prepared.indexes.name_index {
-                let name_arc = backend.string_interner.intern(name);
+                let name_arc = backend.string_interner.intern(name)?;
                 name_index.insert(name_arc, ids.clone());
             }
-            let mut type_index = expect_write(&backend.node_type_index);
+            let mut type_index = write_lock(&backend.node_type_index)?;
             for (node_type, ids) in &prepared.indexes.type_index {
                 type_index.insert(*node_type, ids.clone());
             }
         }
-        backend.index_node_metadata(&nodes);
+        backend.index_node_metadata(&nodes)?;
 
         {
-            let mut store = expect_write(&backend.nodes);
+            let mut store = write_lock(&backend.nodes)?;
             for node in nodes {
                 store.insert(node.id, node);
             }
@@ -174,9 +175,40 @@ impl MemoryBackend {
 
     /// Find node IDs by name (returns UUIDs, not cloned nodes).
     pub fn find_node_ids_by_name(&self, name: &str) -> Result<Vec<Uuid>> {
-        let name_arc = self.string_interner.intern(name);
+        let name_arc = self.string_interner.intern(name)?;
         let index = read_lock(&self.node_name_index)?;
         Ok(index.get(name_arc.as_ref()).cloned().unwrap_or_default())
+    }
+
+    /// Collect nodes for a set of IDs (single nodes-map lock).
+    pub fn get_nodes_by_ids(&self, ids: &HashSet<Uuid>) -> Result<Vec<Node>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let nodes = read_lock(&self.nodes)?;
+        Ok(ids
+            .iter()
+            .filter_map(|id| nodes.get(id).cloned())
+            .collect())
+    }
+
+    /// Find node IDs by label (returns UUIDs, not cloned nodes).
+    pub fn find_node_ids_by_label(&self, label: &str) -> Result<Vec<Uuid>> {
+        let label_arc = self.string_interner.intern(label)?;
+        let index = read_lock(&self.node_label_index)?;
+        Ok(index.get(label_arc.as_ref()).cloned().unwrap_or_default())
+    }
+
+    /// Find node IDs by property key/value (returns UUIDs, not cloned nodes).
+    pub fn find_node_ids_by_property(&self, key: &str, value: &str) -> Result<Vec<Uuid>> {
+        let key_arc = self.string_interner.intern(key)?;
+        let value_arc = self.string_interner.intern(value)?;
+        let index = read_lock(&self.node_property_index)?;
+        Ok(index
+            .get(key_arc.as_ref())
+            .and_then(|values| values.get(value_arc.as_ref()))
+            .cloned()
+            .unwrap_or_default())
     }
 
     /// Find node IDs by type (returns UUIDs, not cloned nodes).
@@ -219,7 +251,7 @@ impl MemoryBackend {
 
     /// Find nodes by name (indexed)
     pub fn find_nodes_by_name(&self, name: &str) -> Result<Vec<Node>> {
-        let name_arc = self.string_interner.intern(name);
+        let name_arc = self.string_interner.intern(name)?;
         let index = read_lock(&self.node_name_index)?;
         if let Some(ids) = index.get(name_arc.as_ref()) {
             let nodes = read_lock(&self.nodes)?;
@@ -242,7 +274,7 @@ impl MemoryBackend {
 
     /// Find nodes by label (indexed)
     pub fn find_nodes_by_label(&self, label: &str) -> Result<Vec<Node>> {
-        let label_arc = self.string_interner.intern(label);
+        let label_arc = self.string_interner.intern(label)?;
         let index = read_lock(&self.node_label_index)?;
         if let Some(ids) = index.get(label_arc.as_ref()) {
             let nodes = read_lock(&self.nodes)?;
@@ -254,8 +286,8 @@ impl MemoryBackend {
 
     /// Find nodes by property key/value (indexed).
     pub fn find_nodes_by_property(&self, key: &str, value: &str) -> Result<Vec<Node>> {
-        let key_arc = self.string_interner.intern(key);
-        let value_arc = self.string_interner.intern(value);
+        let key_arc = self.string_interner.intern(key)?;
+        let value_arc = self.string_interner.intern(value)?;
         let index = read_lock(&self.node_property_index)?;
         if let Some(values) = index.get(key_arc.as_ref()) {
             if let Some(ids) = values.get(value_arc.as_ref()) {
@@ -303,7 +335,7 @@ impl MemoryBackend {
         trace!(elapsed = ?intern_start.elapsed(), "insert_nodes_batch: string interning complete");
 
         let index_start = std::time::Instant::now();
-        self.index_nodes(&prepared);
+        self.index_nodes(&prepared)?;
         trace!(elapsed = ?index_start.elapsed(), "insert_nodes_batch: indexing complete");
 
         let store_start = std::time::Instant::now();
@@ -314,7 +346,7 @@ impl MemoryBackend {
         drop(store);
         trace!(elapsed = ?store_start.elapsed(), "insert_nodes_batch: storing complete");
 
-        self.invalidate_cache();
+        self.invalidate_cache()?;
         trace!(elapsed = ?start.elapsed(), "insert_nodes_batch complete");
         Ok(())
     }
@@ -338,7 +370,7 @@ impl MemoryBackend {
         }
         drop(type_index);
         drop(store);
-        self.invalidate_cache();
+        self.invalidate_cache()?;
 
         trace!(elapsed = ?start.elapsed(), "insert_edges_batch complete");
         Ok(())
@@ -395,8 +427,8 @@ impl MemoryBackend {
                 // Intern new property strings
                 let mut interned_props = HashMap::new();
                 for (key, value) in &props_to_add {
-                    let key_interned = self.string_interner.intern(key);
-                    let value_interned = self.string_interner.intern(value);
+                    let key_interned = self.string_interner.intern(key)?;
+                    let value_interned = self.string_interner.intern(value)?;
                     interned_props.insert(key_interned.to_string(), value_interned.to_string());
                 }
 
@@ -415,8 +447,8 @@ impl MemoryBackend {
         // Remove old property index entries
         for (node_id, old_props) in old_properties {
             for (key, value) in old_props {
-                let key_arc = self.string_interner.intern(&key);
-                let value_arc = self.string_interner.intern(&value);
+                let key_arc = self.string_interner.intern(&key)?;
+                let value_arc = self.string_interner.intern(&value)?;
                 if let Some(values) = property_index.get_mut(key_arc.as_ref()) {
                     if let Some(ids) = values.get_mut(value_arc.as_ref()) {
                         ids.retain(|&id| id != node_id);
@@ -428,8 +460,8 @@ impl MemoryBackend {
         // Add new property index entries
         for (node_id, new_props) in new_properties {
             for (key, value) in new_props {
-                let key_arc = self.string_interner.intern(&key);
-                let value_arc = self.string_interner.intern(&value);
+                let key_arc = self.string_interner.intern(&key)?;
+                let value_arc = self.string_interner.intern(&value)?;
                 property_index
                     .entry(key_arc)
                     .or_default()
@@ -441,7 +473,7 @@ impl MemoryBackend {
 
         drop(property_index);
 
-        self.invalidate_cache();
+        self.invalidate_cache()?;
 
         trace!(elapsed = ?start.elapsed(), update_count, "batch_update_node_properties complete");
         Ok(())
@@ -526,14 +558,14 @@ impl MemoryBackend {
         }
         if count > 0 {
             self.rebuild_edge_index();
-            self.invalidate_cache();
+            self.invalidate_cache()?;
         }
         Ok(count)
     }
 
     fn delete_node_without_reindex(&mut self, id: Uuid) -> Result<()> {
         if let Some(node) = write_lock(&self.nodes)?.remove(&id) {
-            self.unindex_node(&node);
+            self.unindex_node(&node)?;
             write_lock(&self.edges)?.retain(|e| e.from != id && e.to != id);
         }
         Ok(())
@@ -576,14 +608,15 @@ impl MemoryBackend {
     }
 
     /// Remove edges referencing deleted nodes.
-    pub fn prune_orphan_edges(&mut self) {
+    pub fn prune_orphan_edges(&mut self) -> Result<()> {
         let node_ids: HashSet<Uuid> = expect_read(&self.nodes).keys().copied().collect();
         {
             let mut edges = expect_write(&self.edges);
             edges.retain(|e| node_ids.contains(&e.from) && node_ids.contains(&e.to));
         }
         self.rebuild_edge_index();
-        self.invalidate_cache();
+        self.invalidate_cache()?;
+        Ok(())
     }
 
     /// Execute a cached query when possible.
@@ -651,24 +684,24 @@ impl MemoryBackend {
         }
     }
 
-    fn index_node(&self, node: &Node) {
-        self.index_nodes(std::slice::from_ref(node));
+    fn index_node(&self, node: &Node) -> Result<()> {
+        self.index_nodes(std::slice::from_ref(node))
     }
 
-    fn index_nodes(&self, nodes: &[Node]) {
+    fn index_nodes(&self, nodes: &[Node]) -> Result<()> {
         let start = std::time::Instant::now();
 
         let lock_start = std::time::Instant::now();
-        let mut name_index = expect_write(&self.node_name_index);
-        let mut type_index = expect_write(&self.node_type_index);
-        let mut label_index = expect_write(&self.node_label_index);
-        let mut property_index = expect_write(&self.node_property_index);
+        let mut name_index = write_lock(&self.node_name_index)?;
+        let mut type_index = write_lock(&self.node_type_index)?;
+        let mut label_index = write_lock(&self.node_label_index)?;
+        let mut property_index = write_lock(&self.node_property_index)?;
         trace!(elapsed = ?lock_start.elapsed(), "index_nodes: lock acquisition complete");
 
         let index_start = std::time::Instant::now();
         for node in nodes {
             // Intern strings once, share Arc across indexes (no clones!)
-            let name_arc = self.string_interner.intern(&node.name);
+            let name_arc = self.string_interner.intern(&node.name)?;
             name_index
                 .entry(name_arc) // Arc::clone is cheap (just pointer + refcount)
                 .or_default()
@@ -677,13 +710,13 @@ impl MemoryBackend {
             type_index.entry(node.node_type).or_default().push(node.id);
 
             for label in &node.labels {
-                let label_arc = self.string_interner.intern(label);
+                let label_arc = self.string_interner.intern(label)?;
                 label_index.entry(label_arc).or_default().push(node.id);
             }
 
             for (key, value) in &node.properties {
-                let key_arc = self.string_interner.intern(key);
-                let value_arc = self.string_interner.intern(value);
+                let key_arc = self.string_interner.intern(key)?;
+                let value_arc = self.string_interner.intern(value)?;
                 property_index
                     .entry(key_arc)
                     .or_default()
@@ -694,20 +727,21 @@ impl MemoryBackend {
         }
         trace!(elapsed = ?index_start.elapsed(), "index_nodes: index population complete");
         trace!(elapsed = ?start.elapsed(), "index_nodes complete");
+        Ok(())
     }
 
     /// Index labels and properties only (name/type indexes supplied externally).
-    fn index_node_metadata(&self, nodes: &[Node]) {
-        let mut label_index = expect_write(&self.node_label_index);
-        let mut property_index = expect_write(&self.node_property_index);
+    fn index_node_metadata(&self, nodes: &[Node]) -> Result<()> {
+        let mut label_index = write_lock(&self.node_label_index)?;
+        let mut property_index = write_lock(&self.node_property_index)?;
         for node in nodes {
             for label in &node.labels {
-                let label_arc = self.string_interner.intern(label);
+                let label_arc = self.string_interner.intern(label)?;
                 label_index.entry(label_arc).or_default().push(node.id);
             }
             for (key, value) in &node.properties {
-                let key_arc = self.string_interner.intern(key);
-                let value_arc = self.string_interner.intern(value);
+                let key_arc = self.string_interner.intern(key)?;
+                let value_arc = self.string_interner.intern(value)?;
                 property_index
                     .entry(key_arc)
                     .or_default()
@@ -716,32 +750,34 @@ impl MemoryBackend {
                     .push(node.id);
             }
         }
+        Ok(())
     }
 
-    fn unindex_node(&self, node: &Node) {
-        let name_arc = self.string_interner.intern(&node.name);
-        if let Some(ids) = expect_write(&self.node_name_index).get_mut(name_arc.as_ref()) {
+    fn unindex_node(&self, node: &Node) -> Result<()> {
+        let name_arc = self.string_interner.intern(&node.name)?;
+        if let Some(ids) = write_lock(&self.node_name_index)?.get_mut(name_arc.as_ref()) {
             ids.retain(|&x| x != node.id);
         }
-        if let Some(ids) = expect_write(&self.node_type_index).get_mut(&node.node_type) {
+        if let Some(ids) = write_lock(&self.node_type_index)?.get_mut(&node.node_type) {
             ids.retain(|&x| x != node.id);
         }
         for label in &node.labels {
-            let label_arc = self.string_interner.intern(label);
-            if let Some(ids) = expect_write(&self.node_label_index).get_mut(label_arc.as_ref()) {
+            let label_arc = self.string_interner.intern(label)?;
+            if let Some(ids) = write_lock(&self.node_label_index)?.get_mut(label_arc.as_ref()) {
                 ids.retain(|&x| x != node.id);
             }
         }
         for (key, value) in &node.properties {
-            let key_arc = self.string_interner.intern(key);
-            let value_arc = self.string_interner.intern(value);
-            if let Some(values) = expect_write(&self.node_property_index).get_mut(key_arc.as_ref())
+            let key_arc = self.string_interner.intern(key)?;
+            let value_arc = self.string_interner.intern(value)?;
+            if let Some(values) = write_lock(&self.node_property_index)?.get_mut(key_arc.as_ref())
             {
                 if let Some(ids) = values.get_mut(value_arc.as_ref()) {
                     ids.retain(|&x| x != node.id);
                 }
             }
         }
+        Ok(())
     }
 
     fn rebuild_edge_index(&self) {
@@ -753,8 +789,9 @@ impl MemoryBackend {
         *expect_write(&self.edge_type_index) = index;
     }
 
-    fn invalidate_cache(&self) {
-        expect_write(&self.query_cache).clear();
+    fn invalidate_cache(&self) -> Result<()> {
+        write_lock(&self.query_cache)?.clear();
+        Ok(())
     }
 }
 
@@ -769,9 +806,9 @@ impl GraphBackend for MemoryBackend {
         let mut node = node;
         self.intern_node(&mut node);
         let id = node.id;
-        self.index_node(&node);
+        self.index_node(&node)?;
         write_lock(&self.nodes)?.insert(id, node);
-        self.invalidate_cache();
+        self.invalidate_cache()?;
         Ok(())
     }
 
@@ -793,10 +830,10 @@ impl GraphBackend for MemoryBackend {
 
     fn delete_node(&mut self, id: Uuid) -> Result<()> {
         if let Some(node) = write_lock(&self.nodes)?.remove(&id) {
-            self.unindex_node(&node);
+            self.unindex_node(&node)?;
             write_lock(&self.edges)?.retain(|e| e.from != id && e.to != id);
             self.rebuild_edge_index();
-            self.invalidate_cache();
+            self.invalidate_cache()?;
         }
         Ok(())
     }
@@ -900,6 +937,10 @@ impl MemoryBackend {
     /// Calculate PageRank scores using Petgraph's optimized algorithm.
     ///
     /// Much faster than custom implementation (< 1 second vs 17+ minutes on large graphs).
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use rbuilder_analysis::CentralityAnalyzer for PageRank on large graphs"
+    )]
     pub fn calculate_pagerank(
         &self,
         damping: f64,
@@ -1009,6 +1050,28 @@ fn node_matches_file(node: &Node, file_path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_query_cache_invalidated_on_insert_and_delete() {
+        let mut backend = MemoryBackend::new();
+        backend
+            .insert_node(Node::new(NodeType::Function, "cached_fn".to_string()))
+            .unwrap();
+
+        let before = backend.cached_query("functions").unwrap();
+        assert_eq!(before.len(), 1);
+
+        let extra = Node::new(NodeType::Function, "new_fn".to_string());
+        let extra_id = extra.id;
+        backend.insert_node(extra).unwrap();
+
+        let after_insert = backend.cached_query("functions").unwrap();
+        assert_eq!(after_insert.len(), 2);
+
+        backend.delete_node(extra_id).unwrap();
+        let after_delete = backend.cached_query("functions").unwrap();
+        assert_eq!(after_delete.len(), 1);
+    }
 
     #[test]
     fn test_create_backend() {

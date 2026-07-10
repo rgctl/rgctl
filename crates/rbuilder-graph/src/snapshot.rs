@@ -1,6 +1,8 @@
 //! Memory-mappable binary graph snapshot format.
 //!
 //! v1: bincode blob (legacy). v2: columnar mmap — see [`columnar_snapshot`].
+//!
+//! **Complexity:** columnar open is O(header + index sections); legacy v1 deserialize is O(N+E).
 
 use crate::backend::MemoryBackend;
 use crate::columnar_snapshot::ColumnarGraphMmap;
@@ -112,6 +114,8 @@ impl MmappedGraphSnapshot {
     /// Open and parse a snapshot file via mmap (v1 bincode or v2 columnar).
     pub fn open(path: &Path) -> Result<Self> {
         let file = File::open(path)?;
+        // SAFETY: `file` is opened read-only; the mapping is valid for the file's lifetime and
+        // snapshot bytes are treated as immutable (no concurrent writes while mapped).
         let mmap = Arc::new(unsafe { Mmap::map(&file)? });
         if mmap.len() < 8 {
             return Err(Error::SerdeError("graph snapshot truncated".into()));
@@ -150,6 +154,7 @@ impl MmappedGraphSnapshot {
         }
     }
 
+    /// Content digest for cache invalidation.
     pub fn content_digest(&self) -> Result<&str> {
         match &self.backing {
             SnapshotBacking::Legacy(p) => Ok(&p.content_digest),
@@ -157,6 +162,7 @@ impl MmappedGraphSnapshot {
         }
     }
 
+    /// Number of nodes in the snapshot.
     pub fn node_count(&self) -> usize {
         match &self.backing {
             SnapshotBacking::Legacy(p) => p.nodes.len(),
@@ -164,6 +170,7 @@ impl MmappedGraphSnapshot {
         }
     }
 
+    /// Number of edges in the snapshot.
     pub fn edge_count(&self) -> usize {
         match &self.backing {
             SnapshotBacking::Legacy(p) => p.edges.len(),
@@ -239,18 +246,22 @@ impl SnapshotNodeStore {
         self.snapshot.prepared()
     }
 
+    /// Content digest for cache invalidation.
     pub fn content_digest(&self) -> Result<&str> {
         self.snapshot.content_digest()
     }
 
+    /// Whether the backing file uses columnar v2 layout.
     pub fn is_columnar(&self) -> bool {
         self.snapshot.is_columnar()
     }
 
+    /// Number of nodes in the snapshot.
     pub fn node_count(&self) -> usize {
         self.snapshot.node_count()
     }
 
+    /// Number of edges in the snapshot.
     pub fn edge_count(&self) -> usize {
         self.snapshot.edge_count()
     }

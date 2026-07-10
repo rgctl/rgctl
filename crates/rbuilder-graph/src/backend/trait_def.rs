@@ -1,12 +1,21 @@
 //! Graph backend trait definition
 //!
 //! Defines the interface for graph storage backends.
+//!
+//! [`GraphBackend`] is the minimal portable surface (insert, get, delete, string query).
+//! [`MemoryBackend`](crate::backend::MemoryBackend) extends it with batch APIs, typed
+//! indexes, streaming iterators, snapshot hydration, and Petgraph export — the only
+//! production backend today. See `crates/rbuilder-graph/README.md`.
 
 use crate::schema::{Edge, Node};
 use rbuilder_error::Result;
 use uuid::Uuid;
 
-/// Graph storage backend trait
+/// Graph storage backend trait.
+///
+/// Implementors must be `Send + Sync` for use across pipeline stages. Extension methods
+/// on [`MemoryBackend`](crate::backend::MemoryBackend) are intentionally not part of this
+/// trait to keep plugin backends small.
 pub trait GraphBackend: Send + Sync {
     /// Insert a node into the graph
     fn insert_node(&mut self, node: Node) -> Result<()>;

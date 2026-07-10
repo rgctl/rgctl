@@ -2,6 +2,7 @@
 //!
 //! Task 5.2.2: Deduplicate repeated strings across nodes
 
+use rbuilder_error::{Error, Result};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -18,23 +19,24 @@ impl StringInterner {
     }
 
     /// Intern a string, returning a shared handle.
-    pub fn intern(&self, value: &str) -> Arc<str> {
+    pub fn intern(&self, value: &str) -> Result<Arc<str>> {
         // Fast path: check if already interned (read lock)
         if let Ok(read) = self.pool.read() {
             if let Some(existing) = read.get(value) {
-                return existing.clone();
+                return Ok(existing.clone());
             }
         }
 
         // Slow path: insert if not present (write lock with entry API)
         // Note: Race condition is acceptable - duplicate Arc<str> instances
         // will be deduplicated on next read, only slight temporary memory overhead
-        self.pool
+        Ok(self
+            .pool
             .write()
-            .expect("StringInterner lock poisoned")
+            .map_err(|e| Error::GraphError(format!("StringInterner lock poisoned: {e}")))?
             .entry(value.to_string())
             .or_insert_with(|| Arc::from(value))
-            .clone()
+            .clone())
     }
 
     /// Ensure a string is in the intern pool.
@@ -66,8 +68,8 @@ mod tests {
     #[test]
     fn test_intern_deduplicates() {
         let interner = StringInterner::new();
-        let a = interner.intern("hello");
-        let b = interner.intern("hello");
+        let a = interner.intern("hello").unwrap();
+        let b = interner.intern("hello").unwrap();
         assert!(Arc::ptr_eq(&a, &b));
         assert_eq!(interner.len(), 1);
     }

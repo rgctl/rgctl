@@ -917,4 +917,21 @@ mod tests {
         assert_eq!(row.direct_callers.len(), 50);
         assert_eq!(row.impact_zone.len(), 200);
     }
+
+    #[test]
+    fn sqlite_meta_graph_digest_roundtrip() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join("macro_call_index.db");
+        MacroCallLookupDb::write_meta_with_digest(&db, 1024, 10, 20, Some("abc123digest"))
+            .unwrap();
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let digest: String = conn
+            .query_row(
+                "SELECT value FROM macro_call_meta WHERE key = 'graph_digest'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(digest, "abc123digest");
+    }
 }
