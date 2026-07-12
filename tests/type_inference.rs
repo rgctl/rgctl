@@ -1,10 +1,10 @@
 //! Phase 13: type inference (20 tests).
 #![allow(dead_code, unused_imports, unused_macros)]
 
-#[path = "common/phase13.rs"]
-mod phase13;
+#[path = "common/analysis_helpers.rs"]
+mod analysis_helpers;
 
-use phase13::{has_type, with_inferred_types};
+use analysis_helpers::{has_type, with_inferred_types};
 use rbuilder::analysis::{confidence_for, InferredType};
 
 macro_rules! type_test {
@@ -177,7 +177,7 @@ type_test!(
     "js",
     |inferred| {
         assert!(inferred.is_empty() || inferred.iter().any(|t| t.variable == "msg"));
-        let texts = phase13::pdg_statement_texts(
+        let texts = analysis_helpers::pdg_statement_texts(
             "rust",
             r#"fn js() { let msg = "hello"; let flag = true; }"#,
             "js",
@@ -192,7 +192,7 @@ type_test!(
     r#"fn js() { let data = "x"; let upper = "toUpperCase"; }"#,
     "js",
     |_inferred| {
-        let texts = phase13::pdg_statement_texts(
+        let texts = analysis_helpers::pdg_statement_texts(
             "rust",
             r#"fn js() { let data = "x"; let m = "toUpperCase"; }"#,
             "js",
@@ -207,7 +207,7 @@ type_test!(
     r#"fn rb() { let name = "alice"; let count = "42"; }"#,
     "rb",
     |_inferred| {
-        let texts = phase13::pdg_statement_texts(
+        let texts = analysis_helpers::pdg_statement_texts(
             "rust",
             r#"fn rb() { let name = "alice"; let count = "42"; }"#,
             "rb",
@@ -222,7 +222,7 @@ type_test!(
     r#"fn rb() { let data = "x"; let up = "upcase"; }"#,
     "rb",
     |_inferred| {
-        let texts = phase13::pdg_statement_texts(
+        let texts = analysis_helpers::pdg_statement_texts(
             "rust",
             r#"fn rb() { let data = "x"; let up = "upcase"; }"#,
             "rb",

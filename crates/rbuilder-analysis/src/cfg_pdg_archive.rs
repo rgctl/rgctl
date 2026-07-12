@@ -5,6 +5,7 @@
 
 use crate::cfg::ControlFlowGraph;
 use crate::pdg::ProgramDependenceGraph;
+use crate::storage::stable_function_key;
 use memmap2::Mmap;
 use rbuilder_error::{Error, Result};
 use rbuilder_graph::backend::MemoryBackend;
@@ -124,6 +125,32 @@ impl CfgPdgArchive {
             backend,
             self.function_cfgs(),
         )
+    }
+
+    /// Index records by stable `(file, name, code_hash)` for incremental CFG reuse.
+    pub fn stable_key_index(&self) -> HashMap<String, CfgPdgRecord> {
+        let mut index = HashMap::new();
+        for record in self.records.values() {
+            if let Some(key) = record.stable_key() {
+                index.insert(key, record.clone());
+            }
+        }
+        index
+    }
+}
+
+impl CfgPdgRecord {
+    /// Stable cache key when path and hash are present.
+    pub fn stable_key(&self) -> Option<String> {
+        let path = self.file_path.as_deref()?;
+        if self.code_hash.is_empty() || self.function_name.is_empty() {
+            return None;
+        }
+        Some(stable_function_key(
+            path,
+            &self.function_name,
+            &self.code_hash,
+        ))
     }
 }
 

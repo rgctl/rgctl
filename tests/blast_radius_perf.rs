@@ -168,7 +168,7 @@ fn sqlite_fqn_resolved_lookup_under_50ms() {
 
 /// 150k mock: PetGraphView from prepared snapshot.
 #[test]
-#[ignore = "performance gate: run with `cargo test --release --test phase16_blast_radius_perf -- --ignored`"]
+#[ignore = "performance gate: run with `cargo test --release --test blast_radius_perf -- --ignored`"]
 fn petgraph_from_prepared_150k_under_30s() {
     let graph = build_monorepo_mock(150_000, 700_000);
     let prepared = PreparedGraphSnapshot::from_backend(graph.backend()).unwrap();
@@ -185,7 +185,7 @@ fn petgraph_from_prepared_150k_under_30s() {
 
 /// 150k mock: mmap snapshot open + node store index build.
 #[test]
-#[ignore = "performance gate: run with `cargo test --release --test phase16_blast_radius_perf -- --ignored`"]
+#[ignore = "performance gate: run with `cargo test --release --test blast_radius_perf -- --ignored`"]
 fn snapshot_node_store_open_150k_under_15s() {
     let graph = build_monorepo_mock(150_000, 700_000);
     let prepared = PreparedGraphSnapshot::from_backend(graph.backend()).unwrap();
@@ -206,7 +206,7 @@ fn snapshot_node_store_open_150k_under_15s() {
 
 /// 150k mock: blast engine snapshot load + hydrate.
 #[test]
-#[ignore = "performance gate: run with `cargo test --release --test phase16_blast_radius_perf -- --ignored`"]
+#[ignore = "performance gate: run with `cargo test --release --test blast_radius_perf -- --ignored`"]
 fn engine_snapshot_load_150k_under_60s() {
     let graph = build_monorepo_mock(150_000, 700_000);
     let backend = graph.backend();

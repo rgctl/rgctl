@@ -1,10 +1,10 @@
 //! Phase 13: end-to-end integration (4 tests).
 #![allow(dead_code, unused_imports, unused_macros)]
 
-#[path = "common/phase13.rs"]
-mod phase13;
+#[path = "common/analysis_helpers.rs"]
+mod analysis_helpers;
 
-use phase13::{
+use analysis_helpers::{
     analyze_taint_with_types, build_dominance, build_sample_backend_with_chain, call_graph_from,
     large_graph, run_taint_security,
 };

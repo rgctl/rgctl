@@ -160,7 +160,7 @@ fn modularity_singleton_partition_negative_q() {
 
 /// Large mock monorepo community detection must stay under 150 ms (release).
 #[test]
-#[ignore = "performance gate: run with `cargo test --release --test phase15_community_audit -- --ignored`"]
+#[ignore = "performance gate: run with `cargo test --release --test community_audit -- --ignored`"]
 fn community_150k_nodes_under_150ms() {
     let graph = build_monorepo_mock(150_000, 700_000);
     let view = PetGraphView::from_backend(graph.backend()).unwrap();

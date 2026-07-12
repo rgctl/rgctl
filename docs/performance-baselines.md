@@ -44,5 +44,5 @@ Measured **2026-07-10** at git **`ccd0c73`** (release build, local machine).
 
 <!-- Baseline runs appended below by validate-golden-repos.sh or manual tests -->
 
-| 2026-07-10 | ccd0c73 | gbuilder | 5.5 | 0.006 | discover --all + phase17 |
-| 2026-07-10 | ccd0c73 | metasfresh | 531 | 5.9 | discover --all + phase17 |
+| 2026-07-10 | ccd0c73 | gbuilder | 5.5 | 0.006 | discover --all + centrality_approx_scale |
+| 2026-07-10 | ccd0c73 | metasfresh | 531 | 5.9 | discover --all + centrality_approx_scale |

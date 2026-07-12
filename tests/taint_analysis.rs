@@ -1,10 +1,10 @@
 //! Phase 13: taint analysis (25 tests).
 #![allow(dead_code, unused_imports, unused_macros)]
 
-#[path = "common/phase13.rs"]
-mod phase13;
+#[path = "common/analysis_helpers.rs"]
+mod analysis_helpers;
 
-use phase13::{
+use analysis_helpers::{
     analyze_taint, analyze_taint_with_types, analyze_vulnerable_taint, assert_flow_kind,
     pdg_statement_texts,
 };

@@ -1,9 +1,9 @@
 //! Phase 13: GQL optimizer (15 tests).
 
-#[path = "common/phase13.rs"]
-mod phase13;
+#[path = "common/analysis_helpers.rs"]
+mod analysis_helpers;
 
-use phase13::large_graph;
+use analysis_helpers::large_graph;
 use rbuilder::gql::{execute, execute_explain, parse, QueryExecutor, QueryOptimizer};
 use rbuilder::graph::backend::{GraphBackend, MemoryBackend};
 use rbuilder::graph::schema::{Edge, EdgeType, Node, NodeType};

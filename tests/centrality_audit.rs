@@ -248,7 +248,7 @@ fn default_analyzer_skips_structural_edges() {
 
 /// Large mock monorepo PageRank must stay under 20 ms (release builds).
 #[test]
-#[ignore = "performance gate: run with `cargo test --release --test phase14_centrality_audit -- --ignored`"]
+#[ignore = "performance gate: run with `cargo test --release --test centrality_audit -- --ignored`"]
 fn pagerank_150k_nodes_under_20ms() {
     let graph = build_monorepo_mock(150_000, 700_000);
     let view = PetGraphView::from_backend(graph.backend()).unwrap();

@@ -80,7 +80,7 @@ A language is **fully supported** when all rows are ✅ and backed by automated 
 |---|-------------|--------|
 | E1 | Plugin unit tests: symbols + at least one `Calls` relation | `crates/rbuilder-lang-{id}/src/plugin.rs` `#[cfg(test)]` |
 | E2 | CFG unit tests: branching function + loop cycle | `crates/rbuilder-analysis/src/cfg_builder.rs` tests |
-| E3 | Taint unit/integration test: at least one source→sink path | `tests/phase13_taint.rs` or `tests/{lang}_phase13.rs` |
+| E3 | Taint unit/integration test: at least one source→sink path | `tests/taint_analysis.rs` or `tests/{lang}_taint.rs` |
 | E4 | Fixture integration test on a small real repo | e.g. `tests/go_cfg_analysis.rs` |
 | E5 | Dashboard golden gate: `discover --all` + bundle assertions | e.g. `tests/dashboard_ecommerce_go.rs` + `tests/dashboard_harness.rs` |
 | E6 | `cargo test` + `cargo clippy` clean for touched crates | CI |
@@ -109,7 +109,7 @@ crates/
   rbuilder-languages/                   # Wire register() into default binary
 tests/
   {lang}_cfg_analysis.rs                # Fixture CFG tests
-  {lang}_phase13.rs                     # Taint + calls integration
+  {lang}_taint.rs                     # Taint + calls integration
   dashboard_{fixture}.rs                # discover --all dashboard gate
 ```
 
@@ -278,7 +278,7 @@ crates/rbuilder-lang-{id}/src/plugin.rs   # unit: symbols, calls
 crates/rbuilder-analysis/src/cfg_builder.rs # unit: CFG shape
 crates/rbuilder-analysis/src/language_profile.rs # unit: path → id
 tests/{id}_cfg_analysis.rs                # integration: real fixture file
-tests/{id}_phase13.rs                     # taint + calls smoke
+tests/{id}_taint.rs                     # taint + calls smoke
 tests/dashboard_{fixture}.rs              # discover --all + manifest/cfg_index
 ```
 

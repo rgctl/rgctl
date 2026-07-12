@@ -1,10 +1,10 @@
 //! Phase 13: security / CWE analysis (10 tests — one per CWE id).
 #![allow(dead_code, unused_imports, unused_macros)]
 
-#[path = "common/phase13.rs"]
-mod phase13;
+#[path = "common/analysis_helpers.rs"]
+mod analysis_helpers;
 
-use phase13::run_taint_security;
+use analysis_helpers::run_taint_security;
 use rbuilder::analysis::{
     build_cfg_for_function, ProgramDependenceGraph, TaintFlow, TaintSink, TaintSource,
 };
@@ -72,7 +72,7 @@ def run(request):
     cmd = request.GET['cmd']
     os.system(cmd)
 "#;
-    let flows = phase13::analyze_vulnerable_taint("python", code, "run");
+    let flows = analysis_helpers::analyze_vulnerable_taint("python", code, "run");
     assert!(
         !flows.is_empty(),
         "expected vulnerable command injection flow"

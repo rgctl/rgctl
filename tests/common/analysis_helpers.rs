@@ -1,4 +1,4 @@
-//! Shared Phase 13 integration helpers.
+//! Shared analysis integration test helpers.
 
 #![allow(dead_code)]
 

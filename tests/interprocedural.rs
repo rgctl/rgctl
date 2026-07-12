@@ -1,10 +1,10 @@
 //! Phase 13: interprocedural analysis (20 tests).
 #![allow(dead_code, unused_imports, unused_macros)]
 
-#[path = "common/phase13.rs"]
-mod phase13;
+#[path = "common/analysis_helpers.rs"]
+mod analysis_helpers;
 
-use phase13::{
+use analysis_helpers::{
     build_backend_with_parameters, build_sample_backend_with_chain, call_graph_from, sample_backend,
 };
 use rbuilder::analysis::{

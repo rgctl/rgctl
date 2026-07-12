@@ -1,10 +1,10 @@
 //! Boundary, stress, and differential tests for the macro→micro semantic pipeline.
 #![allow(dead_code, unused_imports, unused_macros)]
 
-#[path = "common/phase13.rs"]
-mod phase13;
+#[path = "common/analysis_helpers.rs"]
+mod analysis_helpers;
 
-use phase13::build_dominance;
+use analysis_helpers::build_dominance;
 use rbuilder::analysis::{
     build_cfg_for_function, criterion_for_parameter, filter_handoff_seeds_by_index,
     resolve_handoff_seeds, verify_idom_acyclic, BackwardSlicer, BlastRadiusEngine,

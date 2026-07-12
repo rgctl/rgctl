@@ -1,10 +1,10 @@
 //! Phase 13: dominance analysis (15 tests).
 #![allow(dead_code, unused_imports, unused_macros)]
 
-#[path = "common/phase13.rs"]
-mod phase13;
+#[path = "common/analysis_helpers.rs"]
+mod analysis_helpers;
 
-use phase13::{build_dominance, with_dominance};
+use analysis_helpers::{build_dominance, with_dominance};
 use rbuilder::analysis::{build_cfg_for_function, DominatorTree, ProgramDependenceGraph};
 
 macro_rules! dom_test {

@@ -49,7 +49,7 @@ Run everything:
 cargo test --test cli_output --test subprocess_golden_path --test all_commands_sanity
 ```
 
-**CI:** On every PR to `main`/`master`, [.github/workflows/blast-radius-perf.yml](../.github/workflows/blast-radius-perf.yml) runs release `phase16_blast_radius_perf` plus all three CLI I/O test targets.
+**CI:** On every PR to `main`/`master`, [.github/workflows/blast-radius-perf.yml](../.github/workflows/blast-radius-perf.yml) runs release `blast_radius_perf` plus all three CLI I/O test targets.
 
 Individual targets:
 

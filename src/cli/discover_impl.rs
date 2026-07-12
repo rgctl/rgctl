@@ -408,7 +408,7 @@ pub(crate) fn run_full_analysis(
             ..CfgPdgArchive::default()
         };
 
-        let batch = run_cfg_analysis_batch(&functions, &storage);
+        let batch = run_cfg_analysis_batch(&functions, &storage, root);
         let success_count = batch.success_count;
         let error_count = batch.error_count;
         for record in batch.archive_records {
@@ -451,6 +451,12 @@ pub(crate) fn run_full_analysis(
                 );
             }
             if verbose {
+                if batch.cache_hits > 0 || batch.recomputed > 0 {
+                    println!(
+                        "  CFG cache: {} reused, {} recomputed, {} orphan artifacts removed",
+                        batch.cache_hits, batch.recomputed, batch.orphans_removed
+                    );
+                }
                 println!("{}", mem_monitor.report());
             }
         }

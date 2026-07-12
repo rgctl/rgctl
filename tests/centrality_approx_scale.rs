@@ -162,7 +162,7 @@ fn approx_centrality_kafka_when_present() {
 
 /// Metasfresh reference repo — manual/CI-soft gate with timing report.
 #[test]
-#[ignore = "scale gate: run with `cargo test --release --test phase17_centrality_approx_scale -- --ignored --nocapture`"]
+#[ignore = "scale gate: run with `cargo test --release --test centrality_approx_scale -- --ignored --nocapture`"]
 fn approx_centrality_metasfresh_timing() {
     let root = repo_or_env(
         "metasfresh",

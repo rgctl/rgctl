@@ -1,6 +1,6 @@
-//! Phase 13 advanced analysis benchmarks.
+//! Advanced analysis benchmarks (taint, type inference, dominance, GQL).
 //!
-//! Run: `cargo bench --bench phase13_analysis`
+//! Run: `cargo bench --bench analysis_benchmarks`
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use rbuilder::analysis::{
@@ -23,7 +23,7 @@ fn python_1k_loc() -> String {
 }
 
 fn bench_taint_analysis(c: &mut Criterion) {
-    let mut group = c.benchmark_group("phase13_taint");
+    let mut group = c.benchmark_group("taint_analysis");
     group.measurement_time(Duration::from_secs(8));
     let code = python_1k_loc();
     group.bench_function("python_1k_loc", |b| {
@@ -40,7 +40,7 @@ fn bench_taint_analysis(c: &mut Criterion) {
 
 fn bench_type_inference(c: &mut Criterion) {
     let code = python_1k_loc();
-    c.bench_function("phase13_type_inference_1k_loc", |b| {
+    c.bench_function("type_inference_1k_loc_1k_loc", |b| {
         b.iter(|| {
             let cfg = build_cfg_for_function("python", &code, "big").unwrap();
             let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
@@ -89,7 +89,7 @@ fn bench_interprocedural_slice(c: &mut Criterion) {
     let source = files.get("chain.py").unwrap().clone();
     let leaf_name = format!("f{}", depth - 1);
 
-    c.bench_function("phase13_interprocedural_10_fn_chain", |b| {
+    c.bench_function("interprocedural_10_fn_chain_10_fn_chain", |b| {
         b.iter(|| {
             let icfg = InterproceduralCFG::build(&backend, &files).unwrap();
             let slicer = InterproceduralSlicer::new(&icfg, &backend, &files).unwrap();
@@ -132,7 +132,7 @@ fn large_backend(n: usize) -> MemoryBackend {
 }
 
 fn bench_gql_optimizer_speedup(c: &mut Criterion) {
-    let mut group = c.benchmark_group("phase13_gql");
+    let mut group = c.benchmark_group("analysis_gql");
     for size in [100usize, 500] {
         let backend = large_backend(size);
         let query = "MATCH (f:Function) WHERE f.name = 'target' RETURN f";
@@ -161,7 +161,7 @@ fn bench_gql_optimizer_speedup(c: &mut Criterion) {
 
 fn bench_call_graph(c: &mut Criterion) {
     let backend = large_backend(200);
-    c.bench_function("phase13_call_graph_200_nodes", |b| {
+    c.bench_function("call_graph_200_nodes_200_nodes", |b| {
         b.iter(|| black_box(CallGraph::from_backend(&backend).unwrap()));
     });
 }
@@ -179,7 +179,7 @@ fn bench_dominance_1000_blocks(c: &mut Criterion) {
         cfg.blocks.len()
     );
 
-    c.bench_function("phase13_dominance_1000_blocks", |b| {
+    c.bench_function("dominance_1000_blocks_1000_blocks", |b| {
         b.iter(|| {
             let start = std::time::Instant::now();
             let dom = DominatorTree::build(&cfg);

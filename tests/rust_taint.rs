@@ -8,10 +8,10 @@ use rbuilder_lang_rust::RustPlugin;
 use rbuilder_plugin_api::{LanguagePlugin, RelationType};
 use std::path::Path;
 
-#[path = "common/phase13.rs"]
-mod phase13;
+#[path = "common/analysis_helpers.rs"]
+mod analysis_helpers;
 
-use phase13::analyze_taint;
+use analysis_helpers::analyze_taint;
 
 #[test]
 fn rust_cfg_language_profile_maps_extension() {
