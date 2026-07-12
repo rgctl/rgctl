@@ -398,12 +398,8 @@ pub(crate) fn run_full_analysis(
         if human_output {
             println!("\n✓ Control flow analysis:");
         }
-        use crate::analysis::{
-            build_cfg_for_function, cfg_language_id_from_path, cfg_language_list,
-            AnalysisStorage, CfgPdgArchive, CfgPdgRecord, DominatorTree, FunctionAnalysis,
-            ProgramDependenceGraph,
-        };
-        use rbuilder_graph::code_index::hash_code;
+        use crate::analysis::{cfg_language_list, AnalysisStorage, CfgPdgArchive};
+        use super::discover_cfg::run_cfg_analysis_batch;
 
         let storage = AnalysisStorage::new(&output_dir);
         storage.ensure_dir()?;
@@ -412,97 +408,11 @@ pub(crate) fn run_full_analysis(
             ..CfgPdgArchive::default()
         };
 
-        let mut success_count = 0;
-        let mut error_count = 0;
-
-        for func_node in &functions {
-            // Get function source
-            let file_path = match &func_node.file_path {
-                Some(p) => p,
-                None => {
-                    error_count += 1;
-                    continue;
-                }
-            };
-
-            let source = match std::fs::read_to_string(file_path) {
-                Ok(s) => s,
-                Err(_) => {
-                    error_count += 1;
-                    continue;
-                }
-            };
-
-            let lang = match cfg_language_id_from_path(std::path::Path::new(file_path)) {
-                Some(lang) => lang,
-                None => {
-                    error_count += 1;
-                    continue;
-                }
-            };
-
-            // Build CFG
-            let cfg_result = build_cfg_for_function(lang, &source, &func_node.name);
-
-            let cfg_data = match cfg_result {
-                Ok(c) => Some(c),
-                Err(_) => {
-                    error_count += 1;
-                    continue;
-                }
-            };
-
-            // Build PDG
-            let pdg_data = if let Some(ref cfg) = cfg_data {
-                ProgramDependenceGraph::build(cfg, source.as_bytes()).ok()
-            } else {
-                None
-            };
-
-            // Build Dominance
-            let dom_data = cfg_data.as_ref().map(DominatorTree::build);
-
-            // Run Taint Analysis
-            use crate::analysis::TaintAnalyzer;
-            let taint_data = if let (Some(ref cfg), Some(ref pdg)) = (&cfg_data, &pdg_data) {
-                let mut analyzer = TaintAnalyzer::new(pdg, cfg);
-                analyzer.detect_patterns(lang);
-                let flows = analyzer.analyze();
-                if flows.is_empty() {
-                    None
-                } else {
-                    Some(flows)
-                }
-            } else {
-                None
-            };
-
-            // Store analysis
-            let analysis = FunctionAnalysis {
-                function_id: func_node.id,
-                function_name: func_node.name.clone(),
-                file_path: file_path.clone(),
-                cfg: cfg_data,
-                pdg: pdg_data,
-                dominance: dom_data,
-                taint: taint_data,
-            };
-
-            if storage.save_function(&analysis).is_ok() {
-                success_count += 1;
-                if let (Some(cfg), Some(pdg)) = (&analysis.cfg, &analysis.pdg) {
-                    cfg_archive.insert(CfgPdgRecord {
-                        function_id: func_node.id,
-                        code_hash: hash_code(&source),
-                        function_name: func_node.name.clone(),
-                        file_path: Some(file_path.clone()),
-                        cfg: cfg.clone(),
-                        pdg: pdg.clone(),
-                    });
-                }
-            } else {
-                error_count += 1;
-            }
+        let batch = run_cfg_analysis_batch(&functions, &storage);
+        let success_count = batch.success_count;
+        let error_count = batch.error_count;
+        for record in batch.archive_records {
+            cfg_archive.insert(record);
         }
 
         if !cfg_archive.records.is_empty() {
@@ -528,20 +438,10 @@ pub(crate) fn run_full_analysis(
                     );
                 }
 
-                // Taint analysis summary
-                let all_analyses = storage.load_all().unwrap_or_default();
-                let mut total_flows = 0;
-                let mut vulnerable_flows = 0;
-                for analysis in &all_analyses {
-                    if let Some(ref flows) = analysis.taint {
-                        total_flows += flows.len();
-                        vulnerable_flows += flows.iter().filter(|f| f.is_vulnerable()).count();
-                    }
-                }
-                if total_flows > 0 {
+                if batch.total_flows > 0 {
                     println!(
                         "  Taint flows: {} total ({} vulnerable)",
-                        total_flows, vulnerable_flows
+                        batch.total_flows, batch.vulnerable_flows
                     );
                 }
             } else if !functions.is_empty() {
