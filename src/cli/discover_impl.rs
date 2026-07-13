@@ -403,28 +403,44 @@ pub(crate) fn run_full_analysis(
 
         let storage = AnalysisStorage::new(&output_dir);
         storage.ensure_dir()?;
-        let mut cfg_archive = CfgPdgArchive {
-            graph_digest: Some(graph_digest.clone()),
-            ..CfgPdgArchive::default()
-        };
 
         let batch = run_cfg_analysis_batch(&functions, &storage, root);
         let success_count = batch.success_count;
         let error_count = batch.error_count;
-        for record in batch.archive_records {
-            cfg_archive.insert(record);
-        }
 
-        if !cfg_archive.records.is_empty() {
-            let archive_path = CfgPdgArchive::default_path(root);
-            if let Err(err) = cfg_archive.write_to_path(&archive_path) {
-                warn!(error = %err, "Failed to save cfg_pdg archive");
-            } else if verbose {
+        let archive_path = CfgPdgArchive::default_path(root);
+        if batch.archive_unchanged {
+            if verbose {
                 debug!(
-                    path = %archive_path.display(),
-                    entries = cfg_archive.records.len(),
-                    "CFG/PDG archive saved"
+                    skipped = batch.skipped_unchanged,
+                    "CFG/PDG archive unchanged — skipping rewrite"
                 );
+            }
+        } else {
+            let mut cfg_archive = if batch.archive_records.is_empty() {
+                CfgPdgArchive::open_if_exists(root).ok().flatten().unwrap_or_default()
+            } else {
+                let mut merged =
+                    CfgPdgArchive::open_if_exists(root).ok().flatten().unwrap_or_default();
+                merged.graph_digest = Some(graph_digest.clone());
+                for record in batch.archive_records {
+                    merged.insert(record);
+                }
+                merged
+            };
+            if cfg_archive.records.is_empty() {
+                cfg_archive.graph_digest = Some(graph_digest.clone());
+            }
+            if !cfg_archive.records.is_empty() {
+                if let Err(err) = cfg_archive.write_to_path(&archive_path) {
+                    warn!(error = %err, "Failed to save cfg_pdg archive");
+                } else if verbose {
+                    debug!(
+                        path = %archive_path.display(),
+                        entries = cfg_archive.records.len(),
+                        "CFG/PDG archive saved"
+                    );
+                }
             }
         }
 
@@ -451,10 +467,16 @@ pub(crate) fn run_full_analysis(
                 );
             }
             if verbose {
-                if batch.cache_hits > 0 || batch.recomputed > 0 {
+                if batch.cache_hits > 0
+                    || batch.recomputed > 0
+                    || batch.skipped_unchanged > 0
+                {
                     println!(
-                        "  CFG cache: {} reused, {} recomputed, {} orphan artifacts removed",
-                        batch.cache_hits, batch.recomputed, batch.orphans_removed
+                        "  CFG cache: {} reused ({} unchanged), {} recomputed, {} stale artifacts removed",
+                        batch.cache_hits,
+                        batch.skipped_unchanged,
+                        batch.recomputed,
+                        batch.orphans_removed
                     );
                 }
                 println!("{}", mem_monitor.report());
@@ -686,10 +708,15 @@ pub(crate) fn run_full_analysis(
 
     // Export static dashboard bundle (Phase 0+1 — see docs/dashboard-design.md)
     let dashboard_dir = root.join(".rbuilder/dashboard");
-    match rbuilder_dashboard::export_dashboard_bundle(graph.backend(), root, &snapshot_path) {
-        Ok(()) => {
+    match rbuilder_dashboard::export_dashboard_bundle_if_changed(graph.backend(), root, &snapshot_path) {
+        Ok(true) => {
             if human_output {
                 info!("[✓] Dashboard: {}/index.html", dashboard_dir.display());
+            }
+        }
+        Ok(false) => {
+            if verbose {
+                debug!("Dashboard bundle unchanged — skipped re-export");
             }
         }
         Err(e) => {

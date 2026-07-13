@@ -117,10 +117,19 @@ pub struct TaintAnalyzer<'a> {
 impl<'a> TaintAnalyzer<'a> {
     /// Create analyzer for a function.
     pub fn new(pdg: &'a ProgramDependenceGraph, cfg: &'a ControlFlowGraph) -> Self {
+        Self::with_dominator(pdg, cfg, DominatorTree::build(cfg))
+    }
+
+    /// Create analyzer with a precomputed dominator tree.
+    pub fn with_dominator(
+        pdg: &'a ProgramDependenceGraph,
+        cfg: &'a ControlFlowGraph,
+        dom_tree: DominatorTree,
+    ) -> Self {
         Self {
             pdg,
             _cfg: cfg,
-            dom_tree: DominatorTree::build(cfg),
+            dom_tree,
             sources: HashMap::new(),
             sinks: HashMap::new(),
             sanitizers: HashMap::new(),

@@ -50,9 +50,53 @@ pub fn export_dashboard_bundle(
     repo_root: &Path,
     snapshot_path: &Path,
 ) -> Result<(), String> {
+    export_dashboard_bundle_inner(backend, repo_root, snapshot_path, false)?;
+    Ok(())
+}
+
+/// Export dashboard only when the graph snapshot digest differs from the on-disk manifest.
+pub fn export_dashboard_bundle_if_changed(
+    backend: &MemoryBackend,
+    repo_root: &Path,
+    snapshot_path: &Path,
+) -> Result<bool, String> {
     let out_dir = bundle::default_dashboard_path(repo_root);
-    if out_dir.exists() {
-        fs::remove_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    let manifest_path = out_dir.join("manifest.json");
+    let (_, _, digest) = payload_stats(snapshot_path, backend)?;
+    if !digest.is_empty() && manifest_path.is_file() {
+        if let Ok(bytes) = fs::read_to_string(&manifest_path) {
+            if let Ok(manifest) = serde_json::from_str::<Manifest>(&bytes) {
+                if manifest.graph.digest == digest {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    export_dashboard_bundle_inner(backend, repo_root, snapshot_path, true)?;
+    Ok(true)
+}
+
+fn export_dashboard_bundle_inner(
+    backend: &MemoryBackend,
+    repo_root: &Path,
+    snapshot_path: &Path,
+    replace_out_dir: bool,
+) -> Result<(), String> {
+    let out_dir = bundle::default_dashboard_path(repo_root);
+    if replace_out_dir && out_dir.exists() {
+        let trash = out_dir.with_file_name(format!(
+            "{}.trash.{}",
+            out_dir
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("dashboard"),
+            std::process::id()
+        ));
+        if trash.exists() {
+            let _ = fs::remove_dir_all(&trash);
+        }
+        fs::rename(&out_dir, &trash).map_err(|e| e.to_string())?;
+        let _ = fs::remove_dir_all(&trash);
     }
     fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
 

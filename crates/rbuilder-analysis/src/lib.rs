@@ -60,7 +60,10 @@ pub use centrality_approx::{
 pub use cfg::{
     BasicBlock, BlockId, CfgEdge, CfgEdgeType, ControlFlowGraph, Statement, StatementKind,
 };
-pub use cfg_builder::build_cfg_for_function;
+pub use cfg_builder::{
+    build_cfg_for_function, build_cfg_for_function_in_tree, index_function_locations,
+    FunctionLocation, ParsedSourceFile,
+};
 pub use cfg_pdg_archive::{CfgPdgArchive, CfgPdgRecord, CFG_PDG_ARCHIVE_FILE};
 pub use community::{
     default_community_edge_types, detect_communities, Community, CommunityDetector,
@@ -106,6 +109,6 @@ pub use results::{
     CommunityTable, ComplexityTable,
 };
 pub use slicing::{BackwardSlicer, CodeSlice, SliceCriterion};
-pub use storage::{AnalysisStorage, FunctionAnalysis};
+pub use storage::{AnalysisIndexEntry, AnalysisStorage, FunctionAnalysis, FunctionIdSyncEntry};
 pub use taint::{Sanitizer, TaintAnalyzer, TaintFlow, TaintSink, TaintSource};
 pub use type_inference::{confidence_for, InferredType, TypeInferenceEngine, VariableType};

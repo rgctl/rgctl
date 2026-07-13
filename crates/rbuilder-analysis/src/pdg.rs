@@ -75,12 +75,22 @@ pub struct ControlDependency {
 impl ProgramDependenceGraph {
     /// Build a PDG from a CFG and source bytes for def-use refinement.
     pub fn build(cfg: &ControlFlowGraph, source: &[u8]) -> Result<Self> {
+        let dom = DominatorTree::build(cfg);
+        Self::build_with_dominator(cfg, source, &dom)
+    }
+
+    /// Build a PDG reusing a precomputed dominator tree.
+    pub fn build_with_dominator(
+        cfg: &ControlFlowGraph,
+        source: &[u8],
+        dom: &DominatorTree,
+    ) -> Result<Self> {
         let mut pdg = Self::default();
         pdg.create_nodes_from_cfg(cfg);
         let _ = source;
         let reaching = compute_reaching_definitions(cfg, &pdg);
         pdg.build_data_dependencies(cfg, &reaching);
-        pdg.build_control_dependencies(cfg);
+        pdg.build_control_dependencies_dominance(cfg, dom);
         Ok(pdg)
     }
 
@@ -201,13 +211,16 @@ impl ProgramDependenceGraph {
     }
 
     fn build_control_dependencies(&mut self, cfg: &ControlFlowGraph) {
-        self.build_control_dependencies_dominance(cfg);
+        let dom_tree = DominatorTree::build(cfg);
+        self.build_control_dependencies_dominance(cfg, &dom_tree);
     }
 
     /// Precise control dependencies via dominance frontiers (Phase 13.2).
-    fn build_control_dependencies_dominance(&mut self, cfg: &ControlFlowGraph) {
-        let dom_tree = DominatorTree::build(cfg);
-
+    fn build_control_dependencies_dominance(
+        &mut self,
+        cfg: &ControlFlowGraph,
+        dom_tree: &DominatorTree,
+    ) {
         for block_id in cfg.blocks.keys() {
             for &frontier_block in dom_tree.frontier(*block_id).iter() {
                 let Some(controller_nodes) = self.block_nodes.get(block_id).cloned() else {

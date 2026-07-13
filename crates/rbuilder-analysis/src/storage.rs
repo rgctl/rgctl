@@ -22,6 +22,19 @@ pub fn stable_function_key(file_path: &str, function_name: &str, code_hash: &str
 /// Suffix for bincode per-function analysis artifacts (`{uuid}.analysis.bin`).
 pub const ANALYSIS_BIN_SUFFIX: &str = ".analysis.bin";
 
+/// Sidecar index filename (`stable_key → metadata`) for incremental CFG without `load_all()`.
+pub const ANALYSIS_INDEX_FILE: &str = "analysis_index.bin";
+
+/// Lightweight metadata for incremental CFG reuse (no CFG/PDG payload).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalysisIndexEntry {
+    pub stable_key: String,
+    pub function_id: Uuid,
+    pub code_hash: String,
+    pub flow_count: usize,
+    pub vulnerable_count: usize,
+}
+
 /// Analysis results for a single function.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionAnalysis {
@@ -56,6 +69,14 @@ impl FunctionAnalysis {
 /// Storage manager for analysis results.
 pub struct AnalysisStorage {
     base_dir: PathBuf,
+}
+
+/// Minimal graph function metadata for aligning analysis index UUIDs after re-index.
+pub struct FunctionIdSyncEntry<'a> {
+    pub function_id: Uuid,
+    pub function_name: &'a str,
+    pub file_path: &'a str,
+    pub code_hash: &'a str,
 }
 
 impl AnalysisStorage {
@@ -93,7 +114,245 @@ impl AnalysisStorage {
         if json_path.exists() {
             let _ = fs::remove_file(json_path);
         }
+        self.upsert_index_entry(analysis)?;
         Ok(())
+    }
+
+    /// Save without updating the sidecar index (caller must call [`refresh_analysis_index_from_analyses`]).
+    pub fn save_function_no_index(&self, analysis: &FunctionAnalysis) -> Result<()> {
+        self.ensure_dir()?;
+        let bin_path = self.bin_path(analysis.function_id);
+        let bytes = bincode::serialize(analysis)
+            .map_err(|e| Error::SerdeError(format!("analysis bincode encode: {e}")))?;
+        fs::write(&bin_path, bytes)?;
+        let json_path = self.json_path(analysis.function_id);
+        if json_path.exists() {
+            let _ = fs::remove_file(json_path);
+        }
+        Ok(())
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.base_dir.join(ANALYSIS_INDEX_FILE)
+    }
+
+    /// Load the lightweight stable-key index (no CFG/PDG deserialization).
+    pub fn load_analysis_index(&self) -> Result<HashMap<String, AnalysisIndexEntry>> {
+        let path = self.index_path();
+        if !path.is_file() {
+            return self.rebuild_analysis_index_from_disk();
+        }
+        let bytes = fs::read(&path)?;
+        let entries: Vec<AnalysisIndexEntry> = bincode::deserialize(&bytes)
+            .map_err(|e| Error::SerdeError(format!("analysis index decode: {e}")))?;
+        Ok(entries
+            .into_iter()
+            .map(|e| (e.stable_key.clone(), e))
+            .collect())
+    }
+
+    fn write_analysis_index(&self, entries: &HashMap<String, AnalysisIndexEntry>) -> Result<()> {
+        self.ensure_dir()?;
+        let mut list: Vec<_> = entries.values().cloned().collect();
+        list.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+        let bytes = bincode::serialize(&list)
+            .map_err(|e| Error::SerdeError(format!("analysis index encode: {e}")))?;
+        fs::write(self.index_path(), bytes)?;
+        Ok(())
+    }
+
+    fn upsert_index_entry(&self, analysis: &FunctionAnalysis) -> Result<()> {
+        let Some(stable_key) = analysis.stable_key() else {
+            return Ok(());
+        };
+        let (flow_count, vulnerable_count) = analysis
+            .taint
+            .as_ref()
+            .map(|flows| {
+                let vulnerable = flows.iter().filter(|f| f.is_vulnerable()).count();
+                (flows.len(), vulnerable)
+            })
+            .unwrap_or((0, 0));
+        let mut index = self.load_analysis_index().unwrap_or_default();
+        if let Some(prev) = index.get(&stable_key) {
+            if prev.function_id != analysis.function_id {
+                let old_bin = self.bin_path(prev.function_id);
+                let old_json = self.json_path(prev.function_id);
+                let _ = fs::remove_file(old_bin);
+                let _ = fs::remove_file(old_json);
+            }
+        }
+        index.insert(
+            stable_key.clone(),
+            AnalysisIndexEntry {
+                stable_key,
+                function_id: analysis.function_id,
+                code_hash: analysis.code_hash.clone().unwrap_or_default(),
+                flow_count,
+                vulnerable_count,
+            },
+        );
+        self.write_analysis_index(&index)
+    }
+
+    /// Update the sidecar index from a batch of saved analyses (single write, no per-save races).
+    pub fn refresh_analysis_index_from_analyses(
+        &self,
+        analyses: &[FunctionAnalysis],
+    ) -> Result<()> {
+        let mut index = self.load_analysis_index().unwrap_or_default();
+        for analysis in analyses {
+            let Some(stable_key) = analysis.stable_key() else {
+                continue;
+            };
+            let (flow_count, vulnerable_count) = analysis
+                .taint
+                .as_ref()
+                .map(|flows| {
+                    let vulnerable = flows.iter().filter(|f| f.is_vulnerable()).count();
+                    (flows.len(), vulnerable)
+                })
+                .unwrap_or((0, 0));
+            if let Some(prev) = index.get(&stable_key) {
+                if prev.function_id != analysis.function_id {
+                    let old_bin = self.bin_path(prev.function_id);
+                    let old_json = self.json_path(prev.function_id);
+                    let _ = fs::remove_file(old_bin);
+                    let _ = fs::remove_file(old_json);
+                }
+            }
+            index.insert(
+                stable_key.clone(),
+                AnalysisIndexEntry {
+                    stable_key,
+                    function_id: analysis.function_id,
+                    code_hash: analysis.code_hash.clone().unwrap_or_default(),
+                    flow_count,
+                    vulnerable_count,
+                },
+            );
+        }
+        self.write_analysis_index(&index)
+    }
+
+    /// Rebuild index by scanning on-disk artifacts (one-time migration / repair).
+    pub fn rebuild_analysis_index_from_disk(&self) -> Result<HashMap<String, AnalysisIndexEntry>> {
+        let mut index = HashMap::new();
+        for analysis in self.load_all()? {
+            let Some(stable_key) = analysis.stable_key() else {
+                continue;
+            };
+            let (flow_count, vulnerable_count) = analysis
+                .taint
+                .as_ref()
+                .map(|flows| {
+                    let vulnerable = flows.iter().filter(|f| f.is_vulnerable()).count();
+                    (flows.len(), vulnerable)
+                })
+                .unwrap_or((0, 0));
+            index.insert(
+                stable_key.clone(),
+                AnalysisIndexEntry {
+                    stable_key,
+                    function_id: analysis.function_id,
+                    code_hash: analysis.code_hash.clone().unwrap_or_default(),
+                    flow_count,
+                    vulnerable_count,
+                },
+            );
+        }
+        if !index.is_empty() {
+            let _ = self.write_analysis_index(&index);
+        }
+        Ok(index)
+    }
+
+    /// Load a single analysis by stable cache key.
+    pub fn load_by_stable_key(&self, stable_key: &str) -> Result<Option<FunctionAnalysis>> {
+        let index = self.load_analysis_index()?;
+        let Some(entry) = index.get(stable_key) else {
+            return Ok(None);
+        };
+        self.load_function(entry.function_id)
+    }
+
+    /// Rename on-disk artifact when graph re-index assigns a new function UUID (no deserialize).
+    pub fn remap_function_artifact(&self, old_id: Uuid, new_id: Uuid) -> Result<()> {
+        if old_id == new_id {
+            return Ok(());
+        }
+        let old_bin = self.bin_path(old_id);
+        let new_bin = self.bin_path(new_id);
+        if new_bin.exists() {
+            let _ = fs::remove_file(&new_bin);
+        }
+        if old_bin.exists() {
+            fs::rename(&old_bin, &new_bin)?;
+        }
+        let old_json = self.json_path(old_id);
+        let new_json = self.json_path(new_id);
+        if old_json.exists() {
+            if new_json.exists() {
+                let _ = fs::remove_file(&new_json);
+            }
+            let _ = fs::rename(&old_json, &new_json);
+        }
+        Ok(())
+    }
+
+    /// Align index entries (and artifact filenames) with current graph function UUIDs.
+    pub fn sync_index_function_ids(
+        &self,
+        functions: &[FunctionIdSyncEntry<'_>],
+    ) -> Result<usize> {
+        let mut index = self.load_analysis_index()?;
+        let mut remapped = 0usize;
+        for func in functions {
+            let key = stable_function_key(
+                func.file_path,
+                func.function_name,
+                func.code_hash,
+            );
+            let Some(entry) = index.get_mut(&key) else {
+                continue;
+            };
+            if entry.code_hash != func.code_hash {
+                continue;
+            }
+            if entry.function_id == func.function_id {
+                continue;
+            }
+            self.remap_function_artifact(entry.function_id, func.function_id)?;
+            entry.function_id = func.function_id;
+            remapped += 1;
+        }
+        if remapped > 0 {
+            self.write_analysis_index(&index)?;
+        }
+        Ok(remapped)
+    }
+
+    /// Remove artifacts whose stable keys are not in `active_keys`.
+    pub fn purge_stale_by_stable_keys(&self, active_keys: &HashSet<String>) -> Result<usize> {
+        let index = self.load_analysis_index()?;
+        let mut removed = 0usize;
+        let mut next = index.clone();
+        for (key, entry) in &index {
+            if active_keys.contains(key) {
+                continue;
+            }
+            let bin = self.bin_path(entry.function_id);
+            let json = self.json_path(entry.function_id);
+            if fs::remove_file(&bin).is_ok() {
+                removed += 1;
+            }
+            let _ = fs::remove_file(json);
+            next.remove(key);
+        }
+        if next.len() != index.len() {
+            self.write_analysis_index(&next)?;
+        }
+        Ok(removed)
     }
 
     fn load_from_path(path: &Path) -> Result<Option<FunctionAnalysis>> {
@@ -183,7 +442,7 @@ impl AnalysisStorage {
         Ok(index)
     }
 
-    /// Remove analysis artifacts whose function id is not in `active_ids`.
+    /// Legacy UUID-based orphan purge (prefer [`purge_stale_by_stable_keys`]).
     pub fn purge_orphans(&self, active_ids: &HashSet<Uuid>) -> Result<usize> {
         if !self.base_dir.exists() {
             return Ok(0);
