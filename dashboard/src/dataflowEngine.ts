@@ -200,7 +200,7 @@ export function computeDataflowGraph(
 
 export function computeDominatorGraph(cfg: CfgDetailPayload): DataflowGraphPayload {
   const nodes: DataflowGraphNode[] = cfg.blocks.map((block) => {
-    const frontier = cfg.dominance_frontiers[block.id] ?? [];
+    const frontier = cfg.dominance_frontiers?.[block.id] ?? [];
     return {
       id: `block_${block.id}`,
       line: block.start_line,
@@ -215,7 +215,7 @@ export function computeDominatorGraph(cfg: CfgDetailPayload): DataflowGraphPaylo
   });
 
   const edges: DataflowGraphEdge[] = [];
-  cfg.idom.forEach((parent, blockId) => {
+  (cfg.idom ?? []).forEach((parent, blockId) => {
     if (parent == null || parent === blockId) return;
     edges.push({
       source: `block_${parent}`,

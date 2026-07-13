@@ -1,7 +1,8 @@
 //! Export CFG previews from `cfg_pdg.archive.bin` for the dashboard.
 
 use crate::export_util::write_json_compact;
-use rbuilder_analysis::cfg::{CfgEdgeType, ControlFlowGraph};
+use rbuilder_analysis::cfg::{BlockId, CfgEdgeType, ControlFlowGraph};
+use rbuilder_analysis::dominance::DominatorTree;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -19,6 +20,12 @@ pub struct CfgIndexPayload {
     /// `per_file` (default) or `archive_only` when detail JSON is omitted.
     #[serde(default = "default_detail_mode")]
     pub detail_mode: String,
+    /// Sidecar index for on-demand CFG record fetch (`archive_only` large repos).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_index_path: Option<String>,
+    /// Append-only CFG detail records for HTTP Range fetch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_data_path: Option<String>,
     pub function_count: usize,
     pub functions: Vec<CfgFunctionEntry>,
 }
@@ -145,6 +152,12 @@ pub(crate) fn cfg_detail_light(
         .map(|i| i as u32)
         .collect();
 
+    let dom = DominatorTree::build(cfg);
+    let block_count = ordered_blocks.len();
+    let idom = dominance_idom_view(&ordered_blocks, &block_index, &dom);
+    let dominance_frontiers =
+        dominance_frontiers_view(&ordered_blocks, &block_index, &dom, block_count);
+
     CfgDetailPayload {
         schema_version: 2,
         function_id: function_id.to_string(),
@@ -154,9 +167,42 @@ pub(crate) fn cfg_detail_light(
         exits,
         blocks,
         edges,
-        idom: None,
-        dominance_frontiers: None,
+        idom: Some(idom),
+        dominance_frontiers: Some(dominance_frontiers),
     }
+}
+
+fn dominance_idom_view(
+    ordered_blocks: &[(usize, BlockId)],
+    block_index: &HashMap<BlockId, usize>,
+    dom: &DominatorTree,
+) -> Vec<Option<u32>> {
+    let mut out = vec![None; ordered_blocks.len()];
+    for &(idx, block_id) in ordered_blocks {
+        if !dom.reachable.contains(&block_id) {
+            continue;
+        }
+        let parent = dom.idom.get(&block_id).copied().unwrap_or(block_id);
+        out[idx] = block_index.get(&parent).map(|i| *i as u32);
+    }
+    out
+}
+
+fn dominance_frontiers_view(
+    ordered_blocks: &[(usize, BlockId)],
+    block_index: &HashMap<BlockId, usize>,
+    dom: &DominatorTree,
+    block_count: usize,
+) -> Vec<Vec<u32>> {
+    let mut out = vec![Vec::new(); block_count];
+    for &(idx, block_id) in ordered_blocks {
+        out[idx] = dom
+            .frontier(block_id)
+            .iter()
+            .filter_map(|frontier_id| block_index.get(frontier_id).map(|i| *i as u32))
+            .collect();
+    }
+    out
 }
 
 fn ordered_block_ids(index: &HashMap<Uuid, usize>) -> Vec<(usize, Uuid)> {
@@ -203,6 +249,8 @@ pub(crate) fn write_empty_cfg_index(index_path: &Path) -> Result<(), String> {
         available: false,
         archive_path: None,
         detail_mode: "per_file".into(),
+        record_index_path: None,
+        record_data_path: None,
         function_count: 0,
         functions: vec![],
     };
@@ -246,6 +294,8 @@ mod tests {
         assert_eq!(detail.blocks.len(), 2);
         assert_eq!(detail.edges.len(), 1);
         assert_eq!(detail.edges[0].edge_type, "next");
-        assert!(detail.idom.is_none());
+        assert!(detail.idom.is_some());
+        assert!(detail.dominance_frontiers.is_some());
+        assert_eq!(detail.idom.as_ref().unwrap().len(), 2);
     }
 }

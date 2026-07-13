@@ -258,6 +258,8 @@ export interface CfgIndexPayload {
   available: boolean;
   archive_path?: string | null;
   detail_mode?: string;
+  record_index_path?: string | null;
+  record_data_path?: string | null;
   function_count: number;
   functions: CfgFunctionEntry[];
 }
@@ -427,7 +429,8 @@ export type WorkerInWithoutId =
       functionId: string;
       variable: string | null;
       includeControl: boolean;
-    };
+    }
+  | { type: "load_cfg_detail"; functionId: string };
 
 export type WorkerIn =
   | { type: "init" }
@@ -448,7 +451,8 @@ export type WorkerIn =
       functionId: string;
       variable: string | null;
       includeControl: boolean;
-    };
+    }
+  | { type: "load_cfg_detail"; requestId: number; functionId: string };
 
 export type WorkerOut =
   | {
@@ -464,6 +468,7 @@ export type WorkerOut =
   | { type: "slice_result"; requestId: number; payload: SliceResultPayload }
   | { type: "blast_result"; requestId: number; payload: BlastRadiusPayload }
   | { type: "dataflow_result"; requestId: number; payload: DataflowGraphPayload }
+  | { type: "cfg_detail_result"; requestId: number; payload: CfgDetailPayload }
   | { type: "error"; requestId?: number; message: string };
 
 export async function loadManifest(): Promise<DashboardManifest> {

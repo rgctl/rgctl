@@ -25,14 +25,21 @@ import {
 } from "./viewLegendData";
 import type {
   CfgDetailPayload,
+  CfgIndexPayload,
   DataflowGraphPayload,
   DataflowIndexPayload,
   SliceBundlePayload,
   SlicePdgNode,
 } from "./types";
 
-export function DataflowView() {
+interface DataflowViewProps {
+  wasmReady: boolean;
+  loadCfgDetail: (functionId: string) => Promise<CfgDetailPayload>;
+}
+
+export function DataflowView({ wasmReady, loadCfgDetail }: DataflowViewProps) {
   const [index, setIndex] = useState<DataflowIndexPayload | null>(null);
+  const [cfgIndex, setCfgIndex] = useState<CfgIndexPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [bundle, setBundle] = useState<SliceBundlePayload | null>(null);
@@ -45,6 +52,21 @@ export function DataflowView() {
   const [graph, setGraph] = useState<DataflowGraphPayload | null>(null);
   const [selectedGraphNodeId, setSelectedGraphNodeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(bundleDataUrl("cfg_index.json"))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: CfgIndexPayload | null) => {
+        if (!cancelled) setCfgIndex(data);
+      })
+      .catch(() => {
+        if (!cancelled) setCfgIndex(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,16 +101,27 @@ export function DataflowView() {
     setSelectedGraphNodeId(null);
 
     const sliceUrl = bundleDataUrl(`${index.detail_dir}/${selectedId}.json`);
-    const cfgUrl = bundleDataUrl(`cfg/${selectedId}.json`);
+    const archiveOnly =
+      cfgIndex?.detail_mode === "archive_only" &&
+      Boolean(cfgIndex.record_index_path && cfgIndex.record_data_path);
+
+    const loadCfg = async (): Promise<CfgDetailPayload | null> => {
+      if (archiveOnly) {
+        if (!wasmReady) return null;
+        return loadCfgDetail(selectedId);
+      }
+      const cfgUrl = bundleDataUrl(`cfg/${selectedId}.json`);
+      const res = await fetch(cfgUrl);
+      if (!res.ok) return null;
+      return res.json() as Promise<CfgDetailPayload>;
+    };
 
     Promise.all([
       fetch(sliceUrl).then((r) => {
         if (!r.ok) throw new Error(`PDG bundle HTTP ${r.status}`);
         return r.json() as Promise<SliceBundlePayload>;
       }),
-      fetch(cfgUrl)
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null) as Promise<CfgDetailPayload | null>,
+      loadCfg(),
     ])
       .then(([sliceBundle, cfgDetail]) => {
         if (cancelled) return;
@@ -107,7 +140,16 @@ export function DataflowView() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId, index?.available, index?.detail_dir]);
+  }, [
+    selectedId,
+    index?.available,
+    index?.detail_dir,
+    cfgIndex?.detail_mode,
+    cfgIndex?.record_index_path,
+    cfgIndex?.record_data_path,
+    wasmReady,
+    loadCfgDetail,
+  ]);
 
   useEffect(() => {
     setSelectedGraphNodeId(null);
@@ -267,7 +309,11 @@ export function DataflowView() {
         )}
 
         {selectedId && !graph && !loading && viewMode === "dominator" && (
-          <p class="text-muted small mb-0">No dominator tree data for this function.</p>
+          <p class="text-muted small mb-0">
+            {!wasmReady && cfgIndex?.detail_mode === "archive_only"
+              ? "Waiting for WASM engine to load CFG dominance data…"
+              : "No dominator tree data for this function."}
+          </p>
         )}
 
         {selectedId && !graph && !loading && viewMode === "dataflow" && (

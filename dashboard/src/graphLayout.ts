@@ -2,8 +2,20 @@ import Graph from "graphology";
 import circular from "graphology-layout/circular";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import { communityColorHex } from "./graphColors";
+import {
+  applyLayoutPositions,
+  graphToLayoutRequest,
+  runLayoutWorker,
+} from "./layoutClient";
 
-/** Spread nodes with ForceAtlas2 (better than fixed circle for package graphs). */
+/** True when metagraph.json already carries export-time x/y layout. */
+export function hasPrecomputedLayout(nodes: { x: number; y: number }[]): boolean {
+  if (nodes.length === 0) return false;
+  if (!nodes.every((n) => Number.isFinite(n.x) && Number.isFinite(n.y))) return false;
+  return nodes.some((n) => n.x !== 0 || n.y !== 0);
+}
+
+/** Spread nodes with ForceAtlas2 on the main thread (fallback). */
 export function layoutForceAtlas2(graph: Graph, iterations?: number): void {
   if (graph.order === 0) return;
   circular.assign(graph, { scale: graph.order > 80 ? 200 : 120 });
@@ -21,6 +33,17 @@ export function layoutForceAtlas2(graph: Graph, iterations?: number): void {
       edgeWeightInfluence: 1,
     },
   });
+}
+
+/** Run ForceAtlas2 in a Web Worker so the UI thread stays responsive. */
+export async function layoutForceAtlas2Async(graph: Graph, iterations?: number): Promise<void> {
+  if (graph.order === 0) return;
+  try {
+    const response = await runLayoutWorker(graphToLayoutRequest(graph, iterations));
+    applyLayoutPositions(graph, response.positions);
+  } catch {
+    layoutForceAtlas2(graph, iterations);
+  }
 }
 
 /** Weakly-connected components for community coloring (fallback). */

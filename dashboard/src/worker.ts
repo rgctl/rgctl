@@ -1,11 +1,14 @@
 /// <reference lib="webworker" />
 
-import init, { EngineContext } from "../wasm/rbuilder_wasm.js";
+import init, { EngineContext, parseCfgDetail } from "../wasm/rbuilder_wasm.js";
 import { bundleDataUrl } from "./bundleUrl";
+import { fetchCfgRecordBytes, parseCfgRecordIndex } from "./cfgRecordIndex";
 import { computeSlice } from "./sliceEngine";
 import { computeDataflowGraph } from "./dataflowEngine";
 import { excerptSource, resolveSliceSource } from "./sourceResolver";
 import type {
+  CfgDetailPayload,
+  CfgIndexPayload,
   NodeListPayload,
   SliceBundlePayload,
   SliceResultPayload,
@@ -25,6 +28,9 @@ interface FunctionMetricRow {
 let engine: EngineContext | null = null;
 let metricsByIndex: Map<number, FunctionMetricRow> | null = null;
 const sliceBundleCache = new Map<string, SliceBundlePayload>();
+let cfgRecordIndex: Map<string, { offset: number; length: number }> | null = null;
+let cfgRecordPaths: { indexPath: string; dataPath: string } | null = null;
+let wasmInitPromise: Promise<unknown> | null = null;
 
 self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
   const msg = ev.data;
@@ -58,6 +64,9 @@ self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
           msg.variable,
           msg.includeControl,
         );
+        break;
+      case "load_cfg_detail":
+        await handleLoadCfgDetail(msg.requestId, msg.functionId);
         break;
       default:
         break;
@@ -219,6 +228,56 @@ async function handleBlastRadius(requestId: number, nodeIndex: number, maxDepth:
   const json = engine.blastRadius(nodeIndex >>> 0, maxDepth >>> 0);
   const payload = JSON.parse(json) as import("./types").BlastRadiusPayload;
   const out: WorkerOut = { type: "blast_result", requestId, payload };
+  self.postMessage(out);
+}
+
+async function ensureWasmInit() {
+  if (wasmInitPromise) {
+    await wasmInitPromise;
+    return;
+  }
+  wasmInitPromise = init();
+  await wasmInitPromise;
+}
+
+async function loadCfgRecordIndex(): Promise<Map<string, { offset: number; length: number }>> {
+  if (cfgRecordIndex) return cfgRecordIndex;
+
+  const cfgIndexRes = await fetch(bundleDataUrl("cfg_index.json"));
+  if (!cfgIndexRes.ok) {
+    throw new Error(`cfg_index.json: HTTP ${cfgIndexRes.status}`);
+  }
+  const cfgIndex = (await cfgIndexRes.json()) as CfgIndexPayload;
+  const indexPath = cfgIndex.record_index_path;
+  const dataPath = cfgIndex.record_data_path;
+  if (!indexPath || !dataPath) {
+    throw new Error("CFG record pack not available in this bundle");
+  }
+  cfgRecordPaths = { indexPath, dataPath };
+
+  const indexRes = await fetch(bundleDataUrl(indexPath));
+  if (!indexRes.ok) {
+    throw new Error(`${indexPath}: HTTP ${indexRes.status}`);
+  }
+  cfgRecordIndex = parseCfgRecordIndex(new Uint8Array(await indexRes.arrayBuffer()));
+  return cfgRecordIndex;
+}
+
+async function handleLoadCfgDetail(requestId: number, functionId: string) {
+  await ensureWasmInit();
+  const index = await loadCfgRecordIndex();
+  const paths = cfgRecordPaths;
+  if (!paths) {
+    throw new Error("CFG record paths not initialized");
+  }
+  const location = index.get(functionId);
+  if (!location) {
+    throw new Error(`CFG record not found for function ${functionId}`);
+  }
+  const bytes = await fetchCfgRecordBytes(bundleDataUrl(paths.dataPath), location);
+  const json = parseCfgDetail(bytes);
+  const payload = JSON.parse(json) as CfgDetailPayload;
+  const out: WorkerOut = { type: "cfg_detail_result", requestId, payload };
   self.postMessage(out);
 }
 

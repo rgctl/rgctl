@@ -1,8 +1,11 @@
 //! Stream CFG/PDG dashboard export from per-function `.analysis.bin` files (no monolithic archive load).
 
 use crate::cfg_export::{
-    cfg_detail_light, write_empty_cfg_index, CfgExportSummary, CfgFunctionEntry, CfgIndexPayload,
-    CFG_ARCHIVE_BUNDLE_NAME, CFG_DETAIL_DIR, CFG_DETAIL_INLINE_LIMIT, CFG_INDEX_FILE,
+    cfg_detail_light, write_empty_cfg_index, CfgDetailPayload, CfgExportSummary, CfgFunctionEntry,
+    CfgIndexPayload, CFG_ARCHIVE_BUNDLE_NAME, CFG_DETAIL_DIR, CFG_DETAIL_INLINE_LIMIT, CFG_INDEX_FILE,
+};
+use crate::cfg_record_pack::{
+    CfgRecordPackWriter, CFG_RECORD_DATA_FILE, CFG_RECORD_INDEX_FILE,
 };
 use crate::export_util::{link_or_copy, write_json_compact};
 use crate::function_meta::{function_meta_map, resolve_function_meta};
@@ -29,6 +32,7 @@ pub struct StreamedAnalysisExport {
 struct ExportWork {
     slice_entry: SliceFunctionEntry,
     cfg_entry: CfgFunctionEntry,
+    cfg_detail: Option<CfgDetailPayload>,
 }
 
 /// Export slice + CFG indexes and details by loading one function analysis at a time.
@@ -90,10 +94,28 @@ pub fn export_cfg_slice_from_storage(
 
     let mut slice_functions = Vec::new();
     let mut cfg_functions = Vec::new();
+    let mut cfg_pack_details: Vec<(Uuid, CfgDetailPayload)> = Vec::new();
     for work in works.into_iter().flatten() {
+        if let Some(detail) = work.cfg_detail {
+            if let Ok(id) = Uuid::parse_str(&detail.function_id) {
+                cfg_pack_details.push((id, detail));
+            }
+        }
         slice_functions.push(work.slice_entry);
         cfg_functions.push(work.cfg_entry);
     }
+
+    let record_pack_written = if !write_cfg_details && !cfg_pack_details.is_empty() {
+        let mut pack = CfgRecordPackWriter::create(out_dir)?;
+        cfg_pack_details.sort_by(|a, b| a.0.cmp(&b.0));
+        for (id, detail) in &cfg_pack_details {
+            pack.append(*id, detail)?;
+        }
+        pack.finish(out_dir)?;
+        true
+    } else {
+        false
+    };
 
     slice_functions.sort_by(|a, b| a.name.cmp(&b.name));
     cfg_functions.sort_by(|a, b| a.name.cmp(&b.name));
@@ -140,6 +162,16 @@ pub fn export_cfg_slice_from_storage(
                 "per_file".into()
             } else {
                 "archive_only".into()
+            },
+            record_index_path: if record_pack_written {
+                Some(CFG_RECORD_INDEX_FILE.into())
+            } else {
+                None
+            },
+            record_data_path: if record_pack_written {
+                Some(CFG_RECORD_DATA_FILE.into())
+            } else {
+                None
             },
             function_count: cfg_functions.len(),
             functions: cfg_functions,
@@ -233,11 +265,11 @@ fn export_one(
     )
     .ok()?;
 
+    let cfg_detail = cfg_detail_light(&entry.function_id, &name, file_path.clone(), cfg);
     if write_cfg_details {
-        let detail = cfg_detail_light(&entry.function_id, &name, file_path.clone(), cfg);
         write_json_compact(
             &cfg_dir.join(format!("{}.json", entry.function_id)),
-            &detail,
+            &cfg_detail,
         )
         .ok()?;
     }
@@ -256,6 +288,11 @@ fn export_one(
             file_path: bundle.file_path,
             block_count: cfg.blocks.len(),
             cfg_edge_count: cfg.edges.len(),
+        },
+        cfg_detail: if write_cfg_details {
+            None
+        } else {
+            Some(cfg_detail)
         },
     })
 }

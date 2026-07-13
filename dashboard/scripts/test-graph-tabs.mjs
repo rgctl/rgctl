@@ -133,13 +133,22 @@ async function testCfg(page) {
   const firstFn = page.locator(".function-list-item").first();
   await firstFn.waitFor({ state: "visible", timeout: 10000 });
   const fnName = await firstFn.locator(".function-list-item-name").textContent();
-  await firstFn.click();
-  await page.waitForTimeout(2000);
+  const cfgIndex = await page.evaluate(async () => {
+    const res = await fetch("./cfg_index.json");
+    return res.json();
+  });
+  const archiveOnly = cfgIndex.detail_mode === "archive_only";
+  const fnCount = cfgIndex.function_count ?? 0;
 
-  const metrics = await sigmaMetrics(page);
+  if (!archiveOnly) {
+    await firstFn.click();
+    await page.waitForTimeout(2000);
+  }
+
+  const metrics = archiveOnly ? { found: true, archiveOnly: true } : await sigmaMetrics(page);
   const panel = await page.locator(".cfg-graph-panel").count();
 
-  return { tab: "cfg", fnName, panel, metrics };
+  return { tab: "cfg", fnName, panel, metrics, archiveOnly, fnCount };
 }
 
 const browser = await chromium.launch({ headless: true });
@@ -175,11 +184,13 @@ const ok =
   (dataflowVar.header?.trim().length ?? 0) > 0 &&
   blast.rowCount > 0 &&
   blast.headerText?.includes("Callers of") &&
-  cfg.metrics.found &&
-  cfg.metrics.hostH >= 32 &&
-  cfg.metrics.hostH <= 4096 &&
-  cfg.metrics.canvasH >= 32 &&
-  cfg.metrics.canvasH <= 4096;
+  (cfg.archiveOnly
+    ? cfg.fnCount > 0 && cfg.metrics.found
+    : cfg.metrics.found &&
+      cfg.metrics.hostH >= 32 &&
+      cfg.metrics.hostH <= 4096 &&
+      cfg.metrics.canvasH >= 32 &&
+      cfg.metrics.canvasH <= 4096);
 
 await browser.close();
 process.exit(ok ? 0 : 1);

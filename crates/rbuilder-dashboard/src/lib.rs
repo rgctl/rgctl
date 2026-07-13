@@ -4,6 +4,7 @@ mod analysis_stream_export;
 mod blast_export;
 mod bundle;
 mod cfg_export;
+mod cfg_record_pack;
 mod communities;
 mod dataflow_export;
 mod export_util;

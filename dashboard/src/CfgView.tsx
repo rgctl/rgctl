@@ -15,12 +15,22 @@ import {
   CFG_NODE_LEGEND,
 } from "./viewLegendData";
 
-export function CfgView() {
+interface CfgViewProps {
+  wasmReady: boolean;
+  loadCfgDetail: (functionId: string) => Promise<CfgDetailPayload>;
+}
+
+export function CfgView({ wasmReady, loadCfgDetail }: CfgViewProps) {
   const [index, setIndex] = useState<CfgIndexPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CfgDetailPayload | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const archiveOnly = index?.detail_mode === "archive_only";
+  const canLazyLoad =
+    archiveOnly && Boolean(index?.record_index_path && index?.record_data_path);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,15 +51,14 @@ export function CfgView() {
   }, []);
 
   useEffect(() => {
-    if (!selectedId) {
-      setDetail(null);
+    setDetail(null);
+    setLoadError(null);
+    if (!selectedId) return;
+
+    if (archiveOnly) {
       return;
     }
-    if (index?.detail_mode === "archive_only") {
-      setDetail(null);
-      setError(null);
-      return;
-    }
+
     let cancelled = false;
     setLoadingDetail(true);
     fetch(bundleDataUrl(`cfg/${selectedId}.json`))
@@ -69,7 +78,24 @@ export function CfgView() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId, index?.detail_mode]);
+  }, [selectedId, archiveOnly]);
+
+  const selectedEntry = index?.functions.find((f) => f.function_id === selectedId) ?? null;
+
+  async function handleLoadCfg() {
+    if (!selectedId || !canLazyLoad) return;
+    setLoadingDetail(true);
+    setLoadError(null);
+    try {
+      const payload = await loadCfgDetail(selectedId);
+      setDetail(payload);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+      setDetail(null);
+    } finally {
+      setLoadingDetail(false);
+    }
+  }
 
   if (error) {
     return <div class="alert alert-danger py-2 small mb-0">{error}</div>;
@@ -130,13 +156,40 @@ export function CfgView() {
           </p>
         )}
 
-        {selectedId && index.detail_mode === "archive_only" && (
-          <p class="text-muted small mb-0">
-            CFG topology for this repository is stored in{" "}
-            <code>{index.archive_path ?? "cfg_pdg.archive.bin"}</code> only (large-repo
-            mode). Block/edge counts are listed in the sidebar; use a smaller repo or
-            re-export with fewer than 5,000 functions for inline CFG previews.
-          </p>
+        {selectedId && archiveOnly && !detail && (
+          <div class="flex-shrink-0">
+            <div class="alert alert-warning py-2 small mb-2" role="alert">
+              <strong>Large repository — CFG preview not loaded.</strong> This bundle has{" "}
+              {index.function_count.toLocaleString()} functions with CFG data, which is too large
+              to render automatically in the browser. Block and edge counts are listed in the
+              sidebar. Load one function at a time from the CFG/PDG archive on demand.
+            </div>
+            {loadError && (
+              <div class="alert alert-danger py-2 small mb-2" role="alert">
+                {loadError}
+              </div>
+            )}
+            {canLazyLoad ? (
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-primary"
+                disabled={!wasmReady || loadingDetail}
+                onClick={() => void handleLoadCfg()}
+              >
+                {loadingDetail
+                  ? "Loading CFG graph…"
+                  : `Load CFG graph${selectedEntry ? ` for ${selectedEntry.name}` : ""}`}
+              </button>
+            ) : (
+              <p class="text-muted small mb-0">
+                On-demand CFG records are not in this bundle. Re-run{" "}
+                <code>rbuilder discover . --all</code> to regenerate the dashboard export.
+              </p>
+            )}
+            {!wasmReady && canLazyLoad && (
+              <p class="text-muted small mt-2 mb-0">Waiting for WASM engine…</p>
+            )}
+          </div>
         )}
       </div>
     </FunctionListLayout>
@@ -238,8 +291,7 @@ function DominancePanel({ detail }: { detail: CfgDetailPayload }) {
       <div class="flex-grow-1 min-h-0 overflow-auto small">
         {!hasDominance ? (
           <p class="text-muted p-2 mb-0">
-            Dominance preview omitted in compact export. CFG blocks and edges are still
-            shown in the graph.
+            Dominance data is unavailable for this function.
           </p>
         ) : (
         <table class="table table-sm table-striped mb-0">

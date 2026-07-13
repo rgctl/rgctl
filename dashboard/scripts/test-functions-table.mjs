@@ -20,15 +20,24 @@ const page = await browser.newPage();
 await page.goto(BASE, { waitUntil: "networkidle", timeout: 60000 });
 await page.getByRole("button", { name: "Functions", exact: true }).click();
 await page.waitForSelector(".functions-view table tbody tr", { timeout: 15000 });
+await page.waitForFunction(
+  () => {
+    const cell = document.querySelector(".functions-view table tbody tr td");
+    const text = cell?.textContent?.trim() ?? "";
+    return text.length > 0 && text !== "Loading…";
+  },
+  { timeout: 30000 },
+);
 
 const defaultRows = await tableRows(page);
 const topName = defaultRows[0]?.[0] ?? "";
 const topPr = parsePr(defaultRows[0]?.[2] ?? "0");
+const searchTerm = topName.length >= 4 ? topName.slice(0, 4) : topName;
 
-await page.getByPlaceholder("Search by name or file…").fill("parseFile");
+await page.getByPlaceholder("Search by name or file…").fill(searchTerm);
 await page.waitForTimeout(400);
 const searchRows = await tableRows(page);
-const searchHit = searchRows.find((r) => r[0] === "parseFile");
+const searchHit = searchRows.find((r) => r[0] === topName);
 
 await page.getByPlaceholder("Search by name or file…").fill("");
 await page.waitForTimeout(200);
@@ -63,8 +72,8 @@ const report = {
   defaultTopName: topName,
   defaultTopPr: topPr,
   defaultSortByPr: topPr > 0.005,
-  searchFoundParseFile: Boolean(searchHit),
-  parseFilePr: searchHit?.[2],
+  searchFoundTopRow: Boolean(searchHit),
+  searchTerm,
   nameSortAscending:
     nameSorted.length >= 2 ? nameSorted[0][0].localeCompare(nameSorted[1][0]) <= 0 : true,
   prHeaderTooltip: await prHelp.locator(".functions-col-help-popup").textContent(),
@@ -77,7 +86,7 @@ await browser.close();
 
 const ok =
   report.defaultSortByPr &&
-  report.searchFoundParseFile &&
+  report.searchFoundTopRow &&
   report.nameSortAscending &&
   (report.prHeaderTooltip?.includes("normalized") ?? false) &&
   report.infoIcons === 6 &&

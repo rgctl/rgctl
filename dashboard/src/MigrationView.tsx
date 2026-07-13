@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import { bundleDataUrl } from "./bundleUrl";
 import { ColumnHelp } from "./ColumnHelp";
 import { communityColorHex } from "./graphColors";
-import { layoutForceAtlas2 } from "./graphLayout";
+import { layoutForceAtlas2Async, shortGraphLabel } from "./graphLayout";
 import { GraphZoomControls } from "./GraphZoomControls";
 import { mountSigmaWhenReady } from "./sigmaMount";
 import { SIGMA_NODE_PROGRAM_CLASSES } from "./sigmaPrograms";
@@ -455,7 +455,7 @@ function MigrationGraphPanel({
     let disposed = false;
     setGraphBusy(true);
 
-    return mountSigmaWhenReady(container, () => {
+    return mountSigmaWhenReady(container, async () => {
       if (disposed) return;
 
       sigmaRef.current?.kill();
@@ -492,7 +492,12 @@ function MigrationGraphPanel({
 
       addLouvainLayoutEdges(g, graph.communities);
 
-      layoutForceAtlas2(g, graph.communities.length > 120 ? 160 : graph.communities.length > 40 ? 200 : 140);
+      await layoutForceAtlas2Async(
+        g,
+        graph.communities.length > 120 ? 160 : graph.communities.length > 40 ? 200 : 140,
+      );
+
+      if (disposed) return;
 
       const sigma = new Sigma(g, container, {
         renderEdgeLabels: false,

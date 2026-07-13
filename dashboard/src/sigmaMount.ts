@@ -1,8 +1,10 @@
 import type Sigma from "sigma";
+import { debounce } from "./debounce";
 
 const MIN_SIGMA_SIZE = 32;
 /** WebGL max texture dimension on most GPUs; avoid texImage2D out-of-range errors. */
 const MAX_CANVAS_DIM = 4096;
+const RESIZE_DEBOUNCE_MS = 120;
 
 /** Wait until an element has usable layout dimensions (flex panels settle async). */
 export async function waitForContainerSize(
@@ -45,11 +47,12 @@ export function observeSigmaResize(
   sigma: { resize: (force?: boolean) => unknown; refresh: () => unknown },
   container: HTMLElement,
 ): () => void {
-  const ro = new ResizeObserver(() => {
+  const onResize = debounce(() => {
     if (!isValidCanvasSize(container)) return;
     sigma.resize();
     sigma.refresh();
-  });
+  }, RESIZE_DEBOUNCE_MS);
+  const ro = new ResizeObserver(onResize);
   ro.observe(container);
   return () => ro.disconnect();
 }
@@ -60,16 +63,23 @@ export function observeSigmaResize(
  */
 export function mountSigmaWhenReady(
   container: HTMLElement,
-  mount: () => (() => void) | void,
+  mount: () => void | (() => void) | Promise<void | (() => void)>,
 ): () => void {
   let disposed = false;
   let innerCleanup: (() => void) | undefined;
+  let mountGen = 0;
   let ro: ResizeObserver | null = null;
 
   const tryMount = () => {
     if (disposed || innerCleanup) return;
     if (!isValidCanvasSize(container)) return;
-    innerCleanup = mount() ?? undefined;
+    const gen = ++mountGen;
+    void Promise.resolve(mount()).then((result) => {
+      if (disposed || gen !== mountGen) return;
+      if (typeof result === "function") {
+        innerCleanup = result;
+      }
+    });
   };
 
   void (async () => {
@@ -114,7 +124,7 @@ export function mountSigmaInWrap(
     sigma.refresh();
   };
 
-  const onResize = () => {
+  const onResize = debounce(() => {
     if (disposed) return;
     if (!isValidCanvasSize(wrap)) return;
     if (sigma) {
@@ -123,7 +133,7 @@ export function mountSigmaInWrap(
       return;
     }
     tryMount();
-  };
+  }, RESIZE_DEBOUNCE_MS);
 
   void (async () => {
     await waitForContainerSize(wrap);

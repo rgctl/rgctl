@@ -1,0 +1,1 @@
+import{u as l}from"./index-CEHLslBm.js";function c({text:n,placement:o="below"}){return l("span",{class:`functions-col-help functions-col-help--${o}`,tabIndex:0,"aria-label":n,children:[l("i",{class:"bi bi-info-circle functions-col-help-icon","aria-hidden":"true"}),l("span",{class:"functions-col-help-popup",role:"tooltip",children:n})]})}export{c as C};
