@@ -103,18 +103,19 @@ export const TAB_DOCS: Record<TabId, TabDocContent> = {
   },
   guide: {
     title: "Query guide (GQL)",
-    goal: "Explore and inventory the codebase using graph patterns — like SQL for structure.",
+    goal: "Reproduce every dashboard tab from the CLI — discover, GQL, inspect, slice, blast-radius, and migration export.",
     description:
-      "GQL matches patterns in the indexed graph: find functions by name, list call chains, or count nodes by type. Named macros bundle common patterns. The CLI is the primary interface; examples below work after `discover`.",
+      "The Query Guide tab lists CLI command sequences that mirror each dashboard view: graph exploration, function inventory, CFG/PDG, dataflow, slicing, blast radius, taint, and migration planning. Use it when you prefer terminals, CI, or agents over the browser UI.",
     benefits: [
-      "Repeatable audits on every release",
-      "Automation with `-f json` and scripts",
-      "Deterministic answers from the indexed graph",
+      "One place for tab → CLI mapping",
+      "Copy-paste workflows with prerequisites per analysis depth",
+      "JSON (-f json) examples for automation",
     ],
     usage: [
-      "Run `rbuilder discover .` once per repo (or after large changes).",
-      "Use `rbuilder gql` with MATCH patterns from the examples below.",
-      "Add `-f json` for machine-readable output in CI or agents.",
+      "Start with Prerequisites (discover / discover --all).",
+      "Open the section for the dashboard tab you are replacing.",
+      "Substitute your symbol names and file paths from GQL or the Functions table.",
+      "Add -f json and pipe to jq for scripts and CI gates.",
     ],
   },
   slice: {

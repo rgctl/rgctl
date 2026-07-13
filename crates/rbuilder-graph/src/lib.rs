@@ -1,14 +1,25 @@
-//! Graph storage and query layer
+//! Graph storage and query layer for rBuilder.
+#![warn(missing_docs)]
 
+/// Graph storage backends and the [`backend::GraphBackend`] trait.
 pub mod backend;
+/// High-level [`code_graph::CodeGraph`] API.
 pub mod code_graph;
+/// Code location hashing and lookup helpers.
 pub mod code_index;
+/// Columnar mmap snapshot format (v2).
 pub mod columnar_snapshot;
+/// JSON import/export for graph snapshots.
 pub mod export;
+/// String interning for index keys.
 pub mod intern;
+/// Snapshot version migration helpers.
 pub mod migration;
+/// Mini query language over [`backend::MemoryBackend`].
 pub mod query;
+/// Node, edge, and graph schema types.
 pub mod schema;
+/// Prepared and memory-mapped snapshot I/O.
 pub mod snapshot;
 
 pub use code_graph::CodeGraph;

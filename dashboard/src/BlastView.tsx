@@ -106,6 +106,11 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
     [functions, selectedId],
   );
 
+  const indexScore = useMemo(
+    () => (selected ? scoreByIndex.get(selected.index) ?? null : null),
+    [selected, scoreByIndex],
+  );
+
   const runBlast = useCallback(
     async (nodeIndex: number, maxDepth: number) => {
       const seq = ++requestSeq.current;
@@ -204,12 +209,22 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
 
         {result && (
           <div class="flex-grow-1 min-h-0 d-flex flex-column gap-2">
+            {indexScore &&
+              (indexScore.direct !== result.direct_caller_count ||
+                indexScore.zone !== result.impact_zone_count) && (
+                <p class="text-muted small mb-0 flex-shrink-0">
+                  Summary uses full-graph blast metrics (same as the sidebar). The caller table
+                  below is limited to depth {result.depth_limit}.
+                </p>
+              )}
             <div class="row g-2 flex-shrink-0">
               <div class="col-md-3">
                 <div class="card h-100">
                   <div class="card-body py-2 small">
                     <div class="text-muted">Impact score</div>
-                    <div class="fs-4 fw-semibold text-primary">{result.score.toFixed(1)}</div>
+                    <div class="fs-4 fw-semibold text-primary">
+                      {(indexScore?.score ?? result.score).toFixed(1)}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -217,7 +232,9 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
                 <div class="card h-100">
                   <div class="card-body py-2 small">
                     <div class="text-muted">Direct callers</div>
-                    <div class="fs-4 fw-semibold">{result.direct_caller_count}</div>
+                    <div class="fs-4 fw-semibold">
+                      {indexScore?.direct ?? result.direct_caller_count}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -225,7 +242,9 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
                 <div class="card h-100">
                   <div class="card-body py-2 small">
                     <div class="text-muted">Impact zone</div>
-                    <div class="fs-4 fw-semibold">{result.impact_zone_count}</div>
+                    <div class="fs-4 fw-semibold">
+                      {indexScore?.zone ?? result.impact_zone_count}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -242,6 +261,13 @@ export function BlastView({ wasmReady, functionCount, listNodes, blastRadius }: 
             <div class="card flex-grow-1 min-h-0">
               <div class="card-header py-2 small fw-semibold">
                 Callers of <code>{result.seed_name}</code>
+                <span class="text-muted fw-normal ms-2">
+                  (within depth {result.depth_limit}
+                  {result.callers.length > 0
+                    ? ` · ${result.callers.length} shown`
+                    : ""}
+                  )
+                </span>
               </div>
               <div class="table-responsive flex-grow-1 min-h-0 overflow-auto">
                 <table class="table table-sm table-striped mb-0 small">

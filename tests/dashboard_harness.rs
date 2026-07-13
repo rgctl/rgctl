@@ -5,6 +5,7 @@
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 /// Default golden repo for dashboard phase gates (override with env).
 pub const DEFAULT_GOLDEN_REPO: &str = "/Users/sshaaf/git/java/gbuilder";
@@ -101,6 +102,13 @@ pub fn run_discover(repo: &Path, languages: &str) -> Output {
 /// Run `discover . --all` (CFG/PDG, security scan, full dashboard analysis exports).
 pub fn run_discover_all(repo: &Path, languages: Option<&str>) -> Output {
     run_discover_with_flags(repo, languages, true)
+}
+
+/// Run `discover . --all` and return wall-clock duration alongside process output.
+pub fn run_discover_all_timed(repo: &Path, languages: Option<&str>) -> (Output, Duration) {
+    let start = Instant::now();
+    let output = run_discover_all(repo, languages);
+    (output, start.elapsed())
 }
 
 fn run_discover_with_flags(repo: &Path, languages: Option<&str>, all: bool) -> Output {

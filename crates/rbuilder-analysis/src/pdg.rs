@@ -12,7 +12,7 @@ use uuid::Uuid;
 pub type PdgNodeId = Uuid;
 
 /// Program dependence graph combining data and control dependencies.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ProgramDependenceGraph {
     /// PDG nodes keyed by id.
     pub nodes: HashMap<PdgNodeId, PdgNode>,
@@ -21,7 +21,38 @@ pub struct ProgramDependenceGraph {
     /// Control dependence edges.
     pub control_deps: Vec<ControlDependency>,
     /// Map from CFG block to PDG node ids in that block.
+    #[serde(default)]
     block_nodes: HashMap<BlockId, Vec<PdgNodeId>>,
+    /// Outgoing data-dependence adjacency (rebuilt on load when empty).
+    #[serde(default)]
+    data_succ: HashMap<PdgNodeId, Vec<PdgNodeId>>,
+    #[serde(skip)]
+    seen_data_edges: HashSet<(PdgNodeId, PdgNodeId, String, u8)>,
+}
+
+impl<'de> Deserialize<'de> for ProgramDependenceGraph {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Stored {
+            nodes: HashMap<PdgNodeId, PdgNode>,
+            data_deps: Vec<DataDependency>,
+            control_deps: Vec<ControlDependency>,
+            #[serde(default)]
+            block_nodes: HashMap<BlockId, Vec<PdgNodeId>>,
+            #[serde(default)]
+            data_succ: HashMap<PdgNodeId, Vec<PdgNodeId>>,
+        }
+        let stored = Stored::deserialize(deserializer)?;
+        Ok(Self::from_parts(
+            stored.nodes,
+            stored.data_deps,
+            stored.control_deps,
+            stored.block_nodes,
+            stored.data_succ,
+        ))
+    }
 }
 
 /// A PDG node representing one statement.
@@ -73,15 +104,83 @@ pub struct ControlDependency {
 }
 
 impl ProgramDependenceGraph {
+    pub(crate) fn from_parts(
+        nodes: HashMap<PdgNodeId, PdgNode>,
+        data_deps: Vec<DataDependency>,
+        control_deps: Vec<ControlDependency>,
+        block_nodes: HashMap<BlockId, Vec<PdgNodeId>>,
+        data_succ: HashMap<PdgNodeId, Vec<PdgNodeId>>,
+    ) -> Self {
+        Self {
+            nodes,
+            data_deps,
+            control_deps,
+            block_nodes,
+            data_succ,
+            seen_data_edges: HashSet::new(),
+        }
+    }
+
     /// Build a PDG from a CFG and source bytes for def-use refinement.
     pub fn build(cfg: &ControlFlowGraph, source: &[u8]) -> Result<Self> {
+        let dom = DominatorTree::build(cfg);
+        Self::build_with_dominator(cfg, source, &dom)
+    }
+
+    /// Build a PDG reusing a precomputed dominator tree.
+    pub fn build_with_dominator(
+        cfg: &ControlFlowGraph,
+        source: &[u8],
+        dom: &DominatorTree,
+    ) -> Result<Self> {
         let mut pdg = Self::default();
         pdg.create_nodes_from_cfg(cfg);
         let _ = source;
         let reaching = compute_reaching_definitions(cfg, &pdg);
         pdg.build_data_dependencies(cfg, &reaching);
-        pdg.build_control_dependencies(cfg);
+        pdg.build_control_dependencies_dominance(cfg, dom);
         Ok(pdg)
+    }
+
+    /// Ensure adjacency index exists (no-op when already built).
+    pub fn ensure_data_succ(&mut self) {
+        if !self.data_succ.is_empty() || self.data_deps.is_empty() {
+            return;
+        }
+        self.rebuild_data_succ();
+    }
+
+    /// Rebuild in-memory indexes after bincode/JSON deserialization.
+    pub fn restore_derived_indexes(&mut self) {
+        self.rebuild_block_nodes();
+        self.rebuild_data_succ();
+        self.seen_data_edges.clear();
+    }
+
+    fn rebuild_block_nodes(&mut self) {
+        self.block_nodes.clear();
+        for node in self.nodes.values() {
+            self.block_nodes.entry(node.block).or_default().push(node.id);
+        }
+    }
+
+    fn rebuild_data_succ(&mut self) {
+        self.data_succ.clear();
+        for dep in &self.data_deps {
+            self.data_succ.entry(dep.from).or_default().push(dep.to);
+        }
+    }
+
+    /// Build outgoing data-dependence adjacency (for taint / traversal).
+    pub fn data_succ_map(&self) -> HashMap<PdgNodeId, Vec<PdgNodeId>> {
+        if !self.data_succ.is_empty() {
+            return self.data_succ.clone();
+        }
+        let mut map: HashMap<PdgNodeId, Vec<PdgNodeId>> = HashMap::new();
+        for dep in &self.data_deps {
+            map.entry(dep.from).or_default().push(dep.to);
+        }
+        map
     }
 
     fn create_nodes_from_cfg(&mut self, cfg: &ControlFlowGraph) {
@@ -187,27 +286,30 @@ impl ProgramDependenceGraph {
         if from == to {
             return;
         }
-        let duplicate = self.data_deps.iter().any(|d| {
-            d.from == from && d.to == to && d.variable == variable && d.dep_type == dep_type
-        });
-        if !duplicate {
-            self.data_deps.push(DataDependency {
-                from,
-                to,
-                variable,
-                dep_type,
-            });
+        let key = (from, to, variable.clone(), dep_type as u8);
+        if !self.seen_data_edges.insert(key) {
+            return;
         }
+        self.data_deps.push(DataDependency {
+            from,
+            to,
+            variable,
+            dep_type,
+        });
+        self.data_succ.entry(from).or_default().push(to);
     }
 
     fn build_control_dependencies(&mut self, cfg: &ControlFlowGraph) {
-        self.build_control_dependencies_dominance(cfg);
+        let dom_tree = DominatorTree::build(cfg);
+        self.build_control_dependencies_dominance(cfg, &dom_tree);
     }
 
     /// Precise control dependencies via dominance frontiers (Phase 13.2).
-    fn build_control_dependencies_dominance(&mut self, cfg: &ControlFlowGraph) {
-        let dom_tree = DominatorTree::build(cfg);
-
+    fn build_control_dependencies_dominance(
+        &mut self,
+        cfg: &ControlFlowGraph,
+        dom_tree: &DominatorTree,
+    ) {
         for block_id in cfg.blocks.keys() {
             for &frontier_block in dom_tree.frontier(*block_id).iter() {
                 let Some(controller_nodes) = self.block_nodes.get(block_id).cloned() else {
@@ -305,6 +407,13 @@ impl ProgramDependenceGraph {
 
     /// Downstream nodes depending on `node_id`.
     pub fn get_dependents(&self, node_id: PdgNodeId) -> Vec<PdgNodeId> {
+        if !self.data_succ.is_empty() {
+            return self
+                .data_succ
+                .get(&node_id)
+                .cloned()
+                .unwrap_or_default();
+        }
         self.data_deps
             .iter()
             .filter(|dep| dep.from == node_id)
@@ -406,6 +515,15 @@ fn compute_post_dominators(cfg: &ControlFlowGraph) -> PostDominatorTree {
 mod tests {
     use super::*;
     use crate::cfg_builder::build_cfg_for_function;
+
+    #[test]
+    fn test_pdg_bincode_roundtrip() {
+        let code = "fn add(a: i32, b: i32) -> i32 { a + b }";
+        let cfg = build_cfg_for_function("rust", code, "add").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+        let bytes = bincode::serialize(&pdg).unwrap();
+        let _: ProgramDependenceGraph = bincode::deserialize(&bytes).unwrap();
+    }
 
     #[test]
     fn test_pdg_data_dependency() {

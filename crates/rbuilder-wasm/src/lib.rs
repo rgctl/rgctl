@@ -1,6 +1,9 @@
 //! Columnar v2 engine for the browser WASM worker (Phases 1–3).
 
+mod cfg_preview;
 mod columnar;
+
+pub use cfg_preview::parse_cfg_detail;
 
 use columnar::ColumnarView;
 use wasm_bindgen::prelude::*;

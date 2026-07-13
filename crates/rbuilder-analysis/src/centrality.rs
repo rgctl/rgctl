@@ -4,7 +4,7 @@
 //! from behavioral centrality by default so module containment cannot inflate
 //! PageRank or betweenness scores.
 
-use crate::graph_utils::PetGraphView;
+use crate::graph_utils::{edge_type_set, PetGraphView};
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rbuilder_error::Result;
@@ -90,9 +90,10 @@ impl FlatGraphIndex {
         let node_count = view.directed.node_count();
         let mut flat_edges = Vec::new();
         let mut participates = vec![false; node_count];
+        let allowed = edge_type_set(allowed_types);
 
         for edge in view.directed.edge_references() {
-            if allowed_types.contains(edge.weight()) {
+            if allowed.contains(edge.weight()) {
                 let src = edge.source().index();
                 let dst = edge.target().index();
                 flat_edges.push((src, dst));

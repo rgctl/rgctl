@@ -1,7 +1,7 @@
 //! Blast-radius performance benchmarks with hard regression gates.
 //!
 //! Run: `cargo bench --bench blast_radius_benchmarks`
-//! Ignored gates: `cargo test --release --test phase16_blast_radius_perf -- --ignored`
+//! Ignored gates: `cargo test --release --test blast_radius_perf -- --ignored`
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use rbuilder::analysis::{BlastEngineSnapshot, BlastRadiusEngine, PetGraphView};

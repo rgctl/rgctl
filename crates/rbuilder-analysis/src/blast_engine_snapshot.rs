@@ -76,6 +76,7 @@ impl BlastEngineSnapshot {
     /// Load snapshot from disk via mmap (avoids an extra full-file buffer copy).
     pub fn load_from_path(path: &Path) -> Result<Self> {
         let file = File::open(path)?;
+        // SAFETY: Read-only map of a file we own for the snapshot lifetime; parse only reads bytes.
         let mmap = unsafe { Mmap::map(&file)? };
         parse_blast_payload(&mmap)
     }

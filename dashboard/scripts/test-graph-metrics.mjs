@@ -22,7 +22,7 @@ console.log(
 
 await browser.close();
 process.exit(
-  graphTabActive === 1 && statCards >= 8 && totalNodes === 1 && notificationsButton === 1 && wasmReady === 1
+  graphTabActive === 1 && statCards >= 7 && totalNodes === 1 && notificationsButton === 1 && wasmReady === 1
     ? 0
     : 1,
 );

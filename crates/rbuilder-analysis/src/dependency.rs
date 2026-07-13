@@ -1,8 +1,9 @@
-//! Dependency analysis
+//! Dependency analysis — circular dependencies and impact radius.
 //!
-//! Task 2.1.4: Circular dependencies and impact radius.
+//! **Algorithms:** Kosaraju SCC for cycle detection; reverse BFS for impact radius.
+//! **Complexity:** O(V + E) per analysis; impact radius bounded by [`TraversalConfig`].
 
-use crate::graph_utils::PetGraphView;
+use crate::graph_utils::{PetGraphView, TraversalConfig};
 use petgraph::algo::kosaraju_scc;
 use petgraph::visit::EdgeRef;
 use rbuilder_error::{Error, Result};
@@ -41,6 +42,14 @@ impl DependencyAnalyzer {
     /// Find circular dependencies using strongly connected components.
     pub fn find_circular_dependencies(backend: &MemoryBackend) -> Result<Vec<CircularDependency>> {
         let view = PetGraphView::from_backend(backend)?;
+        Self::find_circular_dependencies_with_view(&view, backend)
+    }
+
+    /// Find circular dependencies using a pre-built topology view.
+    pub fn find_circular_dependencies_with_view(
+        view: &PetGraphView,
+        backend: &MemoryBackend,
+    ) -> Result<Vec<CircularDependency>> {
         let sccs = kosaraju_scc(&view.directed);
 
         let mut cycles = Vec::new();
@@ -53,7 +62,7 @@ impl DependencyAnalyzer {
                     .edges(a)
                     .any(|e| component.contains(&e.target()))
             });
-            if !has_call_edge && component.len() == 1 {
+            if !has_call_edge {
                 continue;
             }
 
@@ -77,11 +86,28 @@ impl DependencyAnalyzer {
     }
 
     /// Calculate impact radius: nodes that transitively depend on `symbol_name`.
+    ///
+    /// Uses [`TraversalConfig::default`] (depth [`DEFAULT_TRAVERSAL_DEPTH`]).
     pub fn calculate_impact_radius(
         backend: &MemoryBackend,
         symbol_name: &str,
     ) -> Result<ImpactResult> {
         let view = PetGraphView::from_backend(backend)?;
+        Self::calculate_impact_radius_with_view(
+            backend,
+            &view,
+            symbol_name,
+            TraversalConfig::default(),
+        )
+    }
+
+    /// Calculate impact radius with a pre-built view and traversal config.
+    pub fn calculate_impact_radius_with_view(
+        backend: &MemoryBackend,
+        view: &PetGraphView,
+        symbol_name: &str,
+        config: TraversalConfig,
+    ) -> Result<ImpactResult> {
         let nodes = backend.find_nodes_by_name(symbol_name)?;
         let source_node = nodes
             .first()
@@ -100,7 +126,7 @@ impl DependencyAnalyzer {
         let mut max_depth = 0usize;
 
         while let Some((idx, depth)) = queue.pop_front() {
-            if depth > 10 {
+            if depth > config.max_depth {
                 continue;
             }
             max_depth = max_depth.max(depth);
@@ -110,9 +136,16 @@ impl DependencyAnalyzer {
                 .neighbors_directed(idx, petgraph::Direction::Incoming)
             {
                 if let Some(uuid) = view.index_to_uuid.get(&neighbor) {
-                    if *uuid != source && affected.insert(*uuid) {
-                        _depths.insert(*uuid, depth + 1);
-                        queue.push_back((neighbor, depth + 1));
+                    if *uuid == source {
+                        continue;
+                    }
+                    let next_depth = depth + 1;
+                    if next_depth > config.max_depth {
+                        continue;
+                    }
+                    if affected.insert(*uuid) {
+                        _depths.insert(*uuid, next_depth);
+                        queue.push_back((neighbor, next_depth));
                     }
                 }
             }
@@ -161,6 +194,7 @@ impl DependencyAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph_utils::DEFAULT_TRAVERSAL_DEPTH;
     use rbuilder_graph::backend::GraphBackend;
     use rbuilder_graph::schema::{Edge, EdgeType, Node, NodeType};
 
@@ -200,5 +234,44 @@ mod tests {
 
         let callers = DependencyAnalyzer::find_callers(&backend, "target").unwrap();
         assert!(callers.contains(&"main".to_string()));
+    }
+
+    #[test]
+    fn default_traversal_depth_is_ten() {
+        assert_eq!(DEFAULT_TRAVERSAL_DEPTH, 10);
+        assert_eq!(TraversalConfig::default().max_depth, 10);
+    }
+
+    #[test]
+    fn impact_radius_respects_traversal_config() {
+        let mut backend = MemoryBackend::new();
+        let mut ids = Vec::new();
+        for i in 0..12 {
+            let node = Node::new(NodeType::Function, format!("f{i}"));
+            ids.push(node.id);
+            backend.insert_node(node).unwrap();
+        }
+        for i in 0..11 {
+            backend
+                .insert_edge(Edge::new(ids[i], ids[i + 1], EdgeType::Calls))
+                .unwrap();
+        }
+        let view = PetGraphView::from_backend(&backend).unwrap();
+        let limited = DependencyAnalyzer::calculate_impact_radius_with_view(
+            &backend,
+            &view,
+            "f11",
+            TraversalConfig::default(),
+        )
+        .unwrap();
+        let full = DependencyAnalyzer::calculate_impact_radius_with_view(
+            &backend,
+            &view,
+            "f11",
+            TraversalConfig::unlimited(),
+        )
+        .unwrap();
+        assert!(full.affected_nodes.contains(&ids[0]));
+        assert!(!limited.affected_nodes.contains(&ids[0]));
     }
 }

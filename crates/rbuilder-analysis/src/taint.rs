@@ -108,6 +108,7 @@ pub struct TaintAnalyzer<'a> {
     pdg: &'a ProgramDependenceGraph,
     _cfg: &'a ControlFlowGraph,
     dom_tree: DominatorTree,
+    data_succ: HashMap<PdgNodeId, Vec<PdgNodeId>>,
     sources: HashMap<PdgNodeId, TaintSource>,
     sinks: HashMap<PdgNodeId, TaintSink>,
     sanitizers: HashMap<PdgNodeId, Sanitizer>,
@@ -117,10 +118,21 @@ pub struct TaintAnalyzer<'a> {
 impl<'a> TaintAnalyzer<'a> {
     /// Create analyzer for a function.
     pub fn new(pdg: &'a ProgramDependenceGraph, cfg: &'a ControlFlowGraph) -> Self {
+        Self::with_dominator(pdg, cfg, DominatorTree::build(cfg))
+    }
+
+    /// Create analyzer with a precomputed dominator tree.
+    pub fn with_dominator(
+        pdg: &'a ProgramDependenceGraph,
+        cfg: &'a ControlFlowGraph,
+        dom_tree: DominatorTree,
+    ) -> Self {
+        let data_succ = pdg.data_succ_map();
         Self {
             pdg,
             _cfg: cfg,
-            dom_tree: DominatorTree::build(cfg),
+            dom_tree,
+            data_succ,
             sources: HashMap::new(),
             sinks: HashMap::new(),
             sanitizers: HashMap::new(),
@@ -688,20 +700,19 @@ impl<'a> TaintAnalyzer<'a> {
     ) -> Vec<(PdgNodeId, Vec<PdgNodeId>)> {
         let mut reachable = Vec::new();
         let mut visited = HashSet::new();
-        let mut queue: VecDeque<(PdgNodeId, Vec<PdgNodeId>)> = VecDeque::new();
-        queue.push_back((source, vec![source]));
+        let mut parent: HashMap<PdgNodeId, PdgNodeId> = HashMap::new();
+        let mut queue = VecDeque::from([source]);
+        visited.insert(source);
 
-        while let Some((current, path)) = queue.pop_front() {
-            if !visited.insert(current) {
-                continue;
-            }
+        while let Some(current) = queue.pop_front() {
             if self.sinks.contains_key(&current) {
-                reachable.push((current, path.clone()));
+                reachable.push((current, reconstruct_path(&parent, source, current)));
             }
-            for dep in self.pdg.data_deps.iter().filter(|d| d.from == current) {
-                let mut new_path = path.clone();
-                new_path.push(dep.to);
-                queue.push_back((dep.to, new_path));
+            for &next in self.data_succ.get(&current).map(|v| v.as_slice()).unwrap_or(&[]) {
+                if visited.insert(next) {
+                    parent.insert(next, current);
+                    queue.push_back(next);
+                }
             }
         }
         reachable
@@ -743,6 +754,27 @@ impl<'a> TaintAnalyzer<'a> {
         }
         sanitizers
     }
+}
+
+fn reconstruct_path(
+    parent: &HashMap<PdgNodeId, PdgNodeId>,
+    source: PdgNodeId,
+    sink: PdgNodeId,
+) -> Vec<PdgNodeId> {
+    let mut path = vec![sink];
+    let mut current = sink;
+    while current != source {
+        let Some(&prev) = parent.get(&current) else {
+            break;
+        };
+        path.push(prev);
+        current = prev;
+    }
+    path.reverse();
+    if path.first() != Some(&source) {
+        path.insert(0, source);
+    }
+    path
 }
 
 #[cfg(test)]
@@ -809,5 +841,40 @@ def handle_request(request):
             vulnerable.len() < all.len() || vulnerable.is_empty(),
             "sanitized flow should reduce vulnerabilities"
         );
+    }
+
+    #[test]
+    fn test_taint_no_sql_flow_without_user_input() {
+        let code = r#"
+def safe_query():
+    query = "SELECT 1"
+    cursor.execute(query)
+"#;
+        let cfg = build_cfg_for_function("python", code, "safe_query").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+        let mut analyzer = TaintAnalyzer::new(&pdg, &cfg);
+        analyzer.detect_patterns("python");
+        assert!(
+            analyzer.vulnerable_flows().is_empty(),
+            "static SQL without user input should not taint"
+        );
+    }
+
+    #[test]
+    fn test_taint_multi_hop_python() {
+        let code = r#"
+def handle(request):
+    user = request.GET['user']
+    msg = user
+    payload = msg
+    cursor.execute("SELECT * FROM t WHERE u = '" + payload + "'")
+"#;
+        let cfg = build_cfg_for_function("python", code, "handle").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+        let mut analyzer = TaintAnalyzer::new(&pdg, &cfg);
+        analyzer.detect_patterns("python");
+        let flows = analyzer.vulnerable_flows();
+        assert!(!flows.is_empty(), "multi-hop assignment chain should reach sink");
+        assert_eq!(flows[0].source_type, TaintSource::HttpParameter);
     }
 }

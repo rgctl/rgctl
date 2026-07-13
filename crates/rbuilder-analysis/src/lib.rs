@@ -60,7 +60,10 @@ pub use centrality_approx::{
 pub use cfg::{
     BasicBlock, BlockId, CfgEdge, CfgEdgeType, ControlFlowGraph, Statement, StatementKind,
 };
-pub use cfg_builder::build_cfg_for_function;
+pub use cfg_builder::{
+    build_cfg_for_function, build_cfg_for_function_in_tree, index_function_locations,
+    FunctionLocation, ParsedSourceFile,
+};
 pub use cfg_pdg_archive::{CfgPdgArchive, CfgPdgRecord, CFG_PDG_ARCHIVE_FILE};
 pub use community::{
     default_community_edge_types, detect_communities, Community, CommunityDetector,
@@ -73,7 +76,10 @@ pub use def_use::{extract_def_use, extract_used_variables};
 pub use dependency::{CircularDependency, DependencyAnalyzer, ImpactResult};
 pub use dominance::{verify_idom_acyclic, DominatorTree};
 pub use flow_cache::{CachedAnalysis, CfgPdgCache, FlowCache, NodePdgCache};
-pub use graph_utils::{filter_impact_by_caller_depth, PetGraphView};
+pub use graph_utils::{
+    edge_type_set, filter_impact_by_caller_depth, PetGraphView, TraversalConfig,
+    DEFAULT_TRAVERSAL_DEPTH,
+};
 pub use language_profile::{
     canonical_language_id, cfg_language_id_from_path, cfg_language_ids, cfg_language_list,
     function_kinds_for, language_id_from_path, parse_source, profile_for_language,
@@ -103,6 +109,6 @@ pub use results::{
     CommunityTable, ComplexityTable,
 };
 pub use slicing::{BackwardSlicer, CodeSlice, SliceCriterion};
-pub use storage::{AnalysisStorage, FunctionAnalysis};
+pub use storage::{AnalysisIndexEntry, AnalysisStorage, FunctionAnalysis, FunctionIdSyncEntry};
 pub use taint::{Sanitizer, TaintAnalyzer, TaintFlow, TaintSink, TaintSource};
 pub use type_inference::{confidence_for, InferredType, TypeInferenceEngine, VariableType};

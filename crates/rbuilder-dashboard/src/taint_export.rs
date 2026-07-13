@@ -1,5 +1,6 @@
-//! Taint flow export for dashboard Phase 8 (reads `.rbuilder/analysis/`).
+//! Taint flow export for dashboard (reads `.rbuilder/analysis/` index + selective loads).
 
+use crate::export_util::write_json_compact;
 use rbuilder_analysis::pdg::{PdgNodeId, ProgramDependenceGraph};
 use rbuilder_analysis::storage::AnalysisStorage;
 use rbuilder_analysis::taint::{Sanitizer, TaintFlow, TaintSink, TaintSource};
@@ -67,7 +68,7 @@ pub struct TaintExportSummary {
 pub fn export_taint_bundle(repo_root: &Path, out_dir: &Path) -> Result<TaintExportSummary, String> {
     let analysis_dir = repo_root.join(".rbuilder/analysis");
     let storage = AnalysisStorage::new(&analysis_dir);
-    let analyses = storage.load_all().map_err(|e| e.to_string())?;
+    let index = storage.load_analysis_index().map_err(|e| e.to_string())?;
 
     let taint_dir = out_dir.join(TAINT_DETAIL_DIR);
     if taint_dir.exists() {
@@ -79,7 +80,19 @@ pub fn export_taint_bundle(repo_root: &Path, out_dir: &Path) -> Result<TaintExpo
     let mut total_flows = 0usize;
     let mut vulnerable_flows = 0usize;
 
-    for analysis in analyses {
+    let mut entries: Vec<_> = index.values().collect();
+    entries.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+
+    for entry in entries {
+        if entry.flow_count == 0 && entry.vulnerable_count == 0 {
+            continue;
+        }
+        let Some(analysis) = storage
+            .load_function(entry.function_id)
+            .map_err(|e| e.to_string())?
+        else {
+            continue;
+        };
         let Some(flows) = analysis.taint.as_ref().filter(|f| !f.is_empty()) else {
             continue;
         };
@@ -100,7 +113,7 @@ pub fn export_taint_bundle(repo_root: &Path, out_dir: &Path) -> Result<TaintExpo
             file_path: Some(analysis.file_path.clone()),
             flows: flow_views,
         };
-        write_json(
+        write_json_compact(
             &taint_dir.join(format!("{}.json", analysis.function_id)),
             &bundle,
         )?;
@@ -121,7 +134,7 @@ pub fn export_taint_bundle(repo_root: &Path, out_dir: &Path) -> Result<TaintExpo
     });
 
     let available = !functions.is_empty();
-    let index = TaintIndexPayload {
+    let index_payload = TaintIndexPayload {
         schema_version: 1,
         available,
         detail_dir: TAINT_DETAIL_DIR.into(),
@@ -130,11 +143,11 @@ pub fn export_taint_bundle(repo_root: &Path, out_dir: &Path) -> Result<TaintExpo
         vulnerable_flows,
         functions,
     };
-    write_json(&out_dir.join(TAINT_INDEX_FILE), &index)?;
+    write_json_compact(&out_dir.join(TAINT_INDEX_FILE), &index_payload)?;
 
     Ok(TaintExportSummary {
         available,
-        function_count: index.function_count,
+        function_count: index_payload.function_count,
         total_flows,
         vulnerable_flows,
     })
@@ -221,11 +234,6 @@ fn format_sanitizer(s: &Sanitizer) -> String {
     }
 }
 
-fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    fs::write(path, json).map_err(|e| e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn exports_taint_from_analysis_storage() {
+    fn exports_taint_from_analysis_index() {
         let tmp = TempDir::new().unwrap();
         let repo = tmp.path().join("repo");
         let analysis_dir = repo.join(".rbuilder/analysis");
@@ -277,6 +285,7 @@ mod tests {
             function_id: fid,
             function_name: "handle".into(),
             file_path: "App.java".into(),
+            code_hash: Some("abc".into()),
             cfg: None,
             pdg: None,
             dominance: None,

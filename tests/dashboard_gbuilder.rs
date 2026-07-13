@@ -8,7 +8,10 @@
 
 mod dashboard_harness;
 
-use dashboard_harness::{assert_dashboard_bundle_with_meta, golden_repo_path, run_discover};
+use dashboard_harness::{
+    assert_dashboard_bundle_all_analysis, assert_dashboard_bundle_with_meta, golden_repo_path,
+    run_discover, run_discover_all_timed,
+};
 use rbuilder_dashboard::dist_embedded;
 
 /// gbuilder is a real multi-module Java graph (~2k nodes). Minimum counts guard against regressions.
@@ -59,5 +62,47 @@ fn discover_writes_dashboard_bundle_on_gbuilder_golden_repo() {
         manifest["graph"]["edge_count"],
         functions,
         manifest["view"]["metanode_count"]
+    );
+}
+
+#[test]
+#[ignore = "manual: gbuilder discover --all runs CFG/PDG on full Java graph"]
+fn discover_all_writes_dashboard_bundle_on_gbuilder() {
+    if !dist_embedded() {
+        panic!(
+            "dashboard/dist not embedded — run ./scripts/build-dashboard.sh && cargo build --release"
+        );
+    }
+
+    let repo = golden_repo_path();
+    if !repo.is_dir() {
+        eprintln!(
+            "skip: golden repo not found at {} (set RBUILDER_DASHBOARD_GOLDEN_REPO)",
+            repo.display()
+        );
+        return;
+    }
+
+    let (output, elapsed) = run_discover_all_timed(&repo, Some("java"));
+    assert!(
+        output.status.success(),
+        "discover --all on gbuilder failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_dashboard_bundle_all_analysis(&repo, GBUILDER_MIN_NODES, GBUILDER_MIN_METANODES);
+
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(repo.join(".rbuilder/dashboard/manifest.json")).unwrap(),
+    )
+    .unwrap();
+
+    eprintln!(
+        "gbuilder discover --all OK in {:.1}s: {} nodes, {} edges, taint={}",
+        elapsed.as_secs_f64(),
+        manifest["graph"]["node_count"],
+        manifest["graph"]["edge_count"],
+        manifest["analysis"]["taint_available"]
     );
 }

@@ -1,9 +1,14 @@
 //! Graph query interface
+//!
+//! **Complexity:** indexed clauses are O(k) for k matching IDs; compound `|` queries intersect
+//! ID sets before materializing nodes; full scans (signature/return_type) are O(N).
 
 use crate::backend::GraphBackend;
 use crate::backend::MemoryBackend;
 use crate::schema::{Node, NodeType};
 use rbuilder_error::{Error, Result};
+use std::collections::HashSet;
+use uuid::Uuid;
 
 /// Execute a simple query against the graph backend.
 ///
@@ -36,13 +41,15 @@ pub fn execute(backend: &MemoryBackend, query: &str) -> Result<Vec<Node>> {
         // Intersect starting from the most selective clause (smallest result set)
         let mut ordered = parts;
         ordered.sort_by_key(|part| selectivity_rank(part));
-        let mut results = execute(backend, ordered[0])?;
+        let mut intersection = execute_node_ids(backend, ordered[0])?;
         for part in &ordered[1..] {
-            let next = execute(backend, part)?;
-            let ids: std::collections::HashSet<_> = next.iter().map(|n| n.id).collect();
-            results.retain(|n| ids.contains(&n.id));
+            let next = execute_node_ids(backend, part)?;
+            intersection.retain(|id| next.contains(id));
+            if intersection.is_empty() {
+                break;
+            }
         }
-        return Ok(results);
+        return backend.get_nodes_by_ids(&intersection);
     }
 
     if let Some(repo) = query.strip_prefix("repo:") {
@@ -111,6 +118,167 @@ pub fn execute_chunks(
     Ok(results
         .chunks(chunk_size)
         .map(|chunk| chunk.to_vec())
+        .collect())
+}
+
+fn execute_node_ids(backend: &MemoryBackend, query: &str) -> Result<HashSet<Uuid>> {
+    let query = query.trim();
+    if query.is_empty() || query.eq_ignore_ascii_case("all") {
+        return Ok(backend.all_nodes()?.into_iter().map(|n| n.id).collect());
+    }
+
+    if let Some(repo) = query.strip_prefix("repo:") {
+        return Ok(backend
+            .find_node_ids_by_property("repo", repo)?
+            .into_iter()
+            .collect());
+    }
+
+    if let Some(type_name) = query.strip_prefix("type:") {
+        let node_type = parse_node_type(type_name)?;
+        return Ok(backend
+            .find_node_ids_by_type(node_type)?
+            .into_iter()
+            .collect());
+    }
+
+    if let Some(name) = query.strip_prefix("name:") {
+        return Ok(backend
+            .find_node_ids_by_name(name)?
+            .into_iter()
+            .collect());
+    }
+
+    if let Some(label) = query.strip_prefix("label:") {
+        return Ok(backend
+            .find_node_ids_by_label(label)?
+            .into_iter()
+            .collect());
+    }
+
+    if let Some(suffix) = query.strip_prefix("name_suffix:") {
+        return filter_node_ids_by_name_suffix(backend, suffix);
+    }
+
+    if let Some(pattern) = query.strip_prefix("signature:") {
+        return filter_node_ids_by_signature(backend, pattern);
+    }
+
+    if let Some(return_type) = query.strip_prefix("return_type:") {
+        return filter_node_ids_by_return_type(backend, return_type);
+    }
+
+    if let Some(module) = query.strip_prefix("module:") {
+        return filter_node_ids_by_property(backend, "module", module);
+    }
+
+    if let Some(resource_type) = query.strip_prefix("resource:") {
+        return filter_node_ids_by_property(backend, "resource_type", resource_type);
+    }
+
+    match query.to_ascii_lowercase().as_str() {
+        "functions" | "function" => Ok(backend
+            .find_node_ids_by_type(NodeType::Function)?
+            .into_iter()
+            .collect()),
+        "classes" | "class" => Ok(backend
+            .find_node_ids_by_type(NodeType::Class)?
+            .into_iter()
+            .collect()),
+        "structs" | "struct" => Ok(backend
+            .find_node_ids_by_type(NodeType::Struct)?
+            .into_iter()
+            .collect()),
+        "files" | "file" => Ok(backend
+            .find_node_ids_by_type(NodeType::File)?
+            .into_iter()
+            .collect()),
+        "config" | "configkeys" => Ok(backend
+            .find_node_ids_by_type(NodeType::ConfigKey)?
+            .into_iter()
+            .collect()),
+        "playbooks" | "ansibleplaybooks" => Ok(backend
+            .find_node_ids_by_type(NodeType::AnsiblePlaybook)?
+            .into_iter()
+            .collect()),
+        "ansibleroles" | "roles" => Ok(backend
+            .find_node_ids_by_type(NodeType::AnsibleRole)?
+            .into_iter()
+            .collect()),
+        "cookbooks" | "chefcookbooks" => Ok(backend
+            .find_node_ids_by_type(NodeType::ChefCookbook)?
+            .into_iter()
+            .collect()),
+        "chefrecipes" | "recipes" => Ok(backend
+            .find_node_ids_by_type(NodeType::ChefRecipe)?
+            .into_iter()
+            .collect()),
+        "puppetmodules" | "modules" => Ok(backend
+            .find_node_ids_by_type(NodeType::PuppetModule)?
+            .into_iter()
+            .collect()),
+        "puppetclasses" => Ok(backend
+            .find_node_ids_by_type(NodeType::PuppetClass)?
+            .into_iter()
+            .collect()),
+        _ => Ok(backend
+            .find_nodes(query)?
+            .into_iter()
+            .map(|n| n.id)
+            .collect()),
+    }
+}
+
+fn filter_node_ids_by_signature(
+    backend: &MemoryBackend,
+    pattern: &str,
+) -> Result<HashSet<Uuid>> {
+    Ok(backend
+        .all_nodes()?
+        .into_iter()
+        .filter(|node| {
+            node.signature_text()
+                .is_some_and(|sig| signature_wildcard_match(pattern, sig))
+        })
+        .map(|node| node.id)
+        .collect())
+}
+
+fn filter_node_ids_by_return_type(
+    backend: &MemoryBackend,
+    prefix: &str,
+) -> Result<HashSet<Uuid>> {
+    Ok(backend
+        .all_nodes()?
+        .into_iter()
+        .filter(|node| {
+            node.return_type_text()
+                .is_some_and(|ty| ty.starts_with(prefix))
+        })
+        .map(|node| node.id)
+        .collect())
+}
+
+fn filter_node_ids_by_property(
+    backend: &MemoryBackend,
+    key: &str,
+    value: &str,
+) -> Result<HashSet<Uuid>> {
+    Ok(backend
+        .find_node_ids_by_property(key, value)?
+        .into_iter()
+        .collect())
+}
+
+fn filter_node_ids_by_name_suffix(
+    backend: &MemoryBackend,
+    suffix: &str,
+) -> Result<HashSet<Uuid>> {
+    Ok(backend
+        .all_nodes()?
+        .into_iter()
+        .filter(|node| node.name.ends_with(suffix))
+        .map(|node| node.id)
         .collect())
 }
 
@@ -243,6 +411,30 @@ mod tests {
     use super::*;
     use crate::backend::GraphBackend;
     use crate::schema::Node;
+
+    #[test]
+    fn test_compound_query_intersects_ids() {
+        let mut backend = MemoryBackend::new();
+        backend
+            .insert_node(
+                Node::new(NodeType::Function, "run".to_string())
+                    .with_return_type("Result<()>".to_string()),
+            )
+            .unwrap();
+        backend
+            .insert_node(
+                Node::new(NodeType::Function, "other".to_string())
+                    .with_return_type("i32".to_string()),
+            )
+            .unwrap();
+        backend
+            .insert_node(Node::new(NodeType::Class, "Svc".to_string()))
+            .unwrap();
+
+        let results = execute(&backend, "type:Function|return_type:Result").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "run");
+    }
 
     #[test]
     fn test_query_by_type() {

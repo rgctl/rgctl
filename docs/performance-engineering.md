@@ -13,7 +13,7 @@ Last updated: 2026-07-03 (T3 complete: ICFG from CFG archive + br.slice.total_ms
 | Track | Status | What it proves |
 |-------|--------|----------------|
 | **CLI I/O contract** | ✅ Strong | `cli_output`, `subprocess_golden_path`, `all_commands_sanity` — CI in [blast-radius-perf.yml](../.github/workflows/blast-radius-perf.yml) |
-| **Blast-radius perf infra** | ✅ Landed | `phase16_blast_radius_perf` (8 CI gates + 3 ignored 150k) |
+| **Blast-radius perf infra** | ✅ Landed | `blast_radius_perf` (8 CI gates + 3 ignored 150k) |
 | **Production latency (T0–T3)** | ⚠️ Partial | metasfresh T1 ~200 ms post-Sprint A; soft gates when cache present |
 
 **Bottom line:** We can regress **algorithm + cache micro-paths** at mock scale and **SQLite lookup** on synthetic rows. We **cannot yet** automatically regress end-to-end CLI latency on a real monorepo cache.
@@ -52,22 +52,22 @@ Policy evaluation and `--with-slices` force T2+ (full graph required today).
 
 | Asset | Location | Scale | Gate | Runs in CI? |
 |-------|----------|-------|------|-------------|
-| **Blast analyze (warm)** | `tests/phase16_blast_radius_perf.rs` | 5k / 25k edges mock | **< 1 ms** | Yes (`cargo test --release --test phase16_blast_radius_perf`) |
-| **SQLite unique lookup** | `phase16` | Synthetic row (100 callers, 500 impact names) | **< 15 ms** | Yes (release test) |
-| **SQLite FQN resolved** | `phase16` | Single candidate row | **< 50 ms** | Yes (release test) |
-| **PetGraph from prepared** | `phase16` + `blast_radius_benchmarks` | 150k / 700k mock | **< 30 s** | No (`#[ignore]`, needs `--ignored`) |
-| **PetGraph from columnar store** | `phase16` | 5k mock | **< 500 ms** | Yes (release test) |
-| **Columnar open vs v1** | `phase16` | 5k mock | v2 faster than v1 bincode | Yes (release test) |
-| **SnapshotNodeStore open** | `phase16` + `blast_radius_benchmarks` | 150k mock | **< 15 s** | No (`#[ignore]`) |
-| **Engine snapshot load** | `phase16` + `blast_radius_benchmarks` | 150k mock | **< 60 s** | No (`#[ignore]`) |
+| **Blast analyze (warm)** | `tests/blast_radius_perf.rs` | 5k / 25k edges mock | **< 1 ms** | Yes (`cargo test --release --test blast_radius_perf`) |
+| **SQLite unique lookup** | `blast_radius_perf` | Synthetic row (100 callers, 500 impact names) | **< 15 ms** | Yes (release test) |
+| **SQLite FQN resolved** | `blast_radius_perf` | Single candidate row | **< 50 ms** | Yes (release test) |
+| **PetGraph from prepared** | `blast_radius_perf` + `blast_radius_benchmarks` | 150k / 700k mock | **< 30 s** | No (`#[ignore]`, needs `--ignored`) |
+| **PetGraph from columnar store** | `blast_radius_perf` | 5k mock | **< 500 ms** | Yes (release test) |
+| **Columnar open vs v1** | `blast_radius_perf` | 5k mock | v2 faster than v1 bincode | Yes (release test) |
+| **SnapshotNodeStore open** | `blast_radius_perf` + `blast_radius_benchmarks` | 150k mock | **< 15 s** | No (`#[ignore]`) |
+| **Engine snapshot load** | `blast_radius_perf` + `blast_radius_benchmarks` | 150k mock | **< 60 s** | No (`#[ignore]`) |
 | **Blast analyze (small)** | `benches/blast_radius_benchmarks.rs` | 5k mock | **< 5 ms** (bench assert) | No |
-| PageRank | `centrality_benchmarks` + `phase14_centrality_audit` | 150k / 700k mock | **< 20 ms** | No (ignored / bench) |
-| Community | `community_benchmarks` + `phase15_community_audit` | 150k / 700k mock | **< 150 ms** | No (ignored / bench) |
+| PageRank | `centrality_benchmarks` + `centrality_audit` | 150k / 700k mock | **< 20 ms** | No (ignored / bench) |
+| Community | `community_benchmarks` + `community_audit` | 150k / 700k mock | **< 150 ms** | No (ignored / bench) |
 | PetGraphView (generic) | `benches/graph_benchmarks.rs` | 5k–25k; 150k/1M with `RBUILDER_BENCH_LARGE=1` | Criterion only | No |
 | Blast engine (small) | `graph_benchmarks` | ≤1000 nodes | Criterion only | No |
-| Dominance | `benches/phase13_analysis.rs` | 1000-block CFG | **< 15 ms** | Yes (`scripts/semantic-verification.sh`) |
-| Semantic smoke | `tests/phase13_perf.rs` | Small fixtures | < 2–5 s generous | Yes |
-| Blast correctness | `tests/phase12_blast_radius.rs` | Small chains | Functional | Yes |
+| Dominance | `benches/analysis_benchmarks.rs` | 1000-block CFG | **< 15 ms** | Yes (`scripts/semantic-verification.sh`) |
+| Semantic smoke | `tests/analysis_perf.rs` | Small fixtures | < 2–5 s generous | Yes |
+| Blast correctness | `tests/blast_radius.rs` | Small chains | Functional | Yes |
 | **CLI I/O sanity** | `tests/cli_output/all_commands_sanity.rs` | Tiny polyglot fixture | Schema / exit code | Yes |
 | Cache rebuild | `tests/rebuild_macro_index.rs` | metasfresh (ignored) | `eprintln!` only | No |
 | Full repo indexing | `benches/full_analysis.rs` | kafka example | Criterion | **Orphan** (not in `Cargo.toml`) |
@@ -77,13 +77,13 @@ Policy evaluation and `--with-slices` force T2+ (full graph required today).
 | Component | Path | Status |
 |-----------|------|--------|
 | Criterion benches | `benches/blast_radius_benchmarks.rs` | ✅ Wired in `Cargo.toml` |
-| Release gate tests | `tests/phase16_blast_radius_perf.rs` | ✅ CI gates + ignored 150k gates |
+| Release gate tests | `tests/blast_radius_perf.rs` | ✅ CI gates + ignored 150k gates |
 
 ### Fixture tiers
 
 | ID | Purpose | Source |
 |----|---------|--------|
-| **S** | Algorithm smoke | 5k-node mock in phase16 / blast_radius_benchmarks |
+| **S** | Algorithm smoke | 5k-node mock in blast_radius_perf / blast_radius_benchmarks |
 | **M** | Scale gates (centrality/community parity) | `build_monorepo_mock(150_000, 700_000)` |
 | **R** | Realistic Java monorepo | `example/metasfresh-4.9.8b/.rbuilder/*` if present |
 | **R'** | Polyglot smoke | `example/kafka` if present |
@@ -93,7 +93,7 @@ Environment variables:
 
 ```bash
 RBUILDER_BENCH_LARGE=1              # enable 150k mock Criterion groups
-RBUILDER_BENCH_REPO=/path/to/repo     # real-repo soft gates in phase16 (skips if cache missing)
+RBUILDER_BENCH_REPO=/path/to/repo     # real-repo soft gates in blast_radius_perf (skips if cache missing)
 RBUILDER_BENCH_SYMBOL=saveError       # optional symbol for bench_repo_lite_analyze_under_3s
 ```
 
@@ -116,32 +116,32 @@ Each metric should eventually have Criterion samples **and** a release gate wher
 
 | Metric ID | Description | Target (metasfresh) | Gate status |
 |-----------|-------------|---------------------|-------------|
-| `br.query.analyze_ms` | Warm `BlastRadiusEngine::analyze` | < 1 ms (5k mock) | ✅ `phase16` |
-| `br.query.sqlite_unique_ms` | `MacroCallLookupDb::lookup()` | < 15 ms | ✅ `phase16` (synthetic DB) |
-| `br.query.sqlite_fqn_ms` | `lookup_resolved()` with class filter | < 50 ms | ✅ `phase16` (synthetic DB) |
+| `br.query.analyze_ms` | Warm `BlastRadiusEngine::analyze` | < 1 ms (5k mock) | ✅ `blast_radius_perf` |
+| `br.query.sqlite_unique_ms` | `MacroCallLookupDb::lookup()` | < 15 ms | ✅ `blast_radius_perf` (synthetic DB) |
+| `br.query.sqlite_fqn_ms` | `lookup_resolved()` with class filter | < 50 ms | ✅ `blast_radius_perf` (synthetic DB) |
 | `br.query.fast_path_ms` | `try_fast_cached_lookup` end-to-end CLI | < 150 ms | ✅ `subprocess_golden_path` |
-| `br.query.lite_total_ms` | Full T1 CLI (snapshot + engine, no SQLite hit) | < 3000 ms | ✅ soft `phase16` when metasfresh cache present |
+| `br.query.lite_total_ms` | Full T1 CLI (snapshot + engine, no SQLite hit) | < 3000 ms | ✅ soft `blast_radius_perf` when metasfresh cache present |
 | `br.query.full_hydrate_ms` | T2 `load_graph` + analyze | < 15000 ms | ❌ Soft gate only (manual) |
 
 ### Load / deserialize (implementation-facing)
 
 | Metric ID | Description | Gate (150k mock) | Gate status |
 |-----------|-------------|------------------|-------------|
-| `br.load.petgraph_from_prepared_ms` | `PetGraphView::from_prepared` | < 30 s | ✅ ignored `phase16` |
-| `br.load.petgraph_from_snapshot_store_ms` | `PetGraphView::from_snapshot_store` (columnar v2) | < 500 ms (5k mock) | ✅ `phase16` |
-| `br.load.columnar_open_ms` | Columnar v2 open vs v1 bincode | v2 faster than v1 (5k mock) | ✅ `phase16` |
-| `br.load.snapshot_node_store_ms` | `SnapshotNodeStore::open` | < 15 s | ✅ ignored `phase16` |
+| `br.load.petgraph_from_prepared_ms` | `PetGraphView::from_prepared` | < 30 s | ✅ ignored `blast_radius_perf` |
+| `br.load.petgraph_from_snapshot_store_ms` | `PetGraphView::from_snapshot_store` (columnar v2) | < 500 ms (5k mock) | ✅ `blast_radius_perf` |
+| `br.load.columnar_open_ms` | Columnar v2 open vs v1 bincode | v2 faster than v1 (5k mock) | ✅ `blast_radius_perf` |
+| `br.load.snapshot_node_store_ms` | `SnapshotNodeStore::open` | < 15 s | ✅ ignored `blast_radius_perf` |
 | `br.load.graph_snapshot_ms` | `MmappedGraphSnapshot::open` | < 15 s | ✅ `blast_radius_benchmarks` assert |
-| `br.load.engine_snapshot_ms` | Load + `from_engine_snapshot` | < 5 s (150k mock + metasfresh soft) | ✅ `phase16` |
-| `br.load.engine_snapshot_rss_mb` | RSS delta after engine load | < 512 MB (5k mock) | ✅ `phase16` |
-| `br.load.backend_hydrate_ms` | `hydrate_prepared` vs batch re-index | hydrate ≤ batch | ✅ `phase16` (5k mock) |
+| `br.load.engine_snapshot_ms` | Load + `from_engine_snapshot` | < 5 s (150k mock + metasfresh soft) | ✅ `blast_radius_perf` |
+| `br.load.engine_snapshot_rss_mb` | RSS delta after engine load | < 512 MB (5k mock) | ✅ `blast_radius_perf` |
+| `br.load.backend_hydrate_ms` | `hydrate_prepared` vs batch re-index | hydrate ≤ batch | ✅ `blast_radius_perf` (5k mock) |
 
 ### Discover / write path
 
 | Metric ID | Description | Gate status |
 |-----------|-------------|-------------|
 | `br.discover.engine_build_ms` | `BlastRadiusEngine::build` | ❌ Manual only |
-| `br.discover.analyze_all_ms` | Parallel loop over all functions at discover | < 2 s (5k mock) | ✅ `phase16` |
+| `br.discover.analyze_all_ms` | Parallel loop over all functions at discover | < 2 s (5k mock) | ✅ `blast_radius_perf` |
 | `br.discover.snapshot_write_ms` | `PreparedGraphSnapshot::write_to_path` | ❌ |
 | `br.discover.engine_snapshot_write_ms` | v2 sparse+zstd write | ❌ |
 | `br.discover.macro_index_write_ms` | SQLite + macro index | ❌ |
@@ -227,8 +227,8 @@ Prioritized by impact on T0–T3. Status as of 2026-07-03.
 
 ```bash
 # ── Blast-radius perf (release) ──
-cargo test --release --test phase16_blast_radius_perf
-cargo test --release --test phase16_blast_radius_perf -- --ignored   # 150k mock gates
+cargo test --release --test blast_radius_perf
+cargo test --release --test blast_radius_perf -- --ignored   # 150k mock gates
 
 cargo bench --bench blast_radius_benchmarks
 RBUILDER_BENCH_LARGE=1 cargo bench --bench blast_radius_benchmarks   # 150k groups
@@ -236,11 +236,11 @@ RBUILDER_BENCH_LARGE=1 cargo bench --bench blast_radius_benchmarks   # 150k grou
 # ── Peer scale gates ──
 cargo bench --bench centrality_benchmarks
 cargo bench --bench community_benchmarks
-cargo test --release --test phase14_centrality_audit -- --ignored
-cargo test --release --test phase15_community_audit -- --ignored
+cargo test --release --test centrality_audit -- --ignored
+cargo test --release --test community_audit -- --ignored
 
 # ── Correctness (CI-friendly) ──
-cargo test --release --test phase12_blast_radius
+cargo test --release --test blast_radius
 cargo test --test cli_output --test subprocess_golden_path --test all_commands_sanity
 
 # ── Semantic pipeline (dominance perf only) ──
@@ -271,13 +271,13 @@ cargo test --release rebuild_metasfresh_caches -- --ignored --nocapture
 | File | Role |
 |------|------|
 | `benches/blast_radius_benchmarks.rs` | Blast-radius Criterion + small-scale asserts |
-| `tests/phase16_blast_radius_perf.rs` | Release perf gates (SQLite, analyze, hydrate, RSS, 150k load) |
-| `.github/workflows/blast-radius-perf.yml` | CI: `phase16` + CLI I/O tests on PR |
+| `tests/blast_radius_perf.rs` | Release perf gates (SQLite, analyze, hydrate, RSS, 150k load) |
+| `.github/workflows/blast-radius-perf.yml` | CI: `blast_radius_perf` + CLI I/O tests on PR |
 | `crates/rbuilder-analysis/src/cfg_pdg_archive.rs` | CFG/PDG archive for `--with-slices` (T3) |
 | `benches/centrality_benchmarks.rs` | PageRank 150k template |
 | `benches/community_benchmarks.rs` | Community 150k template |
-| `tests/phase14_centrality_audit.rs` | Ignored PageRank regression |
-| `tests/phase15_community_audit.rs` | Ignored community regression |
+| `tests/centrality_audit.rs` | Ignored PageRank regression |
+| `tests/community_audit.rs` | Ignored community regression |
 | `tests/rebuild_macro_index.rs` | Manual metasfresh cache rebuild |
 | `tests/cli_output/subprocess_golden_path.rs` | Golden paths + `br.query.fast_path_ms` gate |
 | `tests/cli_output/all_commands_sanity.rs` | CLI I/O contract (not wall-clock) |

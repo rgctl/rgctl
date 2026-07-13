@@ -59,6 +59,12 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --features "${{ env.FEATURES }}" --lib --bins -- -D warnings
 
+      - name: cargo clippy (rbuilder-analysis)
+        run: cargo clippy -p rbuilder-analysis --features "${{ env.FEATURES }}" -- -D warnings
+
+      - name: cargo clippy (rbuilder-graph, rbuilder-core)
+        run: cargo clippy -p rbuilder-graph -p rbuilder-core --features "${{ env.FEATURES }}" -- -D warnings
+
       - name: cargo test (unit and integration)
         run: cargo test --features "${{ env.FEATURES }}" --workspace --lib --bins --tests
 
@@ -72,4 +78,4 @@ jobs:
         run: cargo test --release --features "${{ env.FEATURES }}" --test all_commands_sanity
 
       - name: Blast-radius performance gates (release)
-        run: cargo test --release --features "${{ env.FEATURES }}" --test phase16_blast_radius_perf
+        run: cargo test --release --features "${{ env.FEATURES }}" --test blast_radius_perf

@@ -93,6 +93,7 @@ mod tests {
                 function_id: id,
                 function_name: "parseOrder".into(),
                 file_path: "src/Order.java".into(),
+                code_hash: Some("h1".into()),
                 cfg: None,
                 pdg: None,
                 dominance: None,

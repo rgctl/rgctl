@@ -169,7 +169,7 @@ Currently hard-coded via `DEFAULT_*` constants in `centrality_approx.rs`.
 
 ## Scale measurements (release build, Jul 2026)
 
-### Synthetic mocks (`phase17_centrality_approx_scale`)
+### Synthetic mocks (`centrality_approx_scale`)
 
 | Test | Nodes | Edges | Time | Notes |
 |------|-------|-------|------|-------|
@@ -202,7 +202,7 @@ even at 230k nodes because k=512 is fixed.
 | Sampled bridge ranking | `centrality_approx::tests` | Bridge node scores high |
 | HyperBall line graph | `centrality_approx::tests` | Head > tail harmonic (UUID-aware flat index) |
 | Spearman correlation | `centrality_approx::tests` | Sampled ≈ exact on small graph |
-| 10k mock budget | `phase17_centrality_approx_scale` | < 30s total |
+| 10k mock budget | `centrality_approx_scale` | < 30s total |
 | 50k flat BC / Harm | `phase17` | Individual algo budgets (60s) |
 | metasfresh timing | `phase17` (ignored) | Real-repo overhead vs 5–6 min discover |
 | gbuilder timing | `phase17` (ignored) | Small-repo exact path |
@@ -211,8 +211,8 @@ Run scale gates:
 
 ```bash
 cargo test --release -p rbuilder-analysis centrality_approx
-cargo test --release --test phase17_centrality_approx_scale -- --nocapture
-cargo test --release --test phase17_centrality_approx_scale -- --ignored --nocapture
+cargo test --release --test centrality_approx_scale -- --nocapture
+cargo test --release --test centrality_approx_scale -- --ignored --nocapture
 ```
 
 ---

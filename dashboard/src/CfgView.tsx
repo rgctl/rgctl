@@ -15,12 +15,22 @@ import {
   CFG_NODE_LEGEND,
 } from "./viewLegendData";
 
-export function CfgView() {
+interface CfgViewProps {
+  wasmReady: boolean;
+  loadCfgDetail: (functionId: string) => Promise<CfgDetailPayload>;
+}
+
+export function CfgView({ wasmReady, loadCfgDetail }: CfgViewProps) {
   const [index, setIndex] = useState<CfgIndexPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CfgDetailPayload | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const archiveOnly = index?.detail_mode === "archive_only";
+  const canLazyLoad =
+    archiveOnly && Boolean(index?.record_index_path && index?.record_data_path);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,10 +51,14 @@ export function CfgView() {
   }, []);
 
   useEffect(() => {
-    if (!selectedId) {
-      setDetail(null);
+    setDetail(null);
+    setLoadError(null);
+    if (!selectedId) return;
+
+    if (archiveOnly) {
       return;
     }
+
     let cancelled = false;
     setLoadingDetail(true);
     fetch(bundleDataUrl(`cfg/${selectedId}.json`))
@@ -64,7 +78,24 @@ export function CfgView() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [selectedId, archiveOnly]);
+
+  const selectedEntry = index?.functions.find((f) => f.function_id === selectedId) ?? null;
+
+  async function handleLoadCfg() {
+    if (!selectedId || !canLazyLoad) return;
+    setLoadingDetail(true);
+    setLoadError(null);
+    try {
+      const payload = await loadCfgDetail(selectedId);
+      setDetail(payload);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+      setDetail(null);
+    } finally {
+      setLoadingDetail(false);
+    }
+  }
 
   if (error) {
     return <div class="alert alert-danger py-2 small mb-0">{error}</div>;
@@ -123,6 +154,42 @@ export function CfgView() {
           <p class="text-muted small mb-0">
             Pick a function to render its control-flow graph and dominator tree.
           </p>
+        )}
+
+        {selectedId && archiveOnly && !detail && (
+          <div class="flex-shrink-0">
+            <div class="alert alert-warning py-2 small mb-2" role="alert">
+              <strong>Large repository — CFG preview not loaded.</strong> This bundle has{" "}
+              {index.function_count.toLocaleString()} functions with CFG data, which is too large
+              to render automatically in the browser. Block and edge counts are listed in the
+              sidebar. Load one function at a time from the CFG/PDG archive on demand.
+            </div>
+            {loadError && (
+              <div class="alert alert-danger py-2 small mb-2" role="alert">
+                {loadError}
+              </div>
+            )}
+            {canLazyLoad ? (
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-primary"
+                disabled={!wasmReady || loadingDetail}
+                onClick={() => void handleLoadCfg()}
+              >
+                {loadingDetail
+                  ? "Loading CFG graph…"
+                  : `Load CFG graph${selectedEntry ? ` for ${selectedEntry.name}` : ""}`}
+              </button>
+            ) : (
+              <p class="text-muted small mb-0">
+                On-demand CFG records are not in this bundle. Re-run{" "}
+                <code>rbuilder discover . --all</code> to regenerate the dashboard export.
+              </p>
+            )}
+            {!wasmReady && canLazyLoad && (
+              <p class="text-muted small mt-2 mb-0">Waiting for WASM engine…</p>
+            )}
+          </div>
         )}
       </div>
     </FunctionListLayout>
@@ -215,11 +282,18 @@ function CfgGraph({ detail }: { detail: CfgDetailPayload }) {
 
 function DominancePanel({ detail }: { detail: CfgDetailPayload }) {
   const selectedBlock = detail.entry;
+  const hasDominance =
+    detail.idom != null && detail.dominance_frontiers != null;
 
   return (
     <div class="cfg-dom-panel d-flex flex-column flex-grow-1 min-h-0 border rounded bg-white">
       <div class="border-bottom py-2 px-3 small fw-semibold flex-shrink-0">Dominance</div>
       <div class="flex-grow-1 min-h-0 overflow-auto small">
+        {!hasDominance ? (
+          <p class="text-muted p-2 mb-0">
+            Dominance data is unavailable for this function.
+          </p>
+        ) : (
         <table class="table table-sm table-striped mb-0">
           <thead>
             <tr>
@@ -234,12 +308,13 @@ function DominancePanel({ detail }: { detail: CfgDetailPayload }) {
                 <td>
                   <code>{b.label}</code>
                 </td>
-                <td>{detail.idom[b.id]?.toString() ?? "—"}</td>
-                <td>{(detail.dominance_frontiers[b.id] ?? []).join(", ") || "—"}</td>
+                <td>{detail.idom?.[b.id]?.toString() ?? "—"}</td>
+                <td>{(detail.dominance_frontiers?.[b.id] ?? []).join(", ") || "—"}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        )}
         {detail.blocks.some((b) => b.statements.length > 0) && (
           <div class="p-2 border-top">
             <div class="fw-semibold mb-1">Entry block preview</div>

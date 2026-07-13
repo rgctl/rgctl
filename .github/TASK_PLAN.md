@@ -45,7 +45,7 @@
 - 🖥️ **CLI Commands**: `rbuilder watch`, `rbuilder init-hooks`, `rbuilder mcp serve --watch` ✅
 - 📦 **Implementation**: `src/watch.rs` (461 lines), `src/hooks/mod.rs` (245 lines), MCP integration (3 files)
 - 🧪 **Testing**: 31 tests ✅ **Exceeds target** (15 needed, 207% coverage)
-- 📚 **Documentation**: `docs/phase13_automation.md` (170 lines) ✅
+- 📚 **Documentation**: `docs/automation.md` (170 lines) ✅
 
 **Key Gaps Addressed (Phase 13)**:
 1. ❌ → ✅ File system watching with incremental updates
@@ -186,7 +186,7 @@ We are NOT focusing on open source release yet. Instead:
 - ✅ MCP stdio notifications (notifications/graph_updated push)
 - ✅ MCP HTTP polling (/notifications/latest endpoint)
 - ✅ Test coverage: 31/15 tests (207%)
-- ✅ Documentation: docs/phase13_automation.md (170 lines)
+- ✅ Documentation: docs/automation.md (170 lines)
 
 **Phase 14 (Weeks 38-41):** ✅ COMPLETE (Grade: A+ - 96%) - Visualization & Export
 - ✅ Mermaid diagram generation
@@ -3646,7 +3646,7 @@ fn insert_edges_batch(&mut self, edges: Vec<Edge>) -> Result<()>;
 **Deliverables**:
 - [x] Updated `src/graph/backend/trait_def.rs`
 - [x] Optimized `src/graph/backend/memory.rs`
-- [x] Integration tests in `tests/phase8_integration.rs`
+- [x] Integration tests in `tests/parallel_query_integration.rs`
 
 ---
 
@@ -4506,7 +4506,7 @@ fn test_bash_function_extraction() {
 - [ ] Memory: 35 grammars loaded, <500MB
 
 **Deliverables**:
-- [ ] `tests/phase11_multilang.rs`
+- [ ] `tests/multilang_bundles.rs`
 - [ ] Fixture repo with 35 languages
 - [ ] Performance benchmarks
 
@@ -6163,7 +6163,7 @@ Total: 0.2ms
 
 **Deliverables**:
 - [x] `src/analysis/taint.rs`
-- [x] 25 comprehensive tests in `tests/phase13_taint.rs`
+- [x] 25 comprehensive tests in `tests/taint_analysis.rs`
 - [x] MCP tool integration (planned)
 
 ---
@@ -6193,7 +6193,7 @@ Total: 0.2ms
 **Deliverables**:
 - [x] `src/security/cve_patterns.rs`
 - [x] `src/security/analyzer.rs`
-- [x] 10 comprehensive tests in `tests/phase13_security.rs`
+- [x] 10 comprehensive tests in `tests/taint_security.rs`
 
 ---
 
@@ -6220,7 +6220,7 @@ Total: 0.2ms
 
 **Deliverables**:
 - [x] `src/analysis/callgraph.rs`
-- [x] Tests in `tests/phase13_interprocedural.rs`
+- [x] Tests in `tests/interprocedural.rs`
 
 ---
 
@@ -6296,7 +6296,7 @@ Total: 0.2ms
 
 **Deliverables**:
 - [x] `src/analysis/dominance.rs`
-- [x] 15 comprehensive tests in `tests/phase13_dominance.rs`
+- [x] 15 comprehensive tests in `tests/dominance.rs`
 - [x] Integration with PDG for enhanced control dependencies
 
 ---
@@ -6343,8 +6343,8 @@ Total: 0.2ms
 
 **Deliverables**:
 - [x] `src/analysis/type_inference.rs`
-- [x] 20 comprehensive tests in `tests/phase13_type_inference.rs`
-- [x] Helper utilities in `tests/common/phase13.rs`
+- [x] 20 comprehensive tests in `tests/type_inference.rs`
+- [x] Helper utilities in `tests/common/analysis_helpers.rs`
 
 ---
 
@@ -6370,7 +6370,7 @@ Total: 0.2ms
 
 **Deliverables**:
 - [x] `src/gql/optimizer.rs`
-- [x] 15 comprehensive tests in `tests/phase13_gql_optimizer.rs`
+- [x] 15 comprehensive tests in `tests/gql_optimizer.rs`
 - [x] Integration with GQL executor
 - [x] Enhanced explain plans with optimization details
 
@@ -6381,28 +6381,28 @@ Total: 0.2ms
 ### Task 12A.5.1: End-to-End Integration Tests ✅
 **Description**: Full pipeline integration tests across multiple components
 
-**Tests**: 4/4 passing in `tests/phase13_e2e.rs`
+**Tests**: 4/4 passing in `tests/analysis_e2e.rs`
 - [x] Taint → Security scan → CWE mapping pipeline
 - [x] Interprocedural dominance slice (call graph → dominance → slicing)
 - [x] Type inference + taint sanitization (multi-component)
 - [x] GQL optimize + execute on large graph
 
 **Deliverables**:
-- [x] `tests/phase13_e2e.rs` (111 lines, 4 tests)
-- [x] Shared test utilities in `tests/common/phase13.rs` (225 lines)
+- [x] `tests/analysis_e2e.rs` (111 lines, 4 tests)
+- [x] Shared test utilities in `tests/common/analysis_helpers.rs` (225 lines)
 
 ---
 
 ### Task 12A.5.2: Performance Validation ✅
 **Description**: Validate performance targets with benchmarks and smoke tests
 
-**Performance Smoke Tests**: 4/4 passing in `tests/phase13_perf.rs`
+**Performance Smoke Tests**: 4/4 passing in `tests/analysis_perf.rs`
 - [x] Taint analysis on 200-statement function (<5s CI limit)
 - [x] Dominance tree on 100-block CFG (<3s)
 - [x] Call graph on 100-function chain (<2s)
 - [x] GQL query on 500-node graph (<3s)
 
-**Criterion Benchmarks**: 5 benchmarks in `benches/phase13_analysis.rs`
+**Criterion Benchmarks**: 5 benchmarks in `benches/analysis_benchmarks.rs`
 - [x] Taint analysis on 1000-line Python function
 - [x] Type inference on 1000 LOC
 - [x] Interprocedural slice on 10-function chain
@@ -6411,12 +6411,12 @@ Total: 0.2ms
 
 **Run Command**:
 ```bash
-cargo bench --features bundle-minimal --bench phase13_analysis
+cargo bench --features bundle-minimal --bench analysis_benchmarks
 ```
 
 **Deliverables**:
-- [x] `tests/phase13_perf.rs` (91 lines, 4 tests)
-- [x] `benches/phase13_analysis.rs` (175 lines, 5 benchmarks)
+- [x] `tests/analysis_perf.rs` (91 lines, 4 tests)
+- [x] `benches/analysis_benchmarks.rs` (175 lines, 5 benchmarks)
 - [x] Performance targets validated (all within limits)
 
 ---
@@ -6460,18 +6460,18 @@ cargo bench --features bundle-minimal --bench phase13_analysis
 - [x] `src/security/mod.rs` (8 lines)
 
 **Tests** (8 files, 2,159 lines):
-- [x] `tests/phase13_taint.rs` (491 lines, 25 tests)
-- [x] `tests/phase13_type_inference.rs` (260 lines, 20 tests)
-- [x] `tests/phase13_dominance.rs` (304 lines, 15 tests)
-- [x] `tests/phase13_interprocedural.rs` (309 lines, 20 tests)
-- [x] `tests/phase13_gql_optimizer.rs` (195 lines, 15 tests)
-- [x] `tests/phase13_security.rs` (173 lines, 10 tests)
-- [x] `tests/phase13_e2e.rs` (111 lines, 4 tests)
-- [x] `tests/phase13_perf.rs` (91 lines, 4 tests)
-- [x] `tests/common/phase13.rs` (225 lines, utilities)
+- [x] `tests/taint_analysis.rs` (491 lines, 25 tests)
+- [x] `tests/type_inference.rs` (260 lines, 20 tests)
+- [x] `tests/dominance.rs` (304 lines, 15 tests)
+- [x] `tests/interprocedural.rs` (309 lines, 20 tests)
+- [x] `tests/gql_optimizer.rs` (195 lines, 15 tests)
+- [x] `tests/taint_security.rs` (173 lines, 10 tests)
+- [x] `tests/analysis_e2e.rs` (111 lines, 4 tests)
+- [x] `tests/analysis_perf.rs` (91 lines, 4 tests)
+- [x] `tests/common/analysis_helpers.rs` (225 lines, utilities)
 
 **Benchmarks**:
-- [x] `benches/phase13_analysis.rs` (175 lines, 5 benchmarks)
+- [x] `benches/analysis_benchmarks.rs` (175 lines, 5 benchmarks)
 
 **Documentation**:
 - [x] `PHASE_13_ADVANCED_ANALYSIS_GUIDE.md` (2,287 lines)
@@ -6502,9 +6502,9 @@ cargo bench --features bundle-minimal --bench phase13_analysis
 - **Files Added**: 
   - `src/watch.rs` (461 lines) - File watcher + MCP integration
   - `src/hooks/mod.rs` (245 lines) - Git hook templates
-  - `docs/phase13_automation.md` (170 lines) - User guide
-  - `tests/phase13_automation.rs` (276 lines, 14 tests)
-  - `tests/phase13_mcp_watch.rs` (112 lines, 4 tests)
+  - `docs/automation.md` (170 lines) - User guide
+  - `tests/automation.rs` (276 lines, 14 tests)
+  - `tests/mcp_watch.rs` (112 lines, 4 tests)
 - **Files Enhanced**: 
   - `src/cli/mcp.rs` - Added `--watch` flag + notification store
   - `src/mcp/server.rs` - Added `/notifications/latest` HTTP endpoint
@@ -6514,7 +6514,7 @@ cargo bench --features bundle-minimal --bench phase13_analysis
 - **CLI Commands**: `rbuilder watch`, `rbuilder init-hooks`, `rbuilder mcp serve --watch`
 - **Completed Tasks**: **5/5 (100%)**
 - **Test Coverage**: ✅ **Excellent** - 31/15 tests (207% of target)
-- **Documentation**: ✅ **Complete** - docs/phase13_automation.md
+- **Documentation**: ✅ **Complete** - docs/automation.md
 
 **Achievements**:
 1. ✅ File system watching with configurable debouncing (default 500ms)
@@ -6613,8 +6613,8 @@ fn test_watch_mode_modify_file() {
 - [x] `src/watch.rs` (461 lines) - File watcher + debouncing + MCP integration
 - [x] CLI command: `rbuilder watch`
 - [x] Performance target: <500ms update latency (debounce configurable)
-- [x] Integration tests (6 tests in src/watch.rs + 14 in tests/phase13_automation.rs)
-- [x] Documentation (`docs/phase13_automation.md` - 170 lines)
+- [x] Integration tests (6 tests in src/watch.rs + 14 in tests/automation.rs)
+- [x] Documentation (`docs/automation.md` - 170 lines)
 
 ---
 
@@ -6651,8 +6651,8 @@ fn test_watch_mode_modify_file() {
 - [x] Updated MCP server to enable watch mode:
   - `rbuilder mcp serve --watch` flag in src/cli/mcp.rs
   - spawn_watch_with_state integrated with AppState
-- [x] Integration tests (4 tests in tests/phase13_mcp_watch.rs)
-- [ ] Client example (Claude Code integration) ⚠️ **Optional**: Not critical, documented in phase13_automation.md
+- [x] Integration tests (4 tests in tests/mcp_watch.rs)
+- [ ] Client example (Claude Code integration) ⚠️ **Optional**: Not critical, documented in automation.md
 
 ---
 
@@ -6732,8 +6732,8 @@ git commit -m "test" && exit 1 || echo "Blocked as expected"
 - [x] Hook template script (PRE_COMMIT in src/hooks/mod.rs - 245 lines total)
 - [x] CLI command: `rbuilder init-hooks` (installs all hooks)
 - [x] Config parsing for hook options (RbuilderConfig::hooks)
-- [x] Tests (5 tests in src/hooks/mod.rs + 14 in tests/phase13_automation.rs)
-- [x] Documentation (`docs/phase13_automation.md` - Git hooks section)
+- [x] Tests (5 tests in src/hooks/mod.rs + 14 in tests/automation.rs)
+- [x] Documentation (`docs/automation.md` - Git hooks section)
 
 ---
 
@@ -6794,11 +6794,11 @@ fi
 3. `src/cli/mcp.rs` - MCP --watch flag integration
 4. `src/mcp/server.rs` - HTTP /notifications/latest endpoint
 5. `src/mcp/protocol.rs` - stdio notifications/graph_updated
-6. `docs/phase13_automation.md` (170 lines) - User guide
+6. `docs/automation.md` (170 lines) - User guide
 
 **Test Files**:
-1. `tests/phase13_automation.rs` - 14 tests (incremental updates, hooks, change detection, risk classification)
-2. `tests/phase13_mcp_watch.rs` - 4 tests (MCP integration, notification store, AppState updates)
+1. `tests/automation.rs` - 14 tests (incremental updates, hooks, change detection, risk classification)
+2. `tests/mcp_watch.rs` - 4 tests (MCP integration, notification store, AppState updates)
 3. `src/watch.rs::tests` - 6 tests (notification, debounce, event handling, path filtering)
 4. `src/hooks/mod.rs::tests` - 5 tests (installation, hook scripts validation, templates)
 5. `src/changes/mod.rs::tests` - 2 new tests (risk classification enhancements)
@@ -7042,7 +7042,7 @@ IndraDB (code graph data)
 **Deliverables**:
 - [x] `web/` directory with HTML/CSS/JS
 - [x] Updated MCP server with HTTP API endpoints
-- [x] Documentation: `docs/phase14_visualization.md`
+- [x] Documentation: `docs/visualization.md`
 - [ ] Screenshots in README
 
 ---
@@ -8015,7 +8015,7 @@ rbuilder diagram "type:AnsibleRole" --format mermaid
 **Target**: 35+ tests total
 
 **Deliverables**:
-- [ ] `tests/phase16_ansible.rs`
+- [ ] `tests/ansible_integration.rs`
 - [ ] Test fixtures (sample playbooks)
 - [ ] Benchmark for large Ansible projects
 
@@ -8542,7 +8542,7 @@ rbuilder chef security-scan
 **Target**: 35+ tests total
 
 **Deliverables**:
-- [ ] `tests/phase17_chef.rs`
+- [ ] `tests/chef_integration.rs`
 - [ ] Test fixtures (sample cookbooks)
 - [ ] Benchmark for large Chef repos
 
@@ -8990,7 +8990,7 @@ rbuilder puppet security-scan
 **Target**: 35+ tests total
 
 **Deliverables**:
-- [ ] `tests/phase18_puppet.rs`
+- [ ] `tests/puppet_integration.rs`
 - [ ] Test fixtures (sample modules)
 - [ ] Benchmark for large Puppet codebases
 
@@ -9150,7 +9150,7 @@ Err(Error::ParseError {
 - [ ] `src/analysis/ansible_roles.rs` (323 lines)
 - [ ] `src/security/ansible.rs` (247 lines)
 - [ ] `src/cli/ansible.rs` (242 lines)
-- [ ] `tests/phase16_ansible.rs` (360 lines)
+- [ ] `tests/ansible_integration.rs` (360 lines)
 
 **Review Against**:
 - [ ] CODE_REVIEW_GUIDE.md standards
@@ -9185,7 +9185,7 @@ Err(Error::ParseError {
 - [ ] `src/analysis/chef_cookbooks.rs` (309 lines)
 - [ ] `src/security/chef.rs` (189 lines)
 - [ ] `src/cli/chef.rs` (241 lines)
-- [ ] `tests/phase17_chef.rs` (314 lines)
+- [ ] `tests/chef_integration.rs` (314 lines)
 
 **Review Focus**:
 - [ ] Regex pattern correctness in DSL parsing
@@ -9230,7 +9230,7 @@ end
 - [ ] `src/analysis/puppet_modules.rs`
 - [ ] `src/security/puppet.rs`
 - [ ] `src/cli/puppet.rs`
-- [ ] `tests/phase18_puppet.rs`
+- [ ] `tests/puppet_integration.rs`
 
 **Deliverables**:
 - [ ] Review report: `reviews/puppet_plugin_review.md`
@@ -9410,12 +9410,12 @@ cargo tarpaulin --out Html --output-dir coverage/
 **Effort:** 2-3 days
 
 **Files to Review**:
-- [ ] `tests/phase11_bundles.rs`
-- [ ] `tests/phase11_multilang.rs`
-- [ ] `tests/phase11_multimodal.rs`
-- [ ] `tests/phase16_ansible.rs` ✅ 34 tests
-- [ ] `tests/phase17_chef.rs` ✅ 33 tests
-- [ ] `tests/phase18_puppet.rs` (when implemented)
+- [ ] `tests/bundles.rs`
+- [ ] `tests/multilang_bundles.rs`
+- [ ] `tests/multimodal_bundles.rs`
+- [ ] `tests/ansible_integration.rs` ✅ 34 tests
+- [ ] `tests/chef_integration.rs` ✅ 33 tests
+- [ ] `tests/puppet_integration.rs` (when implemented)
 
 **Integration Test Validation**:
 - [ ] End-to-end workflows tested

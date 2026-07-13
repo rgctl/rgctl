@@ -1,12 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { DataflowView } from "./DataflowView";
-import { BlastView } from "./BlastView";
-import { SliceView } from "./SliceView";
-import { TaintView } from "./TaintView";
-import { CfgView } from "./CfgView";
-import { FunctionsView } from "./FunctionsView";
-import { GraphView } from "./GraphView";
-import { MigrationView } from "./MigrationView";
+import { lazy, Suspense } from "preact/compat";
 import { NotificationMenu } from "./NotificationMenu";
 import { TabPanelStack } from "./TabDocPanel";
 import { DASHBOARD_TABS } from "./tabIcons";
@@ -14,11 +7,43 @@ import { type TabId } from "./tabDocs";
 import { loadManifest, type DashboardManifest, type EngineReady } from "./types";
 import { useEngineWorker } from "./useEngineWorker";
 
+const GraphView = lazy(() =>
+  import("./GraphView").then((m) => ({ default: m.GraphView })),
+);
+const FunctionsView = lazy(() =>
+  import("./FunctionsView").then((m) => ({ default: m.FunctionsView })),
+);
+const CfgView = lazy(() => import("./CfgView").then((m) => ({ default: m.CfgView })));
+const DataflowView = lazy(() =>
+  import("./DataflowView").then((m) => ({ default: m.DataflowView })),
+);
+const SliceView = lazy(() =>
+  import("./SliceView").then((m) => ({ default: m.SliceView })),
+);
+const BlastView = lazy(() =>
+  import("./BlastView").then((m) => ({ default: m.BlastView })),
+);
+const TaintView = lazy(() =>
+  import("./TaintView").then((m) => ({ default: m.TaintView })),
+);
+const MigrationView = lazy(() =>
+  import("./MigrationView").then((m) => ({ default: m.MigrationView })),
+);
+const GuideView = lazy(() => import("./GuideView").then((m) => ({ default: m.GuideView })));
+
+function TabLoading() {
+  return (
+    <div class="p-4 text-muted small" role="status">
+      Loading view…
+    </div>
+  );
+}
+
 export function App() {
   const [manifest, setManifest] = useState<DashboardManifest | null>(null);
   const [manifestError, setManifestError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>("graph");
-  const { engine, error: workerError, expand, listNodes, computeSlice, blastRadius, wasmReady } =
+  const { engine, error: workerError, expand, listNodes, computeSlice, blastRadius, loadCfgDetail, wasmReady } =
     useEngineWorker();
 
   useEffect(() => {
@@ -115,16 +140,19 @@ export function App() {
                             : "rb-tab-panel-body--scroll p-0"
             }`}
           >
-            <TabPanel
-              id={tab}
-              manifest={manifest}
-              engine={engine}
-              wasmReady={wasmReady}
-              expand={expand}
-              listNodes={listNodes}
-              computeSlice={computeSlice}
-              blastRadius={blastRadius}
-            />
+            <Suspense fallback={<TabLoading />}>
+              <TabPanel
+                id={tab}
+                manifest={manifest}
+                engine={engine}
+                wasmReady={wasmReady}
+                expand={expand}
+                listNodes={listNodes}
+                computeSlice={computeSlice}
+                blastRadius={blastRadius}
+                loadCfgDetail={loadCfgDetail}
+              />
+            </Suspense>
           </div>
         </div>
       </div>
@@ -159,6 +187,7 @@ function TabPanel({
   listNodes,
   computeSlice,
   blastRadius,
+  loadCfgDetail,
 }: {
   id: TabId;
   manifest: DashboardManifest | null;
@@ -180,6 +209,7 @@ function TabPanel({
     nodeIndex: number,
     maxDepth: number,
   ) => Promise<import("./types").BlastRadiusPayload>;
+  loadCfgDetail: (functionId: string) => Promise<import("./types").CfgDetailPayload>;
 }) {
   if (id === "graph") {
     return (
@@ -209,7 +239,7 @@ function TabPanel({
   if (id === "cfg") {
     return (
       <TabPanelStack tabId={id}>
-        <CfgView />
+        <CfgView wasmReady={wasmReady} loadCfgDetail={loadCfgDetail} />
       </TabPanelStack>
     );
   }
@@ -217,7 +247,7 @@ function TabPanel({
   if (id === "dataflow") {
     return (
       <TabPanelStack tabId={id}>
-        <DataflowView />
+        <DataflowView wasmReady={wasmReady} loadCfgDetail={loadCfgDetail} />
       </TabPanelStack>
     );
   }
@@ -259,23 +289,13 @@ function TabPanel({
     );
   }
 
-  const placeholders: Record<Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint" | "migration">, string> = {
-    guide: "CLI query reference",
-  };
+  if (id === "guide") {
+    return (
+      <TabPanelStack tabId={id}>
+        <GuideView />
+      </TabPanelStack>
+    );
+  }
 
-  return (
-    <TabPanelStack tabId={id}>
-      <div class="p-4">
-        <h2 class="h5 mb-2">{DASHBOARD_TABS.find((t) => t.id === id)?.label}</h2>
-        <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint" | "migration">]}</p>
-        {id === "guide" && (
-          <pre class="bg-light border rounded p-3 small mb-0">
-            {`rbuilder discover .
-rbuilder -f json blast-radius OrderService::process --depth 5
-rbuilder gql "MATCH (n:Function) RETURN n LIMIT 10"`}
-          </pre>
-        )}
-      </div>
-    </TabPanelStack>
-  );
+  return null;
 }

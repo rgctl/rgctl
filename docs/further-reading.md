@@ -23,7 +23,7 @@ Legend: **Implemented** = algorithm or structure in the codebase with tests; **I
 | Control-flow graphs | **Implemented** | [`cfg.rs`](../crates/rbuilder-analysis/src/cfg.rs), [`cfg_builder.rs`](../crates/rbuilder-analysis/src/cfg_builder.rs) | `discover --cfg`, `inspect` |
 | Forward taint (source → sink + sanitizers) | **Implemented** | [`taint.rs`](../crates/rbuilder-analysis/src/taint.rs) | `rbuilder slice --taint` — [Introduction § Taint](Introduction.md#taint-analysis) |
 
-**Tests:** [`phase12_slicing.rs`](../tests/phase12_slicing.rs), [`phase13_security.rs`](../tests/phase13_security.rs) (CWE-oriented taint/security patterns).
+**Tests:** [`slicing.rs`](../tests/slicing.rs), [`taint_security.rs`](../tests/taint_security.rs) (CWE-oriented taint/security patterns).
 
 ### Graph algorithms & architecture metrics
 
@@ -33,7 +33,7 @@ Legend: **Implemented** = algorithm or structure in the codebase with tests; **I
 | [Brandes — Betweenness centrality (2001)](https://doi.org/10.1080/00207160108942084) | **Implemented** | [`centrality.rs`](../crates/rbuilder-analysis/src/centrality.rs) — Brandes on filtered projections | `rbuilder metrics --betweenness` |
 | [Raghavan et al. — Label propagation (2007)](https://doi.org/10.1107/S1744309107073516) + Newman modularity | **Implemented** | [`community.rs`](../crates/rbuilder-analysis/src/community.rs) | `rbuilder metrics --communities` |
 
-**Tests:** [`phase14_centrality_audit.rs`](../tests/phase14_centrality_audit.rs).
+**Tests:** [`centrality_audit.rs`](../tests/centrality_audit.rs).
 
 ### Reachability, blast radius, and the “R”
 
@@ -57,7 +57,7 @@ This is the core differentiator for **LLM agents**: deterministic reachability a
 
 | Standard | Status | rBuilder |
 |----------|--------|----------|
-| [CWE](https://cwe.mitre.org/) / OWASP-style categories | **Implemented** (pattern + taint hooks) | [`taint.rs`](../crates/rbuilder-analysis/src/taint.rs), [`phase13_security.rs`](../tests/phase13_security.rs) — SQLi (CWE-89), XSS (CWE-79), command injection (CWE-78), etc. |
+| [CWE](https://cwe.mitre.org/) / OWASP-style categories | **Implemented** (pattern + taint hooks) | [`taint.rs`](../crates/rbuilder-analysis/src/taint.rs), [`taint_security.rs`](../tests/taint_security.rs) — SQLi (CWE-89), XSS (CWE-79), command injection (CWE-78), etc. |
 
 ---
 

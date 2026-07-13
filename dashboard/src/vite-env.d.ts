@@ -9,4 +9,5 @@ declare module "../wasm/rbuilder_wasm.js" {
     readonly schema_version: number;
     readonly digest: string;
   }
+  export function parseCfgDetail(bytes: Uint8Array): string;
 }

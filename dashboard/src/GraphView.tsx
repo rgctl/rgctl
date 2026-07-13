@@ -31,8 +31,9 @@ import {
   sigmaProgramForMetanode,
   sigmaProgramForNodeType,
 } from "./graphColors";
-import { layoutForceAtlas2, shortGraphLabel } from "./graphLayout";
+import { layoutForceAtlas2Async, hasPrecomputedLayout, shortGraphLabel } from "./graphLayout";
 import { GraphZoomControls } from "./GraphZoomControls";
+import { debounce } from "./debounce";
 import { mountSigmaWhenReady } from "./sigmaMount";
 import { SIGMA_NODE_PROGRAM_CLASSES } from "./sigmaPrograms";
 
@@ -206,7 +207,8 @@ export function GraphView({
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => refreshGraph());
+    const onResize = debounce(() => refreshGraph(), 120);
+    const ro = new ResizeObserver(onResize);
     ro.observe(el);
     return () => ro.disconnect();
   }, [level, subgraph, meta, refreshGraph]);
@@ -430,6 +432,34 @@ function mountMetagraph(
     setSelected: (n: Metanode | null) => void;
     onDrill: (n: Metanode) => void;
   },
+): Promise<() => void> {
+  return mountMetagraphInner(
+    meta,
+    container,
+    sigmaRef,
+    adjacencyRef,
+    highlightRef,
+    filterRef,
+    colorMapRef,
+    showCalls,
+    handlers,
+  );
+}
+
+async function mountMetagraphInner(
+  meta: MetagraphPayload,
+  container: HTMLDivElement,
+  sigmaRef: { current: Sigma | null },
+  adjacencyRef: { current: Map<string, Set<string>> },
+  highlightRef: { current: { hover: string | null; selected: string | null } },
+  filterRef: { current: GraphFilterState },
+  colorMapRef: { current: Map<number, string> },
+  showCalls: boolean,
+  handlers: {
+    setHover: (n: Metanode | null) => void;
+    setSelected: (n: Metanode | null) => void;
+    onDrill: (n: Metanode) => void;
+  },
 ) {
   const graph = new Graph();
 
@@ -458,7 +488,9 @@ function mountMetagraph(
   }
 
   adjacencyRef.current = buildUndirectedAdjacency(edgeList);
-  layoutForceAtlas2(graph);
+  if (!hasPrecomputedLayout(meta.nodes)) {
+    await layoutForceAtlas2Async(graph);
+  }
 
   if (sigmaRef.current) {
     sigmaRef.current.kill();
@@ -501,6 +533,26 @@ function mountSubgraph(
   filterRef: { current: GraphFilterState },
   setSubHover: (n: SubgraphNode | null) => void,
   showCalls: boolean,
+): Promise<() => void> {
+  return mountSubgraphInner(
+    payload,
+    container,
+    sigmaRef,
+    highlightRef,
+    filterRef,
+    setSubHover,
+    showCalls,
+  );
+}
+
+async function mountSubgraphInner(
+  payload: SubgraphPayload,
+  container: HTMLDivElement,
+  sigmaRef: { current: Sigma | null },
+  highlightRef: { current: { hover: string | null; selected: string | null } },
+  filterRef: { current: GraphFilterState },
+  setSubHover: (n: SubgraphNode | null) => void,
+  showCalls: boolean,
 ) {
   const graph = new Graph();
 
@@ -530,7 +582,7 @@ function mountSubgraph(
     addAggregatedEdges(graph, edgeList);
   }
 
-  layoutForceAtlas2(graph, payload.nodes.length > 200 ? 120 : 180);
+  await layoutForceAtlas2Async(graph, payload.nodes.length > 200 ? 120 : 180);
 
   if (sigmaRef.current) {
     sigmaRef.current.kill();

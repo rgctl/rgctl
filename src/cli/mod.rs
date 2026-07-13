@@ -7,6 +7,7 @@ mod check;
 pub mod check_output;
 mod context;
 mod discover;
+mod discover_cfg;
 mod discover_impl;
 pub mod discover_output;
 mod export;

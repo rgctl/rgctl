@@ -550,7 +550,9 @@ fn topological_schedule(
         order.push(node.id);
         if let Some(neighbors) = outgoing.get(&node.id) {
             for &next in neighbors {
-                let deg = in_degree.get_mut(&next).expect("neighbor in graph");
+                let Some(deg) = in_degree.get_mut(&next) else {
+                    continue;
+                };
                 *deg = deg.saturating_sub(1);
                 if *deg == 0 && !scheduled.contains(&next) {
                     ready.push(ScheduleNode {

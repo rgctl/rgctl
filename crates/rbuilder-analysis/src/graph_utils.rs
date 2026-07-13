@@ -16,6 +16,43 @@ use rbuilder_graph::snapshot::{PreparedGraphSnapshot, SnapshotNodeStore};
 use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
+/// Default max traversal depth for impact/blast-radius BFS analyses.
+pub const DEFAULT_TRAVERSAL_DEPTH: usize = 10;
+
+/// Configuration for graph traversal depth limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraversalConfig {
+    /// Maximum hops to traverse.
+    pub max_depth: usize,
+}
+
+impl Default for TraversalConfig {
+    fn default() -> Self {
+        Self {
+            max_depth: DEFAULT_TRAVERSAL_DEPTH,
+        }
+    }
+}
+
+impl TraversalConfig {
+    /// Create a config with an explicit depth limit.
+    pub fn new(max_depth: usize) -> Self {
+        Self { max_depth }
+    }
+
+    /// Traverse without a depth cap.
+    pub fn unlimited() -> Self {
+        Self {
+            max_depth: usize::MAX,
+        }
+    }
+}
+
+/// Build a set for O(1) edge-type membership checks in hot paths.
+pub fn edge_type_set(allowed_types: &[EdgeType]) -> HashSet<EdgeType> {
+    allowed_types.iter().copied().collect()
+}
+
 /// A petgraph view of the code graph with UUID mapping and typed edges.
 pub struct PetGraphView {
     /// Directed graph with [`EdgeType`] weights
@@ -345,6 +382,12 @@ mod tests {
         let view = PetGraphView::from_snapshot_store(&store).unwrap();
         assert_eq!(view.directed.node_count(), 2);
         assert_eq!(view.directed.edge_count(), 1);
+    }
+
+    #[test]
+    fn traversal_config_default_depth() {
+        assert_eq!(DEFAULT_TRAVERSAL_DEPTH, 10);
+        assert_eq!(TraversalConfig::default().max_depth, 10);
     }
 
     #[test]

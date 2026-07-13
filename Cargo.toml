@@ -246,8 +246,8 @@ name = "c_cfg_analysis"
 path = "tests/c_cfg_analysis.rs"
 
 [[test]]
-name = "c_phase13"
-path = "tests/c_phase13.rs"
+name = "c_taint"
+path = "tests/c_taint.rs"
 
 [[test]]
 name = "dashboard_ecommerce_cpp"
@@ -270,12 +270,12 @@ name = "dashboard_ecommerce_typescript"
 path = "tests/dashboard_ecommerce_typescript.rs"
 
 [[test]]
-name = "js_phase13"
-path = "tests/js_phase13.rs"
+name = "js_taint"
+path = "tests/js_taint.rs"
 
 [[test]]
-name = "rust_phase13"
-path = "tests/rust_phase13.rs"
+name = "rust_taint"
+path = "tests/rust_taint.rs"
 
 [[test]]
 name = "javascript_cfg_analysis"
@@ -286,8 +286,8 @@ name = "cpp_cfg_analysis"
 path = "tests/cpp_cfg_analysis.rs"
 
 [[test]]
-name = "cpp_phase13"
-path = "tests/cpp_phase13.rs"
+name = "cpp_taint"
+path = "tests/cpp_taint.rs"
 
 [[test]]
 name = "go_cfg_analysis"
@@ -296,6 +296,10 @@ path = "tests/go_cfg_analysis.rs"
 [[test]]
 name = "dashboard_metasfresh"
 path = "tests/dashboard_metasfresh.rs"
+
+[[test]]
+name = "discover_perf_baselines"
+path = "tests/discover_perf_baselines.rs"
 
 [[bench]]
 name = "parsing"
@@ -310,7 +314,7 @@ name = "graph_benchmarks"
 harness = false
 
 [[bench]]
-name = "phase13_analysis"
+name = "analysis_benchmarks"
 harness = false
 
 [[bench]]

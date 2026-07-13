@@ -1,6 +1,8 @@
 //! Canonical language profiles for CFG/PDG analysis and path-based language detection.
 
 use rbuilder_error::{Error, Result};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 use tree_sitter::{Language, Parser, Tree};
 
@@ -192,15 +194,25 @@ pub fn parse_source(language: &str, source: &[u8]) -> Result<Tree> {
         .filter(|p| p.cfg_enabled)
         .ok_or_else(|| Error::UnsupportedLanguage(language.to_string()))?;
 
-    let mut parser = Parser::new();
-    parser
-        .set_language(&grammar_for(profile)?)
-        .map_err(|e| Error::PluginError(format!("{} grammar: {e}", profile.id)))?;
+    let grammar = grammar_for(profile)?;
+    let lang_id = profile.id;
 
-    parser.parse(source, None).ok_or_else(|| Error::ParseError {
-        file: "source".into(),
-        line: 0,
-        message: "Failed to parse source".to_string(),
+    thread_local! {
+        static PARSERS: RefCell<HashMap<&'static str, Parser>> = RefCell::new(HashMap::new());
+    }
+
+    PARSERS.with(|parsers| {
+        let mut map = parsers.borrow_mut();
+        let parser = map.entry(lang_id).or_insert_with(Parser::new);
+        parser
+            .set_language(&grammar)
+            .map_err(|e| Error::PluginError(format!("{} grammar: {e}", profile.id)))?;
+
+        parser.parse(source, None).ok_or_else(|| Error::ParseError {
+            file: "source".into(),
+            line: 0,
+            message: "Failed to parse source".to_string(),
+        })
     })
 }
 

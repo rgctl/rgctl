@@ -361,7 +361,7 @@ impl IncrementalUpdater {
                 }
             }
             backend.insert_edges_batch(new_edges)?;
-            graph.backend_mut().prune_orphan_edges();
+            graph.backend_mut().prune_orphan_edges()?;
         }
 
         Ok(added)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import type { BlastRadiusPayload, DataflowGraphPayload, EngineReady, NodeListPayload, SliceDirection, SliceResultPayload, SubgraphPayload, WorkerInWithoutId, WorkerOut } from "./types";
+import type { BlastRadiusPayload, CfgDetailPayload, DataflowGraphPayload, EngineReady, NodeListPayload, SliceDirection, SliceResultPayload, SubgraphPayload, WorkerInWithoutId, WorkerOut } from "./types";
 
 export function useEngineWorker() {
   const workerRef = useRef<Worker | null>(null);
@@ -44,6 +44,7 @@ export function useEngineWorker() {
         else if (data.type === "slice_result") p.resolve(data.payload);
         else if (data.type === "blast_result") p.resolve(data.payload);
         else if (data.type === "dataflow_result") p.resolve(data.payload);
+        else if (data.type === "cfg_detail_result") p.resolve(data.payload);
       }
     };
 
@@ -111,6 +112,11 @@ export function useEngineWorker() {
     [send],
   );
 
+  const loadCfgDetail = useCallback(
+    (functionId: string) => send<CfgDetailPayload>({ type: "load_cfg_detail", functionId }),
+    [send],
+  );
+
   return {
     engine,
     error,
@@ -119,6 +125,7 @@ export function useEngineWorker() {
     computeSlice: computeSliceRequest,
     blastRadius,
     computeDataflow,
+    loadCfgDetail,
     wasmReady: engine?.wasm ?? false,
   };
 }

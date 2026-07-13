@@ -5,6 +5,7 @@
 
 use crate::cfg::ControlFlowGraph;
 use crate::pdg::ProgramDependenceGraph;
+use crate::storage::stable_function_key;
 use memmap2::Mmap;
 use rbuilder_error::{Error, Result};
 use rbuilder_graph::backend::MemoryBackend;
@@ -92,6 +93,8 @@ impl CfgPdgArchive {
     /// Load archive from disk (mmap parse).
     pub fn load_from_path(path: &Path) -> Result<Self> {
         let file = File::open(path)?;
+        // SAFETY: The file is opened read-only and lives for the lifetime of the returned
+        // archive; we only read the mapped bytes and do not mutate through the mapping.
         let mmap = unsafe { Mmap::map(&file)? };
         parse_payload(&mmap)
     }
@@ -123,6 +126,32 @@ impl CfgPdgArchive {
             self.function_cfgs(),
         )
     }
+
+    /// Index records by stable `(file, name, code_hash)` for incremental CFG reuse.
+    pub fn stable_key_index(&self) -> HashMap<String, CfgPdgRecord> {
+        let mut index = HashMap::new();
+        for record in self.records.values() {
+            if let Some(key) = record.stable_key() {
+                index.insert(key, record.clone());
+            }
+        }
+        index
+    }
+}
+
+impl CfgPdgRecord {
+    /// Stable cache key when path and hash are present.
+    pub fn stable_key(&self) -> Option<String> {
+        let path = self.file_path.as_deref()?;
+        if self.code_hash.is_empty() || self.function_name.is_empty() {
+            return None;
+        }
+        Some(stable_function_key(
+            path,
+            &self.function_name,
+            &self.code_hash,
+        ))
+    }
 }
 
 fn parse_payload(mmap: &[u8]) -> Result<CfgPdgArchive> {
@@ -144,7 +173,11 @@ fn parse_payload(mmap: &[u8]) -> Result<CfgPdgArchive> {
             "cfg_pdg archive payload truncated".into(),
         ));
     }
-    bincode::deserialize(&mmap[16..16 + payload_len]).map_err(serde_err)
+    let mut archive: CfgPdgArchive = bincode::deserialize(&mmap[16..16 + payload_len]).map_err(serde_err)?;
+    for record in archive.records.values_mut() {
+        record.pdg.restore_derived_indexes();
+    }
+    Ok(archive)
 }
 
 fn serde_err(e: bincode::Error) -> Error {

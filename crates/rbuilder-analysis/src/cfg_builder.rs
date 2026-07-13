@@ -5,7 +5,7 @@ use crate::def_use::extract_def_use;
 use crate::language_profile::{function_kinds_for, parse_source};
 use rbuilder_error::{Error, Result};
 use rbuilder_plugin_helpers::extract_name_from_node;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Tree};
 use uuid::Uuid;
 
@@ -21,6 +21,87 @@ pub fn build_cfg_for_function(
     let func_node = find_function_by_name(tree.root_node(), bytes, function_name, function_kinds)
         .ok_or_else(|| Error::NotFound(format!("function '{function_name}' not found")))?;
     build_cfg_from_function_node(language, func_node, bytes)
+}
+
+/// Parsed source file with function name → byte span index (one tree-sitter parse per file).
+pub struct ParsedSourceFile {
+    tree: Tree,
+    locations: HashMap<String, FunctionLocation>,
+}
+
+impl ParsedSourceFile {
+    /// Parse and index all functions in a source file.
+    pub fn parse(language: &str, source: &[u8]) -> Result<Self> {
+        let (tree, locations) = index_function_locations(language, source)?;
+        Ok(Self { tree, locations })
+    }
+
+    /// Whether `function_name` was found in the indexed file.
+    pub fn contains(&self, function_name: &str) -> bool {
+        self.locations.contains_key(function_name)
+    }
+
+    /// Build CFG for a named function using the cached parse tree.
+    pub fn build_cfg(&self, language: &str, source: &[u8], function_name: &str) -> Result<ControlFlowGraph> {
+        build_cfg_for_function_in_tree(language, &self.tree, source, function_name)
+    }
+}
+
+/// Byte span of a function body in a parsed source file.
+#[derive(Debug, Clone, Copy)]
+pub struct FunctionLocation {
+    pub start_byte: usize,
+    pub end_byte: usize,
+}
+
+/// Build a CFG for a named function in an already-parsed tree (no re-parse).
+pub fn build_cfg_for_function_in_tree(
+    language: &str,
+    tree: &Tree,
+    source: &[u8],
+    function_name: &str,
+) -> Result<ControlFlowGraph> {
+    let function_kinds = function_kinds_for(language)?;
+    let func_node = find_function_by_name(tree.root_node(), source, function_name, function_kinds)
+        .ok_or_else(|| Error::NotFound(format!("function '{function_name}' not found")))?;
+    build_cfg_from_function_node(language, func_node, source)
+}
+
+/// Parse a source file once and index function names to source byte spans.
+pub fn index_function_locations(
+    language: &str,
+    source: &[u8],
+) -> Result<(Tree, HashMap<String, FunctionLocation>)> {
+    let tree = parse_language(language, source)?;
+    let function_kinds = function_kinds_for(language)?;
+    let mut index = HashMap::new();
+    collect_function_locations(
+        tree.root_node(),
+        source,
+        function_kinds,
+        &mut index,
+    );
+    Ok((tree, index))
+}
+
+fn collect_function_locations(
+    node: Node<'_>,
+    source: &[u8],
+    function_kinds: &[&str],
+    out: &mut HashMap<String, FunctionLocation>,
+) {
+    if function_kinds.contains(&node.kind()) {
+        if let Ok(Some(func_name)) = extract_name_from_node(node, source) {
+            out.entry(func_name).or_insert(FunctionLocation {
+                start_byte: node.start_byte(),
+                end_byte: node.end_byte(),
+            });
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_function_locations(child, source, function_kinds, out);
+    }
 }
 
 fn parse_language(language: &str, source: &[u8]) -> Result<Tree> {

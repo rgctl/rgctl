@@ -212,7 +212,12 @@ export interface SliceBundlePayload {
   function_id: string;
   name: string;
   file_path?: string | null;
-  source: string;
+  /** Inline source (schema v1). */
+  source?: string;
+  /** Deduplicated source file under `sources/` (schema v2+). */
+  source_id?: string | null;
+  start_line?: number | null;
+  end_line?: number | null;
   total_lines: number;
   pdg: SlicePdgPayload;
 }
@@ -252,6 +257,9 @@ export interface CfgIndexPayload {
   schema_version: number;
   available: boolean;
   archive_path?: string | null;
+  detail_mode?: string;
+  record_index_path?: string | null;
+  record_data_path?: string | null;
   function_count: number;
   functions: CfgFunctionEntry[];
 }
@@ -273,8 +281,8 @@ export interface CfgDetailPayload {
   exits: number[];
   blocks: CfgBlockView[];
   edges: CfgEdgeView[];
-  idom: Array<number | null>;
-  dominance_frontiers: number[][];
+  idom?: Array<number | null> | null;
+  dominance_frontiers?: number[][] | null;
 }
 
 export interface CfgBlockView {
@@ -421,7 +429,8 @@ export type WorkerInWithoutId =
       functionId: string;
       variable: string | null;
       includeControl: boolean;
-    };
+    }
+  | { type: "load_cfg_detail"; functionId: string };
 
 export type WorkerIn =
   | { type: "init" }
@@ -442,7 +451,8 @@ export type WorkerIn =
       functionId: string;
       variable: string | null;
       includeControl: boolean;
-    };
+    }
+  | { type: "load_cfg_detail"; requestId: number; functionId: string };
 
 export type WorkerOut =
   | {
@@ -458,6 +468,7 @@ export type WorkerOut =
   | { type: "slice_result"; requestId: number; payload: SliceResultPayload }
   | { type: "blast_result"; requestId: number; payload: BlastRadiusPayload }
   | { type: "dataflow_result"; requestId: number; payload: DataflowGraphPayload }
+  | { type: "cfg_detail_result"; requestId: number; payload: CfgDetailPayload }
   | { type: "error"; requestId?: number; message: string };
 
 export async function loadManifest(): Promise<DashboardManifest> {

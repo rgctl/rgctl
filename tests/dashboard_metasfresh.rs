@@ -9,7 +9,7 @@
 mod dashboard_harness;
 
 use dashboard_harness::{
-    assert_dashboard_bundle_all_analysis, metasfresh_repo_path, run_discover_all,
+    assert_dashboard_bundle_all_analysis, metasfresh_repo_path, run_discover_all_timed,
 };
 use rbuilder_dashboard::dist_embedded;
 
@@ -36,7 +36,7 @@ fn discover_all_writes_dashboard_bundle_on_metasfresh() {
         return;
     }
 
-    let output = run_discover_all(&repo, None);
+    let (output, elapsed) = run_discover_all_timed(&repo, None);
     assert!(
         output.status.success(),
         "discover --all on metasfresh failed:\nstdout: {}\nstderr: {}",
@@ -57,7 +57,8 @@ fn discover_all_writes_dashboard_bundle_on_metasfresh() {
     );
 
     eprintln!(
-        "metasfresh golden OK: {} nodes, {} edges, {} functions, {} metanodes, taint={}",
+        "metasfresh golden OK in {:.1}s: {} nodes, {} edges, {} functions, {} metanodes, taint={}",
+        elapsed.as_secs_f64(),
         manifest["graph"]["node_count"],
         manifest["graph"]["edge_count"],
         functions,

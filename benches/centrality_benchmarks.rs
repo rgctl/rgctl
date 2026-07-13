@@ -1,7 +1,7 @@
 //! Centrality performance benchmarks with hard regression gates.
 //!
 //! Run: `cargo bench --bench centrality_benchmarks`
-//! Large gate: `cargo test --release --test phase14_centrality_audit -- --ignored`
+//! Large gate: `cargo test --release --test centrality_audit -- --ignored`
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rbuilder::analysis::{FastPageRank, FlatGraphIndex, PetGraphView};
