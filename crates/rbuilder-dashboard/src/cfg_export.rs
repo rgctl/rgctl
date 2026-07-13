@@ -85,17 +85,6 @@ pub struct CfgExportSummary {
 /// Skip per-function CFG JSON when function count exceeds this (archive still copied).
 pub(crate) const CFG_DETAIL_INLINE_LIMIT: usize = 5_000;
 
-pub fn export_cfg_bundle(
-    _backend: &rbuilder_graph::backend::MemoryBackend,
-    repo_root: &Path,
-    out_dir: &Path,
-) -> Result<CfgExportSummary, String> {
-    Ok(crate::analysis_stream_export::export_cfg_slice_from_storage(
-        _backend, repo_root, out_dir,
-    )?
-    .cfg)
-}
-
 pub(crate) fn cfg_detail_light(
     function_id: &Uuid,
     name: &str,

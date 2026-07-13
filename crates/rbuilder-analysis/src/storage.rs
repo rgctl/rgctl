@@ -28,10 +28,15 @@ pub const ANALYSIS_INDEX_FILE: &str = "analysis_index.bin";
 /// Lightweight metadata for incremental CFG reuse (no CFG/PDG payload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisIndexEntry {
+    /// Stable cache key (`file\x1fname\x1fcode_hash`).
     pub stable_key: String,
+    /// Current graph node UUID for the function.
     pub function_id: Uuid,
+    /// BLAKE3 hash of the function body used for reuse.
     pub code_hash: String,
+    /// Number of taint flows recorded for this function.
     pub flow_count: usize,
+    /// Number of vulnerable taint flows recorded for this function.
     pub vulnerable_count: usize,
 }
 
@@ -73,9 +78,13 @@ pub struct AnalysisStorage {
 
 /// Minimal graph function metadata for aligning analysis index UUIDs after re-index.
 pub struct FunctionIdSyncEntry<'a> {
+    /// Current graph node UUID for the function.
     pub function_id: Uuid,
+    /// Function symbol name.
     pub function_name: &'a str,
+    /// Source file path containing the function.
     pub file_path: &'a str,
+    /// BLAKE3 hash of the function body.
     pub code_hash: &'a str,
 }
 

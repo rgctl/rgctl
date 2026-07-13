@@ -299,11 +299,6 @@ impl ProgramDependenceGraph {
         self.data_succ.entry(from).or_default().push(to);
     }
 
-    fn build_control_dependencies(&mut self, cfg: &ControlFlowGraph) {
-        let dom_tree = DominatorTree::build(cfg);
-        self.build_control_dependencies_dominance(cfg, &dom_tree);
-    }
-
     /// Precise control dependencies via dominance frontiers (Phase 13.2).
     fn build_control_dependencies_dominance(
         &mut self,

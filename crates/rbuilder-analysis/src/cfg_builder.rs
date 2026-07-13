@@ -50,7 +50,9 @@ impl ParsedSourceFile {
 /// Byte span of a function body in a parsed source file.
 #[derive(Debug, Clone, Copy)]
 pub struct FunctionLocation {
+    /// Inclusive start byte offset in the source buffer.
     pub start_byte: usize,
+    /// Exclusive end byte offset in the source buffer.
     pub end_byte: usize,
 }
 

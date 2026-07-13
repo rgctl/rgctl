@@ -3,7 +3,6 @@
 use crate::export_util::write_json_compact;
 use rbuilder_analysis::cfg::ControlFlowGraph;
 use rbuilder_analysis::pdg::{PdgNodeId, ProgramDependenceGraph};
-use rbuilder_graph::backend::MemoryBackend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -77,17 +76,6 @@ pub struct SlicePdgEdge {
 pub struct SliceExportSummary {
     pub available: bool,
     pub function_count: usize,
-}
-
-pub fn export_slice_bundle(
-    backend: &MemoryBackend,
-    repo_root: &Path,
-    out_dir: &Path,
-) -> Result<SliceExportSummary, String> {
-    Ok(crate::analysis_stream_export::export_cfg_slice_from_storage(
-        backend, repo_root, out_dir,
-    )?
-    .slice)
 }
 
 pub(crate) fn function_line_span(cfg: &ControlFlowGraph) -> (usize, usize) {
