@@ -309,6 +309,15 @@ body {
   flex-shrink: 0;
 }
 
+.guide-cli-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.guide-view .card-header {
+  background: var(--bs-light, #f8f9fa);
+}
+
 .rb-tab-panel-stack {
   flex: 1 1 auto;
   min-height: 0;

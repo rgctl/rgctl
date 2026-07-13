@@ -29,6 +29,7 @@ const TaintView = lazy(() =>
 const MigrationView = lazy(() =>
   import("./MigrationView").then((m) => ({ default: m.MigrationView })),
 );
+const GuideView = lazy(() => import("./GuideView").then((m) => ({ default: m.GuideView })));
 
 function TabLoading() {
   return (
@@ -288,23 +289,13 @@ function TabPanel({
     );
   }
 
-  const placeholders: Record<Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint" | "migration">, string> = {
-    guide: "CLI query reference",
-  };
+  if (id === "guide") {
+    return (
+      <TabPanelStack tabId={id}>
+        <GuideView />
+      </TabPanelStack>
+    );
+  }
 
-  return (
-    <TabPanelStack tabId={id}>
-      <div class="p-4">
-        <h2 class="h5 mb-2">{DASHBOARD_TABS.find((t) => t.id === id)?.label}</h2>
-        <p class="text-muted">{placeholders[id as Exclude<TabId, "graph" | "functions" | "cfg" | "dataflow" | "slice" | "blast" | "taint" | "migration">]}</p>
-        {id === "guide" && (
-          <pre class="bg-light border rounded p-3 small mb-0">
-            {`rbuilder discover .
-rbuilder -f json blast-radius OrderService::process --depth 5
-rbuilder gql "MATCH (n:Function) RETURN n LIMIT 10"`}
-          </pre>
-        )}
-      </div>
-    </TabPanelStack>
-  );
+  return null;
 }
