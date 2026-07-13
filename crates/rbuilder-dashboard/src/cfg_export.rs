@@ -1,13 +1,9 @@
-//! Export CFG/dominance previews from `cfg_pdg.archive.bin` for the dashboard.
+//! Export CFG previews from `cfg_pdg.archive.bin` for the dashboard.
 
-use crate::function_meta::{function_meta_map, resolve_function_meta};
+use crate::export_util::write_json_compact;
 use rbuilder_analysis::cfg::{CfgEdgeType, ControlFlowGraph};
-use rbuilder_analysis::cfg_pdg_archive::CfgPdgArchive;
-use rbuilder_analysis::dominance::DominatorTree;
-use rbuilder_graph::backend::MemoryBackend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -20,8 +16,15 @@ pub struct CfgIndexPayload {
     pub schema_version: u32,
     pub available: bool,
     pub archive_path: Option<String>,
+    /// `per_file` (default) or `archive_only` when detail JSON is omitted.
+    #[serde(default = "default_detail_mode")]
+    pub detail_mode: String,
     pub function_count: usize,
     pub functions: Vec<CfgFunctionEntry>,
+}
+
+fn default_detail_mode() -> String {
+    "per_file".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,9 +46,10 @@ pub struct CfgDetailPayload {
     pub exits: Vec<u32>,
     pub blocks: Vec<CfgBlockView>,
     pub edges: Vec<CfgEdgeView>,
-    /// Immediate dominator per block index (`null` for entry / unreachable).
-    pub idom: Vec<Option<u32>>,
-    pub dominance_frontiers: Vec<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idom: Option<Vec<Option<u32>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dominance_frontiers: Option<Vec<Vec<u32>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,81 +75,21 @@ pub struct CfgExportSummary {
     pub archive_copied: bool,
 }
 
+/// Skip per-function CFG JSON when function count exceeds this (archive still copied).
+pub(crate) const CFG_DETAIL_INLINE_LIMIT: usize = 5_000;
+
 pub fn export_cfg_bundle(
-    backend: &MemoryBackend,
+    _backend: &rbuilder_graph::backend::MemoryBackend,
     repo_root: &Path,
     out_dir: &Path,
 ) -> Result<CfgExportSummary, String> {
-    let archive_path = CfgPdgArchive::default_path(repo_root);
-    let index_path = out_dir.join(CFG_INDEX_FILE);
-
-    if !archive_path.is_file() {
-        write_empty_cfg_index(&index_path)?;
-        return Ok(CfgExportSummary::default());
-    }
-
-    let archive = match CfgPdgArchive::load_from_path(&archive_path) {
-        Ok(archive) => archive,
-        Err(_) => {
-            // Stale or corrupt archive from a prior `--cfg` run must not block dashboard export.
-            write_empty_cfg_index(&index_path)?;
-            return Ok(CfgExportSummary::default());
-        }
-    };
-    let meta_map = function_meta_map(repo_root, backend);
-
-    let detail_dir = out_dir.join(CFG_DETAIL_DIR);
-    if detail_dir.exists() {
-        fs::remove_dir_all(&detail_dir).map_err(|e| e.to_string())?;
-    }
-    fs::create_dir_all(&detail_dir).map_err(|e| e.to_string())?;
-
-    let mut functions = Vec::with_capacity(archive.records.len());
-
-    for (function_id, record) in &archive.records {
-        let (name, file_path) = resolve_function_meta(
-            function_id,
-            &record.function_name,
-            &record.file_path,
-            repo_root,
-            backend,
-            &meta_map,
-        );
-
-        let detail = cfg_detail(function_id, &name, file_path.clone(), &record.cfg);
-        write_json(&detail_dir.join(format!("{function_id}.json")), &detail)?;
-
-        functions.push(CfgFunctionEntry {
-            function_id: function_id.to_string(),
-            name,
-            file_path,
-            block_count: record.cfg.blocks.len(),
-            cfg_edge_count: record.cfg.edges.len(),
-        });
-    }
-
-    functions.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let archive_dest = out_dir.join(CFG_ARCHIVE_BUNDLE_NAME);
-    fs::copy(&archive_path, &archive_dest).map_err(|e| e.to_string())?;
-
-    let index = CfgIndexPayload {
-        schema_version: 1,
-        available: true,
-        archive_path: Some(CFG_ARCHIVE_BUNDLE_NAME.into()),
-        function_count: functions.len(),
-        functions,
-    };
-    write_json(&index_path, &index)?;
-
-    Ok(CfgExportSummary {
-        available: true,
-        function_count: index.function_count,
-        archive_copied: true,
-    })
+    Ok(crate::analysis_stream_export::export_cfg_slice_from_storage(
+        _backend, repo_root, out_dir,
+    )?
+    .cfg)
 }
 
-fn cfg_detail(
+pub(crate) fn cfg_detail_light(
     function_id: &Uuid,
     name: &str,
     file_path: Option<String>,
@@ -153,7 +97,6 @@ fn cfg_detail(
 ) -> CfgDetailPayload {
     let block_index = index_blocks(cfg);
     let ordered_blocks = ordered_block_ids(&block_index);
-    let dom = DominatorTree::build(cfg);
 
     let blocks: Vec<CfgBlockView> = ordered_blocks
         .iter()
@@ -202,36 +145,8 @@ fn cfg_detail(
         .map(|i| i as u32)
         .collect();
 
-    let idom: Vec<Option<u32>> = ordered_blocks
-        .iter()
-        .map(|(_, block_id)| {
-            dom.idom.get(block_id).and_then(|parent| {
-                if *parent == *block_id {
-                    None
-                } else {
-                    block_index.get(parent).copied().map(|i| i as u32)
-                }
-            })
-        })
-        .collect();
-
-    let dominance_frontiers: Vec<Vec<u32>> = ordered_blocks
-        .iter()
-        .map(|(_, block_id)| {
-            dom.frontiers
-                .get(block_id)
-                .map(|set| {
-                    set.iter()
-                        .filter_map(|id| block_index.get(id).copied())
-                        .map(|i| i as u32)
-                        .collect()
-                })
-                .unwrap_or_default()
-        })
-        .collect();
-
     CfgDetailPayload {
-        schema_version: 1,
+        schema_version: 2,
         function_id: function_id.to_string(),
         name: name.to_string(),
         file_path,
@@ -239,8 +154,8 @@ fn cfg_detail(
         exits,
         blocks,
         edges,
-        idom,
-        dominance_frontiers,
+        idom: None,
+        dominance_frontiers: None,
     }
 }
 
@@ -282,20 +197,16 @@ fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
 }
 
-fn write_empty_cfg_index(index_path: &Path) -> Result<(), String> {
+pub(crate) fn write_empty_cfg_index(index_path: &Path) -> Result<(), String> {
     let index = CfgIndexPayload {
-        schema_version: 1,
+        schema_version: 2,
         available: false,
         archive_path: None,
+        detail_mode: "per_file".into(),
         function_count: 0,
         functions: vec![],
     };
-    write_json(index_path, &index)
-}
-
-fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    fs::write(path, json).map_err(|e| e.to_string())
+    write_json_compact(index_path, &index)
 }
 
 #[cfg(test)]
@@ -331,9 +242,10 @@ mod tests {
             edge_type: CfgEdgeType::Next,
         });
 
-        let detail = cfg_detail(&uuid::Uuid::new_v4(), "foo", Some("a.rs".into()), &cfg);
+        let detail = cfg_detail_light(&uuid::Uuid::new_v4(), "foo", Some("a.rs".into()), &cfg);
         assert_eq!(detail.blocks.len(), 2);
         assert_eq!(detail.edges.len(), 1);
         assert_eq!(detail.edges[0].edge_type, "next");
+        assert!(detail.idom.is_none());
     }
 }

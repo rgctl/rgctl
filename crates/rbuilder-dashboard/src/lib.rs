@@ -1,16 +1,19 @@
 //! Export `.rbuilder/dashboard/` static bundle after discover.
 
+mod analysis_stream_export;
 mod blast_export;
 mod bundle;
 mod cfg_export;
 mod communities;
 mod dataflow_export;
+mod export_util;
 mod function_meta;
 mod function_metrics_export;
 mod manifest;
 mod metagraph;
 mod migration_export;
 mod slice_export;
+mod source_catalog;
 mod taint_export;
 
 pub use bundle::{default_dashboard_path, dist_embedded, DASHBOARD_DIR_NAME};
@@ -33,16 +36,15 @@ pub use taint_export::{TaintExportSummary, TAINT_INDEX_FILE};
 use blast_export::export_blast_bundle;
 use function_metrics_export::export_function_metrics;
 use bundle::{extract_static_assets, inject_manifest_bootstrap};
-use cfg_export::export_cfg_bundle;
 use dataflow_export::export_dataflow_index;
 use manifest::DashboardManifest as Manifest;
 use metagraph::write_metagraph;
 use rbuilder_graph::backend::MemoryBackend;
 use rbuilder_graph::schema::{EdgeType, NodeType};
-use slice_export::export_slice_bundle;
 use std::fs;
 use std::path::Path;
 use taint_export::export_taint_bundle;
+use rbuilder_analysis::storage::AnalysisStorage;
 
 /// Write dashboard bundle: static UI, manifest, graph payload copy.
 pub fn export_dashboard_bundle(
@@ -54,7 +56,7 @@ pub fn export_dashboard_bundle(
     Ok(())
 }
 
-/// Export dashboard only when the graph snapshot digest differs from the on-disk manifest.
+/// Export dashboard only when semantic content fingerprint is unchanged.
 pub fn export_dashboard_bundle_if_changed(
     backend: &MemoryBackend,
     repo_root: &Path,
@@ -62,16 +64,17 @@ pub fn export_dashboard_bundle_if_changed(
 ) -> Result<bool, String> {
     let out_dir = bundle::default_dashboard_path(repo_root);
     let manifest_path = out_dir.join("manifest.json");
-    let (_, _, digest) = payload_stats(snapshot_path, backend)?;
-    if !digest.is_empty() && manifest_path.is_file() {
+    let fingerprint = compute_export_fingerprint(backend, repo_root);
+    if manifest_path.is_file() {
         if let Ok(bytes) = fs::read_to_string(&manifest_path) {
             if let Ok(manifest) = serde_json::from_str::<Manifest>(&bytes) {
-                if manifest.graph.digest == digest {
+                if manifest.export_fingerprint.as_deref() == Some(fingerprint.as_str()) {
                     return Ok(false);
                 }
             }
         }
     }
+    let _ = snapshot_path;
     export_dashboard_bundle_inner(backend, repo_root, snapshot_path, true)?;
     Ok(true)
 }
@@ -103,11 +106,14 @@ fn export_dashboard_bundle_inner(
     extract_static_assets(&out_dir)?;
 
     let (node_count, edge_count, digest) = payload_stats(snapshot_path, backend)?;
+    let export_fingerprint = compute_export_fingerprint(backend, repo_root);
     let metrics = collect_metrics(backend);
 
     let export = write_metagraph(backend, snapshot_path, &out_dir, node_count)?;
-    let cfg_summary = export_cfg_bundle(backend, repo_root, &out_dir)?;
-    let slice_summary = export_slice_bundle(backend, repo_root, &out_dir)?;
+    let streamed =
+        analysis_stream_export::export_cfg_slice_from_storage(backend, repo_root, &out_dir)?;
+    let cfg_summary = streamed.cfg;
+    let slice_summary = streamed.slice;
     let dataflow_summary = export_dataflow_index(&slice_summary, &out_dir)?;
     let taint_summary = export_taint_bundle(repo_root, &out_dir)?;
     let blast_summary = export_blast_bundle(repo_root, &out_dir)?;
@@ -121,6 +127,7 @@ fn export_dashboard_bundle_inner(
         node_count,
         edge_count,
         digest,
+        export_fingerprint,
         metrics,
         &export,
         &cfg_summary,
@@ -172,6 +179,52 @@ fn payload_stats(
         backend.edge_count() as u64,
         String::new(),
     ))
+}
+
+/// Hash graph topology + function body hashes + analysis index for incremental export skip.
+fn compute_export_fingerprint(backend: &MemoryBackend, repo_root: &Path) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&(backend.node_count() as u64).to_le_bytes());
+    hasher.update(&(backend.edge_count() as u64).to_le_bytes());
+
+    if let Ok(functions) = backend.collect_nodes_by_type(NodeType::Function) {
+        let mut refs: Vec<(&str, &str, &str)> = functions
+            .iter()
+            .filter_map(|f| {
+                Some((
+                    f.file_path.as_deref()?,
+                    f.name.as_str(),
+                    f.code_hash.as_deref()?,
+                ))
+            })
+            .collect();
+        refs.sort_by(|a, b| {
+            a.0.cmp(b.0)
+                .then_with(|| a.1.cmp(b.1))
+                .then_with(|| a.2.cmp(b.2))
+        });
+        for (path, name, hash) in refs {
+            hasher.update(path.as_bytes());
+            hasher.update(name.as_bytes());
+            hasher.update(hash.as_bytes());
+        }
+    }
+
+    let storage = AnalysisStorage::new(repo_root.join(".rbuilder/analysis"));
+    if let Ok(index) = storage.load_analysis_index() {
+        hasher.update(&(index.len() as u64).to_le_bytes());
+        let mut keys: Vec<_> = index.keys().collect();
+        keys.sort();
+        for key in keys {
+            let entry = &index[key];
+            hasher.update(key.as_bytes());
+            hasher.update(entry.code_hash.as_bytes());
+            hasher.update(&(entry.flow_count as u64).to_le_bytes());
+            hasher.update(&(entry.vulnerable_count as u64).to_le_bytes());
+        }
+    }
+
+    hasher.finalize().to_hex().to_string()
 }
 
 fn collect_metrics(backend: &MemoryBackend) -> MetricsSection {

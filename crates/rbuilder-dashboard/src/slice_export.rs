@@ -1,14 +1,12 @@
-//! Export PDG + source bundles for dashboard slicing (Phase 5).
+//! Export PDG bundles for dashboard slicing (streamed from per-function analysis files).
 
-use crate::function_meta::{function_meta_map, resolve_function_meta};
+use crate::export_util::write_json_compact;
 use rbuilder_analysis::cfg::ControlFlowGraph;
-use rbuilder_analysis::cfg_pdg_archive::CfgPdgArchive;
 use rbuilder_analysis::pdg::{PdgNodeId, ProgramDependenceGraph};
 use rbuilder_graph::backend::MemoryBackend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const SLICE_INDEX_FILE: &str = "slice_index.json";
 pub const SLICE_DETAIL_DIR: &str = "slice";
@@ -36,7 +34,14 @@ pub struct SliceBundlePayload {
     pub function_id: String,
     pub name: String,
     pub file_path: Option<String>,
-    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<usize>,
     pub total_lines: usize,
     pub pdg: SlicePdgPayload,
 }
@@ -53,7 +58,6 @@ pub struct SlicePdgNode {
     pub line: usize,
     pub label: String,
     pub kind: String,
-    /// CFG block index (matches `cfg/{id}.json` block `id`); omitted in older bundles.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_index: Option<u32>,
     pub defined: Vec<String>,
@@ -80,95 +84,29 @@ pub fn export_slice_bundle(
     repo_root: &Path,
     out_dir: &Path,
 ) -> Result<SliceExportSummary, String> {
-    let archive_path = CfgPdgArchive::default_path(repo_root);
-    let index_path = out_dir.join(SLICE_INDEX_FILE);
+    Ok(crate::analysis_stream_export::export_cfg_slice_from_storage(
+        backend, repo_root, out_dir,
+    )?
+    .slice)
+}
 
-    if !archive_path.is_file() {
-        write_empty_slice_index(&index_path)?;
-        return Ok(SliceExportSummary::default());
-    }
-
-    let archive = match CfgPdgArchive::load_from_path(&archive_path) {
-        Ok(archive) => archive,
-        Err(_) => {
-            write_empty_slice_index(&index_path)?;
-            return Ok(SliceExportSummary::default());
+pub(crate) fn function_line_span(cfg: &ControlFlowGraph) -> (usize, usize) {
+    let mut min_line = usize::MAX;
+    let mut max_line = 0usize;
+    for block in cfg.blocks.values() {
+        if block.start_line > 0 {
+            min_line = min_line.min(block.start_line);
         }
-    };
-    let meta_map = function_meta_map(repo_root, backend);
-    let detail_dir = out_dir.join(SLICE_DETAIL_DIR);
-    if detail_dir.exists() {
-        fs::remove_dir_all(&detail_dir).map_err(|e| e.to_string())?;
+        max_line = max_line.max(block.end_line);
     }
-    fs::create_dir_all(&detail_dir).map_err(|e| e.to_string())?;
-
-    let mut functions = Vec::with_capacity(archive.records.len());
-    let mut source_cache: HashMap<PathBuf, String> = HashMap::new();
-
-    for (function_id, record) in &archive.records {
-        let (name, file_path) = resolve_function_meta(
-            function_id,
-            &record.function_name,
-            &record.file_path,
-            repo_root,
-            backend,
-            &meta_map,
-        );
-
-        let source = file_path
-            .as_ref()
-            .and_then(|p| read_source_cached(p, &mut source_cache))
-            .unwrap_or_default();
-        let total_lines = source.lines().count().max(1);
-        let pdg = export_pdg(&record.pdg, &record.cfg);
-
-        let bundle = SliceBundlePayload {
-            schema_version: 1,
-            function_id: function_id.to_string(),
-            name: name.clone(),
-            file_path: file_path.clone(),
-            source,
-            total_lines,
-            pdg: pdg.clone(),
-        };
-        write_json(&detail_dir.join(format!("{function_id}.json")), &bundle)?;
-
-        functions.push(SliceFunctionEntry {
-            function_id: function_id.to_string(),
-            name,
-            file_path,
-            source_lines: total_lines,
-            pdg_nodes: pdg.nodes.len(),
-        });
+    if min_line == usize::MAX {
+        (1, max_line.max(1))
+    } else {
+        (min_line, max_line.max(min_line))
     }
-
-    functions.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let index = SliceIndexPayload {
-        schema_version: 1,
-        available: true,
-        function_count: functions.len(),
-        functions,
-    };
-    write_json(&index_path, &index)?;
-
-    Ok(SliceExportSummary {
-        available: true,
-        function_count: index.function_count,
-    })
 }
 
-fn read_source_cached(path: &str, cache: &mut HashMap<PathBuf, String>) -> Option<String> {
-    let key = PathBuf::from(path);
-    if let Some(s) = cache.get(&key) {
-        return Some(s.clone());
-    }
-    let text = fs::read_to_string(&key).ok()?;
-    cache.insert(key, text.clone());
-    Some(text)
-}
-
-fn export_pdg(pdg: &ProgramDependenceGraph, cfg: &ControlFlowGraph) -> SlicePdgPayload {
+pub(crate) fn export_pdg(pdg: &ProgramDependenceGraph, cfg: &ControlFlowGraph) -> SlicePdgPayload {
     let block_index_map = index_cfg_blocks(cfg);
     let mut ordered: Vec<_> = pdg.nodes.values().collect();
     ordered.sort_by_key(|n| (n.statement.line, n.id));
@@ -237,19 +175,14 @@ fn index_cfg_blocks(cfg: &ControlFlowGraph) -> HashMap<uuid::Uuid, usize> {
         .collect()
 }
 
-fn write_empty_slice_index(index_path: &Path) -> Result<(), String> {
+pub(crate) fn write_empty_slice_index(index_path: &Path) -> Result<(), String> {
     let index = SliceIndexPayload {
-        schema_version: 1,
+        schema_version: 2,
         available: false,
         function_count: 0,
         functions: vec![],
     };
-    write_json(index_path, &index)
-}
-
-fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    fs::write(path, json).map_err(|e| e.to_string())
+    write_json_compact(index_path, &index)
 }
 
 #[cfg(test)]
@@ -279,5 +212,15 @@ mod tests {
         assert!(!exported.nodes.is_empty());
         assert_eq!(exported.nodes[0].id, "node_0");
         assert_eq!(exported.nodes[0].block_index, Some(0));
+    }
+
+    #[test]
+    fn function_line_span_from_cfg() {
+        let mut cfg = ControlFlowGraph::new();
+        let entry = cfg.entry;
+        let block = cfg.blocks.get_mut(&entry).unwrap();
+        block.start_line = 10;
+        block.end_line = 42;
+        assert_eq!(function_line_span(&cfg), (10, 42));
     }
 }

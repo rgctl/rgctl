@@ -368,13 +368,127 @@ impl AnalysisStorage {
             .is_some_and(|name| name.ends_with(ANALYSIS_BIN_SUFFIX))
         {
             let bytes = fs::read(path)?;
-            let analysis = bincode::deserialize(&bytes)
-                .map_err(|e| Error::SerdeError(format!("analysis bincode decode: {e}")))?;
+            let mut analysis = decode_function_analysis_bincode(&bytes)?;
+            if let Some(pdg) = analysis.pdg.as_mut() {
+                pdg.restore_derived_indexes();
+            }
             return Ok(Some(analysis));
         }
         Ok(None)
     }
+}
 
+/// Decode per-function analysis bincode across PDG layout revisions.
+fn decode_function_analysis_bincode(bytes: &[u8]) -> Result<FunctionAnalysis> {
+    if let Ok(analysis) = bincode::deserialize::<FunctionAnalysis>(bytes) {
+        return Ok(analysis);
+    }
+    if let Ok(legacy) = bincode::deserialize::<FunctionAnalysisPdgFour>(bytes) {
+        return Ok(legacy.into_analysis());
+    }
+    if let Ok(legacy) = bincode::deserialize::<FunctionAnalysisPdgThree>(bytes) {
+        return Ok(legacy.into_analysis());
+    }
+    bincode::deserialize(bytes).map_err(|e| {
+        Error::SerdeError(format!("analysis bincode decode: {e}"))
+    })
+}
+
+#[derive(Deserialize)]
+struct FunctionAnalysisPdgFour {
+    function_id: Uuid,
+    function_name: String,
+    file_path: String,
+    #[serde(default)]
+    code_hash: Option<String>,
+    cfg: Option<ControlFlowGraph>,
+    pdg: Option<PdgStoredFour>,
+    dominance: Option<DominatorTree>,
+    #[serde(default)]
+    taint: Option<Vec<TaintFlow>>,
+}
+
+#[derive(Deserialize)]
+struct FunctionAnalysisPdgThree {
+    function_id: Uuid,
+    function_name: String,
+    file_path: String,
+    #[serde(default)]
+    code_hash: Option<String>,
+    cfg: Option<ControlFlowGraph>,
+    pdg: Option<PdgStoredThree>,
+    dominance: Option<DominatorTree>,
+    #[serde(default)]
+    taint: Option<Vec<TaintFlow>>,
+}
+
+#[derive(Deserialize)]
+struct PdgStoredFour {
+    nodes: HashMap<crate::pdg::PdgNodeId, crate::pdg::PdgNode>,
+    data_deps: Vec<crate::pdg::DataDependency>,
+    control_deps: Vec<crate::pdg::ControlDependency>,
+    #[serde(default)]
+    block_nodes: HashMap<crate::cfg::BlockId, Vec<crate::pdg::PdgNodeId>>,
+}
+
+#[derive(Deserialize)]
+struct PdgStoredThree {
+    nodes: HashMap<crate::pdg::PdgNodeId, crate::pdg::PdgNode>,
+    data_deps: Vec<crate::pdg::DataDependency>,
+    control_deps: Vec<crate::pdg::ControlDependency>,
+}
+
+impl FunctionAnalysisPdgFour {
+    fn into_analysis(self) -> FunctionAnalysis {
+        FunctionAnalysis {
+            function_id: self.function_id,
+            function_name: self.function_name,
+            file_path: self.file_path,
+            code_hash: self.code_hash,
+            cfg: self.cfg,
+            pdg: self.pdg.map(|pdg| {
+                let mut graph = ProgramDependenceGraph::from_parts(
+                    pdg.nodes,
+                    pdg.data_deps,
+                    pdg.control_deps,
+                    pdg.block_nodes,
+                    HashMap::new(),
+                );
+                graph.restore_derived_indexes();
+                graph
+            }),
+            dominance: self.dominance,
+            taint: self.taint,
+        }
+    }
+}
+
+impl FunctionAnalysisPdgThree {
+    fn into_analysis(self) -> FunctionAnalysis {
+        FunctionAnalysis {
+            function_id: self.function_id,
+            function_name: self.function_name,
+            file_path: self.file_path,
+            code_hash: self.code_hash,
+            cfg: self.cfg,
+            pdg: self.pdg.map(|pdg| {
+                let mut graph = ProgramDependenceGraph::from_parts(
+                    pdg.nodes,
+                    pdg.data_deps,
+                    pdg.control_deps,
+                    HashMap::new(),
+                    HashMap::new(),
+                );
+                graph.restore_derived_indexes();
+                graph
+            }),
+            dominance: self.dominance,
+            taint: self.taint,
+        }
+    }
+}
+
+impl AnalysisStorage {
     fn analysis_paths(&self) -> Result<Vec<PathBuf>> {
         if !self.base_dir.exists() {
             return Ok(Vec::new());
@@ -542,6 +656,102 @@ mod tests {
             dominance: None,
             taint: None,
         }
+    }
+
+    #[test]
+    fn test_save_and_load_function_with_cfg_pdg() {
+        use crate::cfg_builder::build_cfg_for_function;
+        use crate::pdg::ProgramDependenceGraph;
+
+        let tmp = TempDir::new().unwrap();
+        let storage = AnalysisStorage::new(tmp.path());
+        let id = Uuid::new_v4();
+        let code = "fn add(a: i32, b: i32) -> i32 { a + b }";
+        let cfg = build_cfg_for_function("rust", code, "add").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+        storage
+            .save_function(&FunctionAnalysis {
+                function_id: id,
+                function_name: "add".into(),
+                file_path: "src/lib.rs".into(),
+                code_hash: Some("hash1".into()),
+                cfg: Some(cfg.clone()),
+                pdg: Some(pdg.clone()),
+                dominance: None,
+                taint: None,
+            })
+            .unwrap();
+        let cfg_bytes = bincode::serialize(&cfg).expect("cfg serialize");
+        let _: ControlFlowGraph = bincode::deserialize(&cfg_bytes).expect("cfg deserialize");
+        let pdg_bytes = bincode::serialize(&pdg).expect("pdg serialize");
+        let _: ProgramDependenceGraph = bincode::deserialize(&pdg_bytes).expect("pdg deserialize");
+        let path = storage.bin_path(id);
+        let size = fs::metadata(&path).unwrap().len();
+        assert!(size > 0, "analysis file should not be empty");
+        let loaded = storage
+            .load_function(id)
+            .unwrap()
+            .expect("cfg/pdg analysis should round-trip");
+        assert!(loaded.cfg.is_some());
+        assert!(loaded.pdg.is_some());
+    }
+
+    #[test]
+    fn test_metasfresh_analysis_load_sample() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../example/metasfresh-4.9.8b");
+        let analysis_dir = repo.join(".rbuilder/analysis");
+        if !analysis_dir.is_dir() {
+            return;
+        }
+        let storage = AnalysisStorage::new(&analysis_dir);
+        let index = storage.load_analysis_index().expect("index");
+        let mut ok = 0usize;
+        let mut fail = 0usize;
+        let mut has_cfg = 0usize;
+        for entry in index.values().take(5000) {
+            match storage.load_function(entry.function_id) {
+                Ok(Some(a)) => {
+                    ok += 1;
+                    if a.cfg.is_some() && a.pdg.is_some() {
+                        has_cfg += 1;
+                    }
+                }
+                _ => fail += 1,
+            }
+        }
+        eprintln!(
+            "index_total={} sampled ok={} fail={} with_cfg_pdg={}",
+            index.len(),
+            ok,
+            fail,
+            has_cfg
+        );
+        assert!(
+            has_cfg > 4000,
+            "most cached analyses should load with cfg/pdg after serde fix"
+        );
+    }
+
+    #[test]
+    fn test_load_metasfresh_analysis_roundtrip() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../example/metasfresh-4.9.8b");
+        let analysis_dir = repo.join(".rbuilder/analysis");
+        if !analysis_dir.is_dir() {
+            return;
+        }
+        let storage = AnalysisStorage::new(&analysis_dir);
+        let index = storage.load_analysis_index().expect("index");
+        let Some(entry) = index.values().next() else {
+            return;
+        };
+        let loaded = storage
+            .load_function(entry.function_id)
+            .expect("load")
+            .expect("analysis present");
+        assert!(loaded.cfg.is_some(), "cfg should deserialize");
+        assert!(loaded.pdg.is_some(), "pdg should deserialize");
     }
 
     #[test]

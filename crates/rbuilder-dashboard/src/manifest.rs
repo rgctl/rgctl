@@ -23,6 +23,9 @@ pub struct DashboardManifest {
     pub analysis: Option<AnalysisSection>,
     pub metrics: MetricsSection,
     pub generated_at: String,
+    /// Stable fingerprint for incremental dashboard export (semantic, not volatile UUID digest).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +104,7 @@ impl DashboardManifest {
         node_count: u64,
         edge_count: u64,
         digest: String,
+        export_fingerprint: String,
         metrics: MetricsSection,
         export: &MetagraphExport,
         cfg: &CfgExportSummary,
@@ -247,6 +251,7 @@ impl DashboardManifest {
             analysis,
             metrics,
             generated_at: chrono_now_rfc3339(),
+            export_fingerprint: Some(export_fingerprint),
         }
     }
 }
@@ -307,6 +312,7 @@ mod tests {
             100,
             200,
             "abc".into(),
+            "fp".into(),
             MetricsSection {
                 function_count: 8,
                 class_count: 2,

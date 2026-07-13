@@ -4,6 +4,7 @@ import init, { EngineContext } from "../wasm/rbuilder_wasm.js";
 import { bundleDataUrl } from "./bundleUrl";
 import { computeSlice } from "./sliceEngine";
 import { computeDataflowGraph } from "./dataflowEngine";
+import { excerptSource, resolveSliceSource } from "./sourceResolver";
 import type {
   NodeListPayload,
   SliceBundlePayload,
@@ -183,6 +184,10 @@ async function loadSliceBundle(functionId: string): Promise<SliceBundlePayload> 
     throw new Error(`slice/${functionId}.json: HTTP ${res.status}`);
   }
   const bundle = (await res.json()) as SliceBundlePayload;
+  if (!bundle.source && bundle.source_id) {
+    const full = await resolveSliceSource(bundle);
+    bundle.source = excerptSource(full, bundle.start_line, bundle.end_line);
+  }
   sliceBundleCache.set(functionId, bundle);
   return bundle;
 }

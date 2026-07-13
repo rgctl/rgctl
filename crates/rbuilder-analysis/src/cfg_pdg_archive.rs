@@ -173,7 +173,11 @@ fn parse_payload(mmap: &[u8]) -> Result<CfgPdgArchive> {
             "cfg_pdg archive payload truncated".into(),
         ));
     }
-    bincode::deserialize(&mmap[16..16 + payload_len]).map_err(serde_err)
+    let mut archive: CfgPdgArchive = bincode::deserialize(&mmap[16..16 + payload_len]).map_err(serde_err)?;
+    for record in archive.records.values_mut() {
+        record.pdg.restore_derived_indexes();
+    }
+    Ok(archive)
 }
 
 fn serde_err(e: bincode::Error) -> Error {

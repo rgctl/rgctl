@@ -45,6 +45,11 @@ export function CfgView() {
       setDetail(null);
       return;
     }
+    if (index?.detail_mode === "archive_only") {
+      setDetail(null);
+      setError(null);
+      return;
+    }
     let cancelled = false;
     setLoadingDetail(true);
     fetch(bundleDataUrl(`cfg/${selectedId}.json`))
@@ -64,7 +69,7 @@ export function CfgView() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [selectedId, index?.detail_mode]);
 
   if (error) {
     return <div class="alert alert-danger py-2 small mb-0">{error}</div>;
@@ -122,6 +127,15 @@ export function CfgView() {
         {!selectedId && (
           <p class="text-muted small mb-0">
             Pick a function to render its control-flow graph and dominator tree.
+          </p>
+        )}
+
+        {selectedId && index.detail_mode === "archive_only" && (
+          <p class="text-muted small mb-0">
+            CFG topology for this repository is stored in{" "}
+            <code>{index.archive_path ?? "cfg_pdg.archive.bin"}</code> only (large-repo
+            mode). Block/edge counts are listed in the sidebar; use a smaller repo or
+            re-export with fewer than 5,000 functions for inline CFG previews.
           </p>
         )}
       </div>
@@ -215,11 +229,19 @@ function CfgGraph({ detail }: { detail: CfgDetailPayload }) {
 
 function DominancePanel({ detail }: { detail: CfgDetailPayload }) {
   const selectedBlock = detail.entry;
+  const hasDominance =
+    detail.idom != null && detail.dominance_frontiers != null;
 
   return (
     <div class="cfg-dom-panel d-flex flex-column flex-grow-1 min-h-0 border rounded bg-white">
       <div class="border-bottom py-2 px-3 small fw-semibold flex-shrink-0">Dominance</div>
       <div class="flex-grow-1 min-h-0 overflow-auto small">
+        {!hasDominance ? (
+          <p class="text-muted p-2 mb-0">
+            Dominance preview omitted in compact export. CFG blocks and edges are still
+            shown in the graph.
+          </p>
+        ) : (
         <table class="table table-sm table-striped mb-0">
           <thead>
             <tr>
@@ -234,12 +256,13 @@ function DominancePanel({ detail }: { detail: CfgDetailPayload }) {
                 <td>
                   <code>{b.label}</code>
                 </td>
-                <td>{detail.idom[b.id]?.toString() ?? "—"}</td>
-                <td>{(detail.dominance_frontiers[b.id] ?? []).join(", ") || "—"}</td>
+                <td>{detail.idom?.[b.id]?.toString() ?? "—"}</td>
+                <td>{(detail.dominance_frontiers?.[b.id] ?? []).join(", ") || "—"}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        )}
         {detail.blocks.some((b) => b.statements.length > 0) && (
           <div class="p-2 border-top">
             <div class="fw-semibold mb-1">Entry block preview</div>

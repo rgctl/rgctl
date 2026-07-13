@@ -15,6 +15,7 @@ import {
 import { java } from "@codemirror/lang-java";
 import { basicSetup } from "codemirror";
 import { bundleDataUrl } from "./bundleUrl";
+import { excerptSource, resolveSliceSource } from "./sourceResolver";
 import { FunctionListLayout, FunctionListSidebar } from "./FunctionListSidebar";
 import { shortPath, sliceEntryToListItem } from "./functionListUtils";
 import { ViewLegend } from "./ViewLegend";
@@ -40,6 +41,7 @@ export function SliceView({ computeSlice }: SliceViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [bundle, setBundle] = useState<SliceBundlePayload | null>(null);
+  const [sourceText, setSourceText] = useState("");
   const [line, setLine] = useState(1);
   const [variable, setVariable] = useState("");
   const [direction, setDirection] = useState<SliceDirection>("backward");
@@ -67,6 +69,7 @@ export function SliceView({ computeSlice }: SliceViewProps) {
   useEffect(() => {
     if (!selectedId) {
       setBundle(null);
+      setSourceText("");
       setResult(null);
       return;
     }
@@ -76,9 +79,18 @@ export function SliceView({ computeSlice }: SliceViewProps) {
         if (!r.ok) throw new Error(`slice bundle HTTP ${r.status}`);
         return r.json();
       })
-      .then((data: SliceBundlePayload) => {
+      .then(async (data: SliceBundlePayload) => {
+        if (cancelled) return;
+        setBundle(data);
+        const resolved = data.source
+          ? data.source
+          : excerptSource(
+              await resolveSliceSource(data),
+              data.start_line,
+              data.end_line,
+            );
         if (!cancelled) {
-          setBundle(data);
+          setSourceText(resolved);
           setLine(1);
           setVariable("");
           setResult(null);
@@ -216,7 +228,7 @@ export function SliceView({ computeSlice }: SliceViewProps) {
       {bundle && (
         <div class="flex-grow-1 min-h-0">
           <SourceEditor
-            source={bundle.source}
+            source={sourceText}
             filePath={bundle.file_path}
             highlightLines={result?.lines ?? []}
             criterionLine={result?.criterion.line}

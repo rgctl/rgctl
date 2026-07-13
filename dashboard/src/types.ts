@@ -212,7 +212,12 @@ export interface SliceBundlePayload {
   function_id: string;
   name: string;
   file_path?: string | null;
-  source: string;
+  /** Inline source (schema v1). */
+  source?: string;
+  /** Deduplicated source file under `sources/` (schema v2+). */
+  source_id?: string | null;
+  start_line?: number | null;
+  end_line?: number | null;
   total_lines: number;
   pdg: SlicePdgPayload;
 }
@@ -252,6 +257,7 @@ export interface CfgIndexPayload {
   schema_version: number;
   available: boolean;
   archive_path?: string | null;
+  detail_mode?: string;
   function_count: number;
   functions: CfgFunctionEntry[];
 }
@@ -273,8 +279,8 @@ export interface CfgDetailPayload {
   exits: number[];
   blocks: CfgBlockView[];
   edges: CfgEdgeView[];
-  idom: Array<number | null>;
-  dominance_frontiers: number[][];
+  idom?: Array<number | null> | null;
+  dominance_frontiers?: number[][] | null;
 }
 
 export interface CfgBlockView {
