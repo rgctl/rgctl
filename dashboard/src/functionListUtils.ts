@@ -34,33 +34,42 @@ export const FUNCTION_COLUMN_TOOLTIPS: Record<FunctionSortKey, string> = {
   pagerank:
     "PageRank (PR): global influence on the behavioral call graph. Scores are normalized fractions that sum to ~1 across all nodes, so values look small (e.g. 2.46e-4 = 0.000246). Rank order matters more than the absolute number.",
   betweenness:
-    "Betweenness (BC): how often this symbol sits on shortest paths between others — bridges and bottlenecks score high. Sampled approximation on graphs above 500 nodes. — means zero (not on meaningful paths).",
+    "Betweenness (BC): how often this symbol sits on shortest paths between others — bridges and bottlenecks score high. Sampled approximation (512 pivots) above 500 nodes. A true 0 is normal: call-graph bridges are rare. — means no metric was exported for this node.",
   harmonic:
-    "Harmonic centrality (Harm): average closeness to reachable nodes (inverse distance). High values mean the symbol can reach much of the graph quickly. HyperBall approximation on large graphs. — means zero.",
+    "Harmonic centrality (Harm): average closeness to reachable nodes (inverse distance). High values mean the symbol can reach much of the graph quickly. HyperBall approximation on large graphs. Off by default — re-run `rgctl discover . --with-harmonic` to populate it; an all-zero column usually means it was never computed. — means no metric was exported.",
   blast_score:
-    "Blast radius score (0–100): upstream caller impact from discover — how many callers are affected if this symbol changes. Higher = wider blast radius.",
+    "Blast radius score (0–100): upstream caller impact — how many callers are affected if this symbol changes. Bulk scoring is skipped when the call graph condenses to one giant SCC (flat graph), which leaves every score 0; use `rgctl blast-radius <symbol>` for an exact on-demand figure. — means no metric was exported.",
 };
 
-/** Display centrality: scientific notation below 0.01, else 3 decimal places. */
+/**
+ * Display centrality: scientific notation below 0.01, else 3 decimal places.
+ *
+ * `—` means the metric is **not available** for this node (no metrics row, or a
+ * non-finite value). A value that was computed and is genuinely zero renders as
+ * `0` — previously both cases collapsed to `—`, which made sparse-but-correct
+ * columns (betweenness, blast) look like they had failed to load.
+ */
 export function formatCentrality(value: number | undefined): string {
-  if (value === undefined || value <= 0) return "—";
+  if (value === undefined || !Number.isFinite(value) || value < 0) return "—";
+  if (value === 0) return "0";
   if (value >= 0.01) return value.toFixed(3);
   return value.toExponential(2);
 }
 
 /** Full precision for cell hover tooltips. */
 export function formatCentralityTooltip(value: number | undefined): string | undefined {
-  if (value === undefined || value <= 0) return undefined;
+  if (value === undefined || !Number.isFinite(value) || value < 0) return undefined;
   return value.toPrecision(6);
 }
 
 export function formatBlast(value: number | undefined): string {
-  if (value === undefined || value <= 0) return "—";
+  if (value === undefined || !Number.isFinite(value) || value < 0) return "—";
+  if (value === 0) return "0";
   return value.toFixed(0);
 }
 
 export function formatBlastTooltip(value: number | undefined): string | undefined {
-  if (value === undefined || value <= 0) return undefined;
+  if (value === undefined || !Number.isFinite(value) || value < 0) return undefined;
   return value.toFixed(2);
 }
 
