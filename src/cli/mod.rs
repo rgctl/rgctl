@@ -7,6 +7,7 @@ mod check;
 mod pr_check;
 mod pr_check_output;
 mod review;
+mod review_export;
 mod temporal_prep;
 pub mod check_output;
 mod clones;
@@ -1112,6 +1113,64 @@ pub enum ReviewCommands {
         /// Treat calendar `warn` violations as failures (grace / sunset warn windows)
         #[arg(long = "strict-calendar")]
         strict_calendar: bool,
+    },
+
+    /// Compose the review workflow into one versioned artifact
+    Export {
+        /// Base graph artifact root, snapshot file, `$RGCTL_BASE_ARTIFACT`, or `{repo}/.rgctl-base`
+        #[arg(long)]
+        base_artifact: Option<String>,
+
+        /// Head graph artifact root or snapshot file [default: `-r` / cwd repo]
+        #[arg(long)]
+        head_artifact: Option<String>,
+
+        #[arg(long, default_value = "origin/main")]
+        base_ref: String,
+
+        #[arg(long, default_value = "HEAD")]
+        head_ref: String,
+
+        /// Reverse call-dependency hops when synthesizing a delta head (0 = disabled)
+        #[arg(long, default_value = "1")]
+        cascade_depth: usize,
+
+        /// Require pre-built head snapshot; skip delta head synthesis from base artifact.
+        #[arg(long = "full-snapshots")]
+        full_snapshots: bool,
+
+        /// Synthetic head source (`worktree` = uncommitted changes over HEAD snapshot)
+        #[arg(long = "synthetic-head", value_name = "MODE")]
+        synthetic_head: Option<String>,
+
+        /// Reverse-Calls hops in representative spines [default: 2]
+        #[arg(long = "upstream-depth", default_value_t = 2)]
+        upstream_depth: usize,
+
+        /// Forward-Calls hops in representative spines [default: 1]
+        #[arg(long = "downstream-depth", default_value_t = 1)]
+        downstream_depth: usize,
+
+        /// Restrict report to one symbol (name or stable-key hex); ambiguity lists candidates
+        #[arg(long = "symbol", value_name = "NAME")]
+        symbol: Option<String>,
+
+        /// Max symbols in the report [default: 50]
+        #[arg(long = "max-symbols", default_value_t = 50)]
+        max_symbols: usize,
+
+        /// Fan-out cap per hop when selecting spine neighbors [default: 10]
+        #[arg(long = "fanout", default_value_t = 10)]
+        fanout: usize,
+
+        /// Policy file for the `policy` section. Omit to record it as not evaluated
+        /// (the section is then `null`, never an empty "clean" result).
+        #[arg(long = "policy-file", value_name = "PATH")]
+        policy_file: Option<String>,
+
+        /// Write the envelope to stdout instead of `{repo}/.rgctl/workflows/review.json`
+        #[arg(long = "stdout")]
+        stdout: bool,
     },
 }
 
@@ -2254,6 +2313,42 @@ impl Cli {
                         strict_calendar,
                     },
                 ),
+                ReviewCommands::Export {
+                    base_artifact,
+                    head_artifact,
+                    base_ref,
+                    head_ref,
+                    cascade_depth,
+                    full_snapshots,
+                    synthetic_head,
+                    upstream_depth,
+                    downstream_depth,
+                    symbol,
+                    max_symbols,
+                    fanout,
+                    policy_file,
+                    stdout,
+                } => review_export::run_export(
+                    &ctx,
+                    review_export::ReviewExportArgs {
+                        paths: review::ReviewPathsArgs {
+                            base_artifact,
+                            head_artifact,
+                            base_ref,
+                            head_ref,
+                            cascade_depth,
+                            full_snapshots,
+                            synthetic_head,
+                            upstream_depth,
+                            downstream_depth,
+                            symbol,
+                            max_symbols,
+                            fanout,
+                        },
+                        policy_file,
+                        stdout,
+                    },
+                ),
             },
             Commands::PrCheck {
                 policy_file,
@@ -2439,6 +2534,7 @@ fn command_label_for(command: &Commands) -> &'static str {
         Commands::Review { action } => match action {
             ReviewCommands::Paths { .. } => "review paths",
             ReviewCommands::Check { .. } => "review check",
+            ReviewCommands::Export { .. } => "review export",
         },
         Commands::PrCheck { .. } => "pr-check",
         Commands::Export { .. } => "export",

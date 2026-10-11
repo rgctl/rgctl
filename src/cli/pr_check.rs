@@ -3,7 +3,7 @@
 use super::args::OutputFormat;
 use super::context::CliContext;
 use super::policy_file::PolicyFile;
-use super::pr_check_output::build_pr_check_response;
+use super::pr_check_output::{PrCheckResponse, build_pr_check_response};
 use super::temporal_prep::{
     SyntheticHeadMode, TemporalArtifactArgs, prepare_artifacts, resolve_scope_paths,
     resolve_unified_diff,
@@ -167,6 +167,64 @@ pub fn run(ctx: &CliContext, args: PrCheckArgs) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Evaluate the policy gate **without appending to `.rgctl/violation_ledger.jsonl`**.
+///
+/// [`run`] opens the on-disk ledger and records observations into it
+/// (`record_deltas_to_ledger`), which is correct for a gate but wrong for a reporting
+/// command: `review export` must not mutate the state it reports on, and an append
+/// would change the classification inputs for the very next export.
+///
+/// So this path evaluates against an in-memory ledger and returns the response
+/// instead of printing it. Recording observations remains the job of [`run`].
+pub fn evaluate_read_only(ctx: &CliContext, args: &PrCheckArgs) -> Result<PrCheckResponse> {
+    let policy = PolicyFile::load(Path::new(&args.policy_file))
+        .with_context(|| format!("load policy {}", args.policy_file))?;
+    let synthetic_head = SyntheticHeadMode::parse(args.synthetic_head.as_deref())?;
+    let new_violations_only = policy.scope.new_violations_only;
+    let fail_on_regression = policy.scope.fail_on_regression;
+    let max_changed_files = policy.size_limits.max_changed_files;
+    let max_scoped_entities = policy.size_limits.max_scoped_entities;
+    let temporal = policy.temporal.clone();
+    let registry = policy.into_registry();
+
+    let eval = evaluate_pr_check(
+        ctx,
+        args,
+        &registry,
+        max_changed_files,
+        max_scoped_entities,
+        synthetic_head,
+    )?;
+    let mut deltas = eval.deltas;
+
+    // Deliberately in-memory: see the doc comment above.
+    let ledger = ViolationLedger::in_memory();
+    apply_ledger_regression(&mut deltas, &ledger);
+
+    let calendar = evaluate_calendar_for_deltas(
+        &deltas,
+        &temporal,
+        &ledger,
+        system_today_days(),
+        system_unix_secs(),
+    );
+
+    Ok(build_pr_check_response(
+        &deltas,
+        eval.graph_diff,
+        eval.scoped_files,
+        eval.scoped_entities,
+        new_violations_only,
+        fail_on_regression,
+        // `--bisect` is intentionally not run here: it walks the commit range once per
+        // violating symbol, which is far too costly for an export and would make the
+        // artifact's cost scale with violation count rather than repo size.
+        &HashMap::new(),
+        &calendar,
+        args.strict_calendar,
+    ))
 }
 
 fn evaluate_pr_check(

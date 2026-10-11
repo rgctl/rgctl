@@ -227,3 +227,143 @@ fn pr_check_and_review_check_equivalent_json() {
     assert_eq!(va["passed"], vb["passed"]);
     assert_eq!(va["violations_summary"], vb["violations_summary"]);
 }
+
+// ---------------------------------------------------------------------------
+// `review export` — one composed, read-only, deterministic artifact.
+// Spec: openspec/changes/add-review-workflow-export/specs/review-workflow-export/spec.md
+// ---------------------------------------------------------------------------
+
+fn run_export(repo: &Path, extra: &[&str]) -> std::process::Output {
+    let mut cmd = Command::new(rgctl_bin());
+    cmd.current_dir(repo)
+        .args(["-r", repo.to_str().unwrap()])
+        .args(["review", "export", "--full-snapshots"])
+        .args(["--base-ref", "HEAD~1", "--head-ref", "HEAD"])
+        .args(extra);
+    cmd.output().expect("spawn review export")
+}
+
+#[test]
+fn review_export_stdout_is_one_json_document() {
+    let tmp = setup_rewired_repo();
+    let out = run_export(tmp.path(), &["--stdout"]);
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Must be exactly one JSON document: no trailing text, no banner.
+    let v: Value = serde_json::from_slice(&out.stdout).expect("stdout is a single JSON document");
+
+    assert_eq!(v["schema_version"], "1");
+    assert_eq!(v["command"], "review export");
+    assert!(v["generated_at"].is_string());
+
+    // The composed section is present and populated.
+    let symbols = v["review_paths"]["symbols"].as_array().expect("symbols");
+    assert!(!symbols.is_empty(), "review_paths should carry the change");
+    assert_eq!(v["review_paths"]["schema_version"], 1);
+}
+
+#[test]
+fn review_export_marks_absent_sections_instead_of_emptying_them() {
+    let tmp = setup_rewired_repo();
+    let out = run_export(tmp.path(), &["--stdout"]);
+    assert!(out.status.success());
+    let v: Value = serde_json::from_slice(&out.stdout).expect("json");
+
+    // No --policy-file: must be null with a reason, never an empty "clean" result.
+    assert!(v["policy"].is_null(), "policy={}", v["policy"]);
+    assert!(
+        v["provenance"]["unavailable"]["policy"].is_string(),
+        "a null section must say why: {}",
+        v["provenance"]["unavailable"]
+    );
+
+    // No ledger in a fresh repo: empty array plus a reason, and never a silent [].
+    assert_eq!(v["timeline"].as_array().map(Vec::len), Some(0));
+    assert!(
+        v["provenance"]["unavailable"]["timeline"].is_string(),
+        "absent ledger must be recorded: {}",
+        v["provenance"]["unavailable"]
+    );
+}
+
+#[test]
+fn review_export_is_read_only_and_leaves_no_ledger() {
+    let tmp = setup_rewired_repo();
+    let repo = tmp.path();
+    let ledger = repo.join(".rgctl/violation_ledger.jsonl");
+    assert!(!ledger.exists(), "precondition: no ledger");
+
+    assert!(run_export(repo, &["--stdout"]).status.success());
+    assert!(
+        !ledger.exists(),
+        "review export must not create or append to the violation ledger"
+    );
+}
+
+#[test]
+fn review_export_writes_default_artifact_path() {
+    let tmp = setup_rewired_repo();
+    let repo = tmp.path();
+    let out = run_export(repo, &[]);
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let artifact = repo.join(".rgctl/workflows/review.json");
+    assert!(artifact.exists(), "expected {}", artifact.display());
+    let v: Value = serde_json::from_slice(&fs::read(&artifact).unwrap()).expect("artifact json");
+    assert_eq!(v["command"], "review export");
+}
+
+#[test]
+fn review_export_is_deterministic_apart_from_generated_at() {
+    let tmp = setup_rewired_repo();
+    let repo = tmp.path();
+
+    let mut docs = Vec::new();
+    for _ in 0..2 {
+        let out = run_export(repo, &["--stdout"]);
+        assert!(out.status.success());
+        let mut v: Value = serde_json::from_slice(&out.stdout).expect("json");
+        v.as_object_mut().unwrap().remove("generated_at");
+        docs.push(serde_json::to_string(&v).unwrap());
+    }
+    assert_eq!(
+        docs[0], docs[1],
+        "two exports over identical inputs must be byte-identical apart from generated_at"
+    );
+}
+
+#[test]
+fn review_export_does_not_change_review_paths_output() {
+    let tmp = setup_rewired_repo();
+    let repo = tmp.path();
+    // `review paths` keeps its own schema; export must not have altered it.
+    let out = Command::new(rgctl_bin())
+        .current_dir(repo)
+        .args([
+            "-r",
+            repo.to_str().unwrap(),
+            "-f",
+            "json",
+            "review",
+            "paths",
+            "--full-snapshots",
+            "--base-ref",
+            "HEAD~1",
+            "--head-ref",
+            "HEAD",
+        ])
+        .output()
+        .expect("spawn review paths");
+    assert!(out.status.success());
+    let v: Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["command"], "review paths");
+}

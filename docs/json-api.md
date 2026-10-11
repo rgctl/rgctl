@@ -629,6 +629,76 @@ Appends outcomes to `.rgctl/violation_ledger.jsonl` keyed by `(stable_key, rule_
 
 ---
 
+## 8d. `review export`
+
+```bash
+# Writes {repo}/.rgctl/workflows/review.json
+rgctl review export --base-ref origin/main --head-ref HEAD --full-snapshots
+
+# One document on stdout, for piping
+rgctl review export --stdout | jq .review_paths.change_summary
+```
+
+Composes `review paths`, an optional `review check`, and the violation timeline into **one versioned
+artifact**, so a consumer needs a single fetch instead of orchestrating three commands. It **composes
+and does not recompute** — each section is byte-identical to what the corresponding command emits.
+
+**Read-only.** Unlike `review check`, `review export` does **not** append to
+`.rgctl/violation_ledger.jsonl`. The policy section is evaluated against an in-memory ledger, so
+exporting never mutates the state it reports on and repeated exports stay identical.
+
+Precedence for the output target: `-o PATH` → `--stdout` → `{repo}/.rgctl/workflows/review.json`.
+
+### TypeScript shape
+
+```typescript
+interface ReviewExportEnvelope {
+  schema_version: "1";
+  command: "review export";
+  /** Unix seconds. The only field that differs between two exports over the same inputs. */
+  generated_at: string;
+  /** Same shape as `review paths` (its own schema_version is preserved). */
+  review_paths: ReviewPathsResponse;
+  /**
+   * `null` means NOT EVALUATED (e.g. no --policy-file), never "no violations".
+   * An evaluated run that found nothing is an object with `passed` and `violations: []`.
+   */
+  policy: PrCheckResponse | null;
+  timeline: ViolationLedgerEntry[];
+  /** Aggregate of `review_paths` truncation, including per-symbol flags. */
+  truncation: { symbols: boolean; fanout: boolean; depth: boolean };
+  provenance: {
+    /** Copy-pasteable commands behind the populated sections. */
+    commands: string[];
+    graph: {
+      base_snapshot: string;
+      head_snapshot: string;
+      base_digest: string;
+      head_digest: string;
+    };
+    /** Present only when something could not be produced. */
+    unavailable?: { policy?: string; timeline?: string };
+  };
+}
+
+interface ViolationLedgerEntry {
+  stable_key: number;
+  rule: string;
+  class: "new" | "existing" | "resolved" | "regression";
+  commit: string;
+  ts: string;
+  symbol?: string;
+}
+```
+
+Exits **0** even when a section is unavailable — a missing optional section is not an error. Failing to
+produce `review_paths` (the section defining the change under review) is the only fatal case. Unreadable
+ledger lines are skipped with a warning on **stderr**, so stdout stays parseable.
+
+OpenSpec: `openspec/changes/add-review-workflow-export/`.
+
+---
+
 ## 9. `slice`
 
 ```bash
