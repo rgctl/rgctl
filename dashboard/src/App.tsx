@@ -101,7 +101,6 @@ export function App() {
         <StatCard label="Classes" value={m?.class_count ?? "—"} />
         <StatCard label="Call Edges" value={m?.calls_count ?? "—"} />
         <StatCard label="High Blast Radius" value={m?.high_blast_radius_count ?? "—"} />
-        <StatCard label="Filtered Nodes" value={manifest?.graph.node_count ?? "—"} />
       </div>
 
       <div class="rb-tab-workspace rb-tab-workspace--analysis">
