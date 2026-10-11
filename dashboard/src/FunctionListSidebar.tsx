@@ -190,7 +190,7 @@ export function FunctionListSidebar({
                     >
                       <div class="function-list-item-name text-truncate">{item.name}</div>
                       {(item.filePath || item.meta) && (
-                        <div class="function-list-item-meta text-truncate">
+                        <div class="function-list-item-meta text-truncate" title={item.filePath ?? undefined}>
                           {item.filePath && <span>{shortPath(item.filePath)}</span>}
                           {item.filePath && item.meta && <span class="mx-1">·</span>}
                           {item.meta && <span>{item.meta}</span>}

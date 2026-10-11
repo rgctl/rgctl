@@ -166,10 +166,15 @@ export async function loadAllNodeEntries(
   return all;
 }
 
+/**
+ * Shorten a path for display, keeping the basename plus enough ancestors to tell
+ * sibling files apart. Paths that already fit are returned verbatim — prefixing a
+ * leading ellipsis regardless made short paths read as relative ones.
+ */
 export function shortPath(p: string): string {
   const parts = p.split(/[/\\]/);
-  if (parts.length <= 2) return p;
-  return `…/${parts.slice(-2).join("/")}`;
+  if (parts.length <= 3) return p;
+  return `…/${parts.slice(-3).join("/")}`;
 }
 
 export function fileLabel(filePath?: string | null): string | undefined {
