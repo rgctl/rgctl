@@ -165,8 +165,17 @@ export function App() {
       </div>
 
       <footer class={`text-muted small flex-shrink-0 ${tab === "graph" ? "mt-2 d-none d-lg-block" : "mt-3"}`}>
-        <code>docs/dashboard-design.md</code> · manifest v{manifest?.schema_version ?? "?"} ·{" "}
-        {manifest?.graph.payload_format ?? "columnar_v2"}
+        {manifest ? (
+          <>
+            indexed {manifest.generated_at} · graph{" "}
+            <span title={`Graph digest: ${manifest.graph.digest}`}>
+              {manifest.graph.digest.slice(0, 12)}
+            </span>{" "}
+            · dashboard v{manifest.dashboard_version}
+          </>
+        ) : (
+          "loading manifest…"
+        )}
       </footer>
     </div>
   );
