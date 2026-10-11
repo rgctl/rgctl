@@ -363,7 +363,7 @@ export function GraphView({
           <div class="graph-legend px-2 py-1 bg-white small d-flex flex-wrap gap-2 gap-md-3 border-top align-items-center">
             {level === "metagraph" ? (
               <>
-                <span class="text-muted">Color = Louvain community (matches sidebar)</span>
+                <span class="text-muted">Color = community (label propagation; matches sidebar)</span>
                 {(communities?.communities ?? []).slice(0, 6).map((c) => (
                   <span key={c.id} class="graph-legend-community">
                     <span
