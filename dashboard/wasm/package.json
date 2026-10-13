@@ -2,7 +2,7 @@
   "name": "rgctl-wasm",
   "type": "module",
   "description": "WASM graph engine for rgctl dashboard",
-  "version": "0.4.17",
+  "version": "0.4.19",
   "license": "MIT OR Apache-2.0",
   "files": [
     "rgctl_wasm_bg.wasm",
