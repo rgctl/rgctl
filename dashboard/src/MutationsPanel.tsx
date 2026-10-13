@@ -45,7 +45,9 @@ export function filterMutationWrites(
 }
 
 export function MutationsPanel({ index, loadError, onSelect, activeKey }: MutationsPanelProps) {
-  const [typeName, setTypeName] = useState("ShoppingCart");
+  // Empty default = show every indexed field write. Seeding this with a demo
+  // type from another project made a working feature render "0 shown" on load.
+  const [typeName, setTypeName] = useState("");
   const [member, setMember] = useState("");
   const [excludeCtors, setExcludeCtors] = useState(true);
   const [includeUnresolved, setIncludeUnresolved] = useState(false);
@@ -112,7 +114,7 @@ export function MutationsPanel({ index, loadError, onSelect, activeKey }: Mutati
             class="form-control form-control-sm"
             list="mut-type-list"
             value={typeName}
-            placeholder="e.g. ShoppingCart"
+            placeholder={index.types.length > 0 ? `e.g. ${index.types[0]}` : "(any)"}
             data-testid="mutations-type-input"
             onInput={(e) => setTypeName((e.target as HTMLInputElement).value)}
           />

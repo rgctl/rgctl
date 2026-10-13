@@ -547,8 +547,8 @@ function MigrationGraphPanel({
     <section class="migration-section migration-graph-section mb-4">
       <h2 class="h6 fw-semibold mb-2">Package graph</h2>
       <p class="small text-muted mb-2">
-        Node color = Louvain cluster · size = priority score · strong layout pull within clusters,
-        weak pull across clusters · sizes update live when weights change.
+        Node color = community (label propagation) · size = priority score · strong layout pull within
+        clusters, weak pull across clusters · sizes update live when weights change.
       </p>
       <div class="migration-graph-panel analysis-graph-canvas-wrap border rounded">
         <div class="graph-canvas-wrap position-relative">
