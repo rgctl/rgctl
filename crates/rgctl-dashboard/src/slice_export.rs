@@ -179,7 +179,6 @@ mod tests {
     use rgctl_analysis::cfg::{ControlFlowGraph, DefVar, Statement, StatementKind};
     use rgctl_analysis::pdg::ProgramDependenceGraph;
     use smallvec::SmallVec;
-    use std::collections::HashSet;
 
     #[test]
     fn export_pdg_assigns_node_labels() {
@@ -193,8 +192,13 @@ mod tests {
                 kind: StatementKind::Assignment,
                 line: 1,
                 text: "x = 1".into(),
-                defined_vars: SmallVec::from([DefVar::local("x")]),
-                used_vars: HashSet::new(),
+                // `Statement::defined_vars` is `SmallVec<[DefVar; 2]>` and `used_vars` is
+                // `SmallVec<[String; 3]>`. `SmallVec::from([..])` takes its inline size from the array
+                // literal, so it produced a `SmallVec<[DefVar; 1]>` and stopped matching the field;
+                // `used_vars` was still a `HashSet` from before that field changed type. The macro
+                // infers the inline size from the field, which is what makes it stay correct.
+                defined_vars: smallvec::smallvec![DefVar::local("x")],
+                used_vars: SmallVec::new(),
             });
         let pdg = ProgramDependenceGraph::build(&cfg, b"x = 1\n").unwrap();
         let exported = export_pdg(&pdg, &cfg);
