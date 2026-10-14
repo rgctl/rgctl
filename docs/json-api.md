@@ -648,6 +648,12 @@ Two deliberate differences, both so that exporting does not mutate what it repor
 evaluated against the on-disk ledger for classification but **without appending** to it, and `--bisect` is
 skipped. So "identical output" is not the claim; "same evaluation, modulo read-only and no bisect" is.
 
+**`provenance.commands` are a starting point, not a re-run recipe.** Each entry names the command behind a
+section and the refs it used, but not every flag the evaluation applied — `full_snapshots`, `bisect`,
+`cascade_depth` and `strict` are fixed values at the evaluation site rather than the flags the export was
+invoked with. A consumer that wants to reproduce a section should read what it needs from the schema rather
+than treating the string as executable.
+
 **Read-only.** Unlike `review check`, `review export` does **not** append to
 `.rgctl/violation_ledger.jsonl`. The policy section is evaluated against an in-memory ledger, so
 exporting never mutates the state it reports on and repeated exports stay identical.

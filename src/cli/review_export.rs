@@ -195,6 +195,13 @@ pub fn run_export(ctx: &CliContext, args: ReviewExportArgs) -> Result<()> {
                 synthetic_head: None,
                 strict_calendar: false,
             };
+            // Provenance is a **starting point, not a re-run recipe** (raised in review).
+            // The command above omits every flag the evaluation fixed at its own construction site —
+            // `full_snapshots: false`, `bisect: false`, `cascade_depth: 1`, `strict: false` — and those are
+            // constants here, not the flags the export was invoked with. So running the printed command does
+            // not necessarily reproduce what the `policy` section contains. Stated rather than left implied;
+            // whether the evaluation should adopt the export's flags, and the command advertise them, is an
+            // open question rather than something to change quietly in a nit fix.
             commands.push(format!(
                 "rgctl review check --policy-file {path} --base-ref {base_ref} --head-ref {head_ref} -f json"
             ));
