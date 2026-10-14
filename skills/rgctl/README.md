@@ -4,24 +4,21 @@ A skill for answering structural questions about codebases using the rgctl CLI g
 
 ## Quick Stats
 
-- **One skill:** `rgctl` (router + structured verb tables + references)
+- **Meta skill:** `rgctl` (router + structured verb tables + references)
+- **Companion skill + command:** `rgctl-review` / `/rgctl:review` (PR/branch review → `REVIEW_REPORT.md`)
 - **Reference files:** command encyclopedia, workflows, communities & policy
-- **Workflow families (docs only):** discover, impact, flow, search, migrate, gate, vuln
+- **Workflow families (docs only):** discover, impact, flow, search, migrate, gate, vuln, review
 - **Agent query path:** `find` / `callers` / `callees` / `relations` / `inventory` / `status` (no Cypher)
 
 ## Structure
 
 ```
-skills/rgctl/
-├── SKILL.md                              # Main skill
-├── README.md                             # This file
-└── references/
-    ├── command-encyclopedia.md           # All commands with JSON samples
-    ├── workflows.md                      # Worked NL scenarios (discover, impact, migrate, …)
-    └── communities-and-policy.md         # Community detection + CI policy
+skills/rgctl/                 # Meta skill (this tree)
+skills/rgctl-review/          # Review protocol skill
+agent-pack/commands/          # Thin slash-command stubs (codegen → per adapter)
 ```
 
-`rgctl install --skill` writes **only** this skill tree (e.g. `.cursor/skills/rgctl/`). It does **not** create separate `rgctl-discover` / `rgctl-impact` / … skill directories.
+`rgctl install --skill` writes the meta skill, companion skills, and slash commands (OpenSpec dual). It does **not** create retired `rgctl-discover` / `rgctl-impact` / … skill directories.
 
 ## What's Covered
 

@@ -13,6 +13,8 @@ pub struct PackManifest {
     pub version: u32,
     pub rgctl_version: String,
     pub workflows: Vec<WorkflowEntry>,
+    #[serde(default)]
+    pub commands: Vec<CommandEntry>,
     pub agents: Vec<AgentManifestEntry>,
 }
 
@@ -23,11 +25,20 @@ pub struct WorkflowEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandEntry {
+    pub id: String,
+    pub title: String,
+    pub skill: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentManifestEntry {
     pub id: String,
     pub agent_dir: String,
     pub skills_subdir: String,
     pub skills_path: String,
+    #[serde(default)]
+    pub commands_path: String,
     pub invoke_prefix: String,
     pub supports_global: bool,
 }
@@ -74,6 +85,7 @@ pub enum PackArtifactKind {
     Skill,
     Policy,
     Meta,
+    Command,
 }
 
 fn agent_entry<'a>(
@@ -112,6 +124,25 @@ pub fn collect_artifacts(
                 &mut out,
                 &mut seen_dest,
             )?;
+            // OpenSpec-style: --skill also installs commands when present in the pack.
+            if !entry.commands_path.is_empty() {
+                let cmd_subdir = entry
+                    .commands_path
+                    .strip_prefix(&format!("{}/", entry.agent_dir))
+                    .unwrap_or(entry.commands_path.as_str())
+                    .trim_matches('/');
+                if !cmd_subdir.is_empty() {
+                    let commands_embed = format!("{}{}/", embed_prefix, cmd_subdir);
+                    collect_commands(
+                        &commands_embed,
+                        embed_prefix.as_str(),
+                        agent_id,
+                        &entry.agent_dir,
+                        &mut out,
+                        &mut seen_dest,
+                    )?;
+                }
+            }
         }
     }
 
@@ -154,11 +185,7 @@ fn collect_skills(
         }
         seen_dest.insert(repo_rel.clone(), ());
         let workflow = workflow_from_skill_path(after_embed, skills_subdir);
-        let kind = if after_embed.contains("/rgctl/") {
-            PackArtifactKind::Meta
-        } else {
-            PackArtifactKind::Skill
-        };
+        let kind = skill_kind(after_embed, skills_subdir);
         out.push(PackArtifact {
             agent_id: agent_id.to_string(),
             workflow,
@@ -170,11 +197,69 @@ fn collect_skills(
     Ok(())
 }
 
+fn collect_commands(
+    commands_prefix: &str,
+    embed_prefix: &str,
+    agent_id: &str,
+    agent_dir: &str,
+    out: &mut Vec<PackArtifact>,
+    seen_dest: &mut HashMap<PathBuf, ()>,
+) -> Result<(), String> {
+    for (path, _) in pack_files() {
+        let path = path.to_string_lossy();
+        if !path.starts_with(commands_prefix) {
+            continue;
+        }
+        let after_embed = path.strip_prefix(embed_prefix).unwrap_or(&path);
+        let repo_rel = PathBuf::from(agent_dir).join(after_embed);
+        if seen_dest.contains_key(&repo_rel) {
+            continue;
+        }
+        seen_dest.insert(repo_rel.clone(), ());
+        let workflow = command_workflow_id(after_embed);
+        out.push(PackArtifact {
+            agent_id: agent_id.to_string(),
+            workflow,
+            kind: PackArtifactKind::Command,
+            repo_rel,
+            bundle_rel: PathBuf::from(path.as_ref()),
+        });
+    }
+    Ok(())
+}
+
+fn skill_kind(after_embed: &str, skills_subdir: &str) -> PackArtifactKind {
+    let prefix = format!("{skills_subdir}/");
+    let rest = after_embed.strip_prefix(&prefix).unwrap_or(after_embed);
+    let name = rest.split('/').next().unwrap_or("");
+    if name == "rgctl" {
+        PackArtifactKind::Meta
+    } else {
+        PackArtifactKind::Skill
+    }
+}
+
 fn workflow_from_skill_path(after_embed: &str, skills_subdir: &str) -> Option<String> {
     let prefix = format!("{skills_subdir}/");
     let rest = after_embed.strip_prefix(&prefix)?;
     let name = rest.split('/').next()?;
-    name.strip_prefix("rgctl-").map(str::to_string)
+    if name == "rgctl" {
+        return None;
+    }
+    name.strip_prefix("rgctl-")
+        .map(str::to_string)
+        .or_else(|| Some(name.to_string()))
+}
+
+fn command_workflow_id(after_embed: &str) -> Option<String> {
+    let file = Path::new(after_embed)
+        .file_stem()
+        .and_then(|s| s.to_str())?;
+    let id = file
+        .strip_prefix("rgctl-")
+        .or_else(|| file.strip_prefix("rgctl:"))
+        .unwrap_or(file);
+    Some(id.to_string())
 }
 
 pub fn bundle_bytes(bundle_rel: &Path) -> Option<&[u8]> {
@@ -280,6 +365,41 @@ mod tests {
             .filter(|p| p.to_string_lossy().starts_with("agents/host-cursor/skills/"))
             .count();
         assert!(n > 5, "expected cursor skills in zip, got {n}");
+    }
+
+    #[test]
+    fn embedded_pack_includes_review_skill_and_cursor_command() {
+        let m = load_manifest().expect("manifest");
+        assert!(
+            m.commands.iter().any(|c| c.id == "review" && c.skill == "rgctl-review"),
+            "manifest commands should list review"
+        );
+        assert!(
+            pack_files()
+                .keys()
+                .any(|p| p.to_string_lossy().ends_with("skills/rgctl-review/SKILL.md")),
+            "missing rgctl-review skill in zip"
+        );
+        assert!(
+            pack_files().keys().any(|p| {
+                let s = p.to_string_lossy();
+                s.starts_with("agents/host-cursor/commands/") && s.contains("rgctl-review")
+            }),
+            "missing cursor rgctl-review command in zip"
+        );
+        let arts = collect_artifacts(&m, &["cursor".to_string()], true, false).expect("arts");
+        assert!(
+            arts.iter()
+                .any(|a| a.kind == PackArtifactKind::Command && a.workflow.as_deref() == Some("review")),
+            "collect_artifacts should include review command"
+        );
+        assert!(
+            arts.iter().any(|a| {
+                a.kind == PackArtifactKind::Skill
+                    && a.repo_rel.to_string_lossy().contains("rgctl-review")
+            }),
+            "collect_artifacts should include rgctl-review skill"
+        );
     }
 
     #[test]

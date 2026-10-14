@@ -303,9 +303,15 @@ rgctl -r "$REPO" -f json check --policy-file policy.json
 
 Blast-radius policy schema (`max_impact_nodes`, `forbidden_crossings`, …) — see [docs/policy-format.md](../../docs/policy-format.md). Named rules like `no-controller-direct-db-access` are **not** built-in ids. Report `passed` + `violations`.
 
-### PR review — call paths (`review paths`)
+### PR / branch review (`/rgctl:review`)
 
-**User intent:** *"How did call paths change?"* / *"What was rewired on this PR?"*
+**User intent:** *"Review this PR"* / *"What's the impact of this branch vs main?"*
+
+Prefer slash command **`/rgctl:review`** (skill **`rgctl-review`**) — OpenSpec-style dual install with meta skill `rgctl`. Full protocol: base artifact → `review paths` → optional blast / `review check` → **`REVIEW_REPORT.md`** + four-section session verdict. No GitHub/GitLab posting. See installed `skills/rgctl-review/SKILL.md`.
+
+### PR review — call paths only (`review paths`)
+
+**User intent:** *"How did call paths change?"* / *"What was rewired on this PR?"* (CLI JSON only)
 
 ```bash
 rgctl -r "$REPO" -f json review paths --base-ref origin/main --head-ref HEAD --full-snapshots

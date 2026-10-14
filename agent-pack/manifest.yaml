@@ -18,3 +18,7 @@ workflows:
 meta_skills:
   - id: rgctl
     title: rgctl
+commands:
+  - id: review
+    title: Structural PR / branch review
+    skill: rgctl-review

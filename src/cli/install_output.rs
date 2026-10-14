@@ -21,6 +21,7 @@ pub enum InstallWriteKind {
     Skill,
     Policy,
     Meta,
+    Command,
 }
 
 /// Outcome of one destination file.

@@ -12,9 +12,11 @@ fn main() {
 
     println!("cargo:rerun-if-changed=agent-pack/manifest.yaml");
     println!("cargo:rerun-if-changed=agent-pack/agents/registry.toml");
+    println!("cargo:rerun-if-changed=agent-pack/commands");
     println!("cargo:rerun-if-changed=skills/rgctl/SKILL.md");
     println!("cargo:rerun-if-changed=skills/rgctl/README.md");
     println!("cargo:rerun-if-changed=skills/rgctl/references");
+    println!("cargo:rerun-if-changed=skills/rgctl-review");
 
     rgctl_agent_pack_codegen::generate(&pack_root, &embed_dir, &version)
         .expect("agent-pack codegen failed");

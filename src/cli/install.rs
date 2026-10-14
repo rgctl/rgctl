@@ -69,6 +69,7 @@ pub fn run(ctx: &CliContext, args: InstallArgs) -> Result<()> {
             PackArtifactKind::Skill => InstallWriteKind::Skill,
             PackArtifactKind::Policy => InstallWriteKind::Policy,
             PackArtifactKind::Meta => InstallWriteKind::Meta,
+            PackArtifactKind::Command => InstallWriteKind::Command,
         };
         let path = dest.display().to_string();
         planned.push((dest, art.bundle_rel.clone()));
@@ -139,12 +140,14 @@ fn emit_list_agents(ctx: &CliContext, manifest: &super::agent_pack::PackManifest
     }
     let mut lines = vec!["rgctl agent registry:".to_string()];
     for a in &manifest.agents {
+        let cmds = if a.commands_path.is_empty() {
+            "-".to_string()
+        } else {
+            a.commands_path.clone()
+        };
         lines.push(format!(
-            "  {}  skills={}  global={}  invoke={}",
-            a.id,
-            a.skills_path,
-            a.supports_global,
-            a.invoke_prefix
+            "  {}  skills={}  commands={}  global={}  invoke={}",
+            a.id, a.skills_path, cmds, a.supports_global, a.invoke_prefix
         ));
     }
     ctx.emit(&lines.join("\n"))?;

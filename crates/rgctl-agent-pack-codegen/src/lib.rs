@@ -1,17 +1,33 @@
-//! Generate the embedded agent pack from `skills/rgctl/` and agent adapters.
+//! Generate the embedded agent pack from `skills/` and agent adapters.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Agent adapter definition (`agent-pack/agents/*.toml`).
+/// Agent adapter definition (`agent-pack/agents/registry.toml`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct AgentDef {
     pub id: String,
     pub agent_dir: String,
     pub skills_subdir: String,
+    #[serde(default)]
+    pub commands_subdir: String,
+    #[serde(default = "default_command_style")]
+    pub command_style: String,
+    #[serde(default = "default_command_extension")]
+    pub command_extension: String,
+    #[serde(default)]
+    pub commands_enabled: bool,
     pub invoke_prefix: String,
     pub supports_global: bool,
+}
+
+fn default_command_style() -> String {
+    "hyphen".into()
+}
+
+fn default_command_extension() -> String {
+    "md".into()
 }
 
 /// Installed pack manifest written to `out/manifest.json`.
@@ -21,6 +37,8 @@ pub struct PackManifest {
     pub version: u32,
     pub rgctl_version: String,
     pub workflows: Vec<WorkflowEntry>,
+    #[serde(default)]
+    pub commands: Vec<CommandEntry>,
     pub agents: Vec<AgentManifestEntry>,
 }
 
@@ -31,11 +49,20 @@ pub struct WorkflowEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandEntry {
+    pub id: String,
+    pub title: String,
+    pub skill: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentManifestEntry {
     pub id: String,
     pub agent_dir: String,
     pub skills_subdir: String,
     pub skills_path: String,
+    #[serde(default)]
+    pub commands_path: String,
     pub invoke_prefix: String,
     pub supports_global: bool,
 }
@@ -46,6 +73,8 @@ struct RootManifest {
     version: u32,
     workflows: Vec<WorkflowEntry>,
     meta_skills: Vec<WorkflowEntry>,
+    #[serde(default)]
+    commands: Vec<CommandEntry>,
 }
 
 /// Generate the full agent pack under `out_dir`.
@@ -55,29 +84,48 @@ pub fn generate(pack_root: &Path, out_dir: &Path, rgctl_version: &str) -> Result
     }
     fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
 
-    let manifest_yaml = fs::read_to_string(pack_root.join("manifest.yaml")).map_err(|e| e.to_string())?;
+    let manifest_yaml =
+        fs::read_to_string(pack_root.join("manifest.yaml")).map_err(|e| e.to_string())?;
     let root: RootManifest = serde_yaml::from_str(&manifest_yaml).map_err(|e| e.to_string())?;
     if !root.meta_skills.iter().any(|m| m.id == "rgctl") {
         return Err("manifest meta_skills must include id rgctl".into());
     }
 
+    let repo_root = pack_root.parent().unwrap_or(pack_root);
     let agents = load_agents(&pack_root.join("agents"))?;
-    let meta_src = pack_root
-        .parent()
-        .unwrap_or(pack_root)
-        .join("skills/rgctl");
-    if !meta_src.join("references/workflows.md").is_file() {
-        return Err("skills/rgctl/references/workflows.md missing".into());
+
+    // Skills: meta_skills + skills referenced by commands
+    let mut skill_ids: Vec<String> = root.meta_skills.iter().map(|m| m.id.clone()).collect();
+    for cmd in &root.commands {
+        if !skill_ids.iter().any(|s| s == &cmd.skill) {
+            skill_ids.push(cmd.skill.clone());
+        }
     }
 
     for agent in &agents {
-        // Single skill `rgctl`: copy `skills/rgctl` (including references/workflows.md).
-        if meta_src.is_dir() {
-            let meta_dest = agent_out_root(out_dir, &agent.id)
+        for skill_id in &skill_ids {
+            let skill_src = repo_root.join("skills").join(skill_id);
+            if !skill_src.is_dir() {
+                return Err(format!("skills/{skill_id} missing"));
+            }
+            if skill_id == "rgctl" && !skill_src.join("references/workflows.md").is_file() {
+                return Err("skills/rgctl/references/workflows.md missing".into());
+            }
+            let skill_dest = agent_out_root(out_dir, &agent.id)
                 .join(&agent.skills_subdir)
-                .join("rgctl");
-            copy_meta_skill_tree(&meta_src, &meta_dest)?;
-            ensure_rgctl_managed_frontmatter(&meta_dest.join("SKILL.md"), rgctl_version)?;
+                .join(skill_id);
+            copy_skill_tree(&skill_src, &skill_dest)?;
+            ensure_rgctl_managed_frontmatter(
+                &skill_dest.join("SKILL.md"),
+                skill_id,
+                rgctl_version,
+            )?;
+        }
+
+        if agent.commands_enabled && !agent.commands_subdir.is_empty() {
+            for cmd in &root.commands {
+                emit_command(pack_root, out_dir, agent, cmd, rgctl_version)?;
+            }
         }
     }
 
@@ -86,6 +134,7 @@ pub fn generate(pack_root: &Path, out_dir: &Path, rgctl_version: &str) -> Result
         version: root.version,
         rgctl_version: rgctl_version.to_string(),
         workflows: root.workflows.clone(),
+        commands: root.commands.clone(),
         agents: agents
             .iter()
             .map(|a| AgentManifestEntry {
@@ -93,6 +142,11 @@ pub fn generate(pack_root: &Path, out_dir: &Path, rgctl_version: &str) -> Result
                 agent_dir: a.agent_dir.clone(),
                 skills_subdir: a.skills_subdir.clone(),
                 skills_path: format!("{}/{}/", a.agent_dir, a.skills_subdir),
+                commands_path: if a.commands_enabled && !a.commands_subdir.is_empty() {
+                    format!("{}/{}/", a.agent_dir, a.commands_subdir)
+                } else {
+                    String::new()
+                },
                 invoke_prefix: a.invoke_prefix.clone(),
                 supports_global: a.supports_global,
             })
@@ -101,7 +155,6 @@ pub fn generate(pack_root: &Path, out_dir: &Path, rgctl_version: &str) -> Result
     let json = serde_json::to_string_pretty(&pack_manifest).map_err(|e| e.to_string())?;
     fs::write(out_dir.join("manifest.json"), json).map_err(|e| e.to_string())?;
 
-    // Policy snippet (cursor rules format)
     let policy = render_policy(rgctl_version);
     let policy_path = out_dir.join("policy/rgctl-structural.mdc");
     if let Some(parent) = policy_path.parent() {
@@ -110,6 +163,99 @@ pub fn generate(pack_root: &Path, out_dir: &Path, rgctl_version: &str) -> Result
     fs::write(policy_path, policy).map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+fn emit_command(
+    pack_root: &Path,
+    out_dir: &Path,
+    agent: &AgentDef,
+    cmd: &CommandEntry,
+    rgctl_version: &str,
+) -> Result<(), String> {
+    let stub_src = pack_root
+        .join("commands")
+        .join(format!("rgctl-{}.md", cmd.id));
+    let body = if stub_src.is_file() {
+        fs::read_to_string(&stub_src).map_err(|e| e.to_string())?
+    } else {
+        default_command_stub(cmd)
+    };
+    let filename = command_filename(cmd, &agent.command_style, &agent.command_extension);
+    let dest = agent_out_root(out_dir, &agent.id)
+        .join(&agent.commands_subdir)
+        .join(&filename);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = ensure_command_frontmatter(&body, cmd, &agent.command_style, rgctl_version)?;
+    fs::write(&dest, content).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn command_filename(cmd: &CommandEntry, style: &str, ext: &str) -> String {
+    let base = match style {
+        "colon" => format!("rgctl:{}", cmd.id),
+        "dollar" => format!("rgctl-{}", cmd.id),
+        "slash" | "hyphen" | _ => format!("rgctl-{}", cmd.id),
+    };
+    if ext.is_empty() {
+        base
+    } else {
+        format!("{base}.{ext}")
+    }
+}
+
+fn default_command_stub(cmd: &CommandEntry) -> String {
+    format!(
+        r#"---
+name: /rgctl:{}
+id: rgctl-{}
+category: Workflow
+description: "{}"
+---
+
+Follow the **{}** skill protocol installed under this agent's skills root.
+"#,
+        cmd.id, cmd.id, cmd.title, cmd.skill
+    )
+}
+
+fn ensure_command_frontmatter(
+    body: &str,
+    cmd: &CommandEntry,
+    style: &str,
+    version: &str,
+) -> Result<String, String> {
+    let invoke = match style {
+        "hyphen" | "slash" | "dollar" => format!("/rgctl-{}", cmd.id),
+        _ => format!("/rgctl:{}", cmd.id),
+    };
+    // Prefer documenting colon form as canonical in description; keep name host-friendly.
+    let mut text = body.to_string();
+    if !text.contains("rgctl-managed: true") {
+        if text.starts_with("---\n") {
+            let rest = &text[4..];
+            if let Some(end) = rest.find("\n---\n") {
+                let front = &rest[..end];
+                let after = &rest[end + 5..];
+                text = format!(
+                    "---\n{front}\nrgctl-managed: true\nmetadata:\n  generatedBy: \"rgctl {version}\"\n  canonicalInvoke: \"/rgctl:{}\"\n---\n{after}",
+                    cmd.id
+                );
+            }
+        } else {
+            text = format!(
+                "---\nname: {invoke}\nid: rgctl-{}\nrgctl-managed: true\nmetadata:\n  generatedBy: \"rgctl {version}\"\n  canonicalInvoke: \"/rgctl:{}\"\n---\n\n{text}",
+                cmd.id, cmd.id
+            );
+        }
+    }
+    // Ensure name documents slash invoke when missing
+    if !text.contains("name:") {
+        text = format!("---\nname: {invoke}\n---\n\n{text}");
+    }
+    let _ = invoke;
+    Ok(text)
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,7 +273,6 @@ fn load_agents(agents_dir: &Path) -> Result<Vec<AgentDef>, String> {
     Ok(out)
 }
 
-/// Embed directory name (avoid `.cursor`/`.claude` gitignore collisions on case-insensitive FS).
 fn embed_agent_dir(agent_id: &str) -> String {
     format!("host-{agent_id}")
 }
@@ -136,16 +281,17 @@ fn agent_out_root(out_dir: &Path, agent_id: &str) -> PathBuf {
     out_dir.join("agents").join(embed_agent_dir(agent_id))
 }
 
-/// Copy `skills/rgctl` for install. Skip a leftover `workflows/` dir if present.
-fn copy_meta_skill_tree(src: &Path, dest: &Path) -> Result<(), String> {
+/// Copy a skill tree. Skip a leftover `workflows/` dir if present.
+fn copy_skill_tree(src: &Path, dest: &Path) -> Result<(), String> {
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
     for ent in walkdir::WalkDir::new(src) {
         let ent = ent.map_err(|e| e.to_string())?;
-        let rel = ent
-            .path()
-            .strip_prefix(src)
-            .map_err(|e| e.to_string())?;
-        if rel.components().next().is_some_and(|c| c.as_os_str() == "workflows") {
+        let rel = ent.path().strip_prefix(src).map_err(|e| e.to_string())?;
+        if rel
+            .components()
+            .next()
+            .is_some_and(|c| c.as_os_str() == "workflows")
+        {
             continue;
         }
         let target = dest.join(rel);
@@ -161,8 +307,11 @@ fn copy_meta_skill_tree(src: &Path, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Ensure SKILL.md frontmatter notes this file is rgctl-managed (for install --force).
-fn ensure_rgctl_managed_frontmatter(skill_path: &Path, version: &str) -> Result<(), String> {
+fn ensure_rgctl_managed_frontmatter(
+    skill_path: &Path,
+    skill_id: &str,
+    version: &str,
+) -> Result<(), String> {
     let existing = fs::read_to_string(skill_path).map_err(|e| e.to_string())?;
     if existing.contains("rgctl-managed: true") {
         return Ok(());
@@ -180,7 +329,7 @@ fn ensure_rgctl_managed_frontmatter(skill_path: &Path, version: &str) -> Result<
         }
     }
     let updated = format!(
-        "---\nname: rgctl\nrgctl-managed: true\nmetadata:\n  generatedBy: \"rgctl {version}\"\n---\n\n{existing}"
+        "---\nname: {skill_id}\nrgctl-managed: true\nmetadata:\n  generatedBy: \"rgctl {version}\"\n---\n\n{existing}"
     );
     fs::write(skill_path, updated).map_err(|e| e.to_string())?;
     Ok(())
@@ -191,14 +340,18 @@ mod codegen_tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf()
+    }
+
     #[test]
     fn generate_copies_workflows_reference() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf();
+        let repo = repo_root();
         let pack = repo.join("agent-pack");
         let out = repo.join("target/agent-pack-test-workflows-ref");
         generate(&pack, &out, "test").expect("gen");
@@ -214,28 +367,73 @@ mod codegen_tests {
     }
 
     #[test]
-    fn generate_emits_only_rgctl_skill_for_cursor() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf();
+    fn generate_emits_rgctl_and_review_for_cursor() {
+        let repo = repo_root();
         let pack = repo.join("agent-pack");
-        let out = repo.join("target/agent-pack-test-single");
+        let out = repo.join("target/agent-pack-test-review");
         generate(&pack, &out, "test").expect("gen");
         let skills = out.join("agents/host-cursor/skills");
         assert!(skills.join("rgctl/SKILL.md").is_file());
+        assert!(skills.join("rgctl-review/SKILL.md").is_file());
         assert!(skills.join("rgctl/references/workflows.md").is_file());
         assert!(!skills.join("rgctl-search").exists());
         assert!(!skills.join("rgctl-discover").exists());
         assert!(!skills.join("rgctl-migrate").exists());
-        // Deterministic: regenerate and compare
-        let out2 = repo.join("target/agent-pack-test-single-b");
+        assert!(!skills.join("rgctl-gql").exists());
+        let cmd = out.join("agents/host-cursor/commands/rgctl-review.md");
+        assert!(cmd.is_file(), "missing {}", cmd.display());
+        let body = fs::read_to_string(&cmd).expect("cmd");
+        assert!(body.contains("/rgctl:review") || body.contains("rgctl:review"));
+        assert!(body.contains("rgctl-managed: true"));
+    }
+
+    #[test]
+    fn generate_emits_colon_command_for_claude() {
+        let repo = repo_root();
+        let pack = repo.join("agent-pack");
+        let out = repo.join("target/agent-pack-test-claude-cmd");
+        generate(&pack, &out, "test").expect("gen");
+        let cmd = out.join("agents/host-claude/commands/rgctl/rgctl:review.md");
+        assert!(cmd.is_file(), "missing {}", cmd.display());
+    }
+
+    #[test]
+    fn generate_deterministic() {
+        let repo = repo_root();
+        let pack = repo.join("agent-pack");
+        let out = repo.join("target/agent-pack-test-det-a");
+        let out2 = repo.join("target/agent-pack-test-det-b");
+        generate(&pack, &out, "test").expect("gen a");
         generate(&pack, &out2, "test").expect("gen b");
         assert_eq!(
-            fs::read(skills.join("rgctl/SKILL.md")).expect("a"),
-            fs::read(out2.join("agents/host-cursor/skills/rgctl/SKILL.md")).expect("b")
+            fs::read(out.join("agents/host-cursor/skills/rgctl-review/SKILL.md")).unwrap(),
+            fs::read(out2.join("agents/host-cursor/skills/rgctl-review/SKILL.md")).unwrap()
+        );
+        assert_eq!(
+            fs::read(out.join("agents/host-cursor/commands/rgctl-review.md")).unwrap(),
+            fs::read(out2.join("agents/host-cursor/commands/rgctl-review.md")).unwrap()
+        );
+    }
+
+    #[test]
+    fn agents_without_commands_skip_emit() {
+        let repo = repo_root();
+        let pack = repo.join("agent-pack");
+        let out = repo.join("target/agent-pack-test-no-cmd");
+        generate(&pack, &out, "test").expect("gen");
+        // forgecode has commands_enabled = false
+        let forge = out.join("agents/host-forgecode");
+        assert!(forge.join("skills/rgctl/SKILL.md").is_file());
+        assert!(forge.join("skills/rgctl-review/SKILL.md").is_file());
+        // no commands dir expected (empty commands_subdir)
+        assert!(
+            !forge.join("commands").exists()
+                || walkdir::WalkDir::new(forge.join("commands"))
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file())
+                    .count()
+                    == 0
         );
     }
 }
@@ -257,7 +455,7 @@ Agent hosts do **not** guarantee blocking grep or read tools. This rule biases b
 
 When the repository contains `.rgctl/` (after `discover`):
 
-- **MUST** use `rgctl -f json` first for **structural** questions: callers/callees, blast radius, communities, data flow, migration **roadmap** (`discover --export-migration-hints` → `migration_plan.json`), semantic/graph search.
+- **MUST** use `rgctl -f json` first for **structural** questions: callers/callees, blast radius, communities, data flow, migration **roadmap** (`discover --export-migration-hints` → `migration_plan.json`), semantic/graph search, PR/branch review (`/rgctl:review`).
 - **MAY** use ripgrep/grep for **lexical** search (fixed strings, comments, logs) and to open files **after** rgctl cites paths.
 - **MUST NOT** use bulk grep-as-call-graph (e.g. searching for `foo(` to find callers) when rgctl can answer.
 

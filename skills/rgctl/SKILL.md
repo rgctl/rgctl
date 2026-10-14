@@ -140,13 +140,16 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | User Intent | CLI Command |
 |-------------|-------------|
 | Blast radius | `blast-radius <Symbol> --depth N` |
-| Call paths before/after on a PR | `review paths --base-ref ORIGIN --head-ref HEAD` |
+| **Review a PR / branch** (report + verdict) | **`/rgctl:review`** → skill `rgctl-review` (writes `REVIEW_REPORT.md`) |
+| Call paths before/after (CLI only) | `review paths --base-ref ORIGIN --head-ref HEAD` |
 | Temporal PR policy / CI gate | `review check --policy-file policy.json` (alias: `pr-check`) |
 | Policy check (full codebase) | `check --policy-file policy.json` |
 | Policy check (one symbol) | `blast-radius <Symbol> --policy-file policy.json` |
 | OSV / CVE / OpenVEX | `discover . --with-cfg` then `vuln triage` → `deps check` → `vuln analyze` (see vuln workflow) |
 
-**PR review family:** use **`review paths`** when the user asks how call wiring moved (before/after spines + `path_delta`). Use **`review check`** / `pr-check` only for policy/merge gates. Do **not** run `review check` solely to explain paths; do **not** treat paths JSON as pass/fail.
+**PR / branch review:** when the user asks to **review a PR**, branch, or call-path impact vs a base, prefer slash command **`/rgctl:review`** (skill `rgctl-review`) — base artifact, `review paths` / optional `review check`, session `REVIEW_REPORT.md` + four-section verdict. No forge posting.
+
+**CLI-only PR family:** use **`review paths`** when the user only wants call-path JSON. Use **`review check`** / `pr-check` for policy/merge gates. Do **not** run `review check` solely to explain paths; do **not** treat paths JSON as pass/fail.
 
 **Presenting `review paths`:** (1) call paths per symbol (before → after + deltas), (2) short prose summary, (3) unscored files. Unchanged path → one line. No raw JSON dump; no follow-up `callers`/`callees` when paths already returned.
 
