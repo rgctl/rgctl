@@ -39,13 +39,19 @@ fn line_start_byte(source: &str, line: usize) -> Option<usize> {
 ///
 /// Nested functions mean several spans can contain a line; the smallest span is the function the
 /// line actually belongs to.
+///
+/// The range is **half-open** — `start <= offset < end` — because `FunctionLocation::end_byte` is
+/// documented exclusive. A closed range at the right end would let the *previous* function match at a
+/// boundary: where one function's exclusive end equals the next function's start, both spans contain that
+/// offset, and the tie would go to whichever `min_by_key` happened to see first. That is precisely the
+/// adjacent-function case this function exists to resolve, so it is also the case a test pins.
 fn function_containing_line(
     locations: &HashMap<String, FunctionLocation>,
     offset: usize,
 ) -> Option<String> {
     locations
         .iter()
-        .filter(|(_, loc)| loc.start_byte <= offset && offset <= loc.end_byte)
+        .filter(|(_, loc)| loc.start_byte <= offset && offset < loc.end_byte)
         .min_by_key(|(_, loc)| loc.end_byte - loc.start_byte)
         .map(|(name, _)| name.clone())
 }
@@ -301,6 +307,30 @@ mod tests {
         };
         assert_eq!(at(2).as_deref(), Some("useAgentPositions"));
         assert_eq!(at(8).as_deref(), Some("fetchPositions"));
+    }
+
+    /// Two functions back to back, where the first one's exclusive end is exactly the second's start.
+    ///
+    /// With a closed range (`<= end_byte`) both spans contain that offset and the choice is a tie broken by
+    /// iteration order; with a half-open range only the second matches. The bytes are laid out explicitly
+    /// rather than parsed, because the point is the comparison, not the parser.
+    #[test]
+    fn a_boundary_offset_belongs_to_the_following_function_not_the_previous() {
+        let locations: HashMap<String, FunctionLocation> = HashMap::from([
+            ("first".to_string(), FunctionLocation { start_byte: 0, end_byte: 10 }),
+            ("second".to_string(), FunctionLocation { start_byte: 10, end_byte: 20 }),
+        ]);
+        assert_eq!(
+            function_containing_line(&locations, 10).as_deref(),
+            Some("second"),
+            "offset 10 is `first`'s exclusive end and `second`'s inclusive start — it belongs to `second`"
+        );
+        assert_eq!(function_containing_line(&locations, 9).as_deref(), Some("first"));
+        assert_eq!(
+            function_containing_line(&locations, 20),
+            None,
+            "offset 20 is `second`'s exclusive end, so it belongs to neither"
+        );
     }
 
     #[test]
