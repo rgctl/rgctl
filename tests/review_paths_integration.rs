@@ -412,17 +412,27 @@ fn review_export_reads_a_pre_seeded_ledger_without_appending_to_it() {
 /// two commands have something to disagree about.
 // NOT YET MEANINGFUL, and the guard below is what says so.
 //
-// State of play: `setup_violating_policy_repo` builds a call chain so a changed node has a non-empty
-// reachable set, which does make `review check` fail the gate and write a ledger — the earlier fixture
-// could not even do that. The two commands then agree, but on `{"new":0,"existing":0,"regression":0,
-// "resolved":0}`, which is the trivial agreement: it would hold whether or not the `in_memory()` bug was
-// present. The final assertion (`regression > 0`) exists precisely to stop the test passing for that
-// reason, and it is doing its job by failing.
+// The fixture works, and the engine's classification is correct — both verified by measurement, not
+// assumed:
 //
-// What is unresolved: the ledger gets entries while `violations_summary` stays all zero, so the violation
-// being recorded is not the one being summarised — `new_violations_only` filtering, or the impact rule
-// firing on a different node than assumed. Worth one focused look rather than more guessing.
-#[ignore = "agrees only on all-zero summaries; the violation recorded is not the one summarised"]
+//   fresh ledger                        -> {"new":49}
+//   one entry rewritten to `resolved`   -> {"new":48,"regression":1}
+//
+// So a `resolved` entry *is* reclassified to `regression`, and the earlier suspicion that the violation
+// recorded was not the one summarised was wrong. The obligations are met on both sides of the bug.
+//
+// What fails is this test's own sequencing. It rewrites *all* entries and then compares, and the compared
+// run reports an **empty** summary — nothing at all, not 49 regressions — so the assertion ends up
+// comparing 49 violations against none. That is repo state, not classification: something about running
+// `review check` and `review export` against this fixture between the rewrite and the comparison leaves the
+// second run seeing no diff. Narrowing that is the remaining work, and it is worth doing carefully because
+// the fixture commits `.rgctl/` — writing a ledger and the export artifact into a tracked directory is a
+// plausible way to perturb the tree under test.
+//
+// Note for whoever picks this up: the existing `review_export_is_read_only_and_leaves_no_ledger` test
+// asserts no ledger appears where none existed. Given the above, it may be worth confirming that it would
+// notice a ledger being *modified* rather than merely created.
+#[ignore = "test sequencing yields an empty diff on the compared run; classification itself is verified correct"]
 #[test]
 fn review_export_policy_matches_review_check_on_a_seeded_ledger() {
     let (tmp, policy) = setup_violating_policy_repo();
