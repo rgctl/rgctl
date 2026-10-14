@@ -14,7 +14,16 @@ use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 /// Default golden repo for dashboard phase gates (override with env).
-pub const DEFAULT_GOLDEN_REPO: &str = "/Users/sshaaf/git/java/gbuilder";
+/// Golden repo, **relative to the checkout**.
+///
+/// This was `/Users/sshaaf/git/java/gbuilder` — an absolute path on one developer's machine, and the only
+/// corpus helper here that was not resolved in-tree (`default_go_repo` and friends use `in_tree_ecommerce`).
+/// The effect on any other checkout was that the golden gate hit its "repo not found" branch and **passed
+/// without testing anything**, while reporting success.
+///
+/// `example/` is where `scripts/fetch-profile-repos.sh` puts the corpora the Gate B table in AGENTS.md
+/// documents, so the default now points there and the env override still wins.
+pub const DEFAULT_GOLDEN_REPO: &str = "example/metasfresh-4.9.8b";
 
 fn in_tree_ecommerce(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -98,7 +107,7 @@ pub fn default_groovy_repo() -> PathBuf {
 pub fn golden_repo_path() -> PathBuf {
     env_rg("DASHBOARD_GOLDEN_REPO")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_GOLDEN_REPO))
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_GOLDEN_REPO))
 }
 
 pub fn ecommerce_go_repo_path() -> PathBuf {

@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
-# Phase gate: build the dashboard embed, then run the tiny-fixture and gbuilder golden tests.
+# Phase gate: build the dashboard embed, then run the tiny-fixture and golden-repo tests.
 #
 # Usage:
 #   ./scripts/test-dashboard-golden.sh
-#   RGCTL_DASHBOARD_GOLDEN_REPO=/path/to/gbuilder ./scripts/test-dashboard-golden.sh
+#   RGCTL_DASHBOARD_GOLDEN_REPO=/path/to/repo ./scripts/test-dashboard-golden.sh
 #
-# The gbuilder half is skipped (not failed) when the checkout is absent, so the
-# tiny-fixture gate still runs on machines that do not have it.
+# The golden half is skipped (not failed) when the corpus is absent, so the tiny-fixture
+# gate still runs on machines that have not fetched it.
 #
-# Requires: wasm-pack + Node.js for the bundle build, and a golden repo checkout
-# for the second half. Referenced by docs/design/dashboard-design.md and
-# docs/contributor-checklist.md.
+# Requires: wasm-pack + Node.js for the bundle build, and a corpus for the second half.
+# Referenced by docs/design/dashboard-design.md and docs/contributor-checklist.md.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-GOLDEN="${RGCTL_DASHBOARD_GOLDEN_REPO:-/Users/sshaaf/git/java/gbuilder}"
+# Defaults to a corpus under `example/`, which is where `scripts/fetch-profile-repos.sh` puts the repos the
+# Gate B table in AGENTS.md documents. It previously defaulted to an absolute path on one developer's
+# machine (`/Users/sshaaf/git/java/gbuilder` — also pre-rename naming), so on every other machine the
+# "golden" half silently skipped and the gate reported success without testing anything.
+GOLDEN="${RGCTL_DASHBOARD_GOLDEN_REPO:-$ROOT/example/metasfresh-4.9.8b}"
+if [[ ! -d "$GOLDEN" ]]; then
+  for candidate in "$ROOT"/example/*; do
+    [[ -d "$candidate" ]] || continue
+    GOLDEN="$candidate"
+    break
+  done
+fi
 
 log() { echo "[test-dashboard-golden] $*"; }
 
