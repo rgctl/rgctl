@@ -641,7 +641,12 @@ rgctl review export --stdout | jq .review_paths.change_summary
 
 Composes `review paths`, an optional `review check`, and the violation timeline into **one versioned
 artifact**, so a consumer needs a single fetch instead of orchestrating three commands. It **composes
-and does not recompute** — each section is byte-identical to what the corresponding command emits.
+and does not recompute** — each section is produced by the same builder or the same evaluation path as the
+corresponding command, so the two cannot drift apart in what they compute.
+
+Two deliberate differences, both so that exporting does not mutate what it reports on: `policy` is
+evaluated against the on-disk ledger for classification but **without appending** to it, and `--bisect` is
+skipped. So "identical output" is not the claim; "same evaluation, modulo read-only and no bisect" is.
 
 **Read-only.** Unlike `review check`, `review export` does **not** append to
 `.rgctl/violation_ledger.jsonl`. The policy section is evaluated against an in-memory ledger, so

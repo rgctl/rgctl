@@ -304,6 +304,43 @@ fn review_export_is_read_only_and_leaves_no_ledger() {
     );
 }
 
+/// A pre-seeded ledger is **read**, not ignored.
+///
+/// Raised in review: an earlier version classified against `ViolationLedger::in_memory()`, which is more
+/// than read-only — it discards on-disk history, so regressions are not reclassified and calendar
+/// `first_seen` ages do not line up, and the exported `policy` section can contradict `review check` on a
+/// repository whose ledger already has entries. `in_memory()` is documented as being for tests.
+///
+/// This seeds a real ledger and asserts export both succeeds and leaves it byte-identical: reading is the
+/// classification input, and appending is the mutation that a reporting command must not perform. The
+/// stronger claim — that export's classification *equals* `review check`'s on a seeded ledger — needs the
+/// calendar and regression semantics exercised per class, and is tracked as a follow-up rather than
+/// half-written here.
+#[test]
+fn review_export_reads_a_pre_seeded_ledger_without_appending_to_it() {
+    let (tmp, policy) = setup_pr_policy_repo();
+    let repo = tmp.path();
+
+    // One observation in the append-only JSONL shape `record_deltas_to_ledger` writes. The stable key does
+    // not need to match anything real: the assertion is about the file being read and left alone.
+    let ledger = repo.join(".rgctl/violation_ledger.jsonl");
+    let seeded = concat!(
+        r#"{"stable_key":1,"rule":"max_impact_nodes","class":"new","commit":"deadbeef","ts":"1700000000","symbol":"seed"}"#,
+        "\n",
+    );
+    fs::write(&ledger, seeded).unwrap();
+
+    let out = run_export(repo, &["--stdout", "--policy-file", policy.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "export should succeed against a seeded ledger: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let after = fs::read_to_string(&ledger).expect("ledger still readable");
+    assert_eq!(after, seeded, "export must not append to the ledger it classifies against");
+}
+
 #[test]
 fn review_export_writes_default_artifact_path() {
     let tmp = setup_rewired_repo();

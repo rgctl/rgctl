@@ -171,13 +171,20 @@ pub fn run(ctx: &CliContext, args: PrCheckArgs) -> Result<()> {
 
 /// Evaluate the policy gate **without appending to `.rgctl/violation_ledger.jsonl`**.
 ///
-/// [`run`] opens the on-disk ledger and records observations into it
-/// (`record_deltas_to_ledger`), which is correct for a gate but wrong for a reporting
-/// command: `review export` must not mutate the state it reports on, and an append
-/// would change the classification inputs for the very next export.
+/// [`run`] opens the on-disk ledger, classifies against it, and then records observations
+/// into it (`record_deltas_to_ledger`). The classification is a read; the recording is the mutation, and
+/// it is the part a reporting command must not do — an append would change the classification inputs for
+/// the very next export, so exporting twice would not be idempotent.
 ///
-/// So this path evaluates against an in-memory ledger and returns the response
-/// instead of printing it. Recording observations remains the job of [`run`].
+/// **The read is that same read.** An earlier version of this function used
+/// [`ViolationLedger::in_memory()`], which is more than read-only: it discards the on-disk history
+/// entirely. That made the two halves of this module's contract disagree —
+/// [`record_deltas_to_ledger`] stops the *state* from changing, while the empty ledger stopped the
+/// *classification* from matching. Regressions were not reclassified and calendar `first_seen` ages did
+/// not line up, so the exported `policy` section could contradict `review check` on a repository whose
+/// ledger already had entries. `in_memory()` is documented as being for tests, and this was not one.
+///
+/// So: open the real ledger, classify against it, and skip only the append.
 pub fn evaluate_read_only(ctx: &CliContext, args: &PrCheckArgs) -> Result<PrCheckResponse> {
     let policy = PolicyFile::load(Path::new(&args.policy_file))
         .with_context(|| format!("load policy {}", args.policy_file))?;
@@ -199,8 +206,10 @@ pub fn evaluate_read_only(ctx: &CliContext, args: &PrCheckArgs) -> Result<PrChec
     )?;
     let mut deltas = eval.deltas;
 
-    // Deliberately in-memory: see the doc comment above.
-    let ledger = ViolationLedger::in_memory();
+    // The on-disk ledger, opened for reading only. `ViolationLedger::open` loads the file if it exists and
+    // creates nothing, so the only mutation in the `run` path — `record_deltas_to_ledger` — is the one
+    // thing this function leaves out.
+    let ledger = ViolationLedger::open(&ctx.repo.join(GRAPH_DIR)).map_err(|e| anyhow::anyhow!(e.to_string()))?;
     apply_ledger_regression(&mut deltas, &ledger);
 
     let calendar = evaluate_calendar_for_deltas(
