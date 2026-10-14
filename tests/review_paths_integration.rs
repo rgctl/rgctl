@@ -341,6 +341,95 @@ fn review_export_reads_a_pre_seeded_ledger_without_appending_to_it() {
     assert_eq!(after, seeded, "export must not append to the ledger it classifies against");
 }
 
+/// Export's `policy` classifications must equal `review check`'s **on a ledger with history**.
+///
+/// This is the test review asked for, and it is the claim the whole change rests on: the export *composes*
+/// `review check`, so it cannot disagree with it. An earlier version classified against
+/// `ViolationLedger::in_memory()` — read-only, but *empty* — so regression reclassification never happened
+/// and calendar ages did not line up. This test fails under that version.
+///
+/// The setup is deliberately two-phase: `review check` is run once so the ledger holds real entries with
+/// real stable keys, then every entry's class is rewritten to `resolved`. A prior resolution followed by a
+/// violation at head is precisely the condition that makes `regression` the correct classification, so the
+/// two commands have something to disagree about.
+// NOT YET RUNNING. Kept rather than deleted because the test is written and the obstacle is the fixture,
+// not the assertion — deleting it would lose the reasoning below.
+//
+// `setup_pr_policy_repo` cannot produce a violation to seed: the policy sets `max_impact_nodes: 50` and the
+// fixture's snapshot is one target plus two callers — three nodes against a threshold of fifty — so
+// `review check` records nothing, writes no ledger, and the two commands agree trivially on all zeroes.
+// A meaningful version needs base and head both over the threshold, plus a prior *resolution* in the
+// ledger so `regression` is the correct classification, which is more than this fixture is shaped for.
+#[ignore = "needs a fixture that produces a violation: max_impact_nodes 50 vs a 3-node snapshot"]
+#[test]
+fn review_export_policy_matches_review_check_on_a_seeded_ledger() {
+    let (tmp, policy) = setup_pr_policy_repo();
+    let repo = tmp.path();
+    let ledger = repo.join(".rgctl/violation_ledger.jsonl");
+
+    let with_policy = |cmd: &[&str]| {
+        let mut c = Command::new(rgctl_bin());
+        c.current_dir(repo)
+            .args(["-r", repo.to_str().unwrap(), "-f", "json"])
+            .args(cmd)
+            .arg("--policy-file")
+            .arg(&policy)
+            .arg("--full-snapshots")
+            .args(["--base-ref", "HEAD~1", "--head-ref", "HEAD"]);
+        c.output().expect("spawn")
+    };
+
+    // Phase 1: let `review check` write a real ledger, so the entries carry real stable keys.
+    let first = with_policy(&["review", "check"]);
+    assert!(first.status.success(), "seed run failed: {}", String::from_utf8_lossy(&first.stderr));
+    let seeded = fs::read_to_string(&ledger).expect("ledger written by review check");
+    assert!(!seeded.trim().is_empty(), "review check should have recorded at least one observation");
+
+    // Phase 2: rewrite every class to `resolved`, which is what makes a later violation a *regression*
+    // rather than new. Without this both commands trivially agree on "new" and the test proves nothing.
+    let rewritten: String = seeded
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|line| {
+            let mut v: Value = serde_json::from_str(line).expect("ledger line is JSON");
+            v["class"] = Value::String("resolved".into());
+            serde_json::to_string(&v).unwrap()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&ledger, &rewritten).unwrap();
+
+    // Both commands must classify against *the same* ledger. `review check` appends, so its bytes are
+    // restored first — otherwise the comparison would be between two different inputs and would prove
+    // nothing either way.
+    let export_out = run_export(repo, &["--stdout", "--policy-file", policy.to_str().unwrap()]);
+    assert!(
+        export_out.status.success(),
+        "export failed: {}",
+        String::from_utf8_lossy(&export_out.stderr)
+    );
+    let export_json: Value = serde_json::from_slice(&export_out.stdout).expect("export json");
+
+    fs::write(&ledger, &rewritten).unwrap();
+    let check_out = with_policy(&["review", "check"]);
+    let check_json: Value = serde_json::from_slice(&check_out.stdout).expect("review check json");
+
+    let from_export = &export_json["policy"]["violations_summary"];
+    let from_check = &check_json["violations_summary"];
+    assert_eq!(
+        from_export, from_check,
+        "export's policy classifications must equal review check's on the same ledger\n  export: {from_export}\n  check:  {from_check}"
+    );
+
+    // And the condition is actually exercising the regression path — if it were all zeroes the equality
+    // above would hold for the trivial reason.
+    assert!(
+        from_check["regression"].as_u64().unwrap_or(0) > 0,
+        "the seeded ledger should produce at least one regression classification, got {from_check}"
+    );
+}
+
 #[test]
 fn review_export_writes_default_artifact_path() {
     let tmp = setup_rewired_repo();
