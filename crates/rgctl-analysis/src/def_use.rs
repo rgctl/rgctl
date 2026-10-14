@@ -434,6 +434,14 @@ fn is_binding_pattern(kind: &str) -> bool {
             | "attribute"
             | "rest_pattern"
             | "wildcard_pattern"
+            // JS/TS destructuring. Without these, a pattern reaches the catch-all arm below and
+            // its children are walked as *uses*, so nothing is ever defined.
+            | "object_pattern"
+            | "array_pattern"
+            | "pair_pattern"
+            | "assignment_pattern"
+            | "object_assignment_pattern"
+            | "shorthand_property_identifier_pattern"
     )
 }
 
@@ -465,7 +473,10 @@ fn collect_declarator_defs(node: Node, source: &[u8], defined: &mut HashSet<DefV
 
 fn collect_pattern_defs(node: Node, source: &[u8], defined: &mut HashSet<DefVar>, depth: usize) {
     match node.kind() {
-        "identifier" | "shorthand_field_identifier" => {
+        // `shorthand_property_identifier_pattern` is the binding in `const { a } = src`. It is a
+        // leaf whose kind is not `identifier`, so without naming it here the name is never
+        // recorded as defined.
+        "identifier" | "shorthand_field_identifier" | "shorthand_property_identifier_pattern" => {
             if let Ok(name) = node.utf8_text(source) {
                 defined.insert(DefVar::local(name));
             }
@@ -476,10 +487,28 @@ fn collect_pattern_defs(node: Node, source: &[u8], defined: &mut HashSet<DefVar>
         | "pattern"
         | "list_pattern"
         | "attribute"
-        | "rest_pattern" => {
+        | "rest_pattern"
+        // JS/TS destructuring: `const { a, b } = src` and `const [a, b] = src`. Recursing keeps
+        // nested patterns binding and reaches a `rest_pattern` inside them.
+        | "object_pattern"
+        | "array_pattern" => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 collect_pattern_defs(child, source, defined, depth + 1);
+            }
+        }
+        // `{ key: binding }` — only the value binds. Recurring into every child would treat the
+        // property name as a variable.
+        "pair_pattern" => {
+            if let Some(value) = node.child_by_field_name("value") {
+                collect_pattern_defs(value, source, defined, depth + 1);
+            }
+        }
+        // `{ a = default }` and `{ a: x = default }` — `left` binds; `right` is read, not defined.
+        // Descending into `right` would invert the dependence, recording a *use* as a definition.
+        "object_assignment_pattern" | "assignment_pattern" => {
+            if let Some(left) = node.child_by_field_name("left") {
+                collect_pattern_defs(left, source, defined, depth + 1);
             }
         }
         _ => {
@@ -538,6 +567,14 @@ mod tests {
         parser.parse(source, None).unwrap()
     }
 
+    fn parse_typescript(source: &str) -> tree_sitter::Tree {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
+        parser.parse(source, None).unwrap()
+    }
+
     fn find_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
         if node.kind() == kind {
             return Some(node);
@@ -576,6 +613,85 @@ mod tests {
         let (defs, uses) = extract_def_use(let_node, source.as_bytes());
         assert!(defs_has(&defs, "x"));
         assert!(uses.iter().any(|u| u == "a"));
+    }
+
+    /// Destructuring must bind names. Regression: `object_pattern`, `array_pattern`,
+    /// `pair_pattern` and `shorthand_property_identifier_pattern` were absent from
+    /// `collect_pattern_defs`, so a destructured name was never recorded as defined. The
+    /// consequence was silent under-approximation — no data dependence linked the destructuring
+    /// line to the lines reading those names, so slices dropped it without saying so.
+    #[test]
+    fn test_typescript_object_destructuring_binds_shorthand_names() {
+        let source = "const { a, b } = src;";
+        let tree = parse_typescript(source);
+        let decl = find_kind(tree.root_node(), "lexical_declaration").unwrap();
+        let (defs, uses) = extract_def_use(decl, source.as_bytes());
+        assert!(defs_has(&defs, "a"), "shorthand `a` should be defined");
+        assert!(defs_has(&defs, "b"), "shorthand `b` should be defined");
+        assert!(uses.iter().any(|u| u == "src"), "`src` is read");
+    }
+
+    #[test]
+    fn test_typescript_array_destructuring_binds_names() {
+        let source = "const [a, b] = src;";
+        let tree = parse_typescript(source);
+        let decl = find_kind(tree.root_node(), "lexical_declaration").unwrap();
+        let (defs, uses) = extract_def_use(decl, source.as_bytes());
+        assert!(defs_has(&defs, "a"), "array element `a` should be defined");
+        assert!(defs_has(&defs, "b"), "array element `b` should be defined");
+        assert!(uses.iter().any(|u| u == "src"), "`src` is read");
+    }
+
+    /// `{ key: binding }` binds the value. The property name must not become a variable, or the
+    /// slice would reference a name that does not exist in the source.
+    #[test]
+    fn test_typescript_renaming_destructuring_binds_value_not_key() {
+        let source = "const { data: members } = src;";
+        let tree = parse_typescript(source);
+        let decl = find_kind(tree.root_node(), "lexical_declaration").unwrap();
+        let (defs, _uses) = extract_def_use(decl, source.as_bytes());
+        assert!(
+            defs_has(&defs, "members"),
+            "the bound value should be defined"
+        );
+        assert!(
+            !defs_has(&defs, "data"),
+            "the property key must not be bound as a variable"
+        );
+    }
+
+    #[test]
+    fn test_typescript_nested_destructuring_binds_inner_names() {
+        let source = "const { outer: { inner } } = src;";
+        let tree = parse_typescript(source);
+        let decl = find_kind(tree.root_node(), "lexical_declaration").unwrap();
+        let (defs, _) = extract_def_use(decl, source.as_bytes());
+        assert!(defs_has(&defs, "inner"), "nested binding should be defined");
+        assert!(!defs_has(&defs, "outer"), "`outer` is a key, not a binding");
+    }
+
+    #[test]
+    fn test_typescript_destructuring_rest_binds_rest() {
+        let source = "const { a, ...rest } = src;";
+        let tree = parse_typescript(source);
+        let decl = find_kind(tree.root_node(), "lexical_declaration").unwrap();
+        let (defs, _) = extract_def_use(decl, source.as_bytes());
+        assert!(defs_has(&defs, "a"));
+        assert!(defs_has(&defs, "rest"), "rest element should be defined");
+    }
+
+    /// A default expression is read, not defined. Descending into it would invert the dependence.
+    #[test]
+    fn test_typescript_destructuring_default_binds_left_not_default() {
+        let source = "const { a = fallback } = src;";
+        let tree = parse_typescript(source);
+        let decl = find_kind(tree.root_node(), "lexical_declaration").unwrap();
+        let (defs, _) = extract_def_use(decl, source.as_bytes());
+        assert!(defs_has(&defs, "a"), "the binding should be defined");
+        assert!(
+            !defs_has(&defs, "fallback"),
+            "the default expression must not be defined"
+        );
     }
 
     #[test]
