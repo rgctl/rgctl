@@ -180,6 +180,64 @@ fn write_target_snapshot(path: &Path, caller_count: usize) {
     .unwrap();
 }
 
+/// A repo that actually violates the policy, so the ledger has entries to seed.
+///
+/// `setup_pr_policy_repo` cannot: its snapshot is a star pointing *at* `target_fn`, and
+/// `max_impact_nodes` fires on a changed node's **reachable set** (`policy.rs:140`), which for a function
+/// nothing calls downward is empty. Three nodes, threshold fifty, no violation, no ledger — and a test
+/// built on it would compare two all-zero summaries and pass whether or not the bug was present.
+///
+/// So this builds a **call chain**: `target_fn → c1 → c2 → …`. Base is short, head is `CHAIN_HEAD` deep,
+/// which puts `c1`'s reachable set well over the threshold and makes it a genuine new violation at head.
+fn write_chain_snapshot(path: &Path, depth: usize) {
+    let mut backend = rgctl_graph::backend::MemoryBackend::new();
+    let mut previous = Node::new(NodeType::Function, "target_fn").with_file_path("src/pkg.rs");
+    let first = previous.id;
+    backend.insert_node(previous.clone()).unwrap();
+    let mut ids = vec![first];
+    for i in 1..=depth {
+        let node = Node::new(NodeType::Function, format!("c{i}")).with_file_path("src/pkg.rs");
+        let id = node.id;
+        backend.insert_node(node).unwrap();
+        backend.insert_edge(Edge::new(previous.id, id, EdgeType::Calls)).unwrap();
+        previous = Node::new(NodeType::Function, format!("c{i}")).with_file_path("src/pkg.rs");
+        previous.id = id;
+        ids.push(id);
+    }
+    write_columnar_from_nodes_edges(
+        backend.all_nodes().unwrap(),
+        backend.all_edges().unwrap(),
+        path,
+    )
+    .unwrap();
+}
+
+/// Threshold is 50 (`rgctl-tests/rgctl-pr-policy.json`), so a head depth above it violates.
+const CHAIN_HEAD: usize = 60;
+const CHAIN_BASE: usize = 2;
+
+fn setup_violating_policy_repo() -> (TempDir, PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path();
+    init_git_repo(repo);
+    fs::create_dir_all(repo.join("src")).unwrap();
+    fs::write(repo.join("src/pkg.rs"), "fn target_fn() {}\n").unwrap();
+    fs::create_dir_all(repo.join(".rgctl")).unwrap();
+    write_chain_snapshot(&repo.join(".rgctl/graph.snapshot.bin"), CHAIN_BASE);
+    git_commit_all(repo, "base");
+
+    // Head: the chain grows past the threshold, and the source changes so the diff has something to see.
+    fs::write(repo.join("src/pkg.rs"), "fn target_fn() { let _ = 1; }\n").unwrap();
+    write_chain_snapshot(&repo.join(".rgctl/graph.snapshot.bin"), CHAIN_HEAD);
+    git_commit_all(repo, "head");
+
+    fs::create_dir_all(repo.join(".rgctl-base/.rgctl")).unwrap();
+    write_chain_snapshot(&repo.join(".rgctl-base/.rgctl/graph.snapshot.bin"), CHAIN_BASE);
+
+    let policy = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("rgctl-tests/rgctl-pr-policy.json");
+    (tmp, policy)
+}
+
 fn setup_pr_policy_repo() -> (TempDir, PathBuf) {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
@@ -352,18 +410,22 @@ fn review_export_reads_a_pre_seeded_ledger_without_appending_to_it() {
 /// real stable keys, then every entry's class is rewritten to `resolved`. A prior resolution followed by a
 /// violation at head is precisely the condition that makes `regression` the correct classification, so the
 /// two commands have something to disagree about.
-// NOT YET RUNNING. Kept rather than deleted because the test is written and the obstacle is the fixture,
-// not the assertion — deleting it would lose the reasoning below.
+// NOT YET MEANINGFUL, and the guard below is what says so.
 //
-// `setup_pr_policy_repo` cannot produce a violation to seed: the policy sets `max_impact_nodes: 50` and the
-// fixture's snapshot is one target plus two callers — three nodes against a threshold of fifty — so
-// `review check` records nothing, writes no ledger, and the two commands agree trivially on all zeroes.
-// A meaningful version needs base and head both over the threshold, plus a prior *resolution* in the
-// ledger so `regression` is the correct classification, which is more than this fixture is shaped for.
-#[ignore = "needs a fixture that produces a violation: max_impact_nodes 50 vs a 3-node snapshot"]
+// State of play: `setup_violating_policy_repo` builds a call chain so a changed node has a non-empty
+// reachable set, which does make `review check` fail the gate and write a ledger — the earlier fixture
+// could not even do that. The two commands then agree, but on `{"new":0,"existing":0,"regression":0,
+// "resolved":0}`, which is the trivial agreement: it would hold whether or not the `in_memory()` bug was
+// present. The final assertion (`regression > 0`) exists precisely to stop the test passing for that
+// reason, and it is doing its job by failing.
+//
+// What is unresolved: the ledger gets entries while `violations_summary` stays all zero, so the violation
+// being recorded is not the one being summarised — `new_violations_only` filtering, or the impact rule
+// firing on a different node than assumed. Worth one focused look rather than more guessing.
+#[ignore = "agrees only on all-zero summaries; the violation recorded is not the one summarised"]
 #[test]
 fn review_export_policy_matches_review_check_on_a_seeded_ledger() {
-    let (tmp, policy) = setup_pr_policy_repo();
+    let (tmp, policy) = setup_violating_policy_repo();
     let repo = tmp.path();
     let ledger = repo.join(".rgctl/violation_ledger.jsonl");
 
@@ -380,9 +442,15 @@ fn review_export_policy_matches_review_check_on_a_seeded_ledger() {
     };
 
     // Phase 1: let `review check` write a real ledger, so the entries carry real stable keys.
+    // Deliberately *not* asserting `status.success()`: the fixture exists to violate the policy, and a gate
+    // that finds a blocking violation exits non-zero by design. What matters is that it produced the ledger.
     let first = with_policy(&["review", "check"]);
-    assert!(first.status.success(), "seed run failed: {}", String::from_utf8_lossy(&first.stderr));
-    let seeded = fs::read_to_string(&ledger).expect("ledger written by review check");
+    let seeded = fs::read_to_string(&ledger).unwrap_or_else(|e| {
+        panic!(
+            "review check should have recorded observations (ledger: {e})\n  stderr: {}",
+            String::from_utf8_lossy(&first.stderr)
+        )
+    });
     assert!(!seeded.trim().is_empty(), "review check should have recorded at least one observation");
 
     // Phase 2: rewrite every class to `resolved`, which is what makes a later violation a *regression*
@@ -403,13 +471,15 @@ fn review_export_policy_matches_review_check_on_a_seeded_ledger() {
     // Both commands must classify against *the same* ledger. `review check` appends, so its bytes are
     // restored first — otherwise the comparison would be between two different inputs and would prove
     // nothing either way.
+    // Also not asserting exit status, for the same reason — and the JSON envelope is on stdout either way.
     let export_out = run_export(repo, &["--stdout", "--policy-file", policy.to_str().unwrap()]);
-    assert!(
-        export_out.status.success(),
-        "export failed: {}",
-        String::from_utf8_lossy(&export_out.stderr)
-    );
-    let export_json: Value = serde_json::from_slice(&export_out.stdout).expect("export json");
+    let export_json: Value = serde_json::from_slice(&export_out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "export should emit one JSON document ({e})\n  stdout: {}\n  stderr: {}",
+            String::from_utf8_lossy(&export_out.stdout),
+            String::from_utf8_lossy(&export_out.stderr)
+        )
+    });
 
     fs::write(&ledger, &rewritten).unwrap();
     let check_out = with_policy(&["review", "check"]);
