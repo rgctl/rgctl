@@ -9,7 +9,7 @@ The rgctl **agent pack** teaches AI coding agents (Claude Code, Antigravity, Cod
 | **Skill `rgctl`** | Single skill + `references/` (command encyclopedia, workflow scenarios) | `.cursor/skills/rgctl/SKILL.md` |
 | **Policy snippet** | Optional structural bias | `.cursor/rules/rgctl-structural.mdc` (`--with-policy`) |
 
-The pack is **embedded in the `rgctl` binary**. `rgctl install --skill` installs **one** skill named `rgctl` per adapter — not separate `rgctl-discover` / `rgctl-impact` / … skills. Agents load that skill and run `rgctl -f json` structured verbs. Scenario playbooks live under `references/workflows.md` inside the skill.
+The pack is **embedded in the `rgctl` binary**. `rgctl install --skill` installs the meta skill **`rgctl`**, additional skills declared with commands (today **`rgctl-review`**), and **slash commands** for adapters that support them (OpenSpec-style dual install — no separate `--with-commands` flag). Retired per-workflow skills (`rgctl-discover`, `rgctl-gql`, …) are **not** reintroduced. Agents load skills / invoke `/rgctl:review` and run `rgctl -f json` structured verbs. Scenario playbooks live under `references/workflows.md` inside the meta skill.
 
 ## Use Cases
 
@@ -57,8 +57,10 @@ rgctl -r example/coolstore install --skill --tools cursor,claude,codex,antigravi
 
 Text mode lists each created or updated path. Typical layout (Cursor example):
 
-- `.cursor/skills/rgctl/SKILL.md` — the skill
+- `.cursor/skills/rgctl/SKILL.md` — the meta skill
 - `.cursor/skills/rgctl/references/` — command encyclopedia, workflows, communities & policy
+- `.cursor/skills/rgctl-review/SKILL.md` — PR/branch review protocol
+- `.cursor/commands/rgctl-review.md` — slash command `/rgctl:review` (writes `REVIEW_REPORT.md`)
 
 **What happened:**
 
@@ -503,7 +505,7 @@ You must pass at least one of **`--skill`** or **`--with-policy`**.
 
 | Flag | Effect |
 |------|--------|
-| **`--skill`** | Install the single skill **`rgctl`** (with `references/`). |
+| **`--skill`** | Install meta skill **`rgctl`**, companion skills (e.g. **`rgctl-review`**), and slash **commands** (e.g. `/rgctl:review`) for commands-enabled adapters. |
 | **`--with-policy`** | Structural bias snippet (e.g. `.cursor/rules/rgctl-structural.mdc`). Optional; does not replace skills. |
 | **`--tools id1,id2`** or **`--tools all`** | Which **registry adapters** receive files. **Default (omit flag):** `cursor`, `claude`, `codex`, `agents`, `antigravity`. **`all`** = full registry (~40 products). Unknown ids: stderr warning; if none valid, exit **1**. |
 | **`-g` / `--global`** | Install under your **home** (e.g. `~/.cursor/skills/…`) instead of repo-local paths. Only agents with `supports_global: true` (see `--list-agents`). |

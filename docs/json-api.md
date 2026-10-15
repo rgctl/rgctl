@@ -1376,7 +1376,7 @@ Human guide: [Vulnerability and OSV Supply-Chain Analysis](guides/vulnerability-
 
 ## 19. `install`
 
-Install the embedded **agent pack** (single skill `rgctl`, optional policy). Does **not** require a prior `discover` and does **not** run `discover`. Types: `src/cli/install_output.rs`. `schema_version` is **3**.
+Install the embedded **agent pack** (meta skill `rgctl`, companion skills such as `rgctl-review`, slash commands such as `/rgctl:review` for commands-enabled adapters, optional policy). Does **not** require a prior `discover` and does **not** run `discover`. Types: `src/cli/install_output.rs`. `schema_version` is **3** (`writes[].kind` may be `skill` | `meta` | `command` | `policy`).
 
 Human-readable install reference: [Agent pack walkthrough](guides/agent-skill.md).
 

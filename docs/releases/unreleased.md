@@ -2,6 +2,12 @@
 
 <!-- Add bullets here during development; move to docs/releases/v0.4.x.md at tag time. -->
 
+## Agent pack: `/rgctl:review` (OpenSpec dual)
+
+- New skill **`rgctl-review`** + slash command **`/rgctl:review`**: local PR/branch review protocol (`review paths` / `review check`, optional blast, soft architecture-md) writing **`REVIEW_REPORT.md`** + four-section session verdict — **no** GitHub/GitLab posting.
+- `rgctl install --skill` installs **skills and commands together** (codegen emits per-adapter command files from `agent-pack/manifest.yaml` `commands:`).
+- Meta skill routes “review this PR” intents to `/rgctl:review`.
+
 ## Clone detection ([#37](https://github.com/sshaaf/rgctl/issues/37))
 
 First-class `rgctl clones` — whole-function and sub-function duplicate detection, distinct from `semantic query`. Query-time / sidecars only (no default discover cost; Gate A unchanged). Does **not** write clone edges into `graph.snapshot.bin`.
