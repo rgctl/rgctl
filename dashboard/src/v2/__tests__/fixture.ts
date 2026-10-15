@@ -5,8 +5,59 @@
  * test that passes on one machine. The shapes here are copied from a real bundle (`sources_index.json`
  * keys its array `files`; the manifest nests the digest under `graph`) because those details are exactly
  * what a guess gets wrong.
+ *
+ * The review artifact under `fixtures/` is the exception, and the opposite rule: it is a real export,
+ * committed as it came out, because the artifact's shape is the thing under review.
  */
 import { vi } from "vitest";
+import reviewArtifact from "./fixtures/review-artifact.json";
+import reviewArtifactAmbiguous from "./fixtures/review-artifact-ambiguous-scope.json";
+import type { FunctionEntry } from "../data";
+import type { ReviewArtifact } from "../workflow";
+
+/**
+ * A **real** `rgctl review export` artifact, committed verbatim.
+ *
+ * Deliberately not hand-written: a hand-written artifact encodes the author's belief about the shape, and
+ * the shape is exactly what is in question (upstream #117). This came from the two-commit ecommerce
+ * fixture — a one-line deletion — and reads `call_edges: {added: 0, removed: 8}`, i.e. it reports the
+ * removal. One edit was made and nothing else: the machine-specific temp root was rebased to `/repo`, so
+ * field names, nesting, counts and every delta are the export's own.
+ */
+export const REVIEW_ARTIFACT = reviewArtifact as unknown as ReviewArtifact;
+
+/**
+ * A second **real** export: the same producer, scoped with `--symbol checkout`, where three functions
+ * share that name in three files, so it resolved to none of them.
+ *
+ * Kept as its own fixture because this document is not a review of a change at all — every figure in its
+ * `change_summary` is zero and `symbols` is empty — and §3.5 of the change says that path needs a fixture
+ * rather than being assumed unreachable. Paths rebased to `/repo` as above; nothing else touched.
+ */
+export const REVIEW_ARTIFACT_UNRESOLVED = reviewArtifactAmbiguous as unknown as ReviewArtifact;
+
+/** The revision the artifact describes, so a test can put the bundle's manifest on the same one. */
+export const REVIEW_HEAD_DIGEST = REVIEW_ARTIFACT.provenance?.graph?.head_digest ?? "";
+
+const REVIEW_ID_PREFIX = "cccccccc-0000-4000-8000-";
+
+/**
+ * Index rows for the artifact's own symbols — one per symbol, ids derived rather than invented, so the
+ * room's file+name join resolves against a real artifact instead of a fixture shaped to fit it.
+ *
+ * Two rows for one name in one file is the ambiguity case; a test asks for that by concatenating.
+ */
+export function reviewFunctions(artifact: ReviewArtifact = REVIEW_ARTIFACT): FunctionEntry[] {
+  return (artifact.review_paths?.symbols ?? []).map((symbol, i) => ({
+    function_id: `${REVIEW_ID_PREFIX}${String(i + 1).padStart(12, "0")}`,
+    name: symbol.name ?? "",
+    file_path: symbol.head?.file ?? "",
+    block_count: 1,
+    cfg_edge_count: 0,
+    source_lines: 4,
+    pdg_nodes: 1,
+  }));
+}
 
 export const SUBJECT = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 export const OTHER = "11111111-2222-4333-8444-555555555555";
@@ -101,12 +152,45 @@ function text(body: string, status = 200) {
   return { ok: true, status, text: async () => body, json: async () => JSON.parse(body) } as unknown as Response;
 }
 
+export interface StubOptions {
+  /**
+   * `workflows/review.json`. Omitted or `null` serves a 404 — the "no artifact in this bundle" state; an
+   * object serves it as JSON; a string is served as the body verbatim, which is how the "present but not
+   * valid JSON" state is reached.
+   */
+  review?: unknown;
+  /** Appended to the function index. Two rows sharing one name and one file is the ambiguity case. */
+  extraFunctions?: FunctionEntry[];
+  /** Names in the artifact's own symbol list to leave *out* of the index, for the "not in this graph" state. */
+  omitReviewFunctions?: string[];
+  /** Shallow-merged onto `manifest.json`, so a test can align or deliberately misalign the graph digest. */
+  manifest?: Record<string, unknown>;
+}
+
 /** Serve the fixture bundle. Anything unknown is a 404, which the loaders treat as a typed absence. */
-export function installFetchStub() {
+export function installFetchStub(options: StubOptions = {}) {
+  const omitted = new Set(options.omitReviewFunctions ?? []);
+  const functions = reviewFunctions().filter((f) => !omitted.has(f.name));
+  const bodies: Record<string, unknown> = {
+    ...BODIES,
+    "manifest.json": { ...(BODIES["manifest.json"] as Record<string, unknown>), ...(options.manifest ?? {}) },
+    // The artifact's own symbols are only added when an artifact is being served: a review test needs its
+    // rows to resolve, and every other test's function list should stay exactly what it was.
+    "cfg_index.json": {
+      ...(BODIES["cfg_index.json"] as Record<string, unknown>),
+      functions: [...FUNCTIONS, ...functions, ...(options.extraFunctions ?? [])],
+    },
+  };
+
   const stub = vi.fn(async (input: RequestInfo | URL) => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.pathname : String(input);
     const path = raw.startsWith("file:") ? new URL(raw).pathname : raw;
-    for (const [name, body] of Object.entries(BODIES)) {
+    if (path.endsWith("workflows/review.json")) {
+      if (options.review === undefined || options.review === null) return json({ error: "not found" }, 404);
+      if (typeof options.review === "string") return text(options.review);
+      return json(options.review);
+    }
+    for (const [name, body] of Object.entries(bodies)) {
       if (path.endsWith(name)) return json(body);
     }
     if (path.endsWith(`sources/${SOURCE_ID}.txt`)) return text(SOURCE_LINES.join("\n"));

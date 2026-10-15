@@ -15,19 +15,19 @@
  *   3. **Identity is resolved, never guessed.** The artifact keys symbols by an analysis cache key, so
  *      identity comes from joining file + name against the index. An ambiguous name renders without a
  *      handoff instead of silently carrying the wrong function.
+ *
+ * It reads the artifact **only through `reviewViewModel`** (task 2.4). No component here names an artifact
+ * field, so a shape change is an edit in `workflow.ts` and cannot reach this file.
  */
 import { useQuery } from "@tanstack/react-query";
-import { loadFunctions, loadManifest, type FunctionEntry } from "../data";
+import { loadFunctions, loadManifest } from "../data";
 import { Chip, Command, Panel, Stat, Unavailable } from "../shell";
 import {
-  absenceNotes,
-  formatGeneratedAt,
-  identityOf,
   loadWorkflow,
   PRODUCE_COMMAND,
-  truncationOf,
-  type CallEdgeDelta,
-  type ReviewSymbol,
+  reviewViewModel,
+  type ReviewRow,
+  type UnresolvedCandidate,
 } from "../workflow";
 
 export function ReviewRoom({ onFocus }: { onFocus: (functionId: string) => void }) {
@@ -61,8 +61,11 @@ export function ReviewRoom({ onFocus }: { onFocus: (functionId: string) => void 
         <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
           Producing one needs a <span className="text-zinc-400">base artifact</span> — a second indexed
           revision at <code className="font-mono">.rgctl-base/</code>, or passed with{" "}
-          <code className="font-mono">--base-artifact</code> — and git refs on this repository. The export
-          must then be run <span className="text-zinc-400">before</span> the dashboard is re-exported with{" "}
+          <code className="font-mono">--base-artifact</code> — a real{" "}
+          <span className="text-zinc-400">head snapshot</span> (run{" "}
+          <code className="font-mono">rgctl discover .</code> on the head revision first; the export will not
+          fabricate one), and git refs on this repository. The export must then be run{" "}
+          <span className="text-zinc-400">before</span> the dashboard is re-exported with{" "}
           <code className="font-mono">discover --with-dashboard</code>, which copies it into this bundle.
         </p>
       </Panel>
@@ -81,27 +84,21 @@ export function ReviewRoom({ onFocus }: { onFocus: (functionId: string) => void 
     );
   }
 
-  const { artifact, freshness } = state.workflow;
-  const paths = artifact.review_paths;
-  const summary = paths?.change_summary;
-  const symbols = paths?.symbols ?? [];
-  const cut = truncationOf([artifact.truncation, paths?.truncation, ...symbols.map((s) => s.truncation)]);
-  const notes = absenceNotes(artifact);
-  const generated = formatGeneratedAt(artifact.generated_at);
-  const commands = artifact.provenance?.commands ?? [];
+  const vm = reviewViewModel(state.workflow, functions.data ?? []);
+  const unresolved = vm.unresolvedScope.length > 0;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      {freshness !== "current" && (
+      {vm.freshness !== "current" && (
         <Unavailable
-          tag={freshness === "different-revision" ? "different revision" : "freshness unknown"}
+          tag={vm.freshness === "different-revision" ? "different revision" : "freshness unknown"}
           what={
-            freshness === "different-revision"
+            vm.freshness === "different-revision"
               ? "This artifact describes a different revision than the graph in this bundle"
               : "Whether this artifact matches the browsed graph could not be established"
           }
           why={
-            freshness === "different-revision"
+            vm.freshness === "different-revision"
               ? "The digests disagree, so the figures below are about another revision pair. They are worth reading as history, not as the current state of this graph."
               : "The artifact or the manifest is missing a graph digest, so no comparison was possible. That is not the same as a match."
           }
@@ -110,68 +107,64 @@ export function ReviewRoom({ onFocus }: { onFocus: (functionId: string) => void 
 
       <Panel
         title="Review"
-        subtitle={generated ? `artifact generated ${generated}` : "composed review artifact"}
+        subtitle={vm.generatedLabel ? `artifact generated ${vm.generatedLabel}` : "composed review artifact"}
         right={
-          freshness === "current" ? (
+          vm.freshness === "current" ? (
             <Chip tone="green">same revision</Chip>
           ) : (
-            <Chip tone="amber">{freshness === "different-revision" ? "other revision" : "unverified"}</Chip>
+            <Chip tone="amber">{vm.freshness === "different-revision" ? "other revision" : "unverified"}</Chip>
           )
         }
       >
-        <div className="flex flex-wrap items-start gap-x-8 gap-y-3">
-          <Stat
-            label="changed symbols"
-            value={summary?.changed_symbols ?? "—"}
-            hint={cut.includes("symbols") ? "truncated — not the full set" : undefined}
-          />
-          <Stat label="files in scope" value={summary?.files_in_scope ?? "—"} />
-          <Stat label="call edges added" value={summary?.call_edges?.added ?? "—"} />
-          <Stat label="retargeted" value={summary?.call_edges?.retargeted ?? "—"} />
-          <Stat label="removed" value={summary?.call_edges?.removed ?? "—"} />
-          {summary?.unscored_files ? <Stat label="unscored files" value={summary.unscored_files} /> : null}
-        </div>
-        {cut.length > 0 && (
-          <p className="mt-3 rounded border border-amber-500/25 bg-amber-500/[0.04] px-2 py-1.5 text-[11px] text-amber-200">
-            The report was truncated ({cut.join(", ")}), so these lists are incomplete by construction —
-            not a complete review of a small change.
-          </p>
-        )}
-        {!summary && (
-          <p className="mt-3 text-[11px] text-zinc-400">
-            The artifact carries no change summary, so there are no totals to show. Its sections are listed
-            below as they were recorded.
-          </p>
-        )}
-      </Panel>
-
-      <Panel
-        title="Changed symbols"
-        subtitle={symbols.length > 0 ? `${symbols.length} with call-path detail` : undefined}
-      >
-        {symbols.length === 0 ? (
-          <p className="text-[11px] text-zinc-400">
-            The artifact lists no symbols with call-path detail. That is the artifact's own content, not a
-            failure to load it.
-          </p>
+        {unresolved ? (
+          <UnresolvedScope candidates={vm.unresolvedScope} />
         ) : (
-          <ul className="flex flex-col divide-y divide-white/6">
-            {symbols.map((symbol, i) => (
-              <SymbolRow
-                key={symbol.stable_key ?? `${symbol.name}-${i}`}
-                symbol={symbol}
-                functions={functions.data ?? []}
-                onFocus={onFocus}
-              />
-            ))}
-          </ul>
+          <>
+            <div className="flex flex-wrap items-start gap-x-8 gap-y-3">
+              {vm.stats?.map((stat) => (
+                <Stat key={stat.label} label={stat.label} value={stat.value ?? "—"} hint={stat.hint} />
+              ))}
+            </div>
+            {vm.truncated.length > 0 && (
+              <p className="mt-3 rounded border border-amber-500/25 bg-amber-500/[0.04] px-2 py-1.5 text-[11px] text-amber-200">
+                The report was truncated ({vm.truncated.join(", ")}), so these lists are incomplete by
+                construction — not a complete review of a small change.
+              </p>
+            )}
+            {!vm.stats && (
+              <p className="mt-3 text-[11px] text-zinc-400">
+                The artifact carries no change summary, so there are no totals to show. Its sections are
+                listed below as they were recorded.
+              </p>
+            )}
+          </>
         )}
       </Panel>
 
-      {notes.length > 0 && (
+      {!unresolved && (
+        <Panel
+          title="Changed symbols"
+          subtitle={vm.symbols.length > 0 ? `${vm.symbols.length} with call-path detail` : undefined}
+        >
+          {vm.symbols.length === 0 ? (
+            <p className="text-[11px] text-zinc-400">
+              The artifact lists no symbols with call-path detail. That is the artifact's own content, not a
+              failure to load it.
+            </p>
+          ) : (
+            <ul className="flex flex-col divide-y divide-white/6">
+              {vm.symbols.map((row) => (
+                <SymbolRow key={row.key} row={row} onFocus={onFocus} />
+              ))}
+            </ul>
+          )}
+        </Panel>
+      )}
+
+      {vm.notes.length > 0 && (
         <Panel title="Not evaluated" subtitle="sections the artifact says it did not produce">
           <ul className="flex flex-col gap-1.5">
-            {notes.map((note) => (
+            {vm.notes.map((note) => (
               <li key={note.section} className="text-[11px] leading-relaxed text-zinc-400">
                 <span className="font-mono text-zinc-300">{note.section}</span> — {note.reason}
               </li>
@@ -180,9 +173,9 @@ export function ReviewRoom({ onFocus }: { onFocus: (functionId: string) => void 
         </Panel>
       )}
 
-      {commands.length > 0 && (
+      {vm.commands.length > 0 && (
         <Panel title="Receipt" subtitle="the command that produced this document">
-          {commands.map((command) => (
+          {vm.commands.map((command) => (
             <Command key={command}>{command}</Command>
           ))}
         </Panel>
@@ -191,33 +184,56 @@ export function ReviewRoom({ onFocus }: { onFocus: (functionId: string) => void 
   );
 }
 
-function SymbolRow({
-  symbol,
-  functions,
-  onFocus,
-}: {
-  symbol: ReviewSymbol;
-  functions: FunctionEntry[];
-  onFocus: (functionId: string) => void;
-}) {
-  const identity = identityOf(symbol, functions);
-  const file = symbol.head?.file ?? "";
-  const line = symbol.head?.start_line;
-  const deltas = symbol.path_delta ?? [];
+/**
+ * A symbol-scoped export that did not resolve to exactly one function.
+ *
+ * The producer lists the candidates and returns an empty report, so every figure it carries is zero. Those
+ * zeros are the absence of an answer, not an answer of "nothing changed" — and the difference is the whole
+ * reason this state is rendered instead of the summary row.
+ */
+function UnresolvedScope({ candidates }: { candidates: UnresolvedCandidate[] }) {
+  return (
+    <>
+      <Unavailable
+        tag="no symbol resolved"
+        what={`This artifact was scoped to a single symbol that matched ${candidates.length} functions`}
+        why="The export was asked for one symbol and could not choose between these, so it produced no report. The document's own totals are all zero because nothing was analysed — not because nothing changed."
+      />
+      <ul className="mt-3 flex flex-col gap-1">
+        {candidates.map((candidate) => (
+          <li key={candidate.key} className="flex flex-wrap items-baseline gap-2">
+            <span className="font-mono text-[12px] text-zinc-100">{candidate.name}</span>
+            <span className="truncate font-mono text-[10px] text-zinc-500" title={candidate.file}>
+              {shorten(candidate.file)}
+            </span>
+            <span className="font-mono text-[10px] text-zinc-600">{candidate.key}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
+        Re-export without <code className="font-mono">--symbol</code> to review the change as a whole, or
+        pass a name that resolves to one function.
+      </p>
+    </>
+  );
+}
 
+function SymbolRow({ row, onFocus }: { row: ReviewRow; onFocus: (functionId: string) => void }) {
+  // Bound to a local so the narrowing survives into the click closure; `row.identity` alone does not.
+  const identity = row.identity;
   return (
     <li className="flex flex-col gap-1.5 py-2 first:pt-0 last:pb-0">
       <div className="flex flex-wrap items-baseline gap-2">
-        <span className="font-mono text-[12px] text-zinc-100">{symbol.name ?? "(unnamed)"}</span>
-        {symbol.kind && <span className="text-[10px] uppercase tracking-wider text-zinc-500">{symbol.kind}</span>}
-        <span className="truncate font-mono text-[10px] text-zinc-500" title={file}>
-          {shorten(file)}
-          {line ? `:${line}` : ""}
+        <span className="font-mono text-[12px] text-zinc-100">{row.name}</span>
+        {row.kind && <span className="text-[10px] uppercase tracking-wider text-zinc-500">{row.kind}</span>}
+        <span className="truncate font-mono text-[10px] text-zinc-500" title={row.file}>
+          {shorten(row.file)}
+          {row.line ? `:${row.line}` : ""}
         </span>
         <span className="ml-auto flex items-center gap-2">
-          {deltas.length > 0 && (
+          {row.deltas.length > 0 && (
             <span className="text-[10px] text-zinc-500">
-              {deltas.length} call-path {deltas.length === 1 ? "change" : "changes"}
+              {row.deltas.length} call-path {row.deltas.length === 1 ? "change" : "changes"}
             </span>
           )}
           {identity.kind === "unique" ? (
@@ -242,9 +258,9 @@ function SymbolRow({
           )}
         </span>
       </div>
-      {deltas.length > 0 && (
+      {row.deltas.length > 0 && (
         <ul className="flex flex-col gap-0.5">
-          {deltas.map((delta, i) => (
+          {row.deltas.map((delta, i) => (
             <li key={`${delta.kind}-${delta.from}-${delta.to}-${i}`} className="flex items-center gap-2">
               <DeltaChip kind={delta.kind} />
               <span className="font-mono text-[11px] text-zinc-400">
@@ -258,7 +274,7 @@ function SymbolRow({
   );
 }
 
-function DeltaChip({ kind }: { kind: CallEdgeDelta["kind"] }) {
+function DeltaChip({ kind }: { kind: string }) {
   const tone = kind === "added" ? "green" : kind === "removed" ? "amber" : "zinc";
   return <Chip tone={tone}>{kind}</Chip>;
 }

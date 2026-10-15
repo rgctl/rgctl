@@ -1,0 +1,272 @@
+{
+  "schema_version": "1",
+  "command": "review export",
+  "generated_at": "1792088858",
+  "review_paths": {
+    "schema_version": 1,
+    "command": "review paths",
+    "change_summary": {
+      "changed_symbols": 6,
+      "call_edges": {
+        "added": 0,
+        "removed": 8,
+        "retargeted": 0,
+        "unchanged": 0
+      },
+      "files_in_scope": 1,
+      "unscored_files": 0
+    },
+    "truncation": {
+      "symbols": false,
+      "fanout": true,
+      "depth": false
+    },
+    "symbols": [
+      {
+        "stable_key": "1f0096d97ebda706",
+        "name": "register",
+        "kind": "function",
+        "base": {
+          "file": "/repo/src/main/java/com/example/ecommerce/service/AuthService.java",
+          "start_line": 38,
+          "end_line": 56
+        },
+        "head": {
+          "file": "/repo/src/main/java/com/example/ecommerce/service/AuthService.java",
+          "start_line": 38,
+          "end_line": 56
+        },
+        "path_before": [
+          "register",
+          "existsByEmail"
+        ],
+        "path_after": [
+          "register",
+          "existsByEmail"
+        ],
+        "path_delta": [
+          {
+            "kind": "removed",
+            "from": "register",
+            "to": "key:138baf8e7dbfd492"
+          },
+          {
+            "kind": "removed",
+            "from": "register",
+            "to": "key:73571860eb973033"
+          },
+          {
+            "kind": "removed",
+            "from": "register",
+            "to": "key:73571860eb973033"
+          }
+        ],
+        "truncation": {
+          "symbols": false,
+          "fanout": true,
+          "depth": false
+        }
+      },
+      {
+        "stable_key": "2674abd002cded14",
+        "name": "login",
+        "kind": "function",
+        "base": {
+          "file": "/repo/src/main/java/com/example/ecommerce/service/AuthService.java",
+          "start_line": 58,
+          "end_line": 66
+        },
+        "head": {
+          "file": "/repo/src/main/java/com/example/ecommerce/service/AuthService.java",
+          "start_line": 58,
+          "end_line": 66
+        },
+        "path_before": [
+          "login",
+          "$lambda$0"
+        ],
+        "path_after": [
+          "login",
+          "$lambda$0"
+        ],
+        "path_delta": [
+          {
+            "kind": "removed",
+            "from": "login",
+            "to": "key:138baf8e7dbfd492"
+          },
+          {
+            "kind": "removed",
+            "from": "login",
+            "to": "key:73571860eb973033"
+          },
+          {
+            "kind": "removed",
+            "from": "login",
+            "to": "key:73571860eb973033"
+          }
+        ],
+        "truncation": {
+          "symbols": false,
+          "fanout": false,
+          "depth": false
+        }
+      },
+      {
+        "stable_key": "3adcf80aeff60057",
+        "name": "isFreeShipping",
+        "kind": "function",
+        "base": {
+          "file": "/repo/src/main/java/com/example/ecommerce/coolstore/service/ShippingService.java",
+          "start_line": 23,
+          "end_line": 25
+        },
+        "head": {
+          "file": "/repo/src/main/java/com/example/ecommerce/coolstore/service/ShippingService.java",
+          "start_line": 22,
+          "end_line": 24
+        },
+        "path_before": [
+          "calculateShipping",
+          "isFreeShipping"
+        ],
+        "path_after": [
+          "isFreeShipping"
+        ],
+        "path_delta": [
+          {
+            "kind": "removed",
+            "from": "calculateShipping",
+            "to": "isFreeShipping"
+          }
+        ],
+        "truncation": {
+          "symbols": false,
+          "fanout": false,
+          "depth": false
+        }
+      },
+      {
+        "stable_key": "5e26c2860863f62d",
+        "name": "calculateShipping",
+        "kind": "function",
+        "base": {
+          "file": "/repo/src/main/java/com/example/ecommerce/coolstore/service/ShippingService.java",
+          "start_line": 9,
+          "end_line": 21
+        },
+        "head": {
+          "file": "/repo/src/main/java/com/example/ecommerce/coolstore/service/ShippingService.java",
+          "start_line": 9,
+          "end_line": 20
+        },
+        "path_before": [
+          "priceShoppingCart",
+          "calculateShipping",
+          "isFreeShipping"
+        ],
+        "path_after": [
+          "priceShoppingCart",
+          "calculateShipping",
+          "getCartItemTotal"
+        ],
+        "path_delta": [
+          {
+            "kind": "removed",
+            "from": "calculateShipping",
+            "to": "isFreeShipping"
+          }
+        ],
+        "truncation": {
+          "symbols": false,
+          "fanout": false,
+          "depth": false
+        }
+      },
+      {
+        "stable_key": "92407e6ba46f9486",
+        "name": "round2",
+        "kind": "function",
+        "base": {
+          "file": "/repo/src/main/java/com/example/ecommerce/coolstore/service/ShippingService.java",
+          "start_line": 37,
+          "end_line": 39
+        },
+        "head": {
+          "file": "/repo/src/main/java/com/example/ecommerce/coolstore/service/ShippingService.java",
+          "start_line": 36,
+          "end_line": 38
+        },
+        "path_before": [
+          "calculateShippingInsurance",
+          "round2"
+        ],
+        "path_after": [
+          "calculateShippingInsurance",
+          "round2"
+        ],
+        "path_delta": [],
+        "truncation": {
+          "symbols": false,
+          "fanout": false,
+          "depth": false
+        }
+      },
+      {
+        "stable_key": "969b509a8c900fcf",
+        "name": "calculateShippingInsurance",
+        "kind": "function",
+        "base": {
+          "file": "/repo/src/main/java/com/example/ecommerce/coolstore/service/ShippingService.java",
+          "start_line": 27,
+          "end_line": 35
+        },
+        "head": {
+          "file": "/repo/src/main/java/com/example/ecommerce/coolstore/service/ShippingService.java",
+          "start_line": 26,
+          "end_line": 34
+        },
+        "path_before": [
+          "priceShoppingCart",
+          "calculateShippingInsurance",
+          "getCartItemTotal"
+        ],
+        "path_after": [
+          "priceShoppingCart",
+          "calculateShippingInsurance",
+          "getCartItemTotal"
+        ],
+        "path_delta": [],
+        "truncation": {
+          "symbols": false,
+          "fanout": false,
+          "depth": false
+        }
+      }
+    ],
+    "unscored_files": [],
+    "ambiguous": []
+  },
+  "policy": null,
+  "timeline": [],
+  "truncation": {
+    "symbols": false,
+    "fanout": true,
+    "depth": false
+  },
+  "provenance": {
+    "commands": [
+      "rgctl review paths --base-ref cf44c9e --head-ref e7fdfa8 -f json"
+    ],
+    "graph": {
+      "base_snapshot": "/tmp/expG-base/.rgctl/graph.snapshot.bin",
+      "head_snapshot": "/repo/.rgctl/graph.snapshot.bin",
+      "base_digest": "e960eee7c6991eadf3bbc3ca11664446025e58054e326b6e3005569e3ba08532",
+      "head_digest": "996a4ee309e9bab3d83d837e40ddd06e3701d185a4aad3fdd7b9e26afac1b121"
+    },
+    "unavailable": {
+      "policy": "no --policy-file provided; policy was not evaluated",
+      "timeline": "no violation_ledger.jsonl under .rgctl/"
+    }
+  }
+}

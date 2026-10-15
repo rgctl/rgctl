@@ -1,0 +1,66 @@
+{
+  "schema_version": "1",
+  "command": "review export",
+  "generated_at": "1792092665",
+  "review_paths": {
+    "schema_version": 1,
+    "command": "review paths",
+    "change_summary": {
+      "changed_symbols": 0,
+      "call_edges": {
+        "added": 0,
+        "removed": 0,
+        "retargeted": 0,
+        "unchanged": 0
+      },
+      "files_in_scope": 1,
+      "unscored_files": 0
+    },
+    "truncation": {
+      "symbols": false,
+      "fanout": false,
+      "depth": false
+    },
+    "symbols": [],
+    "unscored_files": [],
+    "ambiguous": [
+      {
+        "name": "checkout",
+        "file": "/repo/src/main/java/com/example/ecommerce/service/OrderService.java",
+        "stable_key": "177ae677547c07bf"
+      },
+      {
+        "name": "checkout",
+        "file": "/repo/src/main/java/com/example/ecommerce/controller/OrderController.java",
+        "stable_key": "5934ae64e63a0318"
+      },
+      {
+        "name": "checkout",
+        "file": "/repo/src/main/java/com/example/ecommerce/coolstore/rest/CartEndpoint.java",
+        "stable_key": "f56c6ac3979075ac"
+      }
+    ]
+  },
+  "policy": null,
+  "timeline": [],
+  "truncation": {
+    "symbols": false,
+    "fanout": false,
+    "depth": false
+  },
+  "provenance": {
+    "commands": [
+      "rgctl review paths --base-ref cf44c9e --head-ref e7fdfa8 -f json"
+    ],
+    "graph": {
+      "base_snapshot": "/tmp/shot-base/.rgctl/graph.snapshot.bin",
+      "head_snapshot": "/tmp/shotrepo/.rgctl/graph.snapshot.bin",
+      "base_digest": "56feb0d00b44e0ce40c5f85138ca049d397baac1545049e20590ebcd09a5bd3c",
+      "head_digest": "3196efed3b937adf030af3175481877f3e784c503fa0b7f78859425c43a618f8"
+    },
+    "unavailable": {
+      "policy": "no --policy-file provided; policy was not evaluated",
+      "timeline": "no violation_ledger.jsonl under .rgctl/"
+    }
+  }
+}

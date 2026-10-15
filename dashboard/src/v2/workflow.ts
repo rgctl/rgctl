@@ -70,7 +70,23 @@ export interface ReviewPaths {
   truncation?: TruncationFlags;
   symbols?: ReviewSymbol[];
   unscored_files?: string[];
-  ambiguous?: unknown[];
+  /**
+   * Candidates the producer could not choose between. Populated only when the export was scoped to one
+   * symbol (`--symbol`) and that name matched more than one function — measured shape:
+   * `{name, file, stable_key}` (`crates/rgctl-analysis/src/review_paths.rs`, `AmbiguousCandidate`).
+   *
+   * When this is non-empty the document is **not a review of a change**: `symbols` is `[]` and every
+   * figure in `change_summary` is zero. Rendering those zeros would read as "nothing changed", which is
+   * the misreporting this room exists to prevent — see `reviewViewModel`.
+   */
+  ambiguous?: AmbiguousCandidate[];
+}
+
+/** One function the producer listed as a candidate for a symbol filter that did not resolve. */
+export interface AmbiguousCandidate {
+  name?: string;
+  file?: string;
+  stable_key?: string;
 }
 
 export interface ReviewProvenance {
@@ -214,8 +230,10 @@ export function absenceNotes(artifact: ReviewArtifact): { section: string; reaso
 }
 
 /** Which dimensions were cut, top-level or per symbol. Empty means nothing was truncated. */
-export function truncationOf(flags: (TruncationFlags | undefined)[]): ("symbols" | "fanout" | "depth")[] {
-  const cut = new Set<"symbols" | "fanout" | "depth">();
+export type TruncationDimension = "symbols" | "fanout" | "depth";
+
+export function truncationOf(flags: (TruncationFlags | undefined)[]): TruncationDimension[] {
+  const cut = new Set<TruncationDimension>();
   for (const f of flags) {
     if (!f) continue;
     if (f.symbols) cut.add("symbols");
@@ -235,6 +253,122 @@ export function formatGeneratedAt(value: string | undefined): string | null {
   return new Date(secs * 1000).toISOString().replace("T", " ").slice(0, 16);
 }
 
-/** The command that produces an artifact, shown when there is none — including the base-artifact need. */
+// --- the view model -----------------------------------------------------------------------------
+//
+// The room renders *this*, and never the artifact's own fields. Two reasons, and the second is the one
+// that matters:
+//
+//   1. Shape changes stay a one-file edit (task 2.4). The contract's types already live here; this makes
+//      the room's *inputs* live here too, so a renamed field cannot reach a component.
+//   2. Deriving once is what makes the zeroed-figure problem impossible to reintroduce. `unresolvedScope`
+//      below is a fact about the document, and a component that only receives `stats` cannot accidentally
+//      render a symbol-scoped lookup that failed as a clean review.
+
+/** One figure in the summary row. `null` renders as an em dash — an absent number, never a zero. */
+export interface ReviewStat {
+  label: string;
+  value: number | null;
+  hint?: string;
+}
+
+export interface ReviewDelta {
+  kind: string;
+  from: string;
+  to: string;
+}
+
+export interface ReviewRow {
+  key: string;
+  name: string;
+  kind: string | null;
+  file: string;
+  line: number | null;
+  deltas: ReviewDelta[];
+  identity: Identity;
+}
+
+export interface ReviewNote {
+  section: string;
+  reason: string;
+}
+
+/** One candidate for a symbol filter that did not resolve, as the room renders it. */
+export interface UnresolvedCandidate {
+  key: string;
+  name: string;
+  file: string;
+}
+
+export interface ReviewViewModel {
+  freshness: Freshness;
+  generatedLabel: string | null;
+  /** `null` when the artifact carries no change summary, so the room says so rather than showing zeros. */
+  stats: ReviewStat[] | null;
+  truncated: TruncationDimension[];
+  symbols: ReviewRow[];
+  notes: ReviewNote[];
+  commands: string[];
+  /**
+   * Non-empty when the export was scoped to a symbol that matched more than one function. The room shows
+   * the candidates and refuses to present the document as a review; see the field note on
+   * `ReviewPaths.ambiguous`.
+   */
+  unresolvedScope: UnresolvedCandidate[];
+}
+
+export function reviewViewModel(workflow: LoadedWorkflow, functions: FunctionEntry[]): ReviewViewModel {
+  const { artifact, freshness } = workflow;
+  const paths = artifact.review_paths;
+  const summary = paths?.change_summary;
+  const raw = paths?.symbols ?? [];
+  const truncated = truncationOf([artifact.truncation, paths?.truncation, ...raw.map((s) => s.truncation)]);
+
+  const stats: ReviewStat[] | null = summary
+    ? [
+        {
+          label: "changed symbols",
+          value: summary.changed_symbols ?? null,
+          hint: truncated.includes("symbols") ? "truncated — not the full set" : undefined,
+        },
+        { label: "files in scope", value: summary.files_in_scope ?? null },
+        { label: "call edges added", value: summary.call_edges?.added ?? null },
+        { label: "retargeted", value: summary.call_edges?.retargeted ?? null },
+        { label: "removed", value: summary.call_edges?.removed ?? null },
+        ...(summary.unscored_files ? [{ label: "unscored files", value: summary.unscored_files }] : []),
+      ]
+    : null;
+
+  return {
+    freshness,
+    generatedLabel: formatGeneratedAt(artifact.generated_at),
+    stats,
+    truncated,
+    symbols: raw.map((symbol, i) => ({
+      key: symbol.stable_key ?? `${symbol.name}-${i}`,
+      name: symbol.name ?? "(unnamed)",
+      kind: symbol.kind ?? null,
+      file: symbol.head?.file ?? "",
+      line: symbol.head?.start_line ?? null,
+      deltas: (symbol.path_delta ?? []).map((d) => ({ kind: d.kind, from: d.from, to: d.to })),
+      identity: identityOf(symbol, functions),
+    })),
+    notes: absenceNotes(artifact),
+    commands: artifact.provenance?.commands ?? [],
+    unresolvedScope: (paths?.ambiguous ?? []).map((candidate, i) => ({
+      key: candidate.stable_key ?? `${candidate.name}-${i}`,
+      name: candidate.name ?? "(unnamed)",
+      file: candidate.file ?? "",
+    })),
+  };
+}
+
+/**
+ * The command that produces an artifact, shown when there is none — including what it needs.
+ *
+ * `--full-snapshots` is not decoration: without it the review path synthesizes a "head" by overwriting
+ * `.rgctl/` from the base artifact, which both destroys the session index and describes a head that does
+ * not contain the change (a one-line deletion reports as additions). The export refuses to do that, so a
+ * command printed without this flag would be a command that fails.
+ */
 export const PRODUCE_COMMAND =
-  "rgctl review export --base-artifact <base> --base-ref <base-ref> --head-ref <head-ref>";
+  "rgctl review export --full-snapshots --base-artifact <base> --base-ref <base-ref> --head-ref <head-ref>";
