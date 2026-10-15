@@ -13,6 +13,8 @@
  * clean result. `available: false` in an index means the same thing as a 404.
  */
 
+import type { WorkflowsSection } from "./workflow";
+
 /** Asset-relative URL. Bundled assets live in `assets/`, data one level up, so a bare relative fetch
  *  from a worker resolves against the wrong directory. */
 export function bundleUrl(name: string): URL {
@@ -36,6 +38,8 @@ export interface Manifest {
   /** Unix seconds, as a **string** in the real bundle. */
   generated_at?: string;
   graph?: { node_count?: number; edge_count?: number; digest?: string; payload_format?: string };
+  /** Composed workflow documents carried in the bundle. `workflow.ts` owns this contract. */
+  workflows?: WorkflowsSection;
   analysis?: {
     cfg_available?: boolean;
     cfg_function_count?: number;

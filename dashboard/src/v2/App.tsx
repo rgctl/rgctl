@@ -6,6 +6,7 @@ import { Palette } from "./Palette";
 import { Chip, Panel, Unavailable } from "./shell";
 import { Spine } from "./rooms/Spine";
 import { CfgPdgLens } from "./rooms/CfgPdg";
+import { ReviewRoom } from "./rooms/Review";
 import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
 import { loadFunctions, loadManifest, type FunctionEntry } from "./data";
@@ -66,6 +67,22 @@ export function App() {
 
   const goRoom = (next: RoomId) =>
     void navigate({ to: "/$roomId", params: { roomId: next }, search: (prev) => prev });
+
+  /**
+   * Hand a review symbol to the room that explains it.
+   *
+   * The Review room resolves a symbol's identity itself — the artifact carries no node id — so this only
+   * ever receives ids already established to be unambiguous. Carrying and navigating in one action is
+   * what makes the room a room rather than a JSON viewer.
+   */
+  const carryToUnderstand = (functionId: string) => {
+    setFocus(functionId);
+    void navigate({
+      to: "/$roomId",
+      params: { roomId: "understand" },
+      search: (prev) => ({ ...prev, focus: functionId }),
+    });
+  };
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -146,7 +163,8 @@ export function App() {
               <UnderstandRoom entry={entry} lens={lens} loading={functions.isLoading} onOpenPalette={() => setPaletteOpen(true)} onCarry={goRoom} />
             )}
             {room === "architecture" && <ArchitectureRoom />}
-            {room !== "repo" && room !== "understand" && room !== "architecture" && (
+            {room === "review" && !staleFocus && <ReviewRoom onFocus={carryToUnderstand} />}
+            {room !== "repo" && room !== "understand" && room !== "architecture" && room !== "review" && (
               <Placeholder room={room} />
             )}
           </div>
