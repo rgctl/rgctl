@@ -29,7 +29,7 @@ pub use dataflow_export::{DATAFLOW_INDEX_FILE, DataflowExportSummary};
 pub use export_context::DashboardExportContext;
 pub use manifest::{
     AnalysisSection, DashboardManifest, KantraSection, MANIFEST_SCHEMA_VERSION, MetricsSection,
-    SemanticSection, ViewSection,
+    SemanticSection, ViewSection, WorkflowsSection,
 };
 pub use metagraph::{COMMUNITY_ONLY_THRESHOLD, METAGRAPH_FILE, MetagraphExport, MetagraphPayload};
 pub use migration_export::{
@@ -55,7 +55,7 @@ use rgctl_graph::backend::MemoryBackend;
 use rgctl_graph::schema::{EdgeType, NodeType};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use kantra_export::export_kantra_bundle;
 use taint_export::export_taint_bundle;
 
@@ -122,7 +122,17 @@ pub fn export_dashboard_bundle_if_changed_with_context(
                 // bundle extracted — a silent no-op that looks like the flag being ignored.
                 let same_graph = manifest.export_fingerprint.as_deref() == Some(fingerprint.as_str());
                 let same_bundle = manifest.bundle_version.as_deref() == Some(version);
-                if same_graph && same_bundle {
+                // Third condition. The workflow artifact is not part of the graph fingerprint, so
+                // without this a fresh `review export` followed by a re-export would match the
+                // fingerprint, return early, and leave the previous artifact in the bundle — the
+                // bundle would serve a review of a change nobody is looking at any more.
+                let current_workflow = workflow_artifact_digest(repo_root);
+                let same_workflow = manifest
+                    .workflows
+                    .as_ref()
+                    .and_then(|w| w.review_digest.as_deref())
+                    == current_workflow.as_deref();
+                if same_graph && same_bundle && same_workflow {
                     return Ok(false);
                 }
             }
@@ -238,6 +248,7 @@ fn export_dashboard_bundle_inner(
         semantic_summary,
     );
     manifest.kantra = kantra_summary.manifest_section();
+    manifest.workflows = Some(export_workflows(repo_root, &out_dir)?);
     let (manifest_json, manifest_serialize_secs) = profile_stage("manifest_serialize", || {
         let start = std::time::Instant::now();
         let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
@@ -404,6 +415,95 @@ fn payload_stats(
         backend.edge_count() as u64,
         String::new(),
     ))
+}
+
+/// Bundle-relative directory for composed workflow documents.
+pub const WORKFLOWS_DIR: &str = "workflows";
+/// Bundle-relative filename of the review artifact.
+pub const REVIEW_WORKFLOW_FILE: &str = "review.json";
+
+/// Where `rgctl review export` writes its artifact: `{repo}/.rgctl/workflows/review.json`.
+fn workflow_artifact_path(repo_root: &Path) -> PathBuf {
+    repo_root
+        .join(".rgctl")
+        .join(WORKFLOWS_DIR)
+        .join(REVIEW_WORKFLOW_FILE)
+}
+
+fn no_workflows() -> WorkflowsSection {
+    WorkflowsSection {
+        available: false,
+        review_path: None,
+        review_digest: None,
+        review_generated_at: None,
+        review_head_digest: None,
+    }
+}
+
+/// BLAKE3 of the review artifact, or `None` when this repository has none.
+///
+/// The reuse gate compares this, because the artifact is **not** part of the graph fingerprint. Without
+/// it, `rgctl review export` followed by a re-export would match the fingerprint, return early, and
+/// leave the previously copied artifact in the bundle — the silent-staleness class of #122, in the one
+/// place where a stale document would be read as a current review.
+fn workflow_artifact_digest(repo_root: &Path) -> Option<String> {
+    let bytes = fs::read(workflow_artifact_path(repo_root)).ok()?;
+    Some(blake3::hash(&bytes).to_hex().to_string())
+}
+
+/// Copy the review artifact into the bundle and describe it for the manifest.
+///
+/// Absence is the common case — a repository that has never run `rgctl review export` has nothing to
+/// carry — and it is recorded as `available: false` rather than by omitting the section, so a consumer
+/// can tell "there is none" from "this manifest predates the field".
+///
+/// A copy that fails is an error rather than a silent `available: false`: claiming absence while the
+/// file exists is exactly the misreporting this section exists to prevent. An artifact that is not
+/// valid JSON is copied anyway, with its identity fields left unset and a warning, so that a broken
+/// workflow document cannot make the dashboard export fail.
+fn export_workflows(repo_root: &Path, out_dir: &Path) -> Result<WorkflowsSection, String> {
+    let src = workflow_artifact_path(repo_root);
+    let bytes = match fs::read(&src) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(no_workflows()),
+        Err(e) => return Err(format!("read {}: {e}", src.display())),
+    };
+
+    let parsed = serde_json::from_slice::<serde_json::Value>(&bytes);
+    if let Err(e) = &parsed {
+        tracing::warn!(
+            path = %src.display(),
+            error = %e,
+            "review workflow artifact is not valid JSON; copying it without identity fields"
+        );
+    }
+    let parsed = parsed.ok();
+    let generated_at = parsed
+        .as_ref()
+        .and_then(|v| v.get("generated_at"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let head_digest = parsed
+        .as_ref()
+        .and_then(|v| v.get("provenance"))
+        .and_then(|p| p.get("graph"))
+        .and_then(|g| g.get("head_digest"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    let dest = out_dir.join(WORKFLOWS_DIR).join(REVIEW_WORKFLOW_FILE);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    fs::write(&dest, &bytes).map_err(|e| format!("write {}: {e}", dest.display()))?;
+
+    Ok(WorkflowsSection {
+        available: true,
+        review_path: Some(format!("{WORKFLOWS_DIR}/{REVIEW_WORKFLOW_FILE}")),
+        review_digest: Some(blake3::hash(&bytes).to_hex().to_string()),
+        review_generated_at: generated_at,
+        review_head_digest: head_digest,
+    })
 }
 
 /// Hash graph topology + function body hashes + analysis index for incremental export skip.

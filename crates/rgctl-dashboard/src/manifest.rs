@@ -48,6 +48,33 @@ pub struct KantraSection {
     pub rule_count: usize,
 }
 
+/// Composed workflow documents copied into the bundle beside `manifest.json`.
+///
+/// These are not analysis outputs of *this* graph. A review artifact is composed from a **pair** of
+/// revisions (a base and a head), so it describes a different revision pair than the bundle's graph —
+/// which is why it is a section of its own rather than a field under `analysis`, and why
+/// `review_head_digest` is recorded: a consumer can then tell whether the artifact describes the graph
+/// in this bundle or another one, instead of presenting foreign numbers as current.
+///
+/// `available: false` is recorded explicitly rather than by omitting the section, so a consumer can
+/// distinguish "there is no artifact here" from "this manifest predates the field".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowsSection {
+    pub available: bool,
+    /// Bundle-relative path, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_path: Option<String>,
+    /// BLAKE3 of the copied artifact, so re-export can notice that only the artifact changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_digest: Option<String>,
+    /// The artifact's own `generated_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_generated_at: Option<String>,
+    /// The artifact's `provenance.graph.head_digest`, for comparison against `graph.digest`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_head_digest: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardManifest {
     pub schema_version: u32,
@@ -61,6 +88,9 @@ pub struct DashboardManifest {
     pub semantic: Option<SemanticSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kantra: Option<KantraSection>,
+    /// Composed workflow documents carried in the bundle (`workflows/review.json`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflows: Option<WorkflowsSection>,
     pub metrics: MetricsSection,
     pub generated_at: String,
     /// Stable fingerprint for incremental dashboard export (semantic, not volatile UUID digest).
@@ -331,6 +361,7 @@ impl DashboardManifest {
             analysis,
             semantic,
             kantra: None,
+            workflows: None,
             metrics,
             generated_at: chrono_now_rfc3339(),
             export_fingerprint: Some(export_fingerprint),
@@ -429,5 +460,36 @@ mod tests {
         assert_eq!(v["analysis"]["blast_available"], false);
         assert_eq!(v["analysis"]["dataflow_available"], false);
         assert_eq!(v["analysis"]["taint_available"], false);
+        // `with_phases` reads no filesystem, so it leaves the section unset. The *export* always sets it —
+        // to `available: false` when the repository has no artifact — which is what lets a consumer tell
+        // "there is none" from "this manifest predates the field". Asserted end-to-end in
+        // `tests/dashboard_bundle.rs`; here the constructor's behaviour is what is pinned.
+        assert!(v["workflows"].is_null());
+    }
+
+    #[test]
+    fn workflows_section_records_the_artifact_identity() {
+        let section = WorkflowsSection {
+            available: true,
+            review_path: Some("workflows/review.json".into()),
+            review_digest: Some("deadbeef".into()),
+            review_generated_at: Some("1792080101".into()),
+            review_head_digest: Some("0710".into()),
+        };
+        let v = serde_json::to_value(&section).unwrap();
+        assert_eq!(v["available"], true);
+        assert_eq!(v["review_path"], "workflows/review.json");
+        assert_eq!(v["review_head_digest"], "0710");
+
+        // An absent artifact must not serialise empty-string placeholders that read as values.
+        let none = WorkflowsSection {
+            available: false,
+            review_path: None,
+            review_digest: None,
+            review_generated_at: None,
+            review_head_digest: None,
+        };
+        let v = serde_json::to_value(&none).unwrap();
+        assert_eq!(v.as_object().unwrap().len(), 1);
     }
 }
