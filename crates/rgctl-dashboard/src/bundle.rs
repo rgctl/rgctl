@@ -5,18 +5,98 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 static DASHBOARD_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../dashboard/dist");
+static DASHBOARD_DIST_V2: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../dashboard/dist-v2");
 
 /// Root directory name under `.rgctl/`.
 pub const DASHBOARD_DIR_NAME: &str = "dashboard";
 
+/// Selects the v2 bundle. Temporary and internal: there is deliberately **one** user-facing flag
+/// (`--with-dashboard`), and this exists only while v1 and v2 both ship. It goes away when v2 is what
+/// that flag serves.
+///
+/// An environment variable rather than a CLI flag, because a flag is a promise to users and this is not
+/// one — "run the other dashboard" is a development affordance, not a feature.
+pub const DASHBOARD_V2_ENV: &str = "RGCTL_DASHBOARD_V2";
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BundleVersion {
+    V1,
+    V2,
+}
+
+/// Pure, so it can be tested without mutating process-global state.
+fn version_from_env(value: Option<&str>) -> BundleVersion {
+    match value {
+        Some(v) if !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false") => BundleVersion::V2,
+        _ => BundleVersion::V1,
+    }
+}
+
+pub fn selected_version() -> BundleVersion {
+    version_from_env(std::env::var(DASHBOARD_V2_ENV).ok().as_deref())
+}
+
+/// Short tag for the selected bundle, recorded in the manifest so a later run can tell which one produced
+/// the bundle already on disk.
+pub fn selected_version_tag() -> &'static str {
+    match selected_version() {
+        BundleVersion::V1 => "v1",
+        BundleVersion::V2 => "v2",
+    }
+}
+
+/// Whether the v2 bundle is available to this build (embedded, or on disk in a source checkout).
+pub fn v2_available() -> bool {
+    let disk = dist_dir_for(BundleVersion::V2);
+    disk_dist_complete(&disk) || embedded_dist_complete(&DASHBOARD_DIST_V2)
+}
+
+/// Say so when a bundle was requested that this build cannot serve.
+///
+/// `RGCTL_DASHBOARD_V2=1` against a build with no v2 bundle used to produce **no output at all** — the
+/// variable was read, the embed was empty, and every path downstream either skipped or fell back without a
+/// word. Silence is the worst response to a request you cannot honour: it sends the reader looking at their
+/// repository, their flags and their branch, which is exactly what happened here. Printed before the work
+/// rather than after it, so a long `discover` does not have to finish to report a problem it could have
+/// stated at the start.
+pub fn warn_if_selection_unavailable() {
+    if selected_version() == BundleVersion::V2 && !v2_available() {
+        eprintln!(
+            "warn: {DASHBOARD_V2_ENV} is set but this build has no v2 dashboard bundle.\n  \
+             Build one with: npm --prefix dashboard run build:v2 && cargo build\n  \
+             The v2 bundle is selected at extraction time, so this is stated now rather than at the end."
+        );
+    }
+}
+
+fn dist_dir_for(version: BundleVersion) -> PathBuf {
+    let dir = match version {
+        BundleVersion::V1 => "dist",
+        BundleVersion::V2 => "dist-v2",
+    };
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../dashboard")
+        .join(dir)
+}
+
+fn embedded_for(version: BundleVersion) -> &'static Dir<'static> {
+    match version {
+        BundleVersion::V1 => &DASHBOARD_DIST,
+        BundleVersion::V2 => &DASHBOARD_DIST_V2,
+    }
+}
+
 fn workspace_dist_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dashboard/dist")
+    dist_dir_for(selected_version())
 }
 
 /// True when a usable dashboard build exists (disk tree in dev, or full embed for release).
+///
+/// Reports false when v2 is selected and unavailable, rather than falling back to v1: a silent fallback
+/// would serve the old dashboard while the operator believes they are looking at the new one.
 pub fn dist_embedded() -> bool {
     let disk = workspace_dist_dir();
-    disk_dist_complete(&disk) || embedded_dist_complete(&DASHBOARD_DIST)
+    disk_dist_complete(&disk) || embedded_dist_complete(embedded_for(selected_version()))
 }
 
 fn disk_dist_complete(dist: &Path) -> bool {
@@ -34,9 +114,17 @@ fn embedded_file_count(dir: &Dir<'_>) -> usize {
     dir.files().count() + dir.dirs().map(embedded_file_count).sum::<usize>()
 }
 
-/// Write all files from embedded `dashboard/dist` into `out_dir`.
+/// Write all files from the selected embedded bundle into `out_dir`.
 pub fn extract_static_assets(out_dir: &Path) -> Result<(), String> {
-    extract_static_assets_from(out_dir, &workspace_dist_dir(), &DASHBOARD_DIST)
+    let version = selected_version();
+    extract_static_assets_from(out_dir, &dist_dir_for(version), embedded_for(version)).map_err(|e| {
+        match version {
+            BundleVersion::V1 => e,
+            BundleVersion::V2 => format!(
+                "{e}\n  note: {DASHBOARD_V2_ENV} selected the v2 bundle; build it with: npm --prefix dashboard run build:v2"
+            ),
+        }
+    })
 }
 
 fn extract_static_assets_from(
@@ -136,21 +224,57 @@ mod tests {
         assert!(disk.join("assets").is_dir());
     }
 
+    /// Shared by the v1 and v2 embed tests.
+    fn assert_paths(dir: &Dir<'_>) {
+        for file in dir.files() {
+            let p = file.path().to_string_lossy();
+            assert!(
+                !p.contains("assets/assets/"),
+                "double-nested asset path in embed: {p}"
+            );
+        }
+        for child in dir.dirs() {
+            assert_paths(child);
+        }
+    }
+
+    #[test]
+    fn v2_is_opt_in_and_explicit() {
+        assert_eq!(version_from_env(None), BundleVersion::V1);
+        assert_eq!(version_from_env(Some("")), BundleVersion::V1);
+        assert_eq!(version_from_env(Some("0")), BundleVersion::V1);
+        assert_eq!(version_from_env(Some("false")), BundleVersion::V1);
+        assert_eq!(version_from_env(Some("FALSE")), BundleVersion::V1);
+        assert_eq!(version_from_env(Some("1")), BundleVersion::V2);
+        assert_eq!(version_from_env(Some("true")), BundleVersion::V2);
+    }
+
+    /// The v2 bundle is committed, so a fresh checkout must carry a complete one. The embed is the check.
+    #[test]
+    fn v2_embed_is_complete() {
+        let v2 = embedded_for(BundleVersion::V2);
+        assert!(
+            embedded_dist_complete(v2),
+            "dashboard/dist-v2 needs index.html and a non-empty assets/ — rebuild: npm --prefix dashboard run build:v2"
+        );
+        assert_paths(v2);
+    }
+
+    /// Rust finds the entry by name (`disk_dist_complete`, `embedded_dist_complete`,
+    /// `inject_manifest_bootstrap`). The v2 build renames its entry to `index.html` to match; if that
+    /// regresses, this says so rather than the dashboard silently 404ing.
+    #[test]
+    fn both_bundles_define_the_same_entry() {
+        for version in [BundleVersion::V1, BundleVersion::V2] {
+            assert!(
+                embedded_for(version).get_file("index.html").is_some(),
+                "{version:?} has no index.html"
+            );
+        }
+    }
+
     #[test]
     fn embedded_dist_has_no_double_nested_assets() {
-        fn assert_paths(dir: &Dir<'_>) {
-            for file in dir.files() {
-                let p = file.path().to_string_lossy();
-                assert!(
-                    !p.contains("assets/assets/"),
-                    "double-nested asset path in embed: {p}"
-                );
-            }
-            for child in dir.dirs() {
-                assert_paths(child);
-            }
-        }
-
         if embedded_file_count(&DASHBOARD_DIST) == 0 {
             return;
         }

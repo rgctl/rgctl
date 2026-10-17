@@ -9,8 +9,15 @@
     "skipLibCheck": true,
     "noEmit": true,
     "isolatedModules": true,
-    "types": ["vite/client"]
+    "types": [
+      "vite/client"
+    ]
   },
-  "include": ["src"],
-  "exclude": ["src/**/*.test.ts"]
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/v2"
+  ]
 }

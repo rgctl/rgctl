@@ -66,6 +66,17 @@ pub struct DashboardManifest {
     /// Stable fingerprint for incremental dashboard export (semantic, not volatile UUID digest).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub export_fingerprint: Option<String>,
+    /// Which dashboard bundle these assets came from: `"v1"` or `"v2"`.
+    ///
+    /// The export is skipped when the fingerprint matches, and that fingerprint is derived from the
+    /// graph — so it says nothing about which bundle was extracted. Selecting a different bundle
+    /// therefore matched and returned early, leaving the previous bundle in `.rgctl/dashboard/`: the
+    /// operator believed they were looking at v2 while the extracted files were still v1.
+    ///
+    /// `Option` with a default so a manifest written before this field existed still deserialises —
+    /// and compares unequal, which forces one re-export and is the correct outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -315,6 +326,7 @@ impl DashboardManifest {
             metrics,
             generated_at: chrono_now_rfc3339(),
             export_fingerprint: Some(export_fingerprint),
+            bundle_version: Some(crate::bundle::selected_version_tag().to_string()),
         }
     }
 }

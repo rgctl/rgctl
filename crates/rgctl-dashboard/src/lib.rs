@@ -102,13 +102,24 @@ pub fn export_dashboard_bundle_if_changed_with_context(
     snapshot_path: &Path,
     ctx: DashboardExportContext<'_>,
 ) -> Result<bool, String> {
+    // Stated before the work rather than after it: a bundle that was requested and cannot be served is
+    // worth saying at the start, not at the end of a long discover.
+    bundle::warn_if_selection_unavailable();
+
     let out_dir = bundle::default_dashboard_path(repo_root);
     let manifest_path = out_dir.join("manifest.json");
     let fingerprint = compute_export_fingerprint(backend, repo_root);
+    let version = bundle::selected_version_tag();
     if manifest_path.is_file() {
         if let Ok(bytes) = fs::read_to_string(&manifest_path) {
             if let Ok(manifest) = serde_json::from_str::<Manifest>(&bytes) {
-                if manifest.export_fingerprint.as_deref() == Some(fingerprint.as_str()) {
+                // Two conditions, not one. Matching fingerprints mean "the graph has not changed since this
+                // bundle was produced"; only the recorded version says *which* bundle it was. Without the
+                // second comparison, switching bundles matched, returned early, and left the previous
+                // bundle extracted — a silent no-op that looks like the flag being ignored.
+                let same_graph = manifest.export_fingerprint.as_deref() == Some(fingerprint.as_str());
+                let same_bundle = manifest.bundle_version.as_deref() == Some(version);
+                if same_graph && same_bundle {
                     return Ok(false);
                 }
             }

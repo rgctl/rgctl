@@ -1,0 +1,27 @@
+/* `source(none)` is load-bearing, not tidiness. Without it these `@source` lines *add to* Tailwind's
+   automatic content detection rather than replacing it, and that detection scans everything it can reach
+   that is not gitignored — which includes `dashboard/dist` and `dashboard/dist-v2`, because both are
+   tracked on purpose.
+   
+   Vite empties `outDir` at *write* time, not before transform, so while Tailwind is deciding which classes
+   exist, the previous build's JavaScript and CSS are still sitting in `dist-v2` and are scanned too. Their
+   class-name strings feed back into the stylesheet, so each build's CSS depends on the last build's output
+   and the content hash changes every time. Measured: `index-BOEbXtKe.css` from a clean tree, a different
+   hash whenever a stale `dist-v2` was present, and never settling.
+   
+   The effect was that committing the bundle could never be a no-op: every rebuild of unchanged source
+   produced a diff, so every UI commit looked larger than it was and `dist-v2` appeared dirty for no
+   reason. */
+@import "tailwindcss" source(none);
+@source "../v2";
+@source "../../index.v2.html";
+
+:root { color-scheme: dark; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: #0b0d10;
+  color: #e6e8eb;
+  font: 13px/1.45 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+}
+* { scrollbar-width: thin; scrollbar-color: #2a2f36 transparent; }
