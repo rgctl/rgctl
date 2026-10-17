@@ -7,12 +7,93 @@ use super::slice_output::{
     cfg_topology_json, pdg_topology_json, taint_slice_json, text_slice_json,
 };
 use crate::analysis::{
-    BackwardSlicer, ForwardSlicer, ProgramDependenceGraph, SliceCriterion, TaintAnalyzer,
-    build_cfg_for_function,
+    BackwardSlicer, ForwardSlicer, FunctionLocation, ProgramDependenceGraph, SliceCriterion,
+    TaintAnalyzer, build_cfg_for_function, index_function_locations,
 };
 use anyhow::{Context, Result, bail};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+
+/// Byte offset at which a 1-based `line` begins, if the line exists.
+fn line_start_byte(source: &str, line: usize) -> Option<usize> {
+    if line == 0 {
+        return None;
+    }
+    if line == 1 {
+        return Some(0);
+    }
+    let mut current = 1;
+    for (i, b) in source.bytes().enumerate() {
+        if b == b'\n' {
+            current += 1;
+            if current == line {
+                return Some(i + 1);
+            }
+        }
+    }
+    None
+}
+
+/// Name of the function whose span contains `offset`, preferring the innermost one.
+///
+/// Nested functions mean several spans can contain a line; the smallest span is the function the
+/// line actually belongs to.
+///
+/// The range is **half-open** — `start <= offset < end` — because `FunctionLocation::end_byte` is
+/// documented exclusive. A closed range at the right end would let the *previous* function match at a
+/// boundary: where one function's exclusive end equals the next function's start, both spans contain that
+/// offset, and the tie would go to whichever `min_by_key` happened to see first. That is precisely the
+/// adjacent-function case this function exists to resolve, so it is also the case a test pins.
+fn function_containing_line(
+    locations: &HashMap<String, FunctionLocation>,
+    offset: usize,
+) -> Option<String> {
+    locations
+        .iter()
+        .filter(|(_, loc)| loc.start_byte <= offset && offset < loc.end_byte)
+        .min_by_key(|(_, loc)| loc.end_byte - loc.start_byte)
+        .map(|(name, _)| name.clone())
+}
+
+/// Add the function that was actually searched to a criterion lookup failure.
+///
+/// The slicer reports `no PDG node for <var> at line <N>`, which points at the variable and the
+/// line — the two things the caller supplied and which are usually correct. Naming the function and
+/// listing the file's other candidates makes the failure attributable to the real cause.
+fn name_the_function_searched(
+    err: anyhow::Error,
+    fn_name: &str,
+    locations: &HashMap<String, FunctionLocation>,
+    explicit_function: bool,
+) -> anyhow::Error {
+    let msg = err.to_string();
+    // The analysis error renders as `Resource not found: no PDG node for …`, so match on the
+    // message body rather than its start.
+    if !msg.contains("no PDG node for") {
+        return err;
+    }
+    let provenance = if explicit_function {
+        "from --function"
+    } else {
+        "resolved from the criterion line"
+    };
+    let mut names: Vec<&str> = locations.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    let candidates = if names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " This file defines: {}.",
+            names
+                .iter()
+                .map(|n| format!("'{n}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    anyhow::anyhow!("{msg} — searched only '{fn_name}' ({provenance}).{candidates}")
+}
 
 pub struct SliceArgs {
     pub file: String,
@@ -35,16 +116,33 @@ pub fn run(ctx: &CliContext, args: SliceArgs) -> Result<()> {
         .language
         .clone()
         .unwrap_or_else(|| language_from_path(&path));
-    let fn_name = args.function.clone().unwrap_or_else(|| {
-        if lang == "python" {
-            "process".to_string()
-        } else {
-            path.file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("main")
-                .to_string()
-        }
-    });
+    // Which function to slice within. `--function` wins when given. Otherwise resolve the
+    // function that *contains* the criterion line.
+    //
+    // The previous default was the file stem, which is not a defensible guess: files routinely
+    // hold several functions, and the stem may match none of them. In `src/probe.ts` holding
+    // `calc`, it produced `function 'probe' not found`; when the stem *did* match one function but
+    // the line belonged to another in the same file, it produced `no PDG node for <var> at line
+    // <N>` — blaming the variable and the line, the two things the caller actually supplied.
+    let (_, locations) = index_function_locations(&lang, source.as_bytes())?;
+    let explicit_function = args.function.is_some();
+    let fn_name = match args.function.clone() {
+        Some(name) => name,
+        None => line_start_byte(&source, args.line)
+            .and_then(|offset| function_containing_line(&locations, offset))
+            // Nothing contains the line. Keep the historical fallback so behaviour changes only
+            // where the old default was plainly wrong.
+            .unwrap_or_else(|| {
+                if lang == "python" {
+                    "process".to_string()
+                } else {
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("main")
+                        .to_string()
+                }
+            }),
+    };
 
     let mut cfg = build_cfg_for_function(&lang, &source, &fn_name)?;
     let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
@@ -79,9 +177,10 @@ pub fn run(ctx: &CliContext, args: SliceArgs) -> Result<()> {
     }
 
     let slice = match args.direction {
-        SliceDirection::Backward => BackwardSlicer::new(&pdg, &cfg).slice(criterion.clone())?,
-        SliceDirection::Forward => ForwardSlicer::new(&pdg, &cfg).slice(criterion.clone())?,
-    };
+        SliceDirection::Backward => BackwardSlicer::new(&pdg, &cfg).slice(criterion.clone()),
+        SliceDirection::Forward => ForwardSlicer::new(&pdg, &cfg).slice(criterion.clone()),
+    }
+    .map_err(|e| name_the_function_searched(e.into(), &fn_name, &locations, explicit_function))?;
 
     match args.view {
         SliceView::Cfg => {
@@ -174,4 +273,114 @@ fn render_slice_text(
     }
     let _ = function;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TWO_FUNCTIONS: &str = "export function useAgentPositions() {\n  const x = 1;\n  return x;\n}\n\nexport function fetchPositions(ids: number[]) {\n  const userIds = ids.map(String);\n  const total = userIds.length;\n  return total;\n}\n";
+
+    fn locations(language: &str, source: &str) -> HashMap<String, FunctionLocation> {
+        index_function_locations(language, source.as_bytes())
+            .expect("index function locations")
+            .1
+    }
+
+    #[test]
+    fn line_start_byte_is_one_based() {
+        let source = "a\nbb\nccc\n";
+        assert_eq!(line_start_byte(source, 1), Some(0));
+        assert_eq!(line_start_byte(source, 2), Some(2));
+        assert_eq!(line_start_byte(source, 3), Some(5));
+        assert_eq!(line_start_byte(source, 0), None, "lines are 1-based");
+        assert_eq!(line_start_byte(source, 99), None, "past end of file");
+    }
+
+    /// The defect: the function was taken from the file stem, so a line belonging to the second
+    /// function in a file was looked up in the first, and the error blamed the variable and line.
+    #[test]
+    fn resolves_the_function_that_contains_the_line() {
+        let locs = locations("typescript", TWO_FUNCTIONS);
+        let at = |line: usize| {
+            function_containing_line(&locs, line_start_byte(TWO_FUNCTIONS, line).unwrap())
+        };
+        assert_eq!(at(2).as_deref(), Some("useAgentPositions"));
+        assert_eq!(at(8).as_deref(), Some("fetchPositions"));
+    }
+
+    /// Two functions back to back, where the first one's exclusive end is exactly the second's start.
+    ///
+    /// With a closed range (`<= end_byte`) both spans contain that offset and the choice is a tie broken by
+    /// iteration order; with a half-open range only the second matches. The bytes are laid out explicitly
+    /// rather than parsed, because the point is the comparison, not the parser.
+    #[test]
+    fn a_boundary_offset_belongs_to_the_following_function_not_the_previous() {
+        let locations: HashMap<String, FunctionLocation> = HashMap::from([
+            ("first".to_string(), FunctionLocation { start_byte: 0, end_byte: 10 }),
+            ("second".to_string(), FunctionLocation { start_byte: 10, end_byte: 20 }),
+        ]);
+        assert_eq!(
+            function_containing_line(&locations, 10).as_deref(),
+            Some("second"),
+            "offset 10 is `first`'s exclusive end and `second`'s inclusive start — it belongs to `second`"
+        );
+        assert_eq!(function_containing_line(&locations, 9).as_deref(), Some("first"));
+        assert_eq!(
+            function_containing_line(&locations, 20),
+            None,
+            "offset 20 is `second`'s exclusive end, so it belongs to neither"
+        );
+    }
+
+    #[test]
+    fn prefers_the_innermost_function_for_nested_spans() {
+        let source = "function outer() {\n  function inner() {\n    const y = 1;\n    return y;\n  }\n  return inner();\n}\n";
+        let locs = locations("typescript", source);
+        let offset = line_start_byte(source, 3).unwrap();
+        assert_eq!(
+            function_containing_line(&locs, offset).as_deref(),
+            Some("inner"),
+            "several spans contain line 3; the smallest is the one it belongs to"
+        );
+    }
+
+    #[test]
+    fn no_function_contains_a_line_outside_every_span() {
+        let source = format!("{TWO_FUNCTIONS}\n// trailing comment\n");
+        let locs = locations("typescript", source.as_str());
+        let offset = line_start_byte(&source, 12).unwrap();
+        assert_eq!(function_containing_line(&locs, offset), None);
+    }
+
+    #[test]
+    fn names_the_function_that_was_searched() {
+        let locs = locations("typescript", TWO_FUNCTIONS);
+        let err = anyhow::anyhow!("Resource not found: no PDG node for total at line 8");
+        let out = name_the_function_searched(err, "useAgentPositions", &locs, false).to_string();
+        assert!(out.contains("no PDG node for total at line 8"), "{out}");
+        assert!(out.contains("'useAgentPositions'"), "{out}");
+        assert!(out.contains("resolved from the criterion line"), "{out}");
+        assert!(
+            out.contains("'fetchPositions'"),
+            "the other candidate should be listed: {out}"
+        );
+    }
+
+    #[test]
+    fn attributes_the_choice_to_an_explicit_function_flag() {
+        let locs = locations("typescript", TWO_FUNCTIONS);
+        let err = anyhow::anyhow!("Resource not found: no PDG node for total at line 8");
+        let out = name_the_function_searched(err, "useAgentPositions", &locs, true).to_string();
+        assert!(out.contains("from --function"), "{out}");
+    }
+
+    /// Unrelated failures must not be rewritten.
+    #[test]
+    fn leaves_other_errors_untouched() {
+        let locs = locations("typescript", TWO_FUNCTIONS);
+        let err = anyhow::anyhow!("Resource not found: function 'nope' not found");
+        let out = name_the_function_searched(err, "useAgentPositions", &locs, false).to_string();
+        assert_eq!(out, "Resource not found: function 'nope' not found");
+    }
 }
