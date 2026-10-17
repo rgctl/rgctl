@@ -26,6 +26,7 @@ Prefer the **Canonical** column in examples and agent workflows. Aliases/façade
 | CI policy | `check` | — |
 | PR call-path review | `review paths` | — |
 | PR policy gate | `review check` | `pr-check` (alias) |
+| Composed review artifact | `review export` | — |
 | Kantra rules | `rules run` | — |
 | Experimental GQL | `gql` | prefer Query verbs above |
 
@@ -679,6 +680,23 @@ rgctl cpg export --format graphson --output cpg.json [--path-contains src/] \
 **Purpose:** Temporal PR policy gate (new/existing/resolved/regression). Prefer this name; **`pr-check`** is a compatibility alias with identical JSON and exit codes.
 
 **See:** [CI Policy Checks](../../docs/guides/ci-policy-checks.md), [json-api § pr-check / review check](../../docs/json-api.md#8b-pr-check).
+
+### review export
+
+**Command:** `rgctl review export [--base-ref REF] [--head-ref REF] [--policy-file PATH] [--stdout] [--full-snapshots]`
+
+**Purpose:** Compose `review paths` + optional `review check` + the violation timeline into **one** versioned artifact at `.rgctl/workflows/review.json`, so a review needs a single fetch instead of three commands. Use `--stdout` to pipe it.
+
+**Prerequisites:** Base/head graph snapshots (same prep as `review paths`).
+
+**Pitfalls (critical):**
+- `policy` is **`null` when not evaluated** (no `--policy-file`), which is *not* the same as "no violations". Never report a null `policy` as a clean result.
+- `review export` is **read-only**: unlike `review check`, it does **not** write `.rgctl/violation_ledger.jsonl`. Persisting observations stays `review check`'s job.
+- Output target precedence: `-o PATH` → `--stdout` → `.rgctl/workflows/review.json`.
+
+**Agent should report:** the artifact path, `review_paths.change_summary`, whether `policy` was evaluated, and any `provenance.unavailable` reasons.
+
+**See:** [json-api § review export](../../docs/json-api.md#8d-review-export).
 
 ---
 

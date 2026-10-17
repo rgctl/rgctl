@@ -3,7 +3,7 @@
 use super::args::OutputFormat;
 use super::context::CliContext;
 use super::policy_file::PolicyFile;
-use super::pr_check_output::build_pr_check_response;
+use super::pr_check_output::{PrCheckResponse, build_pr_check_response};
 use super::temporal_prep::{
     SyntheticHeadMode, TemporalArtifactArgs, prepare_artifacts, resolve_scope_paths,
     resolve_unified_diff,
@@ -167,6 +167,73 @@ pub fn run(ctx: &CliContext, args: PrCheckArgs) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Evaluate the policy gate **without appending to `.rgctl/violation_ledger.jsonl`**.
+///
+/// [`run`] opens the on-disk ledger, classifies against it, and then records observations
+/// into it (`record_deltas_to_ledger`). The classification is a read; the recording is the mutation, and
+/// it is the part a reporting command must not do — an append would change the classification inputs for
+/// the very next export, so exporting twice would not be idempotent.
+///
+/// **The read is that same read.** An earlier version of this function used
+/// [`ViolationLedger::in_memory()`], which is more than read-only: it discards the on-disk history
+/// entirely. That made the two halves of this module's contract disagree —
+/// [`record_deltas_to_ledger`] stops the *state* from changing, while the empty ledger stopped the
+/// *classification* from matching. Regressions were not reclassified and calendar `first_seen` ages did
+/// not line up, so the exported `policy` section could contradict `review check` on a repository whose
+/// ledger already had entries. `in_memory()` is documented as being for tests, and this was not one.
+///
+/// So: open the real ledger, classify against it, and skip only the append.
+pub fn evaluate_read_only(ctx: &CliContext, args: &PrCheckArgs) -> Result<PrCheckResponse> {
+    let policy = PolicyFile::load(Path::new(&args.policy_file))
+        .with_context(|| format!("load policy {}", args.policy_file))?;
+    let synthetic_head = SyntheticHeadMode::parse(args.synthetic_head.as_deref())?;
+    let new_violations_only = policy.scope.new_violations_only;
+    let fail_on_regression = policy.scope.fail_on_regression;
+    let max_changed_files = policy.size_limits.max_changed_files;
+    let max_scoped_entities = policy.size_limits.max_scoped_entities;
+    let temporal = policy.temporal.clone();
+    let registry = policy.into_registry();
+
+    let eval = evaluate_pr_check(
+        ctx,
+        args,
+        &registry,
+        max_changed_files,
+        max_scoped_entities,
+        synthetic_head,
+    )?;
+    let mut deltas = eval.deltas;
+
+    // The on-disk ledger, opened for reading only. `ViolationLedger::open` loads the file if it exists and
+    // creates nothing, so the only mutation in the `run` path — `record_deltas_to_ledger` — is the one
+    // thing this function leaves out.
+    let ledger = ViolationLedger::open(&ctx.repo.join(GRAPH_DIR)).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    apply_ledger_regression(&mut deltas, &ledger);
+
+    let calendar = evaluate_calendar_for_deltas(
+        &deltas,
+        &temporal,
+        &ledger,
+        system_today_days(),
+        system_unix_secs(),
+    );
+
+    Ok(build_pr_check_response(
+        &deltas,
+        eval.graph_diff,
+        eval.scoped_files,
+        eval.scoped_entities,
+        new_violations_only,
+        fail_on_regression,
+        // `--bisect` is intentionally not run here: it walks the commit range once per
+        // violating symbol, which is far too costly for an export and would make the
+        // artifact's cost scale with violation count rather than repo size.
+        &HashMap::new(),
+        &calendar,
+        args.strict_calendar,
+    ))
 }
 
 fn evaluate_pr_check(

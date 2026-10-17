@@ -32,7 +32,22 @@ pub fn run_check(ctx: &CliContext, args: PrCheckArgs) -> Result<()> {
     pr_check::run(ctx, args)
 }
 
-pub fn run_paths(ctx: &CliContext, args: ReviewPathsArgs) -> Result<()> {
+/// A built review-paths report plus the provenance captured while building it.
+///
+/// `review export` consumes the report *and* the provenance, so the two are produced
+/// together: re-deriving the digests or artifact paths afterwards would risk them
+/// describing a different snapshot pair than the report does.
+pub struct PathsReportBundle {
+    pub report: crate::analysis::ReviewPathsReport,
+    pub base_snapshot: std::path::PathBuf,
+    pub head_snapshot: std::path::PathBuf,
+    pub base_digest: String,
+    pub head_digest: String,
+}
+
+/// Build the before/after call-path report for a PR. Shared by `review paths` and
+/// `review export` so the two can never disagree about the same change.
+pub fn build_paths_bundle(ctx: &CliContext, args: ReviewPathsArgs) -> Result<PathsReportBundle> {
     let synthetic_head = SyntheticHeadMode::parse(args.synthetic_head.as_deref())?;
     let temporal = TemporalArtifactArgs {
         base_artifact: args.base_artifact,
@@ -52,6 +67,9 @@ pub fn run_paths(ctx: &CliContext, args: ReviewPathsArgs) -> Result<()> {
                 artifacts.head_snapshot.display()
             )
         })?;
+
+    let base_digest = pair.base.content_digest()?.to_string();
+    let head_digest = pair.head.content_digest()?.to_string();
 
     let mut sink = VecDiffSink::default();
     let _stats = diff_snapshots(&pair.base, &pair.head, &mut sink)?;
@@ -82,6 +100,18 @@ pub fn run_paths(ctx: &CliContext, args: ReviewPathsArgs) -> Result<()> {
         &options,
     )
     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+    Ok(PathsReportBundle {
+        report,
+        base_snapshot: artifacts.base_snapshot,
+        head_snapshot: artifacts.head_snapshot,
+        base_digest,
+        head_digest,
+    })
+}
+
+pub fn run_paths(ctx: &CliContext, args: ReviewPathsArgs) -> Result<()> {
+    let report = build_paths_bundle(ctx, args)?.report;
 
     if !report.ambiguous.is_empty() && report.symbols.is_empty() {
         if ctx.format == OutputFormat::Json {
