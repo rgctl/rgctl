@@ -4,7 +4,8 @@
 //!   ./scripts/test-dashboard-golden.sh
 //!   cargo test --release --test dashboard_gbuilder
 //!
-//! Repo path: `/Users/sshaaf/git/java/gbuilder` (override: `RGCTL_DASHBOARD_GOLDEN_REPO`).
+//! Repo path: `example/metasfresh-4.9.8b`, relative to the checkout (override:
+//! `RGCTL_DASHBOARD_GOLDEN_REPO`). Fetch corpora with `./scripts/fetch-profile-repos.sh`.
 
 mod dashboard_harness;
 
