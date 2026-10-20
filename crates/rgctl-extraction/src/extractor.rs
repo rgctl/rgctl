@@ -54,6 +54,8 @@ pub struct FileExtraction {
 /// Lightweight remainder after pass-1 graph population (symbols committed; source dropped).
 #[derive(Debug, Default)]
 pub struct ExtractionTail {
+    /// Source file path (used to sort pass-2 application order).
+    pub path: PathBuf,
     /// Relations resolved in pass 2
     pub relations: Vec<Relation>,
     /// Config usages linked in pass 2
@@ -228,6 +230,7 @@ impl Extractor {
 
         Ok((
             ExtractionTail {
+                path: extraction.path.clone(),
                 relations: std::mem::take(&mut extraction.relations),
                 config_usages: std::mem::take(&mut extraction.config_usages),
             },
@@ -236,6 +239,9 @@ impl Extractor {
     }
 
     /// Pass 2: resolve relations and config usages (requires [`GraphBuilder::build_resolution_indexes`]).
+    ///
+    /// Tails are applied in stable path order so parallel extract completion order
+    /// cannot change which relations see mid-pass stubs first (#125).
     pub fn populate_pass2(
         &self,
         tails: &[ExtractionTail],
@@ -252,8 +258,11 @@ impl Extractor {
     ) -> Result<Pass2Profile> {
         use std::time::Instant;
 
+        let mut ordered: Vec<&ExtractionTail> = tails.iter().collect();
+        ordered.sort_by(|a, b| a.path.cmp(&b.path));
+
         let mut profile = Pass2Profile::default();
-        for tail in tails {
+        for tail in ordered {
             if !tail.relations.is_empty() {
                 let relation_start = Instant::now();
                 for relation in &tail.relations {

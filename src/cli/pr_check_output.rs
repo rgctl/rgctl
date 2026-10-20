@@ -146,6 +146,8 @@ mod tests {
                 Some("src/a.rs"),
                 "foo",
                 rgctl_graph::schema::NodeType::Function,
+                None,
+                None,
             ),
             symbol: "foo".into(),
             classification,

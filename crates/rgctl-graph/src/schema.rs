@@ -432,28 +432,39 @@ impl Node {
         }
     }
 
-    /// Set the qualified name
+    /// Set the qualified name and refresh the deterministic [`id`](Self::id) when a file path is set.
     pub fn with_qualified_name(mut self, qualified_name: impl Into<SharedStr>) -> Self {
         self.qualified_name = Some(qualified_name.into());
+        self.refresh_deterministic_id();
         self
     }
 
     /// Set the file path and assign a deterministic [`id`](Self::id) from stable facets.
     pub fn with_file_path(mut self, file_path: impl Into<SharedStr>) -> Self {
         self.file_path = Some(file_path.into());
+        self.refresh_deterministic_id();
+        self
+    }
+
+    /// Set the source location and refresh the deterministic [`id`](Self::id) when a file path is set.
+    pub fn with_location(mut self, start_line: usize, end_line: usize) -> Self {
+        self.start_line = Some(start_line);
+        self.end_line = Some(end_line);
+        self.refresh_deterministic_id();
+        self
+    }
+
+    fn refresh_deterministic_id(&mut self) {
+        if self.file_path.is_none() {
+            return;
+        }
         self.id = crate::stable_key::deterministic_node_id(
             self.file_path.as_deref().map(|s| s.as_ref()),
             self.name.as_ref(),
             self.node_type,
+            self.qualified_name.as_deref().map(|s| s.as_ref()),
+            self.start_line,
         );
-        self
-    }
-
-    /// Set the source location
-    pub fn with_location(mut self, start_line: usize, end_line: usize) -> Self {
-        self.start_line = Some(start_line);
-        self.end_line = Some(end_line);
-        self
     }
 
     /// Set the function signature.

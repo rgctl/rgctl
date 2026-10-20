@@ -2,6 +2,17 @@
 
 <!-- Add bullets here during development; move to docs/releases/v0.4.x.md at tag time. -->
 
+## Discover graph determinism ([#125](https://github.com/sshaaf/rgctl/issues/125))
+
+Cold `discover` edge identity is deterministic under parallel extract:
+
+- Pass-2 applies extraction tails in **path-sorted** order (not Rayon completion order).
+- `Calls` resolve only to `Function` nodes (never Class field stubs via fuzzy suffix).
+- Field-like `References` no longer create Class external stubs (no bare `email`/`password` type pollution).
+- Deterministic node IDs include **qualified name** (or start line when QN is absent), so per-owner `$lambda$0` symbols no longer collide.
+
+**Re-discover required** after upgrade: node UUIDs and edge sets can change vs pre-fix indexes.
+
 ## Agent pack: `/rgctl:review` (OpenSpec dual)
 
 - New skill **`rgctl-review`** + slash command **`/rgctl:review`**: local PR/branch review protocol (`review paths` / `review check`, optional blast, soft architecture-md) writing **`REVIEW_REPORT.md`** + four-section session verdict — **no** GitHub/GitLab posting.

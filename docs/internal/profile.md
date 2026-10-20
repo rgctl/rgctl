@@ -48,6 +48,8 @@ See also `example/README.md` (kafka, k8s-website markdown gates).
 
 Warm or partial `.rgctl/` caches **invalidate** wall times (often seconds instead of minutes).
 
+**Edge / node identity:** parallel cold `discover` is deterministic (path-sorted pass-2, callable-only `Calls`, QN-aware node IDs). See [#125](https://github.com/sshaaf/rgctl/issues/125) and `docs/releases/unreleased.md` — re-discover after upgrading past that fix.
+
 ---
 
 ## Commands

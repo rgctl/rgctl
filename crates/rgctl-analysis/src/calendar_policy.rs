@@ -249,7 +249,7 @@ mod tests {
 
     fn sample_delta(classification: TemporalClass) -> PolicyDelta {
         PolicyDelta {
-            key: stable_key_from_facets(Some("src/a.rs"), "foo", NodeType::Function),
+            key: stable_key_from_facets(Some("src/a.rs"), "foo", NodeType::Function, None, None),
             symbol: "foo".into(),
             classification,
             violation: PolicyViolation::ScaleFailure { count: 6, max: 5 },

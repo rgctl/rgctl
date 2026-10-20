@@ -54,6 +54,8 @@ pub struct GraphBuilder {
     field_type_index: HashMap<String, String>,
     /// Symbol node id → defining file path (for C header/.c disambiguation).
     symbol_files: HashMap<Uuid, String>,
+    /// Node id → kind (spill-safe; used to reject non-callable `Calls` targets).
+    node_types: HashMap<Uuid, NodeType>,
     /// Precomputed bare-name → `.c` implementation when header/translation-unit pairs collide.
     c_preferred_impl: HashMap<String, Uuid>,
     /// Lazy cache for bare suffix lookups during pass 2 (positive hits only).
@@ -256,6 +258,7 @@ impl GraphBuilder {
     }
 
     fn commit_node(&mut self, node: Node) {
+        self.node_types.insert(node.id, node.node_type);
         self.record_line_span(&node);
         self.record_tracker_mapping(&node);
         if let Some(spill) = self.spill.as_mut() {
@@ -664,7 +667,8 @@ impl GraphBuilder {
     ///
     /// For allowlisted relation kinds, missing endpoints become deduplicated
     /// external stub nodes (`is_external_stub`) so Instantiates / JPMS /
-    /// AnnotatedWith / References edges survive into GQL.
+    /// AnnotatedWith edges survive into GQL. Field-like `References` are not
+    /// stubbed (they must not invent Class nodes named like fields).
     pub fn add_relation(&mut self, relation: &Relation) -> Result<()> {
         // Fast reject: unresolved cross-file C calls (no stub policy for Calls).
         if relation.relation_type == RelationType::Calls
@@ -732,6 +736,14 @@ impl GraphBuilder {
                     stub_node_type_for_target(relation),
                 ));
             }
+        }
+
+        // Calls must target callables only — never Class field stubs via fuzzy suffix.
+        if relation.relation_type == RelationType::Calls
+            && let Some(to) = to_id
+            && self.node_types.get(&to).copied() != Some(NodeType::Function)
+        {
+            to_id = None;
         }
 
         if let (Some(from), Some(to)) = (from_id, to_id) {
@@ -1399,13 +1411,14 @@ fn join_path_normalized(base: &Path, rel: &str) -> String {
 }
 
 fn relation_allows_external_stub(relation_type: RelationType) -> bool {
+    // `References` is intentionally omitted: field access must not invent Class
+    // stubs named like `email` / `password` that pollute suffix resolution (#125).
     matches!(
         relation_type,
         RelationType::Instantiates
             | RelationType::DependsOn
             | RelationType::Uses
             | RelationType::AnnotatedWith
-            | RelationType::References
             | RelationType::Extends
             | RelationType::Implements
             | RelationType::Permits
@@ -2074,6 +2087,236 @@ mod tests {
         );
     }
 
+    fn auth_register_symbol() -> Symbol {
+        Symbol {
+            name: "register".to_string(),
+            symbol_type: SymbolType::Function,
+            qualified_name: Some("AuthService.register".to_string()),
+            location: SourceLocation {
+                file: "AuthService.java".to_string(),
+                start_line: 1,
+                end_line: 10,
+                start_column: 0,
+                end_column: 1,
+            },
+            signature: None,
+            return_type: None,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({ "language": "java" }),
+        }
+    }
+
+    fn auth_loc(line: usize) -> SourceLocation {
+        SourceLocation {
+            file: "AuthService.java".to_string(),
+            start_line: line,
+            end_line: line,
+            start_column: 0,
+            end_column: 1,
+        }
+    }
+
+    /// Issue #125: field References must not invent Class stubs that bare Calls can bind.
+    #[test]
+    fn references_to_field_does_not_create_class_stub() {
+        let mut builder = GraphBuilder::new();
+        let file_id = builder.ensure_file_node(Path::new("AuthService.java"));
+        builder.add_symbol(&auth_register_symbol(), file_id);
+        builder.build_resolution_indexes();
+        let before_nodes = builder.node_count();
+        builder
+            .add_relation(&Relation {
+                from: "AuthService.register".to_string(),
+                to: "email".to_string(),
+                relation_type: RelationType::References,
+                location: auth_loc(2),
+                metadata: serde_json::json!({ "language": "java" }),
+                to_qualified_hint: Some("User.email".to_string()),
+                to_type_hint: None,
+            })
+            .unwrap();
+        assert_eq!(
+            builder.node_count(),
+            before_nodes,
+            "unresolved field References must not invent nodes"
+        );
+        assert!(
+            !builder.nodes().iter().any(|n| {
+                n.name == "email"
+                    && n.node_type == NodeType::Class
+                    && n.properties.get("is_external_stub").map(String::as_str) == Some("true")
+            }),
+            "no Class stub named email"
+        );
+    }
+
+    /// Issue #125: bare Calls never bind Class stubs, regardless of relation order.
+    #[test]
+    fn calls_never_bind_class_stub_regardless_of_order() {
+        let references = Relation {
+            from: "AuthService.register".to_string(),
+            to: "email".to_string(),
+            relation_type: RelationType::References,
+            location: auth_loc(2),
+            metadata: serde_json::json!({ "language": "java" }),
+            to_qualified_hint: Some("User.email".to_string()),
+            to_type_hint: None,
+        };
+        let calls = Relation {
+            from: "AuthService.register".to_string(),
+            to: "email".to_string(),
+            relation_type: RelationType::Calls,
+            location: auth_loc(3),
+            metadata: serde_json::json!({ "language": "java" }),
+            to_qualified_hint: None,
+            to_type_hint: None,
+        };
+
+        for order_refs_first in [true, false] {
+            let mut builder = GraphBuilder::new();
+            let file_id = builder.ensure_file_node(Path::new("AuthService.java"));
+            builder.add_symbol(&auth_register_symbol(), file_id);
+            // Plant a Class stub via Instantiates (still allowlisted) to prove Calls rejects it.
+            builder
+                .add_relation(&Relation {
+                    from: "AuthService.register".to_string(),
+                    to: "email".to_string(),
+                    relation_type: RelationType::Instantiates,
+                    location: auth_loc(1),
+                    metadata: serde_json::json!({ "language": "java" }),
+                    to_qualified_hint: Some("User.email".to_string()),
+                    to_type_hint: None,
+                })
+                .unwrap();
+            let stub_id = builder
+                .nodes()
+                .iter()
+                .find(|n| {
+                    n.name == "email"
+                        && n.node_type == NodeType::Class
+                        && n.properties.get("is_external_stub").map(String::as_str) == Some("true")
+                })
+                .map(|n| n.id)
+                .expect("Class stub via Instantiates");
+            builder.build_resolution_indexes();
+            if order_refs_first {
+                builder.add_relation(&references).unwrap();
+                builder.add_relation(&calls).unwrap();
+            } else {
+                builder.add_relation(&calls).unwrap();
+                builder.add_relation(&references).unwrap();
+            }
+            assert!(
+                !builder
+                    .edges
+                    .iter()
+                    .any(|e| e.edge_type == EdgeType::Calls && e.to == stub_id),
+                "Calls must not target Class stub (refs_first={order_refs_first})"
+            );
+        }
+    }
+
+    #[test]
+    fn calls_to_existing_function_suffix_still_commits() {
+        let mut builder = GraphBuilder::new();
+        let file_id = builder.ensure_file_node(Path::new("AuthService.java"));
+        builder.add_symbol(&auth_register_symbol(), file_id);
+        let callee = Symbol {
+            name: "encode".to_string(),
+            symbol_type: SymbolType::Function,
+            qualified_name: Some("PasswordEncoder.encode".to_string()),
+            location: SourceLocation {
+                file: "PasswordEncoder.java".to_string(),
+                start_line: 1,
+                end_line: 3,
+                start_column: 0,
+                end_column: 1,
+            },
+            signature: None,
+            return_type: None,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({ "language": "java" }),
+        };
+        let enc_file = builder.ensure_file_node(Path::new("PasswordEncoder.java"));
+        builder.add_symbol(&callee, enc_file);
+        builder.build_resolution_indexes();
+        let before = builder.edge_count();
+        builder
+            .add_relation(&Relation {
+                from: "AuthService.register".to_string(),
+                to: "encode".to_string(),
+                relation_type: RelationType::Calls,
+                location: auth_loc(5),
+                metadata: serde_json::json!({ "language": "java" }),
+                to_qualified_hint: None,
+                to_type_hint: None,
+            })
+            .unwrap();
+        assert_eq!(builder.edge_count(), before + 1);
+        assert!(builder.edges.iter().any(|e| e.edge_type == EdgeType::Calls));
+    }
+
+    #[test]
+    fn same_file_lambdas_with_different_qn_keep_distinct_ids() {
+        let mut builder = GraphBuilder::new();
+        let file_id = builder.ensure_file_node(Path::new("AuthService.java"));
+        let login_lambda = Symbol {
+            name: "$lambda$0".to_string(),
+            symbol_type: SymbolType::Function,
+            qualified_name: Some("AuthService.login.$lambda$0".to_string()),
+            location: SourceLocation {
+                file: "AuthService.java".to_string(),
+                start_line: 63,
+                end_line: 63,
+                start_column: 0,
+                end_column: 1,
+            },
+            signature: None,
+            return_type: None,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({ "language": "java", "is_lambda": true }),
+        };
+        let current_lambda = Symbol {
+            name: "$lambda$0".to_string(),
+            symbol_type: SymbolType::Function,
+            qualified_name: Some("AuthService.currentUser.$lambda$0".to_string()),
+            location: SourceLocation {
+                file: "AuthService.java".to_string(),
+                start_line: 77,
+                end_line: 77,
+                start_column: 0,
+                end_column: 1,
+            },
+            signature: None,
+            return_type: None,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({ "language": "java", "is_lambda": true }),
+        };
+        let id_a = builder.add_symbol(&login_lambda, file_id);
+        let id_b = builder.add_symbol(&current_lambda, file_id);
+        assert_ne!(id_a, id_b);
+        let qns: Vec<_> = builder
+            .nodes()
+            .iter()
+            .filter(|n| n.name == "$lambda$0")
+            .filter_map(|n| n.qualified_name.as_deref())
+            .collect();
+        assert!(qns.contains(&"AuthService.login.$lambda$0"));
+        assert!(qns.contains(&"AuthService.currentUser.$lambda$0"));
+    }
+
     #[test]
     fn external_stub_dedupes_by_qualified_name() {
         let mut builder = GraphBuilder::new();
@@ -2317,7 +2560,9 @@ mod tests {
     }
 
     #[test]
-    fn references_arraylist_without_file_hint_still_stubs_class() {
+    fn references_unresolved_type_name_does_not_stub_class() {
+        // #125: References is not stub-allowlisted (field names must not become Class stubs).
+        // Type stubs remain available via Instantiates / Uses / etc.
         let mut builder = GraphBuilder::new();
         let file_id = builder.ensure_file_node(Path::new("Demo.java"));
         let method = Symbol {
@@ -2341,6 +2586,7 @@ mod tests {
         };
         builder.add_symbol(&method, file_id);
         builder.build_resolution_indexes();
+        let before = builder.node_count();
         builder
             .add_relation(&Relation {
                 from: "Demo.run".to_string(),
@@ -2358,21 +2604,14 @@ mod tests {
                 to_type_hint: None,
             })
             .unwrap();
-
-        let stub = builder
-            .nodes()
-            .iter()
-            .find(|n| n.name == "ArrayList" && n.node_type == NodeType::Class)
-            .expect("ArrayList Class stub");
-        assert_eq!(
-            stub.properties.get("is_external_stub").map(String::as_str),
-            Some("true")
-        );
+        assert_eq!(builder.node_count(), before);
         assert!(
-            builder
-                .edges
-                .iter()
-                .any(|e| { e.edge_type == EdgeType::References && e.to == stub.id })
+            !builder.nodes().iter().any(|n| {
+                n.name == "ArrayList"
+                    && n.node_type == NodeType::Class
+                    && n.properties.get("is_external_stub").map(String::as_str) == Some("true")
+            }),
+            "References must not invent Class stubs"
         );
     }
 

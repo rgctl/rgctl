@@ -73,18 +73,31 @@ pub fn deterministic_node_id(
     file_path: Option<&str>,
     name: &str,
     node_type: NodeType,
+    qualified_name: Option<&str>,
+    start_line: Option<usize>,
 ) -> Uuid {
     match file_path {
-        Some(path) => stable_key_to_uuid(stable_key_from_facets(Some(path), name, node_type)),
+        Some(path) => stable_key_to_uuid(stable_key_from_facets(
+            Some(path),
+            name,
+            node_type,
+            qualified_name,
+            start_line,
+        )),
         None => Uuid::new_v4(),
     }
 }
 
-/// Hash normalized file path, name, and node type into a [`StableNodeKey`].
+/// Hash normalized file path, name, node type, and disambiguation facets into a [`StableNodeKey`].
+///
+/// When `qualified_name` is present it is hashed (same-file same-simple-name symbols diverge).
+/// When absent, `start_line` is hashed instead so location still disambiguates.
 pub fn stable_key_from_facets(
     file_path: Option<&str>,
     name: &str,
     node_type: NodeType,
+    qualified_name: Option<&str>,
+    start_line: Option<usize>,
 ) -> StableNodeKey {
     let mut hasher = blake3::Hasher::new();
     if let Some(path) = file_path {
@@ -94,6 +107,12 @@ pub fn stable_key_from_facets(
     hasher.update(name.as_bytes());
     hasher.update(&[0xff]);
     hasher.update(&(node_type as u16).to_le_bytes());
+    hasher.update(&[0xff]);
+    if let Some(qn) = qualified_name.filter(|s| !s.is_empty()) {
+        hasher.update(qn.as_bytes());
+    } else {
+        hasher.update(&start_line.unwrap_or(0).to_le_bytes());
+    }
     let hash = hasher.finalize();
     StableNodeKey(u64::from_le_bytes(hash.as_bytes()[..8].try_into().expect("8 bytes")))
 }
@@ -112,7 +131,19 @@ pub fn stable_key_from_row(col: &ColumnarGraphMmap, idx: usize) -> Result<Stable
         row.file_path_len,
     )?;
     let node_type = crate::columnar_snapshot::node_type_from_u16(row.node_type)?;
-    Ok(stable_key_from_facets(file_path, name, node_type))
+    let start_line = (row.start_line > 0).then_some(row.start_line as usize);
+    // Qualified name lives in the cold extension blob.
+    let id = Uuid::from_bytes(row.id);
+    let qn_owned = col
+        .get_node(id)?
+        .and_then(|n| n.qualified_name.as_ref().map(|s| s.to_string()));
+    Ok(stable_key_from_facets(
+        file_path,
+        name,
+        node_type,
+        qn_owned.as_deref(),
+        start_line,
+    ))
 }
 
 /// Repo-relative path used for PR scope filtering (file path or file-node name).
@@ -200,6 +231,30 @@ mod tests {
         let login = Node::new(NodeType::Function, "login").with_file_path("auth.rs");
         let auth = Node::new(NodeType::Function, "authenticate").with_file_path("auth.rs");
         assert_ne!(login.id, auth.id);
+    }
+
+    #[test]
+    fn deterministic_node_id_disambiguates_by_qualified_name() {
+        let a = Node::new(NodeType::Function, "$lambda$0")
+            .with_file_path("AuthService.java")
+            .with_qualified_name("AuthService.login.$lambda$0")
+            .with_location(63, 63);
+        let b = Node::new(NodeType::Function, "$lambda$0")
+            .with_file_path("AuthService.java")
+            .with_qualified_name("AuthService.currentUser.$lambda$0")
+            .with_location(77, 77);
+        assert_ne!(a.id, b.id, "per-owner lambdas must not share a UUID");
+    }
+
+    #[test]
+    fn deterministic_node_id_disambiguates_by_start_line_without_qn() {
+        let a = Node::new(NodeType::Function, "dup")
+            .with_file_path("f.rs")
+            .with_location(10, 12);
+        let b = Node::new(NodeType::Function, "dup")
+            .with_file_path("f.rs")
+            .with_location(40, 42);
+        assert_ne!(a.id, b.id);
     }
 
     #[test]
