@@ -43,6 +43,18 @@ struct GraphSpec {
     severity: String,
     min_functions: Option<usize>,
     min_calls_edges: Option<usize>,
+    exact_functions: Option<usize>,
+    exact_calls_edges: Option<usize>,
+    #[serde(default)]
+    forbidden_edges: Vec<ForbiddenEdge>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ForbiddenEdge {
+    from: String,
+    to: String,
+    #[serde(default)]
+    edge_type: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -235,6 +247,13 @@ impl GraphIndex {
     }
     fn calls_count(&self) -> usize {
         self.calls.len()
+    }
+
+    fn has_calls_edge(&self, from: &str, to: &str) -> bool {
+        self.calls.iter().any(|(caller, callee)| {
+            caller.get("node").and_then(|n| n.as_str()) == Some(from)
+                && callee.get("node").and_then(|n| n.as_str()) == Some(to)
+        })
     }
 
     fn find_functions(&self, name: &str, class_hint: Option<&str>) -> Vec<&Value> {
@@ -597,6 +616,43 @@ pub fn run_project(
 
     let index = load_graph_index(bin, project_dir);
 
+    // Universal columnar structural invariants (INV-1…INV-7).
+    {
+        use rgctl_graph::{assert_graph_invariants, SnapshotNodeStore, SNAPSHOT_FILE};
+        let snap = project_dir.join(".rgctl").join(SNAPSHOT_FILE);
+        let inv_check = match SnapshotNodeStore::open(&snap) {
+            Ok(store) => match store.mmap().columnar() {
+                Some(col) => match assert_graph_invariants(col) {
+                    Ok(()) => check(
+                        "graph.assert_graph_invariants",
+                        "required",
+                        true,
+                        "INV-1..INV-7 ok",
+                    ),
+                    Err(e) => check(
+                        "graph.assert_graph_invariants",
+                        "required",
+                        false,
+                        e.to_string(),
+                    ),
+                },
+                None => check(
+                    "graph.assert_graph_invariants",
+                    "required",
+                    false,
+                    "snapshot is not columnar v2",
+                ),
+            },
+            Err(e) => check(
+                "graph.assert_graph_invariants",
+                "required",
+                false,
+                format!("open snapshot: {e}"),
+            ),
+        };
+        checks.push(inv_check);
+    }
+
     let gsev = facts.graph.severity.as_str();
     if let Some(min_fn) = facts.graph.min_functions {
         checks.push(check(
@@ -606,12 +662,38 @@ pub fn run_project(
             format!("functions={} min={min_fn}", index.function_count()),
         ));
     }
+    if let Some(exact_fn) = facts.graph.exact_functions {
+        checks.push(check(
+            "graph.exact_functions",
+            gsev,
+            index.function_count() == exact_fn,
+            format!("functions={} exact={exact_fn}", index.function_count()),
+        ));
+    }
     if let Some(min_calls) = facts.graph.min_calls_edges {
         checks.push(check(
             "graph.min_calls_edges",
             gsev,
             index.calls_count() >= min_calls,
             format!("calls={} min={min_calls}", index.calls_count()),
+        ));
+    }
+    if let Some(exact_calls) = facts.graph.exact_calls_edges {
+        checks.push(check(
+            "graph.exact_calls_edges",
+            gsev,
+            index.calls_count() == exact_calls,
+            format!("calls={} exact={exact_calls}", index.calls_count()),
+        ));
+    }
+    for (i, fe) in facts.graph.forbidden_edges.iter().enumerate() {
+        let hit = index.has_calls_edge(&fe.from, &fe.to);
+        let ok = !hit;
+        checks.push(check(
+            &format!("graph.forbidden_edges[{i}]"),
+            gsev,
+            ok,
+            format!("forbidden {} → {} present={hit}", fe.from, fe.to),
         ));
     }
 

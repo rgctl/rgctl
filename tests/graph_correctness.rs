@@ -73,6 +73,31 @@ const PROJECTS: &[ProjectSpec] = &[
         dir_name: "ecommerce-cpp",
         exclude: "build",
     },
+    ProjectSpec {
+        id: "php",
+        dir_name: "ecommerce-php",
+        exclude: "vendor",
+    },
+    ProjectSpec {
+        id: "ruby",
+        dir_name: "ecommerce-ruby",
+        exclude: "vendor",
+    },
+    ProjectSpec {
+        id: "kotlin",
+        dir_name: "ecommerce-kotlin",
+        exclude: "build,target",
+    },
+    ProjectSpec {
+        id: "groovy",
+        dir_name: "ecommerce-groovy",
+        exclude: "build,target",
+    },
+    ProjectSpec {
+        id: "puppet",
+        dir_name: "ecommerce-puppet",
+        exclude: "spec,vendor",
+    },
 ];
 
 fn assert_project(spec: &ProjectSpec) {
@@ -152,4 +177,24 @@ fn correctness_c() {
 #[test]
 fn correctness_cpp() {
     assert_project(&PROJECTS[8]);
+}
+#[test]
+fn correctness_php() {
+    assert_project(&PROJECTS[9]);
+}
+#[test]
+fn correctness_ruby() {
+    assert_project(&PROJECTS[10]);
+}
+#[test]
+fn correctness_kotlin() {
+    assert_project(&PROJECTS[11]);
+}
+#[test]
+fn correctness_groovy() {
+    assert_project(&PROJECTS[12]);
+}
+#[test]
+fn correctness_puppet() {
+    assert_project(&PROJECTS[13]);
 }

@@ -31,7 +31,7 @@
 - **Discover** walks the tree, runs language plugins (tree-sitter), builds the graph, writes compact caches to `.rgctl/`.
 - **Query** paths are read-oriented and return versioned JSON (`schema_version` on stdout — never scrape stderr).
 - **Analysis** (`rgctl-analysis`) projects CSR / callgraph / centrality / blast-radius / CFG–PDG; see [docs/analysis-architecture.md](docs/analysis-architecture.md).
-- **Languages:** `crates/rgctl-lang-*` + `rgctl-plugin-api`; register in `languages.toml`. See **Grammar bumps** under Must-follow for AST coverage manifests.
+- **Languages:** `crates/rgctl-lang-*` + `rgctl-plugin-api`; register in `languages.toml`. See **Grammar bumps** under Must-follow for AST coverage manifests. Adding a language: [docs/language-testing-guide.md](docs/language-testing-guide.md) (where to put tests / what to assert).
 
 ---
 
@@ -158,6 +158,7 @@ Baselines and notes: [docs/internal/profile.md](docs/internal/profile.md#snapsho
 | [docs/internal/profile.md](docs/internal/profile.md) | Cold profile deep dive |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, tests, PR norms |
 | [docs/contributor-checklist.md](docs/contributor-checklist.md) | Language / feature checklist |
+| [docs/language-testing-guide.md](docs/language-testing-guide.md) | New-language test locations, asserts, Tier 1 matrix |
 | [docs/guides/semantic-search.md](docs/guides/semantic-search.md) | Embedders (if touching semantic) |
 | [docs/releasing.md](docs/releasing.md) | Version bump + GitHub Release tags |
 | [openspec/changes/_shared/starting-context.md](openspec/changes/_shared/starting-context.md) | OpenSpec pointer (canonical policy is this file) |

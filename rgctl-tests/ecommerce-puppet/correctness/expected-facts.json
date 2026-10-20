@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "language": "puppet",
+  "project": "ecommerce-puppet",
+  "graph": {
+    "severity": "required",
+    "min_functions": 1,
+    "min_calls_edges": 0,
+    "forbidden_edges": []
+  },
+  "symbols": {},
+  "invariants": {}
+}

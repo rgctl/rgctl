@@ -428,6 +428,30 @@ path = "tests/discover_perf_baselines.rs"
 name = "cold_profile_gates"
 path = "tests/cold_profile_gates.rs"
 
+[[test]]
+name = "graph_determinism_qe"
+path = "tests/graph_determinism_qe.rs"
+
+[[test]]
+name = "stable_key_invariance_qe"
+path = "tests/stable_key_invariance_qe.rs"
+
+[[test]]
+name = "e2e_workflow_equivalence"
+path = "tests/e2e_workflow_equivalence.rs"
+
+[[test]]
+name = "e2e_feature_contracts"
+path = "tests/e2e_feature_contracts.rs"
+
+[[test]]
+name = "columnar_zero_cold_touch_gate"
+path = "tests/columnar_zero_cold_touch_gate.rs"
+
+[[test]]
+name = "scale_perf_ci_gate"
+path = "tests/scale_perf_ci_gate.rs"
+
 [[bench]]
 name = "parsing"
 harness = false

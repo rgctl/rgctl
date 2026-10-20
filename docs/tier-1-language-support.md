@@ -4,7 +4,7 @@ This document defines what **fully supported** means for a programming language 
 
 **Audience:** contributors adding a new Tier 1 language or bringing a language to parity with the current bar (Java-shaped Layer F + Layers A–E).
 
-**Related docs:** [Code_structure.md](Code_structure.md) (crate layout), [dashboard-design.md](dashboard-design.md) (dashboard bundle), [user-guide.md](user-guide.md) (discover / serve), [hybrid-cpg-plan.md](design/hybrid-cpg-plan.md) (CPG).
+**Related docs:** [language-testing-guide.md](language-testing-guide.md) (where to add tests / what to assert), [Code_structure.md](Code_structure.md) (crate layout), [dashboard-design.md](dashboard-design.md) (dashboard bundle), [user-guide.md](user-guide.md) (discover / serve), [hybrid-cpg-plan.md](design/hybrid-cpg-plan.md) (CPG).
 
 ---
 
@@ -343,20 +343,21 @@ Do **not** add `detect_{id}_patterns()` in Rust. Keep patterns **statement-text*
 
 ### Step 8 — Tests
 
-Minimum test matrix:
+Full matrix (where files go, what to assert, commands, PR checklist): **[language-testing-guide.md](language-testing-guide.md)**.
+
+Minimum artifacts:
 
 ```
-crates/rgctl-lang-{id}/src/plugin.rs   # unit: symbols, calls
-crates/rgctl-analysis/src/cfg_builder.rs # unit: CFG shape
-crates/rgctl-analysis/src/language_profile.rs # unit: path → id
-tests/{id}_cfg_analysis.rs                # integration: real fixture file
-tests/{id}_taint.rs                     # taint + calls smoke
-tests/dashboard_{fixture}.rs              # discover --with-cfg --with-security --with-taint + manifest/cfg_index
+crates/rgctl-lang-{id}/                 # unit: symbols, Calls, AST coverage
+tests/fixtures/{id}/langfeatures/       # small snippets
+tests/{id}_langfeatures.rs              # GQL / structured-query gates
+tests/{id}_cfg_analysis.rs              # CFG after discover --with-cfg
+tests/{id}_taint.rs                     # taint pack + source→sink
+rgctl-tests/ecommerce-{id}/correctness/ # expected-facts.json + graph_correctness
+tests/dashboard_ecommerce_{id}.rs       # dashboard harness (release)
 ```
 
-Reuse `tests/dashboard_harness.rs` helpers (`run_discover_all`, `assert_dashboard_bundle_all_analysis`).
-
-Provide a **small fixture repo** under `rgctl-tests/` or document `RGCTL_{LANG}_REPO` env override.
+Also register the language in `stable_key_invariance_qe` and plan Gate B once you have a ~10k-file corpus. Reuse `tests/dashboard_harness.rs` helpers (`run_discover_all`, `assert_dashboard_bundle_all_analysis`).
 
 ### Step 9 — Manual validation
 
@@ -404,7 +405,7 @@ Many languages exist as **generic tree-sitter** plugins (`TreeSitterLanguagePlug
 
 ## 7. PR submission checklist
 
-Copy into your PR description:
+Copy into your PR description. For the **testing** half (paths, asserts, commands), also use [language-testing-guide §7](language-testing-guide.md#7-checklist-copy-into-pr).
 
 - [ ] `crates/rgctl-lang-{id}/` with `LanguagePlugin` + tests
 - [ ] `languages.toml` updated (`handler = "custom"`)
@@ -418,7 +419,10 @@ Copy into your PR description:
 - [ ] `taint` pack `rules/taint/{id}.yaml` + `BUNDLED_PACKS` entry (not `detect_{id}_patterns`)
 - [ ] `extract_relations` emits `Calls` (and inheritance if applicable)
 - [ ] `{id}-ast-coverage.json` + `ast_coverage` test (`*_ast_coverage_manifest_matches_grammar`)
-- [ ] Integration test + dashboard gate (or documented fixture path)
+- [ ] `tests/{id}_langfeatures.rs` · `{id}_cfg_analysis.rs` · `{id}_taint.rs` + `[[test]]` entries
+- [ ] `rgctl-tests/ecommerce-{id}/correctness/expected-facts.json` + `graph_correctness` `PROJECTS` entry
+- [ ] `dashboard_ecommerce_{id}` release gate (or documented fixture path)
+- [ ] Stable-key QE: language in `stable_key_invariance_qe` (no line-coupled `qualified_name`)
 - [ ] `discover --with-cfg --with-security --with-taint` smoke on fixture repo documented in test
 - [ ] No new CDN / online-only dashboard dependencies
 

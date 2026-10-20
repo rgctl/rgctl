@@ -47,6 +47,32 @@ pub fn hydrate_subset(store: &SnapshotNodeStore, ids: &HashSet<Uuid>) -> Result<
     Ok(backend)
 }
 
+/// Hot-column hydrate for scoped blast / policy (no cold `NodeExtension` decode).
+pub fn hydrate_subset_hot(store: &SnapshotNodeStore, ids: &HashSet<Uuid>) -> Result<MemoryBackend> {
+    let mut backend = MemoryBackend::new();
+    if let Some(col) = store.columnar() {
+        for id in ids {
+            let Some(idx) = col.find_node_index(*id) else {
+                continue;
+            };
+            backend.insert_node(col.materialize_node_hot_at(idx)?)?;
+        }
+    } else {
+        for id in ids {
+            if let Some(node) = store.get_node(*id)? {
+                backend.insert_node(node)?;
+            }
+        }
+    }
+    store.for_each_edge(|from, to, edge_type| {
+        if ids.contains(&from) && ids.contains(&to) {
+            backend.insert_edge(Edge::new(from, to, edge_type))?;
+        }
+        Ok(())
+    })?;
+    Ok(backend)
+}
+
 /// Resolve scoped entity UUIDs on a snapshot from stable keys.
 pub fn scope_entity_ids(
     store: &SnapshotNodeStore,

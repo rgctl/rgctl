@@ -17,6 +17,8 @@ pub mod csr;
 pub mod export;
 /// Streaming compaction of columnar snapshots with a delta segment.
 pub mod graph_compactor;
+/// Universal columnar graph structural invariants.
+pub mod invariants;
 /// String interning for index keys.
 pub mod intern;
 /// Lazy heap-backed collections for graph schema types.
@@ -44,9 +46,11 @@ pub mod structural_sketch;
 pub use code_graph::CodeGraph;
 pub use code_index::{CodeIndex, CodeLocation, hash_code};
 pub use columnar_snapshot::{
-    COLUMNAR_SNAPSHOT_VERSION, ColumnarGraphMmap, write_columnar_from_backend,
+    COLUMNAR_SNAPSHOT_VERSION, ColumnarGraphMmap, cold_ext_deserialization_count,
+    reset_cold_ext_deserialization_count, write_columnar_from_backend,
     write_columnar_from_nodes_edges,
 };
+pub use invariants::assert_graph_invariants;
 pub use content_store::{
     CONTENT_STORE_FILE, ContentStore, INLINE_BODY_MAX_BYTES, hash_bytes, hash_text,
 };
@@ -78,7 +82,7 @@ pub use structured_query::{
 pub use stable_key::{
     MmapNodeKey, NodeRowRef, StableNodeKey, NAMESPACE_RGCTL, deterministic_node_id,
     extension_digest, node_row_ref, node_scope_path_at, stable_key_from_facets,
-    stable_key_from_row, stable_key_to_uuid,
+    stable_key_from_node, stable_key_from_row, stable_key_to_uuid,
 };
 pub use structural_sketch::{
     MIN_TOKEN_LEN, TOKEN_BLOOM_BITS, TOKEN_BLOOM_WORDS, TokenBloom, bloom_jaccard, bloom_popcount,

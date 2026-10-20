@@ -57,7 +57,7 @@ impl BlastRadiusEngine {
         store: &rgctl_graph::SnapshotNodeStore,
         seed_ids: &[Uuid],
     ) -> Result<Self> {
-        use crate::scoped_policy::{collect_upstream_call_closure, hydrate_subset};
+        use crate::scoped_policy::{collect_upstream_call_closure, hydrate_subset_hot};
         use std::collections::HashSet;
 
         let seeds: HashSet<Uuid> = seed_ids.iter().copied().collect();
@@ -65,7 +65,8 @@ impl BlastRadiusEngine {
             return Self::build(&MemoryBackend::new());
         }
         let ids = collect_upstream_call_closure(store, &seeds)?;
-        let backend = hydrate_subset(store, &ids)?;
+        // Hot-column stubs only — zero cold NodeExtension deserializations.
+        let backend = hydrate_subset_hot(store, &ids)?;
         Self::build(&backend)
     }
 

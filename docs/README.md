@@ -44,6 +44,7 @@ Internals and contribution bars — not the default agent reading path.
 | Document | Topic |
 |----------|--------|
 | [Contributor checklist](contributor-checklist.md) | End-to-end workflow: add language, update feature, tests, PR |
+| [Language testing guide](language-testing-guide.md) | Where to add language tests, what to assert, Tier 1 matrix |
 | [Feature designs](design/README.md) | Per-capability engineering notes |
 | [Tier 1 language support](tier-1-language-support.md) | Layer A–F bar for Tier 1 languages |
 | [Code structure](Code_structure.md) | Crate layout |

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "language": "kotlin",
+  "project": "ecommerce-kotlin",
+  "graph": {
+    "severity": "required",
+    "min_functions": 1,
+    "min_calls_edges": 0,
+    "forbidden_edges": []
+  },
+  "symbols": {},
+  "invariants": {}
+}

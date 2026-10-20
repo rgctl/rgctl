@@ -20,8 +20,23 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
+
+/// Process-wide count of cold [`NodeExtension`] bincode deserializations via
+/// [`ColumnarGraphMmap::materialize_node_at`] / [`ColumnarGraphMmap::get_node`].
+static COLD_EXT_DESERIALIZATIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// Number of cold `NodeExtension` deserializations since the last reset.
+pub fn cold_ext_deserialization_count() -> usize {
+    COLD_EXT_DESERIALIZATIONS.load(AtomicOrdering::Relaxed)
+}
+
+/// Reset the cold-extension deserialization counter (tests / gates).
+pub fn reset_cold_ext_deserialization_count() {
+    COLD_EXT_DESERIALIZATIONS.store(0, AtomicOrdering::Relaxed);
+}
 /// Snapshot file format version for columnar layout.
 pub const COLUMNAR_SNAPSHOT_VERSION: u32 = 2;
 
@@ -358,6 +373,52 @@ impl ColumnarGraphMmap {
         self.materialize_node(idx)
     }
 
+    /// Hot-column node view (name / type / file / lines) without decoding the cold extension.
+    ///
+    /// Does **not** increment [`cold_ext_deserialization_count`]. Qualified name, parameters,
+    /// properties, and labels are empty — suitable for topology / SCC labeling.
+    pub fn materialize_node_hot_at(&self, idx: usize) -> Result<Node> {
+        let row = read_node_row(self.mmap.as_ref(), self.offset_nodes as usize, idx)?;
+        let id = Uuid::from_bytes(row.id);
+        let name = read_string(
+            self.mmap.as_ref(),
+            self.offset_strings as usize,
+            self.offset_strings_len as usize,
+            row.name_off,
+            row.name_len,
+        )?;
+        let file_path = optional_string(
+            self.mmap.as_ref(),
+            self.offset_strings as usize,
+            self.offset_strings_len as usize,
+            row.file_path_off,
+            row.file_path_len,
+        )?;
+        let signature = optional_string(
+            self.mmap.as_ref(),
+            self.offset_strings as usize,
+            self.offset_strings_len as usize,
+            row.signature_off,
+            row.signature_len,
+        )?;
+        Ok(Node {
+            id,
+            node_type: node_type_from_u16(row.node_type)?,
+            name: SharedStr::from(name),
+            qualified_name: None,
+            signature: signature.map(SharedStr::from),
+            return_type: None,
+            parameters: Vec::new(),
+            code_hash: None,
+            token_bloom: None,
+            file_path: file_path.map(SharedStr::from),
+            start_line: (row.start_line > 0).then_some(row.start_line as usize),
+            end_line: (row.end_line > 0).then_some(row.end_line as usize),
+            properties: LazyStringMap::new(),
+            labels: Vec::new(),
+        })
+    }
+
     /// Fixed-width node row at column index (no string pool reads).
     pub(crate) fn node_row_at(&self, idx: usize) -> Result<NodeRow> {
         if idx >= self.node_count {
@@ -545,6 +606,7 @@ impl ColumnarGraphMmap {
             if end > self.mmap.len() {
                 return Err(Error::SerdeError("node extension out of range".into()));
             }
+            COLD_EXT_DESERIALIZATIONS.fetch_add(1, AtomicOrdering::Relaxed);
             decode_node_extension(&self.mmap[start..end])?
         } else {
             NodeExtension::default()
@@ -1209,6 +1271,7 @@ pub fn write_columnar_from_nodes_edges(
     path: &Path,
 ) -> Result<String> {
     nodes.sort_by_key(|n| n.id);
+    nodes.dedup_by_key(|n| n.id);
     edges.sort_by(|a, b| {
         (a.from, a.to, edge_type_to_u8(a.edge_type)).cmp(&(
             b.from,
@@ -1216,6 +1279,7 @@ pub fn write_columnar_from_nodes_edges(
             edge_type_to_u8(b.edge_type),
         ))
     });
+    edges.dedup_by(|a, b| a.from == b.from && a.to == b.to && a.edge_type == b.edge_type);
 
     let mut hasher = blake3::Hasher::new();
     let mut strings = StringPool::new();
@@ -1303,6 +1367,7 @@ pub fn write_columnar_from_backend(backend: &MemoryBackend, path: &Path) -> Resu
         edge_meta.push((edge.from, edge.to, edge.edge_type));
     })?;
     edge_meta.sort_by_key(|a| (a.0, a.1, edge_type_to_u8(a.2)));
+    edge_meta.dedup();
 
     let mut edge_rows = Vec::with_capacity(edge_meta.len());
     for (from, to, edge_type) in &edge_meta {

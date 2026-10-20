@@ -35,6 +35,8 @@ This doc **does not replace** the deep guides it links to. Use it to pick a path
 
 ## 2. Programming languages
 
+**Testing (where to add tests, what to assert, PR checklist):** → **[language-testing-guide.md](language-testing-guide.md)**
+
 ### Scaffold (all tiers)
 
 1. Add `crates/rgctl-lang-{id}/` and register in `crates/rgctl-languages/`.
@@ -47,7 +49,7 @@ Full layout and naming: [tier-1-language-support.md §3–4](tier-1-language-sup
 
 | Tier | Run before PR |
 |------|----------------|
-| **Tier 2** | Plugin unit tests in `crates/rgctl-lang-{id}/`; `cargo test` on touched crates; optional fixture under `tests/fixtures/` |
+| **Tier 2** | Plugin unit tests in `crates/rgctl-lang-{id}/`; `cargo test` on touched crates; optional fixture under `tests/fixtures/` — details in [language-testing-guide §3](language-testing-guide.md#3-what-to-add-for-a-new-language) |
 | **Tier 3** | Same as Tier 2; no CFG/taint/dashboard gates |
 
 Promoting Tier 2 → Tier 1: [tier-1 §5](tier-1-language-support.md#5-promoting-tier-2--tier-1).
@@ -55,19 +57,22 @@ Promoting Tier 2 → Tier 1: [tier-1 §5](tier-1-language-support.md#5-promoting
 ### Tier 1 — test matrix (Layers E + F)
 
 Layer **definitions** (A–F prose, F1–F7 table, honesty limits): [tier-1 §2](tier-1-language-support.md#2-capability-checklist--fully-supported).  
-Copy-paste **PR checklist** block: [tier-1 §7](tier-1-language-support.md#7-pr-submission-checklist).
+**Where to add each test + what to assert:** [language-testing-guide.md](language-testing-guide.md).  
+Copy-paste **PR checklist** block: [tier-1 §7](tier-1-language-support.md#7-pr-submission-checklist) · [language-testing-guide §7](language-testing-guide.md#7-checklist-copy-into-pr).
 
 | Gate | Layer | Command / location |
 |------|-------|-------------------|
 | AST coverage (build) | A | `cargo check -p rgctl-languages` warns on grammar/`*-ast-coverage.json` drift; `RGCTL_AST_COVERAGE_STRICT=1` fails |
 | E1 Plugin symbols + `Calls` | E | `cargo test -p rgctl-lang-{id}` |
-| E2 CFG branching + loop | E | `cargo test -p rgctl-analysis cfg_builder` |
-| E3 Taint source→sink | E | `cargo test --test taint_analysis` or `tests/{lang}_taint.rs` |
-| E4 Fixture integration | E | e.g. `cargo test --test go_cfg_analysis` |
-| E5 Dashboard bundle | E | `cargo test --release --test dashboard_ecommerce_{lang}` + shared [dashboard_harness.rs](../tests/dashboard_harness.rs) |
-| E6 Workspace clean | E | [§5 standard test workflow](#5-standard-test-workflow) |
+| E2 CFG branching + loop | E | `cargo test --test {id}_cfg_analysis` · `cargo test -p rgctl-analysis cfg_builder` |
+| E3 Taint source→sink | E | `cargo test --test {id}_taint` · pack in `rules/taint/{id}.yaml` |
+| E4 Fixture / langfeatures | E | `cargo test --test {id}_langfeatures` |
+| E5 Dashboard bundle | E | `cargo test --release --test dashboard_ecommerce_{id}` + shared [dashboard_harness.rs](../tests/dashboard_harness.rs) |
+| E6 Graph correctness + invariants | E | `cargo test --test graph_correctness` (`ecommerce-{id}/correctness/expected-facts.json`) |
+| E7 Stable-key / determinism QE | E | `cargo test --test stable_key_invariance_qe` · `--test graph_determinism_qe` |
+| E8 Workspace clean | E | [§5 standard test workflow](#5-standard-test-workflow) |
 | F6 Field-write golden | F | `crates/rgctl-analysis/src/field_write.rs` — `{id}_cfg_captures_field_write_and_query` |
-| Langfeature structured-query probes | E/F | `cargo test --test java_langfeatures` · `cargo test --test go_langfeatures` · `cargo test --test ruby_langfeatures` (see [go-language-coverage.md](design/go-language-coverage.md), [ruby-extract-honesty.md](ruby-extract-honesty.md)) |
+| Gate B cold discover | scale | [AGENTS.md](../AGENTS.md) Gate B · `tests/cold_profile_gates.rs` |
 
 **Dashboard gates by language** (release mode; external fixture repos — set `RGCTL_*_REPO` if needed):
 
@@ -190,6 +195,7 @@ CLI I/O layer reference: [cli-io-sanity-qe.md](cli-io-sanity-qe.md). Workflow mi
 | Contribute (agent README) | [AGENTS.md](../AGENTS.md) |
 | Use rgctl / JSON | [USER_AGENTS_TEMPLATE](agents/USER_AGENTS_TEMPLATE.md) · [json-api.md](json-api.md) · [agent-recipes.md](agent-recipes.md) · [agent-skill](guides/agent-skill.md) |
 | Languages (coverage JSON → website) | [languages/README.md](languages/README.md) |
+| Language tests (new / Tier 1) | [language-testing-guide.md](language-testing-guide.md) |
 | Dashboard UX | [dashboard-user-guide.md](dashboard-user-guide.md) |
 | New capability | Matching doc in [design/](design/README.md) |
 

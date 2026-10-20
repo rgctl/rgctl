@@ -281,8 +281,18 @@ pub fn write_columnar_from_spill(spill: FinishedSpill, path: &Path) -> Result<St
 
     {
         let mut reader = BufReader::with_capacity(8 * 1024 * 1024, File::open(&nodes_sorted)?);
+        let mut prev_key: Option<[u8; MAX_SPILL_KEY_LEN]> = None;
+        let mut prev_key_len = 0usize;
         for i in 0..node_count {
             let rec = read_one_record_at(&mut reader, NODE_KEY_LEN, "node", i, node_count)?;
+            if prev_key
+                .as_ref()
+                .is_some_and(|k| k[..prev_key_len] == rec.key[..rec.key_len])
+            {
+                continue;
+            }
+            prev_key = Some(rec.key);
+            prev_key_len = rec.key_len;
             let node: Node = bincode::deserialize(&rec.blob)
                 .map_err(|e| Error::SerdeError(format!("segmented spill node deserialize: {e}")))?;
             append_node_columnar_prehashed(
@@ -302,8 +312,18 @@ pub fn write_columnar_from_spill(spill: FinishedSpill, path: &Path) -> Result<St
     let mut edge_rows = Vec::with_capacity(edge_count);
     {
         let mut reader = BufReader::with_capacity(8 * 1024 * 1024, File::open(&edges_sorted)?);
+        let mut prev_key: Option<[u8; MAX_SPILL_KEY_LEN]> = None;
+        let mut prev_key_len = 0usize;
         for i in 0..edge_count {
             let rec = read_one_record_at(&mut reader, EDGE_KEY_LEN, "edge", i, edge_count)?;
+            if prev_key
+                .as_ref()
+                .is_some_and(|k| k[..prev_key_len] == rec.key[..rec.key_len])
+            {
+                continue;
+            }
+            prev_key = Some(rec.key);
+            prev_key_len = rec.key_len;
             hasher.update(&rec.blob);
             let from = Uuid::from_bytes(rec.key[..16].try_into().unwrap());
             let to = Uuid::from_bytes(rec.key[16..32].try_into().unwrap());

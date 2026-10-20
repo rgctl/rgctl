@@ -106,6 +106,21 @@ jobs:
       - name: QE cross-feature consistency
         run: cargo test --features "${{ env.FEATURES }}" --test cross_feature_qe
 
+      - name: QE graph determinism
+        run: cargo test --features "${{ env.FEATURES }}" --test graph_determinism_qe
+
+      - name: QE stable-key invariance
+        run: cargo test --features "${{ env.FEATURES }}" --test stable_key_invariance_qe
+
+      - name: QE columnar zero cold-touch
+        run: cargo test --features "${{ env.FEATURES }}" --test columnar_zero_cold_touch_gate
+
+      - name: E2E workflow equivalence
+        run: cargo test --features "${{ env.FEATURES }}" --test e2e_workflow_equivalence
+
+      - name: E2E feature contracts
+        run: cargo test --features "${{ env.FEATURES }}" --test e2e_feature_contracts
+
       - name: CLI JSON contract (unit)
         run: cargo test --features "${{ env.FEATURES }}" --test cli_output
 
@@ -117,3 +132,6 @@ jobs:
 
       - name: Blast-radius performance gates (release)
         run: cargo test --release --features "${{ env.FEATURES }}" --test blast_radius_perf
+
+      - name: Scale perf CI gate (release)
+        run: cargo test --release --features "${{ env.FEATURES }}" --test scale_perf_ci_gate -- --nocapture
