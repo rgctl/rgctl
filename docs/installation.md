@@ -82,6 +82,8 @@ cargo build --release --bin rgctl
 
 All **Tier 1** languages registered in [`languages.toml`](languages.toml) (Rust, Python, Ruby, PHP, JavaScript, TypeScript, Go, Java, C#, C, C++) plus markdown are always included in the binary — no per-language feature flags.
 
+The repository tracks **`Cargo.lock`** (binary workspace). Prefer `cargo build --locked` / `cargo check --locked` so dependency versions match CI. `ort` is pinned exactly while it remains on a `2.0.0-rc.*` train.
+
 **Default features** include `semantic-onnx` (links `ort` / ONNX Runtime for the optional `code-daemon` embedder). If the build fails linking `ort-sys` or you do not need ONNX, build without default features (vocab embedder still works):
 
 ```bash

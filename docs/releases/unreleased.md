@@ -2,6 +2,12 @@
 
 <!-- Add bullets here during development; move to docs/releases/v0.4.x.md at tag time. -->
 
+## Build / lockfile ([#123](https://github.com/sshaaf/rgctl/issues/123))
+
+- Track `Cargo.lock` (removed from `.gitignore`) so fresh clones agree on dependency versions.
+- Pin `ort` to `=2.0.0-rc.13` (rc.14 changed `Session::builder` to require `&Environment`).
+- CI always runs `cargo check --locked --bin rgctl` on pull requests; full suite remains behind the `ci` label.
+
 ## Review / pr-check delta head ([#124](https://github.com/sshaaf/rgctl/issues/124))
 
 Default `review paths` / `review check` / `pr-check` head synthesis is **non-destructive**:

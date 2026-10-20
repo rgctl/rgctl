@@ -50,7 +50,10 @@ default = []
 semantic-onnx = ["dep:ort", "dep:ndarray", "dep:sentencepiece-rs"]
 
 [dependencies.ort]
-version = "2.0.0-rc.12"
+# Exact pin: ort 2.0.0-rc.14 requires Session::builder(&Environment); our call sites
+# still use the rc.12/rc.13 zero-arg builder. Range "2.0.0-rc.12" admitted rc.14 on
+# fresh resolves when Cargo.lock was gitignored (#123).
+version = "=2.0.0-rc.13"
 optional = true
 default-features = false
 features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-rustls", "api-18"]

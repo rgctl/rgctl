@@ -3,6 +3,7 @@
 .claude/
 .opencode/
 .agent
+.antigravity/
 .reports
 # OpenSpec change proposals (local only — do not commit)
 openspec/
@@ -11,7 +12,8 @@ openspec/
 
 # Rust
 /target
-Cargo.lock
+# Cargo.lock is tracked: this is a binary workspace (`publish = false`); without a
+# committed lock, fresh clones can resolve pre-release deps (e.g. ort) to breaking APIs (#123).
 **/*.rs.bk
 *.pdb
 

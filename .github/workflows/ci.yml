@@ -1,8 +1,8 @@
-# CI does not run on push or on every pull request.
-#
 # Triggers:
-#   - workflow_dispatch  — run manually from the Actions tab (any branch/ref).
-#   - pull_request       — only when a maintainer adds the `ci` label to the PR.
+#   - workflow_dispatch  — full suite manually from the Actions tab (any branch/ref).
+#   - pull_request       — always runs a cheap `cargo check` (default features).
+#                         Full format/lint/test suite only when a maintainer adds the
+#                         `ci` label (create that label in the repo if missing).
 #
 # Fork PRs: label must be added by a maintainer on the base-repo PR.
 name: CI
@@ -31,6 +31,30 @@ env:
   FEATURES: ${{ github.event_name == 'workflow_dispatch' && inputs.features || '' }}
 
 jobs:
+  # Always-on cold-compile gate so ignored/missing Cargo.lock + pre-release crates
+  # cannot break `cargo build` unnoticed (#123).
+  check:
+    name: cargo check (default features)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: check-default
+
+      - name: cargo check --bin rgctl
+        run: cargo check --locked --bin rgctl
+
   ci:
     name: Format, lint, and test
     if: >-
