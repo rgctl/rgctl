@@ -446,11 +446,10 @@ impl Node {
         self
     }
 
-    /// Set the source location and refresh the deterministic [`id`](Self::id) when a file path is set.
+    /// Set the source location (does not affect deterministic [`id`](Self::id)).
     pub fn with_location(mut self, start_line: usize, end_line: usize) -> Self {
         self.start_line = Some(start_line);
         self.end_line = Some(end_line);
-        self.refresh_deterministic_id();
         self
     }
 
@@ -463,7 +462,6 @@ impl Node {
             self.name.as_ref(),
             self.node_type,
             self.qualified_name.as_deref().map(|s| s.as_ref()),
-            self.start_line,
         );
     }
 

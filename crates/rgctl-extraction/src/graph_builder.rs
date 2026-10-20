@@ -722,7 +722,7 @@ impl GraphBuilder {
             }
         }
 
-        if relation_allows_external_stub(relation.relation_type) {
+        if relation_allows_external_stub(relation) {
             // Only stub unresolved *targets*. Stubbing missing `from` when
             // resolution is ambiguous invents phantom callers and inflates
             // Function counts on large Java repos.
@@ -799,6 +799,9 @@ impl GraphBuilder {
     }
 
     /// Create or reuse a stub node for an unresolved relation endpoint.
+    ///
+    /// External stubs are indexed under `symbols_by_qualified` / `symbol_index` only —
+    /// never `symbols_by_suffix` — so a stub cannot hijack bare simple-name lookups (#125).
     fn ensure_external_stub(
         &mut self,
         name: &str,
@@ -823,20 +826,24 @@ impl GraphBuilder {
         {
             return id;
         }
-        if let Some(id) = self
-            .symbols_by_suffix
-            .get(name)
-            .and_then(|ids| unique_resolved(ids))
-        {
-            return id;
-        }
-        if name != simple
-            && let Some(id) = self
+        // Only coalesce via bare suffix when the caller did not provide a distinct QN.
+        // Otherwise `com.foo.Builder` and `org.bar.Builder` would collapse.
+        if qualified_hint.is_none() {
+            if let Some(id) = self
                 .symbols_by_suffix
-                .get(simple)
+                .get(name)
                 .and_then(|ids| unique_resolved(ids))
-        {
-            return id;
+            {
+                return id;
+            }
+            if name != simple
+                && let Some(id) = self
+                    .symbols_by_suffix
+                    .get(simple)
+                    .and_then(|ids| unique_resolved(ids))
+            {
+                return id;
+            }
         }
 
         const STUB_FILE: &str = "<external>";
@@ -857,8 +864,11 @@ impl GraphBuilder {
             .with_file_path(STUB_FILE.to_string())
             .with_property("is_external_stub".to_string(), "true".to_string());
         let id = node.id;
-        self.symbol_index.insert(key.clone(), id);
-        self.index_symbol_resolution(&key, &node);
+        self.symbol_index.insert(key, id);
+        self.symbols_by_qualified
+            .entry(qn)
+            .or_default()
+            .push(id);
         self.commit_node(node);
         self.add_edge(id, file_id, EdgeType::DefinedIn);
         self.add_edge(file_id, id, EdgeType::Contains);
@@ -1410,21 +1420,55 @@ fn join_path_normalized(base: &Path, rel: &str) -> String {
     normalize_file_key(out.to_string_lossy().as_ref())
 }
 
-fn relation_allows_external_stub(relation_type: RelationType) -> bool {
-    // `References` is intentionally omitted: field access must not invent Class
-    // stubs named like `email` / `password` that pollute suffix resolution (#125).
-    matches!(
-        relation_type,
+fn relation_allows_external_stub(relation: &Relation) -> bool {
+    match relation.relation_type {
         RelationType::Instantiates
-            | RelationType::DependsOn
-            | RelationType::Uses
-            | RelationType::AnnotatedWith
-            | RelationType::Extends
-            | RelationType::Implements
-            | RelationType::Permits
-            | RelationType::UsesVariable
-            | RelationType::UsesFact
-    )
+        | RelationType::DependsOn
+        | RelationType::Uses
+        | RelationType::AnnotatedWith
+        | RelationType::Extends
+        | RelationType::Implements
+        | RelationType::Permits
+        | RelationType::UsesVariable
+        | RelationType::UsesFact => true,
+        // Bare field `References` (no type hint / type metadata) must not invent
+        // Class stubs that pollute suffix resolution (#125). Typed References
+        // (throws, class literals, Puppet resources, explicit type hints) still stub.
+        RelationType::References => references_allows_external_stub(relation),
+        _ => false,
+    }
+}
+
+fn references_allows_external_stub(relation: &Relation) -> bool {
+    if relation
+        .metadata
+        .get("throws")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || relation
+            .metadata
+            .get("class_literal")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    {
+        return true;
+    }
+    match relation
+        .to_type_hint
+        .as_deref()
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("puppetresource")
+        | Some("puppetclass")
+        | Some("class")
+        | Some("interface")
+        | Some("enum")
+        | Some("annotation")
+        | Some("module")
+        | Some("struct") => true,
+        _ => false,
+    }
 }
 
 fn stub_node_type_for_target(relation: &Relation) -> NodeType {
@@ -2561,8 +2605,7 @@ mod tests {
 
     #[test]
     fn references_unresolved_type_name_does_not_stub_class() {
-        // #125: References is not stub-allowlisted (field names must not become Class stubs).
-        // Type stubs remain available via Instantiates / Uses / etc.
+        // #125: bare field-like References (no type hint / type metadata) must not stub.
         let mut builder = GraphBuilder::new();
         let file_id = builder.ensure_file_node(Path::new("Demo.java"));
         let method = Symbol {
@@ -2611,8 +2654,180 @@ mod tests {
                     && n.node_type == NodeType::Class
                     && n.properties.get("is_external_stub").map(String::as_str) == Some("true")
             }),
-            "References must not invent Class stubs"
+            "bare References must not invent Class stubs"
         );
+    }
+
+    #[test]
+    fn references_throws_still_stubs_external_exception() {
+        let mut builder = GraphBuilder::new();
+        let file_id = builder.ensure_file_node(Path::new("Demo.java"));
+        builder.add_symbol(
+            &Symbol {
+                name: "run".to_string(),
+                symbol_type: SymbolType::Function,
+                qualified_name: Some("Demo.run".to_string()),
+                location: SourceLocation {
+                    file: "Demo.java".to_string(),
+                    start_line: 2,
+                    end_line: 4,
+                    start_column: 0,
+                    end_column: 1,
+                },
+                signature: None,
+                return_type: None,
+                parameters: vec![],
+                fields: vec![],
+                modifiers: vec![],
+                documentation: None,
+                metadata: serde_json::json!({ "language": "java" }),
+            },
+            file_id,
+        );
+        builder.build_resolution_indexes();
+        builder
+            .add_relation(&Relation {
+                from: "Demo.run".to_string(),
+                to: "IOException".to_string(),
+                relation_type: RelationType::References,
+                location: SourceLocation {
+                    file: "Demo.java".to_string(),
+                    start_line: 2,
+                    end_line: 2,
+                    start_column: 0,
+                    end_column: 1,
+                },
+                metadata: serde_json::json!({ "language": "java", "throws": true }),
+                to_qualified_hint: Some("java.io.IOException".to_string()),
+                to_type_hint: None,
+            })
+            .unwrap();
+        assert!(
+            builder.nodes().iter().any(|n| {
+                n.qualified_name.as_deref() == Some("java.io.IOException")
+                    && n.properties.get("is_external_stub").map(String::as_str) == Some("true")
+            }),
+            "throws References must still create external stubs"
+        );
+        assert!(
+            !builder.symbols_by_suffix.contains_key("IOException"),
+            "external stubs must not enter symbols_by_suffix"
+        );
+    }
+
+    #[test]
+    fn references_puppetresource_hint_still_stubs() {
+        let mut builder = GraphBuilder::new();
+        let file_id = builder.ensure_file_node(Path::new("site.pp"));
+        builder.add_symbol(
+            &Symbol {
+                name: "main".to_string(),
+                symbol_type: SymbolType::Function,
+                qualified_name: Some("main".to_string()),
+                location: SourceLocation {
+                    file: "site.pp".to_string(),
+                    start_line: 1,
+                    end_line: 5,
+                    start_column: 0,
+                    end_column: 1,
+                },
+                signature: None,
+                return_type: None,
+                parameters: vec![],
+                fields: vec![],
+                modifiers: vec![],
+                documentation: None,
+                metadata: serde_json::json!({ "language": "puppet" }),
+            },
+            file_id,
+        );
+        builder.build_resolution_indexes();
+        builder
+            .add_relation(&Relation {
+                from: "main".to_string(),
+                to: "nginx".to_string(),
+                relation_type: RelationType::References,
+                location: SourceLocation {
+                    file: "site.pp".to_string(),
+                    start_line: 2,
+                    end_line: 2,
+                    start_column: 0,
+                    end_column: 1,
+                },
+                metadata: serde_json::json!({ "language": "puppet" }),
+                to_qualified_hint: Some("Package[nginx]".to_string()),
+                to_type_hint: Some("puppetresource".to_string()),
+            })
+            .unwrap();
+        assert!(
+            builder.nodes().iter().any(|n| {
+                n.node_type == NodeType::PuppetResource
+                    && n.properties.get("is_external_stub").map(String::as_str) == Some("true")
+            }),
+            "PuppetResource References must still stub"
+        );
+    }
+
+    #[test]
+    fn external_stubs_with_distinct_qualified_hints_do_not_coalesce() {
+        let mut builder = GraphBuilder::new();
+        let a = builder.ensure_file_node(Path::new("FileA.java"));
+        let b = builder.ensure_file_node(Path::new("FileB.java"));
+        builder.add_symbol(
+            &function_symbol("FileA.java", "a", "FileA.a"),
+            a,
+        );
+        builder.add_symbol(
+            &function_symbol("FileB.java", "b", "FileB.b"),
+            b,
+        );
+        builder.build_resolution_indexes();
+        builder
+            .add_relation(&Relation {
+                from: "FileA.a".to_string(),
+                to: "Builder".to_string(),
+                relation_type: RelationType::Instantiates,
+                location: SourceLocation {
+                    file: "FileA.java".to_string(),
+                    start_line: 2,
+                    end_line: 2,
+                    start_column: 0,
+                    end_column: 1,
+                },
+                metadata: serde_json::json!({ "language": "java" }),
+                to_qualified_hint: Some("com.foo.Builder".to_string()),
+                to_type_hint: None,
+            })
+            .unwrap();
+        builder
+            .add_relation(&Relation {
+                from: "FileB.b".to_string(),
+                to: "Builder".to_string(),
+                relation_type: RelationType::Instantiates,
+                location: SourceLocation {
+                    file: "FileB.java".to_string(),
+                    start_line: 2,
+                    end_line: 2,
+                    start_column: 0,
+                    end_column: 1,
+                },
+                metadata: serde_json::json!({ "language": "java" }),
+                to_qualified_hint: Some("org.bar.Builder".to_string()),
+                to_type_hint: None,
+            })
+            .unwrap();
+        let stubs: Vec<_> = builder
+            .nodes()
+            .iter()
+            .filter(|n| {
+                n.name == "Builder"
+                    && n.properties.get("is_external_stub").map(String::as_str) == Some("true")
+            })
+            .map(|n| n.qualified_name.clone())
+            .collect();
+        assert_eq!(stubs.len(), 2, "expected distinct external Builders, got {stubs:?}");
+        assert!(stubs.iter().any(|q| q.as_deref() == Some("com.foo.Builder")));
+        assert!(stubs.iter().any(|q| q.as_deref() == Some("org.bar.Builder")));
     }
 
     #[test]

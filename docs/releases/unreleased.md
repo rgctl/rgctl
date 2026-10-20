@@ -8,8 +8,8 @@ Cold `discover` edge identity is deterministic under parallel extract:
 
 - Pass-2 applies extraction tails in **path-sorted** order (not Rayon completion order).
 - `Calls` resolve only to `Function` nodes (never Class field stubs via fuzzy suffix).
-- Field-like `References` no longer create Class external stubs (no bare `email`/`password` type pollution).
-- Deterministic node IDs include **qualified name** (or start line when QN is absent), so per-owner `$lambda$0` symbols no longer collide.
+- Bare / field-like `References` do not create Class external stubs; typed References (`throws`, `class_literal`, explicit type hints such as `puppetresource`) still stub. External stubs are not registered in `symbols_by_suffix`, and distinct `to_qualified_hint` values do not coalesce by simple name.
+- Deterministic node IDs / `StableNodeKey` include **qualified name** when present (fixes per-owner `$lambda$0` collisions). **`start_line` is not hashed** (avoids cross-commit identity churn when a line is inserted above a no-QN symbol). Diff/review hot paths read QN via a zero-alloc columnar prefix helper (no full `NodeExtension` materialize per row).
 
 **Re-discover required** after upgrade: node UUIDs and edge sets can change vs pre-fix indexes.
 

@@ -74,30 +74,25 @@ pub fn deterministic_node_id(
     name: &str,
     node_type: NodeType,
     qualified_name: Option<&str>,
-    start_line: Option<usize>,
 ) -> Uuid {
     match file_path {
-        Some(path) => stable_key_to_uuid(stable_key_from_facets(
-            Some(path),
-            name,
-            node_type,
-            qualified_name,
-            start_line,
-        )),
+        Some(path) => {
+            stable_key_to_uuid(stable_key_from_facets(Some(path), name, node_type, qualified_name))
+        }
         None => Uuid::new_v4(),
     }
 }
 
-/// Hash normalized file path, name, node type, and disambiguation facets into a [`StableNodeKey`].
+/// Hash normalized file path, name, node type, and optional qualified name into a [`StableNodeKey`].
 ///
 /// When `qualified_name` is present it is hashed (same-file same-simple-name symbols diverge).
-/// When absent, `start_line` is hashed instead so location still disambiguates.
+/// When absent, an empty facet is hashed — **not** `start_line` — so a one-line insert above a
+/// symbol cannot churn cross-commit identity for languages that omit QN.
 pub fn stable_key_from_facets(
     file_path: Option<&str>,
     name: &str,
     node_type: NodeType,
     qualified_name: Option<&str>,
-    start_line: Option<usize>,
 ) -> StableNodeKey {
     let mut hasher = blake3::Hasher::new();
     if let Some(path) = file_path {
@@ -111,7 +106,7 @@ pub fn stable_key_from_facets(
     if let Some(qn) = qualified_name.filter(|s| !s.is_empty()) {
         hasher.update(qn.as_bytes());
     } else {
-        hasher.update(&start_line.unwrap_or(0).to_le_bytes());
+        hasher.update(b"");
     }
     let hash = hasher.finalize();
     StableNodeKey(u64::from_le_bytes(hash.as_bytes()[..8].try_into().expect("8 bytes")))
@@ -131,18 +126,12 @@ pub fn stable_key_from_row(col: &ColumnarGraphMmap, idx: usize) -> Result<Stable
         row.file_path_len,
     )?;
     let node_type = crate::columnar_snapshot::node_type_from_u16(row.node_type)?;
-    let start_line = (row.start_line > 0).then_some(row.start_line as usize);
-    // Qualified name lives in the cold extension blob.
-    let id = Uuid::from_bytes(row.id);
-    let qn_owned = col
-        .get_node(id)?
-        .and_then(|n| n.qualified_name.as_ref().map(|s| s.to_string()));
+    let qn = col.node_qualified_name_str(idx)?;
     Ok(stable_key_from_facets(
         file_path,
         name,
         node_type,
-        qn_owned.as_deref(),
-        start_line,
+        qn,
     ))
 }
 
@@ -247,14 +236,36 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_node_id_disambiguates_by_start_line_without_qn() {
+    fn start_line_shift_without_qn_keeps_stable_key() {
+        // Cross-commit identity must not churn when a line is inserted above a
+        // symbol that has no qualified_name (TS/JS/Python/Go/C++ common case).
         let a = Node::new(NodeType::Function, "dup")
-            .with_file_path("f.rs")
+            .with_file_path("f.ts")
             .with_location(10, 12);
         let b = Node::new(NodeType::Function, "dup")
-            .with_file_path("f.rs")
+            .with_file_path("f.ts")
             .with_location(40, 42);
-        assert_ne!(a.id, b.id);
+        assert_eq!(a.id, b.id);
+        assert_eq!(
+            stable_key_from_facets(Some("f.ts"), "dup", NodeType::Function, None),
+            stable_key_from_facets(Some("f.ts"), "dup", NodeType::Function, None),
+        );
+    }
+
+    #[test]
+    fn stable_key_from_row_reads_qn_without_materialize() {
+        let node = Node::new(NodeType::Function, "$lambda$0")
+            .with_file_path("AuthService.java")
+            .with_qualified_name("AuthService.login.$lambda$0");
+        let expected = stable_key_from_facets(
+            Some("AuthService.java"),
+            "$lambda$0",
+            NodeType::Function,
+            Some("AuthService.login.$lambda$0"),
+        );
+        let (_tmp, col) = open_columnar(vec![node]);
+        assert_eq!(col.node_qualified_name_str(0).unwrap(), Some("AuthService.login.$lambda$0"));
+        assert_eq!(stable_key_from_row(&col, 0).unwrap(), expected);
     }
 
     #[test]

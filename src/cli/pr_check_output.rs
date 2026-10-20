@@ -147,7 +147,6 @@ mod tests {
                 "foo",
                 rgctl_graph::schema::NodeType::Function,
                 None,
-                None,
             ),
             symbol: "foo".into(),
             classification,

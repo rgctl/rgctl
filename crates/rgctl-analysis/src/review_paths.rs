@@ -916,13 +916,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let (base, head, edges) = rewired_fixture(&tmp);
         let submit_key =
-            stable_key_from_facets(
-                Some("src/Order.java"),
-                "submitOrder",
-                NodeType::Function,
-                None,
-                None,
-            );
+            stable_key_from_facets(Some("src/Order.java"), "submitOrder", NodeType::Function, None);
         let report = build_review_paths_report(
             &base,
             &head,
@@ -1017,7 +1011,7 @@ mod tests {
         }
         let path = write_snap(tmp.path(), "same.bin", nodes, edges);
         let store = SnapshotNodeStore::open(&path).unwrap();
-        let key = stable_key_from_facets(Some("t.rs"), "target", NodeType::Function, None, None);
+        let key = stable_key_from_facets(Some("t.rs"), "target", NodeType::Function, None);
         let mut opts = ReviewPathsOptions::default();
         opts.fanout_cap = 3;
         opts.upstream_depth = 1;

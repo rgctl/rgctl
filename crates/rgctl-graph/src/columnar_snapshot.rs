@@ -399,6 +399,36 @@ impl ColumnarGraphMmap {
         Ok(Some(&self.mmap[start..end]))
     }
 
+    /// Zero-alloc borrow of `NodeExtension::qualified_name` (first bincode field).
+    ///
+    /// Layout (bincode `serialize` / fixint): `u8` Option tag, then for `Some`
+    /// a little-endian `u64` byte length and the UTF-8 payload. Does not
+    /// deserialize the rest of the cold extension blob.
+    pub fn node_qualified_name_str(&self, idx: usize) -> Result<Option<&str>> {
+        let Some(bytes) = self.extension_bytes_at(idx)? else {
+            return Ok(None);
+        };
+        match bytes.first().copied() {
+            Some(0) => Ok(None),
+            Some(1) if bytes.len() >= 9 => {
+                let slen = u64::from_le_bytes(
+                    bytes[1..9]
+                        .try_into()
+                        .expect("slice length checked"),
+                ) as usize;
+                let sbytes = bytes.get(9..9 + slen).ok_or_else(|| {
+                    Error::SerdeError("node extension qualified_name out of range".into())
+                })?;
+                std::str::from_utf8(sbytes)
+                    .map(Some)
+                    .map_err(|e| Error::SerdeError(format!("qualified_name utf8: {e}")))
+            }
+            _ => Err(Error::SerdeError(
+                "invalid qualified_name option tag in node extension".into(),
+            )),
+        }
+    }
+
     /// Whether a base node should be dropped for invalidated file paths (no full materialize).
     pub(crate) fn node_invalidated_at(
         &self,
