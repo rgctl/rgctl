@@ -176,21 +176,25 @@ Temporal PR gate: compare **base** (`main`) vs **head** (PR), classify each viol
 ### How it works (default: delta head)
 
 ```text
-  .rgctl-base/          git diff              PR source tree
-  (main snapshot)   base_ref..head_ref      (checkout)
+  .rgctl-base/          git diff              PR working tree
+  (main snapshot)   base_ref..head_ref      (on-disk files)
         │                    │                      │
-        └──────── seed ──────┴── delta compact ─────┘
+        └──── compact ───────┴── into ──────────────┘
                               │
-                         .rgctl/  (synthesized head)
+                   .rgctl/synth-head/  (synthesized head)
                               │
                     scoped policy eval → JSON + exit code
 ```
 
 1. Open base snapshot from cache (`.rgctl-base/`, `$RGCTL_BASE_ARTIFACT`, or `--base-artifact`).
-2. Copy base into `{repo}/.rgctl/` and apply changed paths from `git diff --name-status` (incremental extract + compact).
+2. Compact base + changed paths from `git diff --name-status` into `{repo}/.rgctl/synth-head/` (does **not** overwrite live `.rgctl/graph.snapshot.bin`).
 3. Optionally expand scope to **caller files** (`--cascade-depth`, default `1`).
 4. Evaluate blast-radius policy only on entities in the git scope.
 5. Classify each violation temporally; apply calendar rules; append to `violation_ledger.jsonl`.
+
+**Worktree mode:** `--synthetic-head worktree` uses live `.rgctl/graph.snapshot.bin` as base when `.rgctl-base/` is absent, and still writes the head under `.rgctl/synth-head/`.
+
+**Caveat:** delta extract reads **working-tree files on disk**, not `git show <head_ref>:path`. Check out the target ref (or use `--synthetic-head worktree`). A mismatch emits a stderr warning. `--bisect` inherits the same limitation until blob extract lands.
 
 **Legacy mode:** pass `--full-snapshots` and provide both `--base-artifact` and `--head-artifact` (or pre-built `.rgctl/` on the PR branch). Use when you already run two full `discover` jobs in CI.
 

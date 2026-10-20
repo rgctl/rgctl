@@ -2,6 +2,16 @@
 
 <!-- Add bullets here during development; move to docs/releases/v0.4.x.md at tag time. -->
 
+## Review / pr-check delta head ([#124](https://github.com/sshaaf/rgctl/issues/124))
+
+Default `review paths` / `review check` / `pr-check` head synthesis is **non-destructive**:
+
+- Synthesized head lands under `.rgctl/synth-head/` (not the live `graph.snapshot.bin`).
+- Compaction drops base edges whose **source** file was invalidated (call deletions no longer resurrect / flip to additions-only).
+- `--synthetic-head worktree` can use the live session snapshot as base without `.rgctl-base/`.
+- `review export --policy-file` reuses the prepared base/head snapshots (no second synth / dropped `--base-artifact`).
+- Stderr warning when `--head-ref` ≠ `HEAD` or scoped files are dirty in non-worktree delta mode.
+
 ## Discover graph determinism ([#125](https://github.com/sshaaf/rgctl/issues/125))
 
 Cold `discover` edge identity is deterministic under parallel extract:

@@ -63,17 +63,28 @@ flowchart TD
 `review` commands require both base and head graph artifacts:
 
 #### Option A: Automatic Head Synthesis (Default)
-If you have a base snapshot saved under `{repo}/.rgctl-base/` (or via `--base-artifact`), `rgctl` synthesizes the head graph on the fly using git hunks and name-status deltas:
+If you have a base snapshot under `{repo}/.rgctl-base/` (or via `--base-artifact`), `rgctl` synthesizes the head into `{repo}/.rgctl/synth-head/` using git name-status deltas. The live session files (`graph.snapshot.bin`, `file_hashes.json`, analysis sidecars) are **not** overwritten.
 
 ```bash
 # 1. On main branch: index and copy to .rgctl-base
 git checkout main
 rgctl discover .
-mkdir -p .rgctl-base && cp -a .rgctl/* .rgctl-base/
+mkdir -p .rgctl-base && cp -a .rgctl/. .rgctl-base/.rgctl/
 
-# 2. Switch back to your PR branch
+# 2. Switch back to your PR branch (working tree should match --head-ref)
 git checkout my-feature-branch
+rgctl review paths --base-ref origin/main --head-ref HEAD
 ```
+
+**Uncommitted edits vs indexed HEAD** (no `.rgctl-base` needed):
+
+```bash
+rgctl discover .
+# edit files...
+rgctl review paths --synthetic-head worktree
+```
+
+If `--head-ref` does not match `HEAD` (or scoped files are dirty) in non-worktree mode, `rgctl` prints a stderr warning: synthesis reads working-tree files on disk.
 
 #### Option B: Dual Full Snapshots (`--full-snapshots`)
 If you build both base and head explicitly (e.g. in a CI pipeline with cached artifacts):

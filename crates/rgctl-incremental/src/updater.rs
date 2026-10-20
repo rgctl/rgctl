@@ -15,7 +15,8 @@ use rgctl_extraction::{Extractor, GraphBuilder};
 use rgctl_graph::code_graph::CodeGraph;
 use rgctl_graph::schema::EdgeType;
 use rgctl_graph::{
-    DeltaSegment, MmappedGraphSnapshot, compact_repo_snapshot, write_columnar_from_backend,
+    DeltaSegment, MmappedGraphSnapshot, compact_repo_snapshot, compact_snapshot_file,
+    write_columnar_from_backend,
 };
 use rgctl_pipeline::parallel::par_map;
 use rgctl_pipeline::stream::{DEFAULT_STREAM_CHANNEL_CAPACITY, stream_into_graph};
@@ -152,6 +153,98 @@ impl IncrementalUpdater {
             FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
         let all_files = discoverer.discover(repo_root)?;
         self.apply_changes(graph, repo_root, &all_files, changes, start)
+    }
+
+    /// Compact `base_snapshot` + `changes` into `output_snapshot` without mutating the live
+    /// `{repo}/.rgctl/` structural tree (no tracker/JSON/sidecar invalidation).
+    ///
+    /// Spill and compact scratch live under `work_root`. Source files are still read from
+    /// `repo_root` (working tree). Used by review/pr-check delta-head synthesis (#124).
+    pub fn apply_change_set_to_snapshot(
+        &self,
+        base_snapshot: &Path,
+        output_snapshot: &Path,
+        work_root: &Path,
+        repo_root: &Path,
+        changes: ChangeSet,
+    ) -> Result<UpdateResult> {
+        let start = Instant::now();
+        if !base_snapshot.is_file() {
+            return Err(rgctl_error::Error::NotFound(format!(
+                "base snapshot not found at {}",
+                base_snapshot.display()
+            )));
+        }
+        if let Some(parent) = output_snapshot.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::create_dir_all(work_root)?;
+
+        if changes.is_empty() {
+            std::fs::copy(base_snapshot, output_snapshot)?;
+            return Ok(UpdateResult {
+                duration: start.elapsed(),
+                ..Default::default()
+            });
+        }
+
+        let mut result = UpdateResult {
+            files_added: changes.added.len(),
+            files_changed: changes.changed.len(),
+            files_deleted: changes.deleted.len(),
+            ..Default::default()
+        };
+
+        let extract_paths = self.expand_extract_paths(repo_root, base_snapshot, &changes)?;
+        let paths_to_update: Vec<PathBuf> = extract_paths
+            .iter()
+            .map(|rel| resolve_path(repo_root, rel))
+            .collect();
+
+        let extractor = Extractor::new(Arc::clone(&self.registry));
+        let spill_dir = work_root.join("spill_delta");
+        if spill_dir.exists() {
+            std::fs::remove_dir_all(&spill_dir)?;
+        }
+        std::fs::create_dir_all(&spill_dir)?;
+        let mut builder = GraphBuilder::with_spill(&spill_dir)?;
+        let (_stream_stats, tails) = stream_into_graph(
+            self.config.thread_count,
+            &extractor,
+            Arc::clone(&self.registry),
+            &paths_to_update,
+            DEFAULT_STREAM_CHANNEL_CAPACITY,
+            &mut builder,
+            || {},
+        )?;
+        builder.build_resolution_indexes();
+        extractor.populate_pass2(&tails, &mut builder)?;
+        let finished = builder.finish_spill()?;
+        let (new_nodes, new_edges) =
+            rgctl_graph::segmented_spill::materialize_sorted_graph(&finished)?;
+        finished.cleanup()?;
+        result.nodes_added = new_nodes.len();
+        result.edges_added = new_edges.len();
+
+        let mut delta = DeltaSegment::new();
+        for rel in extract_paths.iter().chain(changes.deleted.iter()) {
+            delta.invalidate_file(rel);
+        }
+        delta.new_nodes = new_nodes;
+        delta.new_edges = new_edges;
+
+        let scratch = work_root.join("compact-scratch");
+        let _stats = compact_snapshot_file(base_snapshot, delta, output_snapshot, &scratch)?;
+
+        let mut graph = CodeGraph::open_snapshot(output_snapshot)?;
+        let relation_edges = self.rebuild_relations(&mut graph, repo_root, &paths_to_update)?;
+        result.edges_added += relation_edges;
+        if relation_edges > 0 {
+            let _ = write_columnar_from_backend(graph.backend(), output_snapshot)?;
+        }
+
+        result.duration = start.elapsed();
+        Ok(result)
     }
 
     /// Update only the given repo-relative file paths.

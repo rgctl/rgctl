@@ -573,3 +573,105 @@ fn review_export_does_not_change_review_paths_output() {
     assert_eq!(v["schema_version"], 1);
     assert_eq!(v["command"], "review paths");
 }
+
+/// #124: default delta synthesis must report call deletions (not additions-only)
+/// and must not clobber the live session snapshot.
+#[test]
+fn review_paths_delta_head_call_deletion_preserves_session() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path();
+    init_git_repo(repo);
+    fs::create_dir_all(repo.join("src")).unwrap();
+    fs::write(
+        repo.join("src/ship.rs"),
+        r#"
+pub fn get_cart_item_total() {}
+pub fn is_free_shipping() {}
+pub fn calculate_shipping() {
+    get_cart_item_total();
+    is_free_shipping();
+}
+"#,
+    )
+    .unwrap();
+    git_commit_all(repo, "base");
+
+    let discover = Command::new(rgctl_bin())
+        .args(["-r", repo.to_str().unwrap(), "discover", "."])
+        .current_dir(repo)
+        .output()
+        .expect("discover base");
+    assert!(
+        discover.status.success(),
+        "discover: {}",
+        String::from_utf8_lossy(&discover.stderr)
+    );
+    fs::create_dir_all(repo.join(".rgctl-base/.rgctl")).unwrap();
+    fs::copy(
+        repo.join(".rgctl/graph.snapshot.bin"),
+        repo.join(".rgctl-base/.rgctl/graph.snapshot.bin"),
+    )
+    .unwrap();
+
+    fs::write(
+        repo.join("src/ship.rs"),
+        r#"
+pub fn get_cart_item_total() {}
+pub fn is_free_shipping() {}
+pub fn calculate_shipping() {
+    get_cart_item_total();
+}
+"#,
+    )
+    .unwrap();
+    git_commit_all(repo, "head-delete-call");
+
+    let discover_head = Command::new(rgctl_bin())
+        .args(["-r", repo.to_str().unwrap(), "discover", "."])
+        .current_dir(repo)
+        .output()
+        .expect("discover head");
+    assert!(discover_head.status.success());
+    let live_before = fs::read(repo.join(".rgctl/graph.snapshot.bin")).unwrap();
+    let hashes_before = fs::read(repo.join(".rgctl/file_hashes.json")).ok();
+
+    let out = Command::new(rgctl_bin())
+        .current_dir(repo)
+        .args([
+            "-r",
+            repo.to_str().unwrap(),
+            "-f",
+            "json",
+            "review",
+            "paths",
+            "--base-ref",
+            "HEAD~1",
+            "--head-ref",
+            "HEAD",
+        ])
+        .output()
+        .expect("review paths delta");
+    assert!(
+        out.status.success(),
+        "review paths failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).expect("json");
+    let edges = &v["change_summary"]["call_edges"];
+    let removed = edges["removed"].as_u64().unwrap_or(0);
+    let added = edges["added"].as_u64().unwrap_or(0);
+    assert!(
+        removed >= 1,
+        "expected call deletion (not additions-only), got change_summary.call_edges={edges:?}"
+    );
+    let _ = added; // incidental adds from cascade/re-extract are ok if removals appear
+    assert_eq!(
+        fs::read(repo.join(".rgctl/graph.snapshot.bin")).unwrap(),
+        live_before
+    );
+    if let Some(h) = hashes_before {
+        assert_eq!(fs::read(repo.join(".rgctl/file_hashes.json")).unwrap(), h);
+    }
+    assert!(repo.join(".rgctl/synth-head/graph.snapshot.bin").is_file());
+    assert!(!repo.join(".rgctl-synth-head").exists());
+}

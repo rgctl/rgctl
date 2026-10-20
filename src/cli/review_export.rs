@@ -182,28 +182,23 @@ pub fn run_export(ctx: &CliContext, args: ReviewExportArgs) -> Result<()> {
     // Policy: evaluated read-only, or explicitly unavailable.
     let (policy, policy_unavailable) = match policy_file {
         Some(path) => {
+            // Reuse the already-prepared base/head snapshots from the paths bundle so
+            // policy evaluation does not re-synthesize (and does not drop --base-artifact).
             let check_args = PrCheckArgs {
                 policy_file: path.clone(),
-                base_artifact: None,
-                head_artifact: None,
+                base_artifact: Some(bundle.base_snapshot.display().to_string()),
+                head_artifact: Some(bundle.head_snapshot.display().to_string()),
                 base_ref: base_ref.clone(),
                 head_ref: head_ref.clone(),
                 strict: false,
                 cascade_depth: 1,
-                full_snapshots: false,
+                full_snapshots: true,
                 bisect: false,
                 synthetic_head: None,
                 strict_calendar: false,
             };
-            // Provenance is a **starting point, not a re-run recipe** (raised in review).
-            // The command above omits every flag the evaluation fixed at its own construction site —
-            // `full_snapshots: false`, `bisect: false`, `cascade_depth: 1`, `strict: false` — and those are
-            // constants here, not the flags the export was invoked with. So running the printed command does
-            // not necessarily reproduce what the `policy` section contains. Stated rather than left implied;
-            // whether the evaluation should adopt the export's flags, and the command advertise them, is an
-            // open question rather than something to change quietly in a nit fix.
             commands.push(format!(
-                "rgctl review check --policy-file {path} --base-ref {base_ref} --head-ref {head_ref} -f json"
+                "rgctl review check --policy-file {path} --base-ref {base_ref} --head-ref {head_ref} --full-snapshots -f json"
             ));
             match pr_check::evaluate_read_only(ctx, &check_args) {
                 Ok(response) => (Some(response), None),

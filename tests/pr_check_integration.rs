@@ -253,7 +253,14 @@ fn pr_check_delta_head_synthesizes_from_base_only() {
         serde_json::from_slice(&out.stdout).expect("stdout json");
     assert_eq!(doc["schema_version"].as_str(), Some("2"));
     assert!(doc["scope"]["files"].as_u64().unwrap() >= 1);
-    assert!(repo.join(".rgctl/graph.snapshot.bin").is_file());
+    assert!(
+        !repo.join(".rgctl/graph.snapshot.bin").is_file(),
+        "delta synth must not recreate live session snapshot"
+    );
+    assert!(
+        repo.join(".rgctl/synth-head/graph.snapshot.bin").is_file(),
+        "synthesized head must land under .rgctl/synth-head/"
+    );
 }
 
 #[test]
@@ -500,8 +507,9 @@ fn pr_check_worktree_synthetic_head() {
         .expect("discover");
     assert!(discover.status.success());
 
-    fs::create_dir_all(repo.join(".rgctl-base")).unwrap();
-    copy_dir_all(&repo.join(".rgctl"), &repo.join(".rgctl-base/.rgctl"));
+    // No `.rgctl-base/`: live session snapshot is the base (scratch head isolation).
+    let live = repo.join(".rgctl/graph.snapshot.bin");
+    let live_before = fs::read(&live).expect("live snapshot");
 
     fs::write(
         repo.join("src/pkg.rs"),
@@ -536,6 +544,12 @@ fn pr_check_worktree_synthetic_head() {
     let doc: serde_json::Value =
         serde_json::from_slice(&out.stdout).expect("stdout json");
     assert!(doc["scope"]["files"].as_u64().unwrap() >= 1);
+    assert_eq!(
+        fs::read(&live).expect("live after"),
+        live_before,
+        "worktree synth must not clobber live session snapshot"
+    );
+    assert!(repo.join(".rgctl/synth-head/graph.snapshot.bin").is_file());
 }
 
 #[test]

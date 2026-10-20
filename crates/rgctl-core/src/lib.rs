@@ -42,10 +42,10 @@ pub use rgctl_incremental::{
     DEFAULT_BASE_ARTIFACT_SUBDIR, EntityScope, FileTracker, HunkIndex, IncrementalUpdater,
     LineRange, PrCheckArtifactPaths, RGCTL_BASE_ARTIFACT_ENV, ScopedPaths, SymbolScopeOptions,
     UpdateOptions, UpdateResult, changed_function_symbols, function_symbols_in_paths,
-    HeadSynthesisOptions, git_diff_name_only, git_diff_name_status, git_unified_diff,
-    merge_change_sets, parse_name_status_z, resolve_base_artifact_root, resolve_base_snapshot,
-    resolve_pr_check_artifacts, resolve_snapshot_path, seed_head_artifact_from_base,
-    synthesize_head_snapshot,
+    HeadSynthesisOptions, default_synth_head_dir, git_diff_name_only, git_diff_name_status,
+    git_unified_diff, merge_change_sets, parse_name_status_z, resolve_base_artifact_root,
+    resolve_base_snapshot, resolve_pr_check_artifacts, resolve_snapshot_path,
+    synthesize_head_snapshot, synthesize_worktree_head_snapshot,
 };
 pub use rgctl_pipeline::parallel;
 pub use rgctl_pipeline::{PipelineConfig, PipelineStats, ProcessingPipeline, par_filter_map};

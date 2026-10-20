@@ -81,6 +81,39 @@ fn node_alive(entries: &[CompactNodeEntry], id: Uuid) -> bool {
     entries.binary_search_by_key(&id, |entry| entry.id).is_ok()
 }
 
+fn source_is_base(entries: &[CompactNodeEntry], id: Uuid) -> bool {
+    entries
+        .binary_search_by_key(&id, |entry| entry.id)
+        .ok()
+        .is_some_and(|i| matches!(entries[i].source, CompactNodeSource::Base(_)))
+}
+
+/// Prefer `Delta` over `Base` when the same UUID appears twice (e.g. `<external>` stubs).
+fn dedupe_entries_prefer_delta(entries: &mut Vec<CompactNodeEntry>) {
+    if entries.len() < 2 {
+        return;
+    }
+    entries.sort_by_key(|entry| entry.id);
+    let mut out: Vec<CompactNodeEntry> = Vec::with_capacity(entries.len());
+    for entry in entries.drain(..) {
+        if let Some(last) = out.last_mut() {
+            if last.id == entry.id {
+                if matches!(entry.source, CompactNodeSource::Delta(_)) {
+                    *last = entry;
+                }
+                continue;
+            }
+        }
+        out.push(entry);
+    }
+    *entries = out;
+}
+
+fn dedupe_sorted_edges(edge_meta: &mut Vec<(Uuid, Uuid, u8)>) {
+    edge_meta.sort();
+    edge_meta.dedup();
+}
+
 impl<'a> GraphCompactor<'a> {
     /// Create a compactor over a live mmap and owned delta.
     pub fn new(base: &'a ColumnarGraphMmap, delta: DeltaSegment) -> Self {
@@ -122,7 +155,7 @@ impl<'a> GraphCompactor<'a> {
             });
             stats.nodes_from_delta += 1;
         }
-        entries.sort_by_key(|entry| entry.id);
+        dedupe_entries_prefer_delta(&mut entries);
 
         let mut hasher = blake3::Hasher::new();
         let mut strings = StringPool::new();
@@ -162,9 +195,15 @@ impl<'a> GraphCompactor<'a> {
             }
         }
 
+        // Keep base edges only when both endpoints are alive and the source (`from`)
+        // is still a kept base node (its file was not invalidated). Invalidated-source
+        // edges are replaced by `delta.new_edges` so omitted CALLs stay omitted (#124).
         let mut edge_meta: Vec<(Uuid, Uuid, u8)> = Vec::new();
         self.base.for_each_edge(|from, to, edge_type| {
-            if node_alive(&entries, from) && node_alive(&entries, to) {
+            if node_alive(&entries, from)
+                && node_alive(&entries, to)
+                && source_is_base(&entries, from)
+            {
                 edge_meta.push((from, to, edge_type_to_u8(edge_type)));
                 stats.edges_kept += 1;
             } else {
@@ -180,7 +219,7 @@ impl<'a> GraphCompactor<'a> {
             }
         }
 
-        edge_meta.sort();
+        dedupe_sorted_edges(&mut edge_meta);
 
         let mut edge_rows = Vec::with_capacity(edge_meta.len());
         for (from, to, edge_type) in edge_meta {
@@ -384,6 +423,105 @@ mod tests {
         })
         .unwrap();
         assert!(found);
+        let mut call_count = 0usize;
+        col.for_each_edge(|from, to, edge_type| {
+            if from == main_id && to == login_id && edge_type == EdgeType::Calls {
+                call_count += 1;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(call_count, 1, "kept-base + delta must not duplicate CALL");
+    }
+
+    #[test]
+    fn intra_file_call_deletion_with_stable_ids_drops_omitted_edge() {
+        let ship = Node::new(NodeType::Function, "calculateShipping").with_file_path("ship.rs");
+        let total = Node::new(NodeType::Function, "getCartItemTotal").with_file_path("ship.rs");
+        let free = Node::new(NodeType::Function, "isFreeShipping").with_file_path("ship.rs");
+        let ship_id = ship.id;
+        let total_id = total.id;
+        let free_id = free.id;
+        let e_total = Edge::new(ship_id, total_id, EdgeType::Calls);
+        let e_free = Edge::new(ship_id, free_id, EdgeType::Calls);
+
+        let tmp = TempDir::new().unwrap();
+        let base_path = tmp.path().join("base.bin");
+        write_columnar_from_nodes_edges(
+            vec![ship, total, free],
+            vec![e_total, e_free],
+            &base_path,
+        )
+        .unwrap();
+
+        // Same deterministic IDs; only the total call remains in the new extract.
+        let ship2 = Node::new(NodeType::Function, "calculateShipping").with_file_path("ship.rs");
+        let total2 = Node::new(NodeType::Function, "getCartItemTotal").with_file_path("ship.rs");
+        let free2 = Node::new(NodeType::Function, "isFreeShipping").with_file_path("ship.rs");
+        assert_eq!(ship2.id, ship_id);
+        assert_eq!(total2.id, total_id);
+        assert_eq!(free2.id, free_id);
+
+        let mut delta = DeltaSegment::new();
+        delta.invalidate_file("ship.rs");
+        delta.new_nodes.extend([ship2, total2, free2]);
+        delta
+            .new_edges
+            .push(Edge::new(ship_id, total_id, EdgeType::Calls));
+
+        let out = tmp.path().join("out.bin");
+        let scratch = tmp.path().join("scratch");
+        compact_snapshot_file(&base_path, delta, &out, &scratch).unwrap();
+
+        let file = File::open(&out).unwrap();
+        let mmap = Arc::new(unsafe { Mmap::map(&file).unwrap() });
+        let col = ColumnarGraphMmap::open(mmap).unwrap();
+        let mut calls = Vec::new();
+        col.for_each_edge(|from, to, edge_type| {
+            if from == ship_id && edge_type == EdgeType::Calls {
+                calls.push(to);
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, vec![total_id], "deleted CALL must not resurrect via alive IDs");
+    }
+
+    #[test]
+    fn surviving_intra_file_call_not_duplicated() {
+        let a = Node::new(NodeType::Function, "a").with_file_path("f.rs");
+        let b = Node::new(NodeType::Function, "b").with_file_path("f.rs");
+        let a_id = a.id;
+        let b_id = b.id;
+        let call = Edge::new(a_id, b_id, EdgeType::Calls);
+
+        let tmp = TempDir::new().unwrap();
+        let base_path = tmp.path().join("base.bin");
+        write_columnar_from_nodes_edges(vec![a, b], vec![call.clone()], &base_path).unwrap();
+
+        let a2 = Node::new(NodeType::Function, "a").with_file_path("f.rs");
+        let b2 = Node::new(NodeType::Function, "b").with_file_path("f.rs");
+        let mut delta = DeltaSegment::new();
+        delta.invalidate_file("f.rs");
+        delta.new_nodes.extend([a2, b2]);
+        delta.new_edges.push(call);
+
+        let out = tmp.path().join("out.bin");
+        let scratch = tmp.path().join("scratch");
+        compact_snapshot_file(&base_path, delta, &out, &scratch).unwrap();
+
+        let file = File::open(&out).unwrap();
+        let mmap = Arc::new(unsafe { Mmap::map(&file).unwrap() });
+        let col = ColumnarGraphMmap::open(mmap).unwrap();
+        let mut n = 0usize;
+        col.for_each_edge(|from, to, edge_type| {
+            if from == a_id && to == b_id && edge_type == EdgeType::Calls {
+                n += 1;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(n, 1);
     }
 
     #[test]

@@ -14,8 +14,9 @@ pub use file_tracker::{
     normalize_path_str,
 };
 pub use synthesize_head::{
-    HeadSynthesisOptions, seed_head_artifact_from_base, synthesize_head_snapshot,
-    synthesize_worktree_head_snapshot,
+    HeadSynthesisOptions, default_synth_head_dir, out_root_clobbers_live_session,
+    synthesize_head_snapshot, synthesize_head_snapshot_at, synthesize_worktree_head_snapshot,
+    synthesize_worktree_head_snapshot_at,
 };
 pub use pr_scope::{
     EntityScope, HunkIndex, LineRange, PrCheckArtifactPaths, ScopedPaths, SymbolScopeOptions,
