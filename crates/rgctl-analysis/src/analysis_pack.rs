@@ -7,7 +7,7 @@ use memmap2::Mmap;
 use rgctl_error::{Error, Result};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -29,7 +29,7 @@ struct PackIndexEntry {
 /// Thread-safe append writer used during parallel CFG persistence.
 pub struct AnalysisPackWriter {
     data_path: PathBuf,
-    data_file: File,
+    data_file: BufWriter<File>,
     entries: HashMap<Uuid, PackIndexEntry>,
     offset: u64,
 }
@@ -42,7 +42,7 @@ impl AnalysisPackWriter {
         if data_path.exists() {
             fs::remove_file(&data_path)?;
         }
-        let data_file = File::create(&data_path)?;
+        let data_file = BufWriter::with_capacity(4 * 1024 * 1024, File::create(&data_path)?);
         Ok(Self {
             data_path,
             data_file,
@@ -51,7 +51,7 @@ impl AnalysisPackWriter {
         })
     }
 
-    /// Append one serialized analysis record.
+    /// Append one serialized analysis record (pre-encoded bytes welcome).
     pub fn append(&mut self, function_id: Uuid, bytes: &[u8]) -> Result<()> {
         let length = u32::try_from(bytes.len())
             .map_err(|_| Error::SerdeError("analysis pack record exceeds u32::MAX".into()))?;

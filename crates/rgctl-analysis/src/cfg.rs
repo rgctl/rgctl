@@ -317,68 +317,89 @@ impl ControlFlowGraph {
     /// A block `b` is contracted when it has zero statements, is not an exit, and all of its
     /// outgoing edges are `CfgEdgeType::Next` to a single successor `s != b`. Incoming edges
     /// keep their [`CfgEdgeType`]. Exit blocks and empty loop back-edges are preserved.
+    /// Adjacency (`succ` / `pred`) is rebuilt once after all contractions.
     pub fn contract_empty_blocks(&mut self) {
+        let mut contracted_any = false;
         loop {
-            let candidate = self.find_contractable_empty_block();
-            let Some((b, s)) = candidate else {
+            let candidates: Vec<(BlockId, BlockId)> = self
+                .blocks
+                .keys()
+                .copied()
+                .filter_map(|b| self.contractable_successor(b).map(|s| (b, s)))
+                .collect();
+            if candidates.is_empty() {
                 break;
-            };
-
-            for edge in &mut self.edges {
-                if edge.to == b {
-                    edge.to = s;
-                }
             }
-            self.edges.retain(|e| e.from != b);
-
+            for (b, s) in candidates {
+                if !self.blocks.contains_key(&b) || !self.blocks.contains_key(&s) {
+                    continue;
+                }
+                if self.contractable_successor(b) != Some(s) {
+                    continue;
+                }
+                for edge in &mut self.edges {
+                    if edge.to == b {
+                        edge.to = s;
+                    }
+                }
+                self.edges.retain(|e| e.from != b);
+                if self.entry == b {
+                    self.entry = s;
+                }
+                self.blocks.remove(&b);
+                contracted_any = true;
+            }
             let mut seen = HashSet::with_capacity(self.edges.len());
             self.edges
                 .retain(|e| seen.insert((e.from, e.to, e.edge_type)));
-
-            if self.entry == b {
-                self.entry = s;
-            }
-            self.blocks.remove(&b);
+            // Keep succ/pred coherent for the next chain pass (stale pred blocks
+            // contracting a newly-promoted entry that still lists removed preds).
+            self.rebuild_adjacency();
+        }
+        if contracted_any {
             self.rebuild_adjacency();
         }
     }
 
-    fn find_contractable_empty_block(&self) -> Option<(BlockId, BlockId)> {
-        for &b in self.blocks.keys() {
-            if self.exits.contains(&b) {
-                continue;
-            }
-            let Some(block) = self.blocks.get(&b) else {
-                continue;
-            };
-            if !block.statements.is_empty() {
-                continue;
-            }
-
-            let outs: Vec<&CfgEdge> = self.edges.iter().filter(|e| e.from == b).collect();
-            if outs.is_empty() {
-                continue;
-            }
-            let s = outs[0].to;
-            if s == b {
-                continue;
-            }
-            if !outs
-                .iter()
-                .all(|e| e.edge_type == CfgEdgeType::Next && e.to == s)
-            {
-                continue;
-            }
-            // Do not contract a loop-header entry that still has predecessors.
-            if b == self.entry && !self.predecessors(b).is_empty() {
-                continue;
-            }
-            if !self.blocks.contains_key(&s) {
-                continue;
-            }
-            return Some((b, s));
+    /// Empty non-exit block `b` with only `Next` edges to a single successor `s != b`.
+    fn contractable_successor(&self, b: BlockId) -> Option<BlockId> {
+        if self.exits.contains(&b) {
+            return None;
         }
-        None
+        let block = self.blocks.get(&b)?;
+        if !block.statements.is_empty() {
+            return None;
+        }
+        let succs = self.successors(b);
+        if succs.is_empty() {
+            return None;
+        }
+        let s = succs[0];
+        if s == b || !self.blocks.contains_key(&s) {
+            return None;
+        }
+        if !succs.iter().all(|&t| t == s) {
+            return None;
+        }
+        // Confirm edge kinds via edges from b (no Vec alloc): all Next to s.
+        let mut saw = false;
+        for edge in &self.edges {
+            if edge.from != b {
+                continue;
+            }
+            saw = true;
+            if edge.edge_type != CfgEdgeType::Next || edge.to != s {
+                return None;
+            }
+        }
+        if !saw {
+            return None;
+        }
+        // Entry with live predecessors must stay (use edges — pred may lag mid-pass).
+        if b == self.entry && self.edges.iter().any(|e| e.to == b) {
+            return None;
+        }
+        Some(s)
     }
 
     /// Returns true when the CFG contains a cycle reachable from entry.

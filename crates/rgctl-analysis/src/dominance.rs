@@ -1,6 +1,7 @@
 //! Dominator tree and dominance frontiers (Phase 13.2).
 
 use crate::cfg::{BlockId, ControlFlowGraph};
+use crate::hash_maps::{FxHashMap, FxHashSet};
 use rgctl_error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -29,7 +30,8 @@ impl DominatorTree {
         let reachable = cfg.reachable_blocks();
         let rpo = compute_rpo(cfg, &reachable);
         let n = rpo.len();
-        let mut rpo_index: HashMap<BlockId, u32> = HashMap::with_capacity(n);
+        let mut rpo_index: FxHashMap<BlockId, u32> =
+            FxHashMap::with_capacity_and_hasher(n, Default::default());
         for (i, &id) in rpo.iter().enumerate() {
             rpo_index.insert(id, i as u32);
         }
@@ -133,7 +135,7 @@ impl DominatorTree {
 /// Verify that the immediate-dominator relation has no cycles.
 pub fn verify_idom_acyclic(idom: &HashMap<BlockId, BlockId>) -> bool {
     for &node in idom.keys() {
-        let mut seen = HashSet::new();
+        let mut seen: FxHashSet<BlockId> = FxHashSet::default();
         let mut current = node;
         while let Some(&parent) = idom.get(&current) {
             if parent == current {
@@ -153,7 +155,8 @@ fn compute_rpo(cfg: &ControlFlowGraph, reachable: &HashSet<BlockId>) -> Vec<Bloc
     if !reachable.contains(&cfg.entry) {
         return Vec::new();
     }
-    let mut visited = HashSet::with_capacity(reachable.len());
+    let mut visited: FxHashSet<BlockId> =
+        FxHashSet::with_capacity_and_hasher(reachable.len(), Default::default());
     let mut post_order = Vec::with_capacity(reachable.len());
     struct Frame {
         block: BlockId,

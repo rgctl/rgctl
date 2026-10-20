@@ -2,11 +2,13 @@
 
 use crate::analysis::storage::stable_function_key;
 use crate::analysis::{
-    AnalysisIndexEntry, AnalysisStorage, CfgPdgRecord, ControlFlowGraph, DominatorTree,
-    FunctionAnalysis, FunctionIdSyncEntry, ParsedSourceFile, PdgBuildOptions,
-    ProgramDependenceGraph, TaintAnalyzer, TaintRuleSet, build_cfg_for_function,
-    cfg_language_id_from_path,
+    AnalysisIndexEntry, AnalysisStorage, AstSkeletonRecord, CfgPdgRecord, ControlFlowGraph,
+    DominatorTree, FieldWrite, FunctionAnalysis, FunctionIdSyncEntry, ParsedSourceFile,
+    PdgBuildOptions, ProgramDependenceGraph, TaintAnalyzer, TaintRuleSet, build_cfg_for_function,
+    build_file_local_types_from_tree, build_function_skeleton_from_tree, cfg_language_id_from_path,
+    extract_writes_from_cfg,
 };
+use crate::analysis::hash_maps::FxHashMap;
 use rayon::prelude::*;
 use rgctl_graph::code_index::hash_code;
 use rgctl_graph::schema::Node;
@@ -17,6 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tracing::info;
+use uuid::Uuid;
 
 /// Options for the CFG analysis batch.
 #[derive(Debug, Clone, Default)]
@@ -31,6 +34,8 @@ pub struct CfgAnalysisOptions {
     pub dfg_loops: bool,
     /// Compiled taint rule packs (built-in + overlays). Shared across workers.
     pub taint_rules: Option<Arc<TaintRuleSet>>,
+    /// Extract AST skeletons on workers (`--with-ast-skeleton`).
+    pub with_ast_skeleton: bool,
 }
 
 /// Why a function was not CFG-analyzed.
@@ -86,8 +91,17 @@ pub struct CfgAnalysisBatchResult {
     pub recomputed: usize,
     pub skipped_unchanged: usize,
     pub orphans_removed: usize,
+    /// Pre-encoded CFG/PDG archive records `(function_id, bincode)`.
+    pub archive_record_bytes: Vec<(Uuid, Vec<u8>)>,
+    /// Legacy in-memory records (empty when worker-side encode is used).
     pub archive_records: Vec<CfgPdgRecord>,
     pub archive_unchanged: bool,
+    /// Field writes extracted on workers (fused; skip archive re-open when non-empty).
+    pub field_writes: Vec<FieldWrite>,
+    /// Optional AST skeletons extracted on workers.
+    pub skeletons: Vec<AstSkeletonRecord>,
+    /// Index entries for recomputed functions (worker-side serialize path).
+    pub index_entries: Vec<AnalysisIndexEntry>,
     pub stage_profile: Option<CfgStageProfile>,
 }
 
@@ -132,12 +146,19 @@ struct CfgFunctionTiming {
 }
 
 struct CfgFunctionWork {
-    analysis: Option<FunctionAnalysis>,
-    archive_record: Option<CfgPdgRecord>,
+    function_id: Uuid,
+    /// Pre-encoded [`FunctionAnalysis`] bincode (worker-side).
+    analysis_bytes: Option<Vec<u8>>,
+    /// Pre-encoded [`CfgPdgRecord`] bincode (worker-side).
+    archive_bytes: Option<Vec<u8>>,
+    index_entry: Option<AnalysisIndexEntry>,
+    field_writes: Vec<FieldWrite>,
+    skeleton: Option<AstSkeletonRecord>,
     flow_count: usize,
     vulnerable_count: usize,
     from_cache: bool,
     skip_persist: bool,
+    blocks: usize,
 }
 
 struct CfgIncrementalCache {
@@ -208,6 +229,7 @@ struct CfgWorkContext<'a> {
     enable_taint: bool,
     dfg_loops: bool,
     taint_rules: Option<&'a Arc<TaintRuleSet>>,
+    with_ast_skeleton: bool,
 }
 
 /// Analyze all repository functions in parallel with incremental reuse and bincode persistence.
@@ -248,13 +270,14 @@ pub fn run_cfg_analysis_batch(
 
     let ctx = CfgWorkContext {
         functions,
-        sources: &sources,
+        sources,
         cache: &cache,
         stage: stage_ref,
         timings: timing_ref,
         enable_taint: options.enable_taint,
         dfg_loops: options.dfg_loops,
         taint_rules: options.taint_rules.as_ref(),
+        with_ast_skeleton: options.with_ast_skeleton,
     };
 
     let nested: Vec<Vec<Result<CfgFunctionWork, CfgSkipReason>>> = with_large_stack(|| {
@@ -285,7 +308,7 @@ pub fn run_cfg_analysis_batch(
         emit_tail_profile(&log);
     }
 
-    let mut saves: Vec<FunctionAnalysis> = Vec::new();
+    let mut save_bytes: Vec<(Uuid, Vec<u8>)> = Vec::new();
     let mut result = CfgAnalysisBatchResult::default();
 
     for (idx, func) in functions.iter().enumerate() {
@@ -325,12 +348,19 @@ pub fn run_cfg_analysis_batch(
                     result.success_count += 1;
                     result.total_flows += w.flow_count;
                     result.vulnerable_flows += w.vulnerable_count;
-                    if let Some(record) = w.archive_record {
-                        result.archive_records.push(record);
+                    result.field_writes.extend(w.field_writes);
+                    if let Some(skel) = w.skeleton {
+                        result.skeletons.push(skel);
                     }
-                    if let Some(analysis) = w.analysis {
+                    if let Some(entry) = w.index_entry {
+                        result.index_entries.push(entry);
+                    }
+                    if let Some(bytes) = w.archive_bytes {
+                        result.archive_record_bytes.push((w.function_id, bytes));
+                    }
+                    if let Some(bytes) = w.analysis_bytes {
                         if !w.skip_persist {
-                            saves.push(analysis);
+                            save_bytes.push((w.function_id, bytes));
                         }
                     }
                 }
@@ -342,17 +372,13 @@ pub fn run_cfg_analysis_batch(
         tracing::warn!(error = %e, "analysis pack writer failed; skipping CFG persistence");
         Mutex::new(None)
     });
-    with_large_stack(|| {
-        with_large_pool(options.thread_count, || {
-            saves.par_iter().for_each(|analysis| {
-                let _ = storage.save_function_no_index_packed(analysis, &pack);
-            });
-        });
-    });
+    for (function_id, bytes) in &save_bytes {
+        let _ = storage.save_preencoded_no_index_packed(*function_id, bytes, &pack);
+    }
     let _ = AnalysisStorage::finish_pack(pack);
-    let _ = storage.refresh_analysis_index_from_analyses(&saves);
+    let _ = storage.refresh_analysis_index_from_entries(&result.index_entries);
 
-    let active_keys = active_stable_keys(functions, Some(&sources));
+    let active_keys = active_stable_keys(functions, Some(sources));
     let _ = sync_storage_function_ids(storage, functions);
     result.orphans_removed = storage
         .purge_stale_by_stable_keys(&active_keys)
@@ -459,8 +485,20 @@ fn process_file_group(
             .map(|_| Err(CfgSkipReason::MissingSource))
             .collect();
     };
-    let mut parsed: Option<ParsedSourceFile> = None;
-    let mut parse_attempted = false;
+
+    let parsed = ParsedSourceFile::parse(&group.language, source.as_bytes()).ok();
+    let file_locals: FxHashMap<(usize, String), HashMap<String, String>> =
+        parsed
+            .as_ref()
+            .map(|p| {
+                build_file_local_types_from_tree(
+                    &group.language,
+                    p.tree().root_node(),
+                    source.as_bytes(),
+                )
+            })
+            .unwrap_or_default();
+
     group
         .func_indices
         .iter()
@@ -471,14 +509,15 @@ fn process_file_group(
                 &group.language,
                 &group.file_path,
                 source,
-                &mut parsed,
-                &mut parse_attempted,
+                parsed.as_ref(),
+                &file_locals,
                 ctx.cache,
                 ctx.stage,
                 ctx.timings,
                 ctx.enable_taint,
                 ctx.dfg_loops,
                 ctx.taint_rules,
+                ctx.with_ast_skeleton,
             )
             .ok_or(CfgSkipReason::AnalysisError)
         })
@@ -534,20 +573,50 @@ fn resolve_code_hash(func_node: &Node, source: &str) -> String {
         .unwrap_or_else(|| hash_code(source))
 }
 
+fn is_constructor_node(node: &Node) -> bool {
+    node.properties
+        .get("is_constructor")
+        .map(|v| v == "true")
+        .unwrap_or(false)
+        || node
+            .qualified_name
+            .as_deref()
+            .is_some_and(|q| q.ends_with(".<init>") || q.contains("::<init>"))
+}
+
+fn function_name_looks_like_ctor(name: &str, node: &Node) -> bool {
+    if let Some(enclosing) = node
+        .properties
+        .get("member_of")
+        .cloned()
+        .or_else(|| {
+            node.qualified_name.as_ref().and_then(|qn| {
+                qn.rsplit_once('#')
+                    .map(|(o, _)| o.to_string())
+                    .or_else(|| qn.rsplit_once('.').map(|(o, _)| o.to_string()))
+            })
+        })
+    {
+        return name == enclosing || enclosing.ends_with(&format!(".{name}"));
+    }
+    false
+}
+
 #[allow(clippy::too_many_arguments)]
 fn analyze_function_in_file(
     func_node: &Node,
     language: &str,
     file_path: &str,
     source: &str,
-    parsed: &mut Option<ParsedSourceFile>,
-    parse_attempted: &mut bool,
+    parsed: Option<&ParsedSourceFile>,
+    file_locals: &FxHashMap<(usize, String), HashMap<String, String>>,
     cache: &CfgIncrementalCache,
     stage: Option<&CfgStageTimings>,
     timings: Option<&Mutex<Vec<CfgFunctionTiming>>>,
     enable_taint: bool,
     dfg_loops: bool,
     taint_rules: Option<&Arc<TaintRuleSet>>,
+    with_ast_skeleton: bool,
 ) -> Option<CfgFunctionWork> {
     let code_hash = resolve_code_hash(func_node, source);
 
@@ -560,24 +629,21 @@ fn analyze_function_in_file(
         }
     }
 
-    if !*parse_attempted {
-        *parsed = ParsedSourceFile::parse(language, source.as_bytes()).ok();
-        *parse_attempted = true;
-    }
-
     compute_function_cfg(
         func_node,
         language,
         file_path,
         source,
         &code_hash,
-        parsed.as_ref(),
+        parsed,
+        file_locals,
         false,
         stage,
         timings,
         enable_taint,
         dfg_loops,
         taint_rules,
+        with_ast_skeleton,
     )
 }
 
@@ -593,12 +659,17 @@ fn try_fast_cache_hit(
         return None;
     }
     Some(CfgFunctionWork {
-        analysis: None,
-        archive_record: None,
+        function_id: func_node.id,
+        analysis_bytes: None,
+        archive_bytes: None,
+        index_entry: None,
+        field_writes: Vec::new(),
+        skeleton: None,
         flow_count: entry.flow_count,
         vulnerable_count: entry.vulnerable_count,
         from_cache: true,
         skip_persist: true,
+        blocks: 0,
     })
 }
 
@@ -614,12 +685,17 @@ fn try_remap_cached(
         return None;
     }
     Some(CfgFunctionWork {
-        analysis: None,
-        archive_record: None,
+        function_id: func_node.id,
+        analysis_bytes: None,
+        archive_bytes: None,
+        index_entry: None,
+        field_writes: Vec::new(),
+        skeleton: None,
         flow_count: entry.flow_count,
         vulnerable_count: entry.vulnerable_count,
         from_cache: true,
         skip_persist: true,
+        blocks: 0,
     })
 }
 
@@ -631,25 +707,78 @@ fn compute_function_cfg(
     source: &str,
     code_hash: &str,
     parsed: Option<&ParsedSourceFile>,
+    file_locals: &FxHashMap<(usize, String), HashMap<String, String>>,
     from_cache: bool,
     stage: Option<&CfgStageTimings>,
     timings: Option<&Mutex<Vec<CfgFunctionTiming>>>,
     enable_taint: bool,
     dfg_loops: bool,
     taint_rules: Option<&Arc<TaintRuleSet>>,
+    with_ast_skeleton: bool,
 ) -> Option<CfgFunctionWork> {
     let total_start = timings.is_some().then(Instant::now);
 
     let build_start = stage.map(|_| Instant::now());
     let bytes = source.as_bytes();
-    let cfg_data = parsed
-        .and_then(|p| p.build_cfg(language, bytes, &func_node.name).ok())
+    let mut cfg_data = parsed
+        .and_then(|p| match (func_node.start_line, func_node.end_line) {
+            (Some(start), Some(end)) => p
+                .build_cfg_for_node_span(language, bytes, &func_node.name, start, end)
+                .ok(),
+            _ => p.build_cfg(language, bytes, &func_node.name).ok(),
+        })
         .or_else(|| build_cfg_for_function(language, source, &func_node.name).ok())?;
     if let (Some(stage), Some(start)) = (stage, build_start) {
         stage
             .build_cfg_ns
             .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
     }
+
+    // Merge single-pass file locals into CFG before field-write extraction / PDG.
+    if let Some(start) = func_node.start_line {
+        if let Some(locals) = file_locals.get(&(start, func_node.name.to_string())) {
+            for (k, v) in locals {
+                cfg_data
+                    .local_types
+                    .entry(k.clone())
+                    .or_insert_with(|| v.clone());
+            }
+        }
+    }
+
+    let is_constructor =
+        is_constructor_node(func_node) || function_name_looks_like_ctor(&func_node.name, func_node);
+    let mut field_writes = Vec::new();
+    extract_writes_from_cfg(
+        &cfg_data,
+        func_node.id,
+        &func_node.name,
+        is_constructor,
+        file_path,
+        &cfg_data.local_types,
+        &mut field_writes,
+    );
+
+    let skeleton = if with_ast_skeleton {
+        parsed.and_then(|p| {
+            let node = match (func_node.start_line, func_node.end_line) {
+                (Some(start), Some(end)) => p.function_node_for_span(&func_node.name, start, end),
+                _ => None,
+            };
+            node.and_then(|n| {
+                build_function_skeleton_from_tree(
+                    n,
+                    bytes,
+                    &func_node.name,
+                    file_path,
+                    Some(func_node.id),
+                )
+                .ok()
+            })
+        })
+    } else {
+        None
+    };
 
     let work = compute_from_cfg(
         func_node,
@@ -658,6 +787,8 @@ fn compute_function_cfg(
         code_hash,
         language,
         cfg_data,
+        field_writes,
+        skeleton,
         from_cache,
         stage,
         enable_taint,
@@ -670,12 +801,7 @@ fn compute_function_cfg(
             entries.push(CfgFunctionTiming {
                 file_path: file_path.to_string(),
                 function_name: func_node.name.to_string(),
-                blocks: work
-                    .analysis
-                    .as_ref()
-                    .and_then(|a| a.cfg.as_ref())
-                    .map(|c| c.blocks.len())
-                    .unwrap_or(0),
+                blocks: work.blocks,
                 total_ns: start.elapsed().as_nanos() as u64,
             });
         }
@@ -692,6 +818,8 @@ fn compute_from_cfg(
     code_hash: &str,
     language: &str,
     cfg_data: ControlFlowGraph,
+    field_writes: Vec<FieldWrite>,
+    skeleton: Option<AstSkeletonRecord>,
     from_cache: bool,
     stage: Option<&CfgStageTimings>,
     enable_taint: bool,
@@ -701,6 +829,8 @@ fn compute_from_cfg(
     if let Some(stage) = stage {
         stage.functions.fetch_add(1, Ordering::Relaxed);
     }
+
+    let blocks = cfg_data.blocks.len();
 
     let dom_start = stage.map(|_| Instant::now());
     let dom_data = DominatorTree::build(&cfg_data);
@@ -778,13 +908,36 @@ fn compute_from_cfg(
         pdg: Arc::clone(pdg),
     });
 
+    let analysis_bytes = bincode::serialize(&analysis).ok();
+    let archive_bytes = archive_record
+        .as_ref()
+        .and_then(|r| bincode::serialize(r).ok());
+    // Drop CFG/PDG Arcs before returning from the worker.
+    drop(analysis);
+    drop(archive_record);
+    drop(cfg_arc);
+    drop(pdg_arc);
+
+    let index_entry = Some(AnalysisIndexEntry {
+        stable_key: stable_function_key(file_path, &func_node.name, code_hash),
+        function_id: func_node.id,
+        code_hash: code_hash.to_string(),
+        flow_count,
+        vulnerable_count,
+    });
+
     Some(CfgFunctionWork {
-        analysis: Some(analysis),
-        archive_record,
+        function_id: func_node.id,
+        analysis_bytes,
+        archive_bytes,
+        index_entry,
+        field_writes,
+        skeleton,
         flow_count,
         vulnerable_count,
         from_cache,
         skip_persist: false,
+        blocks,
     })
 }
 

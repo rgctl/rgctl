@@ -3,8 +3,10 @@
 //! Bound resolution only: formal parameters and explicitly typed locals inside the
 //! target function. No full type inference / reflection.
 
+use crate::hash_maps::FxHashMap;
+use crate::language_profile::{function_kinds_for, parse_source};
 use std::collections::HashMap;
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Node, Tree};
 
 type VisitFn = fn(Node, &[u8], &str, &mut HashMap<String, String>, bool);
 
@@ -18,12 +20,21 @@ pub struct LocalsParseContext<'a> {
 }
 
 impl<'a> LocalsParseContext<'a> {
-    /// Parse `source` once for `language`. Returns `None` for unknown languages or parse failure.
+    /// Parse `source` once for `language` via thread-local [`parse_source`].
+    /// Returns `None` for unknown languages or parse failure.
     pub fn try_new(language: &str, source: &'a str) -> Option<Self> {
-        let (ts_lang, visit) = language_visit(language)?;
-        let mut parser = Parser::new();
-        parser.set_language(&ts_lang).ok()?;
-        let tree = parser.parse(source, None)?;
+        let visit = language_visit_fn(language)?;
+        let tree = parse_source(language, source.as_bytes()).ok()?;
+        Some(Self {
+            source,
+            tree,
+            visit,
+        })
+    }
+
+    /// Reuse an already-parsed tree (no re-parse).
+    pub fn from_tree(language: &str, source: &'a str, tree: Tree) -> Option<Self> {
+        let visit = language_visit_fn(language)?;
         Some(Self {
             source,
             tree,
@@ -41,29 +52,84 @@ impl<'a> LocalsParseContext<'a> {
             false,
         );
     }
+
+    /// Borrow the cached tree.
+    pub fn tree(&self) -> &Tree {
+        &self.tree
+    }
 }
 
-fn language_visit(language: &str) -> Option<(tree_sitter::Language, VisitFn)> {
+fn language_visit_fn(language: &str) -> Option<VisitFn> {
     Some(match language {
-        "java" => (tree_sitter_java::LANGUAGE.into(), visit_java),
-        "csharp" => (tree_sitter_c_sharp::LANGUAGE.into(), visit_csharp),
-        "go" => (tree_sitter_go::LANGUAGE.into(), visit_go),
-        "rust" => (tree_sitter_rust::LANGUAGE.into(), visit_rust),
-        "python" => (tree_sitter_python::LANGUAGE.into(), visit_python),
-        "javascript" => (tree_sitter_javascript::LANGUAGE.into(), visit_javascript),
-        "typescript" => (
-            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            visit_typescript,
-        ),
-        "c" => (tree_sitter_c::LANGUAGE.into(), visit_c_family),
-        "cpp" => (tree_sitter_cpp::LANGUAGE.into(), visit_c_family),
-        "php" => (tree_sitter_php::LANGUAGE_PHP.into(), visit_php),
-        "ruby" => (tree_sitter_ruby::LANGUAGE.into(), visit_ruby),
-        "puppet" => (tree_sitter_puppet::LANGUAGE.into(), visit_puppet),
-        "kotlin" | "kt" => (tree_sitter_kotlin_ng::LANGUAGE.into(), visit_kotlin),
-        "groovy" => (tree_sitter_groovy::LANGUAGE.into(), visit_groovy),
+        "java" => visit_java,
+        "csharp" => visit_csharp,
+        "go" => visit_go,
+        "rust" => visit_rust,
+        "python" => visit_python,
+        "javascript" => visit_javascript,
+        "typescript" => visit_typescript,
+        "c" => visit_c_family,
+        "cpp" => visit_c_family,
+        "php" => visit_php,
+        "ruby" => visit_ruby,
+        "puppet" => visit_puppet,
+        "kotlin" | "kt" => visit_kotlin,
+        "groovy" => visit_groovy,
         _ => return None,
     })
+}
+
+/// Single AST walk: local-type maps keyed by `(start_line, function_name)`.
+pub fn build_file_local_types_from_tree(
+    language: &str,
+    root: Node<'_>,
+    source: &[u8],
+) -> FxHashMap<(usize, String), HashMap<String, String>> {
+    let Some(visit) = language_visit_fn(language) else {
+        return FxHashMap::default();
+    };
+    let Ok(kinds) = function_kinds_for(language) else {
+        return FxHashMap::default();
+    };
+    let mut out: FxHashMap<(usize, String), HashMap<String, String>> = FxHashMap::default();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if kinds.contains(&node.kind()) {
+            if let Some(name) = function_name_for_locals(language, node, source) {
+                let start_line = node.start_position().row + 1;
+                let mut env = HashMap::new();
+                // Start at the function node so `visit_*` sets `in_target` for this name.
+                visit(node, source, &name, &mut env, false);
+                if !env.is_empty() {
+                    out.insert((start_line, name), env);
+                }
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    out
+}
+
+fn function_name_for_locals(language: &str, node: Node<'_>, source: &[u8]) -> Option<String> {
+    if matches!(language, "java" | "csharp" | "kotlin" | "kt" | "groovy")
+        && matches!(
+            node.kind(),
+            "constructor_declaration" | "primary_constructor" | "secondary_constructor"
+        )
+    {
+        return find_ancestor_name(node, source, "class_declaration")
+            .or_else(|| find_ancestor_name(node, source, "object_declaration"));
+    }
+    node.child_by_field_name("name")
+        .and_then(|n| text_of(n, source))
+        .or_else(|| {
+            rgctl_plugin_helpers::extract_name_from_node(node, source)
+                .ok()
+                .flatten()
+        })
 }
 
 /// Merge typed locals + formals for `function_name` into `env` (name → bare type).

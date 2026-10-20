@@ -2,6 +2,16 @@
 
 <!-- Add bullets here during development; move to docs/releases/v0.4.x.md at tag time. -->
 
+## Faster `--with-cfg` / `--full` discover (`accelerate-cfg-discover-pipeline`)
+
+Cold discover with CFG/CPG is cheaper without changing CLI flags or on-disk archive magic:
+
+- **Single-pass per file:** one tree-sitter parse builds CFG/PDG, local types, field writes, and optional AST skeletons (overload-safe span lookup; no archive re-open for field-write indexing).
+- **Worker-side bincode:** Rayon workers serialize `FunctionAnalysis` / `CfgPdgRecord`, drop live CFG/PDG Arcs, and write buffered pack + `cfg_pdg.archive.bin` via pre-encoded merge.
+- **`discover --full` Stage 2 reuse:** when Stage 1 artifacts match `graph_digest`, skip recomputing complexity / communities / centrality / blast SCC / cold file-tracker sort; run harmonic (if needed), CFG, and dashboard only.
+- CFG/PDG internals: deterministic PDG node UUIDs, `FxHash` scratch maps, denser dataflow lookups, faster empty-block contraction.
+- Reference cold walls (2026-10-21): node `--with-cfg` **~4.8 s** (was ~6.2 s); metasfresh `--full` **~25.7 s** (was ~30 s). Gate A (linux default) unchanged. Details: [profile.md](../internal/profile.md).
+
 ## CFG empty-block contraction ([#121](https://github.com/sshaaf/rgctl/issues/121))
 
 - Lazy `if`/`unless` block allocation: reuse empty current blocks for conditions; wire `IfFalse` directly to merge when there is no `else`.

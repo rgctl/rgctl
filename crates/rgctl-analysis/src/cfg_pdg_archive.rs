@@ -15,7 +15,7 @@ use rgctl_graph::backend::MemoryBackend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -136,18 +136,41 @@ impl CfgPdgArchive {
 
     /// Write archive with magic header and per-record TOC (v2).
     pub fn write_to_path(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let digest_bytes = self.graph_digest.as_deref().unwrap_or("").as_bytes();
         let mut record_bytes: Vec<(Uuid, Vec<u8>)> = Vec::with_capacity(self.records.len());
         for (id, record) in &self.records {
             let bytes = bincode::serialize(record).map_err(serde_err)?;
             record_bytes.push((*id, bytes));
         }
+        Self::write_preencoded_to_path(path, self.graph_digest.as_deref(), &record_bytes)
+    }
+
+    /// Write an archive from pre-serialized `(function_id, bincode)` pairs.
+    ///
+    /// When `path` already exists and contains records not present in `records`, those
+    /// untouched records are merged in (incremental CFG cache hits) without re-serializing.
+    pub fn write_preencoded_to_path(
+        path: &Path,
+        graph_digest: Option<&str>,
+        records: &[(Uuid, Vec<u8>)],
+    ) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut merged: FxHashMap<Uuid, Vec<u8>> = FxHashMap::default();
+        if path.is_file() {
+            if let Ok(existing) = load_raw_record_bytes(path) {
+                merged = existing;
+            }
+        }
+        for (id, bytes) in records {
+            merged.insert(*id, bytes.clone());
+        }
+
+        let mut record_bytes: Vec<(Uuid, Vec<u8>)> = merged.into_iter().collect();
         record_bytes.sort_by_key(|(id, _)| *id);
 
+        let digest_bytes = graph_digest.unwrap_or("").as_bytes();
         let mut payload = Vec::new();
         let mut toc: Vec<(Uuid, TocEntry)> = Vec::with_capacity(record_bytes.len());
         let mut offset = 0u64;
@@ -165,7 +188,7 @@ impl CfgPdgArchive {
             offset += u64::from(length);
         }
 
-        let mut file = File::create(path)?;
+        let mut file = BufWriter::with_capacity(4 * 1024 * 1024, File::create(path)?);
         file.write_all(&ARCHIVE_MAGIC)?;
         file.write_all(&ARCHIVE_VERSION.to_le_bytes())?;
         let digest_len = u32::try_from(digest_bytes.len())
@@ -181,6 +204,7 @@ impl CfgPdgArchive {
             file.write_all(&entry.length.to_le_bytes())?;
         }
         file.write_all(&payload)?;
+        file.flush()?;
         Ok(())
     }
 
@@ -285,6 +309,41 @@ impl CfgPdgRecord {
             &self.code_hash,
         ))
     }
+}
+
+/// Load v2 archive payloads as raw bytes (no CFG/PDG deserialize). Falls back to
+/// re-serializing records for legacy v1 archives.
+fn load_raw_record_bytes(path: &Path) -> Result<FxHashMap<Uuid, Vec<u8>>> {
+    let file = File::open(path)?;
+    let mmap = unsafe { Mmap::map(&file)? };
+    if mmap.len() < 8 || mmap[0..4] != ARCHIVE_MAGIC {
+        return Err(Error::SerdeError("invalid cfg_pdg archive magic".into()));
+    }
+    let version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
+    if version == ARCHIVE_VERSION_V1 {
+        let archive = parse_payload(&mmap)?;
+        let mut out = FxHashMap::default();
+        for (id, record) in &archive.records {
+            out.insert(*id, bincode::serialize(record).map_err(serde_err)?);
+        }
+        return Ok(out);
+    }
+    if version != ARCHIVE_VERSION {
+        return Err(Error::SerdeError(format!(
+            "unsupported cfg_pdg archive version {version}"
+        )));
+    }
+    let (_digest_len, toc, payload_start) = parse_v2_header(&mmap)?;
+    let mut out = FxHashMap::default();
+    for (id, entry) in toc {
+        let start = payload_start + entry.offset as usize;
+        let end = start + entry.length as usize;
+        if end > mmap.len() {
+            return Err(Error::SerdeError("cfg_pdg record truncated".into()));
+        }
+        out.insert(id, mmap[start..end].to_vec());
+    }
+    Ok(out)
 }
 
 fn parse_v2_header(mmap: &[u8]) -> Result<(usize, FxHashMap<Uuid, TocEntry>, usize)> {

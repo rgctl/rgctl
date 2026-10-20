@@ -252,6 +252,7 @@ Top stages (% of wall): `index_extract` **~6.4 s** (30%), `index_graph_build` **
 |--------|-------|
 | **Gate baseline** | **7 s** (pass ≤ 7.7 s; override `RGCTL_NODE_JAVASCRIPT_COLD_WITH_CFG_BASELINE_SECS`) |
 | Wall (reference, 2026-09-04) | **~6.2 s** |
+| Wall (reference, 2026-10-21, after `accelerate-cfg-discover-pipeline`) | **~4.8 s** |
 | Peak RSS | **~614 MB** |
 | `cfg_total` | **~1.1 s** |
 
@@ -381,6 +382,18 @@ Release binary rebuilt immediately before each run (`cargo build --release --bin
 | `metasfresh_cold_discover_within_baseline` (`--full`) | **30.0 s** (319,225 nodes) | 74 s | pass |
 
 Deterministic node IDs + delta `pr-check` did not regress cold discover on the primary corpora.
+
+### `accelerate-cfg-discover-pipeline` (2026-10-21)
+
+Single-pass CFG/CPG (fused field-write + skeleton), worker-side bincode, and `STAGE_DEEP` analytics reuse. Release binary rebuilt immediately before each run.
+
+| Gate | Wall | Baseline (+10%) | Result |
+|------|------|-----------------|--------|
+| `node_javascript_cold_discover_with_cfg_within_baseline` | **4.8 s** (88,168 nodes / 48,670 fn) | 7 s | pass |
+| `metasfresh_cold_discover_within_baseline` (`--full`) | **25.7 s** (311,051 nodes / 133,143 fn) | 74 s | pass |
+| `linux_cold_discover_within_baseline` (default; no CFG) | **133.7 s** (2,700,362 nodes) | 145 s | pass |
+
+`--with-cfg` / `--full` benefit from fused AST reuse and pre-encoded archive writes; Gate A (linux default) stays within the existing envelope (no intentional default-path change).
 
 ---
 

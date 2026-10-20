@@ -141,13 +141,23 @@ impl AnalysisStorage {
     ) -> Result<()> {
         let bytes = bincode::serialize(analysis)
             .map_err(|e| Error::SerdeError(format!("analysis bincode encode: {e}")))?;
+        self.save_preencoded_no_index_packed(analysis.function_id, &bytes, pack)
+    }
+
+    /// Append worker-side pre-encoded analysis bytes to an open pack writer.
+    pub fn save_preencoded_no_index_packed(
+        &self,
+        function_id: Uuid,
+        bytes: &[u8],
+        pack: &SharedPackWriter,
+    ) -> Result<()> {
         let mut guard = pack
             .lock()
             .map_err(|e| Error::SerdeError(e.to_string()))?;
         let writer = guard
             .as_mut()
             .ok_or_else(|| Error::SerdeError("analysis pack writer not open".into()))?;
-        writer.append(analysis.function_id, &bytes)
+        writer.append(function_id, bytes)
     }
 
     fn bin_path(&self, function_id: Uuid) -> PathBuf {
@@ -256,37 +266,46 @@ impl AnalysisStorage {
         &self,
         analyses: &[FunctionAnalysis],
     ) -> Result<()> {
-        let mut index = self.load_analysis_index().unwrap_or_default();
-        for analysis in analyses {
-            let Some(stable_key) = analysis.stable_key() else {
-                continue;
-            };
-            let (flow_count, vulnerable_count) = analysis
-                .taint
-                .as_ref()
-                .map(|flows| {
-                    let vulnerable = flows.iter().filter(|f| f.is_vulnerable()).count();
-                    (flows.len(), vulnerable)
+        let entries: Vec<AnalysisIndexEntry> = analyses
+            .iter()
+            .filter_map(|analysis| {
+                let stable_key = analysis.stable_key()?;
+                let (flow_count, vulnerable_count) = analysis
+                    .taint
+                    .as_ref()
+                    .map(|flows| {
+                        let vulnerable = flows.iter().filter(|f| f.is_vulnerable()).count();
+                        (flows.len(), vulnerable)
+                    })
+                    .unwrap_or((0, 0));
+                Some(AnalysisIndexEntry {
+                    stable_key,
+                    function_id: analysis.function_id,
+                    code_hash: analysis.code_hash.clone().unwrap_or_default(),
+                    flow_count,
+                    vulnerable_count,
                 })
-                .unwrap_or((0, 0));
-            if let Some(prev) = index.get(&stable_key) {
-                if prev.function_id != analysis.function_id {
+            })
+            .collect();
+        self.refresh_analysis_index_from_entries(&entries)
+    }
+
+    /// Update the sidecar index from pre-built entries (worker-side serialize path).
+    pub fn refresh_analysis_index_from_entries(
+        &self,
+        entries: &[AnalysisIndexEntry],
+    ) -> Result<()> {
+        let mut index = self.load_analysis_index().unwrap_or_default();
+        for entry in entries {
+            if let Some(prev) = index.get(&entry.stable_key) {
+                if prev.function_id != entry.function_id {
                     let old_bin = self.bin_path(prev.function_id);
                     let old_json = self.json_path(prev.function_id);
                     let _ = fs::remove_file(old_bin);
                     let _ = fs::remove_file(old_json);
                 }
             }
-            index.insert(
-                stable_key.clone(),
-                AnalysisIndexEntry {
-                    stable_key,
-                    function_id: analysis.function_id,
-                    code_hash: analysis.code_hash.clone().unwrap_or_default(),
-                    flow_count,
-                    vulnerable_count,
-                },
-            );
+            index.insert(entry.stable_key.clone(), entry.clone());
         }
         self.write_analysis_index(&index)
     }

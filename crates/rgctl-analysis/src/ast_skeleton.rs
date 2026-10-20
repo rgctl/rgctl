@@ -147,6 +147,17 @@ pub fn build_function_skeleton(
             ))
         },
     )?;
+    build_function_skeleton_from_tree(func, bytes, function_name, file_path, function_id)
+}
+
+/// Build a skeleton from an already-resolved function [`Node`] (no re-parse).
+pub fn build_function_skeleton_from_tree(
+    func: Node<'_>,
+    source: &[u8],
+    function_name: &str,
+    file_path: &str,
+    function_id: Option<Uuid>,
+) -> Result<AstSkeletonRecord> {
     let mut nodes = Vec::new();
     let root_id = 0u32;
     nodes.push(AstSkeletonNode {
@@ -155,9 +166,9 @@ pub fn build_function_skeleton(
         kind: AstSkeletonKind::Function,
         start_line: func.start_position().row + 1,
         end_line: func.end_position().row + 1,
-        label: truncate_label(func.utf8_text(bytes).unwrap_or(function_name)),
+        label: truncate_label(func.utf8_text(source).unwrap_or(function_name)),
     });
-    walk_skeleton(func, bytes, root_id, &mut nodes, &mut 1);
+    walk_skeleton(func, source, root_id, &mut nodes, &mut 1);
     Ok(AstSkeletonRecord {
         function_id,
         function_name: function_name.to_string(),

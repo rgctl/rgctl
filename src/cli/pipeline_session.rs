@@ -297,6 +297,7 @@ fn analysis_opts<'a>(
         emit_cli_summary: false,
         artifact_root: extras.artifact_root.as_deref(),
         limits: extras.limits.clone(),
+        reuse_basic_analytics: deep,
     }
 }
 

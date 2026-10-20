@@ -74,7 +74,7 @@ pub mod wl_hash;
 pub use alias::may_alias_names;
 pub use ast_skeleton::{
     AST_SKELETON_ARCHIVE_FILE, AST_SKELETON_VERSION, AstSkeletonArchive, AstSkeletonKind,
-    AstSkeletonNode, AstSkeletonRecord, build_function_skeleton,
+    AstSkeletonNode, AstSkeletonRecord, build_function_skeleton, build_function_skeleton_from_tree,
 };
 pub use blast_engine_snapshot::{BLAST_SNAPSHOT_FILE, BlastEngineSnapshot, try_load_engine};
 pub use blast_radius::{
@@ -154,8 +154,13 @@ pub use def_use::{extract_def_use, extract_used_variables};
 pub use dependency::{CircularDependency, DependencyAnalyzer, ImpactResult};
 pub use dominance::{DominatorTree, verify_idom_acyclic};
 pub use field_write::{
-    FIELD_WRITE_INDEX_FILE, FieldWrite, FieldWriteIndex, FieldWriteKind, MutationQuery,
-    build_and_save_field_write_index,
+    FIELD_WRITE_INDEX_FILE, FIELD_WRITE_INDEX_VERSION, FieldWrite, FieldWriteIndex, FieldWriteKind,
+    MutationQuery,
+    build_and_save_field_write_index, extract_writes_from_cfg,
+};
+pub use field_write_locals::{
+    LocalsParseContext, build_file_local_types_from_tree, build_file_local_types_index,
+    language_from_path, merge_local_types,
 };
 pub use flow_cache::{CachedAnalysis, CfgPdgCache, FlowCache, NodePdgCache};
 pub use fragment_clones::{

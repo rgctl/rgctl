@@ -28,25 +28,41 @@ pub fn build_cfg_for_function(
     build_cfg_from_function_node(language, func_node, bytes, function_name)
 }
 
-/// Parsed source file with function name → byte span index (one tree-sitter parse per file).
+/// Parsed source file with function name / span → byte index (one tree-sitter parse per file).
 pub struct ParsedSourceFile {
     tree: Tree,
+    /// First location per bare name (name-only lookup fallback).
     locations: HashMap<String, FunctionLocation>,
+    /// All locations for a bare name (overloads).
+    locations_by_name: HashMap<String, Vec<FunctionLocation>>,
+    /// Exact span key `(start_line, end_line, name)` → location.
+    locations_by_span: HashMap<(usize, usize, String), FunctionLocation>,
 }
 
 impl ParsedSourceFile {
     /// Parse and index all functions in a source file.
     pub fn parse(language: &str, source: &[u8]) -> Result<Self> {
-        let (tree, locations) = index_function_locations(language, source)?;
-        Ok(Self { tree, locations })
+        let (tree, index) = index_function_locations_full(language, source)?;
+        Ok(Self {
+            tree,
+            locations: index.by_name_first,
+            locations_by_name: index.by_name,
+            locations_by_span: index.by_span,
+        })
+    }
+
+    /// Borrow the cached tree-sitter [`Tree`].
+    pub fn tree(&self) -> &Tree {
+        &self.tree
     }
 
     /// Whether `function_name` was found in the indexed file.
     pub fn contains(&self, function_name: &str) -> bool {
         self.locations.contains_key(function_name)
+            || self.locations_by_name.contains_key(function_name)
     }
 
-    /// Build CFG for a named function using the cached parse tree.
+    /// Build CFG for a named function using the cached parse tree (first match by name).
     pub fn build_cfg(
         &self,
         language: &str,
@@ -64,15 +80,74 @@ impl ParsedSourceFile {
         }
         build_cfg_for_function_in_tree(language, &self.tree, source, function_name)
     }
+
+    /// Build CFG for an overloaded / spanned function using `(start_line, end_line, name)`.
+    ///
+    /// Falls back to name-only lookup when the exact span is missing.
+    pub fn build_cfg_for_node_span(
+        &self,
+        language: &str,
+        source: &[u8],
+        function_name: &str,
+        start_line: usize,
+        end_line: usize,
+    ) -> Result<ControlFlowGraph> {
+        if let Some(func_node) = self.function_node_for_span(function_name, start_line, end_line) {
+            return build_cfg_from_function_node(language, func_node, source, function_name);
+        }
+        self.build_cfg(language, source, function_name)
+    }
+
+    /// Resolve the tree-sitter function node for `(start_line, end_line, name)`.
+    pub fn function_node_for_span(
+        &self,
+        function_name: &str,
+        start_line: usize,
+        end_line: usize,
+    ) -> Option<Node<'_>> {
+        let key = (start_line, end_line, function_name.to_string());
+        if let Some(loc) = self.locations_by_span.get(&key) {
+            if let Some(func_node) = self
+                .tree
+                .root_node()
+                .descendant_for_byte_range(loc.start_byte, loc.end_byte)
+            {
+                return Some(func_node);
+            }
+        }
+        if let Some(locs) = self.locations_by_name.get(function_name) {
+            if let Some(loc) = locs
+                .iter()
+                .find(|l| l.start_line == start_line)
+                .or_else(|| locs.first())
+            {
+                return self
+                    .tree
+                    .root_node()
+                    .descendant_for_byte_range(loc.start_byte, loc.end_byte);
+            }
+        }
+        None
+    }
 }
 
-/// Byte span of a function body in a parsed source file.
+/// Byte / line span of a function in a parsed source file.
 #[derive(Debug, Clone, Copy)]
 pub struct FunctionLocation {
     /// Inclusive start byte offset in the source buffer.
     pub start_byte: usize,
     /// Exclusive end byte offset in the source buffer.
     pub end_byte: usize,
+    /// First source line (1-based).
+    pub start_line: usize,
+    /// Last source line (1-based).
+    pub end_line: usize,
+}
+
+struct FunctionLocationIndex {
+    by_name_first: HashMap<String, FunctionLocation>,
+    by_name: HashMap<String, Vec<FunctionLocation>>,
+    by_span: HashMap<(usize, usize, String), FunctionLocation>,
 }
 
 /// Build a CFG for a named function in an already-parsed tree (no re-parse).
@@ -94,9 +169,21 @@ pub fn index_function_locations(
     language: &str,
     source: &[u8],
 ) -> Result<(Tree, HashMap<String, FunctionLocation>)> {
+    let (tree, index) = index_function_locations_full(language, source)?;
+    Ok((tree, index.by_name_first))
+}
+
+fn index_function_locations_full(
+    language: &str,
+    source: &[u8],
+) -> Result<(Tree, FunctionLocationIndex)> {
     let tree = parse_language(language, source)?;
     let function_kinds = function_kinds_for(language)?;
-    let mut index = HashMap::new();
+    let mut index = FunctionLocationIndex {
+        by_name_first: HashMap::new(),
+        by_name: HashMap::new(),
+        by_span: HashMap::new(),
+    };
     collect_function_locations(tree.root_node(), source, function_kinds, language, &mut index);
     Ok((tree, index))
 }
@@ -106,16 +193,25 @@ fn collect_function_locations(
     source: &[u8],
     function_kinds: &[&str],
     language: &str,
-    out: &mut HashMap<String, FunctionLocation>,
+    out: &mut FunctionLocationIndex,
 ) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if function_kinds.contains(&node.kind()) {
             if let Some(func_name) = callable_name_for_cfg(node, source, language) {
-                out.entry(func_name).or_insert(FunctionLocation {
+                let loc = FunctionLocation {
                     start_byte: node.start_byte(),
                     end_byte: node.end_byte(),
-                });
+                    start_line: node.start_position().row + 1,
+                    end_line: node.end_position().row + 1,
+                };
+                out.by_name
+                    .entry(func_name.clone())
+                    .or_default()
+                    .push(loc);
+                out.by_name_first.entry(func_name.clone()).or_insert(loc);
+                out.by_span
+                    .insert((loc.start_line, loc.end_line, func_name), loc);
             }
         }
         let mut cursor = node.walk();
@@ -3977,6 +4073,69 @@ fn example(x: i32) -> i32 {
             .filter(|e| e.edge_type == CfgEdgeType::IfTrue)
             .count();
         assert!(if_true >= 1);
+    }
+
+    #[test]
+    fn test_overload_span_lookup_avoids_reparse_fallback() {
+        let code = r#"
+public class Overloads {
+    public int foo(int x) {
+        return x + 1;
+    }
+    public int foo(String s) {
+        return s.length();
+    }
+}
+"#;
+        let parsed = ParsedSourceFile::parse("java", code.as_bytes()).unwrap();
+        assert!(parsed.contains("foo"));
+        let _ = parsed.tree(); // expose tree API
+
+        // Locate each overload's span from the index.
+        let locs = &parsed.locations_by_name["foo"];
+        assert!(
+            locs.len() >= 2,
+            "expected two foo overloads, got {}",
+            locs.len()
+        );
+        let mut texts_by_span = Vec::new();
+        for loc in locs {
+            let cfg = parsed
+                .build_cfg_for_node_span(
+                    "java",
+                    code.as_bytes(),
+                    "foo",
+                    loc.start_line,
+                    loc.end_line,
+                )
+                .unwrap();
+            let texts: Vec<String> = cfg
+                .blocks
+                .values()
+                .flat_map(|b| b.statements.iter().map(|s| s.text.clone()))
+                .collect();
+            texts_by_span.push(texts);
+        }
+        assert!(
+            texts_by_span.iter().any(|texts| {
+                texts
+                    .iter()
+                    .any(|t| t.contains("x + 1") || t.contains("x+1"))
+            }),
+            "int overload CFG missing, got {texts_by_span:?}"
+        );
+        assert!(
+            texts_by_span.iter().any(|texts| {
+                texts
+                    .iter()
+                    .any(|t| t.contains("length") || t.contains("s."))
+            }),
+            "String overload CFG missing, got {texts_by_span:?}"
+        );
+        assert_ne!(
+            texts_by_span[0], texts_by_span[1],
+            "overloads must resolve to distinct CFGs without whole-file re-parse collision"
+        );
     }
 
     fn non_exit_empty_blocks(cfg: &ControlFlowGraph) -> Vec<BlockId> {

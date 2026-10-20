@@ -3,10 +3,33 @@
 use crate::cfg::{BlockId, ControlFlowGraph, Statement};
 use crate::dataflow::{ReachingDefs, compute_reaching_definitions};
 use crate::dominance::{DominatorTree, compute_post_dominators};
+use crate::hash_maps::{FxHashMap, FxHashSet};
 use rgctl_error::Result;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+/// Deterministic PDG node id from block / statement position and content (no CSPRNG).
+pub fn deterministic_pdg_node_id(
+    block_id: BlockId,
+    stmt_idx: usize,
+    line: usize,
+    text: &str,
+) -> Uuid {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"rgctl.pdg.node.v1");
+    hasher.update(&block_id.0.to_le_bytes());
+    hasher.update(&(stmt_idx as u64).to_le_bytes());
+    hasher.update(&(line as u64).to_le_bytes());
+    hasher.update(text.as_bytes());
+    let hash = hasher.finalize();
+    let b = hash.as_bytes();
+    Uuid::from_bytes([
+        b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13],
+        b[14], b[15],
+    ])
+}
 
 /// Identifier for a PDG node.
 pub type PdgNodeId = Uuid;
@@ -30,9 +53,9 @@ pub struct ProgramDependenceGraph {
     #[serde(default)]
     line_nodes: HashMap<usize, Vec<PdgNodeId>>,
     #[serde(skip)]
-    seen_data_edges: HashSet<(PdgNodeId, PdgNodeId, u32, u8)>,
+    seen_data_edges: FxHashSet<(PdgNodeId, PdgNodeId, u32, u8)>,
     #[serde(skip)]
-    var_intern: HashMap<String, u32>,
+    var_intern: FxHashMap<String, u32>,
     #[serde(skip)]
     next_var_id: u32,
 }
@@ -141,8 +164,8 @@ impl ProgramDependenceGraph {
             block_nodes,
             data_succ,
             line_nodes,
-            seen_data_edges: HashSet::new(),
-            var_intern: HashMap::new(),
+            seen_data_edges: FxHashSet::default(),
+            var_intern: FxHashMap::default(),
             next_var_id: 0,
         }
     }
@@ -279,8 +302,8 @@ impl ProgramDependenceGraph {
 
     fn create_nodes_from_cfg(&mut self, cfg: &ControlFlowGraph) {
         for block in cfg.blocks.values() {
-            for stmt in &block.statements {
-                let id = Uuid::new_v4();
+            for (stmt_idx, stmt) in block.statements.iter().enumerate() {
+                let id = deterministic_pdg_node_id(block.id, stmt_idx, stmt.line, &stmt.text);
                 let node = PdgNode {
                     id,
                     statement: stmt.clone(),
@@ -296,68 +319,82 @@ impl ProgramDependenceGraph {
 
     fn build_data_dependencies(&mut self, cfg: &ControlFlowGraph, reaching: &ReachingDefs) {
         for block in cfg.blocks.values() {
-            let node_ids: Vec<PdgNodeId> =
-                self.block_nodes.get(&block.id).cloned().unwrap_or_default();
+            let stmt_count = self
+                .block_nodes
+                .get(&block.id)
+                .map(|ids| ids.len())
+                .unwrap_or(0);
 
-            for (idx, _stmt) in block.statements.iter().enumerate() {
-                let Some(use_node) = self.find_node_by_block_and_index(block.id, idx) else {
+            for idx in 0..stmt_count {
+                let Some(use_id) = self
+                    .block_nodes
+                    .get(&block.id)
+                    .and_then(|ids| ids.get(idx).copied())
+                else {
                     continue;
                 };
-                let use_id = use_node.id;
-                let used_vars = use_node.used_vars.clone();
+                let used_vars: SmallVec<[String; 4]> = self
+                    .nodes
+                    .get(&use_id)
+                    .map(|n| n.used_vars.iter().cloned().collect())
+                    .unwrap_or_default();
 
-                for var in used_vars {
-                    for def in reaching.in_definitions(block.id).filter(|d| d.variable == var) {
-                        self.push_data_dep(
-                            def.pdg_node,
-                            use_id,
-                            var.clone(),
-                            DataDepType::Flow,
-                        );
+                for var in &used_vars {
+                    for def in reaching
+                        .in_definitions(block.id)
+                        .filter(|d| d.variable == *var)
+                    {
+                        self.push_data_dep(def.pdg_node, use_id, var, DataDepType::Flow);
                     }
 
                     for def_idx in 0..idx {
-                        if let Some(def_node) = self.find_node_by_block_and_index(block.id, def_idx)
-                        {
-                            if def_node.defined_vars.contains(&var) {
-                                self.push_data_dep(
-                                    def_node.id,
-                                    use_id,
-                                    var.clone(),
-                                    DataDepType::Flow,
-                                );
-                            } else if def_node.used_vars.contains(&var) {
-                                self.push_data_dep(
-                                    def_node.id,
-                                    use_id,
-                                    var.clone(),
-                                    DataDepType::Anti,
-                                );
-                            }
+                        let Some(def_id) = self
+                            .block_nodes
+                            .get(&block.id)
+                            .and_then(|ids| ids.get(def_idx).copied())
+                        else {
+                            continue;
+                        };
+                        let Some(def_node) = self.nodes.get(&def_id) else {
+                            continue;
+                        };
+                        if def_node.defined_vars.contains(var) {
+                            self.push_data_dep(def_id, use_id, var, DataDepType::Flow);
+                        } else if def_node.used_vars.contains(var) {
+                            self.push_data_dep(def_id, use_id, var, DataDepType::Anti);
                         }
                     }
                 }
             }
 
-            for (i, &later_id) in node_ids.iter().enumerate() {
-                let defined: Vec<String> = self
+            for i in 0..stmt_count {
+                let Some(later_id) = self
+                    .block_nodes
+                    .get(&block.id)
+                    .and_then(|ids| ids.get(i).copied())
+                else {
+                    continue;
+                };
+                let defined: SmallVec<[String; 2]> = self
                     .nodes
                     .get(&later_id)
                     .map(|n| n.defined_vars.iter().cloned().collect())
                     .unwrap_or_default();
-                for var in defined {
-                    for &earlier_id in node_ids.iter().take(i) {
+                for var in &defined {
+                    for j in 0..i {
+                        let Some(earlier_id) = self
+                            .block_nodes
+                            .get(&block.id)
+                            .and_then(|ids| ids.get(j).copied())
+                        else {
+                            continue;
+                        };
                         if self
                             .nodes
                             .get(&earlier_id)
-                            .is_some_and(|n| n.defined_vars.contains(&var))
+                            .is_some_and(|n| n.defined_vars.contains(var))
                         {
-                            self.push_data_dep(
-                                earlier_id,
-                                later_id,
-                                var.clone(),
-                                DataDepType::Output,
-                            );
+                            self.push_data_dep(earlier_id, later_id, var, DataDepType::Output);
                         }
                     }
                 }
@@ -369,13 +406,13 @@ impl ProgramDependenceGraph {
         &mut self,
         from: PdgNodeId,
         to: PdgNodeId,
-        variable: String,
+        variable: &str,
         dep_type: DataDepType,
     ) {
         if from == to {
             return;
         }
-        let var_id = self.intern_var(&variable);
+        let var_id = self.intern_var(variable);
         let key = (from, to, var_id, dep_type as u8);
         if !self.seen_data_edges.insert(key) {
             return;
@@ -383,7 +420,7 @@ impl ProgramDependenceGraph {
         self.data_deps.push(DataDependency {
             from,
             to,
-            variable,
+            variable: variable.to_string(),
             dep_type,
             loop_carried: false,
         });
@@ -476,7 +513,8 @@ impl ProgramDependenceGraph {
         })
     }
 
-    fn find_node_by_block_and_index(&self, block: BlockId, index: usize) -> Option<&PdgNode> {
+    /// Find a PDG node by block and statement index within that block ($O(1)$).
+    pub fn find_node_by_block_and_index(&self, block: BlockId, index: usize) -> Option<&PdgNode> {
         self.block_nodes
             .get(&block)
             .and_then(|ids| ids.get(index).map(|id| &self.nodes[id]))
@@ -576,6 +614,54 @@ mod tests {
         let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
         let bytes = bincode::serialize(&pdg).unwrap();
         let _: ProgramDependenceGraph = bincode::deserialize(&bytes).unwrap();
+    }
+
+    #[test]
+    fn test_pdg_build_is_deterministic() {
+        let code = r#"
+fn example(a: i32) -> i32 {
+    let x = a + 1;
+    let y = x * 2;
+    y
+}
+"#;
+        let cfg = build_cfg_for_function("rust", code, "example").unwrap();
+        let pdg1 = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+        let pdg2 = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+
+        let mut ids1: Vec<_> = pdg1.nodes.keys().copied().collect();
+        let mut ids2: Vec<_> = pdg2.nodes.keys().copied().collect();
+        ids1.sort();
+        ids2.sort();
+        assert_eq!(ids1, ids2, "PdgNodeIds must match across builds");
+
+        let mut deps1: Vec<_> = pdg1
+            .data_deps
+            .iter()
+            .map(|d| (d.from, d.to, d.variable.clone(), d.dep_type as u8))
+            .collect();
+        let mut deps2: Vec<_> = pdg2
+            .data_deps
+            .iter()
+            .map(|d| (d.from, d.to, d.variable.clone(), d.dep_type as u8))
+            .collect();
+        deps1.sort();
+        deps2.sort();
+        assert_eq!(deps1, deps2);
+
+        let mut ctrl1: Vec<_> = pdg1
+            .control_deps
+            .iter()
+            .map(|c| (c.controller, c.dependent))
+            .collect();
+        let mut ctrl2: Vec<_> = pdg2
+            .control_deps
+            .iter()
+            .map(|c| (c.controller, c.dependent))
+            .collect();
+        ctrl1.sort();
+        ctrl2.sort();
+        assert_eq!(ctrl1, ctrl2);
     }
 
     #[test]

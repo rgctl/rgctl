@@ -133,6 +133,7 @@ pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
             emit_cli_summary: true,
             artifact_root: args.artifact_root.as_deref(),
             limits,
+            reuse_basic_analytics: false,
         },
     )?;
     Ok(())

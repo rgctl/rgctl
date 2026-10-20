@@ -407,7 +407,8 @@ fn load_source(file: &str, repo_root: Option<&Path>) -> Option<String> {
     None
 }
 
-fn extract_writes_from_cfg(
+/// Extract field-write rows from a hot in-memory CFG (fused discover path).
+pub fn extract_writes_from_cfg(
     cfg: &ControlFlowGraph,
     function_id: Uuid,
     function_name: &str,

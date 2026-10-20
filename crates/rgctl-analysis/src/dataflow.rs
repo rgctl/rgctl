@@ -4,10 +4,10 @@
 //! **Complexity:** O(b · d) blocks × definition-set size; gen/kill built in O(total defs).
 
 use crate::cfg::{BasicBlock, BlockId, ControlFlowGraph};
-use crate::hash_maps::FxHashMap;
+use crate::hash_maps::{FxHashMap, FxHashSet};
 use crate::pdg::ProgramDependenceGraph;
 use bit_set::BitSet;
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
 /// Result of reaching-definitions analysis.
 #[derive(Debug, Clone, Default)]
@@ -108,7 +108,7 @@ pub fn compute_reaching_definitions(
         let local_defs = &block_local_defs[&block_id];
 
         let mut gen_b = BitSet::new();
-        let mut defined_vars = HashSet::new();
+        let mut defined_vars: FxHashSet<String> = FxHashSet::default();
         for &def_idx in local_defs.iter().rev() {
             let var = &catalog.defs[def_idx].variable;
             if defined_vars.insert(var.clone()) {
@@ -134,7 +134,7 @@ pub fn compute_reaching_definitions(
     }
 
     let mut worklist: VecDeque<BlockId> = cfg.blocks.keys().copied().collect();
-    let mut on_worklist: HashSet<BlockId> = worklist.iter().copied().collect();
+    let mut on_worklist: FxHashSet<BlockId> = worklist.iter().copied().collect();
 
     while let Some(block_id) = worklist.pop_front() {
         on_worklist.remove(&block_id);
@@ -178,8 +178,8 @@ pub fn compute_reaching_definitions(
 
 fn collect_block_definitions(block: &BasicBlock, pdg: &ProgramDependenceGraph) -> Vec<Definition> {
     let mut defs = Vec::new();
-    for (idx, stmt) in block.statements.iter().enumerate() {
-        if let Some(pdg_node) = pdg.find_node_by_block_and_line(block.id, stmt.line) {
+    for (idx, _stmt) in block.statements.iter().enumerate() {
+        if let Some(pdg_node) = pdg.find_node_by_block_and_index(block.id, idx) {
             for var in &pdg_node.defined_vars {
                 defs.push(Definition {
                     variable: var.clone(),
@@ -300,5 +300,61 @@ fn shadow() {
             saw_double_def_block,
             "expected cfg to place at least two x assignments in one basic block"
         );
+    }
+
+    #[test]
+    fn test_same_line_statements_get_distinct_defs() {
+        use crate::cfg::{
+            BasicBlock, BlockId, CfgEdgeType, ControlFlowGraph, DefVar, Statement, StatementKind,
+        };
+        use smallvec::SmallVec;
+
+        let mut cfg = ControlFlowGraph::new();
+        let b0 = cfg.entry;
+        cfg.blocks.get_mut(&b0).unwrap().statements = vec![
+            Statement {
+                kind: StatementKind::Declaration,
+                line: 1,
+                text: "let a = 1;".into(),
+                defined_vars: SmallVec::from_vec(vec![DefVar::local("a")]),
+                used_vars: SmallVec::new(),
+            },
+            Statement {
+                kind: StatementKind::Declaration,
+                line: 1, // same source line — index lookup must not collide
+                text: "let b = a + 1;".into(),
+                defined_vars: SmallVec::from_vec(vec![DefVar::local("b")]),
+                used_vars: SmallVec::from_vec(vec!["a".into()]),
+            },
+        ];
+        cfg.blocks.get_mut(&b0).unwrap().start_line = 1;
+        cfg.blocks.get_mut(&b0).unwrap().end_line = 1;
+        let exit = BlockId(1);
+        cfg.add_block(BasicBlock {
+            id: exit,
+            statements: vec![],
+            start_line: 0,
+            end_line: 0,
+        });
+        cfg.add_edge(b0, exit, CfgEdgeType::Next);
+        cfg.exits.push(exit);
+
+        let pdg = ProgramDependenceGraph::build(&cfg, b"").unwrap();
+        let a_node = pdg.find_node_by_block_and_index(b0, 0).expect("a");
+        let b_node = pdg.find_node_by_block_and_index(b0, 1).expect("b");
+        assert_ne!(a_node.id, b_node.id);
+        assert!(a_node.defined_vars.contains("a"));
+        assert!(b_node.defined_vars.contains("b"));
+
+        let defs = collect_block_definitions(cfg.blocks.get(&b0).unwrap(), &pdg);
+        assert_eq!(defs.len(), 2);
+        assert!(defs.iter().any(|d| d.variable == "a" && d.statement_index == 0));
+        assert!(defs.iter().any(|d| d.variable == "b" && d.statement_index == 1));
+
+        let flow = pdg
+            .data_deps
+            .iter()
+            .any(|d| d.from == a_node.id && d.to == b_node.id && d.variable == "a");
+        assert!(flow, "expected flow dep a → b on same line, deps={:?}", pdg.data_deps);
     }
 }
