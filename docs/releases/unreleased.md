@@ -2,6 +2,17 @@
 
 <!-- Add bullets here during development; move to docs/releases/v0.4.x.md at tag time. -->
 
+## CFG empty-block contraction ([#121](https://github.com/sshaaf/rgctl/issues/121))
+
+- Lazy `if`/`unless` block allocation: reuse empty current blocks for conditions; wire `IfFalse` directly to merge when there is no `else`.
+- Post-prune `ControlFlowGraph::contract_empty_blocks` removes non-exit empty `Next` trampolines.
+- Restores PDG control dependencies across early-return guard clauses (ecommerce `correctnessRoot` `exact_control_deps` 1→2).
+
+## Docs: language testing guide
+
+- New contributor guide [language-testing-guide.md](../language-testing-guide.md): where to add language tests, Tier 1 matrix (langfeatures / CFG / taint / ecommerce expected-facts / dashboard / Gate B / stable-key QE), what to assert, and a copy-paste PR checklist.
+- Linked from [contributor-checklist.md](../contributor-checklist.md), [tier-1-language-support.md](../tier-1-language-support.md), [docs/README.md](../README.md), and [AGENTS.md](../../AGENTS.md).
+
 ## Build / lockfile ([#123](https://github.com/sshaaf/rgctl/issues/123))
 
 - Track `Cargo.lock` (removed from `.gitignore`) so fresh clones agree on dependency versions.

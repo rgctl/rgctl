@@ -3,6 +3,7 @@
 .claude/
 .opencode/
 .agent
+.agents
 .antigravity/
 .reports
 # OpenSpec change proposals (local only — do not commit)

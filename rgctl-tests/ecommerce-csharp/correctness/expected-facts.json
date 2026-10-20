@@ -45,12 +45,11 @@
         ]
       },
       "cfg": {
-        "exact_block_count": 7,
-        "exact_edge_count": 6,
+        "exact_block_count": 6,
+        "exact_edge_count": 5,
         "exact_edge_kinds": [
           "iffalse",
           "iftrue",
-          "next",
           "next",
           "return",
           "return"
@@ -61,7 +60,7 @@
       },
       "pdg": {
         "exact_data_deps": 2,
-        "exact_control_deps": 1,
+        "exact_control_deps": 2,
         "exact_node_count": 4,
         "exact_node_kinds": [
           "Branch",
@@ -80,7 +79,7 @@
         ]
       },
       "dom": {
-        "exact_block_count": 7
+        "exact_block_count": 6
       }
     },
     "correctnessMid": {

@@ -43,12 +43,11 @@
         ]
       },
       "cfg": {
-        "exact_block_count": 7,
-        "exact_edge_count": 6,
+        "exact_block_count": 6,
+        "exact_edge_count": 5,
         "exact_edge_kinds": [
           "iffalse",
           "iftrue",
-          "next",
           "next",
           "return",
           "return"
@@ -59,7 +58,7 @@
       },
       "pdg": {
         "exact_data_deps": 2,
-        "exact_control_deps": 1,
+        "exact_control_deps": 2,
         "exact_node_count": 5,
         "data_edges": [
           {
@@ -72,15 +71,15 @@
         ]
       },
       "dom": {
-        "exact_block_count": 7,
+        "exact_block_count": 6,
         "idom_contains": [
-          {
-            "block": 3,
-            "immediate_dominator": 3
-          },
           {
             "block": 4,
             "immediate_dominator": 3
+          },
+          {
+            "block": 2,
+            "immediate_dominator": 2
           }
         ]
       }
@@ -284,7 +283,7 @@
         "language": "python"
       },
       "cfg": {
-        "min_blocks": 4,
+        "min_blocks": 2,
         "statements_contain": []
       }
     }

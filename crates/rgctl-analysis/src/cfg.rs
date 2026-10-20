@@ -200,7 +200,7 @@ pub struct CfgEdge {
 }
 
 /// Classification of control-flow edges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CfgEdgeType {
     /// Sequential fall-through.
     Next,
@@ -310,6 +310,75 @@ impl ControlFlowGraph {
             .retain(|e| reachable.contains(&e.from) && reachable.contains(&e.to));
         self.exits.retain(|id| reachable.contains(id));
         self.rebuild_adjacency();
+    }
+
+    /// Contract non-exit empty pass-through blocks (`b --Next--> s`) into their successor.
+    ///
+    /// A block `b` is contracted when it has zero statements, is not an exit, and all of its
+    /// outgoing edges are `CfgEdgeType::Next` to a single successor `s != b`. Incoming edges
+    /// keep their [`CfgEdgeType`]. Exit blocks and empty loop back-edges are preserved.
+    pub fn contract_empty_blocks(&mut self) {
+        loop {
+            let candidate = self.find_contractable_empty_block();
+            let Some((b, s)) = candidate else {
+                break;
+            };
+
+            for edge in &mut self.edges {
+                if edge.to == b {
+                    edge.to = s;
+                }
+            }
+            self.edges.retain(|e| e.from != b);
+
+            let mut seen = HashSet::with_capacity(self.edges.len());
+            self.edges
+                .retain(|e| seen.insert((e.from, e.to, e.edge_type)));
+
+            if self.entry == b {
+                self.entry = s;
+            }
+            self.blocks.remove(&b);
+            self.rebuild_adjacency();
+        }
+    }
+
+    fn find_contractable_empty_block(&self) -> Option<(BlockId, BlockId)> {
+        for &b in self.blocks.keys() {
+            if self.exits.contains(&b) {
+                continue;
+            }
+            let Some(block) = self.blocks.get(&b) else {
+                continue;
+            };
+            if !block.statements.is_empty() {
+                continue;
+            }
+
+            let outs: Vec<&CfgEdge> = self.edges.iter().filter(|e| e.from == b).collect();
+            if outs.is_empty() {
+                continue;
+            }
+            let s = outs[0].to;
+            if s == b {
+                continue;
+            }
+            if !outs
+                .iter()
+                .all(|e| e.edge_type == CfgEdgeType::Next && e.to == s)
+            {
+                continue;
+            }
+            // Do not contract a loop-header entry that still has predecessors.
+            if b == self.entry && !self.predecessors(b).is_empty() {
+                continue;
+            }
+            if !self.blocks.contains_key(&s) {
+                continue;
+            }
+            return Some((b, s));
+        }
+        None
     }
 
     /// Returns true when the CFG contains a cycle reachable from entry.
@@ -559,5 +628,74 @@ mod tests {
         let dot = cfg.to_dot();
         assert!(dot.contains("digraph CFG"));
         assert!(dot.contains("->"));
+    }
+
+    #[test]
+    fn test_contract_empty_blocks_preserves_exits_and_edge_kinds() {
+        let mut cfg = ControlFlowGraph::new();
+        let entry = cfg.entry;
+        let trampoline = BlockId(1);
+        let cond = BlockId(2);
+        let then_b = BlockId(3);
+        let exit = BlockId(4);
+        cfg.add_block(BasicBlock {
+            id: trampoline,
+            statements: vec![],
+            start_line: 0,
+            end_line: 0,
+        });
+        cfg.add_block(BasicBlock {
+            id: cond,
+            statements: vec![Statement {
+                kind: StatementKind::Branch,
+                line: 1,
+                text: "x".into(),
+                defined_vars: SmallVec::new(),
+                used_vars: SmallVec::new(),
+            }],
+            start_line: 1,
+            end_line: 1,
+        });
+        cfg.add_block(BasicBlock {
+            id: then_b,
+            statements: vec![Statement {
+                kind: StatementKind::Return,
+                line: 2,
+                text: "return".into(),
+                defined_vars: SmallVec::new(),
+                used_vars: SmallVec::new(),
+            }],
+            start_line: 2,
+            end_line: 2,
+        });
+        cfg.add_block(BasicBlock {
+            id: exit,
+            statements: vec![],
+            start_line: 0,
+            end_line: 0,
+        });
+        cfg.add_edge(entry, trampoline, CfgEdgeType::Next);
+        cfg.add_edge(trampoline, cond, CfgEdgeType::Next);
+        cfg.add_edge(cond, then_b, CfgEdgeType::IfTrue);
+        cfg.add_edge(cond, exit, CfgEdgeType::IfFalse);
+        cfg.add_edge(then_b, exit, CfgEdgeType::Return);
+        cfg.exits.push(exit);
+
+        cfg.contract_empty_blocks();
+
+        assert!(!cfg.blocks.contains_key(&trampoline));
+        assert_eq!(cfg.entry, cond);
+        assert!(cfg.exits.contains(&exit));
+        assert!(cfg.blocks.contains_key(&exit));
+        assert!(
+            cfg.edges
+                .iter()
+                .any(|e| e.from == cond && e.to == exit && e.edge_type == CfgEdgeType::IfFalse)
+        );
+        assert!(
+            cfg.edges
+                .iter()
+                .any(|e| e.from == then_b && e.to == exit && e.edge_type == CfgEdgeType::Return)
+        );
     }
 }

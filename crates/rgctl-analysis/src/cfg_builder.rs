@@ -397,7 +397,22 @@ impl<'a> CfgBuilder<'a> {
             }
         }
         self.cfg.prune_unreachable_blocks();
+        self.cfg.contract_empty_blocks();
         Ok(())
+    }
+
+    /// Reuse `current_block` as an `if`/`unless` condition header when it is still empty
+    /// and has no self-loop edges (avoids empty entry/merge trampolines).
+    fn can_reuse_current_as_cond(&self) -> bool {
+        self.cfg
+            .blocks
+            .get(&self.current_block)
+            .is_some_and(|b| b.statements.is_empty())
+            && self
+                .cfg
+                .predecessors(self.current_block)
+                .iter()
+                .all(|&p| p != self.current_block)
     }
 
     fn new_block(&mut self) -> BlockId {
@@ -1332,16 +1347,35 @@ impl<'a> CfgBuilder<'a> {
             self.visit_statement(init, source)?;
         }
 
-        let cond_block = self.new_block();
-        self.cfg
-            .add_edge(self.current_block, cond_block, CfgEdgeType::Next);
+        let alternative = node
+            .child_by_field_name("alternative")
+            .or_else(|| node.child_by_field_name("else"))
+            .or_else(|| find_direct_child_kind(node, "else_statement"))
+            .or_else(|| find_direct_child_kind(node, "elsif_statement"))
+            .or_else(|| node.child_by_field_name("else_clause"));
+        let has_else = alternative.is_some();
+
+        let cond_block = if self.can_reuse_current_as_cond() {
+            self.current_block
+        } else {
+            let cond_block = self.new_block();
+            self.cfg
+                .add_edge(self.current_block, cond_block, CfgEdgeType::Next);
+            cond_block
+        };
         self.current_block = cond_block;
 
         let true_block = self.new_block();
-        let false_block = self.new_block();
+        let merge = self.new_block();
+        let false_block = if has_else {
+            Some(self.new_block())
+        } else {
+            None
+        };
+        let false_target = false_block.unwrap_or(merge);
 
         if let Some(cond) = cond_value.or(cond_node) {
-            self.wire_condition(cond, source, true_block, false_block)?;
+            self.wire_condition(cond, source, true_block, false_target)?;
         } else {
             self.add_statement_to_current(Statement {
                 kind: StatementKind::Branch,
@@ -1353,7 +1387,7 @@ impl<'a> CfgBuilder<'a> {
             self.cfg
                 .add_edge(cond_block, true_block, CfgEdgeType::IfTrue);
             self.cfg
-                .add_edge(cond_block, false_block, CfgEdgeType::IfFalse);
+                .add_edge(cond_block, false_target, CfgEdgeType::IfFalse);
         }
 
         let true_end;
@@ -1370,55 +1404,51 @@ impl<'a> CfgBuilder<'a> {
         true_end = self.current_block;
         true_reaches = self.flow_active;
 
-        let mut false_end = false_block;
+        let mut false_end = false_target;
         let false_reaches;
-        self.flow_active = true;
-        self.current_block = false_block;
-        if let Some(alternative) = node
-            .child_by_field_name("alternative")
-            .or_else(|| node.child_by_field_name("else"))
-            .or_else(|| find_direct_child_kind(node, "else_statement"))
-            .or_else(|| find_direct_child_kind(node, "elsif_statement"))
-        {
-            let alt = if alternative.kind() == "else_clause" || alternative.kind() == "else_statement"
-            {
-                find_child_kind(alternative, "block").unwrap_or(alternative)
-            } else if alternative.kind() == "if_expression"
-                || alternative.kind() == "if_statement"
-                || alternative.kind() == "elsif_statement"
-            {
-                // `else if` / Puppet elsif — visit as nested if-like.
-                alternative
+        if let Some(false_block) = false_block {
+            self.flow_active = true;
+            self.current_block = false_block;
+            if let Some(alternative) = alternative {
+                let alt = if alternative.kind() == "else_clause"
+                    || alternative.kind() == "else_statement"
+                {
+                    find_child_kind(alternative, "block").unwrap_or(alternative)
+                } else if alternative.kind() == "if_expression"
+                    || alternative.kind() == "if_statement"
+                    || alternative.kind() == "elsif_statement"
+                {
+                    // `else if` / Puppet elsif — visit as nested if-like.
+                    alternative
+                } else {
+                    alternative
+                };
+                if alt.kind() == "if_expression"
+                    || alt.kind() == "if_statement"
+                    || alt.kind() == "elsif_statement"
+                {
+                    self.visit_if(alt, source)?;
+                } else {
+                    self.visit_block(alt, source)?;
+                }
+                false_end = self.current_block;
+                false_reaches = self.flow_active;
             } else {
-                alternative
-            };
-            if alt.kind() == "if_expression"
-                || alt.kind() == "if_statement"
-                || alt.kind() == "elsif_statement"
-            {
-                self.visit_if(alt, source)?;
-            } else {
-                self.visit_block(alt, source)?;
+                false_reaches = true;
             }
-            false_end = self.current_block;
-            false_reaches = self.flow_active;
-        } else if let Some(else_clause) = node.child_by_field_name("else_clause") {
-            let block = find_child_kind(else_clause, "block").unwrap_or(else_clause);
-            self.visit_block(block, source)?;
-            false_end = self.current_block;
-            false_reaches = self.flow_active;
         } else {
-            false_reaches = true;
+            // IfFalse already targets merge — no phantom false trampoline.
+            false_reaches = false;
         }
 
-        let merge = self.new_block();
         if true_reaches {
             self.cfg.add_edge(true_end, merge, CfgEdgeType::Next);
         }
         if false_reaches {
             self.cfg.add_edge(false_end, merge, CfgEdgeType::Next);
         }
-        self.flow_active = true_reaches || false_reaches;
+        // No-else fallthrough reaches merge via IfFalse; keep flow active like before.
+        self.flow_active = true_reaches || false_reaches || !has_else;
         self.current_block = merge;
         Ok(())
     }
@@ -1438,24 +1468,29 @@ impl<'a> CfgBuilder<'a> {
             ],
         );
         let body = find_direct_child_kind(node, "block");
-        let cond_block = self.new_block();
-        self.cfg
-            .add_edge(self.current_block, cond_block, CfgEdgeType::Next);
+        let cond_block = if self.can_reuse_current_as_cond() {
+            self.current_block
+        } else {
+            let cond_block = self.new_block();
+            self.cfg
+                .add_edge(self.current_block, cond_block, CfgEdgeType::Next);
+            cond_block
+        };
         self.current_block = cond_block;
-        let true_block = self.new_block();
-        let false_block = self.new_block();
+        let body_block = self.new_block();
+        let merge = self.new_block();
         if let Some(cond) = cond {
-            // unless: body on false path of condition
-            self.wire_condition(cond, source, false_block, true_block)?;
+            // unless: skip body when condition is true (IfTrue → merge);
+            // run body when condition is false (IfFalse → body_block).
+            self.wire_condition(cond, source, merge, body_block)?;
         } else {
             self.cfg
-                .add_edge(cond_block, true_block, CfgEdgeType::IfTrue);
+                .add_edge(cond_block, merge, CfgEdgeType::IfTrue);
             self.cfg
-                .add_edge(cond_block, false_block, CfgEdgeType::IfFalse);
+                .add_edge(cond_block, body_block, CfgEdgeType::IfFalse);
         }
-        let merge = self.new_block();
         self.flow_active = true;
-        self.current_block = true_block;
+        self.current_block = body_block;
         if let Some(body) = body {
             self.visit_block(body, source)?;
         }
@@ -1464,9 +1499,6 @@ impl<'a> CfgBuilder<'a> {
                 .add_edge(self.current_block, merge, CfgEdgeType::Next);
         }
         self.flow_active = true;
-        self.current_block = false_block;
-        self.cfg
-            .add_edge(self.current_block, merge, CfgEdgeType::Next);
         self.current_block = merge;
         Ok(())
     }
@@ -3896,6 +3928,8 @@ mod tests {
     use super::*;
     use crate::cfg::CfgEdgeType;
 
+
+
     #[test]
     fn annotate_deep_statements_cfg_does_not_overflow() {
         let path = concat!(
@@ -3943,6 +3977,161 @@ fn example(x: i32) -> i32 {
             .filter(|e| e.edge_type == CfgEdgeType::IfTrue)
             .count();
         assert!(if_true >= 1);
+    }
+
+    fn non_exit_empty_blocks(cfg: &ControlFlowGraph) -> Vec<BlockId> {
+        cfg.blocks
+            .values()
+            .filter(|b| b.statements.is_empty() && !cfg.exits.contains(&b.id))
+            .map(|b| b.id)
+            .collect()
+    }
+
+    #[test]
+    fn test_issue_121_sequential_guard_clauses_no_empty_blocks() {
+        // Issue #121: process(x, y) with two if-without-else then return z.
+        let code = r#"
+fn process(x: i32, y: i32, mut z: i32) -> i32 {
+    if x > 0 {
+        z = z + 1;
+    }
+    if y > 0 {
+        z = z + 2;
+    }
+    z
+}
+"#;
+        let cfg = build_cfg_for_function("rust", code, "process").unwrap();
+        assert_eq!(
+            cfg.blocks.len(),
+            6,
+            "expected 6 blocks after empty contraction, got {}:\n{}",
+            cfg.blocks.len(),
+            cfg.to_dot()
+        );
+        let empties = non_exit_empty_blocks(&cfg);
+        assert!(
+            empties.is_empty(),
+            "non-exit empty blocks remain: {empties:?}\n{}",
+            cfg.to_dot()
+        );
+
+        let first_cond = rust_block_ids(&cfg, "x > 0")[0];
+        let second_cond = rust_block_ids(&cfg, "y > 0")[0];
+        assert!(
+            cfg.edges.iter().any(|e| {
+                e.from == first_cond
+                    && e.to == second_cond
+                    && e.edge_type == CfgEdgeType::IfFalse
+            }),
+            "IfFalse from first guard must land on second condition, edges={:?}",
+            cfg.edges
+        );
+    }
+
+    #[test]
+    fn test_nested_if_without_else_no_empty_blocks() {
+        let code = r#"
+fn nested(a: bool, b: bool) -> i32 {
+    if a {
+        if b {
+            return 1;
+        }
+    }
+    0
+}
+"#;
+        let cfg = build_cfg_for_function("rust", code, "nested").unwrap();
+        let empties = non_exit_empty_blocks(&cfg);
+        assert!(
+            empties.is_empty(),
+            "non-exit empty blocks remain: {empties:?}\n{}",
+            cfg.to_dot()
+        );
+        assert!(
+            cfg.edges
+                .iter()
+                .any(|e| e.edge_type == CfgEdgeType::IfFalse),
+            "nested if-without-else must keep IfFalse edges"
+        );
+    }
+
+    #[test]
+    fn test_early_return_guard_clauses_direct_iffalse() {
+        let code = r#"
+fn guards(a: bool, b: bool) -> i32 {
+    if a {
+        return 1;
+    }
+    if b {
+        return 2;
+    }
+    3
+}
+"#;
+        let cfg = build_cfg_for_function("rust", code, "guards").unwrap();
+        let empties = non_exit_empty_blocks(&cfg);
+        assert!(
+            empties.is_empty(),
+            "non-exit empty blocks remain: {empties:?}\n{}",
+            cfg.to_dot()
+        );
+        let a_cond = rust_block_ids(&cfg, "a")[0];
+        let b_cond = rust_block_ids(&cfg, "b")[0];
+        assert!(
+            cfg.edges.iter().any(|e| {
+                e.from == a_cond && e.to == b_cond && e.edge_type == CfgEdgeType::IfFalse
+            }),
+            "first guard IfFalse must target second condition"
+        );
+    }
+
+    #[test]
+    fn test_short_circuit_if_without_else_wires_false_to_merge() {
+        let code = r#"
+fn sc(a: bool, b: bool) -> i32 {
+    if a && b {
+        return 1;
+    }
+    0
+}
+"#;
+        let cfg = build_cfg_for_function("rust", code, "sc").unwrap();
+        let empties = non_exit_empty_blocks(&cfg);
+        assert!(
+            empties.is_empty(),
+            "non-exit empty blocks remain: {empties:?}\n{}",
+            cfg.to_dot()
+        );
+        let false_edges = cfg
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == CfgEdgeType::IfFalse)
+            .count();
+        assert!(
+            false_edges >= 2,
+            "short-circuit && should emit IfFalse from both sides, got {false_edges}"
+        );
+    }
+
+    #[test]
+    fn test_empty_while_body_preserves_back_edge() {
+        let code = r#"
+fn spin(cond: bool) {
+    while cond {}
+}
+"#;
+        let cfg = build_cfg_for_function("rust", code, "spin").unwrap();
+        assert!(cfg.has_cycle(), "empty while body must keep loop back-edge");
+        let jump_backs = cfg
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == CfgEdgeType::Jump)
+            .count();
+        assert!(
+            jump_backs >= 1,
+            "empty loop body must not be infinitely contracted away"
+        );
     }
 
     #[test]

@@ -676,4 +676,78 @@ fn sum(n: i32) -> i32 {
         let independent = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
         assert!(independent.data_deps.iter().all(|d| !d.loop_carried));
     }
+
+    #[test]
+    fn test_guard_clause_control_deps_cover_true_and_fallthrough() {
+        let code = r#"
+fn guard(flag: bool, a: i32, b: i32) -> i32 {
+    if flag {
+        return a;
+    }
+    return b;
+}
+"#;
+        let cfg = build_cfg_for_function("rust", code, "guard").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+
+        let branch = pdg
+            .nodes
+            .values()
+            .find(|n| {
+                n.statement.kind == crate::cfg::StatementKind::Branch
+                    && n.statement.text.contains("flag")
+            })
+            .expect("branch on flag");
+        let ret_a = pdg
+            .nodes
+            .values()
+            .find(|n| {
+                n.statement.kind == crate::cfg::StatementKind::Return
+                    && n.statement.text.contains('a')
+            })
+            .expect("return a");
+        let ret_b = pdg
+            .nodes
+            .values()
+            .find(|n| {
+                n.statement.kind == crate::cfg::StatementKind::Return
+                    && n.statement.text.contains('b')
+            })
+            .expect("return b");
+        let from_flag: Vec<_> = pdg
+            .control_deps
+            .iter()
+            .filter(|c| c.controller == branch.id)
+            .collect();
+        assert!(
+            from_flag.iter().any(|c| c.dependent == ret_a.id),
+            "expected control dep flag → return a, deps={from_flag:?}"
+        );
+        assert!(
+            from_flag.iter().any(|c| c.dependent == ret_b.id),
+            "expected control dep flag → fallthrough b, deps={from_flag:?}"
+        );
+        assert!(
+            from_flag.len() >= 2,
+            "expected ≥2 control deps from flag, got {}",
+            from_flag.len()
+        );
+
+        let slicer = crate::slicing::BackwardSlicer::new(&pdg, &cfg);
+        let slice = slicer
+            .slice(crate::slicing::SliceCriterion {
+                variable: "b".into(),
+                line: ret_b.statement.line,
+            })
+            .expect("backward slice");
+        let texts: Vec<_> = slice
+            .statements
+            .iter()
+            .filter_map(|id| pdg.nodes.get(id).map(|n| n.statement.text.as_str()))
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("flag")),
+            "backward slice from fallthrough must include flag, got {texts:?}"
+        );
+    }
 }
