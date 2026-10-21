@@ -21,8 +21,20 @@ export function generateStaticParams() {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { lang } = await params;
   const entry = getLanguage(lang);
+  const name = entry?.displayName ?? "Language";
+  const title = `${name} Code Knowledge Graph, Call Graph & AST Coverage`;
+  const description = `${name} support in rgctl: tree-sitter AST coverage, call graph, CFG/PDG, and code knowledge graph queries for LLM agents.`;
+  const canonical = `/docs/languages/${lang}/`;
   return {
-    title: entry ? `${entry.displayName} · Languages` : "Language · Docs",
+    title,
+    description,
+    alternates: { canonical },
+    openGraph: {
+      title,
+      description,
+      type: "article",
+      url: canonical,
+    },
   };
 }
 

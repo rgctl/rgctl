@@ -57,6 +57,75 @@ export function slugDir(slug: string[]): string[] {
   return slug;
 }
 
+export type DocMeta = {
+  title: string;
+  description: string;
+};
+
+/** Strip light markdown formatting for meta titles/descriptions. */
+function stripMdInline(s: string): string {
+  return s
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/_([^_]+)_/g, "$1")
+    .trim();
+}
+
+function titleCaseSlug(slug: string): string {
+  return slug
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/**
+ * Extract `# H1` title and lead paragraph for SEO metadata.
+ * Falls back to a title-cased slug segment when no H1 is present.
+ */
+export function extractDocMeta(md: string, fallbackSlug: string): DocMeta {
+  const lines = md.split(/\r?\n/);
+  let title: string | null = null;
+  let description = "";
+  let pastTitle = false;
+  for (const line of lines) {
+    const h1 = line.match(/^#\s+(.+)$/);
+    if (!pastTitle && h1) {
+      title = stripMdInline(h1[1]);
+      pastTitle = true;
+      continue;
+    }
+    if (!pastTitle) continue;
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (description) break;
+      continue;
+    }
+    if (/^#{1,6}\s/.test(trimmed)) break;
+    if (/^[-*_|`]/.test(trimmed) && !/^[A-Za-z]/.test(trimmed)) {
+      // skip table/list/code fences as lead
+      if (trimmed.startsWith("```") || trimmed.startsWith("|")) continue;
+    }
+    if (/^```/.test(trimmed)) continue;
+    description = stripMdInline(trimmed);
+    break;
+  }
+  if (!title) {
+    title = titleCaseSlug(fallbackSlug || "docs");
+  }
+  if (description.length > 155) {
+    const cut = description.slice(0, 155);
+    const sp = cut.lastIndexOf(" ");
+    description = (sp > 80 ? cut.slice(0, sp) : cut).trimEnd() + "…";
+  }
+  if (!description) {
+    description = `${title} — rgctl documentation.`;
+  }
+  return { title, description };
+}
+
 /** Rewrite repo-relative markdown links for the site `/docs/` tree. */
 export function rewriteDocLinks(md: string, slug?: string[]): string {
   const base = process.env.NEXT_PUBLIC_BASE_PATH || "";

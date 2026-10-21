@@ -7,7 +7,7 @@
 
 [![Docs](https://img.shields.io/badge/docs-shaaf.dev%2Frgctl-2563eb?style=flat-square&logo=readthedocs&logoColor=white)](https://shaaf.dev/rgctl)
 [![Website](https://img.shields.io/github/actions/workflow/status/sshaaf/rgctl/website.yml?branch=main&style=flat-square&label=website)](https://shaaf.dev/rgctl)
-[![Rust](https://img.shields.io/badge/rust-1.99%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-555?style=flat-square)](https://github.com/sshaaf/rgctl/releases/latest)
 [![tree-sitter](https://img.shields.io/badge/parser-tree--sitter-brightgreen?style=flat-square)](https://tree-sitter.github.io/tree-sitter/)
 [![Agents](https://img.shields.io/badge/agents-Cursor%20%7C%20Claude%20%7C%20Codex-111827?style=flat-square)](https://shaaf.dev/rgctl/docs/guides/agent-skill/)
@@ -27,11 +27,23 @@
 [![Rust](https://img.shields.io/badge/Rust-000000?style=flat-square&logo=rust&logoColor=white)](docs/languages/README.md)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](docs/languages/README.md)
 [![Puppet](https://img.shields.io/badge/Puppet-FFAE1A?style=flat-square&logo=puppet&logoColor=black)](docs/languages/README.md)
-[![Markdown](https://img.shields.io/badge/Markdown-000000?style=flat-square&logo=markdown&logoColor=white)](docs/markdown-context.md)
+[![Markdown](https://img.shields.io/badge/Markdown-000000?style=flat-square&logo=markdown&logoColor=white)](docs/guides/markdown-context-graph.md)
 
 > Index once (`discover`), then ask callers, impact, communities, and slices — compact deterministic JSON for agents, not grepping the tree.
 
 **What the R stands for:** **R**ust · **R**eachability · **R**ich graph (30+ typed relations).
+
+### Without `rgctl` vs with `rgctl`
+
+| | Without (grep / dump files) | With `rgctl` |
+|--|----------------------------|--------------|
+| Tool calls for “who calls X transitively?” | Many greps + ad-hoc reads | 1–2 (`discover` once, then `callers` / `blast-radius`) |
+| Context tokens | Whole files / search dumps into the prompt | Compact `-f json` rows (`schema_version`) |
+| Transitive reachability | Easy to miss / invent | Deterministic typed graph + blast-radius |
+
+### Battle-tested at scale
+
+Cold discover and mmap queries on large corpora (see [AGENTS.md](AGENTS.md) Gate A/B): **Linux kernel**, **Kubernetes**, **LLVM**, **Roslyn**, **rustc**, and more — **14 Tier-1 languages**, zero-hydration snapshot reads for structured queries.
 
 ```bash
 rgctl discover .
@@ -51,14 +63,17 @@ https://github.com/user-attachments/assets/15ec6d91-f716-4cbd-a873-e982ba3c6dca
 
 ### 1. Install
 
-**Release binary** (recommended): download `rgctl` for your OS from  
-[GitHub Releases](https://github.com/sshaaf/rgctl/releases/latest), unpack it, put it on your `PATH`.
+**One-line release binary** (macOS / Linux):
 
 ```bash
+curl -fsSL https://shaaf.dev/rgctl/install.sh | sh
 rgctl --version
 ```
 
-**Or build from source** (Rust **1.99+**):
+Installs to `${RGCTL_INSTALL_DIR:-$HOME/.local/bin}`. Or download a tarball from  
+[GitHub Releases](https://github.com/sshaaf/rgctl/releases/latest) and put `rgctl` on your `PATH`.
+
+**Or build from source** (Rust **1.85+**):
 
 ```bash
 git clone https://github.com/sshaaf/rgctl.git

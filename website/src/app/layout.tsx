@@ -38,11 +38,32 @@ export const metadata: Metadata = {
     "Open-source code knowledge graph for LLM agents. Index once, query compact JSON — blast radius, structured find/callers, semantic search, migration planning.",
   metadataBase: new URL("https://shaaf.dev/rgctl"),
   openGraph: {
-    title: "rgctl",
+    title: "rgctl — code knowledge graph for AI agents",
     description:
       "Open-source code knowledge graph for LLM agents — accurate answers, fewer tokens.",
     type: "website",
+    url: "https://shaaf.dev/rgctl/",
+    siteName: "rgctl",
   },
+  twitter: {
+    card: "summary_large_image",
+    title: "rgctl — code knowledge graph for AI agents",
+    description:
+      "Open-source code knowledge graph for LLM agents — accurate answers, fewer tokens.",
+  },
+};
+
+const softwareApplicationLd = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "rgctl",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "macOS, Linux, Windows",
+  license: "https://opensource.org/licenses/MIT",
+  codeRepository: "https://github.com/sshaaf/rgctl",
+  url: "https://shaaf.dev/rgctl/",
+  description:
+    "Open-source code knowledge graph for LLM agents. Index once, query compact JSON — blast radius, structured find/callers, semantic search, migration planning.",
 };
 
 export default function RootLayout({
@@ -60,6 +81,13 @@ export default function RootLayout({
         <Script id="theme-init" strategy="beforeInteractive">
           {themeInitScript}
         </Script>
+        <Script
+          id="software-application-ld"
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(softwareApplicationLd),
+          }}
+        />
         <ThemeProvider>
           <SiteHeader />
           <main className="flex-1">{children}</main>

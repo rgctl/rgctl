@@ -113,6 +113,68 @@ export default function HomePage() {
         </div>
       </section>
 
+      <section className="border-b border-[var(--hairline)]">
+        <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6 sm:py-16">
+          <h2 className="mb-3 font-[family-name:var(--font-serif)] text-2xl font-semibold tracking-tight text-[var(--ink)]">
+            Why rgctl instead of grep?
+          </h2>
+          <p className="mb-8 max-w-[62ch] text-[var(--body)]">
+            Agents that scrape the tree burn tokens and still miss transitive
+            callers. Index once; answer with compact JSON.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[32rem] border-collapse text-left text-sm">
+              <thead>
+                <tr className="border-b border-[var(--hairline)] text-[var(--mute)]">
+                  <th className="py-2 pr-4 font-medium"> </th>
+                  <th className="py-2 pr-4 font-medium">Without rgctl</th>
+                  <th className="py-2 font-medium">With rgctl</th>
+                </tr>
+              </thead>
+              <tbody className="text-[var(--body)]">
+                <tr className="border-b border-[var(--hairline)]">
+                  <td className="py-3 pr-4 font-medium text-[var(--ink)]">
+                    Tool calls
+                  </td>
+                  <td className="py-3 pr-4">Many greps + file dumps</td>
+                  <td className="py-3">1–2 (`discover` once, then query)</td>
+                </tr>
+                <tr className="border-b border-[var(--hairline)]">
+                  <td className="py-3 pr-4 font-medium text-[var(--ink)]">
+                    Context tokens
+                  </td>
+                  <td className="py-3 pr-4">Whole files into the prompt</td>
+                  <td className="py-3">Compact `-f json` rows</td>
+                </tr>
+                <tr>
+                  <td className="py-3 pr-4 font-medium text-[var(--ink)]">
+                    Reachability
+                  </td>
+                  <td className="py-3 pr-4">Easy to miss / invent</td>
+                  <td className="py-3">Deterministic typed graph + blast-radius</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-10">
+            <h3 className="mb-3 font-[family-name:var(--font-serif)] text-lg font-semibold text-[var(--ink)]">
+              Battle-tested at scale
+            </h3>
+            <ul className="grid gap-3 text-sm text-[var(--body)] sm:grid-cols-2 lg:grid-cols-3">
+              <li className="rounded-[4px] border border-[var(--hairline)] p-4">
+                Linux kernel · Kubernetes · LLVM · Roslyn · rustc cold discover
+              </li>
+              <li className="rounded-[4px] border border-[var(--hairline)] p-4">
+                Zero-hydration mmap queries on columnar snapshots
+              </li>
+              <li className="rounded-[4px] border border-[var(--hairline)] p-4">
+                14 Tier-1 tree-sitter languages + markdown
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       <section className="mx-auto max-w-6xl px-4 py-14 sm:px-6 sm:py-16">
         <h2 className="mb-3 font-[family-name:var(--font-serif)] text-2xl font-semibold tracking-tight text-[var(--ink)]">
           What sets it apart

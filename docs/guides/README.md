@@ -1,6 +1,10 @@
 # rgctl Guides
 
-Practical, step-by-step guides for every major rgctl feature. Each guide uses the **CoolStore** application (`example/coolstore`) as a running example so you can follow along on a real Java EE codebase.
+Practical, step-by-step guides for every major rgctl feature.
+
+> **Which fixture?**  
+> - **In-tree quickstart:** `rgctl-tests/ecommerce-java` (ships with this repo — no extra clone). Best for first `discover` / `find` / `blast-radius` runs and the [User Guide](../user-guide.md).  
+> - **Full feature guides:** **CoolStore** (`example/coolstore` or [konveyor-ecosystem/coolstore](https://github.com/konveyor-ecosystem/coolstore)) — larger Java EE app used in the how-tos below.
 
 ## Guides
 
@@ -41,5 +45,5 @@ cd coolstore
 
 - [User Guide](../user-guide.md) -- full CLI reference and tutorial
 - [JSON API Reference](../json-api.md) -- schema details for `-f json` output
-- [Agent Recipes](../agent-recipes.md) -- copy-paste recipes for LLM agents
+- [Agent pack](agent-skill.md) -- install skills and route natural-language intents to `rgctl`
 - [Introduction](../Introduction.md) -- definitions of key terms

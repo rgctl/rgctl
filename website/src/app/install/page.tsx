@@ -23,9 +23,21 @@ export default function InstallPage() {
       </p>
 
       <section className="mt-10 space-y-3">
-        <h2 className="text-lg text-[var(--ink)]">Option A — GitHub Releases</h2>
+        <h2 className="text-lg text-[var(--ink)]">Option A — One-line installer</h2>
         <p className="text-sm text-[var(--body)]">
-          Download the latest asset for your platform from{" "}
+          macOS / Linux: download the latest release binary into{" "}
+          <code className="font-mono">$HOME/.local/bin</code> (override with{" "}
+          <code className="font-mono">RGCTL_INSTALL_DIR</code>):
+        </p>
+        <TerminalBlock
+          lines={[
+            "curl -fsSL https://shaaf.dev/rgctl/install.sh | sh",
+            "rgctl --version",
+            "rgctl install --skill --tools cursor,claude,codex,antigravity,agents",
+          ]}
+        />
+        <p className="text-sm text-[var(--body)]">
+          Or download a tarball manually from{" "}
           <a
             href={GITHUB_RELEASES}
             className="text-[var(--primary)] underline"
@@ -37,16 +49,10 @@ export default function InstallPage() {
           , put <code className="font-mono text-[var(--body-strong)]">rgctl</code>{" "}
           on your <code className="font-mono">PATH</code>, then install the{" "}
           <strong className="font-medium text-[var(--ink)]">agent pack</strong>{" "}
-          into the repo you will index (single skill{" "}
+          (single skill{" "}
           <code className="font-mono text-[var(--body-strong)]">rgctl</code>
-          ):
+          ).
         </p>
-        <TerminalBlock
-          lines={[
-            "rgctl --version",
-            "rgctl install --skill --tools cursor,claude,codex,antigravity,agents",
-          ]}
-        />
         <p className="text-sm text-[var(--mute)]">
           Installs <code className="font-mono">rgctl</code> under each adapter
           (e.g. <code className="font-mono">.cursor/skills/rgctl/</code>). See

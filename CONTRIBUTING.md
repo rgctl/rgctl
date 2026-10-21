@@ -6,6 +6,19 @@ Thanks for helping improve rgctl. This guide covers local setup, tests, and wher
 
 ---
 
+## Contributor tracks
+
+Pick a lane — each links to the checklist / architecture docs you will touch most:
+
+| Track | Start here |
+|-------|------------|
+| **Language Plugins & AST Coverage** | [contributor-checklist.md](docs/contributor-checklist.md) · [tier-1-language-support.md](docs/tier-1-language-support.md) · [language-testing-guide.md](docs/language-testing-guide.md) · [languages/README.md](docs/languages/README.md) |
+| **Declarative Taint & Kantra Rules** | [vulnerability-and-osv-analysis.md](docs/guides/vulnerability-and-osv-analysis.md) · [analysis-architecture.md](docs/analysis-architecture.md) · [policy-format.md](docs/policy-format.md) |
+| **Agent Host Adapters & Skills** | [agent-skill.md](docs/guides/agent-skill.md) · [`skills/rgctl/`](skills/rgctl/) · [USER_AGENTS_TEMPLATE.md](docs/agents/USER_AGENTS_TEMPLATE.md) |
+| **Graph & CPG Algorithms** | [analysis-architecture.md](docs/analysis-architecture.md) · [graph-storage-architecture.md](docs/graph-storage-architecture.md) · [hybrid-cpg.md](docs/guides/hybrid-cpg.md) · [blast-radius-analysis.md](docs/guides/blast-radius-analysis.md) |
+
+---
+
 ## Prerequisites
 
 - **Rust** stable (via [rustup](https://rustup.rs/))
@@ -108,9 +121,9 @@ Tier 1 depth (Layers A–F): [docs/tier-1-language-support.md](docs/tier-1-langu
 
 ## Documentation changes
 
-- **User-facing:** `docs/Introduction.md`, `docs/user-guide.md`, `docs/dashboard-user-guide.md`
+- **User-facing:** `docs/Introduction.md`, `docs/user-guide.md`, [`docs/guides/http-server-and-dashboard.md`](docs/guides/http-server-and-dashboard.md)
 - **Agents (contribute to rgctl):** root [`AGENTS.md`](AGENTS.md) (starting-context, profiles/tests/benches) · [`docs/json-api.md`](docs/json-api.md)
-- **Agents (use rgctl elsewhere):** [`docs/guides/agent-skill.md`](docs/guides/agent-skill.md) · [`docs/agents/USER_AGENTS_TEMPLATE.md`](docs/agents/USER_AGENTS_TEMPLATE.md) · [`docs/agent-recipes.md`](docs/agent-recipes.md)
+- **Agents (use rgctl elsewhere):** [`docs/guides/agent-skill.md`](docs/guides/agent-skill.md) · [`docs/agents/USER_AGENTS_TEMPLATE.md`](docs/agents/USER_AGENTS_TEMPLATE.md)
 - **Accuracy:** keep CLI examples aligned with `dashboard/scripts/validate-guide-cli-gbuilder.sh` where possible
 
 ---

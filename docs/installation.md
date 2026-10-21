@@ -27,7 +27,7 @@ Everything you need to install rgctl (`rgctl`), choose the right operating mode,
 | Requirement | Notes |
 |-------------|-------|
 | **OS** | macOS (Apple Silicon or Intel), Linux (x86_64), Windows (x86_64) |
-| **Rust 1.99+** | Only for building from source ([rustup.rs](https://rustup.rs/)). Pre-built binaries need no Rust toolchain. |
+| **Rust 1.85+** | Only for building from source ([rustup.rs](https://rustup.rs/)). Pre-built binaries need no Rust toolchain. |
 | **Git** | For cloning the repository (source builds) |
 | **Git LFS** | Optional. Only required if you use `semantic index --embedder code-daemon` (~206 MB ONNX weights). The default `vocab` embedder needs no LFS. |
 
@@ -37,7 +37,15 @@ Disk space: the `.rgctl/` artifacts directory typically uses 50-500 MB depending
 
 ## Install rgctl
 
-### Option A -- GitHub release (recommended)
+### Option A -- One-line installer (macOS / Linux, recommended)
+
+```bash
+curl -fsSL https://shaaf.dev/rgctl/install.sh | sh
+```
+
+Downloads the latest GitHub Release tarball for your OS/arch into `${RGCTL_INSTALL_DIR:-$HOME/.local/bin}`. Source: [`scripts/install.sh`](../scripts/install.sh) (also served as `https://shaaf.dev/rgctl/install.sh`).
+
+### Option B -- GitHub release (manual)
 
 Pre-built binaries are published on the project **Releases** page:
 
@@ -53,7 +61,7 @@ Pre-built binaries are published on the project **Releases** page:
    | Linux (x86_64) | `rgctl-*-x86_64-unknown-linux-gnu.tar.gz` |
    | Windows | `rgctl-*-x86_64-pc-windows-msvc.zip` |
 
-   **Linux glibc note:** the `x86_64-unknown-linux-gnu` release is linked against a relatively new glibc (CI runner). It may **not** run on older LTS hosts such as **Ubuntu 22.04**. If `./rgctl` fails with `GLIBC_… not found`, build from source on that host (see Option B), or track a future musl/manylinux asset.
+   **Linux glibc note:** the `x86_64-unknown-linux-gnu` release is linked against a relatively new glibc (CI runner). It may **not** run on older LTS hosts such as **Ubuntu 22.04**. If `./rgctl` fails with `GLIBC_… not found`, build from source on that host (see Option C), or track a future musl/manylinux asset.
 
 3. Extract the archive:
 
@@ -69,9 +77,9 @@ Expand-Archive rgctl-*-x86_64-pc-windows-msvc.zip -DestinationPath .
 .\rgctl.exe --version
 ```
 
-### Option B -- Build from source
+### Option C -- Build from source
 
-Requires **Rust 1.99+** (workspace `rust-version`; edition 2024). Check with `rustc --version`.
+Requires **Rust 1.85+** (see README MSRV; prefer current stable via rustup). Check with `rustc --version`.
 
 ```bash
 git clone https://github.com/sshaaf/rgctl.git
@@ -369,7 +377,7 @@ Start with the default mode (no extra flags). Add `--with-cfg`, `--with-taint`, 
 
 ### Build from source fails
 
-- Confirm **Rust 1.99+** (workspace `rust-version`): `rustc --version`
+- Confirm **Rust 1.85+** (see README MSRV): `rustc --version`
 - Update Rust: `rustup update`
 - Clean build: `cargo clean && cargo build --release --bin rgctl`
 - ONNX / `ort-sys` link errors: `cargo build --release --bin rgctl --no-default-features` (disables default `semantic-onnx`; default `vocab` semantic search still works)
