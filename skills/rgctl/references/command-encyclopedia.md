@@ -64,7 +64,7 @@ Prefer the **Canonical** column in examples and agent workflows. Aliases/façade
 
 **Other flags:** `--languages java,go` restricts the language set; `--exclude` filters paths (glob); `--verbose` prints per-file progress (noisy — skip unless debugging a stuck/slow discover); `--with-kantra` writes Kantra findings; `--write-json-graph` also writes legacy `graph.db`/`graph.json` (rarely needed, snapshot-only is the default and is what agents should rely on).
 
-**Migration flags:** `--export-migration-hints` writes `.rgctl/migration_plan.json` (primary migration deliverable for agents). Pair with `--with-harmonic` for ranking. `--migration-preset` / `--migration-order` control strategy and step sort. Discover `-f json` stdout remains telemetry — the plan body is the JSON file.
+**Migration flags:** `--export-migration-hints` writes `.rgctl/migration_plan.json` **and**, with `-f json`, emits the migration plan JSON on stdout (`preset`, `order_mode`, `steps[]`, `schema_version: 2`). Plain `discover -f json` without the flag emits DiscoverResponse telemetry (`command: "discover"`, `metrics`). Pair with `--with-harmonic` for ranking. `--migration-preset` / `--migration-order` control strategy and step sort.
 
 **Sample** (`-f json`, ecommerce-java):
 
@@ -83,7 +83,7 @@ Prefer the **Canonical** column in examples and agent workflows. Aliases/façade
 }
 ```
 
-**Pitfalls:** Do not re-run full discover on every question if `.rgctl/` exists — use `status` + `update` when sources are dirty. `--with-cfg` needed for slice/inspect/cpg PDG. `--with-taint` is discover-time taint (on-demand: `slice --taint`). Semantic search needs a separate `semantic index`. Migration roadmaps need `--export-migration-hints` (plan is `migration_plan.json`, not discover stdout).
+**Pitfalls:** Do not re-run full discover on every question if `.rgctl/` exists — use `status` + `update` when sources are dirty. `--with-cfg` needed for slice/inspect/cpg PDG. `--with-taint` is discover-time taint (on-demand: `slice --taint`). Semantic search needs a separate `semantic index`. Migration roadmaps need `--export-migration-hints` (plan is on stdout with `-f json` and in `migration_plan.json`).
 
 **Agent should report:** files indexed, nodes/edges, duration; note which feature flags were used; for migration, path to `migration_plan.json` + top steps.
 

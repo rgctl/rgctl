@@ -41,8 +41,8 @@ Blast radius for 'priceShoppingCart'
   Score: 40.6/100
   Direct callers: 6
   Impact zone: 12
-  Callers: com.redhat.coolstore.service.ShoppingCartService.checkOutShoppingCart, com.redhat.coolstore.rest.CartEndpoint.delete, com.redhat.coolstore.rest.CartEndpoint.set, com.redhat.coolstore.rest.CartEndpoint.dedupeCartItems, com.redhat.coolstore.rest.CartEndpoint.add, com.redhat.coolstore.model.ShoppingCart.addShoppingCartItem
-  Impact: com.redhat.coolstore.rest.CartEndpoint.dedupeCartItems, com.redhat.coolstore.rest.CartEndpoint.add, com.redhat.coolstore.model.ShoppingCart.addShoppingCartItem, com.redhat.coolstore.utils.Transformers.shoppingCartToJson, com.redhat.coolstore.service.ShoppingCartOrderProcessor.process, com.redhat.coolstore.service.ShoppingCartService.checkOutShoppingCart, com.redhat.coolstore.rest.CartEndpoint.checkout, com.redhat.coolstore.utils.Transformers.jsonToOrder, com.redhat.coolstore.service.OrderServiceMDB.onMessage, com.redhat.coolstore.service.InventoryNotificationMDB.onMessage, com.redhat.coolstore.rest.CartEndpoint.delete, com.redhat.coolstore.rest.CartEndpoint.set
+  Callers: com.redhat.coolstore.rest.CartEndpoint.add, com.redhat.coolstore.model.ShoppingCart.addShoppingCartItem, com.redhat.coolstore.rest.CartEndpoint.dedupeCartItems, com.redhat.coolstore.rest.CartEndpoint.set, com.redhat.coolstore.rest.CartEndpoint.delete, com.redhat.coolstore.service.ShoppingCartService.checkOutShoppingCart
+  Impact: com.redhat.coolstore.rest.CartEndpoint.add, com.redhat.coolstore.model.ShoppingCart.addShoppingCartItem, com.redhat.coolstore.rest.CartEndpoint.dedupeCartItems, com.redhat.coolstore.utils.Transformers.shoppingCartToJson, com.redhat.coolstore.service.ShoppingCartOrderProcessor.process, com.redhat.coolstore.service.ShoppingCartService.checkOutShoppingCart, com.redhat.coolstore.rest.CartEndpoint.checkout, com.redhat.coolstore.rest.CartEndpoint.delete, com.redhat.coolstore.rest.CartEndpoint.set, com.redhat.coolstore.utils.Transformers.jsonToOrder, com.redhat.coolstore.service.InventoryNotificationMDB.onMessage, com.redhat.coolstore.service.OrderServiceMDB.onMessage
 ```
 
 **What this tells you:**
@@ -50,7 +50,7 @@ Blast radius for 'priceShoppingCart'
 - **Score: 40.6/100** -- a moderate impact score. This function is called by several REST endpoints and the checkout flow.
 - **6 direct callers** -- six functions call `priceShoppingCart` directly.
 - **Impact zone: 12** -- the full transitive closure affects 12 functions, meaning a change here could ripple through 12 code paths.
-- The callers span two classes: `ShoppingCartService` (internal) and `CartEndpoint` (REST API layer), showing that this function bridges the service and API layers.
+- The callers span `ShoppingCartService`, `CartEndpoint` (REST), and `ShoppingCart` (model), showing that this function bridges service, API, and domain layers.
 
 ### 2. JSON Output
 
@@ -74,43 +74,44 @@ rgctl -r example/coolstore -f json blast-radius priceShoppingCart
     "canonical_fqn": "ShoppingCartService::priceShoppingCart",
     "class_context": "ShoppingCartService",
     "file_path": "src/main/java/com/redhat/coolstore/service/ShoppingCartService.java",
-    "id": "cac00c48-70f7-56ca-bdbc-667d7f51e916",
+    "id": "28de0bfd-1b19-5c3c-bcbf-26947d067654",
     "language": "java",
+    "signature": "public void priceShoppingCart(ShoppingCart sc) {",
     "symbol": "priceShoppingCart"
   },
   "topology": {
     "direct_callers": [
       {
-        "file_path": "src/main/java/com/redhat/coolstore/service/ShoppingCartService.java",
-        "fqn": "com.redhat.coolstore.service.ShoppingCartService.checkOutShoppingCart",
-        "id": "e3d4f4a9-86c7-57af-88cd-6f8f97816e68"
+        "file_path": "src/main/java/com/redhat/coolstore/rest/CartEndpoint.java",
+        "fqn": "com.redhat.coolstore.rest.CartEndpoint.add",
+        "id": "d0a70ef7-c170-5a07-90a2-c061373666c2"
+      },
+      {
+        "file_path": "src/main/java/com/redhat/coolstore/model/ShoppingCart.java",
+        "fqn": "com.redhat.coolstore.model.ShoppingCart.addShoppingCartItem",
+        "id": "9ce1fde8-1ebf-5fae-8d09-db90fab10830"
       },
       {
         "file_path": "src/main/java/com/redhat/coolstore/rest/CartEndpoint.java",
-        "fqn": "com.redhat.coolstore.rest.CartEndpoint.delete",
-        "id": "96716012-e50a-57e6-b4bc-d51d8a8f8fc0"
-      },
-      {
-        "file_path": "src/main/java/com/redhat/coolstore/rest/CartEndpoint.java",
-        "fqn": "com.redhat.coolstore.rest.CartEndpoint.set",
-        "id": "1d3e30cb-4a5b-57b9-adb1-9f93c22b350a"
+        "fqn": "com.redhat.coolstore.rest.CartEndpoint.dedupeCartItems",
+        "id": "5318808f-a0e2-551c-b6f7-d15a271d089e"
       }
     ],
     "impact_zone": [
       {
         "file_path": "src/main/java/com/redhat/coolstore/rest/CartEndpoint.java",
-        "fqn": "com.redhat.coolstore.rest.CartEndpoint.dedupeCartItems",
-        "id": "19fb0367-1cad-5749-9bba-bba302903dde"
-      },
-      {
-        "file_path": "src/main/java/com/redhat/coolstore/rest/CartEndpoint.java",
         "fqn": "com.redhat.coolstore.rest.CartEndpoint.add",
-        "id": "19861464-9c28-5c96-bc3e-3963f9b0e4a1"
+        "id": "d0a70ef7-c170-5a07-90a2-c061373666c2"
       },
       {
         "file_path": "src/main/java/com/redhat/coolstore/model/ShoppingCart.java",
         "fqn": "com.redhat.coolstore.model.ShoppingCart.addShoppingCartItem",
-        "id": "80333090-4ac0-54f9-9650-8df523c35205"
+        "id": "9ce1fde8-1ebf-5fae-8d09-db90fab10830"
+      },
+      {
+        "file_path": "src/main/java/com/redhat/coolstore/rest/CartEndpoint.java",
+        "fqn": "com.redhat.coolstore.rest.CartEndpoint.dedupeCartItems",
+        "id": "5318808f-a0e2-551c-b6f7-d15a271d089e"
       }
     ]
   }
@@ -131,15 +132,16 @@ rgctl -r example/coolstore blast-radius getShoppingCart --depth 3
 
 ```
 Blast radius for 'getShoppingCart'
-  Score: 40.5/100
-  Direct callers: 6
-  Impact zone: 10
-  Callers: com.redhat.coolstore.service.ShoppingCartService.checkOutShoppingCart,
-           com.redhat.coolstore.rest.CartEndpoint.getCart,
-           com.redhat.coolstore.rest.CartEndpoint.add,
+  Score: 40.6/100
+  Direct callers: 7
+  Impact zone: 13
+  Callers: com.redhat.coolstore.rest.CartEndpoint.add,
+           com.redhat.coolstore.model.ShoppingCart.addShoppingCartItem,
            com.redhat.coolstore.rest.CartEndpoint.dedupeCartItems,
+           com.redhat.coolstore.rest.CartEndpoint.set,
+           com.redhat.coolstore.rest.CartEndpoint.getCart,
            com.redhat.coolstore.rest.CartEndpoint.delete,
-           com.redhat.coolstore.rest.CartEndpoint.set
+           com.redhat.coolstore.service.ShoppingCartService.checkOutShoppingCart
 ```
 
 The `--depth 3` flag limits the impact zone to at most 3 levels of callers, useful for large graphs where the full closure is too expensive or noisy.
@@ -168,11 +170,14 @@ A score of 0 means this function (the constructor) has no upstream callers in th
 Use `--policy-file` to enforce thresholds:
 
 ```bash
+cat > /tmp/coolstore-ci-policy.json <<'EOF'
+{"max_impact_nodes": 15, "centrality_alert_threshold": 0.15}
+EOF
 rgctl -r example/coolstore -f json blast-radius priceShoppingCart \
-  --policy-file example/coolstore/policy.json
+  --policy-file /tmp/coolstore-ci-policy.json
 ```
 
-The policy file (`policy.json`) defines rules like maximum impact zone size. If `priceShoppingCart` violates any rule, the `violations` array in the output will be populated and the exit code will be non-zero.
+The policy file defines rules like maximum impact zone size. If `priceShoppingCart` violates any rule, the `violations` array in the output will be populated and the exit code will be non-zero. (CoolStore does not ship a `policy.json` in-tree.)
 
 ## Understanding the Score
 

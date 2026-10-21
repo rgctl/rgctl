@@ -41,6 +41,8 @@ Indexed 152 functions (vocab-accumulate-v2, 256 dims) → .rgctl/semantic_index.
   incremental: 0 reused, 152 embedded, 0 removed
 ```
 
+(Paths in the banner may be absolute; under `example/coolstore` they resolve to `.rgctl/semantic_index.bin`.)
+
 **What happened:**
 
 - rgctl embedded all 152 function symbols into 256-dimensional vectors using the **vocab-accumulate-v2** model (a compiled token-table embedder that requires no external model or ONNX runtime).
@@ -62,33 +64,38 @@ rgctl -r example/coolstore -f json semantic query "shopping cart checkout" --lim
   "dimensions": 256,
   "hits": [
     {
-      "distance": 126,
-      "file_path": "src/main/java/com/redhat/coolstore/service/ShoppingCartOrderProcessor.java",
-      "fused_score": 0.6000653020158653,
-      "name": "process",
-      "qualified_name": "com.redhat.coolstore.service.ShoppingCartOrderProcessor.process",
-      "ranking": "fusion",
-      "score": 0.6000653020158653
-    },
-    {
       "distance": 111,
       "file_path": "src/main/java/com/redhat/coolstore/service/ShoppingCartService.java",
-      "fused_score": 0.588396263733291,
+      "fused_score": 0.5916868009571876,
       "name": "checkOutShoppingCart",
+      "node_id": "17d82f49-8908-5a22-b9f4-4ccd10a3391e",
       "qualified_name": "com.redhat.coolstore.service.ShoppingCartService.checkOutShoppingCart",
       "ranking": "fusion",
-      "score": 0.588396263733291
+      "score": 0.5916868009571876
     },
     {
       "distance": 109,
       "file_path": "src/main/java/com/redhat/coolstore/rest/CartEndpoint.java",
-      "fused_score": 0.5404414112077187,
+      "fused_score": 0.540045721237796,
       "name": "checkout",
+      "node_id": "67a58a6b-70c4-52bd-a398-95da64a4d575",
       "qualified_name": "com.redhat.coolstore.rest.CartEndpoint.checkout",
       "ranking": "fusion",
-      "score": 0.5404414112077187
+      "score": 0.540045721237796
+    },
+    {
+      "distance": 126,
+      "file_path": "src/main/java/com/redhat/coolstore/service/ShoppingCartOrderProcessor.java",
+      "fused_score": 0.5203688522111085,
+      "name": "process",
+      "node_id": "da0fb6ca-1c49-5a8f-a8d1-ce52499208a3",
+      "qualified_name": "com.redhat.coolstore.service.ShoppingCartOrderProcessor.process",
+      "ranking": "fusion",
+      "score": 0.5203688522111085
     }
   ],
+  "index_schema_version": 2,
+  "model_id": "vocab-accumulate-v2",
   "query": "shopping cart checkout",
   "schema_version": 3
 }

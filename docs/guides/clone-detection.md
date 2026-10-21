@@ -52,17 +52,13 @@ flowchart TD
 
 ### 1. Build the Graph Snapshot
 
-Clone detection queries the pre-built snapshot:
+Clone detection queries the pre-built snapshot. CoolStore examples use `-l java`:
 
 ```bash
-rgctl discover .
+rgctl -r example/coolstore discover . -l java --with-cfg
 ```
 
-To enable fast-path CFG loading from the archive during fragment queries, you can optionally include `--with-cfg`:
-
-```bash
-rgctl discover . --with-cfg
-```
+`--with-cfg` enables fast-path CFG loading from the archive during fragment queries.
 
 ---
 
@@ -71,51 +67,26 @@ rgctl discover . --with-cfg
 Locate all functions with identical code bodies (Type-1 clones):
 
 ```bash
-rgctl -f json clones --mode exact --min-loc 5 --exclude test
+rgctl -r example/coolstore -f json clones --mode exact --min-loc 5 --exclude test
 ```
 
-**Output:**
+**Output** (Java-only CoolStore currently has no Type-1 pairs at `min-loc` 5):
 
 ```json
 {
   "schema_version": 1,
   "mode": "exact",
-  "graph_digest": "4a7b9c...",
+  "graph_digest": "7d88a1d784b5b94d0c47bbca7670d7cfe80d9455e8fd6453fb62c4598d11e59e",
   "filters": {
     "min_loc": 5,
     "exclude": ["test"]
   },
-  "group_count": 1,
-  "groups": [
-    {
-      "mode": "exact",
-      "hash": "9eec51b8...",
-      "size": 2,
-      "confidence": 1.0,
-      "members": [
-        {
-          "id": "e3b0c442-...",
-          "name": "normalizePayload",
-          "file": "src/service/ServiceA.java",
-          "start_line": 42,
-          "end_line": 58,
-          "loc": 17
-        },
-        {
-          "id": "7f83b165-...",
-          "name": "normalizePayload",
-          "file": "src/legacy/LegacyHelper.java",
-          "start_line": 15,
-          "end_line": 31,
-          "loc": 17
-        }
-      ]
-    }
-  ]
+  "group_count": 0,
+  "groups": []
 }
 ```
 
-Writes `.rgctl/clones.json` sidecar cache keyed by `graph_digest`.
+Writes `.rgctl/clones.json` sidecar cache keyed by `graph_digest`. On larger corpora, `groups[]` members include `id`, `name`, `file`, `start_line`, `end_line`, `loc`, plus `hash` / `confidence` on each group.
 
 ---
 
@@ -124,16 +95,16 @@ Writes `.rgctl/clones.json` sidecar cache keyed by `graph_digest`.
 Locate functions with similar vocabulary using 256-bit token Bloom sketches:
 
 ```bash
-rgctl -f json clones --mode bloom --threshold 0.85 --min-loc 8 --exclude test
+rgctl -r example/coolstore -f json clones --mode bloom --threshold 0.85 --min-loc 8 --exclude test
 ```
 
-**Output:**
+**Output** (live CoolStore hit):
 
 ```json
 {
   "schema_version": 1,
   "mode": "bloom",
-  "graph_digest": "4a7b9c...",
+  "graph_digest": "7d88a1d784b5b94d0c47bbca7670d7cfe80d9455e8fd6453fb62c4598d11e59e",
   "filters": {
     "min_loc": 8,
     "exclude": ["test"]
@@ -145,24 +116,24 @@ rgctl -f json clones --mode bloom --threshold 0.85 --min-loc 8 --exclude test
     {
       "mode": "bloom",
       "size": 2,
-      "confidence": 0.91,
-      "score": 0.91,
+      "confidence": 0.8571428571428571,
+      "score": 0.8571428571428571,
       "members": [
         {
-          "id": "...",
-          "name": "processBatchV1",
-          "file": "src/batch/v1.rs",
-          "start_line": 10,
-          "end_line": 35,
-          "loc": 25
+          "id": "76857e3b-8e4a-568b-a9cf-0ec0cc129f11",
+          "name": "calculateShipping",
+          "file": "src/main/java/com/redhat/coolstore/service/ShippingService.java",
+          "start_line": 15,
+          "end_line": 46,
+          "loc": 32
         },
         {
-          "id": "...",
-          "name": "processBatchV2",
-          "file": "src/batch/v2.rs",
-          "start_line": 12,
-          "end_line": 38,
-          "loc": 26
+          "id": "2a20c5f7-a8a3-5f84-b327-5c0b5748d5d3",
+          "name": "calculateShippingInsurance",
+          "file": "src/main/java/com/redhat/coolstore/service/ShippingService.java",
+          "start_line": 48,
+          "end_line": 70,
+          "loc": 23
         }
       ]
     }
@@ -176,65 +147,40 @@ Writes `.rgctl/clones.bloom.json` sidecar cache keyed by `graph_digest`.
 
 ### 4. Seed-First Sub-Function Fragment Clones (`--mode fragment`)
 
-To find where an 8-line loop or guarded block from `process_orders` is duplicated elsewhere in the project:
+To search for duplicates of a SESE region inside `priceShoppingCart`:
 
 ```bash
-rgctl -f json clones --mode fragment --seed process_orders --lines 24-32
+rgctl -r example/coolstore -f json clones \
+  --mode fragment --seed priceShoppingCart --lines 64-72
 ```
 
-**Output:**
+**Output** (no other CoolStore functions share this hammock’s 1-WL hash):
 
 ```json
 {
   "schema_version": 2,
   "mode": "fragment",
-  "graph_digest": "4a7b9c...",
+  "graph_digest": "7d88a1d784b5b94d0c47bbca7670d7cfe80d9455e8fd6453fb62c4598d11e59e",
   "filters": {
     "min_statements": 3,
     "max_statements": 15,
-    "threshold": 1.0,
-    "exclude": []
+    "threshold": 1.0
   },
   "seed": {
-    "file": "src/orders.rs",
-    "start_line": 24,
-    "end_line": 32,
-    "enclosing_function": "process_orders",
-    "structural_hash": "f9cbad17fbe21cb2"
+    "file": "src/main/java/com/redhat/coolstore/service/ShoppingCartService.java",
+    "start_line": 64,
+    "end_line": 72,
+    "enclosing_function": "priceShoppingCart",
+    "structural_hash": "aec69dabc119347f"
   },
-  "group_count": 1,
-  "groups": [
-    {
-      "structural_hash": "f9cbad17fbe21cb2",
-      "size": 2,
-      "score": 1.0,
-      "members": [
-        {
-          "id": "a1b2c3d4-...",
-          "name": "process_orders",
-          "file": "src/orders.rs",
-          "start_line": 24,
-          "end_line": 32,
-          "enclosing_function": "process_orders",
-          "statement_count": 5
-        },
-        {
-          "id": "e5f6a7b8-...",
-          "name": "audit_orders",
-          "file": "src/audit.rs",
-          "start_line": 40,
-          "end_line": 48,
-          "enclosing_function": "audit_orders",
-          "statement_count": 5
-        }
-      ]
-    }
-  ]
+  "group_count": 0,
+  "groups": []
 }
 ```
 
 **What this tells you:**
-- Even though `audit_orders` has different arguments, a different overall function body, and potentially renamed loop variables, the 5-statement loop spanning lines 40–48 in `src/audit.rs` has the **exact same control-flow topology and statement structure** as lines 24–32 in `process_orders`.
+- The seed hammock was extracted (`structural_hash` set) even when `group_count` is 0 — useful for confirming the SESE bounds before mining a larger corpus.
+- On repos with duplicated control-flow fragments, `groups[].members` include `enclosing_function`, `start_line` / `end_line`, and `statement_count`.
 
 ---
 
@@ -243,19 +189,22 @@ rgctl -f json clones --mode fragment --seed process_orders --lines 24-32
 If a function name appears in multiple files:
 
 ```bash
-rgctl clones --mode fragment --seed process_orders
+rgctl clones --mode fragment --seed priceShoppingCart
 ```
 
 `rgctl` detects the ambiguity and returns:
 
 ```text
-Error: Ambiguous symbol 'process_orders': 2 matches
+Error: Ambiguous symbol 'priceShoppingCart': 2 matches
 ```
 
 Disambiguate by providing the file path:
 
 ```bash
-rgctl -f json clones --mode fragment --seed process_orders --file src/orders.rs --lines 24-32
+rgctl -r example/coolstore -f json clones --mode fragment \
+  --seed priceShoppingCart \
+  --file src/main/java/com/redhat/coolstore/service/ShoppingCartService.java \
+  --lines 64-72
 ```
 
 ---
@@ -265,7 +214,7 @@ rgctl -f json clones --mode fragment --seed process_orders --file src/orders.rs 
 To mine all duplicated sub-function fragments across the whole codebase without specifying a seed:
 
 ```bash
-rgctl -f json clones --mode fragment --min-statements 3 --max-statements 15
+rgctl -r example/coolstore -f json clones --mode fragment --min-statements 3 --max-statements 15
 ```
 
 This scans all indexed functions, extracts SESE hammocks within the statement bounds, groups them by their 1-WL canonical hash, and writes `.rgctl/clones.fragment.json`.
@@ -297,12 +246,13 @@ Extract summary metrics:
 
 ```bash
 # Top 5 exact clone groups by size
-rgctl -f json clones --mode exact \
+rgctl -r example/coolstore -f json clones --mode exact \
   | jq '{group_count, top: [.groups[:5][] | {size, hash: .hash[0:12], names: [.members[].name]}]}'
 
-# Fragment clone member locations
-rgctl -f json clones --mode fragment --seed process_orders --lines 24-32 \
-  | jq '.groups[] | {hash: .structural_hash, members: [.members[] | {fn: .enclosing_function, loc: "\(.file):\(.start_line)-\(.end_line)"}]}'
+# Fragment clone member locations (when groups are non-empty)
+rgctl -r example/coolstore -f json clones \
+  --mode fragment --seed priceShoppingCart --lines 64-72 \
+  | jq '{group_count, seed, groups: [.groups[] | {hash: .structural_hash, members: [.members[] | {fn: .enclosing_function, loc: "\(.file):\(.start_line)-\(.end_line)"}]}]}'
 ```
 
 ---

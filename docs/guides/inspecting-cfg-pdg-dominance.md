@@ -21,7 +21,7 @@ This guide uses the **CoolStore** (`example/coolstore`). Make sure you have run 
 CoolStore examples use `-l java` to index the Java backend only (skip Angular/bower).
 
 ```bash
-rgctl -r example/coolstore discover -l java --with-cfg
+rgctl -r example/coolstore discover . -l java --with-cfg
 ```
 
 ## Step-by-Step
@@ -38,34 +38,102 @@ rgctl -r example/coolstore -f json inspect priceShoppingCart cfg
 
 ```json
 {
+  "schema_version": 1,
   "layer": "cfg",
   "symbol": "priceShoppingCart",
-  "schema_version": 1,
   "pruned": false,
-  "node_count": 18,
-  "edge_count": 22,
-  "nodes_sample": [
-    {
-      "id": "block_0"
-    },
-    {
-      "id": "block_1"
-    },
-    {
-      "id": "block_2"
-    },
-    {
-      "id": "block_3"
-    }
+  "nodes": [
+    { "id": "block_0", "start_line": 0, "end_line": 0 },
+    { "id": "block_1", "start_line": 56, "end_line": 56 },
+    { "id": "block_2", "start_line": 58, "end_line": 58 },
+    { "id": "block_3", "start_line": 60, "end_line": 60 }
+  ],
+  "edges": [
+    { "kind": "iftrue", "source": "block_1", "target": "block_2" },
+    { "kind": "iffalse", "source": "block_1", "target": "block_0" },
+    { "kind": "next", "source": "block_2", "target": "block_3" },
+    { "kind": "iftrue", "source": "block_3", "target": "block_4" }
   ]
 }
 ```
 
 **What this tells you:**
 
-- **`idom`** -- the immediate dominator for each basic block. Block 5 (the entry block) dominates most other blocks, as expected.
-- **`frontiers`** -- dominance frontiers, used for SSA construction. In this example, no explicit frontiers are shown (use `--frontiers` for detailed output).
-- The dominator tree is a tree structure rooted at the entry block; each block's immediate dominator is the closest block that must execute before it on every path.
+- Top-level keys are `nodes`, `edges`, `layer`, `symbol`, `pruned`, and `schema_version` (there is no `node_count` / `nodes_sample` summary field — count the arrays).
+- On clean CoolStore (`-l java --with-cfg`), `priceShoppingCart` has **12** CFG blocks and **16** edges.
+- Edge kinds such as `iftrue` / `iffalse` / `next` / `jump` describe branch and fall-through control flow.
+
+### 2. Program Dependence Graph (PDG)
+
+Inspect data and control dependencies for the same function:
+
+```bash
+rgctl -r example/coolstore -f json inspect priceShoppingCart pdg
+```
+
+**Output (truncated):**
+
+```json
+{
+  "schema_version": 1,
+  "layer": "pdg",
+  "symbol": "priceShoppingCart",
+  "data_deps": 5,
+  "control_deps": 19,
+  "nodes": [
+    { "id": "node_0" },
+    { "id": "node_1" }
+  ],
+  "edges": [
+    { "kind": "data", "source": "node_4", "target": "node_5", "variable": "sc" },
+    { "kind": "data", "source": "node_7", "target": "node_8", "variable": "sci" },
+    { "kind": "control", "source": "node_6", "target": "node_12" }
+  ]
+}
+```
+
+**What this tells you:**
+
+- **`data_deps` / `control_deps`** summarize dependence counts (here **5** data and **19** control).
+- Data edges carry a `variable` name (e.g. `sc`, `sci`); control edges link statement nodes that gate execution.
+- The PDG is the substrate for `slice` and `cpg flows`.
+
+### 3. Dominator Tree
+
+Inspect immediate dominators for each CFG block:
+
+```bash
+rgctl -r example/coolstore -f json inspect priceShoppingCart dom
+```
+
+**Output (truncated):**
+
+```json
+{
+  "schema_version": 1,
+  "layer": "dom",
+  "symbol": "priceShoppingCart",
+  "idom": [
+    { "block": 11, "immediate_dominator": 1 },
+    { "block": 4, "immediate_dominator": 2 },
+    { "block": 6, "immediate_dominator": 1 },
+    { "block": 8, "immediate_dominator": 6 },
+    { "block": 0, "immediate_dominator": 1 },
+    { "block": 1, "immediate_dominator": 1 }
+  ],
+  "frontiers": [],
+  "nodes": [
+    { "id": "block_0" },
+    { "id": "block_1" }
+  ]
+}
+```
+
+**What this tells you:**
+
+- **`idom`** -- the immediate dominator for each basic block. Block `1` dominates many successors (entry-side control).
+- **`frontiers`** -- dominance frontiers (empty unless you request them with `--frontiers`).
+- The dominator tree is rooted at the entry block; each block's immediate dominator is the closest block that must execute before it on every path.
 
 ### 4. Dominance Frontiers
 

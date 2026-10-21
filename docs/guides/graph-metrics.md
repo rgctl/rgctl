@@ -41,27 +41,31 @@ rgctl -r example/coolstore -f json metrics --pagerank
   "pagerank": {
     "converged": true,
     "iterations": 9,
-    "max_delta": 6.728148834490855e-07,
+    "max_delta": 3.6429738108079146e-07,
     "top": [
       {
-        "node": "decbba50-f8fa-50b9-905c-e75d2a69cab5",
-        "pagerank": 0.029448900943039962
+        "file_path": "<external>",
+        "kind": "interface",
+        "name": "Serializable",
+        "node": "f3549ab7-e2f9-5f39-bd10-0a704c9254b0",
+        "pagerank": 0.03165890535246511,
+        "qualified_name": "java.io.Serializable"
       },
       {
-        "node": "1f33cd28-e5f9-5c78-a39d-86d878b734fb",
-        "pagerank": 0.007301250441888811
+        "file_path": "src/main/java/com/redhat/coolstore/model/CatalogItemEntity.java",
+        "kind": "class",
+        "name": "CatalogItemEntity",
+        "node": "9da23d53-5e6e-5267-99d2-a6069d8e2e8f",
+        "pagerank": 0.006735939393751206,
+        "qualified_name": "com.redhat.coolstore.model.CatalogItemEntity"
       },
       {
-        "node": "8b0e2652-bbb9-575e-bf21-e35a79d53d13",
-        "pagerank": 0.006971584463128407
-      },
-      {
-        "node": "d942df07-720c-5947-9d4d-02fc9636a855",
-        "pagerank": 0.006581553480124427
-      },
-      {
-        "node": "7cdc70e2-72a4-59b7-bdd1-95b16f6ec016",
-        "pagerank": 0.006539350370383329
+        "file_path": "src/main/java/com/redhat/coolstore/model/Order.java",
+        "kind": "class",
+        "name": "Order",
+        "node": "3f133891-b72c-5d9d-bd7a-daa4e444cd7a",
+        "pagerank": 0.0067091538522855675,
+        "qualified_name": "com.redhat.coolstore.model.Order"
       }
     ]
   },
@@ -72,8 +76,8 @@ rgctl -r example/coolstore -f json metrics --pagerank
 **What this tells you:**
 
 - **`converged: true`** -- PageRank converged in 9 iterations on this Java-only graph.
-- **`top`** -- the highest-ranked functions by PageRank score. Top entries are node UUIDs (resolve with `find` / callers); ranks are stable after convergence.
-- **`node`** -- the UUID of each function. Resolve with `rgctl find` by id or follow-up `blast-radius` JSON.
+- **`top`** -- highest-ranked nodes (often types / external stubs such as `Serializable`, then domain classes like `CatalogItemEntity` / `Order`).
+- Each entry includes `node` (UUID), `name`, `kind`, `qualified_name`, and `file_path` when available.
 
 To increase iterations for better convergence:
 
@@ -95,12 +99,20 @@ rgctl -r example/coolstore -f json metrics --betweenness
 {
   "betweenness": [
     {
-      "node": "778cc6fc-8ae3-40c8-9137-82e040e5b5d1",
-      "score": 0.000021622996659875876
+      "file_path": "src/main/java/com/redhat/coolstore/rest/CartEndpoint.java",
+      "kind": "function",
+      "name": "add",
+      "node": "d0a70ef7-c170-5a07-90a2-c061373666c2",
+      "qualified_name": "com.redhat.coolstore.rest.CartEndpoint.add",
+      "score": 0.0009528547582929628
     },
     {
-      "node": "7a576df2-e51b-405e-b5a1-6e14bca1c4c1",
-      "score": 0.000021567926001973067
+      "file_path": "src/main/java/com/redhat/coolstore/service/ShoppingCartService.java",
+      "kind": "function",
+      "name": "priceShoppingCart",
+      "node": "28de0bfd-1b19-5c3c-bcbf-26947d067654",
+      "qualified_name": "com.redhat.coolstore.service.ShoppingCartService.priceShoppingCart",
+      "score": 0.00073808863588171
     }
   ],
   "schema_version": 1
@@ -109,7 +121,7 @@ rgctl -r example/coolstore -f json metrics --betweenness
 
 **What this tells you:**
 
-- Functions with the highest betweenness scores are the most critical bridges in the call graph.
+- Functions with the highest betweenness scores are the most critical bridges in the call graph (here: `CartEndpoint.add`, then `priceShoppingCart`).
 - These are the functions where a bug or breaking change would propagate most widely across otherwise separate modules.
 - Low betweenness means a function is "internal" to a single cluster.
 
@@ -126,9 +138,9 @@ rgctl -r example/coolstore -f json metrics --communities
 ```json
 {
   "communities": {
-    "assignments": 14763,
-    "count": 11303,
-    "modularity": 0.3076728222682732
+    "assignments": 608,
+    "count": 473,
+    "modularity": 0.3893411219138413
   },
   "schema_version": 1
 }
@@ -136,9 +148,9 @@ rgctl -r example/coolstore -f json metrics --communities
 
 **What this tells you:**
 
-- **`count: 11303`** -- the algorithm identified 11,303 distinct communities.
-- **`assignments: 14763`** -- all 14,763 nodes in the graph were assigned to a community.
-- **`modularity: 0.3077`** -- a modularity score of ~0.31. Values above 0.3 indicate meaningful community structure; values above 0.5 indicate strong modularity. The CoolStore application has moderate modularity, consistent with its nature as a single-deployment application.
+- **`count: 473`** -- the algorithm identified ~473 distinct communities on the Java-only CoolStore graph.
+- **`assignments: 608`** -- all 608 nodes in the graph were assigned to a community.
+- **`modularity: ~0.39`** -- values above 0.3 indicate meaningful community structure; values above 0.5 indicate strong modularity. The CoolStore application has moderate modularity, consistent with its nature as a single-deployment application.
 
 ### 4. Combining Metrics
 

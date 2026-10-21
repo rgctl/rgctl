@@ -78,7 +78,8 @@ if (doc.schema_version !== 2) {
 |---------|------------------------:|------------------|
 | `discover` | **2** | v2 introduced structured `metrics` block |
 | `blast-radius` | **2** | v2 added `target.language`, `target.canonical_fqn`, `metrics.caller_depth_limit` |
-| `find` / `callers` / `callees` / `relations` / `inventory` / `status` | **2** (find/neighbors/relations/inventory); **2** (`status`) | `status` v2 adds `index_current` / dirty counts |
+| `find` / `callers` / `callees` / `relations` / `inventory` | **2** | Structured-query envelope |
+| `status` | **3** | v3 adds `capabilities` (structural / cfg_cpg / semantic / agent_skills unlock hints) |
 | `update` | **1** | Incremental structural patch |
 | `metrics` | **1** | — |
 | `check` | **1** | — |
@@ -90,7 +91,7 @@ if (doc.schema_version !== 2) {
 | `communities` | **1** | list / label |
 | `clones` | **1 / 2** | exact Type-1 / bloom (v1); fragment hammocks (v2) + optional seed |
 | `cpg` (status / mutations / flows / …) | **1** | per-subcommand shapes |
-| `install` | **2** | agent pack write report (`list-agents` JSON is separate; see §18) |
+| `install` | **3** | agent pack write report (`list-agents` JSON is separate; see §18) |
 
 **Omitted vs null:** optional fields are **absent** when unset (not `null`), unless noted otherwise. Empty collections are usually `[]`, not omitted.
 
@@ -280,7 +281,7 @@ rgctl -f json status
 
 ```typescript
 interface SessionStatus {
-  schema_version: 2;
+  schema_version: 3;
   command: "status";
   status: "ok" | "missing";
   repo: string;
@@ -302,6 +303,13 @@ interface SessionStatus {
   watcher_pid?: number;
   /** Pending lines in `.rgctl/update_queue.jsonl` */
   update_queue_pending?: number;
+  /** Unlock hints for structural graph / CFG-CPG / semantic / agent skills */
+  capabilities?: {
+    structural_graph?: { ready: boolean; path?: string; unlock_command?: string };
+    cfg_cpg?: { ready: boolean; path?: string; unlock_command?: string; cpg_overlay?: boolean; ast_skeleton?: boolean };
+    semantic_index?: { ready: boolean; unlock_command?: string };
+    agent_skills?: { installed_hosts: string[]; unlock_command?: string };
+  };
   message?: string;
 }
 ```
@@ -1422,8 +1430,8 @@ type CpgMutationsResult = {
 | Subcommand | Primary keys |
 |------------|--------------|
 | `cpg function <Symbol>` | `id`, `name`, `has_l_proc`, … |
-| `cpg calls <Symbol>` | `edges[]` (`direction`, `name`, `id`) |
-| `cpg flows …` | `steps[]` (data dependence walk) |
+| `cpg calls <Symbol>` | `edges[]` (`direction`, `name`, `id`), `function_id`, `function_name` (no `edges_sample` / `returned`) |
+| `cpg flows …` | `steps[]`, `lines[]`, `direction`, `variable`, `schema_version` |
 | `cpg export` | writes a **file** (`--format` / `--output`); not stdout JSON |
 
 ```bash
@@ -1768,7 +1776,12 @@ rgctl -f json discover PATH [--languages LANGS] [--exclude PATTERNS] [--with-sec
 
 **Source:** `src/cli/discover_output.rs`, `src/cli/discover_impl.rs`
 
-With `-f json`, discover **suppresses** progress bars and human status lines on stderr (logging quiet unless `-v`). **Stdout** receives a single telemetry object after ingestion completes. Artifacts under `.rgctl/` are still written.
+With `-f json`, discover **suppresses** progress bars and human status lines on stderr (logging quiet unless `-v`). Artifacts under `.rgctl/` are still written.
+
+**Stdout depends on flags:**
+
+- Plain `rgctl -f json discover …` (no `--export-migration-hints`) emits a **DiscoverResponse** telemetry object (`command: "discover"`, `metrics`, `schema_version: 2`).
+- `rgctl -f json discover … --export-migration-hints` writes `.rgctl/migration_plan.json` **and** emits the **migration plan JSON** on stdout (`preset`, `order_mode`, `steps[]`, `schema_version: 2`) instead of the DiscoverResponse telemetry object.
 
 ```json
 {
@@ -1782,6 +1795,19 @@ With `-f json`, discover **suppresses** progress bars and human status lines on 
     "edges_generated": 562067,
     "duration_ms": 18200
   }
+}
+```
+
+Migration-hints stdout shape (when `--export-migration-hints` is set):
+
+```json
+{
+  "schema_version": 2,
+  "preset": "hybrid_default",
+  "order_mode": "scheduled",
+  "steps": [
+    { "step": 1, "label": "com.example.pkg", "community_id": 0, "priority_score": 0.4 }
+  ]
 }
 ```
 

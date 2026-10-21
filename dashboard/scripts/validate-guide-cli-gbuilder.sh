@@ -3,7 +3,7 @@
 set -uo pipefail
 
 REPO="${RGCTL_DASHBOARD_GOLDEN_REPO:-/Users/sshaaf/git/java/gbuilder}"
-RB="${RGCTL_BIN:-/Users/sshaaf/git/rust/rgctl/target/release/rgctl}"
+RB="${RGCTL_BIN:-/Users/sshaaf/git/rust/rbuilder/target/release/rgctl}"
 TMP="${TMPDIR:-/tmp}/rgctl-guide-gbuilder-$$"
 mkdir -p "$TMP"
 
@@ -49,34 +49,36 @@ if [[ ! -d "$REPO/.rgctl" ]]; then
 fi
 
 echo "[graph]"
-run "gql all_functions macro" \
-  "$RB" -r "$REPO" gql --macro-name all_functions unused
-run "gql Service pattern (gbuilder: *parse*)" \
-  "$RB" -r "$REPO" gql "MATCH (n:Function) WHERE n.name LIKE '*parse*' RETURN n LIMIT 20"
-run "gql call chain 1..3" \
-  "$RB" -r "$REPO" gql "MATCH (a:Function)-[:CALLS*1..3]->(b:Function) RETURN a,b LIMIT 50"
-run "gql call_chain macro" \
-  "$RB" -r "$REPO" gql --macro-name call_chain unused
+run "find all functions (type filter)" \
+  "$RB" -r "$REPO" find --type function --limit 20
+run "find Service-like names (gbuilder: *parse*)" \
+  "$RB" -r "$REPO" find '*parse*' --type function --limit 20
+run "callers parseFile" \
+  "$RB" -r "$REPO" callers "$SYMBOL" --class "$CLASS"
+run "callees parseFile" \
+  "$RB" -r "$REPO" callees "$SYMBOL" --class "$CLASS"
+run "relations CALLS depth 2" \
+  "$RB" -r "$REPO" relations --edge calls --depth 2 "$SYMBOL" --class "$CLASS"
 run "export graphml subgraph (filter query)" \
   "$RB" -r "$REPO" export --export-format graphml --export-output "$EXPORT_OUT" \
   --query "name:parseFile"
 run "export mermaid all" \
   "$RB" -r "$REPO" export --export-format mermaid --export-output "$MERMAID_OUT" --query all
-skip "serve + gql" "daemon (manual)"
+skip "serve + query" "daemon (manual)"
 
 echo "[functions]"
-run "gql all_functions" \
-  "$RB" -r "$REPO" gql --macro-name all_functions unused
-run "gql json row count" \
-  bash -c "$RB -r \"$REPO\" -f json gql \"MATCH (n:Function) RETURN n\" | jq '.rows | length' >/dev/null"
+run "inventory by type" \
+  "$RB" -r "$REPO" inventory --by type
+run "find json function count" \
+  bash -c "$RB -r \"$REPO\" -f json find --type function --count-only | jq '.total' >/dev/null"
 run "metrics pagerank" \
   "$RB" -r "$REPO" metrics --pagerank
 run "metrics betweenness" \
   "$RB" -r "$REPO" metrics --betweenness
-run "gql Class limit 30" \
-  "$RB" -r "$REPO" gql "MATCH (n:Class) RETURN n LIMIT 30"
-run "gql file_path filter" \
-  "$RB" -r "$REPO" gql "MATCH (n:Function) WHERE n.file_path LIKE '*gbuilder*' RETURN n LIMIT 10"
+run "find Class limit 30" \
+  "$RB" -r "$REPO" find --type class --limit 30
+run "find file_path filter" \
+  "$RB" -r "$REPO" find --type function --file '*gbuilder*' --limit 10
 
 echo "[cfg]"
 run "inspect parseFile cfg" \
@@ -114,29 +116,31 @@ skip "check policy" "no policy.json in repo"
 echo "[taint]"
 run "slice --taint" \
   "$RB" -r "$REPO" slice "$SLICE_FILE" --line 80 --variable source --function "$SYMBOL" --taint
-run "gql Endpoint pattern (gbuilder: *main*)" \
-  "$RB" -r "$REPO" gql "MATCH (n:Function) WHERE n.name LIKE '*main*' RETURN n LIMIT 10"
+run "find Endpoint-like (*main*)" \
+  "$RB" -r "$REPO" find '*main*' --type function --limit 10
 
 echo "[migration]"
-if [[ -f "$REPO/.rgctl/dashboard/migration_plan.json" ]]; then
+if [[ -f "$REPO/.rgctl/migration_plan.json" ]]; then
   run "migration_plan.json readable" \
-    jq '.packages[:1]' "$REPO/.rgctl/dashboard/migration_plan.json"
+    jq '.steps[:1]' "$REPO/.rgctl/migration_plan.json"
+elif [[ -f "$REPO/.rgctl/dashboard/migration_plan.json" ]]; then
+  run "migration_plan.json readable (dashboard)" \
+    jq '.' "$REPO/.rgctl/dashboard/migration_plan.json" >/dev/null
 else
-  skip "migration_plan.json" "run discover --all --export-migration-plan first"
+  skip "migration_plan.json" "run discover --export-migration-hints first"
 fi
-skip "discover --export-migration-plan" "would re-index (slow)"
+skip "discover --export-migration-hints" "would re-index (slow)"
 
-echo "[guide / gql]"
-run "gql direct_calls macro" \
-  "$RB" -r "$REPO" gql --macro-name direct_calls unused
-run "gql count functions (json + jq)" \
-  bash -c "$RB -r \"$REPO\" -f json gql \"MATCH (n:Function) RETURN n\" | jq '.count' >/dev/null"
-run "gql direct calls limit 25" \
-  "$RB" -r "$REPO" gql "MATCH (a:Function)-[:CALLS]->(b:Function) RETURN a,b LIMIT 25"
-run "gql explain" \
+echo "[guide / structured query]"
+run "relations direct CALLS" \
+  "$RB" -r "$REPO" relations --edge calls "$SYMBOL" --class "$CLASS" --limit 25
+run "inventory count functions (json + jq)" \
+  bash -c "$RB -r \"$REPO\" -f json inventory --by type | jq '[.counts[]|select(.key==\"function\")][0].count' >/dev/null"
+run "find json first hit" \
+  bash -c "$RB -r \"$REPO\" -f json find --type function --limit 1 | jq '.results[0] // .hits[0] // .' >/dev/null"
+# Experimental GQL still available; prefer structured verbs above.
+run "gql explain (experimental)" \
   "$RB" -r "$REPO" gql --explain "MATCH (n:Function) WHERE n.name = 'parseFile' RETURN n"
-run "gql json first row" \
-  bash -c "$RB -r \"$REPO\" -f json gql \"MATCH (n:Function) RETURN n\" | jq '.rows[0]' >/dev/null"
 
 echo ""
 echo "=== Summary: PASS=$PASS FAIL=$FAIL SKIP=$SKIP ==="

@@ -33,30 +33,34 @@ rgctl -r example/coolstore discover -l java \
   --export-migration-hints
 ```
 
-**Output:**
+**Output (text mode):**
 
 ```
 [>] rgctl discover
+[✓] Loaded 26 files from snapshot -> 608 nodes, 1709 edges
 
 ✓ Control flow analysis:
-  Field writes indexed: 43
+  Field writes indexed: 41
   CFG/PDG/Dominance: 150 functions analyzed
   Skipped: 2 functions (unsupported_language=0, missing_source=0, analysis_error=2)
-[✓] rgctl discover finished in 329ms
+[✓] rgctl discover finished in ~300ms
 ```
+
+With `-f json`, **stdout is the migration plan itself** (`schema_version` 2, `preset`, `steps`, …) — not DiscoverResponse telemetry (`command` / `metrics`). The same document is also written to `.rgctl/migration_plan.json`.
 
 **What happened:**
 
 - `--with-harmonic` computed harmonic centrality for every node, measuring how "reachable" each module is from the rest of the graph. This feeds into the migration priority score.
-- `--export-migration-hints` generated `.rgctl/migration_plan.json` with the full roadmap.
+- `--export-migration-hints` generated `.rgctl/migration_plan.json` with the full roadmap (and, with `-f json`, emitted that plan on stdout).
 - `--with-cfg` provided deep analysis data for more accurate blast-radius scoring.
 
 ### 2. Read the Migration Plan
 
-The migration plan is a JSON file with ordered extraction steps:
+Read the on-disk plan (same JSON as `-f json` stdout when `--export-migration-hints` is set):
 
 ```bash
 cat example/coolstore/.rgctl/migration_plan.json
+# or re-run discover with -f json --export-migration-hints
 ```
 
 **Output (truncated):**
@@ -65,6 +69,7 @@ cat example/coolstore/.rgctl/migration_plan.json
 {
   "schema_version": 2,
   "preset": "hybrid_default",
+  "preset_label": "Hybrid Default",
   "order_mode": "scheduled",
   "weights": {
     "alpha": 0.33,
@@ -79,7 +84,7 @@ cat example/coolstore/.rgctl/migration_plan.json
       "priority_score": -0.17,
       "schedule_step": 1,
       "priority_rank": 5,
-      "avg_pagerank": 0.0013936469331383705,
+      "avg_pagerank": 0.001435598242096603,
       "avg_harmonic": 0.0,
       "max_blast": 0.0
     },
@@ -87,44 +92,44 @@ cat example/coolstore/.rgctl/migration_plan.json
       "step": 2,
       "community_id": 3,
       "label": "com.redhat.coolstore.utils",
-      "priority_score": 0.41742493731006725,
+      "priority_score": 0.4095343470271542,
       "schedule_step": 2,
       "priority_rank": 1,
-      "avg_pagerank": 0.001993491896428168,
-      "avg_harmonic": 0.017803672002628446,
+      "avg_pagerank": 0.0021056537225376815,
+      "avg_harmonic": 0.013742449227720499,
       "max_blast": 0.0
     },
     {
       "step": 3,
       "community_id": 2,
       "label": "com.redhat.coolstore.rest",
-      "priority_score": 0.3287355246224791,
+      "priority_score": 0.273298724649785,
       "schedule_step": 3,
       "priority_rank": 2,
-      "avg_pagerank": 0.0017003595227530848,
-      "avg_harmonic": 0.022823009387745213,
+      "avg_pagerank": 0.0016656480341528852,
+      "avg_harmonic": 0.018173883872805163,
       "max_blast": 0.0
     },
     {
       "step": 4,
       "community_id": 1,
       "label": "com.redhat.coolstore.service",
-      "priority_score": 0.25033399963107006,
+      "priority_score": 0.2551460368258126,
       "schedule_step": 4,
       "priority_rank": 3,
-      "avg_pagerank": 0.001865008517223246,
-      "avg_harmonic": 0.011136115525219151,
+      "avg_pagerank": 0.001971891468308647,
+      "avg_harmonic": 0.008867945703540873,
       "max_blast": 0.0
     },
     {
       "step": 5,
       "community_id": 0,
       "label": "com.redhat.coolstore.model",
-      "priority_score": -0.0499976701794404,
+      "priority_score": -0.06700304475953148,
       "schedule_step": 5,
       "priority_rank": 4,
-      "avg_pagerank": 0.0015796984992345277,
-      "avg_harmonic": 0.0012205137184715456,
+      "avg_pagerank": 0.0016304640094605611,
+      "avg_harmonic": 0.00038695176607285886,
       "max_blast": 0.0
     }
   ]
@@ -211,8 +216,8 @@ After reviewing the plan, use other rgctl commands to dig deeper:
 
 ```bash
 # See what functions are in the community being extracted
-rgctl -r example/coolstore -f json communities list | jq '.communities[] | select(.id==13)'
-rgctl -r example/coolstore -f json find --type function --scope com.redhat.coolstore --limit 20
+rgctl -r example/coolstore -f json communities list | jq '.communities[:5]'
+rgctl -r example/coolstore -f json find --type function --scope com.redhat.coolstore.persistence --limit 20
 
 # Check blast radius of a specific function before extracting
 rgctl -r example/coolstore blast-radius getShoppingCart --depth 3

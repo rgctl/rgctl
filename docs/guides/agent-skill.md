@@ -173,22 +173,25 @@ rgctl -r example/coolstore -f json blast-radius priceShoppingCart
 ```json
 {
   "metrics": {
-    "score": 40.35,
-    "direct_callers_count": 5,
-    "impact_zone_size": 7
+    "score": 40.6,
+    "direct_callers_count": 6,
+    "impact_zone_size": 12
   },
+  "schema_version": 2,
   "target": {
     "canonical_fqn": "ShoppingCartService::priceShoppingCart",
     "file_path": "src/main/java/com/redhat/coolstore/service/ShoppingCartService.java",
+    "id": "28de0bfd-1b19-5c3c-bcbf-26947d067654",
     "signature": "public void priceShoppingCart(ShoppingCart sc) {"
   },
   "topology": {
     "direct_callers": [
-      {"fqn": "com.redhat.coolstore.service.ShoppingCartService.checkOutShoppingCart"},
       {"fqn": "com.redhat.coolstore.rest.CartEndpoint.add"},
+      {"fqn": "com.redhat.coolstore.model.ShoppingCart.addShoppingCartItem"},
       {"fqn": "com.redhat.coolstore.rest.CartEndpoint.dedupeCartItems"},
+      {"fqn": "com.redhat.coolstore.rest.CartEndpoint.set"},
       {"fqn": "com.redhat.coolstore.rest.CartEndpoint.delete"},
-      {"fqn": "com.redhat.coolstore.rest.CartEndpoint.set"}
+      {"fqn": "com.redhat.coolstore.service.ShoppingCartService.checkOutShoppingCart"}
     ]
   }
 }
@@ -210,19 +213,22 @@ rgctl -r example/coolstore -f json cpg calls priceShoppingCart
 
 ```json
 {
+  "function_id": "28de0bfd-1b19-5c3c-bcbf-26947d067654",
+  "function_name": "priceShoppingCart",
+  "schema_version": 1,
   "edges": [
-    {"direction": "out", "name": "initShoppingCartForPricing"},
-    {"direction": "out", "name": "getShoppingCartItemList"},
-    {"direction": "out", "name": "setCartItemPromoSavings"},
-    {"direction": "out", "name": "getCartItemTotal"},
-    {"direction": "out", "name": "setCartItemTotal"},
-    {"direction": "out", "name": "setShippingTotal"},
-    {"direction": "out", "name": "setCartTotal"}
+    {"direction": "out", "id": "f3b1f695-a18e-54bf-be9f-24580254b25a", "name": "initShoppingCartForPricing"},
+    {"direction": "out", "id": "7a403968-ae88-50cb-a12c-eb795bfad085", "name": "getShoppingCartItemList"},
+    {"direction": "out", "id": "e007180a-4d55-5ddd-937d-69005d0f84c5", "name": "setCartItemPromoSavings"},
+    {"direction": "out", "id": "6f3d4d58-027a-5937-bb45-43f79c11da93", "name": "setCartItemTotal"},
+    {"direction": "out", "id": "df5f0e9c-fdae-51b2-a73c-2cbcae8ba265", "name": "setShippingTotal"},
+    {"direction": "out", "id": "294f7da2-3bc2-55ab-9487-f86ae0568177", "name": "setCartTotal"},
+    {"direction": "in", "id": "d0a70ef7-c170-5a07-90a2-c061373666c2", "name": "add"}
   ]
 }
 ```
 
-The agent reports: *"priceShoppingCart calls 7 functions: it initializes pricing, iterates cart items to compute totals and promo savings, calculates shipping, and sets the final cart total. A refactoring that splits item pricing from shipping pricing should preserve these call relationships."*
+Keys are `edges`, `function_id`, `function_name`, `schema_version` (not `edges_sample` / `returned`). Live CoolStore returns **17** edges (outgoing callees plus inbound callers). The agent reports: *"priceShoppingCart participates in a dense call neighborhood — initializing pricing, iterating cart items for totals/promo savings, shipping lookups, and final cart total — with inbound REST/service callers. A refactoring that splits item pricing from shipping pricing should preserve these call relationships."*
 
 ### Verifying Field Mutations
 
@@ -233,22 +239,20 @@ rgctl -r example/coolstore -f json cpg mutations \
   --type ShoppingCart --exclude-ctors
 ```
 
-**Output:**
+**Output** (envelope keys; CoolStore currently returns an empty `mutations` array even though `cpg status` reports `field_write_count: 41` — type matching for Java setters is incomplete on this corpus):
 
 ```json
 {
-  "mutations": [
-    {"function": "setShoppingCartItemList", "member": "shoppingCartItemList", "line": 35},
-    {"function": "setCartItemTotal", "member": "cartItemTotal", "line": 71},
-    {"function": "setShippingTotal", "member": "shippingTotal", "line": 79},
-    {"function": "setCartTotal", "member": "cartTotal", "line": 87},
-    {"function": "setCartItemPromoSavings", "member": "cartItemPromoSavings", "line": 95},
-    {"function": "setShippingPromoSavings", "member": "shippingPromoSavings", "line": 103}
-  ]
+  "exclude_ctors": true,
+  "include_unresolved": false,
+  "member": null,
+  "mutations": [],
+  "schema_version": 1,
+  "type_name": "ShoppingCart"
 }
 ```
 
-The agent reports: *"ShoppingCart has 6 mutable fields. The priceShoppingCart method writes to cartItemTotal, shippingTotal, cartTotal, cartItemPromoSavings, and shippingPromoSavings through their setters. If you split the method, ensure both halves still set all required fields."*
+The agent should still cross-check field writes via `cpg status` / PDG / source when `mutations` is empty, and prefer `inspect` / `cpg flows` for pricing-field updates on `sc`.
 
 ---
 
@@ -272,8 +276,11 @@ rgctl -r example/coolstore discover -l java \
 
 Then reads the plan:
 
+With `-f json`, discover stdout **is** the migration plan (`schema_version` 2, `steps`); the same JSON is written to `.rgctl/migration_plan.json`.
+
 ```json
 {
+  "schema_version": 2,
   "preset": "hybrid_default",
   "order_mode": "scheduled",
   "steps": [
@@ -286,13 +293,13 @@ Then reads the plan:
     {
       "step": 2,
       "label": "com.redhat.coolstore.utils",
-      "priority_score": 0.417,
+      "priority_score": 0.4095343470271542,
       "max_blast": 0.0
     },
     {
       "step": 3,
       "label": "com.redhat.coolstore.rest",
-      "priority_score": 0.329,
+      "priority_score": 0.273298724649785,
       "max_blast": 0.0
     }
   ]
@@ -379,13 +386,16 @@ rgctl -r example/coolstore -f json cpg pdg priceShoppingCart
 
 ```json
 {
-  "control_deps": 18,
+  "schema_version": 1,
+  "symbol": "priceShoppingCart",
+  "layer": "pdg",
+  "control_deps": 19,
   "data_deps": 5,
   "edges": [
+    {"kind": "data", "source": "node_4", "target": "node_5", "variable": "sc"},
     {"kind": "data", "source": "node_7", "target": "node_8", "variable": "sci"},
     {"kind": "data", "source": "node_7", "target": "node_8", "variable": "sc"},
-    {"kind": "data", "source": "node_4", "target": "node_6", "variable": "sc"},
-    {"kind": "control", "source": "node_1", "target": "node_5"}
+    {"kind": "data", "source": "node_7", "target": "node_8", "variable": "getQuantity"}
   ]
 }
 ```
@@ -395,13 +405,13 @@ rgctl -r example/coolstore -f json cpg pdg priceShoppingCart
 The agent now has four language-independent facts about `priceShoppingCart`:
 
 1. **Data flow path**: iteration over cart items, accumulation of totals, shipping calculation, final total.
-2. **Call contract**: the 7 functions it must call in the same order.
-3. **Mutation contract**: the 5 ShoppingCart fields it must write.
-4. **Dependency graph**: 18 control edges and 5 data edges encoding the computation structure.
+2. **Call contract**: the outgoing callees from `cpg calls` (plus inbound callers in the same envelope).
+3. **Mutation contract**: field writes on `ShoppingCart` (via PDG / flows when `cpg mutations` is empty).
+4. **Dependency graph**: 19 control edges and 5 data edges encoding the computation structure.
 
 When writing the Go implementation, the agent verifies each fact against the new code. If a data-flow step is missing, a call is omitted, or a field mutation is skipped, the agent flags it.
 
-The agent can report: *"The Java implementation of priceShoppingCart has 4 data-flow steps, calls 7 functions, and mutates 5 fields on ShoppingCart. Your Go implementation should replicate the same iteration pattern (for-each over cart items), accumulate the same totals, and call equivalent functions for shipping calculation and promo application."*
+The agent can report: *"The Java implementation of priceShoppingCart has 4 data-flow steps, a dense call neighborhood (17 cpg call edges on CoolStore), and PDG deps (19 control / 5 data). Your Go implementation should replicate the same iteration pattern (for-each over cart items), accumulate the same totals, and call equivalent functions for shipping calculation and promo application."*
 
 ---
 
@@ -423,28 +433,32 @@ rgctl -r example/coolstore -f json inspect priceShoppingCart cfg
 
 ```json
 {
+  "schema_version": 1,
+  "symbol": "priceShoppingCart",
+  "layer": "cfg",
+  "pruned": false,
+  "nodes": [
+    {
+      "id": "block_1",
+      "block_index": 1,
+      "start_line": 56,
+      "end_line": 56,
+      "statements": [{"kind": "Branch", "line": 56, "text": "sc != null"}]
+    }
+  ],
   "edges": [
-    {"kind": "next", "source": "block_5", "target": "block_7"},
-    {"kind": "iftrue", "source": "block_7", "target": "block_8"},
-    {"kind": "iffalse", "source": "block_7", "target": "block_1"},
-    {"kind": "iftrue", "source": "block_9", "target": "block_10"},
-    {"kind": "iffalse", "source": "block_9", "target": "block_3"},
-    {"kind": "iftrue", "source": "block_12", "target": "block_13"},
-    {"kind": "iffalse", "source": "block_12", "target": "block_14"},
-    {"kind": "jump", "source": "block_13", "target": "block_12"},
-    {"kind": "iftrue", "source": "block_15", "target": "block_16"},
-    {"kind": "iffalse", "source": "block_15", "target": "block_0"}
+    {"kind": "iftrue", "source": "block_1", "target": "block_2"},
+    {"kind": "iffalse", "source": "block_1", "target": "block_0"},
+    {"kind": "next", "source": "block_2", "target": "block_3"},
+    {"kind": "iftrue", "source": "block_3", "target": "block_4"},
+    {"kind": "iffalse", "source": "block_3", "target": "block_11"}
   ]
 }
 ```
 
-The agent identifies all branch points:
+Keys are `edges`, `layer`, `nodes`, `pruned`, `schema_version`, `symbol` (12 nodes / 16 edges on CoolStore — not `node_count` / `edge_count` / `nodes_sample`). The agent identifies branch points from `nodes[].statements`:
 
-> priceShoppingCart has 4 branch conditions:
-> 1. Null check: `sc != null` (block_7) -- test with null and non-null input
-> 2. List check: `sc.getShoppingCartItemList() != null && size > 0` (block_9/10) -- test with empty and populated cart
-> 3. Loop: `for-each sci : sc.getShoppingCartItemList()` (block_12/13) -- test with 0, 1, and many items
-> 4. Price threshold: `sc.getCartItemTotal() >= 25` (block_15) -- test below and above the threshold
+> priceShoppingCart CFG starts with a null check (`sc != null` on block_1) and continues through list/loop/shipping branches — test with null, empty, single-item, multi-item, and shipping-threshold carts.
 
 **Step 2: Examine data dependencies.**
 
@@ -463,7 +477,7 @@ rgctl -r example/coolstore -f json cpg mutations \
   --type ShoppingCart --exclude-ctors
 ```
 
-The agent reports: *"Your tests should assert on 5 ShoppingCart fields after calling priceShoppingCart: cartItemTotal, shippingTotal, cartTotal, cartItemPromoSavings, and shippingPromoSavings. Here are the test cases derived from the CFG:"*
+The agent reports: *"Your tests should assert on ShoppingCart pricing fields after calling priceShoppingCart (cartItemTotal, shippingTotal, cartTotal, promo savings) using PDG/flows when `cpg mutations` returns no rows. Here are the test cases derived from the CFG:"*
 
 The agent can then generate concrete test cases:
 

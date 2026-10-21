@@ -2,7 +2,7 @@
 
 ## Introduction
 
-After `discover`, use **structured query verbs** to explore the indexed knowledge graph: `find`, `callers`, `callees`, `relations`, `inventory`, and `status`. Each verb has predictable flags and a stable JSON envelope (`schema_version` **2**) when you pass `-f json`.
+After `discover`, use **structured query verbs** to explore the indexed knowledge graph: `find`, `callers`, `callees`, `relations`, `inventory`, and `status`. Query verbs use a stable JSON envelope (`schema_version` **2**) when you pass `-f json`; `status` uses `schema_version` **3**.
 
 These commands are the **agent-facing** way to answer structural questions — symbol lookup, call neighborhoods, typed edges, and inventories — without loading whole files into context. Prefer them over ad-hoc graph languages in scripts and CI.
 
@@ -29,16 +29,17 @@ rgctl -r example/coolstore discover -l java
 ### 1. Session status
 
 ```bash
-rgctl -r example/coolstore -f json status | jq '{status, nodes, edges}'
+rgctl -r example/coolstore -f json status | jq '{status, nodes, edges, schema_version}'
 ```
 
-**Example:**
+**Example** (after `discover -l java --with-cfg --with-harmonic`):
 
 ```json
 {
   "status": "ok",
-  "nodes": 591,
-  "edges": 1773
+  "nodes": 608,
+  "edges": 1709,
+  "schema_version": 3
 }
 ```
 
@@ -72,7 +73,7 @@ rgctl -r example/coolstore -f json find priceShoppingCart --exact | jq '.entitie
 ```json
 {
   "file": "src/main/java/com/redhat/coolstore/service/ShoppingCartService.java",
-  "id": "cac00c48-70f7-56ca-bdbc-667d7f51e916",
+  "id": "28de0bfd-1b19-5c3c-bcbf-26947d067654",
   "line": 54,
   "name": "priceShoppingCart",
   "qualified_name": "com.redhat.coolstore.service.ShoppingCartService.priceShoppingCart",
@@ -101,29 +102,33 @@ rgctl -r example/coolstore -f json callers priceShoppingCart | jq '.callers[:5]'
 ```json
 [
   {
-    "name": "add",
-    "qualified_name": "com.redhat.coolstore.rest.CartEndpoint.add",
-    "line": 47
-  },
-  {
-    "name": "set",
-    "qualified_name": "com.redhat.coolstore.rest.CartEndpoint.set",
-    "line": 74
+    "name": "checkOutShoppingCart",
+    "qualified_name": "com.redhat.coolstore.service.ShoppingCartService.checkOutShoppingCart",
+    "line": 43,
+    "type": "function"
   },
   {
     "name": "delete",
     "qualified_name": "com.redhat.coolstore.rest.CartEndpoint.delete",
-    "line": 98
+    "line": 98,
+    "type": "function"
   },
   {
-    "name": "checkOutShoppingCart",
-    "qualified_name": "com.redhat.coolstore.service.ShoppingCartService.checkOutShoppingCart",
-    "line": 43
+    "name": "set",
+    "qualified_name": "com.redhat.coolstore.rest.CartEndpoint.set",
+    "line": 74,
+    "type": "function"
+  },
+  {
+    "name": "add",
+    "qualified_name": "com.redhat.coolstore.rest.CartEndpoint.add",
+    "line": 47,
+    "type": "function"
   }
 ]
 ```
 
-What does it call?
+Envelope keys: `callers`, `total`, `schema_version` (2). What does it call?
 
 ```bash
 rgctl -r example/coolstore callees priceShoppingCart --depth 2
@@ -173,34 +178,34 @@ rgctl -r example/coolstore -f json inventory --by community | jq '.counts[:5]'
 ```json
 [
   {
-    "id": 187,
-    "label": "ArrayList",
-    "member_count": 16
-  },
-  {
-    "id": 591,
-    "label": "Infrastructure / Common Library",
-    "member_count": 13
-  },
-  {
-    "id": 499,
+    "id": 177,
     "label": "Order",
-    "member_count": 12
+    "member_count": 25
   },
   {
-    "id": 174,
-    "label": "coolstore.service::getProductId",
-    "member_count": 10
-  },
-  {
-    "id": 301,
+    "id": 397,
     "label": "coolstore.service::CatalogItemEntity",
-    "member_count": 9
+    "member_count": 20
+  },
+  {
+    "id": 143,
+    "label": "ShoppingCart",
+    "member_count": 15
+  },
+  {
+    "id": 306,
+    "label": "coolstore.model::shoppingCartToJson",
+    "member_count": 14
+  },
+  {
+    "id": 608,
+    "label": "Infrastructure / Common Library",
+    "member_count": 12
   }
 ]
 ```
 
-Heuristic labels (for example `coolstore.model::length`) help you choose a `--scope` prefix for `find`. Refresh labels with `communities label --write`. See [Community detection](community-detection.md).
+Heuristic labels (for example `coolstore.model::shoppingCartToJson`) help you choose a `--scope` prefix for `find`. Refresh labels with `communities label --write`. See [Community detection](community-detection.md).
 
 ### 8. Kantra rules
 
@@ -224,11 +229,11 @@ rgctl -r example/coolstore -f json relations --edge violates --from-type kantrar
 
 | Verb | Primary keys |
 |------|----------------|
-| `find` | `entities`, `returned`, `total`, `schema_version` |
-| `callers` / `callees` | `target`, `callers` or `callees`, `hops`, `depth` |
-| `relations` | `edges` (`source`, `edge`, `target`, `direction`), optional `target` |
+| `find` | `entities`, `returned`, `total`, `schema_version` (2) |
+| `callers` / `callees` | `callers` or `callees`, `total`, `schema_version` (2) |
+| `relations` | `edges` (`source`, `edge`, `target`, `direction`, `hops`), `returned`, `total`, optional seed `target` |
 | `inventory` | `by`, `counts` |
-| `status` | `status`, `nodes`, `edges`, `digest` |
+| `status` | `status`, `nodes`, `edges`, `digest`, `schema_version` (3) |
 
 Full field catalog: [json-api.md](../json-api.md#5-structured-query-verbs).
 
@@ -247,7 +252,7 @@ Full field catalog: [json-api.md](../json-api.md#5-structured-query-verbs).
 
 ## Benefits
 
-- **Stable contracts.** Fixed verbs and `schema_version` 2 envelopes for agents and CI.
+- **Stable contracts.** Fixed verbs with `schema_version` 2 envelopes (query verbs) and `schema_version` 3 for `status`.
 - **Fast.** Queries mmap the session snapshot; no re-parse of source trees.
 - **Composable.** Chain with `blast-radius`, `metrics`, `cpg`, and `semantic query` on the same `.rgctl/` session.
 

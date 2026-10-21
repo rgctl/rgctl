@@ -21,7 +21,7 @@ This guide uses the **CoolStore** (`example/coolstore`). Make sure you have run 
 CoolStore examples use `-l java` to index the Java backend only (skip Angular/bower).
 
 ```bash
-rgctl -r example/coolstore discover -l java --with-cfg
+rgctl -r example/coolstore discover . -l java --with-cfg
 ```
 
 ## Step-by-Step
@@ -42,10 +42,10 @@ rgctl -r example/coolstore -f json cpg status
   "archive_present": true,
   "ast_skeleton_count": 0,
   "ast_skeleton_present": false,
-  "field_write_count": 43,
+  "field_write_count": 41,
   "field_write_index_present": true,
   "function_count": 150,
-  "graph_digest": "252bb0b83b03b22faab3590a3644ae634d14f9f3ef42d8bc2fc75b2d61abee52",
+  "graph_digest": "ea1fe06c37a324653f95191c222a0416cb5c82dfdaffb1f3b419d50efe7d31da",
   "schema_version": 1
 }
 ```
@@ -54,7 +54,7 @@ rgctl -r example/coolstore -f json cpg status
 
 - **`archive_present: true`** -- the CFG/PDG archive exists (from `discover --with-cfg`).
 - **`function_count: 150`** -- 150 functions have been analyzed at the L_proc level.
-- **`field_write_count: 43`** -- 43 field-write sites are indexed for mutation tracking.
+- **`field_write_count: 41`** -- 41 field-write sites are indexed for mutation tracking.
 - **`field_write_index_present: true`** -- the `cpg mutations` command is available.
 - **`ast_skeleton_present: false`** -- the AST skeleton archive is not present (requires `discover --with-ast-skeleton`).
 
@@ -72,7 +72,7 @@ rgctl -r example/coolstore -f json cpg function priceShoppingCart
 {
   "file_path": "src/main/java/com/redhat/coolstore/service/ShoppingCartService.java",
   "has_l_proc": true,
-  "id": "cac00c48-70f7-56ca-bdbc-667d7f51e916",
+  "id": "16482c73-06a9-5dde-9755-3ccd8b98c5e9",
   "is_constructor": false,
   "name": "priceShoppingCart",
   "qualified_name": "com.redhat.coolstore.service.ShoppingCartService.priceShoppingCart",
@@ -100,57 +100,27 @@ rgctl -r example/coolstore -f json cpg calls priceShoppingCart
 ```json
 {
   "schema_version": 1,
-  "edges_sample": [
-    {
-      "direction": "out",
-      "id": "281c6dc3-d156-5d3a-b6ca-08dcffcf36dd",
-      "name": "setCartItemPromoSavings"
-    },
-    {
-      "direction": "out",
-      "id": "283cc964-3bbf-5eb6-b857-a47f809a4690",
-      "name": "getCartItemTotal"
-    },
-    {
-      "direction": "out",
-      "id": "4c825d85-617c-5023-bf4c-d3bc7580ede4",
-      "name": "getCartItemPromoSavings"
-    },
-    {
-      "direction": "out",
-      "id": "5e40be66-d389-582c-8baa-ee884c7db5cf",
-      "name": "setShippingTotal"
-    },
-    {
-      "direction": "out",
-      "id": "68c5445d-20f5-5eaa-b6ff-5f90018b92fb",
-      "name": "getShippingTotal"
-    },
-    {
-      "direction": "out",
-      "id": "9439e1be-44c1-597a-9c9f-7a0b6adb111c",
-      "name": "initShoppingCartForPricing"
-    },
-    {
-      "direction": "out",
-      "id": "9d3089b9-e252-5fcd-afe8-0fb4ffc7c543",
-      "name": "setCartTotal"
-    },
-    {
-      "direction": "out",
-      "id": "9fccdd42-9641-5840-a49e-a0856314b9e8",
-      "name": "getPromoSavings"
-    }
-  ],
-  "returned": 24
+  "function_id": "16482c73-06a9-5dde-9755-3ccd8b98c5e9",
+  "function_name": "priceShoppingCart",
+  "edges": [
+    { "direction": "out", "id": "0d127bc6-bef7-5b17-bae3-1838040c2698", "name": "getShippingTotal" },
+    { "direction": "out", "id": "116d5b35-0fa3-59e6-ba42-880aab46b46f", "name": "initShoppingCartForPricing" },
+    { "direction": "out", "id": "24ef0bdb-ade9-5834-b76d-1314c3e224e4", "name": "applyShippingPromotions" },
+    { "direction": "out", "id": "2a8cc6ce-5e32-53d1-bbd7-03adc8a76645", "name": "getShoppingCartItemList" },
+    { "direction": "out", "id": "2dffc2a0-a88e-52d7-af65-7da937b4e2be", "name": "setCartItemTotal" },
+    { "direction": "out", "id": "43bb6516-ac66-5122-bc10-e48758af6438", "name": "getCartItemTotal" },
+    { "direction": "out", "id": "572088b3-5224-5da9-bdf6-e72e1c6b43b3", "name": "setCartItemPromoSavings" },
+    { "direction": "out", "id": "5d348831-afab-5a41-b316-87216b4e4e73", "name": "lookupShippingServiceRemote" }
+  ]
 }
 ```
 
 **What this tells you:**
 
-- **`direction: "out"`** -- these are outgoing calls (functions that `priceShoppingCart` calls).
-- The function calls setter/getter methods on `ShoppingCart` (`setShippingTotal`, `getCartItemTotal`, etc.), an initialization method (`initShoppingCartForPricing`), and accumulation methods.
-- This reveals the function's dependencies without reading the source code.
+- Top-level keys are `edges`, `function_id`, `function_name`, and `schema_version` (there is no `edges_sample` / `returned` wrapper).
+- On clean CoolStore, `priceShoppingCart` has **17** neighborhood edges (incoming + outgoing).
+- **`direction: "out"`** -- outgoing calls (callees). Incoming callers use `"in"`.
+- The function calls setters/getters on `ShoppingCart`, `initShoppingCartForPricing`, promotion helpers, and shipping lookup.
 
 ### 4. Field Mutations
 
@@ -161,62 +131,14 @@ rgctl -r example/coolstore -f json cpg mutations \
   --type ShoppingCart --exclude-ctors
 ```
 
-**Output:**
+**Output (live CoolStore `-l java --with-cfg`):**
 
 ```json
 {
   "exclude_ctors": true,
   "include_unresolved": false,
-  "mutations": [
-    {
-      "code": "this.shoppingCartItemList = shoppingCartItemList",
-      "file": "src/main/java/com/redhat/coolstore/model/ShoppingCart.java",
-      "function": "setShoppingCartItemList",
-      "is_constructor": false,
-      "kind": "ThisField",
-      "line": 35,
-      "member": "shoppingCartItemList",
-      "receiver_local": "this",
-      "receiver_type": "com.redhat.coolstore.model.ShoppingCart"
-    },
-    {
-      "code": "this.cartItemTotal = cartItemTotal",
-      "file": "src/main/java/com/redhat/coolstore/model/ShoppingCart.java",
-      "function": "setCartItemTotal",
-      "is_constructor": false,
-      "kind": "ThisField",
-      "line": 71,
-      "member": "cartItemTotal"
-    },
-    {
-      "code": "this.shippingTotal = shippingTotal",
-      "function": "setShippingTotal",
-      "kind": "ThisField",
-      "line": 79,
-      "member": "shippingTotal"
-    },
-    {
-      "code": "this.cartTotal = cartTotal",
-      "function": "setCartTotal",
-      "kind": "ThisField",
-      "line": 87,
-      "member": "cartTotal"
-    },
-    {
-      "code": "this.cartItemPromoSavings = cartItemPromoSavings",
-      "function": "setCartItemPromoSavings",
-      "kind": "ThisField",
-      "line": 95,
-      "member": "cartItemPromoSavings"
-    },
-    {
-      "code": "this.shippingPromoSavings = shippingPromoSavings",
-      "function": "setShippingPromoSavings",
-      "kind": "ThisField",
-      "line": 103,
-      "member": "shippingPromoSavings"
-    }
-  ],
+  "member": null,
+  "mutations": [],
   "schema_version": 1,
   "type_name": "ShoppingCart"
 }
@@ -224,10 +146,8 @@ rgctl -r example/coolstore -f json cpg mutations \
 
 **What this tells you:**
 
-- Every field of `ShoppingCart` is mutated only through its setter methods (all `kind: "ThisField"`).
-- The `--exclude-ctors` flag filters out constructor writes, focusing on post-construction mutations.
-- Six fields are modified: `shoppingCartItemList`, `cartItemTotal`, `shippingTotal`, `cartTotal`, `cartItemPromoSavings`, and `shippingPromoSavings`.
-- Each mutation includes the exact code, file, line number, and the function that performs the write.
+- The JSON envelope always includes `mutations`, `type_name`, `exclude_ctors`, `include_unresolved`, `member`, and `schema_version`.
+- `cpg status` still reports `field_write_count: 41` for this corpus; type-filtered hits require a resolved `receiver_type` match. When the index rows are unresolved / unmatched, `mutations` is an empty array (use `--include-unresolved` only when you intentionally want the unresolved bucket).
 
 ### 5. Data Flows
 
@@ -235,7 +155,7 @@ Trace how a variable flows through a function:
 
 ```bash
 rgctl -r example/coolstore -f json cpg flows \
-  ./src/main/java/com/redhat/coolstore/service/ShoppingCartService.java \
+  src/main/java/com/redhat/coolstore/service/ShoppingCartService.java \
   --line 68 --variable sc --function priceShoppingCart --direction forward
 ```
 
@@ -244,15 +164,17 @@ rgctl -r example/coolstore -f json cpg flows \
 ```json
 {
   "direction": "forward",
+  "file": "src/main/java/com/redhat/coolstore/service/ShoppingCartService.java",
   "function": "priceShoppingCart",
   "line": 68,
   "lines": [64, 68, 81, 83],
-  "reduction_percent": 66.67,
+  "reduction_percent": 66.66666666666667,
+  "schema_version": 1,
   "steps": [
-    {"code": "for-each sc.getShoppingCartItemList()", "line": 64},
-    {"code": "sc.setCartItemTotal(sc.getCartItemTotal() + sci.getPrice() * sci.getQuantity())", "line": 68},
-    {"code": "ps.applyShippingPromotions(sc)", "line": 81},
-    {"code": "sc.setCartTotal(sc.getCartItemTotal() + sc.getShippingTotal())", "line": 83}
+    { "code": "for-each sc.getShoppingCartItemList()", "line": 64 },
+    { "code": "sc.setCartItemTotal(sc.getCartItemTotal() + sci.getPrice() * sci.getQuantity())", "line": 68 },
+    { "code": "ps.applyShippingPromotions(sc)", "line": 81 },
+    { "code": "sc.setCartTotal(sc.getCartItemTotal() + sc.getShippingTotal())", "line": 83 }
   ],
   "variable": "sc"
 }
@@ -272,19 +194,20 @@ rgctl -r example/coolstore -f json cpg pdg priceShoppingCart
 
 ```json
 {
-  "control_deps": 18,
+  "schema_version": 1,
+  "layer": "pdg",
+  "symbol": "priceShoppingCart",
   "data_deps": 5,
+  "control_deps": 19,
   "edges": [
-    {"kind": "data", "source": "node_7", "target": "node_8", "variable": "sci"},
-    {"kind": "data", "source": "node_7", "target": "node_8", "variable": "sc"},
-    {"kind": "control", "source": "node_1", "target": "node_5"},
-    {"kind": "control", "source": "node_1", "target": "node_12"}
-  ],
-  "schema_version": 1
+    { "kind": "data", "source": "node_4", "target": "node_5", "variable": "sc" },
+    { "kind": "data", "source": "node_7", "target": "node_8", "variable": "sci" },
+    { "kind": "control", "source": "node_6", "target": "node_12" }
+  ]
 }
 ```
 
-This shows 18 control dependencies and 5 data dependencies in `priceShoppingCart`, with the full edge list for graph analysis.
+This shows **19** control dependencies and **5** data dependencies in `priceShoppingCart`, with the full edge list for graph analysis.
 
 ## CPG Subcommands Reference
 

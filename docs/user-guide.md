@@ -289,11 +289,11 @@ Example:
   "command": "discover",
   "metrics": {
     "duration_ms": "…",
-    "edges_generated": 3293,
+    "edges_generated": 2637,
     "files_discovered": 65,
     "files_indexed": 65,
     "files_skipped": 0,
-    "nodes_generated": 1088
+    "nodes_generated": 943
   },
   "schema_version": 2
 }

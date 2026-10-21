@@ -452,6 +452,10 @@ path = "tests/columnar_zero_cold_touch_gate.rs"
 name = "scale_perf_ci_gate"
 path = "tests/scale_perf_ci_gate.rs"
 
+[[test]]
+name = "docs_guides_cli_fact_check"
+path = "tests/docs_guides_cli_fact_check.rs"
+
 [[bench]]
 name = "parsing"
 harness = false

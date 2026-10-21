@@ -8,7 +8,7 @@ Keep the structural graph aligned with the working tree **without** re-running f
 |---------|------|
 | `rgctl update` | One-shot incremental patch (hash-diff, `--files`, or `--since`) |
 | `rgctl serve --watch` | Debounced filesystem watcher → same incremental updater |
-| `rgctl status` | Reports `index_current` / dirty file counts (no extract); also `watcher_alive` / queue depth |
+| `rgctl status` | Reports `index_current` / dirty file counts (no extract); also `watcher_alive` / queue depth (`-f json` → `schema_version` 3) |
 | `rgctl discover` | Cold index + optional analysis (`--with-cfg`, migration, Kantra, …) |
 
 `discover --files path1,path2` remains a compatible alias for `update --files`.

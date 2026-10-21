@@ -81,12 +81,13 @@ Or set `RGCTL_WITH_LIMITS=max-mem-mb=4096,threads=1`. Soft RSS budget (~95% abor
 
 ```
 [>] rgctl discover
-[✓] rgctl discover finished in 320ms
+[✓] Loaded 26 files from snapshot -> 608 nodes, 1709 edges
+[✓] rgctl discover finished in ~300ms
 ```
 
 **What happened:**
 
-- With `-l java`, rgctl indexed CoolStore’s Java sources only (about **152** functions / **591** nodes on the current tree).
+- With `-l java`, rgctl indexed CoolStore’s Java sources only (**26** files → **608** nodes / **1709** edges; inventory reports **152** functions on the current tree).
 - The graph snapshot was written to `example/coolstore/.rgctl/graph.snapshot.bin`.
 - Basic discover finishes in well under a second on this corpus.
 
@@ -102,18 +103,19 @@ rgctl -r example/coolstore discover -l java --with-cfg
 
 ```
 [>] rgctl discover
+[✓] Loaded 26 files from snapshot -> 608 nodes, 1709 edges
 
 ✓ Control flow analysis:
-  Field writes indexed: 43
+  Field writes indexed: 41
   CFG/PDG/Dominance: 150 functions analyzed
   Skipped: 2 functions (unsupported_language=0, missing_source=0, analysis_error=2)
-[✓] rgctl discover finished in 329ms
+[✓] rgctl discover finished in ~300ms
 ```
 
 **What happened:**
 
-- In addition to the basic graph, rgctl built a CFG, PDG, and dominator tree for each analyzed Java function (**150** on this tree).
-- It indexed **43** field-write sites, enabling `cpg mutations`.
+- In addition to the basic graph, rgctl built a CFG, PDG, and dominator tree for each analyzed Java function (**150** on this tree; inventory still lists **152** function symbols).
+- It indexed **41** field-write sites (`cpg status.field_write_count`), enabling `cpg mutations`.
 - The analysis archive was written to `.rgctl/analysis/cfg_pdg.archive.bin`.
 - A small number of functions may be skipped for analysis errors.
 
@@ -136,7 +138,9 @@ This enables:
 | `--with-cfg` | Build CFG, PDG, and dominator trees for every function |
 | `--with-dashboard` | Export a static dashboard bundle to `.rgctl/dashboard/` |
 | `--with-harmonic` | Compute harmonic centrality (needed for migration ranking) |
-| `--export-migration-hints` | Write a migration roadmap to `.rgctl/migration_plan.json` |
+| `--export-migration-hints` | Write `.rgctl/migration_plan.json`; with `-f json`, stdout is the migration plan (`schema_version` 2, `steps`) instead of DiscoverResponse telemetry |
+
+Without `--export-migration-hints`, `discover -f json` emits DiscoverResponse telemetry (`command: "discover"`, `metrics`, `schema_version: 2`) — not the migration plan.
 
 ### 4. Filtering by Language
 
@@ -178,7 +182,7 @@ After discovery, artifacts live under **`{repo}/.rgctl/`**:
 | `--with-security` | Secret scanning |
 | `--with-dashboard` | Export static dashboard bundle |
 | `--with-harmonic` | Compute harmonic centrality for migration ranking |
-| `--export-migration-hints` | Write migration roadmap JSON |
+| `--export-migration-hints` | Write migration roadmap JSON (and emit it on stdout with `-f json`) |
 | `--write-json-graph` | Write legacy JSON graph files |
 | `-l, --languages` | Restrict to specific languages |
 | `-e, --exclude` | Exclude directories by name |

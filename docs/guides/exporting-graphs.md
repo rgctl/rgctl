@@ -22,8 +22,10 @@ This guide uses the **CoolStore** (`example/coolstore`). Make sure you have run 
 CoolStore examples use `-l java` to index the Java backend only (skip Angular/bower).
 
 ```bash
-rgctl -r example/coolstore discover -l java
+rgctl -r example/coolstore discover . -l java --with-cfg
 ```
+
+After `discover . -l java --with-cfg` on clean CoolStore you should see **608** nodes / **1,709** edges / **152** functions (`rgctl -f json status` / `find --type function --count-only`).
 
 ## Step-by-Step
 
@@ -41,16 +43,14 @@ rgctl -r example/coolstore export \
 **Output:**
 
 ```
-[>] rgctl export
-Exported 152 nodes, 177 edges -> /tmp/coolstore.graphml
-[✓] rgctl export finished in 12ms
+Exported 152 nodes, 130 edges -> /tmp/coolstore.graphml
 ```
 
 **What happened:**
 
-- rgctl exported all 7,526 function nodes and 21,396 edges (calls, contains, imports) to a GraphML file.
-- The file is 6.2 MB and can be opened in Gephi, yEd, or any GraphML-compatible tool.
+- rgctl exported all **152** function nodes and **130** call edges for the Java CoolStore backend.
 - The `--query "type:Function"` filter restricts the export to function nodes only.
+- Open the GraphML file in Gephi, yEd, or any GraphML-compatible tool.
 
 ### 2. Export Everything to JSON
 
@@ -66,12 +66,10 @@ rgctl -r example/coolstore export \
 **Output:**
 
 ```
-[>] rgctl export
-Exported 152 nodes, 177 edges -> /tmp/coolstore.json
-[✓] rgctl export finished in 70ms
+Exported 608 nodes, 1709 edges -> /tmp/coolstore.json
 ```
 
-The `all` query exports every node and edge in the graph -- 14,763 nodes and 50,082 edges for the CoolStore application.
+The `all` query exports every node and edge in the `-l java --with-cfg` graph -- **608** nodes and **1,709** edges for CoolStore’s Java backend.
 
 ### 3. Filtered Export
 

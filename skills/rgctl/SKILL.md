@@ -99,7 +99,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 |-------------|-------------|
 | Generate migration plan | `discover . --export-migration-hints` (add `--with-harmonic` for ranking) |
 | Preset / order | `--migration-preset hybrid_default\|foundational_first\|dense_cluster\|risk_mitigation` · `--migration-order scheduled\|priority` |
-| Read plan | `.rgctl/migration_plan.json` (discover `-f json` stdout is telemetry only) |
+| Read plan | `.rgctl/migration_plan.json` **and** `discover -f json … --export-migration-hints` stdout (migration plan JSON; plain `discover -f json` without the flag is DiscoverResponse telemetry) |
 | Dashboard view | `discover . --with-dashboard --export-migration-hints` then `serve --open` |
 
 **Supporting probes** (optional context before/after the plan): `status` → `inventory --by import-prefix --limit 40` → `find --annotation …` / suffix globs → `callers` / `blast-radius` on candidates.

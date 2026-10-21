@@ -165,7 +165,7 @@ Concepts often live in package/directory paths or type names, not bare function 
 
 # Migrate workflow
 
-**Primary (and only) migration deliverable for agents:** `.rgctl/migration_plan.json` from `--export-migration-hints` (dashboard Migration tab via `serve --open` when `--with-dashboard` is set).
+**Primary migration deliverable for agents:** `.rgctl/migration_plan.json` from `--export-migration-hints`. With `-f json`, the same migration plan object is also printed on **stdout** (plain `discover -f json` without the flag still emits DiscoverResponse telemetry). Dashboard Migration tab via `serve --open` when `--with-dashboard` is set.
 
 Use this workflow for roadmap / extraction-order / "what should we migrate first?" questions. Summarize the plan — do not dump the whole JSON into context.
 

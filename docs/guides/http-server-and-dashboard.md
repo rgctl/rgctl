@@ -115,7 +115,7 @@ When the dashboard opens in your browser, you will see several tabs:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/status` | GET | Full-pipeline status (`schema_version` 1) |
+| `/api/status` | GET | Pipeline status document (`schema_version` 1; same shape as `.rgctl/pipeline_status.json`). Distinct from CLI `rgctl status` (`schema_version` 3). |
 | `/api/semantic/query` | POST | Semantic search |
 | `/api/semantic/status` | GET | Semantic index availability |
 | `/` | GET | Dashboard UI |

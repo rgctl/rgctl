@@ -159,13 +159,18 @@ Policy field `scope.strict_diff: true` also enables strict mode for `check`.
 
 ### Example: CoolStore
 
+CoolStore does not ship a `policy.json`; use a local file (or [docs/examples/policy-strict.json](../examples/policy-strict.json) for a stricter smoke policy):
+
 ```bash
-rgctl -r example/coolstore discover . -l java
+rgctl -r example/coolstore discover . -l java --with-cfg --with-harmonic
+cat > /tmp/coolstore-ci-policy.json <<'EOF'
+{"max_impact_nodes": 15, "centrality_alert_threshold": 0.15}
+EOF
 rgctl -r example/coolstore -f json check \
-  --policy-file example/coolstore/policy.json
+  --policy-file /tmp/coolstore-ci-policy.json
 ```
 
-On CoolStore Java-only, `example/coolstore/policy.json` (`max_impact_nodes: 15`) fails `check` on symbols such as `toProduct` when the impact zone is 19. That illustrates why PR workflows use **`new_violations_only`** instead of failing on all existing debt.
+On CoolStore Java-only, that policy (`max_impact_nodes: 15`) fails `check` (`schema_version` 1, `passed: false`) on symbols such as `toProduct` when the impact zone is 19. That illustrates why PR workflows use **`new_violations_only`** instead of failing on all existing debt.
 
 ---
 

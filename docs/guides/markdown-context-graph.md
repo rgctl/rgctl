@@ -95,7 +95,7 @@ rgctl -r "$REPO" discover . -l markdown
 
 **What happened:**
 
-- rgctl parsed the sparse checkout of kubernetes/website `content/en` — thousands of `.md` files, on the order of **~34k** `:Module` nodes on the current tree (`find --type module --count-only`), with a large overall graph (`status` reports ~136k nodes / ~256k edges including files, imports, and related kinds).
+- rgctl parsed the sparse checkout of kubernetes/website `content/en` — thousands of `.md` files, on the order of **~34k** `:Module` nodes on the current tree (`find --type module --count-only` → **33953**), with a large overall graph (`status` reports **136527** nodes / **256210** edges including files, imports, and related kinds; `schema_version` 3).
 - The graph snapshot was written to `$REPO/.rgctl/graph.snapshot.bin`.
 - Section bodies larger than 32 KiB inline were stored in `$REPO/.rgctl/content_store.bin` (Blake3-keyed).
 
@@ -113,6 +113,8 @@ Use `inventory --by type` or `find --type module --count-only` (**33953** module
 export REPO="$REPO_FIXTURE"
 rgctl -r "$REPO" discover . -l markdown
 ```
+
+Live fixture telemetry: **20** files → **109** nodes / **204** edges; `find --type module --count-only` → **29**; Obsidian export → **16** notes (7 wikilinks).
 
 Markdown is included in default `discover`. Use `-l markdown` when you want **only** documentation.
 

@@ -40,32 +40,34 @@ rgctl -r example/coolstore -f json communities list
 {
   "communities": [
     {
-      "id": 187,
-      "label": "ArrayList",
-      "member_count": 16
-    },
-    {
-      "id": 591,
-      "label": "Infrastructure / Common Library",
-      "member_count": 13
-    },
-    {
-      "id": 499,
+      "id": 177,
       "label": "Order",
-      "member_count": 12
+      "member_count": 25
     },
     {
-      "id": 174,
-      "label": "coolstore.service::getProductId",
-      "member_count": 10
-    },
-    {
-      "id": 301,
+      "id": 397,
       "label": "coolstore.service::CatalogItemEntity",
-      "member_count": 9
+      "member_count": 20
+    },
+    {
+      "id": 143,
+      "label": "ShoppingCart",
+      "member_count": 15
+    },
+    {
+      "id": 306,
+      "label": "coolstore.model::shoppingCartToJson",
+      "member_count": 14
+    },
+    {
+      "id": 608,
+      "label": "Infrastructure / Common Library",
+      "member_count": 12
     }
   ],
-  "schema_version": 1
+  "modularity": 0.39620256943546045,
+  "schema_version": 1,
+  "written": false
 }
 ```
 
@@ -73,8 +75,9 @@ rgctl -r example/coolstore -f json communities list
 
 - **`id`** -- the community's unique identifier (use with `inventory --by community` and scoped `find`).
 - **`label`** -- a heuristic label generated from the most representative member names and paths.
-- **`member_count`** -- how many functions belong to this community.
-- Largest communities on the Java-only CoolStore index are small domain clusters (e.g. `ArrayList` stubs, `Order`, `coolstore.service::*`) plus an **Infrastructure / Common Library** bucket — not vendor JS.
+- **`member_count`** -- how many members belong to this community.
+- Largest communities on the Java-only CoolStore index are domain clusters (`Order`, `ShoppingCart`, `coolstore.service::*`) plus an **Infrastructure / Common Library** bucket — not vendor JS.
+- Envelope also includes `modularity` and `written` (whether labels were persisted this run).
 
 ### 2. Explore community members
 
@@ -121,10 +124,10 @@ rgctl generates community labels heuristically from member names and file paths:
 
 | Label Pattern | Meaning |
 |---------------|---------|
-| `coolstore.model::length` | Functions from the `coolstore.model` package, anchored by `length` |
+| `coolstore.model::shoppingCartToJson` | Functions from the `coolstore.model` package, anchored by a representative symbol |
 | `Infrastructure / Common Library` | Cross-cutting utility functions without a dominant package |
-| `coolstore.service::getProductId` | Package-prefix heuristic from member names/paths |
-| `coolstore.model::APPLICATION_JSON` | Domain model functions related to JSON serialization |
+| `coolstore.service::CatalogItemEntity` | Package-prefix heuristic from member names/paths |
+| `Order` / `ShoppingCart` | Domain-type labels when a single type dominates the cluster |
 
 ## Benefits
 

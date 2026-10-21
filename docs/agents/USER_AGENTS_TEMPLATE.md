@@ -78,7 +78,7 @@ Upgrading from an old daemon install: copy `~/.rgctl/cache/{name}/.rgctl/` into 
 | Loop-carried DFG tags | `rgctl discover . --with-cfg --with-dfg-loops` |
 | AST skeleton | `rgctl discover --with-ast-skeleton` then `rgctl -f json cpg ast <Symbol>` |
 | CPG export | `rgctl cpg export --format graphson --output cpg.json [--path-contains src/]` |
-| Migration plan | `rgctl discover . --with-cfg --with-security --with-taint --with-dashboard --with-harmonic --export-migration-hints` then read `.rgctl/migration_plan.json` |
+| Migration plan | `rgctl -f json discover . --with-cfg --with-security --with-taint --with-dashboard --with-harmonic --export-migration-hints` (stdout = migration plan JSON; also writes `.rgctl/migration_plan.json`) |
 | CI gate on changes | `rgctl -f json check --policy-file policy.json` (exit 1 = violations) |
 | Temporal PR gate | `rgctl -f json pr-check --policy-file rgctl-pr-policy.json --base-artifact .rgctl-base --base-ref origin/main --head-ref HEAD --strict` |
 | Check temporal bridge | `rgctl -f json check --temporal --policy-file policy.json --base-ref origin/main --head-ref HEAD` |

@@ -128,9 +128,13 @@ For automated tooling and LLM agents, pass `-f json`:
 
 ```bash
 rgctl -f json review paths --base-ref origin/main --head-ref HEAD
+# or uncommitted edits vs indexed HEAD:
+rgctl -f json review paths --synthetic-head worktree
 ```
 
-**JSON Output:**
+Envelope keys (live): `ambiguous`, `change_summary`, `command`, `schema_version` (1), `symbols`, `truncation`, `unscored_files`. An unchanged worktree returns empty `symbols` / zeroed `change_summary`.
+
+**JSON Output** (illustrative non-empty PR):
 
 ```json
 {

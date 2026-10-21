@@ -52,12 +52,6 @@ rgctl -r example/coolstore -f json slice \
       "kind": "data",
       "source": "node_0",
       "target": "node_1",
-      "variable": "getQuantity"
-    },
-    {
-      "kind": "data",
-      "source": "node_0",
-      "target": "node_1",
       "variable": "sc"
     },
     {
@@ -65,6 +59,12 @@ rgctl -r example/coolstore -f json slice \
       "source": "node_0",
       "target": "node_1",
       "variable": "sci"
+    },
+    {
+      "kind": "data",
+      "source": "node_0",
+      "target": "node_1",
+      "variable": "getQuantity"
     }
   ],
   "file": "./src/main/java/com/redhat/coolstore/service/ShoppingCartService.java",
@@ -76,8 +76,7 @@ rgctl -r example/coolstore -f json slice \
     {
       "id": "node_0",
       "kind": "Expression",
-      "label": "sc.setCartItemPromoSavings(
-                            sc.getCartItemPromoSa...",
+      "label": "sc.setCartItemPromoSavings(\n                            sc.getCartItemPromoSavings() + sci.getPromoSavings() * sci.getQuantity())",
       "line": 66
     },
     {
@@ -115,7 +114,7 @@ rgctl -r example/coolstore -f json cpg flows \
 ```json
 {
   "direction": "forward",
-  "file": "src/main/java/com/redhat/coolstore/service/ShoppingCartService.java",
+  "file": "./src/main/java/com/redhat/coolstore/service/ShoppingCartService.java",
   "function": "priceShoppingCart",
   "line": 68,
   "lines": [64, 68, 81, 83],
