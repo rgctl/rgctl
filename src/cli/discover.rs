@@ -60,22 +60,92 @@ pub struct DiscoverArgs {
     pub cascade_depth: usize,
 }
 
-/// Resolve discover root: absolute PATH, PATH joined to `--repo`, or `--repo`/cwd.
+/// Choose the session `--repo` base before joining a relative positional `PATH`.
+///
+/// Absolute `PATH` wins. Relative `PATH` (including `"."`) keeps `--repo` so
+/// `rgctl -r <REPO> discover .` and `rgctl -r <REPO> discover <subdir>` do not
+/// replace `--repo` with a cwd-relative path.
+pub fn session_repo_from_flags(
+    repo_flag: Option<&std::path::Path>,
+    positional: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    match positional {
+        Some(p) if std::path::Path::new(p).is_absolute() => Some(std::path::PathBuf::from(p)),
+        _ => repo_flag.map(std::path::Path::to_path_buf),
+    }
+}
+
+/// Resolve discover/update/serve root: absolute PATH, PATH joined to `--repo`, or `--repo`/cwd.
 pub fn resolve_session_root(ctx: &CliContext, path: Option<&str>) -> String {
-    let raw = path.map(|p| {
-        if std::path::Path::new(p).is_absolute() {
-            p.to_string()
-        } else {
-            ctx.repo.join(p).to_string_lossy().into_owned()
-        }
-    })
-    .unwrap_or_else(|| ctx.repo.to_string_lossy().into_owned());
+    let raw = path
+        .map(|p| {
+            if std::path::Path::new(p).is_absolute() {
+                p.to_string()
+            } else {
+                ctx.repo.join(p).to_string_lossy().into_owned()
+            }
+        })
+        .unwrap_or_else(|| ctx.repo.to_string_lossy().into_owned());
     let p = std::path::PathBuf::from(&raw);
     p.canonicalize()
         .or_else(|_| std::env::current_dir().map(|cwd| cwd.join(&p)))
         .unwrap_or(p)
         .to_string_lossy()
         .into_owned()
+}
+
+#[cfg(test)]
+mod session_root_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn dash_r_with_dot_keeps_repo_flag() {
+        let repo = Path::new("/tmp/my-repo");
+        assert_eq!(
+            session_repo_from_flags(Some(repo), Some(".")),
+            Some(repo.to_path_buf())
+        );
+    }
+
+    #[test]
+    fn dash_r_with_relative_subdir_keeps_repo_flag() {
+        let repo = Path::new("/tmp/my-repo");
+        assert_eq!(
+            session_repo_from_flags(Some(repo), Some("pkg/core")),
+            Some(repo.to_path_buf())
+        );
+    }
+
+    #[test]
+    fn absolute_positional_wins_over_dash_r() {
+        let repo = Path::new("/tmp/my-repo");
+        assert_eq!(
+            session_repo_from_flags(Some(repo), Some("/abs/other")),
+            Some(Path::new("/abs/other").to_path_buf())
+        );
+    }
+
+    #[test]
+    fn no_dash_r_relative_uses_cwd_via_none_base() {
+        assert_eq!(session_repo_from_flags(None, Some("subdir")), None);
+    }
+
+    #[test]
+    fn resolve_joins_relative_path_onto_repo() {
+        let ctx = CliContext::new(
+            Some(Path::new("/tmp/my-repo").to_path_buf()),
+            None,
+            OutputFormat::Text,
+            None,
+            false,
+        );
+        let root = resolve_session_root(&ctx, Some("pkg"));
+        assert!(
+            root.ends_with("my-repo/pkg") || root.ends_with("my-repo\\pkg"),
+            "expected join under repo, got {root}"
+        );
+    }
 }
 
 pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {

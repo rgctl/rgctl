@@ -436,6 +436,59 @@ mod codegen_tests {
                     == 0
         );
     }
+
+    #[test]
+    fn dogfood_agents_skills_match_skills_tree() {
+        let repo = repo_root();
+        for name in ["rgctl", "rgctl-review"] {
+            let src = repo.join("skills").join(name);
+            let dst = repo.join(".agents/skills").join(name);
+            assert!(src.is_dir(), "missing skills/{name}");
+            assert!(dst.is_dir(), "missing .agents/skills/{name} — sync from skills/");
+            for entry in walkdir::WalkDir::new(&src)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file())
+            {
+                let rel = entry.path().strip_prefix(&src).unwrap();
+                let other = dst.join(rel);
+                assert!(
+                    other.is_file(),
+                    ".agents/skills/{name}/{} missing",
+                    rel.display()
+                );
+                assert_eq!(
+                    fs::read(entry.path()).unwrap(),
+                    fs::read(&other).unwrap(),
+                    "drift: skills/{name}/{} vs .agents/skills/{name}/{}",
+                    rel.display(),
+                    rel.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn skills_markdown_has_no_broken_relative_docs_links() {
+        let repo = repo_root();
+        let skills = repo.join("skills");
+        let mut offenders = Vec::new();
+        for entry in walkdir::WalkDir::new(&skills)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
+        {
+            let text = fs::read_to_string(entry.path()).unwrap();
+            if text.contains("../../docs/") {
+                offenders.push(entry.path().strip_prefix(&repo).unwrap().display().to_string());
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "skills/ must not contain broken ../../docs/ links (breaks consumer installs): {offenders:?}"
+        );
+    }
 }
 
 fn render_policy(version: &str) -> String {

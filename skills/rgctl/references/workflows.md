@@ -242,7 +242,7 @@ Choose `--migration-preset` to match user intent. Use `--migration-order priorit
 
 Optional structural probes to explain plan steps (keep `--limit` small): `inventory --by import-prefix --limit 40`, `find --annotation …`, `blast-radius` on candidate packages.
 
-**See:** [Migration Planning Guide](../../docs/guides/migration-planning.md)
+**See:** Migration Planning Guide (product docs; not bundled in this skill pack)
 
 
 ---
@@ -301,7 +301,7 @@ rgctl -r "$REPO" -f json clones --mode bloom --threshold 0.85 --exclude test
 rgctl -r "$REPO" -f json check --policy-file policy.json
 ```
 
-Blast-radius policy schema (`max_impact_nodes`, `forbidden_crossings`, …) — see [docs/policy-format.md](../../docs/policy-format.md). Named rules like `no-controller-direct-db-access` are **not** built-in ids. Report `passed` + `violations`.
+Blast-radius policy schema (`max_impact_nodes`, `forbidden_crossings`, …) — see docs/policy-format.md (product docs; not bundled in this skill pack). Named rules like `no-controller-direct-db-access` are **not** built-in ids. Report `passed` + `violations`.
 
 ### PR / branch review (`/rgctl:review`)
 
@@ -385,7 +385,7 @@ rgctl -r "$REPO" serve --open
 #   rgctl -f json find|callers|relations|inventory|status …
 ```
 
-See [docs/guides/http-server-and-dashboard.md](../../docs/guides/http-server-and-dashboard.md). For IDE agents spawn `rgctl -f json` subprocesses; optional `rgctl serve` for a local dashboard on one repo.
+See docs/guides/http-server-and-dashboard.md (product docs; not bundled in this skill pack). For IDE agents spawn `rgctl -f json` subprocesses; optional `rgctl serve` for a local dashboard on one repo.
 
 
 ---
@@ -393,6 +393,6 @@ See [docs/guides/http-server-and-dashboard.md](../../docs/guides/http-server-and
 ## See also
 
 - [Command Encyclopedia](command-encyclopedia.md) - Detailed command reference
-- [Migration Planning Guide](../../docs/guides/migration-planning.md) - In-depth migration strategies
-- [Agent Recipes](../../docs/agent-recipes.md) - Copy-paste recipes
+- Migration Planning Guide (product docs; not bundled in this skill pack) - In-depth migration strategies
+- Agent Recipes (product docs; not bundled in this skill pack) - Copy-paste recipes
 

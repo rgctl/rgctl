@@ -264,6 +264,26 @@ fn scope_flag(scope: CliSemanticScope) -> &'static str {
     }
 }
 
+/// Inferred index scope label from entry contents (for status / mismatch messages).
+pub(crate) fn inferred_index_scope(index: &SemanticIndex) -> &'static str {
+    let has_functions = index
+        .entries
+        .iter()
+        .any(|e| e.node_type.as_deref() == Some("Function"));
+    let has_docs = index.entries.iter().any(|e| {
+        e.node_type.as_deref() == Some("Module")
+            && e.kind
+                .as_deref()
+                .is_some_and(|kind| kind == "heading" || kind == "code_block")
+    });
+    match (has_functions, has_docs) {
+        (true, true) => "all",
+        (true, false) => "function",
+        (false, true) => "docs",
+        (false, false) => "unknown",
+    }
+}
+
 pub(crate) fn validate_index_scope(index: &SemanticIndex, requested: CliSemanticScope) -> Result<()> {
     let has_functions = index
         .entries
@@ -278,12 +298,12 @@ pub(crate) fn validate_index_scope(index: &SemanticIndex, requested: CliSemantic
 
     match requested {
         CliSemanticScope::Function if !has_functions && has_docs => bail!(
-            "semantic query scope {:?} is incompatible with current index contents; rebuild index with `rgctl semantic index --scope function`",
-            requested
+            "semantic query scope 'function' is incompatible with index scope '{}' — run `rgctl semantic index --scope function`",
+            inferred_index_scope(index)
         ),
         CliSemanticScope::Docs if !has_docs && has_functions => bail!(
-            "semantic query scope {:?} is incompatible with current index contents; rebuild index with `rgctl semantic index --scope docs`",
-            requested
+            "semantic query scope 'docs' is incompatible with index scope '{}' — run `rgctl semantic index --scope docs`",
+            inferred_index_scope(index)
         ),
         _ => Ok(()),
     }

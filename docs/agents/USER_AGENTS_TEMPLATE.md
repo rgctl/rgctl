@@ -36,7 +36,7 @@ rgctl -r "$REPO" install --skill --tools cursor,claude,codex,antigravity,agents
 ## Agent workflow
 
 ```text
-1. cd "$REPO" && rgctl discover .     # or rgctl -r PATH discover (no trailing . with -r)
+1. rgctl -r "$REPO" discover .     # or: cd "$REPO" && rgctl discover .  (`.` with `-r` targets the repo)
 2. rgctl -f json <command>            # compact facts on stdout
 3. Parse schema_version + payload     # never scrape stderr for JSON
 ```
@@ -113,10 +113,10 @@ See [HTTP Server and Dashboard](../guides/http-server-and-dashboard.md).
 
 0. **Artifacts** — always `{repo}/.rgctl/` after `discover`. Add `.rgctl/` to `.gitignore`.
 1. **Index first** — `find`/`callers`/`relations`/`inventory`, `blast-radius`, `metrics` fail without `discover`.
-2. **Discover target** — `cd repo && rgctl discover .` or `rgctl -r PATH discover` (no trailing `.` with `-r`).
-3. **Use `-f json`** — stable `schema_version` fields; see [json-api.md](../json-api.md).
-4. **`inspect` takes a symbol only** — no `--class` (use `blast-radius` for disambiguation).
-5. **`slice --function`** is the **method/function name**, not the class name.
+2. **Discover target** — `rgctl -r PATH discover .` (or `cd PATH && rgctl discover .`); relative PATH joins `-r`.
+3. **Use `-f json`** — stable `schema_version` fields; see [json-api.md](../json-api.md). Errors under JSON emit `error_code` / `recovery_command` on stdout.
+4. **Disambiguate symbols** — `inspect` / `cpg` / `blast-radius` accept `--file` / `--class` / `--line`.
+5. **`slice --function`** accepts bare method or `Class::method` / `Class.method`.
 6. **`export --query`** uses filter syntax (`name:Foo`, `type:Function`, `all`) — not Cypher `MATCH`.
 7. **Deep analysis** needs `discover --with-cfg` (and `--with-taint` for discover-time taint).
 8. **Semantic search** needs `semantic index` (separate from discover). Default embedder is **vocab**.

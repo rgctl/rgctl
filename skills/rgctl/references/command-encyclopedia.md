@@ -60,7 +60,9 @@ Prefer the **Canonical** column in examples and agent workflows. Aliases/façade
 
 **Prerequisites:** None (this creates `.rgctl/`).
 
-**Other flags:** `--languages java,go` restricts the language set; `--exclude` filters paths (glob); `--verbose` prints per-file progress (noisy — skip unless debugging a stuck/slow discover); `--write-json-graph` also writes legacy `graph.db`/`graph.json` (rarely needed, snapshot-only is the default and is what agents should rely on).
+**Repo targeting:** `rgctl -r /repo discover .` and `rgctl -r /repo discover` resolve to `/repo` (positional `.` does not override `-r` with process cwd). Relative PATH joins `-r`.
+
+**Other flags:** `--languages java,go` restricts the language set; `--exclude` filters paths (glob); `--verbose` prints per-file progress (noisy — skip unless debugging a stuck/slow discover); `--with-kantra` writes Kantra findings; `--write-json-graph` also writes legacy `graph.db`/`graph.json` (rarely needed, snapshot-only is the default and is what agents should rely on).
 
 **Migration flags:** `--export-migration-hints` writes `.rgctl/migration_plan.json` (primary migration deliverable for agents). Pair with `--with-harmonic` for ranking. `--migration-preset` / `--migration-order` control strategy and step sort. Discover `-f json` stdout remains telemetry — the plan body is the JSON file.
 
@@ -124,7 +126,7 @@ rgctl update --no-wait               # enqueue only when serve --watch is live
 
 **Agent should report:** preset/order, top packages/steps by priority — summarize, do not paste the full plan JSON into context.
 
-**See:** [Migration Planning Guide](../../docs/guides/migration-planning.md), migrate workflow in [workflows.md](workflows.md)
+**See:** Migration Planning Guide (product docs; not bundled in this skill pack), migrate workflow in [workflows.md](workflows.md)
 
 ---
 
@@ -331,13 +333,20 @@ There are **no** `nodes_count` / `edges_count` fields — use `len(nodes)` / `le
 
 **Prerequisites:** `discover` done. Default (no flags) computes all sections.
 
-**Sample** (`--pagerank`; `top[]` entries are node UUIDs — **not names**):
+**Sample** (`--pagerank`; `top[]` includes resolved metadata — **one call**):
 
 ```json
 {
   "schema_version": 1,
   "pagerank": {
-    "top": [{ "node": "<uuid>", "pagerank": 0.0117 }],
+    "top": [{
+      "node": "<uuid>",
+      "pagerank": 0.0117,
+      "name": "processOrder",
+      "qualified_name": "OrderService::processOrder",
+      "kind": "function",
+      "file_path": "src/OrderService.java"
+    }],
     "converged": true,
     "iterations": 20,
     "max_delta": 0.0
@@ -345,18 +354,7 @@ There are **no** `nodes_count` / `edges_count` fields — use `len(nodes)` / `le
 }
 ```
 
-**Resolving UUIDs to names:** PageRank covers all node types (Functions, Modules, Classes). To get the actual name/file for a UUID:
-
-```bash
-# For Function nodes (cheap, O(1)):
-rgctl -f json cpg function '<uuid>'
-# For any node type (heavier but always works):
-rgctl -f json blast-radius '<uuid>'
-```
-
-Loop over `top[]` UUIDs and resolve each with `cpg function` / `blast-radius` (node id is not a `find` name).
-
-**Agent should report:** top hotspot symbols (resolve UUIDs first), modularity/community count when requested.
+**Agent should report:** top hotspot symbols from `name` / `file_path` directly (no N+1 `cpg function` loop).
 
 ---
 
@@ -508,7 +506,7 @@ rgctl -f json clones SYMBOL --file PATH [--class C] [--line N]
 
 **Agent should report:** group sizes, member names/files, start/end lines, enclosing functions; for fragment mode, highlight duplicated snippet coordinates and structural hash. Do not conflate with `semantic query` hits.
 
-**See:** [clone-detection-design.md](../../docs/design/clone-detection-design.md), [Clone Detection Guide](../../docs/guides/clone-detection.md), json-api §16b
+**See:** clone-detection-design.md (product docs; not bundled in this skill pack), Clone Detection Guide (product docs; not bundled in this skill pack), json-api §16b
 
 ---
 
@@ -679,7 +677,7 @@ rgctl cpg export --format graphson --output cpg.json [--path-contains src/] \
 
 **Purpose:** Temporal PR policy gate (new/existing/resolved/regression). Prefer this name; **`pr-check`** is a compatibility alias with identical JSON and exit codes.
 
-**See:** [CI Policy Checks](../../docs/guides/ci-policy-checks.md), [json-api § pr-check / review check](../../docs/json-api.md#8b-pr-check).
+**See:** CI Policy Checks (product docs; not bundled in this skill pack), json-api § pr-check / review check (product docs; not bundled in this skill pack).
 
 ### review export
 
@@ -696,7 +694,7 @@ rgctl cpg export --format graphson --output cpg.json [--path-contains src/] \
 
 **Agent should report:** the artifact path, `review_paths.change_summary`, whether `policy` was evaluated, and any `provenance.unavailable` reasons.
 
-**See:** [json-api § review export](../../docs/json-api.md#8d-review-export).
+**See:** json-api § review export (product docs; not bundled in this skill pack).
 
 ---
 
@@ -728,8 +726,32 @@ rgctl cpg export --format graphson --output cpg.json [--path-contains src/] \
 
 ---
 
+## diff
+
+**Command:** `rgctl -f json diff --base <REF_OR_ARTIFACT> --head <REF_OR_ARTIFACT> …`
+
+**Purpose:** Compare two graph snapshots / refs (structural delta for agents and review workflows).
+
+**Prerequisites:** Discoverable trees or prepared `.rgctl` artifacts for base/head.
+
+**Agent should report:** high-level added/removed/changed symbol counts; avoid dumping full edge lists.
+
+---
+
+## rules / kantra
+
+**Command:** `rgctl discover . --with-kantra` then `rgctl rules …` (list / query Konveyor-style findings)
+
+**Purpose:** Run Kantra/rules analysis during discover; query findings afterward. Structural policy workflows that mention `kantra` should use this path (not ad-hoc scrapes).
+
+**Prerequisites:** `discover --with-kantra` writes findings under `.rgctl/`.
+
+**Agent should report:** findings path + top rule hits; pair with `migration_plan.json` when migrating.
+
+---
+
 ## See Also
 
-- [JSON API Reference](../../docs/json-api.md) - Complete field specifications
-- [Agent Recipes](../../docs/agent-recipes.md) - Copy-paste command examples
-- [User Guide](../../docs/user-guide.md) - Full CLI reference
+- JSON API Reference (product docs; not bundled in this skill pack) - Complete field specifications
+- Agent Recipes (product docs; not bundled in this skill pack) - Copy-paste command examples
+- User Guide (product docs; not bundled in this skill pack) - Full CLI reference

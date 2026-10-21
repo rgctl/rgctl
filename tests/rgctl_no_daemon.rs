@@ -94,6 +94,55 @@ fn discover_absolute_path_works_from_any_cwd() {
     assert_no_rgctl_under(outer.path());
 }
 
+/// `-r REPO discover` (no PATH) from a different cwd indexes `-r`.
+#[test]
+fn discover_no_path_uses_dash_r_when_cwd_differs() {
+    let (_tmp, repo) = materialize_fixture();
+    let outer = tempfile::tempdir().unwrap();
+    let out = Command::new(rgctl())
+        .current_dir(outer.path())
+        .args(["-r", repo.to_str().unwrap(), "discover"])
+        .output()
+        .unwrap();
+    assert_ok(&out, "discover with -r and no PATH");
+    assert_rgctl_snapshot(&repo);
+    assert_no_rgctl_under(outer.path());
+}
+
+/// `-r REPO discover <subdir>` joins subdir under `--repo`, not under cwd.
+#[test]
+fn discover_relative_subdir_joins_under_dash_r() {
+    let (_tmp, repo) = materialize_fixture();
+    let sub = repo.join("nested");
+    std::fs::create_dir_all(&sub).unwrap();
+    // Copy a tiny source so discover has something under the subdir.
+    let src = repo.join("src");
+    if src.is_dir() {
+        for entry in std::fs::read_dir(&src).unwrap() {
+            let entry = entry.unwrap();
+            let _ = std::fs::copy(entry.path(), sub.join(entry.file_name()));
+        }
+    }
+    let outer = tempfile::tempdir().unwrap();
+    let out = Command::new(rgctl())
+        .current_dir(outer.path())
+        .args([
+            "-r",
+            repo.to_str().unwrap(),
+            "discover",
+            "nested",
+        ])
+        .output()
+        .unwrap();
+    assert_ok(&out, "discover relative subdir under -r");
+    // Artifacts land under the scanned root (repo/nested), not cwd/nested.
+    assert!(
+        sub.join(".rgctl").is_dir() || repo.join(".rgctl").is_dir(),
+        "expected .rgctl under nested or repo after discover nested"
+    );
+    assert_no_rgctl_under(outer.path());
+}
+
 #[test]
 #[ignore = "manual: cold discover + gql on example/linux (~145s on reference machine)"]
 fn linux_no_daemon_discover_and_gql_smoke() {

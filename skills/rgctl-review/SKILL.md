@@ -50,15 +50,20 @@ if [ -f "${BASE_ROOT}/.rgctl/graph.snapshot.bin" ]; then
   echo "using base artifact at ${BASE_ROOT}"
 else
   git fetch origin "$(echo "$BASE_REF" | sed 's#^origin/##')" 2>/dev/null || true
-  git worktree add --detach /tmp/rgctl-base-wt "$BASE_REF"
+  WT="$(mktemp -d "${TMPDIR:-/tmp}/rgctl-base-wt.XXXXXX")"
+  cleanup_wt() { git worktree remove --force "$WT" 2>/dev/null || true; rm -rf "$WT"; }
+  trap cleanup_wt EXIT
+  git worktree add --detach "$WT" "$BASE_REF"
   (
-    cd /tmp/rgctl-base-wt
-    rgctl discover . --with-cfg --with-limits "${LIMITS_SPEC}"
+    cd "$WT"
+    # Structural snapshot only — review paths/check do not need CFG/PDG.
+    rgctl discover . --with-limits "${LIMITS_SPEC}"
   )
   mkdir -p .rgctl-base
   rm -rf .rgctl-base/.rgctl
-  cp -a /tmp/rgctl-base-wt/.rgctl .rgctl-base/
-  git worktree remove --force /tmp/rgctl-base-wt
+  cp -a "$WT/.rgctl" .rgctl-base/
+  cleanup_wt
+  trap - EXIT
   BASE_ROOT=".rgctl-base"
 fi
 

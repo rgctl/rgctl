@@ -2,6 +2,18 @@
 
 <!-- Add bullets here during development; move to docs/releases/v0.4.x.md at tag time. -->
 
+## Agent & human CLI UX (`agent-and-human-cli-ux`)
+
+Agents and interactive users share a cleaner CLI surface without changing discover hot paths:
+
+- **`--repo` + PATH:** `rgctl -r <REPO> discover .` (and `update` / `serve`) resolve against `-r`, not process cwd; relative PATH joins `-r`.
+- **JSON errors:** `-f json` / `RGCTL_FORMAT=json` emit a stdout envelope (`ok: false`, `error_code`, optional `candidates` / `suggestions` / `recovery_command`); quiet stderr banners unless `-v`.
+- **Symbol targeting:** `--file` / `--class` / `--line` on `inspect`, `cpg function|calls|ast|pdg`, and `blast-radius`; query `--package` / `--methods` parity; `slice` / `cpg flows` accept `Class::method` / `Class.method`.
+- **Status capabilities:** `status` reports structural / CFG-CPG / semantic (inferred scope) / agent-skills readiness with unlock commands.
+- **Human TTY:** structured query rows show `kind  name  file:line` when stdout is a terminal; piped output stays 1-column. `inspect` and `metrics` print readable summaries (not count-only / `Debug`).
+- **Metrics JSON:** `pagerank` / `betweenness` `top[]` include `name`, `qualified_name`, `kind`, `file_path` (no N+1 `cpg function`).
+- **Skills:** `skills/rgctl` self-contained (no broken `../../docs/` links); `diff` + `kantra`/`rules` coverage; `rgctl-review` Step 0 uses a temp worktree without `--with-cfg`; `.agents/skills/` synced with parity tests.
+
 ## Faster `--with-cfg` / `--full` discover (`accelerate-cfg-discover-pipeline`)
 
 Cold discover with CFG/CPG is cheaper without changing CLI flags or on-disk archive magic:

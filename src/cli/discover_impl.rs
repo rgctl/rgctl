@@ -7,7 +7,7 @@ use super::discover_cfg::{
     CfgAnalysisOptions, FileSourceCache, preload_file_sources, run_cfg_analysis_batch,
 };
 use super::discover_limits::{check_memory_budget, DiscoverLimits};
-use super::discover_output::build_discover_response;
+use super::discover_output::{DiscoverArtifacts, build_discover_response};
 use super::stage_profile::{DiscoverStageReport, secs};
 use crate::analysis::graph_utils::PetGraphView;
 use crate::analysis::{
@@ -1304,6 +1304,7 @@ pub(crate) fn run_full_analysis(
     // Export static dashboard bundle only when requested (#31).
     let save_dashboard_start = Instant::now();
     let dashboard_dir = rgctl_graph::paths::artifact_path(store, "dashboard");
+    let mut written_artifacts = DiscoverArtifacts::default();
     if with_dashboard {
         let graph = hydrated.as_ref().expect("hydrated for dashboard");
         match rgctl_dashboard::export_dashboard_bundle_if_changed_with_context(
@@ -1313,11 +1314,17 @@ pub(crate) fn run_full_analysis(
             rgctl_dashboard::DashboardExportContext::with_analysis(&analysis_results),
         ) {
             Ok(true) => {
+                written_artifacts.dashboard_dir =
+                    Some(dashboard_dir.to_string_lossy().into_owned());
                 if human_output {
                     info!("[✓] Dashboard: {}/index.html", dashboard_dir.display());
                 }
             }
             Ok(false) => {
+                if dashboard_dir.join("manifest.json").is_file() {
+                    written_artifacts.dashboard_dir =
+                        Some(dashboard_dir.to_string_lossy().into_owned());
+                }
                 if verbose {
                     debug!("Dashboard bundle unchanged — skipped re-export");
                 }
@@ -1350,6 +1357,8 @@ pub(crate) fn run_full_analysis(
             rgctl_analysis::MigrationOrderMode::parse(migration_order),
         ) {
             Ok(plan) => {
+                written_artifacts.migration_plan =
+                    Some(plan_path.to_string_lossy().into_owned());
                 if json_output && ctx.output.is_none() && emit_cli_summary {
                     ctx.emit_json_value(&serde_json::to_value(&plan)?)?;
                     return Ok(discover_outcome(
@@ -1401,9 +1410,20 @@ pub(crate) fn run_full_analysis(
         profile.record();
     }
 
+    if with_kantra {
+        let findings = rgctl_graph::paths::artifact_path(store, "kantra_findings.json");
+        if findings.is_file() {
+            written_artifacts.kantra_findings =
+                Some(findings.to_string_lossy().into_owned());
+        }
+    }
+
     if json_output && emit_cli_summary {
-        let response =
+        let mut response =
             build_discover_response(&index_stats, run_start.elapsed().as_millis() as u64);
+        if !written_artifacts.is_empty() {
+            response.artifacts = Some(written_artifacts);
+        }
         ctx.emit_json_value(&serde_json::to_value(&response)?)?;
     } else if !json_output && emit_cli_summary {
         info!("[✓] Saved to .rgctl/ ({:.1} MB total)", analysis_size);

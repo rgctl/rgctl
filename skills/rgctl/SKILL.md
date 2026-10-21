@@ -89,7 +89,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 - `--with-security --with-taint` — Security scanning
 - `--with-harmonic` — Harmonic centrality (used with migration ranking)
 
-**See:** [Discovering and Indexing Guide](../../docs/guides/discovering-and-indexing.md)
+**See:** Discovering and Indexing Guide (product docs; not bundled in this skill pack)
 
 ### 1b. Migration roadmap (`--export-migration-hints`)
 
@@ -104,7 +104,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 
 **Supporting probes** (optional context before/after the plan): `status` → `inventory --by import-prefix --limit 40` → `find --annotation …` / suffix globs → `callers` / `blast-radius` on candidates.
 
-**See:** [Migration Planning Guide](../../docs/guides/migration-planning.md), migrate workflow in [references/workflows.md](references/workflows.md)
+**See:** Migration Planning Guide (product docs; not bundled in this skill pack), migrate workflow in [references/workflows.md](references/workflows.md)
 
 ### 2. Query & Search
 
@@ -133,7 +133,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 **Migration:** prefer `--export-migration-hints` → `migration_plan.json`. Optional probes: `status` → `inventory --by import-prefix --limit 40` → `find --annotation …` / suffix globs → `callers` / `blast-radius`.
 
 **Complexity honesty:** exact name = hash index; prefix/`*mid*`/`--scope` may scan keys/columns until better indexes land. Module re-index is still a strong speed lever. Annotation **arguments** (e.g. `@Path("/x")`) need `--show-attributes` when `annotation_args.json` is present.
-**See:** [Command Encyclopedia](references/command-encyclopedia.md) (find/callers/relations/inventory/status), [Semantic Search Guide](../../docs/guides/semantic-search.md)
+**See:** [Command Encyclopedia](references/command-encyclopedia.md) (find/callers/relations/inventory/status), Semantic Search Guide (product docs; not bundled in this skill pack)
 
 ### 3. Impact & Safety
 
@@ -155,15 +155,17 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 
 **Vuln scans:** index with `--with-cfg` before sink-first taint / blast classify / exploitability VEX; add `--with-taint` when PDG-backed confidence is required. Plain discover is enough only for triage + deps-only early exit.
 
-**See:** [Blast Radius Guide](../../docs/guides/blast-radius-analysis.md), [CI Policy Guide](../../docs/guides/ci-policy-checks.md), vuln workflow in [references/workflows.md](references/workflows.md)
+**See:** Blast Radius Guide (product docs; not bundled in this skill pack), CI Policy Guide (product docs; not bundled in this skill pack), vuln workflow in [references/workflows.md](references/workflows.md)
 
 ### 4. Metrics & Analysis
 
 | User Intent | CLI Command |
 |-------------|-------------|
-| PageRank hotspots | `metrics --pagerank` |
-| Betweenness bridges | `metrics --betweenness` |
+| PageRank hotspots (names + paths in JSON) | `metrics --pagerank -f json` |
+| Betweenness bridges | `metrics --betweenness -f json` |
 | Community stats | `metrics --communities` |
+
+`top[]` entries include `name`, `qualified_name`, `kind`, `file_path` alongside `node` (UUID) — no follow-up `cpg function` needed.
 
 ### 5. Code Analysis (CFG/PDG/Slicing)
 
@@ -172,11 +174,19 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | CFG/PDG status | `cpg status` |
 | Field mutations | `cpg mutations --type Foo` |
 | Data flow trace | `cpg flows FILE --line N --variable V --function F` |
-| Program slice | `slice FILE --line N --variable V --function F` |
-| CFG inspection | `inspect <Symbol> cfg` |
+| Program slice | `slice FILE --line N --variable V --function Class::method` |
+| CFG inspection | `inspect <Symbol> cfg [--file PATH] [--class C] [--line N]` |
 | PDG inspection | `inspect <Symbol> pdg --edge-layer data` |
 
-Needs `discover --with-cfg`. `--function` is method name, not class.
+Needs `discover --with-cfg`. Disambiguate overloaded symbols with `--file` / `--class` / `--line` on `inspect`, `cpg function|calls|ast|pdg`, and `blast-radius`.
+
+### 5b. Diff & Konveyor rules
+
+| User Intent | CLI Command |
+|-------------|-------------|
+| Snapshot / graph diff | `diff --base <A> --head <B>` (or prepared refs; see encyclopedia) |
+| Kantra / migration rules during discover | `discover . --with-kantra` |
+| List / query installed rules | `rules` (and related subcommands) |
 
 ### 6. Export & Visualization
 
@@ -213,7 +223,7 @@ Needs `discover --with-cfg`. `--function` is method name, not class.
 | slice/inspect/cpg fails | Re-discover with `--with-cfg` |
 | vuln analyze / sink-first taint weak (`cfg_available=false`) | Re-discover with `--with-cfg` (add `--with-taint` for PDG confidence) |
 | semantic query fails | `semantic index` |
-| Ambiguous symbol | Add `--class` or `--file` on callers/find |
+| Ambiguous symbol | Add `--file` / `--class` / `--line` (inspect/cpg/blast-radius/find/callers); read `candidates` + `recovery_command` under `-f json` |
 | `check` exit 1 | Report violations (JSON still on stdout) |
 | find/relations empty | Run `inventory --by type` / `--by edge` (zeros mean unpopulated schema); check `--scope` |
 | Name glob returns 0 | Try `semantic query` / `communities list` / broader `find '*X*'` types |
@@ -235,11 +245,13 @@ All paths under **`{repo}/.rgctl/`**:
 
 ```bash
 export REPO=/path/to/repo
-rgctl -r "$REPO" discover
+rgctl -r "$REPO" discover .
+rgctl -r "$REPO" discover          # same target as discover .
 rgctl -r "$REPO" -f json <command> …
+# RGCTL_FORMAT=json also selects JSON without -f
 ```
 
-**Globals:** `-f json` (agents), `-r` / `--repo`, `-o` output file, `-d` / `--db` (custom graph cache path)
+**Globals:** `-f json` / `RGCTL_FORMAT` (agents), `-r` / `--repo` (positional `.` resolves against `-r`), `-o` output file, `-d` / `--db` (custom graph cache path)
 
 ## Reference Files
 
@@ -249,12 +261,12 @@ rgctl -r "$REPO" -f json <command> …
 
 ## External Documentation
 
-- [User Guide](../../docs/user-guide.md) — Complete CLI tutorial
-- [JSON API](../../docs/json-api.md) — Schema specifications
-- [Agent Recipes](../../docs/agent-recipes.md) — Copy-paste recipes
-- [USER_AGENTS_TEMPLATE.md](../../docs/agents/USER_AGENTS_TEMPLATE.md) — paste into consumer repos
-- [AGENTS.md](../../AGENTS.md) — contributor agent README (rgctl source tree)
-- [Policy Format](../../docs/policy-format.md) — CI policy schema
+- User Guide (product docs; not bundled in this skill pack) — Complete CLI tutorial
+- JSON API (product docs; not bundled in this skill pack) — Schema specifications
+- Agent Recipes (product docs; not bundled in this skill pack) — Copy-paste recipes
+- USER_AGENTS_TEMPLATE.md (product docs; not bundled in this skill pack) — paste into consumer repos
+- Contributor `AGENTS.md` (rgctl source tree only; not shipped to consumer installs)
+- Policy Format (product docs; not bundled in this skill pack) — CI policy schema
 
 ## Installation
 
@@ -262,4 +274,4 @@ rgctl -r "$REPO" -f json <command> …
 rgctl install --skill --tools cursor,claude,codex,antigravity,agents
 ```
 
-Installs the single skill `rgctl` (with `references/`) for each selected adapter. Omitting `--tools` installs **cursor, claude, codex, agents, antigravity**; use `--tools all` for the full registry. See [docs/guides/agent-skill.md](../../docs/guides/agent-skill.md). Scenario prose lives in `references/workflows.md`.
+Installs the single skill `rgctl` (with `references/`) for each selected adapter. Omitting `--tools` installs **cursor, claude, codex, agents, antigravity**; use `--tools all` for the full registry. See docs/guides/agent-skill.md (product docs; not bundled in this skill pack). Scenario prose lives in `references/workflows.md`.

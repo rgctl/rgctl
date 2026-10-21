@@ -1,9 +1,10 @@
 //! Shared CLI context: paths, graph I/O, and output routing.
 
 use anyhow::{Context, Result, bail};
+use rgctl_error::SymbolCandidate;
 use rgctl_graph::CodeGraph;
 use rgctl_graph::SnapshotNodeStore;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -26,6 +27,8 @@ pub struct CliContext {
     pub output: Option<PathBuf>,
     pub verbose: bool,
     snapshot_cache: RefCell<Option<SnapshotSession>>,
+    /// Whether a structured JSON error envelope was already written to stdout.
+    json_error_emitted: Cell<bool>,
 }
 
 impl CliContext {
@@ -47,7 +50,60 @@ impl CliContext {
             output,
             verbose,
             snapshot_cache: RefCell::new(None),
+            json_error_emitted: Cell::new(false),
         }
+    }
+
+    /// Whether a JSON error envelope was already emitted on stdout.
+    pub fn json_error_emitted(&self) -> bool {
+        self.json_error_emitted.get()
+    }
+
+    /// Mark that a JSON error envelope was written (prevents duplicate top-level emit).
+    pub fn mark_json_error_emitted(&self) {
+        self.json_error_emitted.set(true);
+    }
+
+    /// Emit a structured JSON error envelope on stdout and mark it emitted.
+    pub fn emit_json_error(
+        &self,
+        error: &str,
+        error_code: &str,
+        message: &str,
+        candidates: Option<&[SymbolCandidate]>,
+        suggestions: Option<&[String]>,
+        recovery_command: Option<&str>,
+    ) -> Result<()> {
+        let mut value = serde_json::json!({
+            "schema_version": 1,
+            "ok": false,
+            "error": error,
+            "error_code": error_code,
+            "message": message,
+        });
+        if let Some(c) = candidates {
+            if !c.is_empty() {
+                value["candidates"] = serde_json::to_value(c)?;
+            }
+        }
+        if let Some(s) = suggestions {
+            if !s.is_empty() {
+                value["suggestions"] = serde_json::to_value(s)?;
+            }
+        }
+        if let Some(cmd) = recovery_command {
+            value["recovery_command"] = serde_json::Value::String(cmd.to_string());
+        }
+        self.emit_json_value(&value)?;
+        self.mark_json_error_emitted();
+        Ok(())
+    }
+
+    /// Classify an [`anyhow::Error`] into a JSON error envelope for `-f json` top-level trapping.
+    pub fn emit_json_error_from_anyhow(&self, err: &anyhow::Error) -> Result<()> {
+        let msg = format!("{err:#}");
+        let (error, error_code, recovery) = classify_cli_error(&msg);
+        self.emit_json_error(error, error_code, &msg, None, None, recovery)
     }
 
     fn snapshot_path(&self) -> PathBuf {
@@ -166,6 +222,45 @@ impl CliContext {
                 }
             }
         }
+    }
+}
+
+fn classify_cli_error(message: &str) -> (&'static str, &'static str, Option<&'static str>) {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("ambiguous symbol") {
+        (
+            "ambiguous_symbol",
+            "AMBIGUOUS_SYMBOL",
+            Some("rgctl status"),
+        )
+    } else if lower.contains("graph not found") || lower.contains("run `rgctl discover`") {
+        (
+            "graph_not_found",
+            "GRAPH_NOT_FOUND",
+            Some("rgctl discover"),
+        )
+    } else if lower.contains("cfg") && (lower.contains("not indexed") || lower.contains("archive"))
+    {
+        (
+            "cfg_not_indexed",
+            "CFG_NOT_INDEXED",
+            Some("rgctl discover --with-cfg"),
+        )
+    } else if lower.contains("incompatible with index scope")
+        || lower.contains("semantic query scope")
+    {
+        let recovery = if lower.contains("--scope docs") || lower.contains("scope 'docs'") {
+            Some("rgctl semantic index --scope docs")
+        } else if lower.contains("--scope function") || lower.contains("scope 'function'") {
+            Some("rgctl semantic index --scope function")
+        } else {
+            Some("rgctl semantic index")
+        };
+        ("index_scope_mismatch", "INDEX_SCOPE_MISMATCH", recovery)
+    } else if lower.contains("not found") {
+        ("not_found", "NOT_FOUND", None)
+    } else {
+        ("error", "ERROR", None)
     }
 }
 

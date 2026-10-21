@@ -10,7 +10,27 @@ use rgctl_analysis::{
     community_edge_types_for_backend, default_behavioral_edges,
 };
 use rgctl_graph::CodeGraph;
+use rgctl_graph::backend::GraphBackend;
 use serde_json::{Value, json};
+use uuid::Uuid;
+
+fn enrich_top_entry(graph: &CodeGraph, id: Uuid, score_key: &str, score: f64) -> Value {
+    let mut obj = json!({
+        "node": id.to_string(),
+        score_key: score,
+    });
+    if let Ok(Some(n)) = graph.backend().get_node(id) {
+        obj["name"] = json!(n.name.to_string());
+        obj["kind"] = json!(format!("{:?}", n.node_type).to_lowercase());
+        if let Some(qn) = n.qualified_name.as_ref() {
+            obj["qualified_name"] = json!(qn.to_string());
+        }
+        if let Some(fp) = n.file_path.as_ref() {
+            obj["file_path"] = json!(fp.to_string());
+        }
+    }
+    obj
+}
 
 /// Compute requested metric sections.
 pub fn run_metrics(graph: &CodeGraph, args: &MetricsArgs) -> Result<Value> {
@@ -41,7 +61,7 @@ pub fn run_metrics(graph: &CodeGraph, args: &MetricsArgs) -> Result<Value> {
         top.truncate(20);
         let top = top
             .iter()
-            .map(|(id, score)| json!({ "node": id.to_string(), "pagerank": score }))
+            .map(|(id, score)| enrich_top_entry(graph, *id, "pagerank", *score))
             .collect();
         pagerank = Some(MetricsPagerankSection {
             top,
@@ -58,7 +78,7 @@ pub fn run_metrics(graph: &CodeGraph, args: &MetricsArgs) -> Result<Value> {
         top.truncate(20);
         betweenness = Some(
             top.iter()
-                .map(|(id, s)| json!({ "node": id.to_string(), "score": s }))
+                .map(|(id, s)| enrich_top_entry(graph, **id, "score", *s))
                 .collect(),
         );
     }

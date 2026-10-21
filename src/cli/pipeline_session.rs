@@ -238,6 +238,7 @@ pub fn run_full_pipeline(
         command: "discover".into(),
         full: Some(true),
         plan: Some(final_status.plan.clone()),
+        artifacts: None,
         metrics: super::discover_output::DiscoverMetrics {
             files_discovered: 0,
             files_indexed: 0,
@@ -249,6 +250,25 @@ pub fn run_full_pipeline(
     });
     response.full = Some(true);
     response.plan = Some(final_status.plan);
+
+    let mut artifacts = super::discover_output::DiscoverArtifacts::default();
+    let dashboard = rgctl_graph::paths::artifact_path(store_path, "dashboard");
+    if dashboard.join("manifest.json").is_file() {
+        artifacts.dashboard_dir = Some(dashboard.to_string_lossy().into_owned());
+    }
+    if extras.export_migration_hints {
+        let plan = rgctl_graph::paths::artifact_path(store_path, "migration_plan.json");
+        if plan.is_file() {
+            artifacts.migration_plan = Some(plan.to_string_lossy().into_owned());
+        }
+    }
+    let kantra = rgctl_graph::paths::artifact_path(store_path, "kantra_findings.json");
+    if kantra.is_file() {
+        artifacts.kantra_findings = Some(kantra.to_string_lossy().into_owned());
+    }
+    if !artifacts.is_empty() {
+        response.artifacts = Some(artifacts);
+    }
 
     if ctx.format == OutputFormat::Json {
         ctx.emit_json_value(&serde_json::to_value(&response)?)?;

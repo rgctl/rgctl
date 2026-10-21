@@ -196,7 +196,17 @@ fn require_unique_function(backend: &MemoryBackend, symbol: &str) -> Result<Node
         many => Err(Error::AmbiguousSymbol {
             name: symbol.to_string(),
             count: many.len(),
-            candidates: vec![],
+            candidates: many
+                .iter()
+                .map(|n| rgctl_error::SymbolCandidate {
+                    id: n.id.to_string(),
+                    name: n.name.to_string(),
+                    qualified_name: n.qualified_name.as_ref().map(|s| s.to_string()),
+                    node_type: "function".into(),
+                    file: n.file_path.as_ref().map(|s| s.to_string()),
+                    line: n.start_line,
+                })
+                .collect(),
         }),
     }
 }

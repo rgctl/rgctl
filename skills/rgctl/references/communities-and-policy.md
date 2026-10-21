@@ -182,7 +182,7 @@ Example `policy.json`:
 | `forbidden_crossings[].to_pattern` | regex | Callee pattern |
 | `forbidden_crossings[].reason` | string | Human explanation |
 
-**See:** [Policy Format Guide](../../docs/policy-format.md) for full schema
+**See:** Policy Format Guide (product docs; not bundled in this skill pack) for full schema
 
 ### Running Policy Checks
 
@@ -443,8 +443,8 @@ rgctl -f json communities list | jq -r '.communities[] | "\(.id): \(.label)"' | 
 
 ## See Also
 
-- [Community Detection Guide](../../docs/guides/community-detection.md) — In-depth tutorial
-- [CI Policy Checks Guide](../../docs/guides/ci-policy-checks.md) — Full policy schema
-- [Policy Format Reference](../../docs/policy-format.md) — JSON schema specification
-- [Graph Metrics Guide](../../docs/guides/graph-metrics.md) — Centrality, PageRank
-- [Blast Radius Guide](../../docs/guides/blast-radius-analysis.md) — Impact analysis
+- Community Detection Guide (product docs; not bundled in this skill pack) — In-depth tutorial
+- CI Policy Checks Guide (product docs; not bundled in this skill pack) — Full policy schema
+- Policy Format Reference (product docs; not bundled in this skill pack) — JSON schema specification
+- Graph Metrics Guide (product docs; not bundled in this skill pack) — Centrality, PageRank
+- Blast Radius Guide (product docs; not bundled in this skill pack) — Impact analysis

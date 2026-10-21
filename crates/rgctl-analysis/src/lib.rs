@@ -146,7 +146,7 @@ pub use complexity::{ComplexityAnalyzer, ComplexityLevel, ComplexityReport, clas
 pub use cpg::{
     CpgCallEdge, CpgCallsInfo, CpgFlowStep, CpgFlowsArgs, CpgFlowsResult, CpgFunctionInfo,
     CpgMutationHit, CpgMutationsResult, CpgStatus, archive_path, cpg_calls, cpg_flows,
-    cpg_function, cpg_mutations, cpg_status,
+    cpg_function, cpg_mutations, cpg_status, find_function_nodes,
 };
 pub use cpg_export::{CpgExportFormat, CpgExportScope, export_cpg};
 pub use dataflow::{Definition, ReachingDefs, compute_reaching_definitions};

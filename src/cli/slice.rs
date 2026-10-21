@@ -106,6 +106,37 @@ pub struct SliceArgs {
     pub view: SliceView,
 }
 
+/// Normalize `Class::method` / `Class.method` to a name that exists in `locations` when possible.
+///
+/// Matches the full selector first, then the trailing bare method name.
+pub fn normalize_function_selector(
+    requested: &str,
+    locations: Option<&HashMap<String, FunctionLocation>>,
+) -> String {
+    if let Some(locs) = locations {
+        if locs.contains_key(requested) {
+            return requested.to_string();
+        }
+    }
+    let bare = if let Some(idx) = requested.rfind("::") {
+        &requested[idx + 2..]
+    } else if let Some(idx) = requested.rfind('.') {
+        &requested[idx + 1..]
+    } else {
+        requested
+    };
+    if let Some(locs) = locations {
+        if locs.contains_key(bare) {
+            return bare.to_string();
+        }
+    }
+    // No index: still prefer bare method for Class::method so CFG lookup can succeed.
+    if bare != requested && !bare.is_empty() {
+        return bare.to_string();
+    }
+    requested.to_string()
+}
+
 pub fn run(ctx: &CliContext, args: SliceArgs) -> Result<()> {
     let path = resolve_slice_path(ctx, &args.file)?;
     if let Some(msg) = markup_context_unsupported("slice", &path) {
@@ -127,7 +158,7 @@ pub fn run(ctx: &CliContext, args: SliceArgs) -> Result<()> {
     let (_, locations) = index_function_locations(&lang, source.as_bytes())?;
     let explicit_function = args.function.is_some();
     let fn_name = match args.function.clone() {
-        Some(name) => name,
+        Some(name) => normalize_function_selector(&name, Some(&locations)),
         None => line_start_byte(&source, args.line)
             .and_then(|offset| function_containing_line(&locations, offset))
             // Nothing contains the line. Keep the historical fallback so behaviour changes only

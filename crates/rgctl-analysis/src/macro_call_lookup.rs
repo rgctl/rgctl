@@ -251,7 +251,25 @@ pub fn resolve_symbol_uuid(candidates: &[MacroIndexEntry], parsed: &ParsedSymbol
             Err(Error::AmbiguousSymbol {
                 name: parsed.target_name.clone(),
                 count,
-                candidates: vec![],
+                candidates: filtered
+                    .iter()
+                    .map(|e| rgctl_error::SymbolCandidate {
+                        id: e.id.to_string(),
+                        name: e.symbol_name.clone(),
+                        qualified_name: if e.canonical_fqn.is_empty() {
+                            None
+                        } else {
+                            Some(e.canonical_fqn.clone())
+                        },
+                        node_type: "function".into(),
+                        file: if e.file_path.is_empty() {
+                            None
+                        } else {
+                            Some(e.file_path.clone())
+                        },
+                        line: None,
+                    })
+                    .collect(),
             })
         }
     }

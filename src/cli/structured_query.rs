@@ -95,41 +95,157 @@ fn emit_text_entities(ctx: &CliContext, names: impl IntoIterator<Item = String>)
     Ok(())
 }
 
-/// Map graph errors; under `-f json`, emit an `ambiguous_symbol` envelope on stdout.
+fn stdout_is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
+}
+
+/// TTY: aligned `kind  name  file:line`; piped: bare names (pipeline-safe).
+fn emit_text_entity_rows(ctx: &CliContext, entities: &[rgctl_graph::EntityRow]) -> Result<()> {
+    if ctx.output.is_some() || !stdout_is_tty() {
+        return emit_text_entities(ctx, entities.iter().map(|e| e.name.clone()));
+    }
+    let kind_w = entities
+        .iter()
+        .map(|e| e.node_type.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    let name_w = entities
+        .iter()
+        .map(|e| e.name.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    for e in entities {
+        let loc = match (&e.file, e.line) {
+            (Some(f), Some(l)) => format!("{f}:{l}"),
+            (Some(f), None) => f.clone(),
+            _ => "-".into(),
+        };
+        ctx.stdout_line(&format!(
+            "{:<kind_w$}  {:<name_w$}  {loc}",
+            e.node_type,
+            e.name,
+            kind_w = kind_w,
+            name_w = name_w
+        ))?;
+    }
+    Ok(())
+}
+
+/// Map graph errors; under `-f json`, emit a structured error envelope on stdout.
 fn map_sq_err(ctx: &CliContext, err: GraphError) -> anyhow::Error {
-    if let GraphError::AmbiguousSymbol {
-        name,
-        count,
-        candidates,
-    } = &err
-    {
-        if ctx.format == OutputFormat::Json {
-            let envelope = serde_json::json!({
-                "schema_version": STRUCTURED_QUERY_SCHEMA_VERSION,
-                "error": "ambiguous_symbol",
-                "name": name,
-                "count": count,
-                "candidates": candidates,
-            });
-            let _ = ctx.emit_json_value(&envelope);
-        } else if !candidates.is_empty() {
-            eprintln!("Ambiguous symbol '{name}': {count} matches. Candidates:");
-            for c in candidates.iter().take(20) {
-                let file = c.file.as_deref().unwrap_or("?");
-                let line = c
-                    .line
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|| "?".into());
-                let qn = c.qualified_name.as_deref().unwrap_or("");
-                eprintln!(
-                    "  - id={} type={} file={file}:{line} name={} {qn}",
-                    c.id, c.node_type, c.name
+    match &err {
+        GraphError::AmbiguousSymbol {
+            name,
+            count,
+            candidates,
+        } => {
+            if ctx.format == OutputFormat::Json {
+                let msg = format!("Ambiguous symbol '{name}': {count} matches");
+                let recovery = format!(
+                    "rgctl find {name} --file <PATH> --class <CLASS> --line <N>"
+                );
+                let _ = ctx.emit_json_error(
+                    "ambiguous_symbol",
+                    "AMBIGUOUS_SYMBOL",
+                    &msg,
+                    Some(candidates.as_slice()),
+                    None,
+                    Some(&recovery),
+                );
+            } else if !candidates.is_empty() {
+                eprintln!("Ambiguous symbol '{name}': {count} matches. Candidates:");
+                for c in candidates.iter().take(20) {
+                    let file = c.file.as_deref().unwrap_or("?");
+                    let line = c
+                        .line
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "?".into());
+                    let qn = c.qualified_name.as_deref().unwrap_or("");
+                    eprintln!(
+                        "  - id={} type={} file={file}:{line} name={} {qn}",
+                        c.id, c.node_type, c.name
+                    );
+                }
+                eprintln!("Disambiguate with --file, --class, and/or --line.");
+            }
+        }
+        GraphError::NodeNotFound(name) | GraphError::NotFound(name) => {
+            if ctx.format == OutputFormat::Json {
+                let suggestions = suggest_symbol_names(ctx, name, 5);
+                let recovery = format!("rgctl find {name}");
+                let _ = ctx.emit_json_error(
+                    "not_found",
+                    "NOT_FOUND",
+                    &format!("{err}"),
+                    None,
+                    Some(&suggestions),
+                    Some(&recovery),
                 );
             }
-            eprintln!("Disambiguate with --file, --class, and/or --line.");
+        }
+        other => {
+            let msg = other.to_string().to_ascii_lowercase();
+            if ctx.format == OutputFormat::Json {
+                if msg.contains("graph") && msg.contains("not found") {
+                    let _ = ctx.emit_json_error(
+                        "graph_not_found",
+                        "GRAPH_NOT_FOUND",
+                        &other.to_string(),
+                        None,
+                        None,
+                        Some("rgctl discover"),
+                    );
+                } else if msg.contains("cfg")
+                    && (msg.contains("not indexed") || msg.contains("archive"))
+                {
+                    let _ = ctx.emit_json_error(
+                        "cfg_not_indexed",
+                        "CFG_NOT_INDEXED",
+                        &other.to_string(),
+                        None,
+                        None,
+                        Some("rgctl discover --with-cfg"),
+                    );
+                }
+            }
         }
     }
     anyhow::anyhow!("{err}")
+}
+
+fn suggest_symbol_names(ctx: &CliContext, needle: &str, limit: usize) -> Vec<String> {
+    let Ok(Some(store)) = ctx.open_snapshot_store() else {
+        return Vec::new();
+    };
+    let needle_l = needle.to_ascii_lowercase();
+    // Cheap: exact-name index miss → try a few prefix/substring hits via find with high limit.
+    let filters = QueryFilters {
+        limit: Some(200),
+        ..Default::default()
+    };
+    let q = StructuredQuery::new(store.as_ref());
+    let Ok(result) = q.find(Some(needle), &filters) else {
+        return Vec::new();
+    };
+    let mut scored: Vec<(usize, String)> = result
+        .entities
+        .into_iter()
+        .filter_map(|e| {
+            let name = e.name;
+            let lower = name.to_ascii_lowercase();
+            if lower.contains(&needle_l) || needle_l.contains(&lower) {
+                Some((lower.len().abs_diff(needle_l.len()), name))
+            } else {
+                None
+            }
+        })
+        .collect();
+    scored.sort_by_key(|(d, _)| *d);
+    scored.dedup_by(|a, b| a.1 == b.1);
+    scored.into_iter().take(limit).map(|(_, n)| n).collect()
 }
 
 /// `rgctl find`
@@ -216,7 +332,7 @@ pub fn run_find(
     if count_only {
         ctx.stdout_line(&format!("{}", result.total))?;
     } else {
-        emit_text_entities(ctx, result.entities.into_iter().map(|e| e.name))?;
+        emit_text_entity_rows(ctx, &result.entities)?;
     }
     Ok(())
 }
@@ -287,7 +403,7 @@ pub fn run_call_neighbors(
         }
         return ctx.emit_json_value(&serde_json::Value::Object(obj));
     }
-    emit_text_entities(ctx, all_neighbors.into_iter().map(|e| e.name))?;
+    emit_text_entity_rows(ctx, &all_neighbors)?;
     Ok(())
 }
 
@@ -338,16 +454,34 @@ pub fn run_relations(
     if ctx.format == OutputFormat::Json {
         return emit_json(ctx, &result);
     }
+    let tty = ctx.output.is_none() && stdout_is_tty();
     for e in result.edges {
         let occ = if e.occurrences > 1 {
             format!(" x{}", e.occurrences)
         } else {
             String::new()
         };
-        ctx.stdout_line(&format!(
-            "{} -[{}]-> {}{occ}",
-            e.source.name, e.edge, e.target.name
-        ))?;
+        if tty {
+            let src_loc = match (&e.source.file, e.source.line) {
+                (Some(f), Some(l)) => format!("{f}:{l}"),
+                (Some(f), None) => f.clone(),
+                _ => "-".into(),
+            };
+            let tgt_loc = match (&e.target.file, e.target.line) {
+                (Some(f), Some(l)) => format!("{f}:{l}"),
+                (Some(f), None) => f.clone(),
+                _ => "-".into(),
+            };
+            ctx.stdout_line(&format!(
+                "{}  {}  {src_loc}  -[{}]->  {}  {}  {tgt_loc}{occ}",
+                e.source.node_type, e.source.name, e.edge, e.target.node_type, e.target.name
+            ))?;
+        } else {
+            ctx.stdout_line(&format!(
+                "{} -[{}]-> {}{occ}",
+                e.source.name, e.edge, e.target.name
+            ))?;
+        }
     }
     Ok(())
 }

@@ -69,7 +69,7 @@ From a target repository (not the rgctl source tree unless you are dogfooding):
 rgctl install --skill --tools cursor,claude,codex,antigravity,agents
 ```
 
-Installs a single skill named `rgctl`. See [Agent pack walkthrough](../../docs/guides/agent-skill.md).
+Installs a single skill named `rgctl`. See Agent pack walkthrough (product docs; not bundled in this skill pack).
 
 If an older pack left `rgctl-discover` / `rgctl-impact` / … directories behind, delete them manually — install no longer writes those folders.
 
@@ -77,8 +77,8 @@ If an older pack left `rgctl-discover` / `rgctl-impact` / … directories behind
 
 ## See Also
 
-- [User Guide](../../docs/user-guide.md) - Complete CLI tutorial
-- [Agent recipes](../../docs/agent-recipes.md) - Copy-paste CLI workflows
-- [HTTP Server and Dashboard](../../docs/guides/http-server-and-dashboard.md) - Optional `rgctl serve` for dashboard
-- [JSON API](../../docs/json-api.md) - Schema specifications
-- [All Guides](../../docs/guides/README.md) - Feature-specific guides
+- User Guide (product docs; not bundled in this skill pack) - Complete CLI tutorial
+- Agent recipes (product docs; not bundled in this skill pack) - Copy-paste CLI workflows
+- HTTP Server and Dashboard (product docs; not bundled in this skill pack) - Optional `rgctl serve` for dashboard
+- JSON API (product docs; not bundled in this skill pack) - Schema specifications
+- All Guides (product docs; not bundled in this skill pack) - Feature-specific guides

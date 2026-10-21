@@ -13,9 +13,7 @@ use rgctl_analysis::{
     build_bloom_report, build_exact_report, exact_clones_with_cache, parse_mode, save_sidecar,
 };
 use rgctl_error::Error as GraphError;
-use rgctl_graph::{
-    QueryFilters, STRUCTURED_QUERY_SCHEMA_VERSION, StructuredQuery, schema::NodeType,
-};
+use rgctl_graph::{QueryFilters, StructuredQuery, schema::NodeType};
 
 /// CLI arguments for `rgctl clones`.
 #[derive(Debug, Clone)]
@@ -82,14 +80,16 @@ fn map_sq_err(ctx: &CliContext, err: GraphError) -> anyhow::Error {
     } = &err
     {
         if ctx.format == OutputFormat::Json {
-            let envelope = serde_json::json!({
-                "schema_version": STRUCTURED_QUERY_SCHEMA_VERSION,
-                "error": "ambiguous_symbol",
-                "name": name,
-                "count": count,
-                "candidates": candidates,
-            });
-            let _ = ctx.emit_json_value(&envelope);
+            let msg = format!("Ambiguous symbol '{name}': {count} matches");
+            let recovery = format!("rgctl clones {name} --file <PATH>");
+            let _ = ctx.emit_json_error(
+                "ambiguous_symbol",
+                "AMBIGUOUS_SYMBOL",
+                &msg,
+                Some(candidates.as_slice()),
+                None,
+                Some(&recovery),
+            );
         } else if !candidates.is_empty() {
             eprintln!("Ambiguous symbol '{name}': {count} matches. Candidates:");
             for c in candidates.iter().take(20) {

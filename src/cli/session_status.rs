@@ -10,8 +10,50 @@ use serde::Serialize;
 use std::path::Path;
 use std::sync::Arc;
 
-const STATUS_SCHEMA_VERSION: u32 = 2;
+const STATUS_SCHEMA_VERSION: u32 = 3;
 const DIRTY_SAMPLE_LIMIT: usize = 10;
+
+#[derive(Debug, Serialize)]
+struct CapabilityReady {
+    ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    unlock_command: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct CfgCpgCapability {
+    ready: bool,
+    cpg_overlay: bool,
+    ast_skeleton: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    unlock_command: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct SemanticCapability {
+    ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    unlock_command: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentSkillsCapability {
+    installed_hosts: Vec<String>,
+    unlock_command: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionCapabilities {
+    structural_graph: CapabilityReady,
+    cfg_cpg: CfgCpgCapability,
+    semantic_index: SemanticCapability,
+    agent_skills: AgentSkillsCapability,
+}
 
 #[derive(Debug, Serialize)]
 struct SessionStatus {
@@ -53,8 +95,86 @@ struct SessionStatus {
     /// Pending lines in `.rgctl/update_queue.jsonl` (0 if absent).
     #[serde(skip_serializing_if = "Option::is_none")]
     update_queue_pending: Option<usize>,
+    capabilities: SessionCapabilities,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+}
+
+fn infer_semantic_scope(repo: &Path) -> Option<String> {
+    let path = crate::analysis::SemanticIndex::default_path(repo);
+    let index = crate::analysis::SemanticIndex::load(&path).ok()?;
+    let has_functions = index
+        .entries
+        .iter()
+        .any(|e| e.node_type.as_deref() == Some("Function"));
+    let has_docs = index.entries.iter().any(|e| {
+        e.node_type.as_deref() == Some("Module")
+            && e.kind
+                .as_deref()
+                .is_some_and(|kind| kind == "heading" || kind == "code_block")
+    });
+    match (has_functions, has_docs) {
+        (true, true) => Some("all".into()),
+        (true, false) => Some("function".into()),
+        (false, true) => Some("docs".into()),
+        (false, false) => Some("unknown".into()),
+    }
+}
+
+fn detect_agent_skill_hosts(repo: &Path) -> Vec<String> {
+    let mut hosts = Vec::new();
+    let candidates = [
+        ("cursor", repo.join(".cursor/skills/rgctl/SKILL.md")),
+        ("claude", repo.join(".claude/skills/rgctl/SKILL.md")),
+        ("agents", repo.join(".agents/skills/rgctl/SKILL.md")),
+    ];
+    for (host, path) in candidates {
+        if path.is_file() {
+            hosts.push(host.to_string());
+        }
+    }
+    hosts
+}
+
+fn build_capabilities(repo: &Path, structural_ready: bool) -> SessionCapabilities {
+    let snapshot = rgctl_graph::paths::artifact_path(repo, rgctl_graph::snapshot::SNAPSHOT_FILE);
+    let cfg_path = crate::analysis::archive_path(repo);
+    let ast_path = repo
+        .join(".rgctl")
+        .join(crate::analysis::AST_SKELETON_ARCHIVE_FILE);
+    let sem_path = crate::analysis::SemanticIndex::default_path(repo);
+    let cfg_ready = cfg_path.is_file();
+    let ast_ready = ast_path.is_file();
+    SessionCapabilities {
+        structural_graph: CapabilityReady {
+            ready: structural_ready,
+            path: structural_ready.then(|| snapshot.display().to_string()),
+            unlock_command: "rgctl discover",
+        },
+        cfg_cpg: CfgCpgCapability {
+            ready: cfg_ready,
+            cpg_overlay: cfg_ready,
+            ast_skeleton: ast_ready,
+            path: cfg_ready.then(|| cfg_path.display().to_string()),
+            unlock_command: "rgctl discover --with-cfg",
+        },
+        semantic_index: SemanticCapability {
+            ready: sem_path.is_file(),
+            scope: if sem_path.is_file() {
+                infer_semantic_scope(repo)
+            } else {
+                None
+            },
+            path: sem_path
+                .is_file()
+                .then(|| sem_path.display().to_string()),
+            unlock_command: "rgctl semantic index",
+        },
+        agent_skills: AgentSkillsCapability {
+            installed_hosts: detect_agent_skill_hosts(repo),
+            unlock_command: "rgctl install --skill",
+        },
+    }
 }
 
 #[derive(Debug, Default)]
@@ -173,6 +293,7 @@ pub fn run_status(ctx: &CliContext) -> Result<()> {
                 watcher_alive,
                 watcher_pid,
                 update_queue_pending,
+                capabilities: build_capabilities(&ctx.repo, true),
                 message,
             }
         }
@@ -196,6 +317,7 @@ pub fn run_status(ctx: &CliContext) -> Result<()> {
             watcher_alive,
             watcher_pid,
             update_queue_pending,
+            capabilities: build_capabilities(&ctx.repo, false),
             message: Some("Graph snapshot not found; run `rgctl discover` first".into()),
         },
     };
@@ -225,6 +347,7 @@ pub fn run_status(ctx: &CliContext) -> Result<()> {
                 .map(|m| format!(" — {m}"))
                 .unwrap_or_default()
         ))?;
+        emit_capabilities_text(ctx, &payload.capabilities)?;
     } else {
         ctx.stdout_line(
             payload
@@ -232,11 +355,56 @@ pub fn run_status(ctx: &CliContext) -> Result<()> {
                 .as_deref()
                 .unwrap_or("Graph snapshot missing"),
         )?;
+        emit_capabilities_text(ctx, &payload.capabilities)?;
     }
 
     if payload.status == "missing" {
         anyhow::bail!("graph snapshot missing");
     }
+    Ok(())
+}
+
+fn emit_capabilities_text(ctx: &CliContext, caps: &SessionCapabilities) -> Result<()> {
+    ctx.stdout_line("capabilities:")?;
+    let sg = if caps.structural_graph.ready {
+        "ready"
+    } else {
+        "missing"
+    };
+    ctx.stdout_line(&format!(
+        "  structural_graph: {sg}  ({})",
+        caps.structural_graph.unlock_command
+    ))?;
+    let cfg = if caps.cfg_cpg.ready { "ready" } else { "missing" };
+    ctx.stdout_line(&format!(
+        "  cfg_cpg: {cfg} overlay={} ast_skeleton={}  ({})",
+        caps.cfg_cpg.cpg_overlay,
+        caps.cfg_cpg.ast_skeleton,
+        caps.cfg_cpg.unlock_command
+    ))?;
+    let sem = if caps.semantic_index.ready {
+        "ready"
+    } else {
+        "missing"
+    };
+    let scope = caps
+        .semantic_index
+        .scope
+        .as_deref()
+        .unwrap_or("-");
+    ctx.stdout_line(&format!(
+        "  semantic_index: {sem} scope={scope}  ({})",
+        caps.semantic_index.unlock_command
+    ))?;
+    let hosts = if caps.agent_skills.installed_hosts.is_empty() {
+        "none".to_string()
+    } else {
+        caps.agent_skills.installed_hosts.join(",")
+    };
+    ctx.stdout_line(&format!(
+        "  agent_skills: hosts={hosts}  ({})",
+        caps.agent_skills.unlock_command
+    ))?;
     Ok(())
 }
 

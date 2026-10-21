@@ -27,6 +27,8 @@ pub struct BlastRadiusArgs {
     pub with_slices: bool,
     pub class: Option<String>,
     pub file: Option<String>,
+    /// Restrict to definition start line (disambiguate overloads).
+    pub line: Option<usize>,
     /// Label impact nodes with boundary catalogs.
     pub classify_boundary: bool,
     /// Allowlist boundary kinds / HTTP methods (`REST_ENDPOINT`, `POST`, …).
@@ -179,7 +181,16 @@ fn try_fast_cached_lookup(
         return Ok(None);
     }
 
-    let candidates = index.get_candidates(&parsed.target_name);
+    let mut candidates = index.get_candidates(&parsed.target_name);
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    filter_candidates_by_line(
+        &mut candidates,
+        args.line,
+        None,
+        session.as_ref().map(|s| s.store.as_ref()),
+    );
     if candidates.is_empty() {
         return Ok(None);
     }
@@ -214,16 +225,47 @@ fn resolve_target_uuid(
     backend: &crate::graph::backend::MemoryBackend,
     ctx: &CliContext,
     parsed: &crate::analysis::ParsedSymbol,
+    line: Option<usize>,
 ) -> Result<(Uuid, String)> {
-    resolve_target_uuid_impl(ctx, parsed, Some(backend), None)
+    resolve_target_uuid_impl(ctx, parsed, Some(backend), None, line)
 }
 
 fn resolve_target_uuid_snapshot(
     ctx: &CliContext,
     parsed: &crate::analysis::ParsedSymbol,
     store: &SnapshotNodeStore,
+    line: Option<usize>,
 ) -> Result<(Uuid, String)> {
-    resolve_target_uuid_impl(ctx, parsed, None, Some(store))
+    resolve_target_uuid_impl(ctx, parsed, None, Some(store), line)
+}
+
+fn filter_candidates_by_line(
+    candidates: &mut Vec<MacroIndexEntry>,
+    line: Option<usize>,
+    backend: Option<&crate::graph::backend::MemoryBackend>,
+    store: Option<&SnapshotNodeStore>,
+) {
+    let Some(line) = line else {
+        return;
+    };
+    candidates.retain(|c| {
+        let start = if let Some(backend) = backend {
+            backend
+                .get_node(c.id)
+                .ok()
+                .flatten()
+                .and_then(|n| n.start_line)
+        } else if let Some(store) = store {
+            store
+                .get_node(c.id)
+                .ok()
+                .flatten()
+                .and_then(|n| n.start_line)
+        } else {
+            None
+        };
+        start == Some(line)
+    });
 }
 
 fn resolve_target_uuid_impl(
@@ -231,6 +273,7 @@ fn resolve_target_uuid_impl(
     parsed: &crate::analysis::ParsedSymbol,
     backend: Option<&crate::graph::backend::MemoryBackend>,
     store: Option<&SnapshotNodeStore>,
+    line: Option<usize>,
 ) -> Result<(Uuid, String)> {
     if let Some(id) = try_parse_symbol_uuid(&parsed.target_name) {
         let name = if let Some(store) = store {
@@ -250,9 +293,11 @@ fn resolve_target_uuid_impl(
 
     let lookup_db = MacroCallLookupDb::default_path(&ctx.repo);
     if MacroCallLookupDb::is_valid_for_repo(&lookup_db, &ctx.repo)? {
-        let candidates = MacroCallLookupDb::get_candidates(&lookup_db, &parsed.target_name)?;
+        let mut candidates =
+            MacroCallLookupDb::get_candidates(&lookup_db, &parsed.target_name)?;
+        filter_candidates_by_line(&mut candidates, line, backend, store);
         if !candidates.is_empty() {
-            let id = resolve_symbol_uuid(&candidates, parsed)?;
+            let id = map_resolve_err(ctx, resolve_symbol_uuid(&candidates, parsed), parsed)?;
             return Ok((id, parsed.target_name.clone()));
         }
     }
@@ -260,9 +305,10 @@ fn resolve_target_uuid_impl(
     let index_path = MacroCallIndex::default_path(&ctx.repo);
     if let Some(index) = MacroCallIndex::load(&index_path)? {
         if index.is_valid_for_repo(&ctx.repo)? {
-            let candidates = index.get_candidates(&parsed.target_name);
+            let mut candidates = index.get_candidates(&parsed.target_name);
+            filter_candidates_by_line(&mut candidates, line, backend, store);
             if !candidates.is_empty() {
-                let id = resolve_symbol_uuid(&candidates, parsed)?;
+                let id = map_resolve_err(ctx, resolve_symbol_uuid(&candidates, parsed), parsed)?;
                 return Ok((id, parsed.target_name.clone()));
             }
         }
@@ -276,7 +322,23 @@ fn resolve_target_uuid_impl(
             &parsed.target_name,
         )?
     };
+    filter_candidates_by_line(&mut candidates, line, backend, store);
     if candidates.is_empty() {
+        let msg = format!("Symbol '{}' not found", parsed.target_name);
+        if ctx.format == OutputFormat::Json {
+            let recovery = format!(
+                "rgctl blast-radius {} --file <PATH> --class <CLASS> --line <N>",
+                parsed.target_name
+            );
+            let _ = ctx.emit_json_error(
+                "not_found",
+                "NOT_FOUND",
+                &msg,
+                None,
+                None,
+                Some(&recovery),
+            );
+        }
         return Err(rgctl_error::Error::NodeNotFound(parsed.target_name.clone()).into());
     }
 
@@ -290,8 +352,54 @@ fn resolve_target_uuid_impl(
         }
     }
 
-    let id = resolve_symbol_uuid(&candidates, parsed)?;
+    let id = map_resolve_err(ctx, resolve_symbol_uuid(&candidates, parsed), parsed)?;
     Ok((id, parsed.target_name.clone()))
+}
+
+fn map_resolve_err(
+    ctx: &CliContext,
+    result: rgctl_error::Result<Uuid>,
+    parsed: &crate::analysis::ParsedSymbol,
+) -> Result<Uuid> {
+    match result {
+        Ok(id) => Ok(id),
+        Err(rgctl_error::Error::AmbiguousSymbol { name, count, candidates }) => {
+            let recovery = format!(
+                "rgctl blast-radius {name} --file <PATH> --class <CLASS> --line <N>"
+            );
+            if ctx.format == OutputFormat::Json {
+                let _ = ctx.emit_json_error(
+                    "ambiguous_symbol",
+                    "AMBIGUOUS_SYMBOL",
+                    &format!("Ambiguous symbol '{name}': {count} matches"),
+                    Some(candidates.as_slice()),
+                    None,
+                    Some(&recovery),
+                );
+            }
+            Err(anyhow::anyhow!(
+                "Symbol '{name}' is ambiguous ({count} matches). Disambiguate with --file / --class / --line."
+            ))
+        }
+        Err(rgctl_error::Error::NotFound(msg)) => {
+            let recovery = format!(
+                "rgctl blast-radius {} --file <PATH> --class <CLASS> --line <N>",
+                parsed.target_name
+            );
+            if ctx.format == OutputFormat::Json {
+                let _ = ctx.emit_json_error(
+                    "not_found",
+                    "NOT_FOUND",
+                    &msg,
+                    None,
+                    None,
+                    Some(&recovery),
+                );
+            }
+            Err(anyhow::anyhow!("{msg}"))
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn try_snapshot_lite_path(
@@ -318,7 +426,7 @@ pub(crate) fn build_lite_response(
     store: &SnapshotNodeStore,
     engine: &BlastRadiusEngine,
 ) -> Result<BlastRadiusResponse> {
-    let (id, _resolved_name) = resolve_target_uuid_snapshot(ctx, parsed, store)?;
+    let (id, _resolved_name) = resolve_target_uuid_snapshot(ctx, parsed, store, args.line)?;
     let result = engine.analyze(id)?;
     let view = PetGraphView::from_snapshot_store(store)?;
     let function_impact = store.filter_function_impact(&result.impact_zone_ids)?;
@@ -483,7 +591,7 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
         None
     };
 
-    let (id, resolved_name) = resolve_target_uuid(backend, ctx, &parsed)?;
+    let (id, resolved_name) = resolve_target_uuid(backend, ctx, &parsed, args.line)?;
     let graph_digest = ctx.graph_digest().ok().flatten();
     let result = resolve_blast_result(backend, &ctx.repo, id, graph_digest.as_deref())?;
 

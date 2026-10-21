@@ -50,7 +50,7 @@ mod help_ia;
 mod rules;
 mod vuln_deps;
 
-pub use args::OutputFormat;
+pub use args::{OutputFormat, SymbolTargetArgs};
 pub use help_ia::root_command;
 
 use crate::BUILD_INFO;
@@ -89,8 +89,14 @@ pub struct Cli {
     #[arg(short = 'r', long = "repo", global = true)]
     pub repo: Option<std::path::PathBuf>,
 
-    /// Output format
-    #[arg(short = 'f', long = "format", value_enum, global = true)]
+    /// Output format (`text`, `json`, …). Also set via `RGCTL_FORMAT`.
+    #[arg(
+        short = 'f',
+        long = "format",
+        value_enum,
+        global = true,
+        env = "RGCTL_FORMAT"
+    )]
     pub format: Option<OutputFormat>,
 
     /// Write output to file instead of stdout
@@ -591,6 +597,10 @@ pub enum Commands {
         #[arg(long, value_name = "PATH")]
         file: Option<String>,
 
+        /// Restrict to function defined on this 1-based source line
+        #[arg(long, value_name = "N")]
+        line: Option<usize>,
+
         #[arg(long, value_name = "PATH")]
         policy_file: Option<String>,
 
@@ -626,6 +636,8 @@ pub enum Commands {
     #[command(display_order = 23)]
     Inspect {
         symbol: String,
+        #[command(flatten)]
+        target: SymbolTargetArgs,
         #[command(subcommand)]
         layer: InspectLayer,
     },
@@ -1202,6 +1214,9 @@ pub enum QueryCommands {
         annotation: Option<String>,
         #[arg(long = "show-attributes")]
         show_attributes: bool,
+        /// Package coordinates for facade / import-scope filtering
+        #[arg(long = "package", value_name = "COORDS")]
+        package: Option<String>,
     },
     /// Alias for `rgctl callers`
     Callers {
@@ -1222,6 +1237,12 @@ pub enum QueryCommands {
         exclude_scope: bool,
         #[arg(long = "limit")]
         limit: Option<usize>,
+        /// Package coordinates for facade / import-scope filtering
+        #[arg(long = "package", value_name = "COORDS")]
+        package: Option<String>,
+        /// Filter / seed by method names (comma-separated)
+        #[arg(long = "methods", value_name = "NAME[,NAME…]", value_delimiter = ',')]
+        methods: Vec<String>,
     },
     /// Alias for `rgctl callees`
     Callees {
@@ -1434,11 +1455,15 @@ pub enum CpgCommands {
     Function {
         #[arg(value_name = "SYMBOL")]
         symbol: String,
+        #[command(flatten)]
+        target: SymbolTargetArgs,
     },
     /// CALL neighborhood for a function
     Calls {
         #[arg(value_name = "SYMBOL")]
         symbol: String,
+        #[command(flatten)]
+        target: SymbolTargetArgs,
     },
     /// Field mutations for a type (requires discover --with-cfg)
     Mutations {
@@ -1477,6 +1502,8 @@ pub enum CpgCommands {
     Ast {
         #[arg(value_name = "SYMBOL")]
         symbol: String,
+        #[command(flatten)]
+        target: SymbolTargetArgs,
     },
     /// Export hybrid CPG view (GraphML / GraphSON)
     Export {
@@ -1499,6 +1526,8 @@ pub enum CpgCommands {
     Pdg {
         #[arg(value_name = "SYMBOL")]
         symbol: String,
+        #[command(flatten)]
+        target: SymbolTargetArgs,
         #[arg(long, value_enum, default_value = "all")]
         edge_layer: PdgEdgeLayer,
         #[arg(long)]
@@ -1531,33 +1560,29 @@ impl Cli {
         let long_running = matches!(self.command, Commands::Serve { .. });
 
         let verbose = matches!(self.command, Commands::Discover { verbose: true, .. });
+        let format = self.format.clone().unwrap_or_default();
+        let quiet_json = format == OutputFormat::Json && !verbose;
         let discover_json = matches!(self.command, Commands::Discover { .. })
-            && self.format.as_ref() == Some(&OutputFormat::Json);
+            && format == OutputFormat::Json;
         init_logging(verbose, discover_json);
 
-        if !long_running {
+        if !long_running && !quiet_json {
             eprintln!("[>] rgctl {command_label}");
         }
 
-        let command_path = match &self.command {
-            Commands::Discover { path: Some(p), .. } | Commands::Serve { path: Some(p), .. } => {
-                let path = std::path::Path::new(p);
-                if path.as_os_str() == "." {
-                    None
-                } else {
-                    Some(path.to_path_buf())
-                }
+        // Session root for discover/update/serve:
+        // - absolute PATH → that path
+        // - relative PATH (including ".") → keep `--repo` (or cwd); join in resolve_session_root
+        let session_repo = match &self.command {
+            Commands::Discover { path: Some(p), .. }
+            | Commands::Serve { path: Some(p), .. }
+            | Commands::Update { path: Some(p), .. } => {
+                discover::session_repo_from_flags(self.repo.as_deref(), Some(p))
             }
-            _ => None,
+            _ => self.repo.clone(),
         };
 
-        let ctx = CliContext::new(
-            command_path.or(self.repo),
-            self.db,
-            self.format.unwrap_or_default(),
-            self.output,
-            verbose,
-        );
+        let ctx = CliContext::new(session_repo, self.db, format, self.output, verbose);
 
         let result = match self.command {
             Commands::Discover {
@@ -1666,6 +1691,7 @@ impl Cli {
                 with_slices,
                 class,
                 file,
+                line,
                 classify_boundary,
                 boundary,
             } => blast_radius::run(
@@ -1678,6 +1704,7 @@ impl Cli {
                     with_slices,
                     class,
                     file,
+                    line,
                     classify_boundary,
                     boundary,
                 },
@@ -1887,6 +1914,7 @@ impl Cli {
                     count_only,
                     annotation,
                     show_attributes,
+                    package,
                 } => structured_query::run_find(
                     &ctx,
                     pattern,
@@ -1900,9 +1928,9 @@ impl Cli {
                         exclude_scope,
                         lang,
                         limit,
-                    package: None,
-                    methods: None,
-                },
+                        package,
+                        methods: None,
+                    },
                     exact,
                     count_only,
                     annotation,
@@ -1918,6 +1946,8 @@ impl Cli {
                     scope_mode,
                     exclude_scope,
                     limit,
+                    package,
+                    methods,
                 } => structured_query::run_call_neighbors(
                     &ctx,
                     symbol,
@@ -1932,9 +1962,13 @@ impl Cli {
                         exclude_scope,
                         lang: None,
                         limit,
-                    package: None,
-                    methods: None,
-                },
+                        package,
+                        methods: if methods.is_empty() {
+                            None
+                        } else {
+                            Some(methods)
+                        },
+                    },
                 ),
                 QueryCommands::Callees {
                     symbol,
@@ -2022,9 +2056,20 @@ impl Cli {
                 },
                 ),
             },
-            Commands::Inspect { symbol, layer } => {
-                inspect::run(&ctx, inspect::InspectArgs { symbol, layer })
-            }
+            Commands::Inspect {
+                symbol,
+                target,
+                layer,
+            } => inspect::run(
+                &ctx,
+                inspect::InspectArgs {
+                    symbol,
+                    file: target.file,
+                    class: target.class,
+                    line: target.line,
+                    layer,
+                },
+            ),
             Commands::Metrics {
                 pagerank,
                 betweenness,
@@ -2161,8 +2206,18 @@ impl Cli {
             Commands::Cpg { action } => {
                 let mapped = match action {
                     CpgCommands::Status => cpg::CpgAction::Status,
-                    CpgCommands::Function { symbol } => cpg::CpgAction::Function { symbol },
-                    CpgCommands::Calls { symbol } => cpg::CpgAction::Calls { symbol },
+                    CpgCommands::Function { symbol, target } => cpg::CpgAction::Function {
+                        symbol,
+                        file: target.file,
+                        class: target.class,
+                        line: target.line,
+                    },
+                    CpgCommands::Calls { symbol, target } => cpg::CpgAction::Calls {
+                        symbol,
+                        file: target.file,
+                        class: target.class,
+                        line: target.line,
+                    },
                     CpgCommands::Mutations {
                         type_name,
                         exclude_ctors,
@@ -2191,7 +2246,12 @@ impl Cli {
                         direction,
                         with_alias,
                     },
-                    CpgCommands::Ast { symbol } => cpg::CpgAction::Ast { symbol },
+                    CpgCommands::Ast { symbol, target } => cpg::CpgAction::Ast {
+                        symbol,
+                        file: target.file,
+                        class: target.class,
+                        line: target.line,
+                    },
                     CpgCommands::Export {
                         format,
                         output,
@@ -2207,10 +2267,14 @@ impl Cli {
                     },
                     CpgCommands::Pdg {
                         symbol,
+                        target,
                         edge_layer,
                         def_use,
                     } => cpg::CpgAction::Pdg {
                         symbol,
+                        file: target.file,
+                        class: target.class,
+                        line: target.line,
                         edge_layer,
                         def_use,
                     },
@@ -2477,11 +2541,21 @@ impl Cli {
             ),
         };
 
-        if !long_running {
+        if !long_running && !quiet_json {
             log_command_wall_time(command_label, wall_start.elapsed(), result.is_ok());
         }
 
-        result
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) if quiet_json => {
+                if !ctx.json_error_emitted() {
+                    let _ = ctx.emit_json_error_from_anyhow(&err);
+                }
+                // Exit here so anyhow's default `Error:` stderr dump does not pollute agents.
+                std::process::exit(1);
+            }
+            Err(err) => Err(err),
+        }
     }
 }
 

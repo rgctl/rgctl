@@ -62,6 +62,22 @@ pub enum ExportFormat {
     Okf,
 }
 
+/// Shared `--file` / `--class` / `--line` disambiguation for symbol commands.
+#[derive(clap::Args, Clone, Debug, Default)]
+pub struct SymbolTargetArgs {
+    /// Restrict matches to this source file path (substring / suffix OK)
+    #[arg(long = "file", value_name = "PATH")]
+    pub file: Option<String>,
+
+    /// Restrict matches to this class / type / namespace
+    #[arg(long = "class", value_name = "NAME")]
+    pub class: Option<String>,
+
+    /// Restrict matches to this 1-based definition line
+    #[arg(long = "line", value_name = "N")]
+    pub line: Option<usize>,
+}
+
 /// Inspect layer subcommand.
 #[derive(clap::Subcommand, Clone, Debug)]
 pub enum InspectLayer {
