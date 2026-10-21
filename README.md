@@ -167,7 +167,7 @@ Support matrix is generated from `*-ast-coverage.json` — see [Languages](docs/
 | [Docs index](docs/README.md) | Full map |
 | [AGENTS.md](AGENTS.md) | Contributing to *this* repo |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Dev setup / PRs |
-| [Latest release](docs/releases/v0.4.19.md) | Changelog |
+| [Latest release](docs/releases/v0.4.20.md) | Changelog |
 
 ---
 
