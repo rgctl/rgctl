@@ -83,9 +83,9 @@ describe("a lens is a control, not a destination", () => {
     const router = renderApp(`/understand?lens=spine&focus=${SUBJECT}`);
     await screen.findAllByText("handleAuth");
 
-    fireEvent.click(screen.getByRole("button", { name: "security →" }));
+    fireEvent.click(screen.getByRole("button", { name: "taint →" }));
 
-    await waitFor(() => expect(router.state.location.pathname).toBe("/security"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/taint"));
     expect(router.state.location.search).toMatchObject({ focus: SUBJECT });
   });
 });
@@ -167,7 +167,7 @@ describe("the palette lands you where the graph is", () => {
   });
 
   it("does not drag you out of a room that already reads the Focus", async () => {
-    const router = renderApp(`/security?focus=${SUBJECT}`);
+    const router = renderApp(`/taint?focus=${SUBJECT}`);
     await screen.findByRole("button", { name: /Search symbols, communities/ });
 
     fireEvent.click(screen.getByRole("button", { name: /Search symbols, communities/ }));
@@ -175,7 +175,7 @@ describe("the palette lands you where the graph is", () => {
     fireEvent.click(await within(dialog).findByText("verify"));
 
     await waitFor(() => expect(router.state.location.search).toMatchObject({ focus: OTHER }));
-    // Choosing a symbol while in Security should not move you to Understand.
-    expect(router.state.location.pathname).toBe("/security");
+    // Choosing a symbol while in Taint should not move you to Understand.
+    expect(router.state.location.pathname).toBe("/taint");
   });
 });

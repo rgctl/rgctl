@@ -1,6 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getRouteApi } from "@tanstack/react-router";
 import { Instrument } from "./Instrument";
 import { Palette } from "./Palette";
 import { Chip, Panel, Unavailable } from "./shell";
@@ -8,31 +7,29 @@ import { Spine } from "./rooms/Spine";
 import { CfgPdgLens } from "./rooms/CfgPdg";
 import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
-import { loadFunctions, loadManifest, type FunctionEntry } from "./data";
-import { LENSES, ROOMS, isLens, isRoom, keyOf, resolveFocus, type LensId, type RoomId } from "./focus";
-import { useState } from "react";
-
-const roomApi = getRouteApi("/$roomId");
+import { MigrationRoom } from "./rooms/Migration";
+import { TaintRoom } from "./rooms/Taint";
+import { loadManifest, type FunctionEntry } from "./data";
+import { LENSES, ROOMS, keyOf, type LensId, type RoomId } from "./focus";
+import { useFocus } from "./useFocus";
 
 export function App() {
-  const params = roomApi.useParams();
-  const search = roomApi.useSearch();
-  const navigate = roomApi.useNavigate();
-
-  const room = (isRoom(params.roomId) ? params.roomId : "repo") as RoomId;
-  const lens = (isLens(search.lens) ? search.lens : "spine") as LensId;
-  const focus = search.focus ?? null;
+  const {
+    room,
+    lens,
+    entry,
+    staleFocus,
+    functions: list,
+    functionsLoading,
+    functionsError,
+    setFocus,
+    setLens,
+    goRoom,
+    pick: focusPick,
+  } = useFocus();
 
   const [paletteOpen, setPaletteOpen] = useState(false);
-
   const manifest = useQuery({ queryKey: ["manifest"], queryFn: loadManifest });
-  const functions = useQuery({ queryKey: ["functions"], queryFn: loadFunctions });
-
-  const list = functions.data ?? [];
-  // A Focus that no longer resolves is a real state (a stale link, or a symbol that was removed), and the
-  // shell says so rather than silently showing no subject.
-  const entry: FunctionEntry | null = focus ? resolveFocus(focus, list) : null;
-  const staleFocus = focus !== null && !entry && !functions.isLoading;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -45,27 +42,14 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const setFocus = (key: string | null) =>
-    void navigate({ search: (prev) => ({ ...prev, focus: key ?? undefined }), replace: false });
-
   /**
-   * Picking a symbol sets the Focus, and leaves the orientation surface if that is where you are.
-   *
-   * The intent is that the graph is one action from the landing page. Setting only the Focus left Repo on
-   * screen with a subject it does not render, so the graph stayed two actions away — pick, then guess that
-   * Understand is where it lives. Rooms that read the Focus are left alone: choosing a symbol while in
-   * Security should not drag you out of Security.
+   * Picking a symbol sets the Focus (key only). From Repo, land in Understand so the graph is one
+   * action away; other rooms keep their place.
    */
   const pick = (f: FunctionEntry) => {
     setPaletteOpen(false);
-    setFocus(keyOf(f));
-    if (room === "repo") {
-      void navigate({ to: "/$roomId", params: { roomId: "understand" }, search: (prev) => ({ ...prev, focus: keyOf(f) }) });
-    }
+    focusPick(f);
   };
-
-  const goRoom = (next: RoomId) =>
-    void navigate({ to: "/$roomId", params: { roomId: next }, search: (prev) => prev });
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -108,34 +92,48 @@ export function App() {
 
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-white/8 bg-[#0e1116] px-3 py-1.5">
-            <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">lens</span>
-            {LENSES.map((l) => (
-              <button
-                key={l.id}
-                type="button"
-                onClick={() => void navigate({ search: (prev) => ({ ...prev, lens: l.id }) })}
-                aria-pressed={lens === l.id}
-                className={`rounded px-2 py-0.5 text-[11px] ${
-                  lens === l.id ? "bg-white/10 text-zinc-100" : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
-                }`}
-              >
-                {l.label}
-              </button>
-            ))}
+            {/* Lenses are Understand controls — hiding them in other rooms avoids implying Spine/CFG
+                tabs apply to Migration/Taint/Architecture. */}
+            {room === "understand" ? (
+              <>
+                <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">lens</span>
+                {LENSES.map((l) => (
+                  <button
+                    key={l.id}
+                    type="button"
+                    onClick={() => setLens(l.id)}
+                    aria-pressed={lens === l.id}
+                    className={`rounded px-2 py-0.5 text-[11px] ${
+                      lens === l.id
+                        ? "bg-white/10 text-zinc-100"
+                        : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+                    }`}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </>
+            ) : (
+              <span className="text-[10px] uppercase tracking-wider text-zinc-600">
+                {ROOMS.find((r) => r.id === room)?.label}
+              </span>
+            )}
             <span className="ml-auto flex items-center gap-2 text-[10px] text-zinc-600">
-              <span>{ROOMS.find((r) => r.id === room)?.label}</span>
+              {room === "understand" && <span>{ROOMS.find((r) => r.id === room)?.label}</span>}
               {entry && <Chip tone="blue">subject: {entry.name}</Chip>}
             </span>
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
-            {functions.isError && (
+            {functionsError != null && (
               <Unavailable
                 what="The function index could not be read"
-                why={String(functions.error)}
+                why={String(functionsError)}
               />
             )}
-            {room === "repo" && <RepoRoom functions={list} loading={functions.isLoading} onGo={goRoom} onPick={pick} />}
+            {room === "repo" && (
+              <RepoRoom functions={list} loading={functionsLoading} onGo={goRoom} onPick={pick} />
+            )}
             {room === "understand" && staleFocus && (
               <Unavailable
                 what="This Focus does not resolve against the current bundle"
@@ -143,22 +141,27 @@ export function App() {
               />
             )}
             {room === "understand" && !staleFocus && (
-              <UnderstandRoom entry={entry} lens={lens} loading={functions.isLoading} onOpenPalette={() => setPaletteOpen(true)} onCarry={goRoom} />
+              <UnderstandRoom
+                entry={entry}
+                lens={lens}
+                loading={functionsLoading}
+                onOpenPalette={() => setPaletteOpen(true)}
+                onCarry={goRoom}
+              />
             )}
             {room === "architecture" && <ArchitectureRoom />}
-            {room !== "repo" && room !== "understand" && room !== "architecture" && (
-              <Placeholder room={room} />
-            )}
+            {room === "migration" && <MigrationRoom />}
+            {room === "taint" && <TaintRoom />}
+            {room !== "repo" &&
+              room !== "understand" &&
+              room !== "architecture" &&
+              room !== "migration" &&
+              room !== "taint" && <Placeholder room={room} />}
           </div>
         </main>
       </div>
 
-      <Palette
-        open={paletteOpen}
-        onOpenChange={setPaletteOpen}
-        functions={list}
-        onPick={pick}
-      />
+      <Palette open={paletteOpen} onOpenChange={setPaletteOpen} functions={list} onPick={pick} />
     </div>
   );
 }
@@ -190,7 +193,11 @@ function RepoRoom({
         </p>
       </Panel>
 
-      {loading && <Panel title="Loading the bundle…"><p className="text-[11px] text-zinc-500">reading indexes…</p></Panel>}
+      {loading && (
+        <Panel title="Loading the bundle…">
+          <p className="text-[11px] text-zinc-500">reading indexes…</p>
+        </Panel>
+      )}
 
       {!loading && (
         <>
@@ -281,14 +288,10 @@ function UnderstandRoom({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <Panel
-        title={entry.name}
-        subtitle={entry.file_path ?? undefined}
-        right={<Chip tone="blue">focus</Chip>}
-      >
+      <Panel title={entry.name} subtitle={entry.file_path ?? undefined} right={<Chip tone="blue">focus</Chip>}>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[10px] uppercase tracking-wider text-zinc-500">carry this focus to</span>
-          {(["review", "security", "architecture", "migration", "proof"] as RoomId[]).map((r) => (
+          {(["review", "taint", "architecture", "migration", "proof"] as RoomId[]).map((r) => (
             <button
               key={r}
               type="button"

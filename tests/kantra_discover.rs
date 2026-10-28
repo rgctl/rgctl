@@ -421,7 +421,7 @@ fn kantra_dashboard_export_writes_index() {
             "--with-kantra",
             "--kantra-rules",
             rules.to_str().unwrap(),
-            "--with-dashboard",
+            "--with-universe",
         ])
         .current_dir(&repo)
         .output()

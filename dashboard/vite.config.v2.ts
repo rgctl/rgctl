@@ -6,9 +6,9 @@
  * alias would rewrite React into the shim. Exactly one of the two configs may carry the alias, so the
  * alias lives in the file it belongs to and neither config has a branch a reader has to evaluate.
  *
- * Output goes to `dist-v2`, never `dist`: `dist` is what `--with-dashboard` serves today, and
- * overwriting it would red-line all 18 dashboard test files at once instead of letting them stay
- * meaningful while v2 is built.
+ * Output goes to `dist-v2`, never `dist`: `--with-universe` extracts `dist-v2` by default; `dist` remains
+ * the Preact v1 hatch (`RGCTL_DASHBOARD_LEGACY=1`). Overwriting `dist` would red-line the v1 dashboard
+ * tests at once instead of letting them stay meaningful while v2 is built.
  */
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
@@ -55,6 +55,10 @@ export default defineConfig({
   // Relative asset paths: the bundle is embedded and served from `.rgctl/dashboard/`, and must also
   // work from `file://`.
   base: "./",
+  // Blast worker loads WASM + graph_payload; ES modules match the v1 worker setup.
+  worker: {
+    format: "es",
+  },
   build: {
     outDir: "dist-v2",
     assetsDir: "assets",

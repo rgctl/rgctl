@@ -14,21 +14,13 @@ const PENDING: Partial<Record<RoomId, { change: string; what: string; why: strin
     what: "Review room",
     why: "Renders the composed artifact from `rgctl review export` — review paths, policy result and the violation timeline in one versioned file, with provenance and truncation recorded so a truncated report cannot be mistaken for a complete one.",
   },
-  security: {
-    change: "change 3 (add-security-workflow-dashboard)",
-    what: "Security room",
-    why: "Risk-weighted triage: severity × centrality × reachability, so the list is ordered by what actually matters rather than by rule id.",
-  },
+  // Taint: owned by `add-taint-flow-dashboard` — rendered by TaintRoom in App.tsx (replaces Security).
   architecture: {
     change: "change 4 (add-architecture-city-view)",
     what: "Architecture room",
     why: "Communities and coupling, with the 3D Code City arriving here at the earliest — depth has to encode real data or it is decoration.",
   },
-  migration: {
-    change: "change 6 (add-migration-workflow-dashboard)",
-    what: "Migration room",
-    why: "The deterministic schedule from coupling, centrality and blast radius, restyled onto the v2 shell.",
-  },
+  // Migration: owned by `add-migration-flow-dashboard` — rendered by MigrationRoom in App.tsx.
   proof: {
     change: "change 5 (add-proof-surface)",
     what: "Proof room",

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "function_id": "8fcef6c3-dfc0-5338-ba7b-e14cc4816997",
+  "name": "handle",
+  "file_path": "app.py",
+  "flows": [
+    {
+      "id": 0,
+      "variable": "q",
+      "source_type": "HttpParameter",
+      "sink_type": "SqlQuery",
+      "severity": 10,
+      "vulnerable": true,
+      "sanitizers": [],
+      "source_line": 2,
+      "sink_line": 3,
+      "source_text": "q = request.GET[\"id\"]",
+      "sink_text": "cursor.execute(q)",
+      "path_lines": [
+        2,
+        3
+      ],
+      "path_statements": [
+        "q = request.GET[\"id\"]",
+        "cursor.execute(q)"
+      ]
+    }
+  ]
+}

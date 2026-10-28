@@ -1,0 +1,28 @@
+{
+  "schema_version": 3,
+  "mode": "package_macro",
+  "modularity": 0.47520661157024796,
+  "communities": [
+    {
+      "id": 0,
+      "label": "src",
+      "member_count": 8,
+      "avg_pagerank": 0.04585075285285711,
+      "avg_harmonic": 0.04499999899417162,
+      "avg_betweenness": 0.00041666667675599456,
+      "max_blast": 0.0,
+      "community_id": 0
+    },
+    {
+      "id": 1,
+      "label": "com.example",
+      "member_count": 6,
+      "avg_pagerank": 0.04817006612817446,
+      "avg_harmonic": 0.05222222333153089,
+      "avg_betweenness": 0.0013888888837148745,
+      "max_blast": 0.0,
+      "community_id": 2
+    }
+  ],
+  "edges": []
+}

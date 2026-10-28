@@ -39,7 +39,7 @@ Agent-first docs: index once, query with `-f json`, deepen in the User Guide whe
 | Monolith migration (how-to) | [Migration planning](https://rgctl.io/docs/guides/migration-planning/) |
 | Research map | [Further reading](further-reading.md) |
 
-Optional browser UI (nice-to-have, not required for agents): [HTTP server and dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/) after `discover --with-dashboard`.
+Optional browser UI (nice-to-have, not required for agents): [HTTP server and dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/) after `discover --with-universe`.
 
 ## For contributors
 
@@ -69,7 +69,7 @@ Internals and contribution bars — not the default agent reading path.
 | `--with-cfg` | Whole-repo CFG/PDG archive (needed for `taint --sink`, `cpg mutations`); `slice` / `cpg flows` lazy-build one function without it |
 | Communities | **Fast-Leiden** (local moving + BFS refinement + coarsening) with $\mu+4\sigma$ `HubStripPolicy` |
 | Canonical query / policy CLI | `find` / `callers` / `callees` / `relations` / `inventory`; `review check` (`query` / `pr-check` are compatibility aliases) |
-| Dashboard / migration JSON | Opt-in (`--with-dashboard` / `--export-migration-hints`) |
+| Dashboard / migration JSON | Opt-in (`--with-universe` / `--export-migration-hints`; `--with-dashboard` is deprecated) |
 | First-hour fixture | In-tree **ecommerce-java** |
 
 ## Redirects (historical names)

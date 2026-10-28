@@ -54,7 +54,7 @@ ORIENTATION  (exactly one)
              Repo — decision-shaped: "where do I start?", never vanity counts
 
 ROOMS        (n; each answers one question end-to-end)
-             Review ⭐ · Security ⭐ · Architecture · Migration · Understand · Agent · Proof
+             Review ⭐ · Taint ⭐ · Architecture · Migration · Understand · Agent · Proof
 
 LENSES       (shared control, never top-level)
              Spine · Code · CFG·PDG · Dataflow · Slice/Trace · Blast · Metrics · Time
@@ -62,7 +62,7 @@ LENSES       (shared control, never top-level)
 
 **Orientation is not a dashboard.** "Repo" answers *where do I start* by ranking the few things worth attention (unreviewed change surface, risk-weighted findings, drift, coverage caveats) and linking into the room that handles each. It does not print totals.
 
-**Rooms are jobs, not features.** Review = "what changed and what does it touch?" Security = "what is exploitable and what is reachable?" Proof = "why should I believe any of this?"
+**Rooms are jobs, not features.** Review = "what changed and what does it touch?" Taint = "where does untrusted data reach a sink?" Proof = "why should I believe any of this?"
 
 **Lenses are filters on the current focus.** Switching lens never changes what you are looking at.
 
@@ -88,8 +88,8 @@ if the carrier expires the first time someone renames a function.
 
 Consequences:
 
-- Select a symbol in **Review**, carry it to **Security** (findings filtered to what that symbol can reach), then to **Architecture** (its coupling), then to **Time** (its drift).
-- The Focus serializes into the URL, so any state is a shareable link: `?focus=<key>&room=security&lens=blast`.
+- Select a symbol in **Review**, carry it to **Taint** (flows filtered to that subject), then to **Architecture** (its coupling), then to **Time** (its drift).
+- The Focus serializes into the URL, so any state is a shareable link: `?focus=<key>&room=taint&lens=blast`.
 - **This is the differentiator.** Tools whose node identity is positional cannot express it, because their selection does not survive the next commit.
 
 Focus is *ambient*: it constrains rooms, it is never a prerequisite to render one. A room with no Focus must still open on a useful default (rule 1).
@@ -230,9 +230,10 @@ The v1 dashboard's own `CfgView` was not changed.
 
 ### Consequences
 
-- **v1 is untouched.** `--with-dashboard` keeps producing the existing Preact bundle, so all 18 dashboard
-  test files stay meaningful and the change stays bisectable.
-- **No dual runtime.** v2 is a separate bundle behind a flag, so React and Preact are never both loaded.
+- **v1 stayed shippable during the rewrite.** Both `dist` and `dist-v2` embed; React and Preact are never both
+  loaded in one extract. After the flag swap, `--with-universe` (and deprecated `--with-dashboard`) extract
+  v2; `RGCTL_DASHBOARD_LEGACY=1` is the one-release hatch back to Preact.
+- **No dual runtime.** v2 is a separate bundle, so React and Preact are never both loaded.
 - **The Preact → React migration of v1 is deferred**, and should happen only at the point the legacy
   views are deleted.
 - **Harness work still required:** `dashboard/vitest.config.ts` declares **no plugins and no DOM
@@ -350,7 +351,7 @@ Rationale: the dashboard surface is guarded by **18 test files** in `tests/` —
 
 Rules:
 
-- `--with-dashboard` (v1) keeps working; v2 is opt-in until parity.
+- **`--with-universe` extracts v2** (`manifest.mode: "universe"`). `--with-dashboard` is a deprecated alias that warns and routes to the same universe bundle. **`rgctl serve --open` defaults to universe** (re-extracts the v2 static shell if an older v1 bundle is on disk). v1 remains reachable via `--with-dashboard legacy` (or `RGCTL_DASHBOARD_LEGACY=1`) until `remove-v1-dashboard`.
 - `tests/dashboard_harness.rs` is extended with v2 parity assertions rather than replaced.
 - Manifest gains a phase bump and `dashboard_version` on every change (`crates/rgctl-dashboard/src/manifest.rs:54`).
 
@@ -375,10 +376,10 @@ Rules:
 | 0 | `add-review-workflow-export` | CLI/JSON only: `rgctl review export` → `.rgctl/workflows/review.json`. No UI opinions. | — |
 | 1 | `add-dashboard-v2-shell` | New app + build pipeline, additive behind a flag, harness parity | 0 |
 | 2 | `add-review-workflow-dashboard` | Review Room | 1 |
-| 3 | `add-security-workflow-dashboard` | Risk-weighted triage (severity × centrality × reachability) | 1 |
+| 3 | `add-taint-flow-dashboard` | Taint room (replaces Security): path stage + triage + CFG/DFG/blast side panel | 1 |
 | 4 | `add-architecture-city-view` | **Universe P0**: L0 community regions + L1 package solids, the full coupling web per layer, five layouts, scales, coverage, absence states, camera fly-to, `--with-universe` + `manifest.mode`. **Drift is out of scope** (a bundle describes one revision) | 1 |
 | 5 | `add-proof-surface` | Speed matrix, correctness scorecard, determinism, live p95 | 1 |
-| 6 | `add-migration-workflow-dashboard` | Restyle/scope existing MigrationView | 1 |
+| 6 | `add-migration-flow-dashboard` | Complete Migration room (tuning + roadmap + three.js community graph); owned outside the umbrella checklist | 1 |
 | 7 | `add-interprocedural-trace-export` | Emit `BlastSliceTrace` in the JSON envelope instead of trailing stdout (`src/cli/blast_radius.rs:532`) | — |
 | U1 | `add-universe-search` | Command bar (name / qualified / community / semantic) + `search_landmarks.json` + `/api/semantic/query` when served; fly-to wired to hits | 4 |
 | U2 | `add-universe-drilldown` | L2 functions via the WASM `expand()` worker, lazy on camera proximity; `Universe › community › package › symbol` breadcrumb | 4 |
@@ -510,36 +511,40 @@ _Update on every phase PR._
 | Audit defect fixes — favicon (D8) | prereq | **not started** | Missing icon → 404 per load |
 | `dashboard/dist` regen | prereq | **done** | Rebuilt with `wasm-pack` and landed in `8f09655` (sshaaf/rgctl#110). Until then the source fixes were invisible in a built binary, because `dashboard/dist` is compile-time embedded — see [Build hazards](#two-build-hazards-to-fix-while-adding-the-size-gate). |
 | `rgctl review export` | 0 | **done** | `.rgctl/workflows/review.json`; composed, tested (`tests/review_paths_integration.rs`). **Merged upstream as [#117](https://github.com/rgctl/rgctl/pull/117), without the refusal.** Upstream's merged producer still defaults to a synthesized delta head (`full_snapshots: false`); refusing it is our change, still on this branch only, because that path overwrote `.rgctl/` in place and described a head that did not contain the change — a one-line deletion reported as 22 additions. It is what [#124](https://github.com/rgctl/rgctl/issues/124) asks for. See `openspec/changes/add-review-workflow-dashboard/tasks.md` §8. |
-| v2 app + shell | 1 | **in progress** | React app in `dashboard/src/v2`, own Vite config, own `dist-v2`; Instrument, Orientation, Rooms, Lens control, and the Focus in the URL. Selected with `RGCTL_DASHBOARD_V2=1` — one flag, see below. |
-| v2 Spine lens (code browser) | 1 | **in progress** | Source for the focused symbol beside its CFG, bound both ways; dominance-depth layout; lightweight highlighting. Not syntax-complete and no IDE affordances, deliberately. |
+| v2 app + shell | 1 | **done** | React app in `dashboard/src/v2`, own Vite config, own `dist-v2`; Instrument, Orientation, Rooms, Lens control, and the Focus in the URL. Reached with **`--with-universe`** (see [How to reach v2](#how-to-reach-v2-universe)). |
+| v2 Spine lens (code browser) | 1 | **done** | Source for the focused symbol beside its CFG, bound both ways; dominance-depth layout; lightweight highlighting. Not syntax-complete and no IDE affordances, deliberately. |
 | v2 CFG·PDG lens | 1 | **done** | The same graph as a surface of its own: full-width, `70vh`, a stat row (blocks · edges · dominance frontiers · exits), a dominance-frontier toggle, the selected block read out above the graph, and a typed absence for a subject the bundle has no CFG for. `?lens=cfgpdg`; shares the drawing, the dominator walk and the loader with the Spine rather than re-deriving them. |
 | v2 test harness + gates | 1 | **done** | Own Vitest config (React, jsdom) and `./scripts/test-dashboard.sh`, which runs every dashboard gate and the offline check as a set. 21 v1 tests + **55 v2 tests**. |
 | v2 bundle-size gate | 1 | **done** | In `scripts/build-dashboard.sh`. Measured: **v1 321 KiB** gzipped, **v2 136 KiB** — v2 ships less than half despite adding React, because it drops CodeMirror and Sigma. |
 | v2 rooms | 2–6 | **in progress** | The Review room exists; the remaining rooms render an explicit "not built yet, change N" state naming what fills them. |
 | v2 lenses other than Spine, Code and CFG·PDG | 1 | **not started** | The lens control offers eight lenses and three render. The rest (Dataflow, Slice/Trace, Blast, Metrics, Time) produce an **empty pane, with no explanation** — `Placeholder` is keyed by *room*, so `Placeholder room="understand"` falls through to `null`. They should state the change that fills them, the way the rooms do. |
 | Review Room | 2 | **done; PR not yet opened** | Renders the composed artifact: change summary, changed symbols with their call-path deltas, the producing command as a receipt, and **five** states in which it says nothing — no artifact · unreadable · sections the artifact did not produce · truncated · a symbol-scoped export that resolved to nothing — each with the artifact's own reason. A symbol's identity is resolved by joining file + name against the index, never guessed, so an ambiguous name renders without a handoff; the room reads only a view model, and a test fails if an artifact field name reaches it. Warns above the figures when the artifact's revision differs from the browsed graph. 14 render tests against two **real** exports, all gates green (55 v2 tests). **Disposition (updated 2026-10-17): #117 is merged**, so the room now renders an artifact every build produces and the earlier reason for holding it back is gone. What remains is one producer behaviour change that did **not** travel with #117 — the refusal to synthesize a delta head (#124) — and it should go upstream **first, on its own**, because it is a small change to an upstream-owned file with its own argument, and the room reads better once the artifact it renders is trustworthy. Sequence: PR A = the refusal (#124); PR B = the room. `openspec/` is gitignored, so the record of why lives here and in `MAINTENANCE.md`. The branch (`feat/review-workflow-dashboard`) holds it. The one open task (5.6) is **not** unblocked by #117: the merged artifact carries no stable symbol id (`grep` for `symbol_id`/`stable_id` in the merged `review_export.rs` is empty), so file+name joining stays. |
-| Security Room | 3 | **not started** | |
+| Taint Room (was Security) | 3 (`add-taint-flow-dashboard`) | **done (this change)** | Focus-aware triage; SVG path stage; side CFG/DFG/blast. Fixture from `taint_smoke` discover. v2 gzip **290 KiB / 320**. |
 | Architecture City / Universe P0 | 4 | **spec reconciled; not started** | Scope is now **universe P0** ([#61](#relationship-to-upstream-61-rg-universe)): **L0 community regions** (214, area from `member_count`, bridged by the 2,398 pairs the 6,524 package edges form) with the **L1 package solids** (256) nested inside them, five layouts, log height, clamped footprints, the full coupling web, camera fly-to, and `--with-universe` + `manifest.mode` over the one existing bundle. The design demos exist: `demos/architecture-city/`, 5 layouts × 2 styles from a real bundle. They overtook the spec and forced four corrections, each of which would otherwise have shipped a false figure: coverage cannot come from `member_indices` (absent by design above 50k nodes — 0 of 256 carry it, so the spec's formula said "0 of 838,801 covered"); the exported `x`/`y` is a `layout_circle` ring, not a floor plan, and its id order is not a size ranking either; the coupling figure is **every** edge with brightness = `log(weight)`; and the renderer is three.js, with the size gate re-baselined against a *measured* bundled delta. Two facts the demos hid and this doc now states: **a solid is a package, not a community** (256 packages vs 214 communities — the community appeared only as colour), and the `(other)` remainder bucket is the largest solid at 15.6% of the graph. Open upstream defect: **8 of 256** package labels embed the corpus checkout path. |
 | Proof surface | 5 | **not started** | |
-| Migration Room restyle | 6 | **not started** | |
+| Migration Room | 6 (`add-migration-flow-dashboard`) | **done (this change)** | Complete room: React tuning + roadmap + `MigrationScene` (three.js). Engine reused from `dashboard/src/migration/*`. Empty states name `--with-universe --with-harmonic`. Fixture from real tiny-polyglot discover. v2 gzip **286 KiB / 320**. See `openspec/changes/add-migration-flow-dashboard/`. |
 | `BlastSliceTrace` export | 7 | **not started** | JSON envelope corruption repro confirmed. Previously also blocked on two `rgctl slice` defects, now **fixed and merged upstream** — issues sshaaf/rgctl#113/#114, PRs #115/#116. See `audit/slice-addressing.md`. |
 
-### How to reach v2
+### How to reach v2 (universe)
 
 ```bash
 npm --prefix dashboard run build:v2        # or ./scripts/build-dashboard.sh for both bundles
-rgctl -r <repo> discover . --with-dashboard
-RGCTL_DASHBOARD_V2=1 rgctl -r <repo> serve --open
+rgctl -r <repo> discover . --with-universe
+rgctl -r <repo> serve --open
 ```
 
-`RGCTL_DASHBOARD_V2=1` selects the v2 bundle when `discover` extracts the dashboard into `.rgctl/dashboard/`,
-and `serve` then serves whatever was extracted. It is an **environment variable rather than a flag on
-purpose**: there is one user-facing flag (`--with-dashboard`), and this switch is a development affordance,
-not a feature — "run the other dashboard" is not a promise worth making to users. It disappears when v2 is
-what that flag serves and v1 is retired.
+**`--with-universe` is the user-facing flag.** It extracts the v2 React bundle (`dashboard/dist-v2`) into
+`.rgctl/dashboard/` and writes `manifest.mode: "universe"` (and `bundle_version: "v2"`). `serve` then serves
+whatever was extracted.
 
-If v2 is selected and its bundle is unavailable, extraction **fails and says so** instead of falling back to
-v1. A silent fallback would serve the old dashboard to someone who believes they are looking at the new one.
+**`--with-dashboard` is deprecated:** it still works, prints a warning naming `--with-universe`, and routes to
+the **same** universe bundle. It will be removed in a later release (change `remove-v1-dashboard`).
+
+**v1 hatch (one release):** `--with-dashboard legacy` (or `RGCTL_DASHBOARD_LEGACY=1`) forces the Preact v1 bundle (`manifest.mode: "dashboard"`)
+when a dashboard export runs. Unset it for the universe.
+
+`RGCTL_DASHBOARD_V2` is obsolete — v2/universe is the default whenever a dashboard is requested. If the v2
+bundle is unavailable, extraction **fails and says so** instead of falling back to v1.
 
 ### Running the dashboard gates
 

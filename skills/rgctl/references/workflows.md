@@ -168,7 +168,7 @@ Concepts often live in package/directory paths or type names, not bare function 
 
 # Migrate workflow
 
-**Primary migration deliverable for agents:** `.rgctl/migration_plan.json` from `--export-migration-hints`. With `-f json`, the same migration plan object is also printed on **stdout** (plain `discover -f json` without the flag still emits DiscoverResponse telemetry). Dashboard Migration tab via `serve --open` when `--with-dashboard` is set.
+**Primary migration deliverable for agents:** `.rgctl/migration_plan.json` from `--export-migration-hints`. With `-f json`, the same migration plan object is also printed on **stdout** (plain `discover -f json` without the flag still emits DiscoverResponse telemetry). Dashboard Migration tab via `serve --open` when `--with-universe` is set.
 
 Use this workflow for roadmap / extraction-order / "what should we migrate first?" questions. Summarize the plan — do not dump the whole JSON into context.
 
@@ -178,7 +178,7 @@ Use this workflow for roadmap / extraction-order / "what should we migrate first
 
 ```bash
 rgctl discover . --with-cfg --with-security --with-taint \
-  --with-dashboard --with-harmonic --export-migration-hints \
+  --with-universe --with-harmonic --export-migration-hints \
   --migration-preset hybrid_default --migration-order scheduled
 # read .rgctl/migration_plan.json (and/or dashboard Migration tab via serve --open)
 ```
@@ -224,7 +224,7 @@ Writes a **file**; success is typically a text summary. Needs prior `discover --
 | `--with-cfg` | CFG/PDG/dominance archive (slice, inspect, cpg PDG) |
 | `--with-taint` | Discover-time taint (implies CFG as needed) |
 | `--with-security` | Secret scanning |
-| `--with-dashboard` | `.rgctl/dashboard/` bundle |
+| `--with-universe` | `.rgctl/dashboard/` universe bundle |
 | `--with-harmonic` | Harmonic centrality (migration ranking; expensive) |
 | `--export-migration-hints` | Write `migration_plan.json` |
 | `--with-ast-skeleton` | AST skeleton for `cpg ast` |
@@ -236,7 +236,7 @@ Migration-oriented discover (heavy):
 
 ```bash
 rgctl discover . --with-cfg --with-security --with-taint \
-  --with-dashboard --with-harmonic --export-migration-hints \
+  --with-universe --with-harmonic --export-migration-hints \
   --migration-preset foundational_first --migration-order scheduled
 # then read .rgctl/migration_plan.json (or dashboard copy)
 ```

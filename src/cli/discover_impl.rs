@@ -1416,6 +1416,7 @@ pub(crate) fn run_full_analysis(
     let dashboard_dir = rgctl_graph::paths::artifact_path(store, "dashboard");
     let mut written_artifacts = DiscoverArtifacts::default();
     if with_dashboard {
+        rgctl_dashboard::set_bundle_override(Some(rgctl_dashboard::BundleVersion::V2));
         let graph = hydrated.as_ref().expect("hydrated for dashboard");
         match rgctl_dashboard::export_dashboard_bundle_if_changed_with_context(
             graph.backend(),
@@ -1448,7 +1449,7 @@ pub(crate) fn run_full_analysis(
             }
         }
     } else if verbose {
-        debug!("Dashboard export skipped (pass --with-dashboard to enable)");
+        debug!("Dashboard export skipped (pass --with-universe to enable)");
     }
     profile.save_dashboard.secs = secs(save_dashboard_start.elapsed());
 
@@ -1565,7 +1566,7 @@ pub(crate) fn run_full_analysis(
         info!("   rgctl -f json relations --edge calls --limit 20");
         info!("   rgctl slice <file> --line <N> --variable <VAR>");
         if dashboard_dir.join("manifest.json").is_file() {
-            info!("   rgctl serve --open   # Dashboard + query API at http://127.0.0.1:8080");
+            info!("   rgctl serve --open   # Universe + query API at http://127.0.0.1:8080");
         }
     }
 

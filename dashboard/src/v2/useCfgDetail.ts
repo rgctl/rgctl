@@ -25,6 +25,13 @@ export function useCfgDetail(functionId: string): CfgState {
   const [state, setState] = useState<CfgState>({ kind: "loading" });
 
   useEffect(() => {
+    if (!functionId) {
+      setState({
+        kind: "absent",
+        reason: "No function is selected, so there is no CFG sidecar to load.",
+      });
+      return;
+    }
     let cancelled = false;
     setState({ kind: "loading" });
     loadCfgDetail(functionId)
@@ -36,7 +43,7 @@ export function useCfgDetail(functionId: string): CfgState {
             : {
                 kind: "absent",
                 reason:
-                  "The CFG export writes one file per function the analysis phase reached, and this bundle has no `cfg/<function_id>.json` for this subject. There is no control-flow graph to draw — as opposed to one that came back empty.",
+                  "No CFG detail for this subject — neither `cfg/<function_id>.json` nor a record in the CFG archive pack. There is no control-flow graph to draw — as opposed to one that came back empty.",
               },
         );
       })

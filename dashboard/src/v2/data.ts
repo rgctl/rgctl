@@ -1,8 +1,8 @@
 /**
  * Read the dashboard bundle.
  *
- * Everything here comes from `.rgctl/dashboard/`, written by `rgctl discover --with-dashboard` and served
- * next to the bundle itself — the same directory v1 reads, so the shell needs no new export.
+ * Everything here comes from `.rgctl/dashboard/`, written by `rgctl discover --with-universe` (or the
+ * deprecated `--with-dashboard` alias) and served next to the bundle itself.
  *
  * Shapes here were read off a real bundle (5,345 nodes, 1,479 functions), not assumed: the first draft of
  * this file expected `manifest.digest` and `sources_index.sources`, and the real manifest nests the digest
@@ -12,6 +12,8 @@
  * On absence: a missing sidecar is a typed absence the UI must state, not an empty array it renders as a
  * clean result. `available: false` in an index means the same thing as a 404.
  */
+
+import { EXTENSION_TO_LANGUAGE, LANGUAGE_TIER, type LanguageTier } from "./languageTiers";
 
 /** Asset-relative URL. Bundled assets live in `assets/`, data one level up, so a bare relative fetch
  *  from a worker resolves against the wrong directory. */
@@ -143,8 +145,27 @@ export async function loadFunctions(): Promise<FunctionEntry[]> {
   return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * Per-file JSON when the export wrote `cfg/<id>.json`; otherwise the archive
+ * record pack decoded with WASM (`detail_mode: "archive_only"`, large repos).
+ */
 export async function loadCfgDetail(functionId: string): Promise<CfgDetail | null> {
-  return getJson<CfgDetail>(`cfg/${functionId}.json`);
+  const { isArchiveOnly, loadCfgDetailFromArchive, loadCfgIndexMeta } = await import("./cfgArchive");
+  const meta = await loadCfgIndexMeta();
+  if (isArchiveOnly(meta)) {
+    return loadCfgDetailFromArchive(functionId, meta);
+  }
+  const perFile = await getJson<CfgDetail>(`cfg/${functionId}.json`);
+  if (perFile) return perFile;
+  // Older / mixed bundles: try the pack if paths are present.
+  if (meta?.record_index_path && meta?.record_data_path) {
+    try {
+      return await loadCfgDetailFromArchive(functionId, meta);
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 let sourceIndex: SourceFileEntry[] | null = null;
@@ -220,7 +241,7 @@ export function excerpt(
   return out;
 }
 
-/** Capabilities this bundle can actually evidence — never a plausible-looking constant. */
+/** Analysis capabilities this bundle can evidence — never a plausible-looking constant. */
 export function capabilities(m: Manifest | null): { label: string; available: boolean }[] {
   const a = m?.analysis;
   return [
@@ -231,4 +252,43 @@ export function capabilities(m: Manifest | null): { label: string; available: bo
     { label: "field writes", available: a?.mutations_available === true },
     { label: "semantic search", available: m?.semantic?.available === true },
   ];
+}
+
+export interface LanguageCoverageEntry {
+  id: string;
+  tier: LanguageTier;
+  fileCount: number;
+}
+
+/**
+ * Languages present in the bundle that have a recorded support tier in `languages.toml`.
+ *
+ * Unstated languages (extension not in the SSOT map) contribute to `unstatedFiles` and are never
+ * shown as covered. Empty when the source index is missing — that absence is stated by the caller.
+ */
+export function languageCoverageFromPaths(paths: string[]): {
+  languages: LanguageCoverageEntry[];
+  unstatedFiles: number;
+} {
+  const counts = new Map<string, number>();
+  let unstatedFiles = 0;
+  for (const path of paths) {
+    const base = path.split(/[/\\]/).pop() ?? path;
+    const dot = base.lastIndexOf(".");
+    if (dot < 0) {
+      unstatedFiles += 1;
+      continue;
+    }
+    const ext = base.slice(dot + 1).toLowerCase();
+    const id = EXTENSION_TO_LANGUAGE[ext];
+    if (!id || LANGUAGE_TIER[id] === undefined) {
+      unstatedFiles += 1;
+      continue;
+    }
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  const languages = [...counts.entries()]
+    .map(([id, fileCount]) => ({ id, tier: LANGUAGE_TIER[id]!, fileCount }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return { languages, unstatedFiles };
 }

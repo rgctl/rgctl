@@ -5,7 +5,9 @@
 
 mod dashboard_harness;
 
-use dashboard_harness::{assert_dashboard_bundle, copy_dir_all, run_discover};
+use dashboard_harness::{
+    assert_dashboard_bundle, assert_v1_v2_shell_parity, copy_dir_all, run_discover,
+};
 use rgctl_dashboard::dist_embedded;
 use std::path::Path;
 
@@ -15,6 +17,12 @@ fn dashboard_dist_embedded_at_compile_time() {
         dist_embedded(),
         "dashboard/dist missing — run: ./scripts/build-dashboard.sh && cargo build"
     );
+}
+
+/// Change 1 task 5.5 — the harness treats v1 and v2 packages the same where they must agree.
+#[test]
+fn dashboard_v1_v2_shell_parity() {
+    assert_v1_v2_shell_parity();
 }
 
 #[test]

@@ -2,7 +2,6 @@
 
 use super::context::CliContext;
 use super::discover::resolve_session_root;
-use super::pipeline_session::spawn_full_pipeline;
 use super::pipeline_status::{self, PIPELINE_STATUS_SCHEMA_VERSION};
 use super::semantic::SemanticQueryArgs;
 use super::semantic_api::{execute_semantic_query, semantic_index_path, semantic_status};
@@ -34,14 +33,15 @@ use tower::ServiceExt;
 use tower_http::services::ServeDir;
 
 /// Options for the unified HTTP `serve` command.
+///
+/// Serve is **serve-only**: it never starts `discover` / a background pipeline. Run
+/// `rgctl discover . --with-universe` first. Always serves the universe UI.
 pub struct HttpServeArgs {
     pub host: String,
     pub port: u16,
     pub dashboard_dir: Option<PathBuf>,
     pub open: bool,
     pub query_only: bool,
-    pub dashboard_only: bool,
-    pub no_pipeline: bool,
     pub path: Option<String>,
     /// Watch sources and run incremental `update` on change.
     pub watch: bool,
@@ -107,10 +107,6 @@ fn default_true() -> bool {
 
 /// Start the HTTP server (dashboard static files + `/api/query` and `/graphql`).
 pub fn serve(ctx: &CliContext, args: HttpServeArgs) -> Result<()> {
-    if args.query_only && args.dashboard_only {
-        bail!("--query-only and --dashboard-only cannot be used together");
-    }
-
     let session_root = PathBuf::from(resolve_session_root(ctx, args.path.as_deref()));
     let session_ctx = CliContext::new(
         Some(session_root.clone()),
@@ -125,27 +121,45 @@ pub fn serve(ctx: &CliContext, args: HttpServeArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| default_dashboard_path(&session_root));
 
-    let start_pipeline = !args.no_pipeline;
-
-    if args.no_pipeline && !args.query_only {
+    if !args.query_only {
         let index = dashboard_dir.join("index.html");
         if !index.is_file() {
             bail!(
-                "dashboard not found at {} (run `rgctl discover` first)",
+                "dashboard not found at {}\n  \
+                 Run `rgctl discover . --with-universe` first (serve does not index).",
+                dashboard_dir.display()
+            );
+        }
+        let before_mode = std::fs::read_to_string(dashboard_dir.join("manifest.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| {
+                v.get("mode")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_owned)
+            });
+        rgctl_dashboard::ensure_static_shell(
+            &dashboard_dir,
+            rgctl_dashboard::BundleVersion::V2,
+        )
+        .map_err(|e| anyhow::anyhow!("ensure universe shell: {e}"))?;
+        if before_mode.as_deref() != Some("universe") {
+            eprintln!(
+                "[i] Serving universe UI (swapped static shell under {})",
                 dashboard_dir.display()
             );
         }
     }
 
-    let (graph, community) = if args.dashboard_only {
-        (None, None)
-    } else if let Ok(graph) = session_ctx.load_graph() {
+    let (graph, community) = if let Ok(graph) = session_ctx.load_graph() {
         let community = super::gql::load_community_context(&session_ctx, graph.backend());
         (Some(graph), community)
-    } else if args.no_pipeline {
-        bail!("load graph for query API (run `rgctl discover` first)");
     } else {
-        (None, None)
+        bail!(
+            "graph snapshot not found under {}\n  \
+             Run `rgctl discover .` first (serve does not index).",
+            session_root.display()
+        );
     };
 
     let semantic = load_semantic_index(&session_root);
@@ -158,10 +172,6 @@ pub fn serve(ctx: &CliContext, args: HttpServeArgs) -> Result<()> {
         community: RwLock::new(community),
         dashboard_announced: AtomicBool::new(dashboard_dir.join("index.html").is_file()),
     });
-
-    if start_pipeline {
-        let _pipeline = spawn_full_pipeline(session_root.clone(), ctx.verbose);
-    }
 
     // Hold for the lifetime of serve so Drop releases `.rgctl/watch.lock` on exit.
     let _watch_lock = if args.watch {
@@ -212,13 +222,11 @@ async fn run_server(ctx: &CliContext, args: HttpServeArgs, state: Arc<AppState>)
     let mut app = Router::new().route("/api/health", get(health));
 
     let mut rest = Router::new().route("/api/status", get(api_pipeline_status));
-    if !args.dashboard_only {
-        rest = rest
-            .route("/api/query", post(api_query))
-            .route("/graphql", post(api_query))
-            .route("/api/semantic/status", get(api_semantic_status))
-            .route("/api/semantic/query", post(api_semantic_query));
-    }
+    rest = rest
+        .route("/api/query", post(api_query))
+        .route("/graphql", post(api_query))
+        .route("/api/semantic/status", get(api_semantic_status))
+        .route("/api/semantic/query", post(api_semantic_query));
     if !args.query_only {
         rest = rest.fallback(dashboard_fallback);
     }
@@ -236,8 +244,6 @@ async fn run_server(ctx: &CliContext, args: HttpServeArgs, state: Arc<AppState>)
             eprintln!("[✓] Query API: http://{bound}/api/query");
             eprintln!("[✓] GraphQL alias: http://{bound}/graphql");
             eprintln!("[✓] Semantic API: http://{bound}/api/semantic/query");
-        } else if args.dashboard_only {
-            eprintln!("[✓] Dashboard: http://{bound}/");
         } else {
             eprintln!("[✓] Dashboard: http://{bound}/");
             eprintln!("[✓] Query API: http://{bound}/api/query");

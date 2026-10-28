@@ -33,7 +33,7 @@ describe("the Architecture room", () => {
     render(<ArchitectureRoom />);
     await waitFor(() => expect(screen.getByText(/no architecture dataset/i)).toBeTruthy());
     // the command that produces one, not just a shrug
-    expect(screen.getByText(/--with-dashboard --with-cfg/)).toBeTruthy();
+    expect(screen.getByText(/--with-universe --with-cfg/)).toBeTruthy();
     // and it must not render an empty city
     expect(screen.queryByTestId("universe-canvas")).toBeNull();
   });

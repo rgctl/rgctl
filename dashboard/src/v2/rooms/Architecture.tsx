@@ -119,7 +119,7 @@ export function ArchitectureRoom() {
         <Unavailable
           tag="not exported"
           what="This bundle carries no architecture dataset"
-          why="The export produced no `metagraph.json`, so there is nothing to draw. It is written by `rgctl discover . --with-dashboard --with-cfg`; a bundle indexed without it renders no city rather than an empty one."
+          why="The export produced no `metagraph.json`, so there is nothing to draw. It is written by `rgctl discover . --with-universe --with-cfg`; a bundle indexed without it renders no city rather than an empty one."
         />
       </Panel>
     );

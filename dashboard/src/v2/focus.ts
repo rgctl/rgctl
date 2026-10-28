@@ -71,7 +71,7 @@ export const ROOMS = [
   { id: "repo", label: "Repo", blurb: "where do I start?" },
   { id: "understand", label: "Understand", blurb: "what does this symbol do?" },
   { id: "review", label: "Review", blurb: "what changed, what does it touch?" },
-  { id: "security", label: "Security", blurb: "what is reachable and dangerous?" },
+  { id: "taint", label: "Taint", blurb: "where does untrusted data reach a sink?" },
   { id: "migration", label: "Migration", blurb: "what order should we move it?" },
   { id: "proof", label: "Proof", blurb: "why should I believe any of this?" },
 ] as const;

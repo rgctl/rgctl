@@ -197,11 +197,11 @@ rgctl -f json blast-radius MyFunction
 A foreground HTTP server with an optional browser dashboard. Keeps the graph in memory for fast repeated queries.
 
 ```bash
-rgctl serve --open              # starts on http://127.0.0.1:8080, opens browser
-rgctl serve --port 3000         # custom port
-rgctl serve --host 0.0.0.0     # bind all interfaces (team sharing)
-rgctl serve --query-only        # API only, no dashboard
-rgctl serve --no-pipeline       # serve existing artifacts, skip auto-pipeline
+rgctl discover . --with-universe   # required first — serve does not index
+rgctl serve --open                 # http://127.0.0.1:8080, opens browser
+rgctl serve --port 3000            # custom port
+rgctl serve --host 0.0.0.0         # bind all interfaces (team sharing)
+rgctl serve --query-only           # API only, no dashboard static files
 ```
 
 Query the API:
@@ -224,7 +224,7 @@ See the [HTTP Server and Dashboard guide](https://rgctl.io/docs/guides/http-serv
 | **Transport** | Process per command | HTTP `127.0.0.1:8080` |
 | **Artifact location** | `{repo}/.rgctl/` | Same (reads in-repo artifacts) |
 | **Dashboard** | No | Yes (optional) |
-| **Auto pipeline** | No (manual `discover`) | Yes (unless `--no-pipeline`) |
+| **Indexing** | Manual `discover` | Manual `discover` first (`serve` does not index) |
 | **Use case** | Agents, CI, scripts | Team, repeated queries, visual |
 | **Output** | stdout (text or `-f json`) | HTTP JSON |
 
@@ -373,7 +373,7 @@ Run `discover` first on the repo you mean to query. Artifacts should appear at `
 
 ### Slow `discover` on large repositories
 
-Start with the default mode (no extra flags). Add `--with-cfg`, `--with-taint`, `--with-dashboard`, `--with-harmonic` only when you need those features. See [User Guide -- Troubleshooting](user-guide.md#18-troubleshooting) for tuning large repos.
+Start with the default mode (no extra flags). Add `--with-cfg`, `--with-taint`, `--with-universe`, `--with-harmonic` only when you need those features. See [User Guide -- Troubleshooting](user-guide.md#18-troubleshooting) for tuning large repos.
 
 ### Build from source fails
 

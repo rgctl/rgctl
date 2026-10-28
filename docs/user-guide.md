@@ -237,7 +237,7 @@ Built-in registry includes **markdown** (`rgctl-lang-markdown`): `.md` and `.mdx
 
 ### Full pipeline (`--full`)
 
-`rgctl discover PATH --full` prints an execution plan, runs a **basic** discover (queryable snapshot), reports that the initial discover is complete, then continues in the same process with `--with-cfg --with-dashboard --with-harmonic`, then `semantic index`. Other terminals can run `find` / `inventory` after stage 1. Does **not** imply taint or secret scanning.
+`rgctl discover PATH --full` prints an execution plan, runs a **basic** discover (queryable snapshot), reports that the initial discover is complete, then continues in the same process with `--with-cfg --with-universe --with-harmonic`, then `semantic index`. Other terminals can run `find` / `inventory` after stage 1. Does **not** imply taint or secret scanning.
 
 ```bash
 rgctl discover . --full
@@ -336,7 +336,7 @@ Harmonic, dashboard, migration export, security, CFG/PDG, and discover-time tain
 | `--with-git` | Git churn hotspots + `CoChangesWith` edges (`metrics --churn`, `relations --edge cochangeswith`) |
 | `--scip PATH` | SCIP overlay — upgrades ambiguous call edges (`resolution = "scip"`) |
 | `--with-harmonic` | Harmonic centrality (migration ranking) |
-| `--with-dashboard` | Static dashboard bundle under `.rgctl/dashboard/` |
+| `--with-universe` | Universe dashboard bundle under `.rgctl/dashboard/` (`manifest.mode: "universe"`). Served by `rgctl serve --open`. |
 | `--export-migration-hints` | Migration roadmap JSON (alias: `--export-migration-plan`) |
 | `--with-kantra` | Konveyor Kantra rule evaluation + rules graph index (see below) |
 
@@ -350,7 +350,7 @@ rgctl discover . --scip path/to/index.scip
 
 # Full walkthrough set used for the samples below
 rgctl discover . -l java -e target \
-  --with-cfg --with-dashboard --with-harmonic --export-migration-hints
+  --with-cfg --with-universe --with-harmonic --export-migration-hints
 ```
 
 Example lines from that richer run:
@@ -411,7 +411,7 @@ Konveyor labels (`konveyor.io/target`, `konveyor.io/source`, …) are stored on 
 
 Does **not** require `--with-cfg`. Unsupported rule providers and invalid regex patterns are skipped with reasons in `skipped_rules`. After full eval, `violates` edges link each `KantraRule` to matched code nodes (`rgctl relations --edge violates --from-type kantrarule`).
 
-**Dashboard:** `discover --with-kantra --with-dashboard` exports `kantra_index.json` and per-file violation shards. Open **Migration Rules** in the dashboard (category + Konveyor target filters, syntax-highlighted snippets). See [Dashboard user guide — Migration Rules](dashboard-user-guide.md#migration-rules-kantra).
+**Dashboard:** `discover --with-kantra --with-universe` exports `kantra_index.json` and per-file violation shards. Open **Migration Rules** in the dashboard (category + Konveyor target filters, syntax-highlighted snippets). See [Dashboard user guide — Migration Rules](dashboard-user-guide.md#migration-rules-kantra).
 
 ### Verbose logging and stage profiling
 
@@ -468,7 +468,7 @@ After a successful run, the layout below appears under **`{repo}/.rgctl/`**:
 ├── migration_plan.json         # With --export-migration-hints
 ├── analysis/                   # Per-function CFG/PDG/taint (with --with-cfg / --with-taint)
 │   └── cfg_pdg.archive.bin
-└── dashboard/                  # Only with --with-dashboard
+└── dashboard/                  # Only with --with-universe
     ├── index.html
     ├── manifest.json
     ├── migration_plan.json
@@ -918,7 +918,7 @@ rgctl -r "$REPO" blast-radius 'ShoppingCartService::priceShoppingCart'
 # → Callers include CartEndpoint.add / delete / checkout and checkOutShoppingCart
 ```
 
-**Dashboard:** after `discover --with-cfg --with-dashboard`, the **Dataflow** tab includes a **Field mutations (CPG)** panel (same filters). Click a hit to open that function’s PDG and highlight the write line. See [Dashboard user guide](dashboard-user-guide.md#dataflow).
+**Dashboard:** after `discover --with-cfg --with-universe`, the **Dataflow** tab includes a **Field mutations (CPG)** panel (same filters). Click a hit to open that function’s PDG and highlight the write line. See [Dashboard user guide](dashboard-user-guide.md#dataflow).
 
 JSON for agents:
 
@@ -966,7 +966,7 @@ rgctl -r "$REPO" -f json metrics --churn | jq '.churn_hotspots[:5]'   # after di
 ```
 
 That summary is counts only. For **named** communities and membership, use `communities list`
-([§6](#6-structured-graph-queries)) or `.rgctl/dashboard/communities.json` after `--with-dashboard`.
+([§6](#6-structured-graph-queries)) or `.rgctl/dashboard/communities.json` after `--with-universe`.
 
 ```bash
 rgctl -r "$REPO" -f json metrics --pagerank | jq '.pagerank | {iterations, converged, top: .top[:3]}'
@@ -1168,20 +1168,21 @@ The fixture also ships a shared policy at [`rgctl-tests/rgctl-policy.json`](../r
 
 ## 15. HTTP server (`serve`) — optional
 
-`serve` binds HTTP immediately and, unless `--no-pipeline`, starts the same staged full pipeline as `discover --full`. The dashboard at `/` shows a preparing page until the bundle exists. Prefer CLI `-f json` for agents and CI.
+`serve` is **serve-only**: it binds HTTP over artifacts already under `.rgctl/` and never runs discover or a background pipeline. Index first, then serve. Prefer CLI `-f json` for agents and CI.
 
 ```bash
-# Starts indexing if needed; preparing page until dashboard exists
-rgctl -r "$REPO" serve --port 8080
+# Two commands: index, then serve
+rgctl -r "$REPO" discover . --with-universe
+rgctl -r "$REPO" serve --open --port 8080
 
-# Old fail-fast (require existing artifacts)
-rgctl -r "$REPO" serve --no-pipeline --query-only
+# API only (still needs a prior discover / graph snapshot)
+rgctl -r "$REPO" serve --query-only
 ```
 
 | Endpoint | Purpose |
 |----------|---------|
-| `/` | Dashboard UI or preparing page |
-| `GET /api/status` | Full-pipeline status JSON |
+| `/` | Dashboard UI (requires prior `discover --with-universe`) |
+| `GET /api/status` | Artifact / pipeline status JSON |
 | `POST /api/semantic/query` | Semantic search (primary HTTP query for agents) |
 | `GET /api/semantic/status` | Semantic index availability |
 | `POST /api/semantic/query` | Semantic search (JSON body) |
@@ -1208,7 +1209,7 @@ cd "$REPO"
 
 # 2. Index (add CFG + dashboard + Kantra for the rest of this walkthrough)
 rgctl discover . -l java -e target \
-  --with-cfg --with-dashboard --with-harmonic --with-kantra --export-migration-hints
+  --with-cfg --with-universe --with-harmonic --with-kantra --export-migration-hints
 
 # 3. Explore structure
 rgctl -r "$REPO" -f json find --type function --count-only | jq '.total'
@@ -1269,7 +1270,7 @@ Migration hints (with `--export-migration-hints`) land under `.rgctl/migration_p
 | `check` / `review check` / `review paths` | CI policy; temporal PR gate (`pr-check` alias); call-path deltas |
 | `install` | Copy the bundled agent pack (single skill `rgctl`) into adapter dirs |
 | `semantic` | Opt-in semantic index + query (`--scope community`, `docs`, `all`) |
-| `serve` | HTTP dashboard + `/api/query` + `/api/status` (auto full pipeline); `--no-pipeline` fail-fast |
+| `serve` | HTTP dashboard + `/api/query` + `/api/status` (serve-only; run `discover` first) |
 
 Full taxonomy: [CLI command reference](https://rgctl.io/docs/guides/cli-command-reference/).
 
@@ -1289,7 +1290,7 @@ Full taxonomy: [CLI command reference](https://rgctl.io/docs/guides/cli-command-
 | `--with-dfg-loops` | Tag loop-carried `DataDependency` edges in PDG (with `--with-cfg`) |
 | `--with-ast-skeleton` | Build AST skeleton archive for `cpg ast` |
 | `--with-harmonic` | Harmonic centrality (default off; needed for migration ranking) |
-| `--with-dashboard` | Static dashboard bundle (default off) |
+| `--with-universe` | Universe dashboard bundle under `.rgctl/dashboard/` (default off; UI for `serve --open`) |
 | `--full` | Staged pipeline: basic discover, then CFG+dashboard+harmonic, then semantic index |
 | `--export-migration-hints` | Migration roadmap JSON (alias `--export-migration-plan`) |
 | `--migration-preset` | Preset for migration hints (`hybrid`, `foundational`, …) |
@@ -1352,7 +1353,7 @@ Confirm `cpg status` shows a field-write index (requires `discover --with-cfg`),
 
 ### Slow `discover`
 
-Start with the default mode. Add `--with-cfg` or `--with-taint` only when you need whole-repo inspect/mutations/taint. Keep `--with-harmonic` / `--with-dashboard` off unless you need migration ranking or the static UI.
+Start with the default mode. Add `--with-cfg` or `--with-taint` only when you need whole-repo inspect/mutations/taint. Keep `--with-harmonic` / `--with-universe` off unless you need migration ranking or the universe UI.
 
 On **very large repos** (500k+ graph nodes), discover automatically:
 

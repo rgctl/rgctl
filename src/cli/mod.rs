@@ -200,14 +200,10 @@ pub enum Commands {
 
         /// Export the universe dashboard bundle under `.rgctl/dashboard/`. Off by default.
         ///
-        /// This is the v2 dashboard: L0 namespace volumes over L1 packages, the coupling web, and
-        /// `manifest.mode: "universe"`.
+        /// L0 namespace volumes over L1 packages, the coupling web, and `manifest.mode: "universe"`.
+        /// `rgctl serve --open` serves this UI.
         #[arg(long = "with-universe", help_heading = "Session / limits")]
         with_universe: bool,
-
-        /// Deprecated: use `--with-universe`. Routes to it and will be removed in the next release.
-        #[arg(long = "with-dashboard", help_heading = "Session / limits")]
-        with_dashboard: bool,
 
         /// Write a migration roadmap JSON after analysis (default: `.rgctl/migration_plan.json`).
         /// Alias: `--export-migration-plan` (deprecated name).
@@ -305,7 +301,11 @@ pub enum Commands {
         )]
         cascade_depth: usize,
 
-        /// Flags after `--` (e.g. `discover . -- --full`)
+        /// Compatibility catch-all for `discover . -- --full` only.
+        ///
+        /// Must stay narrow: unknown hyphen flags used to land here and be **silently ignored**,
+        /// so e.g. an older binary without `--with-universe` would accept the flag, skip dashboard
+        /// export, and leave `serve` on the "Dashboard is being prepared" page.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
         extra: Vec<String>,
     },
@@ -908,18 +908,19 @@ pub enum Commands {
         query: String,
     },
 
-    /// Serve the analysis dashboard and GQL query API over HTTP.
+    /// Serve the universe dashboard and GQL query API over HTTP.
     ///
-    /// Default: dashboard at `/` and query API at `/api/query` (alias `/graphql`).
-    /// Starts the full discover pipeline unless `--no-pipeline`.
+    /// Serve-only: does **not** run discover or a background pipeline. Index first with
+    /// `rgctl discover . --with-universe`, then `rgctl serve --open`.
+    /// Dashboard at `/`; query API at `/api/query` (alias `/graphql`).
     #[command(display_order = 4)]
     Serve {
-        /// Repository path to index (defaults to `--repo` or cwd)
+        /// Repository path (defaults to `--repo` or cwd)
         #[arg(value_name = "PATH")]
         path: Option<String>,
 
-        /// Do not auto-run discover; fail fast if artifacts are missing
-        #[arg(long = "no-pipeline")]
+        /// Deprecated no-op: serve never auto-runs a pipeline (kept so old scripts keep working).
+        #[arg(long = "no-pipeline", hide = true)]
         no_pipeline: bool,
 
         /// Bind host [default: 127.0.0.1]
@@ -934,17 +935,13 @@ pub enum Commands {
         #[arg(long, value_name = "DIR")]
         dashboard_dir: Option<std::path::PathBuf>,
 
-        /// Open the dashboard in the default browser
+        /// Open the universe dashboard in the default browser
         #[arg(long)]
         open: bool,
 
         /// Serve the query API only (no dashboard static files)
         #[arg(long)]
         query_only: bool,
-
-        /// Serve the dashboard only (no query API)
-        #[arg(long)]
-        dashboard_only: bool,
 
         /// Watch source files and apply incremental graph updates (debounce via `rgctl.toml` `[watch]`)
         #[arg(long)]
@@ -1690,7 +1687,6 @@ impl Cli {
                 with_ast_skeleton,
                 write_json_graph,
                 with_universe,
-                with_dashboard,
                 export_migration_hints,
                 with_harmonic,
                 with_kantra,
@@ -1706,8 +1702,24 @@ impl Cli {
                 cascade_depth,
                 extra,
             } => {
-                if extra.iter().any(|a| a == "--full") {
-                    full = true;
+                for arg in &extra {
+                    if arg == "--" {
+                        continue;
+                    }
+                    if arg == "--full" {
+                        full = true;
+                        continue;
+                    }
+                    if arg.starts_with('-') {
+                        anyhow::bail!(
+                            "unexpected argument '{arg}'\n\n  \
+                             Tip: unknown discover flags must not be silently ignored. If you meant \
+                             the universe dashboard, use `--with-universe` (`rgctl discover --help`)."
+                        );
+                    }
+                    anyhow::bail!(
+                        "unexpected positional argument '{arg}' (discover takes at most one PATH)"
+                    );
                 }
                 discover::run(
                     &ctx,
@@ -1727,7 +1739,6 @@ impl Cli {
                         with_ast_skeleton,
                         write_json_graph,
                         with_universe,
-                        with_dashboard,
                         export_migration_hints,
                         with_harmonic,
                         with_kantra,
@@ -2623,13 +2634,12 @@ impl Cli {
             }
             Commands::Serve {
                 path,
-                no_pipeline,
+                no_pipeline: _,
                 host,
                 port,
                 dashboard_dir,
                 open,
                 query_only,
-                dashboard_only,
                 watch,
             } => http_serve::serve(
                 &ctx,
@@ -2639,8 +2649,6 @@ impl Cli {
                     dashboard_dir,
                     open,
                     query_only,
-                    dashboard_only,
-                    no_pipeline,
                     path,
                     watch,
                 },
