@@ -305,7 +305,11 @@ pub enum Commands {
         )]
         cascade_depth: usize,
 
-        /// Flags after `--` (e.g. `discover . -- --full`)
+        /// Compatibility catch-all for `discover . -- --full` only.
+        ///
+        /// Must stay narrow: unknown hyphen flags used to land here and be **silently ignored**,
+        /// so e.g. an older binary without `--with-universe` would accept the flag, skip dashboard
+        /// export, and leave `serve` on the "Dashboard is being prepared" page.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
         extra: Vec<String>,
     },
@@ -910,16 +914,17 @@ pub enum Commands {
 
     /// Serve the analysis dashboard and GQL query API over HTTP.
     ///
-    /// Default: dashboard at `/` and query API at `/api/query` (alias `/graphql`).
-    /// Starts the full discover pipeline unless `--no-pipeline`.
+    /// Serve-only: does **not** run discover or a background pipeline. Index first with
+    /// `rgctl discover . --with-universe`, then `rgctl serve --open`.
+    /// Dashboard at `/`; query API at `/api/query` (alias `/graphql`).
     #[command(display_order = 4)]
     Serve {
-        /// Repository path to index (defaults to `--repo` or cwd)
+        /// Repository path (defaults to `--repo` or cwd)
         #[arg(value_name = "PATH")]
         path: Option<String>,
 
-        /// Do not auto-run discover; fail fast if artifacts are missing
-        #[arg(long = "no-pipeline")]
+        /// Deprecated no-op: serve never auto-runs a pipeline (kept so old scripts keep working).
+        #[arg(long = "no-pipeline", hide = true)]
         no_pipeline: bool,
 
         /// Bind host [default: 127.0.0.1]
@@ -1706,8 +1711,25 @@ impl Cli {
                 cascade_depth,
                 extra,
             } => {
-                if extra.iter().any(|a| a == "--full") {
-                    full = true;
+                for arg in &extra {
+                    if arg == "--" {
+                        continue;
+                    }
+                    if arg == "--full" {
+                        full = true;
+                        continue;
+                    }
+                    if arg.starts_with('-') {
+                        anyhow::bail!(
+                            "unexpected argument '{arg}'\n\n  \
+                             Tip: unknown discover flags must not be silently ignored. If you meant \
+                             the universe dashboard, use a build that documents `--with-universe` \
+                             (`rgctl discover --help`), or the deprecated `--with-dashboard`."
+                        );
+                    }
+                    anyhow::bail!(
+                        "unexpected positional argument '{arg}' (discover takes at most one PATH)"
+                    );
                 }
                 discover::run(
                     &ctx,
@@ -2623,7 +2645,7 @@ impl Cli {
             }
             Commands::Serve {
                 path,
-                no_pipeline,
+                no_pipeline: _,
                 host,
                 port,
                 dashboard_dir,
@@ -2640,7 +2662,6 @@ impl Cli {
                     open,
                     query_only,
                     dashboard_only,
-                    no_pipeline,
                     path,
                     watch,
                 },

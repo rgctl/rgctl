@@ -1,11 +1,9 @@
-//! Integration tests for `discover --full` and `serve --mode` / auto-pipeline.
+//! Integration tests for `discover --full` and serve-only HTTP (`serve` does not auto-pipeline).
 
 use serde_json::Value;
 use std::fs;
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Command, Output};
 
 fn rgctl_bin() -> PathBuf {
     if let Some(bin) = std::env::var_os("CARGO_BIN_EXE_rgctl") {
@@ -230,80 +228,32 @@ fn discover_full_overlapping_lock_fails() {
     );
 }
 
-fn pick_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
-fn wait_for_health(base: &str, timeout: Duration) -> bool {
-    let client = reqwest::blocking::Client::new();
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if let Ok(resp) = client.get(format!("{base}/api/health")).send()
-            && resp.status().is_success()
-        {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    false
-}
-
 #[test]
-fn serve_without_dashboard_binds_preparing_and_status() {
+fn serve_without_dashboard_exits() {
     let (_tmp, repo) = materialize();
-    let port = pick_port();
-    let base = format!("http://127.0.0.1:{port}");
-    let mut child = Command::new(rgctl_bin())
-        .args([
+    let output = run_in(
+        &repo,
+        &[
             "-r",
             repo.to_str().unwrap(),
             "serve",
-            "--host",
-            "127.0.0.1",
             "--port",
-            &port.to_string(),
-        ])
-        .current_dir(&repo)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn serve");
-    let ok = wait_for_health(&base, Duration::from_secs(20));
-    let client = reqwest::blocking::Client::new();
-    let home = if ok {
-        client.get(format!("{base}/")).send().ok()
-    } else {
-        None
-    };
-    let status = if ok {
-        client.get(format!("{base}/api/status")).send().ok()
-    } else {
-        None
-    };
-    let _ = child.kill();
-    let _ = child.wait();
-    assert!(
-        ok,
-        "serve should become healthy without a prebuilt dashboard"
+            "18080",
+        ],
     );
-    let body = home.expect("GET /").text().unwrap_or_default();
     assert!(
-        body.to_ascii_lowercase().contains("prepar") || body.contains("rgctl"),
-        "GET / unexpected: {body}"
+        !output.status.success(),
+        "serve must fail fast without a dashboard (no auto-pipeline)"
     );
-    let status = status.expect("GET /api/status");
-    assert!(status.status().is_success());
-    let doc: Value = status.json().expect("status json");
-    assert_eq!(doc["schema_version"], 1);
-    assert_eq!(doc["command"], "pipeline_status");
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        err.contains("dashboard") || err.contains("discover") || err.contains("universe"),
+        "{err}"
+    );
 }
 
 #[test]
-fn serve_no_pipeline_without_dashboard_exits() {
+fn serve_deprecated_no_pipeline_flag_still_accepted() {
     let (_tmp, repo) = materialize();
     let output = run_in(
         &repo,
@@ -313,15 +263,11 @@ fn serve_no_pipeline_without_dashboard_exits() {
             "serve",
             "--no-pipeline",
             "--port",
-            "18080",
+            "18081",
         ],
     );
+    // Same fail-fast as default; flag is a hidden no-op for old scripts.
     assert!(!output.status.success());
-    let err = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        err.contains("dashboard") || err.contains("discover"),
-        "{err}"
-    );
 }
 
 #[test]
@@ -332,8 +278,17 @@ fn serve_help_lists_http_flags() {
         .expect("help");
     assert_ok(&help, "serve --help");
     let text = String::from_utf8_lossy(&help.stdout);
-    assert!(text.contains("--no-pipeline"), "{text}");
     assert!(text.contains("--port"), "{text}");
+    assert!(
+        text.to_ascii_lowercase().contains("does not")
+            || text.contains("serve-only")
+            || text.contains("discover"),
+        "help should say serve does not index: {text}"
+    );
+    assert!(
+        !text.contains("--no-pipeline"),
+        "--no-pipeline is hidden/deprecated: {text}"
+    );
 }
 
 #[test]

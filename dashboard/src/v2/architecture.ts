@@ -1,7 +1,7 @@
 /**
  * Load the architecture datasets and compose the view the room renders.
  *
- * The room reads `metagraph.json` and `communities.json` — both written by `discover --with-dashboard`
+ * The room reads `metagraph.json` and `communities.json` — both written by `discover --with-universe`
  * today — and `migration_graph.json` only to quote its disagreeing count. No export change is required, and
  * nothing here recomputes a figure the bundle already states.
  */

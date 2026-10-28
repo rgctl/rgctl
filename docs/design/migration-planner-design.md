@@ -217,7 +217,7 @@ Dashboard: **Roadmap sort** dropdown in Metrics & tuning.
 
 ### 6.1 `migration_graph.json` (schema v2)
 
-Written to `.rgctl/dashboard/migration_graph.json` on `discover --with-dashboard`.
+Written to `.rgctl/dashboard/migration_graph.json` on `discover --with-universe` (or deprecated `--with-dashboard`).
 
 ```json
 {
@@ -246,7 +246,7 @@ Note: field name `communities` is historical — entries are **macro packages**.
 
 ### 6.2 `migration_plan.json` (schema v2)
 
-Default export on `discover --with-dashboard` uses `hybrid_default` + `scheduled`. CLI can override.
+Default export on `discover --with-universe` uses `hybrid_default` + `scheduled`. CLI can override.
 
 ```json
 {
@@ -369,7 +369,7 @@ Top → bottom:
 
 ```bash
 # Full analysis + dashboard bundle (includes migration_graph.json + default plan)
-rgctl discover . --with-cfg --with-security --with-taint --with-dashboard --with-harmonic --export-migration-hints
+rgctl discover . --with-cfg --with-security --with-taint --with-universe --with-harmonic --export-migration-hints
 
 # Export plan to file (harmonic required for β term in ranking)
 rgctl discover . --with-harmonic --export-migration-hints \
@@ -380,7 +380,7 @@ rgctl discover . --with-harmonic --export-migration-hints \
 # JSON to stdout (with discover JSON envelope)
 rgctl discover . --with-harmonic --export-migration-hints -f json
 
-# Serve dashboard (requires prior --with-dashboard discover)
+# Serve dashboard (requires prior --with-universe discover)
 rgctl serve -r /path/to/repo --open
 ```
 
@@ -389,7 +389,7 @@ Flags:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--with-harmonic` | off | Compute harmonic centrality (needed for migration β / dense_cluster) |
-| `--with-dashboard` | off | Write `.rgctl/dashboard/` bundle |
+| `--with-universe` | off | Write `.rgctl/dashboard/` universe (v2) bundle (`--with-dashboard` is a deprecated alias) |
 | `--export-migration-hints` | off | Write plan JSON (alias: `--export-migration-hints`) |
 | `--migration-preset` | `hybrid_default` | Strategy preset |
 | `--migration-order` | `scheduled` | `scheduled` or `priority` |

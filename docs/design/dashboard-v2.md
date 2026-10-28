@@ -230,9 +230,10 @@ The v1 dashboard's own `CfgView` was not changed.
 
 ### Consequences
 
-- **v1 is untouched.** `--with-dashboard` keeps producing the existing Preact bundle, so all 18 dashboard
-  test files stay meaningful and the change stays bisectable.
-- **No dual runtime.** v2 is a separate bundle behind a flag, so React and Preact are never both loaded.
+- **v1 stayed shippable during the rewrite.** Both `dist` and `dist-v2` embed; React and Preact are never both
+  loaded in one extract. After the flag swap, `--with-universe` (and deprecated `--with-dashboard`) extract
+  v2; `RGCTL_DASHBOARD_LEGACY=1` is the one-release hatch back to Preact.
+- **No dual runtime.** v2 is a separate bundle, so React and Preact are never both loaded.
 - **The Preact → React migration of v1 is deferred**, and should happen only at the point the legacy
   views are deleted.
 - **Harness work still required:** `dashboard/vitest.config.ts` declares **no plugins and no DOM
@@ -350,7 +351,7 @@ Rationale: the dashboard surface is guarded by **18 test files** in `tests/` —
 
 Rules:
 
-- `--with-dashboard` (v1) keeps working; v2 is opt-in until parity.
+- **`--with-universe` extracts v2** (`manifest.mode: "universe"`). `--with-dashboard` is a deprecated alias that warns and routes to the same universe bundle. v1 remains reachable only via `RGCTL_DASHBOARD_LEGACY=1` until `remove-v1-dashboard`.
 - `tests/dashboard_harness.rs` is extended with v2 parity assertions rather than replaced.
 - Manifest gains a phase bump and `dashboard_version` on every change (`crates/rgctl-dashboard/src/manifest.rs:54`).
 
@@ -510,8 +511,8 @@ _Update on every phase PR._
 | Audit defect fixes — favicon (D8) | prereq | **not started** | Missing icon → 404 per load |
 | `dashboard/dist` regen | prereq | **done** | Rebuilt with `wasm-pack` and landed in `8f09655` (sshaaf/rgctl#110). Until then the source fixes were invisible in a built binary, because `dashboard/dist` is compile-time embedded — see [Build hazards](#two-build-hazards-to-fix-while-adding-the-size-gate). |
 | `rgctl review export` | 0 | **done** | `.rgctl/workflows/review.json`; composed, tested (`tests/review_paths_integration.rs`). **Merged upstream as [#117](https://github.com/rgctl/rgctl/pull/117), without the refusal.** Upstream's merged producer still defaults to a synthesized delta head (`full_snapshots: false`); refusing it is our change, still on this branch only, because that path overwrote `.rgctl/` in place and described a head that did not contain the change — a one-line deletion reported as 22 additions. It is what [#124](https://github.com/rgctl/rgctl/issues/124) asks for. See `openspec/changes/add-review-workflow-dashboard/tasks.md` §8. |
-| v2 app + shell | 1 | **in progress** | React app in `dashboard/src/v2`, own Vite config, own `dist-v2`; Instrument, Orientation, Rooms, Lens control, and the Focus in the URL. Selected with `RGCTL_DASHBOARD_V2=1` — one flag, see below. |
-| v2 Spine lens (code browser) | 1 | **in progress** | Source for the focused symbol beside its CFG, bound both ways; dominance-depth layout; lightweight highlighting. Not syntax-complete and no IDE affordances, deliberately. |
+| v2 app + shell | 1 | **done** | React app in `dashboard/src/v2`, own Vite config, own `dist-v2`; Instrument, Orientation, Rooms, Lens control, and the Focus in the URL. Reached with **`--with-universe`** (see [How to reach v2](#how-to-reach-v2-universe)). |
+| v2 Spine lens (code browser) | 1 | **done** | Source for the focused symbol beside its CFG, bound both ways; dominance-depth layout; lightweight highlighting. Not syntax-complete and no IDE affordances, deliberately. |
 | v2 CFG·PDG lens | 1 | **done** | The same graph as a surface of its own: full-width, `70vh`, a stat row (blocks · edges · dominance frontiers · exits), a dominance-frontier toggle, the selected block read out above the graph, and a typed absence for a subject the bundle has no CFG for. `?lens=cfgpdg`; shares the drawing, the dominator walk and the loader with the Spine rather than re-deriving them. |
 | v2 test harness + gates | 1 | **done** | Own Vitest config (React, jsdom) and `./scripts/test-dashboard.sh`, which runs every dashboard gate and the offline check as a set. 21 v1 tests + **55 v2 tests**. |
 | v2 bundle-size gate | 1 | **done** | In `scripts/build-dashboard.sh`. Measured: **v1 321 KiB** gzipped, **v2 136 KiB** — v2 ships less than half despite adding React, because it drops CodeMirror and Sigma. |
@@ -524,22 +525,26 @@ _Update on every phase PR._
 | Migration Room restyle | 6 | **not started** | |
 | `BlastSliceTrace` export | 7 | **not started** | JSON envelope corruption repro confirmed. Previously also blocked on two `rgctl slice` defects, now **fixed and merged upstream** — issues sshaaf/rgctl#113/#114, PRs #115/#116. See `audit/slice-addressing.md`. |
 
-### How to reach v2
+### How to reach v2 (universe)
 
 ```bash
 npm --prefix dashboard run build:v2        # or ./scripts/build-dashboard.sh for both bundles
-rgctl -r <repo> discover . --with-dashboard
-RGCTL_DASHBOARD_V2=1 rgctl -r <repo> serve --open
+rgctl -r <repo> discover . --with-universe
+rgctl -r <repo> serve --open
 ```
 
-`RGCTL_DASHBOARD_V2=1` selects the v2 bundle when `discover` extracts the dashboard into `.rgctl/dashboard/`,
-and `serve` then serves whatever was extracted. It is an **environment variable rather than a flag on
-purpose**: there is one user-facing flag (`--with-dashboard`), and this switch is a development affordance,
-not a feature — "run the other dashboard" is not a promise worth making to users. It disappears when v2 is
-what that flag serves and v1 is retired.
+**`--with-universe` is the user-facing flag.** It extracts the v2 React bundle (`dashboard/dist-v2`) into
+`.rgctl/dashboard/` and writes `manifest.mode: "universe"` (and `bundle_version: "v2"`). `serve` then serves
+whatever was extracted.
 
-If v2 is selected and its bundle is unavailable, extraction **fails and says so** instead of falling back to
-v1. A silent fallback would serve the old dashboard to someone who believes they are looking at the new one.
+**`--with-dashboard` is deprecated:** it still works, prints a warning naming `--with-universe`, and routes to
+the **same** universe bundle. It will be removed in a later release (change `remove-v1-dashboard`).
+
+**v1 hatch (one release):** `RGCTL_DASHBOARD_LEGACY=1` forces the Preact v1 bundle (`manifest.mode: "dashboard"`)
+when a dashboard export runs. Unset it for the universe.
+
+`RGCTL_DASHBOARD_V2` is obsolete — v2/universe is the default whenever a dashboard is requested. If the v2
+bundle is unavailable, extraction **fails and says so** instead of falling back to v1.
 
 ### Running the dashboard gates
 

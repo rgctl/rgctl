@@ -65,26 +65,6 @@ impl FullPipelineArgs {
         }
     }
 
-    pub fn default_serve() -> Self {
-        Self {
-            languages: None,
-            exclude: None,
-            with_security: false,
-            with_taint: false,
-            taint_rules: None,
-            scip: None,
-            with_git: false,
-            git_since: "90.days".into(),
-            with_dfg_loops: false,
-            with_ast_skeleton: false,
-            write_json_graph: false,
-            export_migration_hints: false,
-            migration_preset: "hybrid_default".into(),
-            migration_order: "scheduled".into(),
-            artifact_root: None,
-            limits: None,
-        }
-    }
 }
 
 /// Print the three-stage plan (stderr via tracing).
@@ -414,18 +394,4 @@ fn should_skip_semantic(store: &Path) -> bool {
         return false;
     };
     index.graph_digest.as_deref() == Some(digest.as_str())
-}
-
-/// Spawn the full pipeline on a dedicated OS thread (HTTP/MCP).
-pub fn spawn_full_pipeline(root: PathBuf, verbose: bool) -> std::thread::JoinHandle<()> {
-    std::thread::Builder::new()
-        .name("rgctl-pipeline".into())
-        .spawn(move || {
-            let ctx = CliContext::new(Some(root.clone()), None, OutputFormat::Json, None, verbose);
-            let path = root.to_string_lossy().into_owned();
-            if let Err(err) = run_full_pipeline(&ctx, &path, FullPipelineArgs::default_serve()) {
-                eprintln!("[!] full pipeline: {err:#}");
-            }
-        })
-        .expect("spawn pipeline thread")
 }

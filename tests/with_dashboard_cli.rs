@@ -183,6 +183,10 @@ fn discover_help_documents_dashboard_flags() {
     assert_ok(&output, "discover --help");
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(
+        help.contains("--with-universe"),
+        "missing --with-universe (canonical universe/v2 flag)"
+    );
+    assert!(
         help.contains("--with-dashboard"),
         "missing --with-dashboard"
     );
@@ -193,5 +197,27 @@ fn discover_help_documents_dashboard_flags() {
     assert!(
         help.contains("--export-migration-plan"),
         "alias --export-migration-plan should remain visible"
+    );
+}
+
+/// Unknown hyphen flags used to fall into Discover's trailing `extra` catch-all and be ignored —
+/// so an older binary without `--with-universe` would accept the flag, skip export, and leave
+/// `serve` stuck on "Dashboard is being prepared". Reject them instead.
+#[test]
+fn discover_rejects_unknown_hyphen_flags() {
+    let (_tmp, repo) = materialize();
+    let output = run_discover(&repo, &["--with-not-a-real-flag"]);
+    assert!(
+        !output.status.success(),
+        "unknown flag must fail, not be swallowed"
+    );
+    let err = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        err.contains("--with-not-a-real-flag") || err.contains("unexpected argument"),
+        "error should name the bad flag: {err}"
     );
 }

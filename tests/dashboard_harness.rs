@@ -598,6 +598,39 @@ pub fn assert_dashboard_bundle_all_analysis(repo: &Path, min_nodes: u64, min_met
     }
 }
 
+/// v1 / v2 static-bundle parity the harness must treat the same.
+///
+/// Both packages must define `index.html`, carry a non-empty `assets/` tree, stay offline (no CDN
+/// refs in the entry HTML), and avoid the `assets/assets/` nesting bug. Data-contract checks stay in
+/// [`assert_dashboard_bundle`]; this only asserts the *shell packages* agree where they must.
+pub fn assert_v1_v2_shell_parity() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dashboard");
+    for name in ["dist", "dist-v2"] {
+        let dir = root.join(name);
+        assert!(
+            dir.join("index.html").is_file(),
+            "{name}/index.html missing — run ./scripts/build-dashboard.sh"
+        );
+        let assets = dir.join("assets");
+        assert!(assets.is_dir(), "{name}/assets missing");
+        let has_asset = std::fs::read_dir(&assets)
+            .ok()
+            .map(|rd| rd.flatten().next().is_some())
+            .unwrap_or(false);
+        assert!(has_asset, "{name}/assets must be non-empty");
+        let html = std::fs::read_to_string(dir.join("index.html"))
+            .unwrap_or_else(|e| panic!("read {name}/index.html: {e}"));
+        assert!(
+            !html.contains("cdn.jsdelivr.net") && !html.contains("d3js.org"),
+            "{name}/index.html must not reference a CDN"
+        );
+        assert!(
+            !html.contains("assets/assets/"),
+            "{name}/index.html must not nest assets/assets/"
+        );
+    }
+}
+
 pub fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {
     std::fs::create_dir_all(&dst)?;
     for entry in std::fs::read_dir(src)? {

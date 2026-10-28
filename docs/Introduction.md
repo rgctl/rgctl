@@ -51,7 +51,7 @@ You do not need graph theory to use the CLI: **indexing builds the map; commands
 1. **Once** (or after large changes): `discover` from the repo you mean to index — see [Discovering and indexing](https://rgctl.io/docs/guides/discovering-and-indexing/) for `-r` vs `.` pitfalls.  
 2. **Many times:** query commands read `{repo}/.rgctl/`. Prefer **`-f json`** and never scrape stderr ([JSON API](json-api.md)).  
 3. **Agents:** install the pack (`rgctl install --skill --tools …`) — single skill `rgctl` ([agent-skill](https://rgctl.io/docs/guides/agent-skill/)).  
-4. **Dashboard:** optional UI after `discover --with-dashboard` + `serve` — not required for structural answers.
+4. **Dashboard:** optional UI after `discover --with-universe` + `serve` — not required for structural answers.
 
 Capability designs for contributors: [design/](design/README.md).
 
@@ -66,7 +66,7 @@ Capability designs for contributors: [design/](design/README.md).
 | `--scip PATH` | SCIP overlay — upgrades ambiguous calls (`resolution = "scip"`) |
 | `--with-kantra` | Konveyor Kantra rule eval (Java-oriented; `VIOLATES` edges) |
 | `--full` | Full pipeline (large corpora / Gate B style runs) |
-| `--with-dashboard` / `--export-migration-hints` | Opt-in UI bundle / migration JSON |
+| `--with-universe` / `--export-migration-hints` | Opt-in universe UI bundle / migration JSON (`--with-dashboard` is a deprecated alias) |
 
 ```bash
 rgctl discover . -l java,kotlin,python --with-cfg

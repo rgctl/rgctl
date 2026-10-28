@@ -57,7 +57,7 @@ Prefer the **Canonical** column in examples and agent workflows. Aliases/façade
 
 ## discover
 
-**Command:** `rgctl [-f json] discover [PATH] [-l/--languages CSV] [-e/--exclude GLOB] [-v/--verbose] [--scip PATH.scip] [--with-git] [--git-since DUR] [--with-cfg] [--with-security] [--with-taint] [--with-dashboard] [--with-harmonic] [--export-migration-hints] [--migration-preset NAME] [--migration-order NAME] [--with-ast-skeleton] [--with-dfg-loops] [--write-json-graph] …`
+**Command:** `rgctl [-f json] discover [PATH] [-l/--languages CSV] [-e/--exclude GLOB] [-v/--verbose] [--scip PATH.scip] [--with-git] [--git-since DUR] [--with-cfg] [--with-security] [--with-taint] [--with-universe] [--with-dashboard] [--with-harmonic] [--export-migration-hints] [--migration-preset NAME] [--migration-order NAME] [--with-ast-skeleton] [--with-dfg-loops] [--write-json-graph] …`
 
 **Purpose:** Index the repo once (or after large changes). Writes the default **`RGCL` v2** columnar mmap snapshot (`.rgctl/graph.snapshot.bin`) that agents query.
 
@@ -769,15 +769,15 @@ rgctl cpg export --format graphson --output cpg.json [--path-contains src/] \
 
 ## serve
 
-**Command:** `rgctl serve [--open] [--host H] [--port N] [--dashboard-dir DIR] [--query-only|--dashboard-only] [--no-pipeline]`
+**Command:** `rgctl serve [--open] [--host H] [--port N] [--dashboard-dir DIR] [--query-only|--dashboard-only]`
 
-**Purpose:** Local HTTP dashboard + `POST /api/query` (and semantic routes) for **one repository**. Auto-runs `discover --full` unless `--no-pipeline`.
+**Purpose:** Local HTTP dashboard + `POST /api/query` (and semantic routes) for **one repository**. Serve-only — does **not** run discover; index first with `rgctl discover . --with-universe`.
 
-**Prerequisites:** `discover` (dashboard bundle with `--with-dashboard` for full UI).
+**Prerequisites:** `discover` (universe dashboard bundle with `--with-universe` for full UI; `--with-dashboard` is a deprecated alias).
 
 **Pitfalls:** Foreground only — binds until Ctrl+C. Not a multi-repo catalog. Agents usually prefer CLI `-f json` subprocesses over HTTP.
 
-**Agent should report:** URL/port for HTTP; note `--no-pipeline` if artifacts must exist first.
+**Agent should report:** URL/port for HTTP; confirm `discover --with-universe` (or equivalent) already produced `.rgctl/dashboard/`.
 
 ---
 

@@ -1,12 +1,17 @@
 /**
  * The Instrument layer — persistent, and never a destination.
  *
- * Coverage is computed from what the bundle can *evidence* (`analysis.*_available`, `semantic.available`,
- * `phases`), per the spec's rule that a capability which cannot be evidenced is not shown as covered. The
- * design promised per-language support tiers here; that data is not in the bundle, so it is reported as
- * unavailable rather than approximated with a dot count that looks like a measurement.
+ * Coverage dots are per-language support tiers from `languages.toml`, filtered to languages whose
+ * files appear in this bundle. Analysis capabilities remain a separate tooltip (CFG, slices, …).
  */
-import { capabilities, type Manifest } from "./data";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
+import {
+  capabilities,
+  languageCoverageFromPaths,
+  loadSourceIndex,
+  type Manifest,
+} from "./data";
 
 function freshness(generatedAt?: string): string {
   const seconds = Number(generatedAt);
@@ -28,8 +33,25 @@ export function Instrument({
   onClearFocus: () => void;
 }) {
   const caps = capabilities(manifest);
-  const filled = caps.filter((c) => c.available).length;
   const digest = manifest?.graph?.digest ?? manifest?.export_fingerprint;
+  const sources = useQuery({ queryKey: ["sources-index"], queryFn: loadSourceIndex });
+  const coverage = useMemo(
+    () => languageCoverageFromPaths((sources.data ?? []).map((f) => f.file_path)),
+    [sources.data],
+  );
+  const tier1 = coverage.languages.filter((l) => l.tier === 1).length;
+  const tier2 = coverage.languages.filter((l) => l.tier === 2).length;
+
+  const coverageTitle = [
+    ...coverage.languages.map((l) => `T${l.tier} ${l.id} · ${l.fileCount} file(s)`),
+    coverage.unstatedFiles > 0
+      ? `${coverage.unstatedFiles} file(s) with no recorded language tier (not shown as covered)`
+      : null,
+    "—",
+    ...caps.map((c) => `${c.available ? "✓" : "✗"} ${c.label}`),
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <header className="shrink-0 border-b border-white/8 bg-[#0e1116] px-3 py-2">
@@ -42,19 +64,27 @@ export function Instrument({
           </span>
         </span>
 
-        <span
-          className="flex items-center gap-1"
-          title={caps.map((c) => `${c.available ? "✓" : "✗"} ${c.label}`).join("\n")}
-        >
-          {caps.map((c) => (
-            <span
-              key={c.label}
-              className={`h-1.5 w-1.5 rounded-full ${c.available ? "bg-emerald-400" : "bg-zinc-700"}`}
-            />
-          ))}
-          <span className="ml-1 text-[10px] text-zinc-500">
-            {filled}/{caps.length} capabilities · per-language tiers not in this bundle
-          </span>
+        <span className="flex items-center gap-1" title={coverageTitle}>
+          {coverage.languages.length === 0 && !sources.isLoading ? (
+            <span className="text-[10px] text-zinc-500">no language coverage in this bundle</span>
+          ) : (
+            <>
+              {coverage.languages.map((l) => (
+                <span
+                  key={l.id}
+                  className={`h-1.5 w-1.5 rounded-full ${l.tier === 1 ? "bg-emerald-400" : "bg-sky-400"}`}
+                  title={`T${l.tier} ${l.id}`}
+                />
+              ))}
+              <span className="ml-1 text-[10px] text-zinc-500">
+                {coverage.languages.length} language
+                {coverage.languages.length === 1 ? "" : "s"}
+                {tier1 + tier2 > 0 ? ` · T1 ${tier1}` : ""}
+                {tier2 > 0 ? ` · T2 ${tier2}` : ""}
+                {coverage.unstatedFiles > 0 ? ` · ${coverage.unstatedFiles} unstated` : ""}
+              </span>
+            </>
+          )}
         </span>
 
         {digest && (

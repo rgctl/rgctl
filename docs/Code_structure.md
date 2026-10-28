@@ -256,7 +256,7 @@ Understanding files helps avoid duplicating cache layers:
 | `analysis/git_churn.json` | `discover --with-git` | `metrics --churn`, `relations --edge cochangeswith` |
 | `query.sock` | *(retired)* | Former blast-radius Unix-socket client (v0.4.7); removed with daemon mode |
 | `analysis_results.bin` | `discover` | Columnar metrics (`CentralityTable`, community, blast); blast columns may stay empty on flat/on-demand graphs (bulk fill skipped — #28 won't-fix; use live `blast-radius`) |
-| `dashboard/` (bundle) | `discover --with-dashboard` | Browser static dashboard (`index.html`, `manifest.json`, `graph_payload.bin`) |
+| `dashboard/` (bundle) | `discover --with-universe` | Browser static universe/dashboard (`index.html`, `manifest.json`, `graph_payload.bin`) |
 
 ---
 

@@ -2,7 +2,6 @@
 
 use super::context::CliContext;
 use super::discover::resolve_session_root;
-use super::pipeline_session::spawn_full_pipeline;
 use super::pipeline_status::{self, PIPELINE_STATUS_SCHEMA_VERSION};
 use super::semantic::SemanticQueryArgs;
 use super::semantic_api::{execute_semantic_query, semantic_index_path, semantic_status};
@@ -34,6 +33,9 @@ use tower::ServiceExt;
 use tower_http::services::ServeDir;
 
 /// Options for the unified HTTP `serve` command.
+///
+/// Serve is **serve-only**: it never starts `discover` / a background pipeline. Run
+/// `rgctl discover . --with-universe` (or `--with-dashboard`) first.
 pub struct HttpServeArgs {
     pub host: String,
     pub port: u16,
@@ -41,7 +43,6 @@ pub struct HttpServeArgs {
     pub open: bool,
     pub query_only: bool,
     pub dashboard_only: bool,
-    pub no_pipeline: bool,
     pub path: Option<String>,
     /// Watch sources and run incremental `update` on change.
     pub watch: bool,
@@ -125,13 +126,12 @@ pub fn serve(ctx: &CliContext, args: HttpServeArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| default_dashboard_path(&session_root));
 
-    let start_pipeline = !args.no_pipeline;
-
-    if args.no_pipeline && !args.query_only {
+    if !args.query_only {
         let index = dashboard_dir.join("index.html");
         if !index.is_file() {
             bail!(
-                "dashboard not found at {} (run `rgctl discover` first)",
+                "dashboard not found at {}\n  \
+                 Run `rgctl discover . --with-universe` first (serve does not index).",
                 dashboard_dir.display()
             );
         }
@@ -142,10 +142,12 @@ pub fn serve(ctx: &CliContext, args: HttpServeArgs) -> Result<()> {
     } else if let Ok(graph) = session_ctx.load_graph() {
         let community = super::gql::load_community_context(&session_ctx, graph.backend());
         (Some(graph), community)
-    } else if args.no_pipeline {
-        bail!("load graph for query API (run `rgctl discover` first)");
     } else {
-        (None, None)
+        bail!(
+            "graph snapshot not found under {}\n  \
+             Run `rgctl discover .` first (serve does not index).",
+            session_root.display()
+        );
     };
 
     let semantic = load_semantic_index(&session_root);
@@ -158,10 +160,6 @@ pub fn serve(ctx: &CliContext, args: HttpServeArgs) -> Result<()> {
         community: RwLock::new(community),
         dashboard_announced: AtomicBool::new(dashboard_dir.join("index.html").is_file()),
     });
-
-    if start_pipeline {
-        let _pipeline = spawn_full_pipeline(session_root.clone(), ctx.verbose);
-    }
 
     // Hold for the lifetime of serve so Drop releases `.rgctl/watch.lock` on exit.
     let _watch_lock = if args.watch {

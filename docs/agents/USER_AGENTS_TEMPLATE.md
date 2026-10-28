@@ -57,7 +57,7 @@ Upgrading from an old daemon install: copy `~/.rgctl/cache/{name}/.rgctl/` into 
 | Intent | Command |
 |--------|---------|
 | Full session (graph + CFG + dashboard + semantic) | `rgctl discover PATH --full` (queryable after stage 1; status in `.rgctl/pipeline_status.json`) |
-| HTTP session (auto-pipeline) | `rgctl serve` — `GET /api/status`; `--no-pipeline` restores fail-fast |
+| HTTP session | `rgctl discover . --with-universe` then `rgctl serve` — `GET /api/status` |
 | Schema / counts (zeros included) | `rgctl -f json inventory --by type` or `--by edge` |
 | Inventory / count functions | `rgctl -f json find --type function --count-only` |
 | Find symbol by pattern | `rgctl -f json find "*Service*" --type function --limit 20` |
@@ -78,7 +78,7 @@ Upgrading from an old daemon install: copy `~/.rgctl/cache/{name}/.rgctl/` into 
 | Loop-carried DFG tags | `rgctl discover . --with-cfg --with-dfg-loops` |
 | AST skeleton | `rgctl discover --with-ast-skeleton` then `rgctl -f json cpg ast <Symbol>` |
 | CPG export | `rgctl cpg export --format graphson --output cpg.json [--path-contains src/]` |
-| Migration plan | `rgctl -f json discover . --with-cfg --with-security --with-taint --with-dashboard --with-harmonic --export-migration-hints` (stdout = migration plan JSON; also writes `.rgctl/migration_plan.json`) |
+| Migration plan | `rgctl -f json discover . --with-cfg --with-security --with-taint --with-universe --with-harmonic --export-migration-hints` (stdout = migration plan JSON; also writes `.rgctl/migration_plan.json`) |
 | CI gate on changes | `rgctl -f json check --policy-file policy.json` (exit 1 = violations) |
 | Temporal PR gate | `rgctl -f json pr-check --policy-file rgctl-pr-policy.json --base-artifact .rgctl-base --base-ref origin/main --head-ref HEAD --strict` |
 | Check temporal bridge | `rgctl -f json check --temporal --policy-file policy.json --base-ref origin/main --head-ref HEAD` |

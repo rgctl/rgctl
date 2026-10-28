@@ -10,7 +10,7 @@
  *
  * A hand-written fixture encodes the author's belief about the shape, and here the shape is the question, so
  * every assertion below is a figure measured off a real corpus. Regenerate by re-running
- * `rgctl discover . --with-dashboard --with-cfg` and re-capturing the two files.
+ * `rgctl discover . --with-universe --with-cfg` and re-capturing the two files.
  */
 import { describe, expect, it } from "vitest";
 import { buildView, channelReport } from "../architecture";
