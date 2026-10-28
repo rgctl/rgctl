@@ -8,6 +8,7 @@ import { CfgPdgLens } from "./rooms/CfgPdg";
 import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
 import { MigrationRoom } from "./rooms/Migration";
+import { TaintRoom } from "./rooms/Taint";
 import { loadManifest, type FunctionEntry } from "./data";
 import { LENSES, ROOMS, keyOf, type LensId, type RoomId } from "./focus";
 import { useFocus } from "./useFocus";
@@ -91,22 +92,34 @@ export function App() {
 
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-white/8 bg-[#0e1116] px-3 py-1.5">
-            <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">lens</span>
-            {LENSES.map((l) => (
-              <button
-                key={l.id}
-                type="button"
-                onClick={() => setLens(l.id)}
-                aria-pressed={lens === l.id}
-                className={`rounded px-2 py-0.5 text-[11px] ${
-                  lens === l.id ? "bg-white/10 text-zinc-100" : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
-                }`}
-              >
-                {l.label}
-              </button>
-            ))}
+            {/* Lenses are Understand controls — hiding them in other rooms avoids implying Spine/CFG
+                tabs apply to Migration/Taint/Architecture. */}
+            {room === "understand" ? (
+              <>
+                <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">lens</span>
+                {LENSES.map((l) => (
+                  <button
+                    key={l.id}
+                    type="button"
+                    onClick={() => setLens(l.id)}
+                    aria-pressed={lens === l.id}
+                    className={`rounded px-2 py-0.5 text-[11px] ${
+                      lens === l.id
+                        ? "bg-white/10 text-zinc-100"
+                        : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+                    }`}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </>
+            ) : (
+              <span className="text-[10px] uppercase tracking-wider text-zinc-600">
+                {ROOMS.find((r) => r.id === room)?.label}
+              </span>
+            )}
             <span className="ml-auto flex items-center gap-2 text-[10px] text-zinc-600">
-              <span>{ROOMS.find((r) => r.id === room)?.label}</span>
+              {room === "understand" && <span>{ROOMS.find((r) => r.id === room)?.label}</span>}
               {entry && <Chip tone="blue">subject: {entry.name}</Chip>}
             </span>
           </div>
@@ -138,9 +151,12 @@ export function App() {
             )}
             {room === "architecture" && <ArchitectureRoom />}
             {room === "migration" && <MigrationRoom />}
-            {room !== "repo" && room !== "understand" && room !== "architecture" && room !== "migration" && (
-              <Placeholder room={room} />
-            )}
+            {room === "taint" && <TaintRoom />}
+            {room !== "repo" &&
+              room !== "understand" &&
+              room !== "architecture" &&
+              room !== "migration" &&
+              room !== "taint" && <Placeholder room={room} />}
           </div>
         </main>
       </div>
@@ -275,7 +291,7 @@ function UnderstandRoom({
       <Panel title={entry.name} subtitle={entry.file_path ?? undefined} right={<Chip tone="blue">focus</Chip>}>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[10px] uppercase tracking-wider text-zinc-500">carry this focus to</span>
-          {(["review", "security", "architecture", "migration", "proof"] as RoomId[]).map((r) => (
+          {(["review", "taint", "architecture", "migration", "proof"] as RoomId[]).map((r) => (
             <button
               key={r}
               type="button"

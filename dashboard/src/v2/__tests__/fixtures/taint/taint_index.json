@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "available": true,
+  "detail_dir": "taint",
+  "function_count": 1,
+  "total_flows": 1,
+  "vulnerable_flows": 1,
+  "functions": [
+    {
+      "function_id": "8fcef6c3-dfc0-5338-ba7b-e14cc4816997",
+      "name": "handle",
+      "file_path": "app.py",
+      "flow_count": 1,
+      "vulnerable_count": 1
+    }
+  ]
+}

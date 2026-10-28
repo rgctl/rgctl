@@ -188,6 +188,11 @@ impl ColumnarView {
             .to_string()
     }
 
+    /// Columnar node index for a UUID, if that node exists in the payload.
+    pub fn index_of_uuid(&self, id: &[u8; 16]) -> Option<u32> {
+        self.uuid_to_index.get(id).copied()
+    }
+
     pub fn expand_indices(
         &self,
         indices: &[u32],
@@ -561,6 +566,21 @@ fn impact_score_from_counts(direct_count: usize, impact_count: usize) -> f64 {
     (direct_component + transitive_component).min(100.0)
 }
 
+/// Parse a hyphenated (or bare) UUID string into 16 bytes.
+pub fn parse_uuid_bytes(s: &str) -> Result<[u8; 16], String> {
+    let hex: String = s.chars().filter(|c| *c != '-').collect();
+    if hex.len() != 32 {
+        return Err(format!("invalid UUID length {}", hex.len()));
+    }
+    let mut out = [0u8; 16];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+            .map_err(|_| format!("invalid UUID hex at byte {i}"))?;
+        *slot = byte;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -574,5 +594,17 @@ mod tests {
     #[test]
     fn impact_score_caps_at_100() {
         assert_eq!(impact_score_from_counts(10, 5000), 100.0);
+    }
+
+    #[test]
+    fn parse_uuid_bytes_hyphenated() {
+        let id = parse_uuid_bytes("445b4d01-a4c2-503c-b13f-cb724988d868").unwrap();
+        assert_eq!(id[0], 0x44);
+        assert_eq!(id[15], 0x68);
+    }
+
+    #[test]
+    fn parse_uuid_bytes_rejects_short() {
+        assert!(parse_uuid_bytes("not-a-uuid").is_err());
     }
 }

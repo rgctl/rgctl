@@ -14,11 +14,7 @@ const PENDING: Partial<Record<RoomId, { change: string; what: string; why: strin
     what: "Review room",
     why: "Renders the composed artifact from `rgctl review export` — review paths, policy result and the violation timeline in one versioned file, with provenance and truncation recorded so a truncated report cannot be mistaken for a complete one.",
   },
-  security: {
-    change: "change 3 (add-security-workflow-dashboard)",
-    what: "Security room",
-    why: "Risk-weighted triage: severity × centrality × reachability, so the list is ordered by what actually matters rather than by rule id.",
-  },
+  // Taint: owned by `add-taint-flow-dashboard` — rendered by TaintRoom in App.tsx (replaces Security).
   architecture: {
     change: "change 4 (add-architecture-city-view)",
     what: "Architecture room",

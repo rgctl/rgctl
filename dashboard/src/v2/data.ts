@@ -145,8 +145,27 @@ export async function loadFunctions(): Promise<FunctionEntry[]> {
   return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * Per-file JSON when the export wrote `cfg/<id>.json`; otherwise the archive
+ * record pack decoded with WASM (`detail_mode: "archive_only"`, large repos).
+ */
 export async function loadCfgDetail(functionId: string): Promise<CfgDetail | null> {
-  return getJson<CfgDetail>(`cfg/${functionId}.json`);
+  const { isArchiveOnly, loadCfgDetailFromArchive, loadCfgIndexMeta } = await import("./cfgArchive");
+  const meta = await loadCfgIndexMeta();
+  if (isArchiveOnly(meta)) {
+    return loadCfgDetailFromArchive(functionId, meta);
+  }
+  const perFile = await getJson<CfgDetail>(`cfg/${functionId}.json`);
+  if (perFile) return perFile;
+  // Older / mixed bundles: try the pack if paths are present.
+  if (meta?.record_index_path && meta?.record_data_path) {
+    try {
+      return await loadCfgDetailFromArchive(functionId, meta);
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 let sourceIndex: SourceFileEntry[] | null = null;

@@ -55,6 +55,10 @@ export default defineConfig({
   // Relative asset paths: the bundle is embedded and served from `.rgctl/dashboard/`, and must also
   // work from `file://`.
   base: "./",
+  // Blast worker loads WASM + graph_payload; ES modules match the v1 worker setup.
+  worker: {
+    format: "es",
+  },
   build: {
     outDir: "dist-v2",
     assetsDir: "assets",

@@ -54,7 +54,7 @@ ORIENTATION  (exactly one)
              Repo — decision-shaped: "where do I start?", never vanity counts
 
 ROOMS        (n; each answers one question end-to-end)
-             Review ⭐ · Security ⭐ · Architecture · Migration · Understand · Agent · Proof
+             Review ⭐ · Taint ⭐ · Architecture · Migration · Understand · Agent · Proof
 
 LENSES       (shared control, never top-level)
              Spine · Code · CFG·PDG · Dataflow · Slice/Trace · Blast · Metrics · Time
@@ -62,7 +62,7 @@ LENSES       (shared control, never top-level)
 
 **Orientation is not a dashboard.** "Repo" answers *where do I start* by ranking the few things worth attention (unreviewed change surface, risk-weighted findings, drift, coverage caveats) and linking into the room that handles each. It does not print totals.
 
-**Rooms are jobs, not features.** Review = "what changed and what does it touch?" Security = "what is exploitable and what is reachable?" Proof = "why should I believe any of this?"
+**Rooms are jobs, not features.** Review = "what changed and what does it touch?" Taint = "where does untrusted data reach a sink?" Proof = "why should I believe any of this?"
 
 **Lenses are filters on the current focus.** Switching lens never changes what you are looking at.
 
@@ -88,8 +88,8 @@ if the carrier expires the first time someone renames a function.
 
 Consequences:
 
-- Select a symbol in **Review**, carry it to **Security** (findings filtered to what that symbol can reach), then to **Architecture** (its coupling), then to **Time** (its drift).
-- The Focus serializes into the URL, so any state is a shareable link: `?focus=<key>&room=security&lens=blast`.
+- Select a symbol in **Review**, carry it to **Taint** (flows filtered to that subject), then to **Architecture** (its coupling), then to **Time** (its drift).
+- The Focus serializes into the URL, so any state is a shareable link: `?focus=<key>&room=taint&lens=blast`.
 - **This is the differentiator.** Tools whose node identity is positional cannot express it, because their selection does not survive the next commit.
 
 Focus is *ambient*: it constrains rooms, it is never a prerequisite to render one. A room with no Focus must still open on a useful default (rule 1).
@@ -376,7 +376,7 @@ Rules:
 | 0 | `add-review-workflow-export` | CLI/JSON only: `rgctl review export` → `.rgctl/workflows/review.json`. No UI opinions. | — |
 | 1 | `add-dashboard-v2-shell` | New app + build pipeline, additive behind a flag, harness parity | 0 |
 | 2 | `add-review-workflow-dashboard` | Review Room | 1 |
-| 3 | `add-security-workflow-dashboard` | Risk-weighted triage (severity × centrality × reachability) | 1 |
+| 3 | `add-taint-flow-dashboard` | Taint room (replaces Security): path stage + triage + CFG/DFG/blast side panel | 1 |
 | 4 | `add-architecture-city-view` | **Universe P0**: L0 community regions + L1 package solids, the full coupling web per layer, five layouts, scales, coverage, absence states, camera fly-to, `--with-universe` + `manifest.mode`. **Drift is out of scope** (a bundle describes one revision) | 1 |
 | 5 | `add-proof-surface` | Speed matrix, correctness scorecard, determinism, live p95 | 1 |
 | 6 | `add-migration-flow-dashboard` | Complete Migration room (tuning + roadmap + three.js community graph); owned outside the umbrella checklist | 1 |
@@ -519,7 +519,7 @@ _Update on every phase PR._
 | v2 rooms | 2–6 | **in progress** | The Review room exists; the remaining rooms render an explicit "not built yet, change N" state naming what fills them. |
 | v2 lenses other than Spine, Code and CFG·PDG | 1 | **not started** | The lens control offers eight lenses and three render. The rest (Dataflow, Slice/Trace, Blast, Metrics, Time) produce an **empty pane, with no explanation** — `Placeholder` is keyed by *room*, so `Placeholder room="understand"` falls through to `null`. They should state the change that fills them, the way the rooms do. |
 | Review Room | 2 | **done; PR not yet opened** | Renders the composed artifact: change summary, changed symbols with their call-path deltas, the producing command as a receipt, and **five** states in which it says nothing — no artifact · unreadable · sections the artifact did not produce · truncated · a symbol-scoped export that resolved to nothing — each with the artifact's own reason. A symbol's identity is resolved by joining file + name against the index, never guessed, so an ambiguous name renders without a handoff; the room reads only a view model, and a test fails if an artifact field name reaches it. Warns above the figures when the artifact's revision differs from the browsed graph. 14 render tests against two **real** exports, all gates green (55 v2 tests). **Disposition (updated 2026-10-17): #117 is merged**, so the room now renders an artifact every build produces and the earlier reason for holding it back is gone. What remains is one producer behaviour change that did **not** travel with #117 — the refusal to synthesize a delta head (#124) — and it should go upstream **first, on its own**, because it is a small change to an upstream-owned file with its own argument, and the room reads better once the artifact it renders is trustworthy. Sequence: PR A = the refusal (#124); PR B = the room. `openspec/` is gitignored, so the record of why lives here and in `MAINTENANCE.md`. The branch (`feat/review-workflow-dashboard`) holds it. The one open task (5.6) is **not** unblocked by #117: the merged artifact carries no stable symbol id (`grep` for `symbol_id`/`stable_id` in the merged `review_export.rs` is empty), so file+name joining stays. |
-| Security Room | 3 | **not started** | |
+| Taint Room (was Security) | 3 (`add-taint-flow-dashboard`) | **done (this change)** | Focus-aware triage; SVG path stage; side CFG/DFG/blast. Fixture from `taint_smoke` discover. v2 gzip **290 KiB / 320**. |
 | Architecture City / Universe P0 | 4 | **spec reconciled; not started** | Scope is now **universe P0** ([#61](#relationship-to-upstream-61-rg-universe)): **L0 community regions** (214, area from `member_count`, bridged by the 2,398 pairs the 6,524 package edges form) with the **L1 package solids** (256) nested inside them, five layouts, log height, clamped footprints, the full coupling web, camera fly-to, and `--with-universe` + `manifest.mode` over the one existing bundle. The design demos exist: `demos/architecture-city/`, 5 layouts × 2 styles from a real bundle. They overtook the spec and forced four corrections, each of which would otherwise have shipped a false figure: coverage cannot come from `member_indices` (absent by design above 50k nodes — 0 of 256 carry it, so the spec's formula said "0 of 838,801 covered"); the exported `x`/`y` is a `layout_circle` ring, not a floor plan, and its id order is not a size ranking either; the coupling figure is **every** edge with brightness = `log(weight)`; and the renderer is three.js, with the size gate re-baselined against a *measured* bundled delta. Two facts the demos hid and this doc now states: **a solid is a package, not a community** (256 packages vs 214 communities — the community appeared only as colour), and the `(other)` remainder bucket is the largest solid at 15.6% of the graph. Open upstream defect: **8 of 256** package labels embed the corpus checkout path. |
 | Proof surface | 5 | **not started** | |
 | Migration Room | 6 (`add-migration-flow-dashboard`) | **done (this change)** | Complete room: React tuning + roadmap + `MigrationScene` (three.js). Engine reused from `dashboard/src/migration/*`. Empty states name `--with-universe --with-harmonic`. Fixture from real tiny-polyglot discover. v2 gzip **286 KiB / 320**. See `openspec/changes/add-migration-flow-dashboard/`. |

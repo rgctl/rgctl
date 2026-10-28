@@ -1,0 +1,21 @@
+{
+  "schema_version": 2,
+  "rows": [
+    {
+      "index": 0,
+      "pagerank": 0.5,
+      "betweenness": 0.0,
+      "harmonic": 0.0,
+      "blast": 0.0,
+      "community_id": 0
+    },
+    {
+      "index": 1,
+      "pagerank": 0.5,
+      "betweenness": 0.0,
+      "harmonic": 0.0,
+      "blast": 0.0,
+      "community_id": 1
+    }
+  ]
+}
