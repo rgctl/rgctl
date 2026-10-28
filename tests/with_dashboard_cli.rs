@@ -1,4 +1,4 @@
-//! CLI coverage for discover `--with-dashboard` / `--export-migration-hints` (#31).
+//! CLI coverage for discover `--with-universe` / `--export-migration-hints` (#31).
 
 mod dashboard_harness;
 
@@ -56,65 +56,7 @@ fn discover_default_skips_dashboard_dir() {
 }
 
 #[test]
-fn discover_with_dashboard_writes_bundle() {
-    if !rgctl_dashboard::dist_embedded() {
-        eprintln!("skip: dashboard/dist not embedded");
-        return;
-    }
-
-    let (_tmp, repo) = materialize();
-    let output = run_discover(&repo, &["--with-dashboard"]);
-    assert_ok(&output, "discover --with-dashboard");
-
-    let dash = repo.join(".rgctl/dashboard");
-    assert!(dash.join("index.html").is_file(), "missing index.html");
-    assert!(
-        dash.join("manifest.json").is_file(),
-        "missing manifest.json"
-    );
-}
-
-/// The maintainer's instruction on #61: `--with-dashboard` keeps working, says it is deprecated, routes to
-/// the universe, and promises its own removal. All four are asserted, because three of them are sentences
-/// and a sentence is the part that silently goes missing.
-#[test]
-fn with_dashboard_routes_to_the_universe_and_says_it_is_deprecated() {
-    if !rgctl_dashboard::dist_embedded() {
-        eprintln!("skip: dashboard bundle not embedded");
-        return;
-    }
-
-    let (_tmp, repo) = materialize();
-    let output = run_discover(&repo, &["--with-dashboard"]);
-    assert_ok(&output, "discover --with-dashboard");
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("deprecated"),
-        "the deprecated flag must say so: {stderr}"
-    );
-    assert!(
-        stderr.contains("--with-universe"),
-        "the notice must name the replacement: {stderr}"
-    );
-    assert!(
-        stderr.contains("removed in the next release"),
-        "the notice must promise the removal, or users cannot plan: {stderr}"
-    );
-
-    let manifest: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(repo.join(".rgctl/dashboard/manifest.json")).expect("manifest.json"),
-    )
-    .expect("manifest parses");
-    assert_eq!(
-        manifest["mode"], "universe",
-        "the deprecated flag routes to the universe, so the manifest must say so"
-    );
-}
-
-/// `--with-universe` is the real flag: same bundle, no deprecation notice, and the manifest says what it is.
-#[test]
-fn with_universe_writes_the_universe_bundle_quietly() {
+fn with_universe_writes_the_universe_bundle() {
     if !rgctl_dashboard::dist_embedded() {
         eprintln!("skip: dashboard bundle not embedded");
         return;
@@ -124,18 +66,31 @@ fn with_universe_writes_the_universe_bundle_quietly() {
     let output = run_discover(&repo, &["--with-universe"]);
     assert_ok(&output, "discover --with-universe");
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("deprecated"),
-        "the current flag must not warn about itself: {stderr}"
-    );
-
     let dash = repo.join(".rgctl/dashboard");
     assert!(dash.join("index.html").is_file(), "missing index.html");
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dash.join("manifest.json")).expect("manifest.json"))
             .expect("manifest parses");
     assert_eq!(manifest["mode"], "universe");
+}
+
+#[test]
+fn with_dashboard_flag_is_rejected() {
+    let (_tmp, repo) = materialize();
+    let output = run_discover(&repo, &["--with-dashboard"]);
+    assert!(
+        !output.status.success(),
+        "--with-dashboard must fail (removed; use --with-universe)"
+    );
+    let err = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        err.contains("--with-dashboard") || err.contains("unexpected argument"),
+        "error should reject --with-dashboard: {err}"
+    );
 }
 
 #[test]
@@ -175,7 +130,7 @@ fn export_migration_plan_alias_still_works() {
 }
 
 #[test]
-fn discover_help_documents_dashboard_flags() {
+fn discover_help_documents_universe_not_dashboard() {
     let output = Command::new(rgctl_bin())
         .args(["discover", "--help"])
         .output()
@@ -184,25 +139,38 @@ fn discover_help_documents_dashboard_flags() {
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(
         help.contains("--with-universe"),
-        "missing --with-universe (canonical universe/v2 flag)"
+        "missing --with-universe"
     );
     assert!(
-        help.contains("--with-dashboard"),
-        "missing --with-dashboard"
+        !help.contains("--with-dashboard"),
+        "--with-dashboard must be gone from help"
     );
     assert!(
         help.contains("--export-migration-hints"),
         "missing --export-migration-hints"
     );
-    assert!(
-        help.contains("--export-migration-plan"),
-        "alias --export-migration-plan should remain visible"
-    );
 }
 
-/// Unknown hyphen flags used to fall into Discover's trailing `extra` catch-all and be ignored —
-/// so an older binary without `--with-universe` would accept the flag, skip export, and leave
-/// `serve` stuck on "Dashboard is being prepared". Reject them instead.
+#[test]
+fn serve_help_has_no_dashboard_only_or_with_dashboard() {
+    let output = Command::new(rgctl_bin())
+        .args(["serve", "--help"])
+        .output()
+        .expect("spawn help");
+    assert_ok(&output, "serve --help");
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !help.contains("--with-dashboard"),
+        "serve must not document --with-dashboard"
+    );
+    assert!(
+        !help.contains("--dashboard-only"),
+        "serve must not document --dashboard-only"
+    );
+    assert!(help.contains("--open"), "serve should document --open");
+}
+
+/// Unknown hyphen flags used to fall into Discover's trailing `extra` catch-all and be ignored.
 #[test]
 fn discover_rejects_unknown_hyphen_flags() {
     let (_tmp, repo) = materialize();

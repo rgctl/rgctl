@@ -224,7 +224,7 @@ Writes a **file**; success is typically a text summary. Needs prior `discover --
 | `--with-cfg` | CFG/PDG/dominance archive (slice, inspect, cpg PDG) |
 | `--with-taint` | Discover-time taint (implies CFG as needed) |
 | `--with-security` | Secret scanning |
-| `--with-universe` | `.rgctl/dashboard/` universe (v2) bundle (`--with-dashboard` deprecated alias) |
+| `--with-universe` | `.rgctl/dashboard/` universe bundle |
 | `--with-harmonic` | Harmonic centrality (migration ranking; expensive) |
 | `--export-migration-hints` | Write `migration_plan.json` |
 | `--with-ast-skeleton` | AST skeleton for `cpg ast` |

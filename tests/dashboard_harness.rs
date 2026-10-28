@@ -201,7 +201,7 @@ fn run_discover_with_flags(repo: &Path, languages: Option<&str>, deep: bool) -> 
         repo.to_str().unwrap(),
         "discover",
         ".",
-        "--with-dashboard",
+        "--with-universe",
     ]);
     if deep {
         // Former `--all` ≡ security + cfg + taint (#34).

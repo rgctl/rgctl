@@ -336,8 +336,7 @@ Harmonic, dashboard, migration export, security, CFG/PDG, and discover-time tain
 | `--with-git` | Git churn hotspots + `CoChangesWith` edges (`metrics --churn`, `relations --edge cochangeswith`) |
 | `--scip PATH` | SCIP overlay — upgrades ambiguous call edges (`resolution = "scip"`) |
 | `--with-harmonic` | Harmonic centrality (migration ranking) |
-| `--with-universe` | Universe (v2) dashboard bundle under `.rgctl/dashboard/` (`manifest.mode: "universe"`) |
-| `--with-dashboard` | **Deprecated** alias for `--with-universe` (warns; removed in a later release). v1 hatch: `RGCTL_DASHBOARD_LEGACY=1` |
+| `--with-universe` | Universe dashboard bundle under `.rgctl/dashboard/` (`manifest.mode: "universe"`). Served by `rgctl serve --open`. |
 | `--export-migration-hints` | Migration roadmap JSON (alias: `--export-migration-plan`) |
 | `--with-kantra` | Konveyor Kantra rule evaluation + rules graph index (see below) |
 
@@ -469,7 +468,7 @@ After a successful run, the layout below appears under **`{repo}/.rgctl/`**:
 ├── migration_plan.json         # With --export-migration-hints
 ├── analysis/                   # Per-function CFG/PDG/taint (with --with-cfg / --with-taint)
 │   └── cfg_pdg.archive.bin
-└── dashboard/                  # Only with --with-universe (or deprecated --with-dashboard)
+└── dashboard/                  # Only with --with-universe
     ├── index.html
     ├── manifest.json
     ├── migration_plan.json
@@ -1291,8 +1290,7 @@ Full taxonomy: [CLI command reference](https://rgctl.io/docs/guides/cli-command-
 | `--with-dfg-loops` | Tag loop-carried `DataDependency` edges in PDG (with `--with-cfg`) |
 | `--with-ast-skeleton` | Build AST skeleton archive for `cpg ast` |
 | `--with-harmonic` | Harmonic centrality (default off; needed for migration ranking) |
-| `--with-universe` | Universe (v2) dashboard bundle under `.rgctl/dashboard/` (default off) |
-| `--with-dashboard` | Deprecated alias for `--with-universe` (warns; use `--with-universe`) |
+| `--with-universe` | Universe dashboard bundle under `.rgctl/dashboard/` (default off; UI for `serve --open`) |
 | `--full` | Staged pipeline: basic discover, then CFG+dashboard+harmonic, then semantic index |
 | `--export-migration-hints` | Migration roadmap JSON (alias `--export-migration-plan`) |
 | `--migration-preset` | Preset for migration hints (`hybrid`, `foundational`, …) |

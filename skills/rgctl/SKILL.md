@@ -89,7 +89,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 - `--with-cfg` — Pre-build whole-repo CFG/PDG archive (taint/mutations/batch inspect; not required for lazy `slice`)
 - `--scip PATH` — Compiler-exact SCIP call overlay
 - `--with-git` — Git churn + `CoChangesWith` edges
-- `--with-universe` — Build universe (v2) dashboard bundle (`--with-dashboard` is a deprecated alias)
+- `--with-universe` — Build universe dashboard bundle
 - `--export-migration-hints` — Write `.rgctl/migration_plan.json` (primary migration deliverable)
 - `--with-security --with-taint` — Security scanning
 - `--with-harmonic` — Harmonic centrality (used with migration ranking)

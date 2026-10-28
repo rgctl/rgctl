@@ -64,14 +64,13 @@ impl FullPipelineArgs {
             limits,
         }
     }
-
 }
 
 /// Print the three-stage plan (stderr via tracing).
 pub fn print_plan() {
     info!("Full pipeline plan:");
     info!("  1. {STAGE_BASIC}  — index + analysis (queryable snapshot)");
-    info!("  2. {STAGE_DEEP}      — --with-cfg --with-dashboard --with-harmonic");
+    info!("  2. {STAGE_DEEP}      — --with-cfg --with-universe --with-harmonic");
     info!("  3. {STAGE_SEMANTIC} — semantic index (vocab embedder)");
 }
 
@@ -280,6 +279,9 @@ fn analysis_opts<'a>(
         BasicOrDeep::Basic { force_reindex } => (false, false, false, force_reindex, false),
         BasicOrDeep::Deep => (true, true, true, false, true),
     };
+    if with_dashboard {
+        rgctl_dashboard::set_bundle_override(Some(rgctl_dashboard::BundleVersion::V2));
+    }
     AnalysisOptions {
         languages: extras.languages.clone(),
         exclude: extras.exclude.clone(),

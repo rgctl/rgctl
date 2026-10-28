@@ -351,7 +351,7 @@ Rationale: the dashboard surface is guarded by **18 test files** in `tests/` —
 
 Rules:
 
-- **`--with-universe` extracts v2** (`manifest.mode: "universe"`). `--with-dashboard` is a deprecated alias that warns and routes to the same universe bundle. v1 remains reachable only via `RGCTL_DASHBOARD_LEGACY=1` until `remove-v1-dashboard`.
+- **`--with-universe` extracts v2** (`manifest.mode: "universe"`). `--with-dashboard` is a deprecated alias that warns and routes to the same universe bundle. **`rgctl serve --open` defaults to universe** (re-extracts the v2 static shell if an older v1 bundle is on disk). v1 remains reachable via `--with-dashboard legacy` (or `RGCTL_DASHBOARD_LEGACY=1`) until `remove-v1-dashboard`.
 - `tests/dashboard_harness.rs` is extended with v2 parity assertions rather than replaced.
 - Manifest gains a phase bump and `dashboard_version` on every change (`crates/rgctl-dashboard/src/manifest.rs:54`).
 
@@ -540,7 +540,7 @@ whatever was extracted.
 **`--with-dashboard` is deprecated:** it still works, prints a warning naming `--with-universe`, and routes to
 the **same** universe bundle. It will be removed in a later release (change `remove-v1-dashboard`).
 
-**v1 hatch (one release):** `RGCTL_DASHBOARD_LEGACY=1` forces the Preact v1 bundle (`manifest.mode: "dashboard"`)
+**v1 hatch (one release):** `--with-dashboard legacy` (or `RGCTL_DASHBOARD_LEGACY=1`) forces the Preact v1 bundle (`manifest.mode: "dashboard"`)
 when a dashboard export runs. Unset it for the universe.
 
 `RGCTL_DASHBOARD_V2` is obsolete — v2/universe is the default whenever a dashboard is requested. If the v2
