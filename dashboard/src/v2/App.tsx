@@ -7,6 +7,7 @@ import { Spine } from "./rooms/Spine";
 import { CfgPdgLens } from "./rooms/CfgPdg";
 import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
+import { MigrationRoom } from "./rooms/Migration";
 import { loadManifest, type FunctionEntry } from "./data";
 import { LENSES, ROOMS, keyOf, type LensId, type RoomId } from "./focus";
 import { useFocus } from "./useFocus";
@@ -136,7 +137,8 @@ export function App() {
               />
             )}
             {room === "architecture" && <ArchitectureRoom />}
-            {room !== "repo" && room !== "understand" && room !== "architecture" && (
+            {room === "migration" && <MigrationRoom />}
+            {room !== "repo" && room !== "understand" && room !== "architecture" && room !== "migration" && (
               <Placeholder room={room} />
             )}
           </div>

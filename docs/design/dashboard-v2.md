@@ -379,7 +379,7 @@ Rules:
 | 3 | `add-security-workflow-dashboard` | Risk-weighted triage (severity × centrality × reachability) | 1 |
 | 4 | `add-architecture-city-view` | **Universe P0**: L0 community regions + L1 package solids, the full coupling web per layer, five layouts, scales, coverage, absence states, camera fly-to, `--with-universe` + `manifest.mode`. **Drift is out of scope** (a bundle describes one revision) | 1 |
 | 5 | `add-proof-surface` | Speed matrix, correctness scorecard, determinism, live p95 | 1 |
-| 6 | `add-migration-workflow-dashboard` | Restyle/scope existing MigrationView | 1 |
+| 6 | `add-migration-flow-dashboard` | Complete Migration room (tuning + roadmap + three.js community graph); owned outside the umbrella checklist | 1 |
 | 7 | `add-interprocedural-trace-export` | Emit `BlastSliceTrace` in the JSON envelope instead of trailing stdout (`src/cli/blast_radius.rs:532`) | — |
 | U1 | `add-universe-search` | Command bar (name / qualified / community / semantic) + `search_landmarks.json` + `/api/semantic/query` when served; fly-to wired to hits | 4 |
 | U2 | `add-universe-drilldown` | L2 functions via the WASM `expand()` worker, lazy on camera proximity; `Universe › community › package › symbol` breadcrumb | 4 |
@@ -522,7 +522,7 @@ _Update on every phase PR._
 | Security Room | 3 | **not started** | |
 | Architecture City / Universe P0 | 4 | **spec reconciled; not started** | Scope is now **universe P0** ([#61](#relationship-to-upstream-61-rg-universe)): **L0 community regions** (214, area from `member_count`, bridged by the 2,398 pairs the 6,524 package edges form) with the **L1 package solids** (256) nested inside them, five layouts, log height, clamped footprints, the full coupling web, camera fly-to, and `--with-universe` + `manifest.mode` over the one existing bundle. The design demos exist: `demos/architecture-city/`, 5 layouts × 2 styles from a real bundle. They overtook the spec and forced four corrections, each of which would otherwise have shipped a false figure: coverage cannot come from `member_indices` (absent by design above 50k nodes — 0 of 256 carry it, so the spec's formula said "0 of 838,801 covered"); the exported `x`/`y` is a `layout_circle` ring, not a floor plan, and its id order is not a size ranking either; the coupling figure is **every** edge with brightness = `log(weight)`; and the renderer is three.js, with the size gate re-baselined against a *measured* bundled delta. Two facts the demos hid and this doc now states: **a solid is a package, not a community** (256 packages vs 214 communities — the community appeared only as colour), and the `(other)` remainder bucket is the largest solid at 15.6% of the graph. Open upstream defect: **8 of 256** package labels embed the corpus checkout path. |
 | Proof surface | 5 | **not started** | |
-| Migration Room restyle | 6 | **not started** | |
+| Migration Room | 6 (`add-migration-flow-dashboard`) | **done (this change)** | Complete room: React tuning + roadmap + `MigrationScene` (three.js). Engine reused from `dashboard/src/migration/*`. Empty states name `--with-universe --with-harmonic`. Fixture from real tiny-polyglot discover. v2 gzip **286 KiB / 320**. See `openspec/changes/add-migration-flow-dashboard/`. |
 | `BlastSliceTrace` export | 7 | **not started** | JSON envelope corruption repro confirmed. Previously also blocked on two `rgctl slice` defects, now **fixed and merged upstream** — issues sshaaf/rgctl#113/#114, PRs #115/#116. See `audit/slice-addressing.md`. |
 
 ### How to reach v2 (universe)

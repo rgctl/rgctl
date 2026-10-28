@@ -23,6 +23,10 @@
     "jsxImportSource": "react"
   },
   "include": [
-    "src/v2"
+    "src/v2",
+    "src/migration/**/*.ts"
+  ],
+  "exclude": [
+    "src/migration/**/*.test.ts"
   ]
 }

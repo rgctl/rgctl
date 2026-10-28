@@ -24,11 +24,7 @@ const PENDING: Partial<Record<RoomId, { change: string; what: string; why: strin
     what: "Architecture room",
     why: "Communities and coupling, with the 3D Code City arriving here at the earliest — depth has to encode real data or it is decoration.",
   },
-  migration: {
-    change: "change 6 (add-migration-workflow-dashboard)",
-    what: "Migration room",
-    why: "The deterministic schedule from coupling, centrality and blast radius, restyled onto the v2 shell.",
-  },
+  // Migration: owned by `add-migration-flow-dashboard` — rendered by MigrationRoom in App.tsx.
   proof: {
     change: "change 5 (add-proof-surface)",
     what: "Proof room",

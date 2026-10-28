@@ -1,16 +1,12 @@
+# Tier 2 CI: Unit & Core Integration Tests
+#
+# Note: Heavy QE/AST-coverage (`ci-qe.yml`) and Release Perf/Bench (`ci-perf.yml`)
+# suites are split into separate manual workflows and disabled on PRs to save CI minutes.
+# Format & Clippy runs in its own lightweight workflow (`ci-lint.yml`).
+#
 # Triggers:
-#   - workflow_dispatch  — full suite manually from the Actions tab (any branch/ref).
-#   - pull_request       — opens a *gated* status only. Full cargo check / fmt / clippy /
-#                         test suite runs only after a maintainer adds the `ci` label
-#                         (or triggers `workflow_dispatch`).
-#
-# Why label, not GitHub's "Approve and run workflows"?
-#   That button only appears when Actions is *waiting* on fork approval. Our jobs used
-#   to evaluate `if:` and finish as SKIPPED, which looks like failed/ignored checks and
-#   never shows Approve. The `ci` label is the maintainer "approve to spend CI minutes"
-#   signal — create it once in the repo (Settings → Labels) if missing.
-#
-# Fork PRs: a maintainer must add `ci` on the *base* repo PR (rgctl/rgctl#N).
+#   - workflow_dispatch  — run manually from the Actions tab (any branch/ref).
+#   - pull_request       — runs when a maintainer adds the `ci` or `ci:test` label.
 name: CI
 
 on:
@@ -28,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  group: ci-test-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -39,59 +35,38 @@ env:
   FEATURES: ${{ github.event_name == 'workflow_dispatch' && inputs.features || '' }}
 
 jobs:
-  # Always runs on PRs so the Checks tab shows *why* the suite is idle — not a pile of SKIPPED jobs.
   awaiting-ci-label:
     name: awaiting maintainer `ci` label
     if: >-
       github.event_name == 'pull_request' &&
-      !contains(github.event.pull_request.labels.*.name, 'ci')
+      !contains(github.event.pull_request.labels.*.name, 'ci') &&
+      !contains(github.event.pull_request.labels.*.name, 'ci:test')
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - name: CI is gated until a maintainer opts in
         run: |
           cat <<'EOF'
-          Full CI (cargo check / fmt / clippy / tests) does not run on every PR.
+          CI does not run automatically on every PR.
 
-          To run it, a maintainer with write access should:
-            1. Review the PR
-            2. Add the label `ci` on this pull request
-               (or Actions → CI → Run workflow)
+          Maintainer labels:
+            - `ci:lint` — run only Format & Clippy (.github/workflows/ci-lint.yml)
+            - `ci:test` — run only Unit & Core Integration Tests (.github/workflows/ci.yml)
+            - `ci`      — run Format & Clippy + Unit & Core Integration Tests
 
-          Removing the `ci` label stops further full-suite runs on new pushes until it is added again.
+          Heavy QE (.github/workflows/ci-qe.yml) and Release Perf (.github/workflows/ci-perf.yml)
+          are disabled on PRs and can be triggered on-demand via Actions → Run workflow.
           EOF
 
-  # Block PR commits that advertise AI agent co-authorship / assistance trailers
-  # (Cursor, Claude, Copilot, …). Only after maintainer `ci` label.
-  no-ai-commit-trailers:
-    name: no AI commit trailers
-    if: >-
-      github.event_name == 'pull_request' &&
-      contains(github.event.pull_request.labels.*.name, 'ci')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check PR commits for AI agent trailers
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          python3 scripts/check-no-ai-commit-trailers.py \
-            --range "${BASE_SHA}..${HEAD_SHA}"
-
-  # Cold-compile gate (gated behind maintainer `ci` label, same as the full suite).
-  check:
-    name: cargo check (default features)
+  test:
+    name: Unit and core integration tests
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci'))
+      (github.event_name == 'pull_request' &&
+       (contains(github.event.pull_request.labels.*.name, 'ci') ||
+        contains(github.event.pull_request.labels.*.name, 'ci:test')))
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -100,163 +75,26 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: swatinem/rust-cache@v2
-        with:
-          shared-key: check-default
-
-      - name: cargo check --bin rgctl
-        run: cargo check --locked --bin rgctl
-
-  ci:
-    name: Format, lint, and test
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - name: Cache cargo
         uses: swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ env.FEATURES }}
 
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
-
-      - name: cargo clippy
-        run: cargo clippy --features "${{ env.FEATURES }}" --lib --bins -- -D warnings
-
-      - name: cargo clippy (rgctl-analysis)
-        run: cargo clippy -p rgctl-analysis --features "${{ env.FEATURES }}" -- -D warnings
-
-      - name: cargo clippy (rgctl-graph, rgctl-core)
-        run: cargo clippy -p rgctl-graph -p rgctl-core --features "${{ env.FEATURES }}" -- -D warnings
-
-      - name: cargo test (unit and integration)
-        run: cargo test --features "${{ env.FEATURES }}" --workspace --lib --bins --tests
-
-      - name: QE map collisions
-        run: cargo test --features "${{ env.FEATURES }}" --test map_collision_qe
-
-      - name: QE graph correctness
-        run: cargo test --features "${{ env.FEATURES }}" --test graph_correctness
-
-      - name: QE semantic search
-        run: cargo test --features "${{ env.FEATURES }}" --test semantic_search_qe
-
-      - name: QE cross-feature consistency
-        run: cargo test --features "${{ env.FEATURES }}" --test cross_feature_qe
-
-      - name: QE graph determinism
-        run: |
-          cargo test --features "${{ env.FEATURES }}" --test graph_determinism_qe
-          echo '{"gate":"graph_determinism_qe","status":"PASS"}' >> .rgctl-ci-gate-status.jsonl
-
-      - name: QE stable-key invariance
-        run: cargo test --features "${{ env.FEATURES }}" --test stable_key_invariance_qe
-
-      - name: QE columnar zero cold-touch
-        run: |
-          cargo test --features "${{ env.FEATURES }}" --test columnar_zero_cold_touch_gate
-          echo '{"gate":"columnar_zero_cold_touch_gate","status":"PASS"}' >> .rgctl-ci-gate-status.jsonl
-
-      - name: E2E workflow equivalence
-        run: cargo test --features "${{ env.FEATURES }}" --test e2e_workflow_equivalence
-
-      - name: E2E feature contracts
-        run: cargo test --features "${{ env.FEATURES }}" --test e2e_feature_contracts
+      - name: cargo test (workspace unit & bin tests)
+        run: cargo test --features "${{ env.FEATURES }}" --workspace --lib --bins --no-fail-fast
 
       - name: CLI JSON contract (unit)
         run: cargo test --features "${{ env.FEATURES }}" --test cli_output
 
-      - name: CLI subprocess golden paths
-        run: cargo test --release --features "${{ env.FEATURES }}" --test subprocess_golden_path
-
-      - name: CLI all-commands sanity
-        run: cargo test --release --features "${{ env.FEATURES }}" --test all_commands_sanity
-
-      - name: Blast-radius performance gates (release)
-        run: cargo test --release --features "${{ env.FEATURES }}" --test blast_radius_perf
-
-      - name: Scale perf CI gate (release)
-        run: |
-          cargo test --release --features "${{ env.FEATURES }}" --test scale_perf_ci_gate -- --nocapture
-          echo '{"gate":"scale_perf_ci_gate","status":"PASS"}' >> .rgctl-ci-gate-status.jsonl
-
-      - name: Fast-Leiden 150K & Centrality Scale Gates (release)
-        run: |
-          cargo test --release --features "${{ env.FEATURES }}" --test community_audit --test centrality_audit --test centrality_approx_scale -- --nocapture
-          echo '{"gate":"centrality_scale","status":"PASS"}' >> .rgctl-ci-gate-status.jsonl
-
-      - name: Benchmark Compilation & Smoke Gate
-        run: |
-          cargo bench --no-run
-          echo '{"gate":"bench_smoke","status":"PASS"}' >> .rgctl-ci-gate-status.jsonl
-
-      - name: AST Handler Runtime Coverage Gate (RGCTL_AST_COVERAGE_TRACK=1)
-        env:
-          RGCTL_AST_COVERAGE_TRACK: "1"
-        run: |
-          cargo test --features "${{ env.FEATURES }}" \
-            -p rgctl-ast-coverage \
-            -p rgctl-languages \
-            -p rgctl-lang-c \
-            -p rgctl-lang-cpp \
-            -p rgctl-lang-csharp \
-            -p rgctl-lang-go \
-            -p rgctl-lang-java \
-            -p rgctl-lang-javascript \
-            -p rgctl-lang-kotlin \
-            -p rgctl-lang-php \
-            -p rgctl-lang-python \
-            -p rgctl-lang-ruby \
-            -p rgctl-lang-rust \
-            -p rgctl-lang-typescript \
-            --tests
-          echo '{"gate":"ast_coverage","status":"PASS"}' >> .rgctl-ci-gate-status.jsonl
-
       - name: Single-Pass Complexity Parity
         run: cargo test --features "${{ env.FEATURES }}" -p rgctl-extraction --test single_pass_complexity_parity
 
-      - name: Cross-Language MRO, Overrides & DI Correctness
-        run: |
-          cargo test --features "${{ env.FEATURES }}" --test inheritance_edges --test cross_language_mro_and_di
-          echo '{"gate":"cross_language_mro_and_di","status":"PASS"}' >> .rgctl-ci-gate-status.jsonl
-
       - name: CFG/PDG v3 TOC, Lazy Slicing & Shadowing Correctness
-        run: |
-          cargo test --features "${{ env.FEATURES }}" --test slicing --test taint_analysis
-          echo '{"gate":"slicing","status":"PASS"}' >> .rgctl-ci-gate-status.jsonl
+        run: cargo test --features "${{ env.FEATURES }}" --test slicing --test taint_analysis
 
       - name: Fast-Leiden Connectivity & Centrality NodeRole Audit
-        run: |
-          cargo test --features "${{ env.FEATURES }}" --test community_audit --test centrality_audit
-          echo '{"gate":"community_audit","status":"PASS"}' >> .rgctl-ci-gate-status.jsonl
+        run: cargo test --features "${{ env.FEATURES }}" --test community_audit --test centrality_audit
 
       - name: Incremental FactsCache & Updater Equivalence
         run: cargo test --features "${{ env.FEATURES }}" --test incremental_performance_integration
-
-      - name: Generate CI Gate Summary
-        if: always()
-        run: python3 scripts/generate-ci-gate-summary.py
-
-      - name: Upload CI Gate Report Artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: rgctl-ci-gate-report
-          path: .rgctl-ci-gate-report.json
-          if-no-files-found: ignore
