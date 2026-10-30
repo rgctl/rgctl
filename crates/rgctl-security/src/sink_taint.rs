@@ -15,6 +15,19 @@ pub enum SinkResolution {
     Unresolved,
 }
 
+/// Discovered call site to an OSV affected method with file + line coordinates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SinkCallSite {
+    /// Qualified name of the caller in the indexed repository.
+    pub caller: String,
+    /// Target OSV affected method matched.
+    pub target_method: String,
+    /// Repo-relative file path of the call site.
+    pub file: String,
+    /// 1-based line number of the call site.
+    pub line: u32,
+}
+
 /// Sink-first analysis result (schema for CLI JSON).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SinkFirstTaintResult {
@@ -33,6 +46,9 @@ pub struct SinkFirstTaintResult {
     pub honesty: Option<String>,
     /// Call sites / callers of the sink (or affected methods) found in-graph.
     pub sink_callers: Vec<String>,
+    /// Discovered call-site coordinates (`caller`, `target_method`, `file`, `line`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub call_sites: Vec<SinkCallSite>,
     /// Exploitable path summaries (empty when none).
     pub paths: Vec<SinkPathSummary>,
     /// True when CFG/PDG archive was available.
@@ -67,12 +83,34 @@ pub fn build_sink_first_result(
     sink_callers: Vec<String>,
     path_summaries: Vec<SinkPathSummary>,
 ) -> SinkFirstTaintResult {
-    let sink_resolution = if sink_in_graph {
+    build_sink_first_result_with_sites(
+        sink,
+        depth,
+        cfg_available,
+        sink_in_graph,
+        sink_callers,
+        vec![],
+        path_summaries,
+    )
+}
+
+/// Summarize sink-first reachability including discovered `file:line` call-site coordinates.
+pub fn build_sink_first_result_with_sites(
+    sink: &str,
+    depth: usize,
+    cfg_available: bool,
+    sink_in_graph: bool,
+    sink_callers: Vec<String>,
+    call_sites: Vec<SinkCallSite>,
+    path_summaries: Vec<SinkPathSummary>,
+) -> SinkFirstTaintResult {
+    let resolved = sink_in_graph || !call_sites.is_empty();
+    let sink_resolution = if resolved {
         SinkResolution::Resolved
     } else {
         SinkResolution::Unresolved
     };
-    let honesty = if !sink_in_graph {
+    let honesty = if !resolved {
         Some(
             "sink symbol not present in indexed source graph (may live only in bundled \
              bytecode/vendor binaries); empty paths MUST NOT alone prove not_exploitable"
@@ -89,6 +127,7 @@ pub fn build_sink_first_result(
         sink_resolution,
         honesty,
         sink_callers,
+        call_sites,
         paths: path_summaries,
         cfg_available,
     }
