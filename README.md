@@ -231,7 +231,7 @@ We welcome contributors across four tracks — see **[CONTRIBUTING.md](CONTRIBUT
 | [Docs index](docs/README.md) | Complete documentation map |
 | [AGENTS.md](AGENTS.md) | Performance rules & cold gates for contributing to *this* repo |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contributor tracks, dev setup, test matrix |
-| [Latest release](docs/releases/v0.4.21.md) · [Unreleased](docs/releases/unreleased.md) | Release notes & upcoming changelog |
+| [Latest release](docs/releases/v0.4.22.md) · [Unreleased](docs/releases/unreleased.md) | Release notes & upcoming changelog |
 
 ---
 
