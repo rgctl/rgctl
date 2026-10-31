@@ -8,6 +8,8 @@
 .reports
 # OpenSpec change proposals (local only — do not commit)
 openspec/
+openspec
+
 .scratch/
 .playwright-mcp/
 
