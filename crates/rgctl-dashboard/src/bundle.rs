@@ -155,7 +155,11 @@ fn read_manifest_mode(path: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn patch_manifest_bundle_fields(path: &Path, mode: &str, bundle_version: &str) -> Result<(), String> {
+fn patch_manifest_bundle_fields(
+    path: &Path,
+    mode: &str,
+    bundle_version: &str,
+) -> Result<(), String> {
     let bytes = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let mut value: serde_json::Value =
         serde_json::from_str(&bytes).map_err(|e| format!("parse manifest for shell swap: {e}"))?;

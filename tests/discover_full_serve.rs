@@ -233,13 +233,7 @@ fn serve_without_dashboard_exits() {
     let (_tmp, repo) = materialize();
     let output = run_in(
         &repo,
-        &[
-            "-r",
-            repo.to_str().unwrap(),
-            "serve",
-            "--port",
-            "18080",
-        ],
+        &["-r", repo.to_str().unwrap(), "serve", "--port", "18080"],
     );
     assert!(
         !output.status.success(),

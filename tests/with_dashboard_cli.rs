@@ -137,10 +137,7 @@ fn discover_help_documents_universe_not_dashboard() {
         .expect("spawn help");
     assert_ok(&output, "discover --help");
     let help = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        help.contains("--with-universe"),
-        "missing --with-universe"
-    );
+    assert!(help.contains("--with-universe"), "missing --with-universe");
     assert!(
         !help.contains("--with-dashboard"),
         "--with-dashboard must be gone from help"
