@@ -325,6 +325,15 @@ The bundle is embedded into the binary at compile time via `include_dir` from `d
   refuses to answer a *file* request (`/assets/x.js`, `/favicon.ico`) or an API path with the shell.
   Anyone serving `.rgctl/dashboard/` with their **own** static server needs the same rule — an SPA fallback
   to `index.html` — and it is not something `rgctl serve` can install on their behalf.
+  **The bundle's own directories are the other half of that rule.** The taint export writes `taint/`
+  (uuid shards), which is also the Taint room's route: `ServeDir` answers a directory with a `307` to
+  `/taint/`, and the trailing-slash canonicalisation sent it straight back to `/taint`. The browser gave up
+  with `ERR_TOO_MANY_REDIRECTS`, and the defect hid exactly where the design makes its promise — the room
+  opened from the nav (pushState never asks the server) and was unreachable by reload, bookmark or shared
+  link. A client route now outranks a bundle directory that has no `index.html`
+  (`client_route_shadowed_by_data_dir`), which inoculates any future `cfg/`, `slice/` or `dataflow/` shard
+  directory with a room's name; the shards keep being served because `/taint/<uuid>.json` is a file, not a
+  route. Both halves are asserted against a live server in `tests/http_serve.rs`.
 - **A workflow artifact arrives as a bundle file, not as a route.** `rgctl review export` composes
   `.rgctl/workflows/review.json`; the dashboard export copies it into the bundle as `workflows/review.json`
   and records its presence, path, digest and generation time in the manifest. The room reads it exactly the

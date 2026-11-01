@@ -272,3 +272,83 @@ fn spa_fallback_serves_the_shell_for_client_routes_only() {
         "api/status should answer for itself"
     );
 }
+
+/// A bundle data directory named after a room must not hijack that room's URL.
+///
+/// The taint export writes `.rgctl/dashboard/taint/` (uuid shards), and the Taint room's client route is
+/// `/taint`. `ServeDir` answers a directory with `307 /taint/`, and the SPA fallback canonicalises `/taint/`
+/// back to `/taint` — a loop the browser reports as `ERR_TOO_MANY_REDIRECTS`. Clicking the room in the nav
+/// worked (pushState never asks the server), so the defect hid exactly where the design makes a promise:
+/// reload, bookmark, shared link. The shards themselves must keep being served, which is the other half of
+/// this test — a fix that answered the shell for everything under `/taint` would trade one bug for another.
+#[test]
+fn a_bundle_data_directory_does_not_hijack_a_room_url() {
+    let Some(repo) = repo_with_dashboard() else {
+        eprintln!("skip: no repo with a dashboard bundle (set RGCTL_HTTP_SERVE_REPO)");
+        return;
+    };
+    let bin = rgctl_bin();
+    assert!(bin.is_file(), "missing rgctl binary at {}", bin.display());
+
+    // A bundle whose taint export found nothing still writes the directory, so create it for symmetry.
+    let detail_dir = repo.join(".rgctl/dashboard/taint");
+    std::fs::create_dir_all(&detail_dir).expect("create taint detail dir");
+    let shard = detail_dir.join("http-serve-probe.json");
+    std::fs::write(&shard, b"{\"probe\":true}").expect("write probe shard");
+
+    let port = pick_port();
+    let base = format!("http://127.0.0.1:{port}");
+    let child = Command::new(&bin)
+        .args([
+            "-r",
+            repo.to_str().unwrap(),
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn rgctl serve");
+    let _guard = ServerGuard { child };
+    assert!(
+        wait_for_health(&base, Duration::from_secs(20)),
+        "server did not become healthy"
+    );
+
+    // No redirects followed: the bug was a redirect *chain*, so a client that followed it would pass.
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("client");
+
+    let room = client
+        .get(format!("{base}/taint"))
+        .send()
+        .expect("GET /taint");
+    assert_eq!(
+        room.status(),
+        200,
+        "/taint is a client route even though a `taint/` directory exists"
+    );
+    let body = room.text().unwrap_or_default().to_lowercase();
+    assert!(
+        body.contains("<!doctype html") || body.contains("id=\"root\""),
+        "the shell, not a directory redirect or an empty body"
+    );
+
+    // The shards behind the room are still files, and still served.
+    let served = client
+        .get(format!("{base}/taint/http-serve-probe.json"))
+        .send()
+        .expect("GET taint shard");
+    assert_eq!(served.status(), 200, "a shard is a file, not a route");
+    assert!(
+        served.text().unwrap_or_default().contains("probe"),
+        "the shard body, not the shell"
+    );
+
+    std::fs::remove_file(&shard).ok();
+}
