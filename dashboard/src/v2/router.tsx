@@ -6,7 +6,7 @@ import {
   Outlet,
   type RouterHistory,
 } from "@tanstack/react-router";
-import { isLens, isRoom, parseFocus } from "./focus";
+import { isLens, isRoom, parseFocus, DEFAULT_ROOM } from "./focus";
 import { App } from "./App";
 
 /** Search params are the Focus's transport: a view state is a shareable link. */
@@ -20,8 +20,14 @@ const rootRoute = createRootRoute({ component: () => <Outlet /> });
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  beforeLoad: () => {
-    throw redirect({ to: "/$roomId", params: { roomId: "repo" }, replace: true });
+  beforeLoad: ({ search }) => {
+    // `search` rides along: a bare `/` carrying a Focus is still a link someone meant to share.
+    throw redirect({
+      to: "/$roomId",
+      params: { roomId: DEFAULT_ROOM },
+      search: search as Record<string, unknown>,
+      replace: true,
+    });
   },
 });
 
@@ -38,7 +44,11 @@ const roomRoute = createRoute({
   beforeLoad: ({ params }) => {
     // An unknown room is normalised rather than rendered as a broken shell with a lying URL.
     if (!isRoom(params.roomId)) {
-      throw redirect({ to: "/$roomId", params: { roomId: "repo" }, replace: true });
+      throw redirect({
+        to: "/$roomId",
+        params: { roomId: DEFAULT_ROOM },
+        replace: true,
+      });
     }
   },
   validateSearch: (search: Record<string, unknown>): ViewSearch => ({

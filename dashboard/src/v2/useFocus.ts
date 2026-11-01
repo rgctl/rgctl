@@ -7,7 +7,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { getRouteApi } from "@tanstack/react-router";
 import { loadFunctions, type FunctionEntry } from "./data";
-import { isLens, isRoom, keyOf, resolveFocus, type Focus, type LensId, type RoomId } from "./focus";
+import {
+  DEFAULT_ROOM,
+  isLens,
+  isRoom,
+  keyOf,
+  resolveFocus,
+  type Focus,
+  type LensId,
+  type RoomId,
+} from "./focus";
 
 const roomApi = getRouteApi("/$roomId");
 
@@ -35,7 +44,7 @@ export function useFocus(): FocusState {
   const search = roomApi.useSearch();
   const navigate = roomApi.useNavigate();
 
-  const room = (isRoom(params.roomId) ? params.roomId : "repo") as RoomId;
+  const room = (isRoom(params.roomId) ? params.roomId : DEFAULT_ROOM) as RoomId;
   const lens = (isLens(search.lens) ? search.lens : "spine") as LensId;
   const focus = (search.focus as Focus | undefined) ?? null;
 
@@ -55,7 +64,10 @@ export function useFocus(): FocusState {
 
   const pick = (f: FunctionEntry) => {
     const key = keyOf(f);
-    if (room === "repo") {
+    // Rooms that do not read the Focus would take a selection and show nothing with it, leaving the graph
+    // two actions away. Architecture is one of them, and it is now the landing room, so ⌘K from `/` has to
+    // carry you to the surface that renders what you picked.
+    if (room === "repo" || room === "architecture") {
       void navigate({
         to: "/$roomId",
         params: { roomId: "understand" },

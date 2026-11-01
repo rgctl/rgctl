@@ -62,6 +62,8 @@ LENSES       (shared control, never top-level)
 
 **Orientation is not a dashboard.** "Repo" answers *where do I start* by ranking the few things worth attention (unreviewed change surface, risk-weighted findings, drift, coverage caveats) and linking into the room that handles each. It does not print totals.
 
+**`/` lands on Architecture, not Repo.** The universe is the surface this dashboard exists for, and its data is what every `--with-universe` bundle carries, so the landing view is never an absence state. Repo keeps its job and is one click away. `DEFAULT_ROOM` in `dashboard/src/v2/focus.ts` is the single place either can be changed — the index route, the unknown-room normalisation and `useFocus` all read it. ⌘K from Architecture carries a selection to Understand for the same reason Repo does: neither room reads the Focus, so a selection made there would otherwise land where nothing renders it.
+
 **Rooms are jobs, not features.** Review = "what changed and what does it touch?" Taint = "where does untrusted data reach a sink?" Proof = "why should I believe any of this?"
 
 **Lenses are filters on the current focus.** Switching lens never changes what you are looking at.

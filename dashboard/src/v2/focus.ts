@@ -90,5 +90,15 @@ export const LENSES = [
 export type RoomId = (typeof ROOMS)[number]["id"];
 export type LensId = (typeof LENSES)[number]["id"];
 
+/**
+ * Where `/` lands.
+ *
+ * Architecture, not Repo: the universe is the surface this dashboard exists for, and "how is it
+ * structured?" is the question a reader arrives with. It is also the room whose data every
+ * `--with-universe` bundle carries, so the landing view is never an absence state. Repo keeps its job
+ * (`where do I start?`) and is one click away.
+ */
+export const DEFAULT_ROOM: RoomId = "architecture";
+
 export const isRoom = (v: unknown): v is RoomId => ROOMS.some((r) => r.id === v);
 export const isLens = (v: unknown): v is LensId => LENSES.some((l) => l.id === v);
