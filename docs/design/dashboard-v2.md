@@ -1,6 +1,6 @@
 # rgctl Dashboard v2 — design
 
-**Status:** shipping — the v2 shell, the **Architecture** room (the universe, #135) and the **Review** room are in `main`; the remaining rooms render a placeholder that names the change which fills them. Measured: v2 bundle **278 KiB** gzipped against v1's 321, and **93 v2 tests** beside v1's 21.
+**Status:** shipping — the v2 shell, the **Architecture** room (the universe, #135) and the **Review** room are in `main`; the remaining rooms render a placeholder that names the change which fills them. Measured: v2 bundle **300 KiB** gzipped against v1's 321, and **104 v2 tests** beside v1's 21.
 **Goal:** Turn the deterministic code knowledge graph into **decisions you can defend** — locally, in milliseconds, with a receipt for every number.
 **OpenSpec (local):** umbrella over `openspec/changes/add-dashboard-v2-shell/` and the room changes listed in [Change sequence](#change-sequence)
 **Relationship to v1:** Additive. This document does **not** replace [dashboard-design.md](dashboard-design.md), which remains the living design for the shipping Preact dashboard until v2 reaches parity.
@@ -525,7 +525,7 @@ _Update on every phase PR._
 | v2 app + shell | 1 | **done** | React app in `dashboard/src/v2`, own Vite config, own `dist-v2`; Instrument, Orientation, Rooms, Lens control, and the Focus in the URL. Reached with **`--with-universe`** (see [How to reach v2](#how-to-reach-v2-universe)). |
 | v2 Spine lens (code browser) | 1 | **done** | Source for the focused symbol beside its CFG, bound both ways; dominance-depth layout; lightweight highlighting. Not syntax-complete and no IDE affordances, deliberately. |
 | v2 CFG·PDG lens | 1 | **done** | The same graph as a surface of its own: full-width, `70vh`, a stat row (blocks · edges · dominance frontiers · exits), a dominance-frontier toggle, the selected block read out above the graph, and a typed absence for a subject the bundle has no CFG for. `?lens=cfgpdg`; shares the drawing, the dominator walk and the loader with the Spine rather than re-deriving them. |
-| v2 test harness + gates | 1 | **done** | Own Vitest config (React, jsdom) and `./scripts/test-dashboard.sh`, which runs every dashboard gate and the offline check as a set. 21 v1 tests + **55 v2 tests**. |
+| v2 test harness + gates | 1 | **done** | Own Vitest config (React, jsdom) and `./scripts/test-dashboard.sh`, which runs every dashboard gate and the offline check as a set. 21 v1 tests + **104 v2 tests**. |
 | v2 bundle-size gate | 1 | **done** | In `scripts/build-dashboard.sh`. Measured: **v1 321 KiB** gzipped, **v2 136 KiB** — v2 ships less than half despite adding React, because it drops CodeMirror and Sigma. |
 | v2 rooms | 2–6 | **in progress** | The Review room exists; the remaining rooms render an explicit "not built yet, change N" state naming what fills them. |
 | v2 lenses other than Spine, Code and CFG·PDG | 1 | **not started** | The lens control offers eight lenses and three render. The rest (Dataflow, Slice/Trace, Blast, Metrics, Time) produce an **empty pane, with no explanation** — `Placeholder` is keyed by *room*, so `Placeholder room="understand"` falls through to `null`. They should state the change that fills them, the way the rooms do. |
