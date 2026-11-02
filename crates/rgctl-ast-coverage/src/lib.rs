@@ -308,8 +308,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "csharp-ast-coverage.json",
             grammar_prefix: "tree-sitter-c-sharp@",
             language: || tree_sitter_c_sharp::LANGUAGE.into(),
-            min_handled_kinds: 55,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 166,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "go",

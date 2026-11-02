@@ -10,6 +10,9 @@ const ALLOWED: &[&str] = &[
     "CfgStatement",
     "AstSkeleton",
     "Skip",
+    "SkipWrapper",
+    "SkipTypeToken",
+    "Unimplemented",
     "Literal",
 ];
 
