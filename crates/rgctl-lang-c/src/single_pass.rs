@@ -157,7 +157,27 @@ pub fn extract_all_single_pass(
                 }
 
                 let kind_id = node.kind_id();
-                let _mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, kind_id);
+                // Pillar 3: gate on manifest passivity. Passive kinds (SkipWrapper /
+                // SkipTypeToken / Literal / Unimplemented) only walk children —
+                // no extract work. Keep `active_kinds` short-circuit below so
+                // AstSkeleton/CfgStatement expression nodes stay zero-cost on
+                // the Linux cold-discover hot path (CFG/DefUse run on --cfg/slice).
+                let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, kind_id);
+                if mask.is_passive() {
+                    let base = stack.len();
+                    for child in node.named_children(&mut cursor) {
+                        let cid = child.kind_id();
+                        if !active_kinds.get(cid as usize).copied().unwrap_or(false)
+                            && child.child_count() == 0
+                        {
+                            let _ = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, cid);
+                            continue;
+                        }
+                        stack.push(Visit::Pre(child, depth + 1));
+                    }
+                    stack[base..].reverse();
+                    continue;
+                }
                 if !active_kinds.get(kind_id as usize).copied().unwrap_or(false) {
                     let base = stack.len();
                     for child in node.named_children(&mut cursor) {

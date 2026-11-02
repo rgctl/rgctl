@@ -1,4 +1,4 @@
-//! Golden correctness for OpenSpec 3.4 C++ AST depth.
+//! Golden correctness + unconditional AST coverage exercise for C++.
 
 use rgctl_lang_cpp::CppPlugin;
 use rgctl_plugin_api::{LanguagePlugin, RelationType, SymbolType};
@@ -12,6 +12,7 @@ namespace N {
 }
 
 using IntVec = std::vector<int>;
+namespace NA = std;
 
 template<typename T>
 concept Addable = requires(T a, T b) { a + b; };
@@ -49,6 +50,17 @@ class Derived : public Base {
             .iter()
             .any(|s| { s.name == "IntVec" && s.symbol_type == SymbolType::TypeAlias }),
         "alias IntVec missing"
+    );
+    assert!(
+        out.symbols.iter().any(|s| {
+            s.name == "NA"
+                && s.metadata
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    == Some("namespace_alias_definition")
+        }),
+        "namespace alias NA missing: {:?}",
+        out.symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
     );
     assert!(
         out.symbols.iter().any(|s| {
@@ -123,9 +135,6 @@ fn enumerator_as_symbol_kind_visited() {
 
 #[test]
 fn ast_coverage_all_declared_handlers_exercised() {
-    if std::env::var_os("RGCTL_AST_COVERAGE_TRACK").is_none() {
-        return;
-    }
     const MANIFEST: &str = include_str!("../cpp-ast-coverage.json");
     let lang: tree_sitter::Language = tree_sitter_cpp::LANGUAGE.into();
     let tracker =
@@ -137,58 +146,132 @@ fn ast_coverage_all_declared_handlers_exercised() {
     );
     rgctl_ast_coverage::install_hit_callback(tracker);
 
-    let sources: &[(&str, &[u8])] = &[(
-        "ast_coverage_corpus.cpp",
-        br#"
+    // Corpus must exercise every active (non-passive) kind in cpp-ast-coverage.json.
+    let sources: &[(&str, &[u8])] = &[
+        (
+            "ast_coverage_corpus.cpp",
+            br#"
 #include <vector>
+#include <cstddef>
+#pragma once
+[[nodiscard]] int marked();
+
 namespace ns {
   using Alias = int;
+  namespace NA = std;
   concept Integral = true;
   enum Color { Red };
-  union U { int i; };
-  class Base {};
-  class Derived : public Base {
-    void run() {
+  union U { int i; float f; };
+  typedef struct TS { int x; } TSAlias;
+  struct S {
+    int a : 3;
+    virtual void pure() = 0;
+    void defed() = default;
+    void deleted() = delete;
+    friend class Color;
+    S() {}
+    virtual ~S() = 0;
+  };
+  template<template<typename> class TT, typename T = int, typename... Ts>
+  requires true
+  class Widget : public S {
+    template<typename U>
+    void tm();
+    void run(int p = 1, ...) {
       int x = 0;
+      int *ptr = &x;
       x = 1;
-      if (x) {} else {}
-      for (auto& v : std::vector<int>{}) { break; }
-      while (0) { continue; }
+      x = (x);
+      x = (int)ptr;
+      x = x + 1;
+      x = -x + !x;
+      x = x ? 1 : 2;
+      x = (1, 2);
+      x = sizeof(x);
+      x = alignof(int);
+      x = offsetof(TS, x);
+      x = *ptr;
+      x = ptr[0];
+      x = this->a;
+      x++;
+      --x;
+      [[nodiscard]] return;
+    label:
+      goto label;
+      if (int y = 1; y) {} else {}
+      for (int i = 0; i < 1; i++) { break; }
+      for (auto& v : std::vector<int>{}) { continue; }
+      while (0) { break; }
       do { break; } while (0);
       switch (x) { case 0: break; }
       try { throw 1; } catch (...) {}
       co_await 1;
       co_yield 1;
       co_return;
-      new int;
+      auto* p = new int;
+      delete p;
+      delete[] p;
+      auto lam = [=, &x, a = 1](int n) { return n + x + a; };
+      auto fold = []<typename... Args>(Args... args) { return (... + args); };
+      asm("nop");
+      x = __extension__ ({ 1; });
+      this->tm<int>();
       return;
     }
   };
+  template<typename T>
+  requires requires(T t) { t + t; }
+  T add(T a, T b) { return a + b; }
+}
+
+static_assert(true);
+
+#if 0
+int dead = 1;
+#else
+int live = 1;
+#endif
+
+#ifdef FOO
+int fooed = 1;
+#endif
+
+#line 1
+
+void seh_demo() {
+  __try {
+    __leave;
+  } __except(1) {
+  }
+  __try {
+  } __finally {
+  }
 }
 "#,
-    )];
+        ),
+        (
+            "ast_coverage_c_generics.cpp",
+            // tree-sitter-cpp still emits C-family kinds used in mixed headers.
+            br#"
+int g(int x) {
+  return _Generic(x, int: 1, default: 0);
+}
+"#,
+        ),
+    ];
 
-    let mut present = std::collections::HashSet::new();
     let plugin = CppPlugin::new().expect("plugin");
     for (path, src) in sources {
-        present.extend(rgctl_ast_coverage::named_kind_ids_in_source(&lang, src));
         plugin
             .extract_all(std::path::Path::new(path), src)
             .expect("extract_all");
     }
 
     let tracker = rgctl_ast_coverage::AstCoverageTracker::global().expect("tracker installed");
-    match tracker.assert_all_exercised() {
-        Ok(msg) => eprintln!("{msg}"),
-        Err(full) => {
-            tracker
-                .assert_present_kinds_exercised(present.iter().copied())
-                .unwrap_or_else(|e| panic!("{e}\n(full gaps: {full})"));
-            assert!(
-                tracker.total_hits() > 0,
-                "RGCTL_AST_COVERAGE_TRACK=1 but no dispatch hits recorded"
-            );
-            eprintln!("soft-gate (full assert not met): {full}");
-        }
-    }
+    let summary = tracker
+        .assert_all_exercised()
+        .expect("every active C++ AST kind in cpp-ast-coverage.json must be exercised");
+    eprintln!("{summary}");
+    let hotspots = tracker.unhandled_hotspots(10);
+    eprintln!("cpp unhandled hotspots: {hotspots:?}");
 }

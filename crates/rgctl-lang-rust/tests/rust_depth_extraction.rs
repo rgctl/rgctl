@@ -1,4 +1,4 @@
-//! Golden correctness for OpenSpec 3.1 Rust call/symbol depth.
+//! Golden correctness + unconditional AST coverage exercise for Rust.
 
 use rgctl_lang_rust::RustPlugin;
 use rgctl_plugin_api::{LanguagePlugin, RelationType, SymbolType};
@@ -106,9 +106,6 @@ trait Painter {
 
 #[test]
 fn ast_coverage_all_declared_handlers_exercised() {
-    if std::env::var_os("RGCTL_AST_COVERAGE_TRACK").is_none() {
-        return;
-    }
     const MANIFEST: &str = include_str!("../rust-ast-coverage.json");
     let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
     let tracker =
@@ -120,11 +117,16 @@ fn ast_coverage_all_declared_handlers_exercised() {
     );
     rgctl_ast_coverage::install_hit_callback(tracker);
 
-    let sources: &[(&str, &[u8])] = &[(
-        "ast_coverage_corpus.rs",
-        br#"
+    let sources: &[(&str, &[u8])] = &[
+        (
+            "ast_coverage_corpus.rs",
+            br#"
+#![allow(dead_code, unused)]
+#![crate_type = "lib"]
+
 extern crate core;
-use std::fmt::Debug;
+use std::fmt::{Debug as FmtDebug, Display};
+use std::collections::HashMap as Map;
 
 mod nested {
     pub fn ping() {}
@@ -135,16 +137,31 @@ static GLOBAL: i32 = 0;
 type Id = u64;
 union Word { i: i32, u: u32 }
 
-struct Point { x: i32, y: i32 }
-
-enum Color { Red, Green }
-
-trait Painter {
-    type Medium;
-    fn paint(&self);
+#[derive(Clone, Debug)]
+struct Point {
+    x: i32,
+    y: i32,
 }
 
-macro_rules! noop { () => {}; }
+enum Color {
+    Red,
+    Green(i32),
+    Blue { a: i32, b: i32 },
+}
+
+trait Painter: FmtDebug
+where
+    Self: Sized,
+{
+    type Medium;
+    fn paint(&self);
+    fn signature_only(&self) -> i32;
+}
+
+macro_rules! noop {
+    () => {};
+    ($($t:tt)*) => { $($t)* };
+}
 
 impl Point {
     fn helper(&self) {}
@@ -152,9 +169,22 @@ impl Point {
         let mut n = 0;
         n = 1;
         n += 1;
-        let _c = || 1;
+        let _arr = [1, 2, 3];
+        let _tup = (1, 2);
+        let _unit = ();
+        let _ref = &n;
+        let _idx = _arr[0];
+        let _cast = n as i64;
+        let _neg = -n;
+        let _bin = n + 1;
+        let _range = 0..1;
+        let _c = |x: i32| x + 1;
         let _a = async { 1 };
         let _u = unsafe { 1 };
+        let _await = async { 1 }.await;
+        let _pt = Point { x: 1, y: 2 };
+        let _field = self.x;
+        ;
         if let Some(x) = Some(1)
             && let Some(y) = Some(2)
         {
@@ -173,8 +203,58 @@ impl Point {
             break;
         }
         match n {
-            0 => {}
+            0 | 1 => {}
+            2..=4 => {}
+            ref r => {
+                let _ = r;
+            }
+            mut m => {
+                m = 0;
+            }
+            x @ 10 => {
+                let _ = x;
+            }
             _ => {}
+        }
+        match Some(1) {
+            None::<i32> => {}
+            Some(v) => {
+                let _ = v;
+            }
+        }
+        match Color::Green(1) {
+            Color::Green(v) => {
+                let _ = v;
+            }
+            Color::Blue { a, b: _, .. } => {
+                let _ = a;
+            }
+            Color::Red => {}
+        }
+        match *_pt {
+            Point { x, y } => {
+                let _ = (x, y);
+            }
+        }
+        match [1, 2, 3] {
+            [a, b, ..] => {
+                let _ = (a, b);
+            }
+        }
+        match (1, 2) {
+            (a, b) => {
+                let _ = (a, b);
+            }
+        }
+        match &n {
+            &ref_pat => {
+                let _ = ref_pat;
+            }
+        }
+        // `generic_pattern`: turbofish path with no constructor args (`None::<T>`).
+        match Option::<i32>::None {
+            None::<i32> => {}
+            Some::<i32>(_v) => {}
         }
         let _ = self.try_me()?;
         noop!();
@@ -183,10 +263,17 @@ impl Point {
         Point::helper(self);
         return Ok(());
     }
-    fn try_me(&self) -> Result<(), ()> { Ok(()) }
+    fn try_me(&self) -> Result<(), ()> {
+        Ok(())
+    }
 }
 
-fn identity<T: Debug>(x: T) -> T { x }
+fn identity<T: FmtDebug>(x: T) -> T
+where
+    T: Display,
+{
+    x
+}
 
 fn gen_block() {
     let _g = gen {
@@ -194,29 +281,21 @@ fn gen_block() {
     };
 }
 "#,
-    )];
+        ),
+    ];
 
-    let mut present = std::collections::HashSet::new();
     let plugin = RustPlugin::new().expect("plugin");
     for (path, src) in sources {
-        present.extend(rgctl_ast_coverage::named_kind_ids_in_source(&lang, src));
         plugin
             .extract_all(std::path::Path::new(path), src)
             .expect("extract_all");
     }
 
     let tracker = rgctl_ast_coverage::AstCoverageTracker::global().expect("tracker installed");
-    match tracker.assert_all_exercised() {
-        Ok(msg) => eprintln!("{msg}"),
-        Err(full) => {
-            tracker
-                .assert_present_kinds_exercised(present.iter().copied())
-                .unwrap_or_else(|e| panic!("{e}\n(full gaps: {full})"));
-            assert!(
-                tracker.total_hits() > 0,
-                "RGCTL_AST_COVERAGE_TRACK=1 but no dispatch hits recorded"
-            );
-            eprintln!("soft-gate (full assert not met): {full}");
-        }
-    }
+    let summary = tracker
+        .assert_all_exercised()
+        .expect("every active Rust AST kind in rust-ast-coverage.json must be exercised");
+    eprintln!("{summary}");
+    let hotspots = tracker.unhandled_hotspots(10);
+    eprintln!("rust unhandled hotspots: {hotspots:?}");
 }

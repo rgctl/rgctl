@@ -290,8 +290,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "c-ast-coverage.json",
             grammar_prefix: "tree-sitter-c@",
             language: || tree_sitter_c::LANGUAGE.into(),
-            min_handled_kinds: 37,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 74,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "cpp",
@@ -299,8 +299,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "cpp-ast-coverage.json",
             grammar_prefix: "tree-sitter-cpp@",
             language: || tree_sitter_cpp::LANGUAGE.into(),
-            min_handled_kinds: 58,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 108,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "csharp",
@@ -317,8 +317,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "go-ast-coverage.json",
             grammar_prefix: "tree-sitter-go@",
             language: || tree_sitter_go::LANGUAGE.into(),
-            min_handled_kinds: 42,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 76,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "groovy",
@@ -416,8 +416,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "rust-ast-coverage.json",
             grammar_prefix: "tree-sitter-rust@",
             language: || tree_sitter_rust::LANGUAGE.into(),
-            min_handled_kinds: 56,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 90,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "typescript",
