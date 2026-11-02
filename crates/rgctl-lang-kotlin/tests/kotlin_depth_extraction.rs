@@ -1,4 +1,4 @@
-//! Golden correctness for OpenSpec 3.5 Kotlin companion/enum/typealias parity.
+//! Golden correctness + Tier-1 Gold AST exercise gate for Kotlin.
 
 use rgctl_lang_kotlin::KotlinPlugin;
 use rgctl_plugin_api::{LanguagePlugin, SymbolType};
@@ -49,9 +49,6 @@ class Service {
 
 #[test]
 fn ast_coverage_all_declared_handlers_exercised() {
-    if std::env::var_os("RGCTL_AST_COVERAGE_TRACK").is_none() {
-        return;
-    }
     const MANIFEST: &str = include_str!("../kotlin-ast-coverage.json");
     let lang: tree_sitter::Language = tree_sitter_kotlin_ng::LANGUAGE.into();
     let tracker =
@@ -63,53 +60,127 @@ fn ast_coverage_all_declared_handlers_exercised() {
     );
     rgctl_ast_coverage::install_hit_callback(tracker);
 
+    // Corpus must exercise every non-passive kind in kotlin-ast-coverage.json.
     let sources: &[(&str, &[u8])] = &[(
         "ast_coverage_corpus.kt",
         br#"
-import kotlin.io.*
+@file:JvmName("Corpus")
+package demo.corp
+
+import kotlin.io.println
+import kotlin.collections.List
+
 typealias Id = Int
+
+annotation class Tag(val value: String = "x")
+
 enum class Color { RED, GREEN }
-class Widget(val x: Int) {
-  companion object { fun create() = Widget(0) }
+
+open class Base(open val seed: Int)
+
+interface Named {
+  fun label(): String
+}
+
+@Tag("svc")
+class Widget<T : CharSequence, U>(
+  val x: Int,
+  private var y: Int = 0,
+) : Base(x), Named by object : Named {
+  override fun label(): String = "anon"
+} where T : Comparable<T> {
+  companion object {
+    fun create(): Widget<String, Int> = Widget(0)
+  }
+
   constructor() : this(0)
-  var y: Int = 0
+
+  init {
+    println("init")
+  }
+
+  var z: Int = 0
     get() = field
-    set(v) { field = v }
-  fun run() {
-    if (true) {} else {}
-    for (i in 0..1) { break }
-    do { break } while (false)
-    when (x) { 0 -> {} else -> {} }
-    try { throw Exception() } catch (e: Exception) {} finally {}
-    create()
-    return
+    set(v) {
+      field = v
+    }
+
+  val delegated by lazy { 1 }
+
+  fun run(
+    items: List<Int>,
+    crossinline block: (Int) -> Unit,
+  ): Int {
+    val (a, b) = Pair(1, 2)
+    val arr = intArrayOf(1, 2)
+    val spread = intArrayOf(*arr)
+    val lit = listOf(1, 2, 3)
+    var i = 0
+    i = a + b
+    i += -1
+    i = (i)
+    this.z = i
+    super.hashCode()
+    val nav = this.z
+    val idx = arr[0]
+    val range = 0..10
+    val inCheck = 1 in range
+    val isCheck = items is List<*>
+    val asCheck = items as List<Int>
+    val infix = 1 to 2
+    val ref = Widget<String, Int>::create
+    val lambda = { n: Int -> n + 1 }
+    val annotatedLambda: (@Tag("p") Int) -> Unit = { _: Int -> }
+    val annotatedExpr = @Tag("e") i
+    val anon = fun(n: Int): Int { return n }
+    labeled@ for (item in items) {
+      if (item > 0 && item < 10 || item == 0) {
+        block(item)
+        create()
+        break@labeled
+      } else {
+        continue@labeled
+      }
+    }
+    while (i < 5) {
+      i++
+    }
+    do {
+      i++
+    } while (i < 8)
+    when (x) {
+      0 -> {}
+      in 1..2 -> {}
+      is Int -> {}
+      else -> {}
+    }
+    try {
+      throw Exception("boom")
+    } catch (e: Exception) {
+      println(e)
+    } finally {
+      println("done")
+    }
+    return lambda(idx) + nav + spread.size + lit.size + ref.hashCode() + anon(1) + infix.first + annotatedExpr
   }
 }
+
 object Singleton
 "#,
     )];
 
-    let mut present = std::collections::HashSet::new();
     let plugin = KotlinPlugin::new().expect("plugin");
     for (path, src) in sources {
-        present.extend(rgctl_ast_coverage::named_kind_ids_in_source(&lang, src));
         plugin
             .extract_all(std::path::Path::new(path), src)
             .expect("extract_all");
     }
 
     let tracker = rgctl_ast_coverage::AstCoverageTracker::global().expect("tracker installed");
-    match tracker.assert_all_exercised() {
-        Ok(msg) => eprintln!("{msg}"),
-        Err(full) => {
-            tracker
-                .assert_present_kinds_exercised(present.iter().copied())
-                .unwrap_or_else(|e| panic!("{e}\n(full gaps: {full})"));
-            assert!(
-                tracker.total_hits() > 0,
-                "RGCTL_AST_COVERAGE_TRACK=1 but no dispatch hits recorded"
-            );
-            eprintln!("soft-gate (full assert not met): {full}");
-        }
-    }
+    let summary = tracker
+        .assert_all_exercised()
+        .expect("every active Kotlin AST kind in kotlin-ast-coverage.json must be exercised");
+    eprintln!("{summary}");
+    let hotspots = tracker.unhandled_hotspots(10);
+    eprintln!("kotlin unhandled hotspots: {hotspots:?}");
 }

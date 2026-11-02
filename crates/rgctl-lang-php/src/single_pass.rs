@@ -15,48 +15,92 @@ const MANIFEST_JSON: &str = include_str!("../php-ast-coverage.json");
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("anonymous_function", HandlerMask::SYMBOL),
+    ("anonymous_function_use_clause", HandlerMask::AST_SKELETON),
+    ("array_creation_expression", HandlerMask::AST_SKELETON),
     ("arrow_function", HandlerMask::SYMBOL),
     ("assignment_expression", HandlerMask::AST_SKELETON),
     ("attribute", HandlerMask::RELATION),
+    ("attribute_group", HandlerMask::RELATION),
     ("augmented_assignment_expression", HandlerMask::AST_SKELETON),
     ("base_clause", HandlerMask::RELATION),
+    ("binary_expression", HandlerMask::CFG_STMT),
     ("break_statement", HandlerMask::CFG_STMT),
     ("case_statement", HandlerMask::CFG_STMT),
+    ("cast_expression", HandlerMask::AST_SKELETON),
     ("catch_clause", HandlerMask::CFG_STMT),
+    ("class_constant_access_expression", HandlerMask::RELATION),
     ("class_declaration", HandlerMask::SYMBOL),
     ("class_interface_clause", HandlerMask::RELATION),
+    ("clone_expression", HandlerMask::AST_SKELETON),
     ("compound_statement", HandlerMask::CFG_STMT),
+    ("conditional_expression", HandlerMask::CFG_STMT),
     ("const_declaration", HandlerMask::SYMBOL),
     ("const_element", HandlerMask::SYMBOL),
     ("continue_statement", HandlerMask::CFG_STMT),
+    ("declare_directive", HandlerMask::CFG_STMT),
+    ("declare_statement", HandlerMask::CFG_STMT),
+    ("default_statement", HandlerMask::CFG_STMT),
     ("do_statement", HandlerMask::CFG_STMT),
+    ("echo_statement", HandlerMask::CFG_STMT),
     ("else_clause", HandlerMask::CFG_STMT),
+    ("else_if_clause", HandlerMask::CFG_STMT),
+    ("empty_statement", HandlerMask::CFG_STMT),
     ("enum_case", HandlerMask::SYMBOL),
     ("enum_declaration", HandlerMask::SYMBOL),
+    ("error_suppression_expression", HandlerMask::AST_SKELETON),
+    ("exit_statement", HandlerMask::CFG_STMT),
     ("finally_clause", HandlerMask::CFG_STMT),
     ("for_statement", HandlerMask::CFG_STMT),
     ("foreach_statement", HandlerMask::CFG_STMT),
+    ("formal_parameters", HandlerMask::AST_SKELETON),
     ("function_call_expression", HandlerMask::RELATION),
     ("function_definition", HandlerMask::SYMBOL),
+    ("function_static_declaration", HandlerMask::CFG_STMT),
+    ("global_declaration", HandlerMask::CFG_STMT),
     ("goto_statement", HandlerMask::CFG_STMT),
     ("if_statement", HandlerMask::CFG_STMT),
+    ("include_expression", HandlerMask::RELATION),
+    ("include_once_expression", HandlerMask::RELATION),
     ("interface_declaration", HandlerMask::SYMBOL),
     ("match_block", HandlerMask::CFG_STMT),
+    ("match_conditional_expression", HandlerMask::CFG_STMT),
+    ("match_default_expression", HandlerMask::CFG_STMT),
     ("match_expression", HandlerMask::CFG_STMT),
+    ("member_access_expression", HandlerMask::RELATION),
     ("member_call_expression", HandlerMask::RELATION),
     ("method_declaration", HandlerMask::SYMBOL),
+    ("named_label_statement", HandlerMask::CFG_STMT),
     ("namespace_definition", HandlerMask::SYMBOL),
+    ("namespace_use_clause", HandlerMask::RELATION),
     ("namespace_use_declaration", HandlerMask::SYMBOL),
+    ("nullsafe_member_access_expression", HandlerMask::RELATION),
     ("nullsafe_member_call_expression", HandlerMask::RELATION),
+    ("object_creation_expression", HandlerMask::RELATION),
     ("property_declaration", HandlerMask::SYMBOL),
     ("property_element", HandlerMask::SYMBOL),
+    ("property_promotion_parameter", HandlerMask::AST_SKELETON),
+    ("reference_assignment_expression", HandlerMask::AST_SKELETON),
+    ("require_expression", HandlerMask::RELATION),
+    ("require_once_expression", HandlerMask::RELATION),
     ("return_statement", HandlerMask::CFG_STMT),
     ("scoped_call_expression", HandlerMask::RELATION),
+    ("scoped_property_access_expression", HandlerMask::RELATION),
+    ("sequence_expression", HandlerMask::CFG_STMT),
+    ("shell_command_expression", HandlerMask::CFG_STMT),
+    ("simple_parameter", HandlerMask::AST_SKELETON),
+    ("static_variable_declaration", HandlerMask::AST_SKELETON),
+    ("subscript_expression", HandlerMask::AST_SKELETON),
     ("switch_statement", HandlerMask::CFG_STMT),
     ("throw_expression", HandlerMask::CFG_STMT),
     ("trait_declaration", HandlerMask::SYMBOL),
     ("try_statement", HandlerMask::CFG_STMT),
+    ("unary_op_expression", HandlerMask::AST_SKELETON),
+    ("unset_statement", HandlerMask::CFG_STMT),
+    ("update_expression", HandlerMask::AST_SKELETON),
+    ("use_as_clause", HandlerMask::RELATION),
     ("use_declaration", HandlerMask::RELATION),
+    ("use_instead_of_clause", HandlerMask::RELATION),
+    ("variadic_parameter", HandlerMask::AST_SKELETON),
     ("while_statement", HandlerMask::CFG_STMT),
     ("yield_expression", HandlerMask::CFG_STMT),
 ];
@@ -136,7 +180,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
@@ -373,6 +424,27 @@ pub fn extract_all_single_pass(
                     }
                     _ => {}
                 }
+
+                let from_for_rel = ctx
+                    .scopes
+                    .current_function()
+                    .and_then(|f| f.symbol_idx)
+                    .and_then(|idx| ctx.symbols.get(idx))
+                    .map(|s| {
+                        s.qualified_name
+                            .clone()
+                            .unwrap_or_else(|| s.name.clone())
+                    })
+                    .or_else(|| {
+                        ctx.scopes.current_type().map(|t| t.qualified_prefix.clone())
+                    });
+                plugin.collect_depth_relation_at(
+                    node,
+                    source,
+                    &file_path_str,
+                    from_for_rel.as_deref(),
+                    &mut relations,
+                );
 
                 if PHP_CALL_KINDS.contains(&kind) {
                     if let Some(frame) = ctx.scopes.current_function() {

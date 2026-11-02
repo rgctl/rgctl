@@ -17,6 +17,8 @@ const AST_WALK_MAX_DEPTH: usize = 2048;
 
 /// Common CFG statement and control-flow AST node kinds recognized by [`CfgBuilder`].
 const CFG_HANDLED_KINDS: &[&str] = &[
+    "annotated_expression",
+    "as_expression",
     "assert_statement",
     "assignment",
     "assignment_expression",
@@ -39,6 +41,7 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "case",
     "case_clause",
     "case_statement",
+    "catch_block",
     "catch_clause",
     "closure_expression",
     "co_await_expression",
@@ -55,16 +58,22 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "continue_expression",
     "continue_statement",
     "control_transfer_statement",
+    "debugger_statement",
     "dec_statement",
     "declaration",
+    "declare_directive",
+    "declare_statement",
+    "default_statement",
     "defer_statement",
     "delete_statement",
     "dictionary_comprehension",
     "do_block",
     "do_statement",
     "do_while_statement",
+    "echo_statement",
     "elif_clause",
     "else_clause",
+    "else_if_clause",
     "elsif",
     "empty_labeled_statement",
     "empty_statement",
@@ -73,10 +82,12 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "ensure",
     "except_clause",
     "exec_statement",
+    "exit_statement",
     "expression",
     "expression_statement",
     "expression_switch_statement",
     "fallthrough_statement",
+    "finally_block",
     "finally_clause",
     "for",
     "for_clause",
@@ -87,7 +98,10 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "for_range_loop",
     "for_statement",
     "foreach_statement",
+    "function_body",
+    "function_static_declaration",
     "generator_expression",
+    "global_declaration",
     "global_statement",
     "go_statement",
     "goto_statement",
@@ -99,11 +113,15 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "if_modifier",
     "if_statement",
     "in_clause",
+    "in_expression",
     "inc_statement",
     "init_statement",
     "instanceof_expression",
+    "is_expression",
+    "labeled_expression",
     "labeled_statement",
     "lambda_expression",
+    "lambda_literal",
     "let_chain",
     "let_condition",
     "let_declaration",
@@ -117,8 +135,11 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "macro_invocation",
     "match_arm",
     "match_block",
+    "match_conditional_expression",
+    "match_default_expression",
     "match_expression",
     "match_statement",
+    "named_label_statement",
     "next",
     "nonlocal_statement",
     "pass_statement",
@@ -144,13 +165,15 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "select_statement",
     "selector",
     "send_statement",
+    "sequence_expression",
     "set_comprehension",
+    "shell_command_expression",
     "short_var_declaration",
     "statement_block",
     "statements",
-    "switch_body",
     "switch_block",
     "switch_block_statement_group",
+    "switch_body",
     "switch_case",
     "switch_default",
     "switch_entry",
@@ -168,10 +191,12 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "try_statement",
     "try_with_resources_statement",
     "type_switch_statement",
+    "unary_expression",
     "unless",
     "unless_modifier",
     "unless_statement",
     "unsafe_block",
+    "unset_statement",
     "until",
     "until_modifier",
     "update_expression",
@@ -1091,8 +1116,8 @@ impl<'a> CfgBuilder<'a> {
                 self.visit_expression_stmt(node, source)
             }
 
-            // Rust + Python + Puppet conditionals
-            "if_statement" | "if_expression" => self.visit_if(node, source),
+            // Rust + Python + Puppet + PHP conditionals
+            "if_statement" | "if_expression" | "else_if_clause" => self.visit_if(node, source),
             // Swift `guard` — early-exit branch (else body is the uncommon path)
             "guard_statement" => self.visit_if(node, source),
             "unless_statement" => self.visit_puppet_unless(node, source),
@@ -1185,9 +1210,20 @@ impl<'a> CfgBuilder<'a> {
             "continue_expression" | "continue_statement" => self.visit_continue(node, source),
             "goto_statement" => self.visit_goto(node, source),
             "fallthrough_statement" => self.visit_fallthrough(node, source),
-            "labeled_statement" | "empty_labeled_statement" => {
+            "labeled_statement" | "empty_labeled_statement" | "named_label_statement" => {
                 self.visit_labeled_statement(node, source)
             }
+            // PHP statements treated as expression / side-effect nodes
+            "echo_statement"
+            | "exit_statement"
+            | "unset_statement"
+            | "declare_statement"
+            | "declare_directive"
+            | "global_declaration"
+            | "function_static_declaration"
+            | "shell_command_expression"
+            | "sequence_expression"
+            | "print_intrinsic" => self.visit_expression_stmt(node, source),
 
             // Declarations / assignments
             "let_declaration" | "let_statement" => {
@@ -2224,9 +2260,13 @@ impl<'a> CfgBuilder<'a> {
         let alternative = node
             .child_by_field_name("alternative")
             .or_else(|| node.child_by_field_name("else_clause"))
+            .or_else(|| find_direct_child_kind(node, "else_if_clause"))
             .or_else(|| find_direct_child_kind(node, "else_clause"))
             .or_else(|| find_direct_child_kind(node, "else_statement"))
             .or_else(|| find_direct_child_kind(node, "elsif_statement"))
+            // PHP: `else_if_clause` siblings are flat under `if_statement`; when
+            // visiting an else_if, chain to the next else_if / else on the parent.
+            .or_else(|| next_php_elseif_or_else(node))
             // Swift: bare `else` keyword followed by `{` + `statements` — take the
             // second `statements` child when present.
             .or_else(|| {
@@ -2310,7 +2350,10 @@ impl<'a> CfgBuilder<'a> {
                     if after_cond
                         && !matches!(
                             child.kind(),
-                            "else_clause" | "else_statement" | "elsif_statement"
+                            "else_clause"
+                                | "else_statement"
+                                | "elsif_statement"
+                                | "else_if_clause"
                         )
                     {
                         return Some(child);
@@ -2344,8 +2387,9 @@ impl<'a> CfgBuilder<'a> {
                 } else if alternative.kind() == "if_expression"
                     || alternative.kind() == "if_statement"
                     || alternative.kind() == "elsif_statement"
+                    || alternative.kind() == "else_if_clause"
                 {
-                    // `else if` / Puppet elsif — visit as nested if-like.
+                    // `else if` / PHP else_if / Puppet elsif — visit as nested if-like.
                     alternative
                 } else {
                     alternative
@@ -2353,6 +2397,7 @@ impl<'a> CfgBuilder<'a> {
                 if alt.kind() == "if_expression"
                     || alt.kind() == "if_statement"
                     || alt.kind() == "elsif_statement"
+                    || alt.kind() == "else_if_clause"
                 {
                     self.visit_if(alt, source)?;
                 } else if is_block_like(alt.kind()) {
@@ -3746,11 +3791,22 @@ impl<'a> CfgBuilder<'a> {
             if child.kind() == "match_block" {
                 let mut bc = child.walk();
                 for arm in child.children(&mut bc) {
-                    if arm.kind() == "match_arm" {
+                    if matches!(
+                        arm.kind(),
+                        "match_arm"
+                            | "match_conditional_expression"
+                            | "match_default_expression"
+                    ) {
                         arms.push(arm);
                     }
                 }
-            } else if child.kind() == "match_arm" || child.kind() == "match_arm_pattern" {
+            } else if matches!(
+                child.kind(),
+                "match_arm"
+                    | "match_arm_pattern"
+                    | "match_conditional_expression"
+                    | "match_default_expression"
+            ) {
                 arms.push(child);
             }
         }
@@ -4586,6 +4642,26 @@ fn is_switch_default_case(case: Node, source: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// Next PHP `else_if_clause` / `else_clause` sibling after `node` on its parent.
+fn next_php_elseif_or_else<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    if node.kind() != "else_if_clause" {
+        return None;
+    }
+    let parent = node.parent()?;
+    let mut past = false;
+    let mut cursor = parent.walk();
+    for child in parent.children(&mut cursor) {
+        if child.id() == node.id() {
+            past = true;
+            continue;
+        }
+        if past && matches!(child.kind(), "else_if_clause" | "else_clause") {
+            return Some(child);
+        }
+    }
+    None
 }
 
 fn find_direct_child_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {

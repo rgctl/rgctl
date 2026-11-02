@@ -11,38 +11,81 @@ const MANIFEST_JSON: &str = include_str!("../kotlin-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
+    ("annotated_expression", HandlerMask::AST_SKELETON),
+    ("annotated_lambda", HandlerMask::AST_SKELETON),
+    ("annotation", HandlerMask::RELATION),
+    ("anonymous_function", HandlerMask::SYMBOL),
+    ("anonymous_initializer", HandlerMask::SYMBOL),
+    ("as_expression", HandlerMask::CFG_STMT),
     ("assignment", HandlerMask::AST_SKELETON),
+    ("binary_expression", HandlerMask::CFG_STMT),
     ("block", HandlerMask::CFG_STMT),
     ("call_expression", HandlerMask::RELATION),
+    ("callable_reference", HandlerMask::RELATION),
     ("catch_block", HandlerMask::CFG_STMT),
     ("class_declaration", HandlerMask::SYMBOL),
     ("class_parameter", HandlerMask::SYMBOL),
+    ("class_parameters", HandlerMask::AST_SKELETON),
     ("companion_object", HandlerMask::SYMBOL),
+    ("constructor_delegation_call", HandlerMask::RELATION),
     ("constructor_invocation", HandlerMask::RELATION),
     ("delegation_specifier", HandlerMask::RELATION),
+    ("delegation_specifiers", HandlerMask::RELATION),
     ("do_while_statement", HandlerMask::CFG_STMT),
     ("enum_entry", HandlerMask::SYMBOL),
+    ("explicit_delegation", HandlerMask::RELATION),
+    ("file_annotation", HandlerMask::RELATION),
     ("finally_block", HandlerMask::CFG_STMT),
     ("for_statement", HandlerMask::CFG_STMT),
     ("function_body", HandlerMask::CFG_STMT),
     ("function_declaration", HandlerMask::SYMBOL),
+    ("function_value_parameters", HandlerMask::AST_SKELETON),
     ("getter", HandlerMask::SYMBOL),
     ("if_expression", HandlerMask::CFG_STMT),
     ("import", HandlerMask::RELATION),
+    ("in_expression", HandlerMask::CFG_STMT),
+    ("index_expression", HandlerMask::RELATION),
+    ("infix_expression", HandlerMask::RELATION),
+    ("is_expression", HandlerMask::CFG_STMT),
+    ("labeled_expression", HandlerMask::CFG_STMT),
+    ("lambda_literal", HandlerMask::SYMBOL),
+    ("lambda_parameters", HandlerMask::AST_SKELETON),
+    ("multi_variable_declaration", HandlerMask::AST_SKELETON),
+    ("navigation_expression", HandlerMask::RELATION),
     ("object_declaration", HandlerMask::SYMBOL),
+    ("object_literal", HandlerMask::SYMBOL),
+    ("parameter", HandlerMask::AST_SKELETON),
     ("primary_constructor", HandlerMask::SYMBOL),
     ("property_declaration", HandlerMask::SYMBOL),
     ("property_delegate", HandlerMask::AST_SKELETON),
+    ("range_expression", HandlerMask::CFG_STMT),
     ("return_expression", HandlerMask::CFG_STMT),
     ("secondary_constructor", HandlerMask::SYMBOL),
     ("setter", HandlerMask::SYMBOL),
+    ("spread_expression", HandlerMask::AST_SKELETON),
     ("throw_expression", HandlerMask::CFG_STMT),
     ("try_expression", HandlerMask::CFG_STMT),
     ("type_alias", HandlerMask::SYMBOL),
+    ("type_arguments", HandlerMask::AST_SKELETON),
+    ("type_constraint", HandlerMask::AST_SKELETON),
+    ("type_parameter", HandlerMask::AST_SKELETON),
+    ("type_parameters", HandlerMask::AST_SKELETON),
+    ("unary_expression", HandlerMask::AST_SKELETON),
     ("variable_declaration", HandlerMask::AST_SKELETON),
     ("when_entry", HandlerMask::CFG_STMT),
     ("when_expression", HandlerMask::CFG_STMT),
     ("while_statement", HandlerMask::CFG_STMT),
+];
+
+/// Call-like nodes flushed as `Calls` / `References` after scope walk.
+const KOTLIN_RELATION_CALL_KINDS: &[&str] = &[
+    "call_expression",
+    "callable_reference",
+    "constructor_delegation_call",
+    "constructor_invocation",
+    "index_expression",
+    "infix_expression",
+    "navigation_expression",
 ];
 
 const AST_MAX_DEPTH: usize = 2048;
@@ -94,6 +137,10 @@ pub fn extract_all_single_pass(
     let mut ctx = SinglePassCtx::new(dispatch);
     let mut relations = Vec::new();
     let mut pending_calls: Vec<PendingCall<'_>> = Vec::new();
+    let mut lambda_idx: u32 = 0;
+    let mut anon_fn_idx: u32 = 0;
+    let mut object_lit_idx: u32 = 0;
+    let mut init_idx: u32 = 0;
 
     let mut stack = vec![Visit::Pre(root, 0)];
 
@@ -114,7 +161,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
@@ -154,6 +208,32 @@ pub fn extract_all_single_pass(
                             pushed_scope = true;
                         }
                     }
+                    "object_literal" => {
+                        object_lit_idx += 1;
+                        if let Some(sym) = plugin.emit_object_literal(
+                            node,
+                            source,
+                            &file_path_str,
+                            package.as_deref(),
+                            object_lit_idx,
+                        ) {
+                            let name = sym.name.clone();
+                            let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
+                            ctx.symbols.push(sym);
+                            let depth_s = ctx.scopes.depth();
+                            let mut frame = ScopeFrame::new(
+                                ScopeKind::Class,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                depth_s,
+                            );
+                            frame.symbol_idx = Some(ctx.symbols.len() - 1);
+                            ctx.scopes.push(frame);
+                            pushed_scope = true;
+                        }
+                    }
                     "function_declaration" => {
                         if let Some(sym) =
                             plugin.emit_function(node, source, &file_path_str, package.as_deref())
@@ -176,6 +256,86 @@ pub fn extract_all_single_pass(
                                 f.complexity.cyclomatic = 1;
                                 f.complexity.param_count = params;
                                 f.complexity.loc = loc;
+                            }
+                            pushed_scope = true;
+                        }
+                    }
+                    "lambda_literal" => {
+                        lambda_idx += 1;
+                        if let Some(sym) = plugin.emit_lambda_like(
+                            node,
+                            source,
+                            &file_path_str,
+                            package.as_deref(),
+                            lambda_idx,
+                            "lambda",
+                        ) {
+                            let name = sym.name.clone();
+                            let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
+                            ctx.symbols.push(sym);
+                            ctx.enter_scope(
+                                ScopeKind::Lambda,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                true,
+                            );
+                            if let Some(f) = ctx.scopes.current_function_mut() {
+                                f.complexity.cyclomatic = 1;
+                            }
+                            pushed_scope = true;
+                        }
+                    }
+                    "anonymous_function" => {
+                        anon_fn_idx += 1;
+                        if let Some(sym) = plugin.emit_lambda_like(
+                            node,
+                            source,
+                            &file_path_str,
+                            package.as_deref(),
+                            anon_fn_idx,
+                            "anon_fn",
+                        ) {
+                            let name = sym.name.clone();
+                            let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
+                            ctx.symbols.push(sym);
+                            ctx.enter_scope(
+                                ScopeKind::Lambda,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                true,
+                            );
+                            if let Some(f) = ctx.scopes.current_function_mut() {
+                                f.complexity.cyclomatic = 1;
+                            }
+                            pushed_scope = true;
+                        }
+                    }
+                    "anonymous_initializer" => {
+                        init_idx += 1;
+                        if let Some(sym) = plugin.emit_anonymous_initializer(
+                            node,
+                            source,
+                            &file_path_str,
+                            package.as_deref(),
+                            init_idx,
+                        ) {
+                            let name = sym.name.clone();
+                            let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
+                            ctx.symbols.push(sym);
+                            ctx.enter_scope(
+                                ScopeKind::Function,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                true,
+                            );
+                            if let Some(f) = ctx.scopes.current_function_mut() {
+                                f.complexity.cyclomatic = 1;
                             }
                             pushed_scope = true;
                         }
@@ -215,6 +375,18 @@ pub fn extract_all_single_pass(
                     }
                     "import" => {
                         plugin.emit_import(node, source, &file_path_str, &mut ctx.symbols);
+                    }
+                    "annotation" | "file_annotation" => {
+                        plugin.emit_annotation_relation(
+                            node,
+                            source,
+                            file_path,
+                            &ctx.symbols,
+                            &mut relations,
+                        );
+                    }
+                    "explicit_delegation" | "delegation_specifiers" => {
+                        // Edges are also collected via delegation_specifier walk; keep visit active.
                     }
                     "type_alias" => {
                         // Grammar: `typealias` keyword, then `identifier` name, then aliased type.
@@ -271,7 +443,7 @@ pub fn extract_all_single_pass(
                     _ => {}
                 }
 
-                if KOTLIN_CALL_KINDS.contains(&kind)
+                if KOTLIN_RELATION_CALL_KINDS.contains(&kind)
                     && let Some(frame) = ctx.scopes.current_function()
                     && let Some(idx) = frame.symbol_idx
                 {
@@ -303,13 +475,21 @@ pub fn extract_all_single_pass(
                             ));
                             stack.push(Visit::LeaveGuard);
                         }
-                        "when_entry" => {
+                        "when_entry" | "is_expression" | "in_expression" | "as_expression"
+                        | "range_expression" | "labeled_expression" => {
                             let delta = 1 + ctx
                                 .scopes
                                 .current_function()
                                 .map(|f| f.complexity.cognitive_nesting)
                                 .unwrap_or(0);
                             ctx.scopes.note_branch(delta);
+                        }
+                        "binary_expression" => {
+                            if let Ok(text) = node.utf8_text(source) {
+                                if text.contains("&&") || text.contains("||") {
+                                    ctx.scopes.note_branch(1);
+                                }
+                            }
                         }
                         "return_expression" | "jump_expression"
                             if (kind == "return_expression"
@@ -340,15 +520,26 @@ pub fn extract_all_single_pass(
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
-        push_call_relation_from(
-            pending.node,
-            source,
-            file_path,
-            &ctx.symbols,
-            from_fn,
-            "kotlin",
-            &mut relations,
-        );
+        let kind = pending.node.kind();
+        if kind == "call_expression" || kind == "constructor_invocation" {
+            push_call_relation_from(
+                pending.node,
+                source,
+                file_path,
+                &ctx.symbols,
+                from_fn,
+                "kotlin",
+                &mut relations,
+            );
+        } else {
+            plugin.emit_reference_relation(
+                pending.node,
+                source,
+                file_path,
+                from_fn,
+                &mut relations,
+            );
+        }
     }
 
     plugin.collect_inheritance_relations(root, source, file_path, &mut relations);

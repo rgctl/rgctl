@@ -344,8 +344,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "javascript-ast-coverage.json",
             grammar_prefix: "tree-sitter-javascript@",
             language: || tree_sitter_javascript::LANGUAGE.into(),
-            min_handled_kinds: 54,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 99,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "kotlin",
@@ -353,8 +353,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "kotlin-ast-coverage.json",
             grammar_prefix: "tree-sitter-kotlin-ng@",
             language: || tree_sitter_kotlin_ng::LANGUAGE.into(),
-            min_handled_kinds: 43,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 87,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "markdown",
@@ -371,8 +371,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "php-ast-coverage.json",
             grammar_prefix: "tree-sitter-php@",
             language: || tree_sitter_php::LANGUAGE_PHP.into(),
-            min_handled_kinds: 55,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 100,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "puppet",
@@ -425,8 +425,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "typescript-ast-coverage.json",
             grammar_prefix: "tree-sitter-typescript@",
             language: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            min_handled_kinds: 70,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 106,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "swift",

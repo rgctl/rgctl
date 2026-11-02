@@ -15,26 +15,36 @@ use tree_sitter::Node;
 const MANIFEST_JSON: &str = include_str!("../javascript-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
+/// Keep in sync with non-Literal active handlers in `javascript-ast-coverage.json`.
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
+    ("array_pattern", HandlerMask::AST_SKELETON),
     ("arrow_function", HandlerMask::SYMBOL),
     ("assignment_expression", HandlerMask::AST_SKELETON),
+    ("assignment_pattern", HandlerMask::AST_SKELETON),
     ("augmented_assignment_expression", HandlerMask::AST_SKELETON),
     ("await_expression", HandlerMask::CFG_STMT),
+    ("binary_expression", HandlerMask::CFG_STMT),
     ("break_statement", HandlerMask::CFG_STMT),
     ("call_expression", HandlerMask::RELATION),
     ("catch_clause", HandlerMask::CFG_STMT),
     ("class", HandlerMask::SYMBOL),
     ("class_declaration", HandlerMask::SYMBOL),
+    ("class_heritage", HandlerMask::RELATION),
+    ("class_static_block", HandlerMask::SYMBOL),
     ("continue_statement", HandlerMask::CFG_STMT),
+    ("debugger_statement", HandlerMask::CFG_STMT),
     ("decorator", HandlerMask::RELATION),
     ("do_statement", HandlerMask::CFG_STMT),
     ("else_clause", HandlerMask::CFG_STMT),
+    ("empty_statement", HandlerMask::CFG_STMT),
+    ("export_clause", HandlerMask::RELATION),
     ("export_specifier", HandlerMask::RELATION),
     ("export_statement", HandlerMask::RELATION),
     ("field_definition", HandlerMask::SYMBOL),
     ("finally_clause", HandlerMask::CFG_STMT),
     ("for_in_statement", HandlerMask::CFG_STMT),
     ("for_statement", HandlerMask::CFG_STMT),
+    ("formal_parameters", HandlerMask::AST_SKELETON),
     ("function_declaration", HandlerMask::SYMBOL),
     ("function_expression", HandlerMask::SYMBOL),
     ("generator_function", HandlerMask::SYMBOL),
@@ -45,19 +55,42 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("import_clause", HandlerMask::RELATION),
     ("import_specifier", HandlerMask::RELATION),
     ("import_statement", HandlerMask::RELATION),
+    ("jsx_element", HandlerMask::RELATION),
+    ("jsx_expression", HandlerMask::AST_SKELETON),
+    ("jsx_opening_element", HandlerMask::RELATION),
+    ("jsx_self_closing_element", HandlerMask::RELATION),
+    ("labeled_statement", HandlerMask::CFG_STMT),
+    ("lexical_declaration", HandlerMask::AST_SKELETON),
+    ("member_expression", HandlerMask::RELATION),
     ("method_definition", HandlerMask::SYMBOL),
     ("named_imports", HandlerMask::RELATION),
+    ("namespace_export", HandlerMask::RELATION),
     ("namespace_import", HandlerMask::RELATION),
     ("new_expression", HandlerMask::RELATION),
+    ("object_assignment_pattern", HandlerMask::AST_SKELETON),
+    ("object_pattern", HandlerMask::AST_SKELETON),
+    ("pair_pattern", HandlerMask::AST_SKELETON),
+    ("regex_pattern", HandlerMask::AST_SKELETON),
+    ("rest_pattern", HandlerMask::AST_SKELETON),
     ("return_statement", HandlerMask::CFG_STMT),
+    ("sequence_expression", HandlerMask::CFG_STMT),
+    ("shorthand_property_identifier_pattern", HandlerMask::AST_SKELETON),
     ("statement_block", HandlerMask::CFG_STMT),
+    ("subscript_expression", HandlerMask::RELATION),
+    ("super", HandlerMask::RELATION),
     ("switch_case", HandlerMask::CFG_STMT),
     ("switch_default", HandlerMask::CFG_STMT),
     ("switch_statement", HandlerMask::CFG_STMT),
     ("ternary_expression", HandlerMask::CFG_STMT),
     ("throw_statement", HandlerMask::CFG_STMT),
     ("try_statement", HandlerMask::CFG_STMT),
+    ("unary_expression", HandlerMask::CFG_STMT),
+    ("update_expression", HandlerMask::CFG_STMT),
+    ("using_declaration", HandlerMask::AST_SKELETON),
+    ("variable_declaration", HandlerMask::AST_SKELETON),
+    ("variable_declarator", HandlerMask::AST_SKELETON),
     ("while_statement", HandlerMask::CFG_STMT),
+    ("with_statement", HandlerMask::CFG_STMT),
     ("yield_expression", HandlerMask::CFG_STMT),
 ];
 
@@ -143,7 +176,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
