@@ -172,5 +172,5 @@ export interface ArchitectureView {
 export type ArchitectureState =
   | { kind: "no-metagraph" }
   | { kind: "unreadable"; reason: string }
-  | { kind: "no-communities"; view: ArchitectureView }
-  | { kind: "ready"; view: ArchitectureView };
+  | { kind: "no-communities"; view: ArchitectureView; metagraph: Metagraph }
+  | { kind: "ready"; view: ArchitectureView; metagraph: Metagraph };

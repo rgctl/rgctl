@@ -66,7 +66,7 @@ export function ArchitectureRoom() {
   const view = state.kind === "ready" || state.kind === "no-communities" ? state.view : null;
   // The metagraph is what membership is addressed against; `view` carries the derived packages only.
   const metagraph: Metagraph | null =
-    state.kind === "ready" || state.kind === "no-communities" ? (state.metagraph ?? null) : null;
+    state.kind === "ready" || state.kind === "no-communities" ? state.metagraph : null;
   // The scene is created once and holds its callbacks, so it must call through a ref to reach the current
   // closure — otherwise a district opened after a re-render would use a stale metagraph or a stale ceiling.
   const expandRef = useRef<(entry: HoverEntry | null) => Promise<void>>(async () => {});
@@ -100,7 +100,15 @@ export function ArchitectureRoom() {
         });
         return;
       }
-      if (!metagraph) return;
+      if (!metagraph) {
+        setExpandState({
+          kind: "failed",
+          title: entry.title,
+          reason:
+            "The metagraph is not loaded, so membership cannot be addressed. That is a wiring failure, not an empty district.",
+        });
+        return;
+      }
       setExpandState({ kind: "loading", title: entry.title });
       sceneRef.current?.collapse();
       setExpanded(null);
