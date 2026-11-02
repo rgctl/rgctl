@@ -107,6 +107,32 @@ describe("a room renders a default with no Focus", () => {
   });
 });
 
+describe("/ is the universe, not a menu", () => {
+  /** Which room the vertical nav marks as current — the structural answer to "where am I?". */
+  function currentRoom(): string | null {
+    const nav = document.querySelector('nav[aria-label="Rooms"]');
+    return nav?.querySelector('button[aria-current="page"]')?.textContent ?? null;
+  }
+
+  it("redirects to Architecture", async () => {
+    const router = renderApp("/");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
+    await waitFor(() => expect(currentRoom()).toContain("Architecture"));
+  });
+
+  it("normalises an unknown room to Architecture instead of a lying URL", async () => {
+    const router = renderApp("/not-a-room");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
+    await waitFor(() => expect(currentRoom()).toContain("Architecture"));
+  });
+
+  it("keeps the Query string when it lands on Architecture", async () => {
+    const router = renderApp(`/?focus=${SUBJECT}`);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
+    expect(router.state.location.search).toMatchObject({ focus: SUBJECT });
+  });
+});
+
 describe("the shell has no tab strip", () => {
   it("rooms are a labelled vertical nav and there is no tablist", async () => {
     renderApp("/repo");

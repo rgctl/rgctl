@@ -4,7 +4,6 @@ import { Instrument } from "./Instrument";
 import { Palette } from "./Palette";
 import { Chip, Panel, Unavailable } from "./shell";
 import { Spine } from "./rooms/Spine";
-import { CfgPdgLens } from "./rooms/CfgPdg";
 import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
 import { MigrationRoom } from "./rooms/Migration";
@@ -305,17 +304,9 @@ function UnderstandRoom({
       </Panel>
 
       {lens === "spine" && <Spine entry={entry} />}
-      {lens === "code" && (
-        <Panel title="Code" subtitle={`${entry.file_path ?? "—"}`}>
-          <p className="text-[11px] text-zinc-400">
-            The Code lens is the same source pane as Spine without the control-flow graph beside it.
-            Source rendering is shared, so this lens is a view of the same reader rather than a second
-            implementation.
-          </p>
-        </Panel>
-      )}
-      {lens === "cfgpdg" && <CfgPdgLens entry={entry} />}
-      {lens !== "spine" && lens !== "code" && lens !== "cfgpdg" && <LensPlaceholder lens={lens} />}
+      {/* Everything else in the control is a question phase 3 answers. `code` and `cfgpdg` are gone: both
+          were the Spine in another frame, and both are now controls inside it (show source / graph height). */}
+      {lens !== "spine" && <LensPlaceholder lens={lens} />}
     </div>
   );
 }

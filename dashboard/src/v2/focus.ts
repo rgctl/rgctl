@@ -76,10 +76,19 @@ export const ROOMS = [
   { id: "proof", label: "Proof", blurb: "why should I believe any of this?" },
 ] as const;
 
+/**
+ * How you look at the focused symbol.
+ *
+ * One implemented lens, then the questions phase 3 fills. `code` and `cfgpdg` used to be entries here and
+ * were not questions — they were the Spine with a different frame (the graph at 70vh without the source;
+ * the source without the graph), and both are now controls inside the Spine. A lens control that asks
+ * "which frame?" is a menu; one that asks "which question?" is a set of views of the same subject.
+ *
+ * Old `?lens=code` / `?lens=cfgpdg` links still resolve: `isLens` rejects them at the URL boundary and the
+ * room falls back to `spine`, which is a superset of both.
+ */
 export const LENSES = [
   { id: "spine", label: "Spine" },
-  { id: "code", label: "Code" },
-  { id: "cfgpdg", label: "CFG·PDG" },
   { id: "dataflow", label: "Dataflow" },
   { id: "slice", label: "Slice/Trace" },
   { id: "blast", label: "Blast" },
@@ -89,6 +98,16 @@ export const LENSES = [
 
 export type RoomId = (typeof ROOMS)[number]["id"];
 export type LensId = (typeof LENSES)[number]["id"];
+
+/**
+ * Where `/` lands.
+ *
+ * Architecture, not Repo: the universe is the surface this dashboard exists for, and "how is it
+ * structured?" is the question a reader arrives with. It is also the room whose data every
+ * `--with-universe` bundle carries, so the landing view is never an absence state. Repo keeps its job
+ * (`where do I start?`) and is one click away.
+ */
+export const DEFAULT_ROOM: RoomId = "architecture";
 
 export const isRoom = (v: unknown): v is RoomId => ROOMS.some((r) => r.id === v);
 export const isLens = (v: unknown): v is LensId => LENSES.some((l) => l.id === v);

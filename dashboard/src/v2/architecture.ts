@@ -108,8 +108,8 @@ export async function loadArchitecture(): Promise<ArchitectureState> {
   }
 
   const view = buildView(metagraph, summary, migration);
-  if (!summary || summary.communities.length === 0) return { kind: "no-communities", view };
-  return { kind: "ready", view };
+  if (!summary || summary.communities.length === 0) return { kind: "no-communities", view, metagraph };
+  return { kind: "ready", view, metagraph };
 }
 
 /** Scales for the drawing, derived from the view's own distribution. */

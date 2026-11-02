@@ -9,20 +9,66 @@
  * It renders without a Focus and without a lens: a package is a set of functions, not a function, so there is
  * nothing here to carry in or out of another room.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { Panel, Unavailable, Chip } from "../shell";
 import { channelReport, loadArchitecture, scalesFor } from "../architecture";
-import type { ArchitectureState, ArchitectureView } from "../architectureTypes";
-import type { HoverEntry, UniverseLayer, UniverseScene } from "../universe/UniverseScene";
+import { expandMembers, MEMBER_EDGE_KINDS } from "../expandEngine";
+import { loadMemberIndices } from "../metagraphMembers";
+import { loadFunctions } from "../data";
+import type { ArchitectureState, ArchitectureView, Metagraph } from "../architectureTypes";
+import type { HoverEntry, MemberEntry, UniverseLayer, UniverseScene } from "../universe/UniverseScene";
 
 type Loaded = { kind: "loading" } | ArchitectureState;
 
 export function ArchitectureRoom() {
+  const navigate = useNavigate();
   const [state, setState] = useState<Loaded>({ kind: "loading" });
   const [layer, setLayer] = useState<UniverseLayer>("packages");
   const [edges, setEdges] = useState(true);
   const [sharedOnly, setSharedOnly] = useState(false);
+  /** Drift is off by default once a district has been opened; the reader can turn it back on. */
+  const [drift, setDrift] = useState(true);
+  /** What happened when a member was clicked: resolving, or why it could not be opened. */
+  const [memberState, setMemberState] = useState<
+    | { kind: "idle" }
+    | { kind: "resolving"; member: MemberEntry }
+    | { kind: "failed"; member: MemberEntry; reason: string }
+  >({ kind: "idle" });
   const [hover, setHover] = useState<HoverEntry | null>(null);
+  /** The clicked object. Hover is a preview; expanding acts on a selection, so a control can carry it. */
+  const [selected, setSelected] = useState<HoverEntry | null>(null);
+  /**
+   * The district currently opened, and how its members were obtained.
+   *
+   * `drawn` is separate from `members` on purpose: a district with more members than `EXPLODE_MAX` must say
+   * how many it drew and by what rule, and a truthy "expanded" flag with no number is how a truncation
+   * becomes invisible.
+   */
+  const [expanded, setExpanded] = useState<{
+    id: number;
+    title: string;
+    members: number;
+    drawn: number;
+    edges: number;
+    truncated: boolean;
+    /** Milliseconds from the click to the district being drawn — a number, not the word "smooth". */
+    ms: number;
+    /** False when the bundle carries no per-member complexity, so members are drawn at a constant height. */
+    measuredHeight: boolean;
+  } | null>(null);
+  const [expandState, setExpandState] = useState<
+    | { kind: "idle" }
+    | {
+        kind: "loading";
+        title: string;
+        phase: "members" | "engine" | "parsing" | "expanding";
+        loaded?: number;
+        total?: number;
+      }
+    | { kind: "absent"; title: string; reason: string }
+    | { kind: "failed"; title: string; reason: string }
+  >({ kind: "idle" });
   const [sceneFailed, setSceneFailed] = useState<string | null>(null);
 
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -39,7 +85,167 @@ export function ArchitectureRoom() {
   }, []);
 
   const view = state.kind === "ready" || state.kind === "no-communities" ? state.view : null;
+  // The metagraph is what membership is addressed against; `view` carries the derived packages only.
+  const metagraph: Metagraph | null =
+    state.kind === "ready" || state.kind === "no-communities" ? state.metagraph : null;
+  // The scene is created once and holds its callbacks, so it must call through a ref to reach the current
+  // closure — otherwise a district opened after a re-render would use a stale metagraph or a stale ceiling.
+  const expandRef = useRef<(entry: HoverEntry | null) => Promise<void>>(async () => {});
+  const driftRef = useRef(drift);
+  const openMemberRef = useRef<(member: MemberEntry | null) => Promise<void>>(async () => {});
 
+  /**
+   * How many members a district will draw.
+   *
+   * The largest district on the measured corpus holds 15 686 members; drawing them all is a frame-rate cliff
+   * and an unreadable cloud, so the ceiling binds — and when it does, the view says so rather than quietly
+   * showing a sample.
+   */
+  const EXPLODE_MAX = 1500;
+
+  const collapse = useCallback(() => {
+    sceneRef.current?.collapse();
+    setExpanded(null);
+    setExpandState({ kind: "idle" });
+  }, []);
+
+  const expand = useCallback(
+    async (entry: HoverEntry | null) => {
+      if (!entry || entry.id === undefined) return;
+      if (entry.kind !== "package") {
+        setExpandState({
+          kind: "absent",
+          title: entry.title,
+          reason:
+            entry.kind === "volume"
+              ? "A namespace group is derived from package labels, not an exported object — it has no members of its own. Open a package inside it."
+              : "This object has no member list in the bundle.",
+        });
+        return;
+      }
+      if (!metagraph) {
+        setExpandState({
+          kind: "failed",
+          title: entry.title,
+          reason:
+            "The metagraph is not loaded, so membership cannot be addressed. That is a wiring failure, not an empty district.",
+        });
+        return;
+      }
+      setExpandState({ kind: "loading", title: entry.title, phase: "members" });
+      sceneRef.current?.collapse();
+      setExpanded(null);
+
+      const members = await loadMemberIndices(metagraph, entry.id);
+      if (members.kind !== "ready") {
+        setExpandState({
+          kind: members.kind === "loading" ? "loading" : members.kind === "absent" ? "absent" : "failed",
+          title: entry.title,
+          reason: "reason" in members ? members.reason : "…",
+        });
+        return;
+      }
+
+      const startedAt = performance.now();
+      const total = members.indices.length;
+      const truncated = total > EXPLODE_MAX;
+      const kept = truncated ? members.indices.slice(0, EXPLODE_MAX) : members.indices;
+
+      try {
+        const subgraph = await expandMembers(kept, 0, (progress) => {
+          setExpandState({
+            kind: "loading",
+            title: entry.title,
+            phase: progress.phase,
+            loaded: progress.loaded,
+            total: progress.total,
+          });
+        });
+        setExpandState({ kind: "loading", title: entry.title, phase: "expanding" });
+        const result = sceneRef.current?.expand(
+          entry.id,
+          subgraph.nodes.map((n) => ({
+            index: n.index,
+            complexity: n.complexity,
+            name: n.name,
+            nodeTypeName: n.node_type_name,
+            filePath: n.file_path ?? null,
+          })),
+          subgraph.edges,
+        );
+        setExpanded({
+          id: entry.id,
+          title: entry.title,
+          members: total,
+          drawn: result?.drawn ?? 0,
+          edges: result?.edges ?? 0,
+          truncated,
+          ms: Math.round(performance.now() - startedAt),
+          measuredHeight: result?.measuredHeight ?? false,
+        });
+        setExpandState({ kind: "idle" });
+      } catch (error) {
+        setExpandState({ kind: "failed", title: entry.title, reason: (error as Error).message });
+      }
+    },
+    [metagraph],
+  );
+
+
+  useEffect(() => {
+    driftRef.current = drift;
+    sceneRef.current?.setDrift(drift);
+  }, [drift]);
+
+  // Escape closes the district: the universal "go back a level", and cheaper than aiming at a solid.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && sceneRef.current?.isExpanded) collapse();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [collapse]);
+
+  /**
+   * Turn a clicked member into a Focus.
+   *
+   * The engine's subgraph payload carries `(file_path, name)` but not the node's UUID, so the identity is
+   * resolved against the dashboard's own function index — the same index the ⌘K palette uses. An ambiguous or
+   * missing match is **not** guessed: a Focus that points at the wrong function is worse than no link at all.
+   */
+  const openMember = useCallback(
+    async (member: MemberEntry | null) => {
+      if (!member) return;
+      setMemberState({ kind: "resolving", member });
+      const functions = await loadFunctions();
+      const matches = functions.filter(
+        (f) => f.name === member.name && (!member.filePath || f.file_path === member.filePath),
+      );
+      if (matches.length === 1) {
+        const focus = matches[0].function_id;
+        setMemberState({ kind: "idle" });
+        collapse();
+        void navigate({ to: "/$roomId", params: { roomId: "understand" }, search: { focus } as never });
+        return;
+      }
+      setMemberState({
+        kind: "failed",
+        member,
+        reason:
+          matches.length === 0
+            ? "no indexed function matches this member's name and file — the CFG index does not reach it"
+            : `${matches.length} indexed functions match this name and file, so opening one would be a guess`,
+      });
+    },
+    [collapse, navigate],
+  );
+
+  useEffect(() => {
+    expandRef.current = expand;
+  }, [expand]);
+  useEffect(() => {
+    openMemberRef.current = openMember;
+  }, [openMember]);
   // The canvas is a canvas: jsdom has no WebGL, and neither does a browser with it switched off. Both get a
   // stated absence instead of a blank pane, and everything textual above still renders.
   useEffect(() => {
@@ -71,7 +277,11 @@ export function ArchitectureRoom() {
         setSceneFailed((error as Error).message);
         return;
       }
+      scene.setDrift(driftRef.current);
       scene.onHoverChange(setHover);
+      scene.onPickChange(setSelected);
+      scene.onMemberPickChange((member) => void openMemberRef.current(member));
+      scene.onExplode((entry) => void expandRef.current(entry));
       scene.attachPointer(host);
       const scales = scalesFor(view);
       scene.setEdges(
@@ -169,10 +379,107 @@ export function ArchitectureRoom() {
               ))}
             </div>
           )}
+          {/* The controls are the discoverable half of the gesture: double-click works, but a gesture nobody
+              knows about is not an affordance. They are sized and weighted like real actions rather than
+              hints, because a 10px ghost button next to a 3D scene is invisible in practice. */}
+          <div className="absolute left-2 top-9 flex max-w-[calc(100%-330px)] flex-col gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                disabled={selected?.kind !== "package" || selected.id === undefined || expandState.kind === "loading"}
+                onClick={() => void expand(selected)}
+                title={
+                  selected?.kind === "package"
+                    ? `Open ${selected.title} — its members and the calls between them`
+                    : "Select a district first (click it in the scene), then expand"
+                }
+                className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium leading-none shadow-sm transition-colors ${
+                  selected?.kind === "package"
+                    ? "bg-sky-500 text-slate-950 hover:bg-sky-400"
+                    : "cursor-not-allowed border border-white/10 bg-white/[0.04] text-zinc-500"
+                }`}
+              >
+                <span aria-hidden>⤢</span>
+                <span>Expand{districtLabel(selected) ? `: ${districtLabel(selected)}` : " district"}</span>
+              </button>
+              <button
+                type="button"
+                disabled={!expanded}
+                onClick={collapse}
+                title="Close the district and restore the universe (Esc)"
+                className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium leading-none shadow-sm transition-colors ${
+                  expanded
+                    ? "bg-white/[0.14] text-zinc-100 ring-1 ring-white/25 hover:bg-white/[0.22]"
+                    : "cursor-not-allowed border border-white/10 bg-white/[0.04] text-zinc-500"
+                }`}
+              >
+                <span aria-hidden>⤡</span>
+                <span>Collapse</span>
+                <kbd className="ml-0.5 rounded border border-white/20 px-1 text-[9px] font-normal text-zinc-400">
+                  esc
+                </kbd>
+              </button>
+            </div>
+            {expandState.kind === "idle" && !expanded && (
+              <span className="text-[10px] leading-none text-zinc-500">
+                {selected?.kind === "package"
+                  ? "double-click a district, or select it and press Expand"
+                  : "click a district in the scene to select it"}
+              </span>
+            )}
+            {expandState.kind === "loading" && (
+              <ProgressPanel
+                title={expandState.title}
+                phase={expandState.phase}
+                loaded={expandState.loaded}
+                total={expandState.total}
+              />
+            )}
+            {expandState.kind === "absent" && (
+              <Chip tone="zinc">
+                {expandState.title}: {expandState.reason}
+              </Chip>
+            )}
+            {expandState.kind === "failed" && (
+              <Chip tone="zinc">
+                {expandState.title}: {expandState.reason}
+              </Chip>
+            )}
+            {expanded && (
+              <div className="flex flex-col gap-1 rounded-md border border-sky-500/30 bg-sky-500/[0.08] px-2 py-1.5">
+                <span className="text-[11px] font-medium leading-none text-sky-100">{expanded.title}</span>
+                <span className="text-[10px] leading-relaxed text-sky-200/80">
+                  {expanded.drawn.toLocaleString()} of {expanded.members.toLocaleString()} members drawn
+                  {expanded.truncated ? " (largest by member count; the rest are not drawn)" : ""} ·{" "}
+                  {expanded.edges.toLocaleString()} member edges ({MEMBER_EDGE_KINDS})
+                </span>
+                {!expanded.measuredHeight && (
+                  <span className="text-[10px] leading-relaxed text-amber-200/80">
+                    heights are constant — this bundle reports no per-member complexity
+                  </span>
+                )}
+                <span className="text-[10px] leading-relaxed text-zinc-500">
+                  opened in {(expanded.ms / 1000).toFixed(1)} s · click a member to open it in Understand
+                </span>
+                {memberState.kind === "resolving" && (
+                  <span className="text-[10px] leading-relaxed text-sky-200/80">
+                    resolving {memberState.member.name}…
+                  </span>
+                )}
+                {memberState.kind === "failed" && (
+                  <span className="text-[10px] leading-relaxed text-amber-200/80">
+                    {memberState.member.name}: {memberState.reason}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="absolute bottom-2 right-2 flex gap-1">
             <Toggle on={layer === "packages"} onClick={() => setLayer("packages")}>namespace › package</Toggle>
             <Toggle on={layer === "communities"} onClick={() => setLayer("communities")}>communities</Toggle>
             <Toggle on={edges} onClick={() => setEdges((value) => !value)}>edges {edges ? "on" : "off"}</Toggle>
+            <Toggle on={drift} onClick={() => setDrift((value) => !value)}>drift {drift ? "on" : "off"}</Toggle>
           </div>
         </div>
         <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
@@ -188,6 +495,75 @@ export function ArchitectureRoom() {
       </div>
     </div>
   );
+}
+
+/**
+ * What is happening, with a bar only where a bar can be honest.
+ *
+ * The payload download reports real bytes, so it gets a real percentage. The WASM parse and the expand scan
+ * report nothing, so they get an indeterminate bar and a sentence naming the phase — a moving stripe that
+ * pretends to be 70% done is the lie this panel exists to avoid.
+ */
+function ProgressPanel({
+  title,
+  phase,
+  loaded,
+  total,
+}: {
+  title: string;
+  phase: "members" | "engine" | "parsing" | "expanding";
+  loaded?: number;
+  total?: number;
+}) {
+  const measuring = phase === "engine" && typeof total === "number" && total > 0;
+  const fraction = measuring && typeof loaded === "number" ? Math.min(1, loaded / total!) : null;
+  const mib = (bytes?: number) => (typeof bytes === "number" ? (bytes / (1024 * 1024)).toFixed(1) : null);
+  const label =
+    phase === "members"
+      ? `reading ${title}'s membership…`
+      : phase === "engine"
+        ? fraction === null
+          ? "loading the graph engine…"
+          : `loading the graph engine — ${mib(loaded)} of ${mib(total)} MiB (${Math.round(fraction * 100)}%)`
+        : phase === "parsing"
+          ? "parsing the graph engine (no progress to report — this is the slow step the first time)"
+          : "placing members…";
+
+  return (
+    <div className="w-72 rounded-md border border-sky-500/30 bg-sky-500/[0.08] px-2 py-1.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-medium leading-none text-sky-100">{title}</span>
+        <span className="text-[10px] tabular-nums leading-none text-sky-200/80">
+          {measuring && fraction !== null ? `${Math.round(fraction * 100)}%` : ""}
+        </span>
+      </div>
+      <div
+        className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-white/10"
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={measuring ? 0 : undefined}
+        aria-valuemax={measuring ? 100 : undefined}
+        aria-valuenow={measuring && fraction !== null ? Math.round(fraction * 100) : undefined}
+        aria-valuetext={label}
+      >
+        {fraction !== null ? (
+          <div
+            className="h-full rounded-full bg-sky-400 transition-[width] duration-200"
+            style={{ width: `${Math.max(2, fraction * 100)}%` }}
+          />
+        ) : (
+          <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-400/70" />
+        )}
+      </div>
+      <div className="mt-1 text-[10px] leading-snug text-sky-200/80">{label}</div>
+    </div>
+  );
+}
+
+/** A short name for a district, so the control says what it will open. */
+function districtLabel(entry: HoverEntry | null): string | null {
+  if (!entry || entry.kind !== "package") return null;
+  return entry.title.length > 28 ? `${entry.title.slice(0, 27)}…` : entry.title;
 }
 
 function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {

@@ -132,18 +132,44 @@ pub fn ensure_static_shell(out_dir: &Path, version: BundleVersion) -> Result<(),
     Ok(())
 }
 
-/// True when `index.html` references the entry script naming for this bundle version.
+/// True when the on-disk `index.html` is the *same build* as the embedded one for this version.
+///
+/// Comparing the entry-script naming alone (`index.v2-`) answered "does this look like a v2 shell", not
+/// "is it the v2 shell in this binary". Vite emits content-hashed names, so after any dashboard rebuild the
+/// on-disk copy still carried the old hashes, matched, and `ensure_static_shell` returned early: `rgctl
+/// serve` kept serving the previous build with no message, and the only way to see a rebuild was to delete
+/// `index.html` by hand — which reads as the dashboard being stale or the build being broken.
+///
+/// The entry filename *is* the build identity here, so it is compared exactly.
 fn index_matches_version(out_dir: &Path, version: BundleVersion) -> bool {
-    let Ok(html) = fs::read_to_string(out_dir.join("index.html")) else {
+    let Ok(disk) = fs::read_to_string(out_dir.join("index.html")) else {
         return false;
     };
-    match version {
-        // v2 vite build prefixes the entry as `index.v2-*.js`.
-        BundleVersion::V2 => html.contains("index.v2-") && html.contains("<title>rgctl</title>"),
-        BundleVersion::V1 => {
-            html.contains("rgctl Analysis Dashboard") && !html.contains("index.v2-")
-        }
-    }
+    let Some(want) = embedded_entry_ref(version) else {
+        return false;
+    };
+    entry_ref(&disk, version).as_deref() == Some(want.as_str())
+}
+
+/// The entry script a shell's `index.html` loads, e.g. `assets/index.v2-n9DL2Vn8.js`.
+///
+/// v2's vite build prefixes the entry as `index.v2-*`; v1's is `index-*`, and the two prefixes cannot
+/// match one another because the `.` sits inside the first.
+fn entry_ref(html: &str, version: BundleVersion) -> Option<String> {
+    let marker = match version {
+        BundleVersion::V1 => "assets/index-",
+        BundleVersion::V2 => "assets/index.v2-",
+    };
+    let start = html.find(marker)?;
+    let rest = &html[start..];
+    let end = rest.find('"').or_else(|| rest.find('\''))?;
+    Some(rest[..end].to_string())
+}
+
+/// The same entry filename, read from the bundle compiled into this binary.
+fn embedded_entry_ref(version: BundleVersion) -> Option<String> {
+    let html = embedded_for(version).get_file("index.html")?;
+    entry_ref(html.contents_utf8()?, version)
 }
 
 fn read_manifest_mode(path: &Path) -> Option<String> {
@@ -155,7 +181,11 @@ fn read_manifest_mode(path: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn patch_manifest_bundle_fields(path: &Path, mode: &str, bundle_version: &str) -> Result<(), String> {
+fn patch_manifest_bundle_fields(
+    path: &Path,
+    mode: &str,
+    bundle_version: &str,
+) -> Result<(), String> {
     let bytes = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let mut value: serde_json::Value =
         serde_json::from_str(&bytes).map_err(|e| format!("parse manifest for shell swap: {e}"))?;
@@ -414,6 +444,53 @@ mod tests {
             return;
         }
         assert_paths(&DASHBOARD_DIST);
+    }
+
+    /// A rebuilt dashboard must be swapped in; an *older build of the same version* must not look current.
+    ///
+    /// This is the regression: `index_matches_version` compared the entry-script naming, which a rebuild
+    /// does not change, so `rgctl serve` kept serving the previous build silently.
+    #[test]
+    fn a_stale_build_of_the_same_version_is_not_current() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let out = tmp.path().join("dashboard");
+        fs::create_dir_all(out.join("assets")).expect("assets dir");
+
+        // Build A: an entry filename that is not the embedded build's.
+        fs::write(
+            out.join("index.html"),
+            r#"<!doctype html><html><head><title>rgctl</title></head><body><script type="module" src="/assets/index.v2-STALEBUILD.js"></script></body></html>"#,
+        )
+        .expect("write index");
+        assert!(
+            !index_matches_version(&out, BundleVersion::V2),
+            "a different build of the same version must not count as current"
+        );
+
+        // The embedded build itself: extracted verbatim, so this asserts the identity comparison works.
+        extract_static_assets_from(&out, &tmp.path().join("no-disk"), &DASHBOARD_DIST_V2)
+            .expect("extract embedded v2");
+        assert!(
+            index_matches_version(&out, BundleVersion::V2),
+            "the embedded build must match itself"
+        );
+    }
+
+    #[test]
+    fn entry_ref_reads_the_v2_and_v1_entry_names() {
+        let v2 = r#"<script type="module" crossorigin src="/assets/index.v2-abc123.js"></script>"#;
+        let v1 = r#"<script type="module" src="./assets/index-Xy9.js"></script>"#;
+        assert_eq!(
+            entry_ref(v2, BundleVersion::V2).as_deref(),
+            Some("assets/index.v2-abc123.js")
+        );
+        assert_eq!(
+            entry_ref(v1, BundleVersion::V1).as_deref(),
+            Some("assets/index-Xy9.js")
+        );
+        // The markers must not match each other's build.
+        assert_eq!(entry_ref(v2, BundleVersion::V1), None);
+        assert_eq!(entry_ref("<html></html>", BundleVersion::V2), None);
     }
 
     #[test]
