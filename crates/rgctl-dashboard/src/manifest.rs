@@ -364,6 +364,9 @@ mod tests {
             community_only: false,
             threshold_community_only: COMMUNITY_ONLY_THRESHOLD,
             source_node_count: 100,
+            members_path: None,
+            members_total: None,
+            members_format: None,
             nodes: vec![Metanode {
                 id: 0,
                 label: "com.example".into(),
@@ -374,6 +377,8 @@ mod tests {
                 x: 0.0,
                 y: 0.0,
                 member_indices: vec![0, 1],
+                member_offset: 0,
+                member_count: 2,
                 community_id: Some(0),
             }],
             edges: vec![],

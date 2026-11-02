@@ -484,7 +484,10 @@ mod tests {
             entry_ref(v2, BundleVersion::V2).as_deref(),
             Some("assets/index.v2-abc123.js")
         );
-        assert_eq!(entry_ref(v1, BundleVersion::V1).as_deref(), Some("assets/index-Xy9.js"));
+        assert_eq!(
+            entry_ref(v1, BundleVersion::V1).as_deref(),
+            Some("assets/index-Xy9.js")
+        );
         // The markers must not match each other's build.
         assert_eq!(entry_ref(v2, BundleVersion::V1), None);
         assert_eq!(entry_ref("<html></html>", BundleVersion::V2), None);
