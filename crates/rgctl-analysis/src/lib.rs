@@ -26,6 +26,7 @@ pub mod complexity;
 pub mod cpg;
 pub mod cpg_export;
 pub mod dataflow;
+pub mod dead_code;
 pub mod def_use;
 pub mod dependency;
 pub mod dominance;
@@ -162,6 +163,10 @@ pub use cpg::{
 };
 pub use cpg_export::{CpgExportFormat, CpgExportScope, export_cpg};
 pub use dataflow::{Definition, ReachingDefs, VarId, compute_reaching_definitions};
+pub use dead_code::{
+    DEAD_CODE_SCHEMA_VERSION, DeadCodeAnalyzer, DeadCodeConfidence, DeadCodeFinding, DeadCodeKind,
+    DeadCodeReport, DeadCodeSummary,
+};
 pub use def_use::def_use_handled_kinds;
 pub use def_use::{extract_def_use, extract_used_variables};
 pub use dependency::{CircularDependency, DependencyAnalyzer, ImpactResult};
