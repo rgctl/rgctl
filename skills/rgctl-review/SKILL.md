@@ -40,7 +40,7 @@ Do **not** start `rgctl serve` or `rgctl serve --watch` for this skill.
 
 ### Step 0a: Fast path — uncommitted working-tree edits
 
-Use when the user wants to review **local uncommitted changes** (not a branch-vs-branch compare), `git status --porcelain` shows modified/untracked source, and `.rgctl/graph.snapshot.bin` exists.
+Use when reviewing **local uncommitted changes** (not a branch compare), `git status --porcelain` has a small dirty set ($\le 10$ files), and `.rgctl/graph.snapshot.bin` exists. (On 1K+ file repos with many dirty files, use Step 0b `--base-artifact` instead.)
 
 ```bash
 cd "${REPO_PATH:-.}"
@@ -55,7 +55,7 @@ rgctl -f json review paths --synthetic-head worktree \
   > .rgctl/review-paths.json
 ```
 
-Do **not** create a detached `git worktree` or `.rgctl-base/` on this path. Continue at Step 2 (optional blast) / Step 3 (policy if configured — pass the same `--synthetic-head worktree`).
+Do **not** create a detached `git worktree` or `.rgctl-base/` on this path. Parse `.rgctl/review-paths.json` (`schema_version: 1`): extract `change_summary.call_edges` (`{added, removed, retargeted, unchanged}`), per-symbol `symbols[].path_delta[]` (`{kind, from, to_before, to_after}` or `{from, to, kind}`), and `truncation` flags. Continue at Step 2 (optional blast) / Step 3 (policy if configured — pass the same `--synthetic-head worktree`).
 
 ### Step 0b: Branch / PR comparison (`--base-ref` / `--head-ref`)
 
@@ -114,7 +114,7 @@ rgctl -f json review paths \
   > "${REPO_PATH:-.}/.rgctl/review-paths.json"
 ```
 
-Parse JSON (`schema_version: 1`). Extract `path_delta` (`added` / `removed` / `retargeted`), top symbols, truncation flags. Exit **2** → disambiguate with `--symbol`.
+Parse JSON (`schema_version: 1`). Extract `change_summary.call_edges` (`{added, removed, retargeted, unchanged}`), per-symbol `symbols[].path_delta[]` (`{kind, from, to_before, to_after}` or `{from, to, kind}`), top `symbols[]`, and `truncation` flags. Exit **2** → disambiguate with `--symbol`.
 
 ### Step 2: Blast radius (optional, top-N)
 

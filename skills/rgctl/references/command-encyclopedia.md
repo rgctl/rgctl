@@ -687,7 +687,7 @@ rgctl cpg export --format graphson --output cpg.json [--path-contains src/] \
 **Purpose:** Orchestrated OSV → deps match → sink-first reachability → OpenVEX. Prefer after `discover . --with-cfg`.
 
 **Key fields:** `.deps_verdict`, `.exploitability`, `.openvex.statements[].status`, and `.sink_taint`:
-- `.sink_taint.call_sites[]` — `{caller, target_method, file, line}` (graph + parked external calls)
+- `.sink_taint.call_sites // []` — `{caller, target_method, file, line}` (graph + parked external calls; key omitted when empty)
 - `.sink_taint.paths[]` — `{from, to, hops}` upstream entry → sink summaries
 
 **Pitfalls:** Empty paths with `cfg_available=false` is not PDG proof of safe. Prefer `/rgctl:vuln` for the full triage protocol. Related: `vuln triage`, `deps check`.

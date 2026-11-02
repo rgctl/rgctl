@@ -169,11 +169,13 @@ Concepts often live in package/directory paths or type names, not bare function 
 
 ```bash
 rgctl discover . -l markdown,java
-rgctl -f json find 'Checkout*' --type module --limit 20
-rgctl -f json relations 'Checkout Flow' --edge references --direction out --limit 40
+MOD_ID="$(rgctl -f json find 'Checkout*' --type module --limit 20 | jq -r '.entities[0].id')"
+rgctl -f json relations "$MOD_ID" --edge references --direction out --limit 40
+# When the heading name is unique across modules and link nodes, you can also pass the name directly:
+# rgctl -f json relations 'Checkout Flow' --edge references --direction out --limit 40
 ```
 
-Headings become modules; `references` edges traverse doc→code. Combine `-l markdown,<lang>` for the languages present in the repo.
+Headings become modules; `references` edges traverse doc→code. Passing `.entities[0].id` from `find --type module` avoids `AMBIGUOUS_SYMBOL` when Markdown link nodes share the same text as the heading. Combine `-l markdown,<lang>` for the languages present in the repo.
 
 
 ---
@@ -262,7 +264,7 @@ rgctl discover . --with-cfg --with-security --with-taint \
 
 Choose `--migration-preset` to match user intent. Use `--migration-order priority` when the user wants highest-impact packages first instead of a dependency-safe sequence.
 
-Optional structural probes to explain plan steps (keep `--limit` small): `inventory --by import-prefix --limit 40`, `find --annotation …`, `blast-radius` on candidate packages.
+Optional structural probes to explain plan steps: `inventory --by import-prefix | jq '.items[:40]'`, `find --annotation … --limit 40`, `blast-radius <sym> --depth 2` on candidate packages.
 
 **See:** Migration Planning Guide (product docs; not bundled in this skill pack)
 
@@ -372,14 +374,14 @@ cd "$REPO" && rgctl discover . --with-cfg --with-taint
 - Add **`--with-taint`** when you need discover-time / PDG-backed taint confidence. Without CFG, `cfg_available=false`: deps / package / callers still work, but empty taint paths are **not** PDG proof.
 - If `.rgctl/` exists from a plain `discover` (no CFG), **re-discover with `--with-cfg`** before analyze — do not treat the warm index as sufficient for reachability/VEX.
 
-**Primary pipeline (v0.4.22+):** `vuln analyze` populates `.sink_taint.call_sites[]` (`caller`, `target_method`, `file`, `line`) from the graph **and** `.rgctl/parked_relations.bin`, plus `.sink_taint.paths[]` (`from`, `to`, `hops`). That eliminates the older manual `find --package` / `callers --package` chain unless you are debugging empty sites.
+**Primary pipeline (v0.4.22+):** `vuln analyze` populates `.sink_taint.call_sites` (`caller`, `target_method`, `file`, `line`; omitted when empty, so use `.sink_taint.call_sites // []`) from the graph **and** `.rgctl/parked_relations.bin`, plus `.sink_taint.paths[]` (`from`, `to`, `hops`). That eliminates the older manual `find --package` / `callers --package` chain unless you are debugging empty sites.
 
 | Step | Command |
 |------|---------|
 | P−1 Index | `rgctl discover . --with-cfg` (+ `--with-taint` for PDG confidence) |
 | P0 Normalize OSV | `rgctl -f json vuln triage --osv ./advisory.json` |
 | P1 Deps match | `rgctl -r "$REPO" -f json deps check --osv ./advisory.json` (+ `--include-jars lib`) |
-| P2 Orchestrated VEX | `rgctl -r "$REPO" -f json vuln analyze --osv ./advisory.json --include-jars lib` → read `.sink_taint.call_sites[]` / `.paths[]` |
+| P2 Orchestrated VEX | `rgctl -r "$REPO" -f json vuln analyze --osv ./advisory.json --include-jars lib` → read `(.sink_taint.call_sites // [])[]` / `.paths[]` |
 | P3 Optional deepen | `slice FILE --line N --variable V --with-alias` or `blast-radius` on a hit caller |
 
 **Debug-only (when call_sites empty and you need to probe):**

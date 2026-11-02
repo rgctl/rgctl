@@ -84,7 +84,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | Build semantic index | `semantic index` |
 | Check CFG readiness | `cpg status` |
 | Full staged pipeline | `discover . --full` |
-| Markdown + code context graph | `discover . -l markdown,<lang>` then `find '<Heading>*' --type module` / `relations '<Heading>' --edge references --direction out` |
+| Markdown + code context graph | `discover . -l markdown,<lang>` then `find '<Heading>*' --type module` → `relations <MODULE_ID_OR_HEADING> --edge references --direction out` |
 
 **Common flags:**
 - `--with-cfg` — Pre-build whole-repo CFG/PDG archive (taint/mutations/batch inspect; not required for lazy `slice`)
@@ -111,7 +111,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | Legacy / mainframe sources | add `-l cobol,pli,jcl` (also `apex,pascal,perl,ada,matlab` as needed) |
 | Dashboard view | `discover . --with-dashboard --export-migration-hints` then `serve --open` |
 
-**Supporting probes** (optional): `communities list` (`member_count > 1`) → `blast-radius` on boundary candidates. Bound with `--limit` / `--depth`.
+**Supporting probes** (optional): `communities list` (`member_count > 1`) → `blast-radius` on boundary candidates. Bound `blast-radius` with `--depth 2`/`3` and filter `communities list` with `jq` (neither accepts `--limit`).
 
 **See:** Migration Planning Guide (product docs; not bundled in this skill pack), migrate workflow in [references/workflows.md](references/workflows.md)
 
@@ -141,9 +141,9 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | Subsystem ownership | `semantic query "X" --scope community` (prefer named clusters) |
 | Refresh community labels | `communities label --write` |
 | Community census | `inventory --by community` |
-| Markdown heading → code | `find 'Checkout*' --type module`; `relations 'Checkout Flow' --edge references --direction out` |
+| Markdown heading → code | `find 'Checkout*' --type module`; `relations <MODULE_ID_OR_HEADING> --edge references --direction out` (use `.entities[0].id` from `find` when link nodes share the heading name) |
 
-**Migration:** prefer **`/rgctl:migrate`** or `--export-migration-hints` → `migration_plan.json` v2 `.steps[]`. Optional probes: `communities list` / `blast-radius` (keep `--limit` small).
+**Migration:** prefer **`/rgctl:migrate`** or `--export-migration-hints` → `migration_plan.json` v2 `.steps[]`. Optional probes: `communities list` (filter via `jq`) / `blast-radius` (keep `--depth` small).
 
 **Complexity honesty:** exact name = hash index; prefix/`*mid*`/`--scope` may scan keys/columns until better indexes land. Module re-index is still a strong speed lever. Annotation **arguments** (e.g. `@Path("/x")`) need `--show-attributes` when `annotation_args.json` is present.
 **See:** [Command Encyclopedia](references/command-encyclopedia.md) (find/callers/relations/inventory/status), Semantic Search Guide (product docs; not bundled in this skill pack)
@@ -152,7 +152,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 
 | User Intent | CLI Command |
 |-------------|-------------|
-| Blast radius | `blast-radius <Symbol> --depth N` (prefer `--depth 2`/`3` + `--limit`) |
+| Blast radius | `blast-radius <Symbol> --depth N` (prefer `--depth 2`/`3`; bound output with `jq`) |
 | **Review a PR / branch** (report + verdict) | **`/rgctl:review`** → skill `rgctl-review` (writes `REVIEW_REPORT.md`) |
 | Review uncommitted local edits | `review paths --synthetic-head worktree` (via **`/rgctl:review`** Step 0a) |
 | Call paths before/after (CLI only) | `review paths --base-ref ORIGIN --head-ref HEAD` |

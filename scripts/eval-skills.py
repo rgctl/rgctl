@@ -22,7 +22,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,6 +33,21 @@ SLASH_SKILL_MAX_TOKENS = 2200
 SLASH_SKILL_MAX_BYTES = 9 * 1024
 
 SLASH_SKILLS = ("rgctl-review", "rgctl-vuln", "rgctl-migrate")
+
+RG_EXCLUDE_GLOBS = (
+    "--glob",
+    "!.rgctl/**",
+    "--glob",
+    "!.rgctl-base/**",
+    "--glob",
+    "!**/bower_components/**",
+    "--glob",
+    "!**/node_modules/**",
+    "--glob",
+    "!**/target/**",
+    "--glob",
+    "!**/build/**",
+)
 
 
 @dataclass
@@ -56,6 +71,8 @@ class TrajectoryResult:
     tool_turns: int
     prompt_tokens_1turn: int
     prompt_tokens_5turn_cached: int
+    net_tokens_1turn: int = 0
+    net_tokens_5turn_cached: int = 0
     detail: str = ""
     error: str = ""
 
@@ -77,6 +94,8 @@ def estimate_tokens(text: str | bytes) -> int:
     else:
         s = text
         raw = text.encode("utf-8")
+    if not raw:
+        return 0
     try:
         import tiktoken  # type: ignore
 
@@ -89,10 +108,6 @@ def estimate_tokens(text: str | bytes) -> int:
     except ImportError:
         pass
     return max(1, len(raw) // 4)
-
-
-def read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
 
 
 def audit_budgets(skills_root: Path) -> list[BudgetResult]:
@@ -172,12 +187,21 @@ def run_cmd(
 
 
 def prompt_tax(skill_paths: list[Path], turns: int = 1) -> int:
-    """Approximate prompt tokens: skill text once + (turns-1) cached reuse tax = 0."""
+    """Amortized per-task prompt token cost.
+
+    - 1-turn cold session: pays 100% of static skill tokens.
+    - N-turn cached session: turn 1 pays 100%, turns 2..N pay 10% cache-read weight
+      (average per task across 5 tasks = (1.0 + 4 * 0.1) / 5 = 0.28x).
+    """
     total = sum(estimate_tokens(p.read_bytes()) for p in skill_paths if p.is_file())
     if turns <= 1:
         return total
-    # Cached multi-turn: count full prompt once; subsequent turns pay ~0 for static skill body.
-    return total
+    effective_total = total * (1.0 + 0.1 * (turns - 1))
+    return int(round(effective_total / float(turns)))
+
+
+def rel_corpus(corpus: Path) -> str:
+    return str(corpus.relative_to(REPO_ROOT) if corpus.is_relative_to(REPO_ROOT) else corpus)
 
 
 def ensure_index(rgctl: Path, corpus: Path, with_cfg: bool = False) -> bool:
@@ -194,200 +218,553 @@ def ensure_index(rgctl: Path, corpus: Path, with_cfg: bool = False) -> bool:
     return snap.is_file()
 
 
+def make_result(
+    task: str,
+    corpus: Path,
+    arm: str,
+    ok: bool,
+    wall_ms: float,
+    stdout_tokens: int,
+    tool_turns: int,
+    skill_paths: list[Path],
+    detail: str = "",
+    error: str = "",
+) -> TrajectoryResult:
+    p1 = prompt_tax(skill_paths, 1) if arm == "with_skill" else 0
+    p5 = prompt_tax(skill_paths, 5) if arm == "with_skill" else 0
+    return TrajectoryResult(
+        task=task,
+        corpus=rel_corpus(corpus),
+        arm=arm,
+        ok=ok,
+        wall_ms=wall_ms,
+        stdout_tokens_est=stdout_tokens,
+        tool_turns=tool_turns,
+        prompt_tokens_1turn=p1,
+        prompt_tokens_5turn_cached=p5,
+        net_tokens_1turn=p1 + stdout_tokens,
+        net_tokens_5turn_cached=p5 + stdout_tokens,
+        detail=detail,
+        error=error,
+    )
+
+
+def run_no_skill_rg_and_read(
+    task: str,
+    corpus: Path,
+    pattern: str,
+    max_files: int = 5,
+    max_bytes_per_file: int = 24000,
+    extra_files: Optional[list[Path]] = None,
+) -> TrajectoryResult:
+    rg = find_rg()
+    if not rg:
+        return make_result(task, corpus, "no_skill", False, 0.0, 0, 0, [], error="rg not found")
+    t0 = time.perf_counter()
+    code_rg, out_rg, err_rg, _ = run_cmd(
+        [
+            rg,
+            "-n",
+            *RG_EXCLUDE_GLOBS,
+            "--type-add",
+            "src:*.{rs,java,go,py,js,ts,xml,gradle}",
+            "-t",
+            "src",
+            pattern,
+            ".",
+        ],
+        corpus,
+        timeout=60.0,
+    )
+    seen: set[Path] = set()
+    read_bytes = 0
+    for fp in extra_files or []:
+        if fp.is_file() and fp not in seen:
+            seen.add(fp)
+            read_bytes += len(fp.read_bytes()[:max_bytes_per_file])
+    for line in out_rg.decode(errors="replace").splitlines()[:100]:
+        if ":" not in line:
+            continue
+        rel = line.split(":", 1)[0]
+        fp = (corpus / rel).resolve()
+        if fp.is_file() and fp not in seen:
+            seen.add(fp)
+            read_bytes += len(fp.read_bytes()[:max_bytes_per_file])
+            if len(seen) >= max_files:
+                break
+    ms_ns = (time.perf_counter() - t0) * 1000.0
+    # Bound rg stdout to top 80 matching lines (realistic agent tool truncation) + files read
+    rg_lines = b"\n".join(out_rg.splitlines()[:80])
+    stdout_tok = estimate_tokens(rg_lines) + (read_bytes // 4)
+    return make_result(
+        task=task,
+        corpus=corpus,
+        arm="no_skill",
+        ok=code_rg in (0, 1),
+        wall_ms=ms_ns,
+        stdout_tokens=stdout_tok,
+        tool_turns=1 + len(seen),
+        skill_paths=[],
+        detail=f"rg+{len(seen)} files ({read_bytes} B)",
+        error="" if code_rg in (0, 1) else err_rg.decode(errors="replace")[:200],
+    )
+
+
+def pick_blast_target(rgctl: Path, corpus: Path) -> tuple[list[str], str]:
+    """Select a realistic symbol for blast-radius on coolstore or large repo."""
+    if "coolstore" in corpus.name:
+        return (["priceShoppingCart", "--depth", "2"], "priceShoppingCart")
+    if "kafka" in corpus.name:
+        return (["nextInt", "--class", "MockableRandom", "--depth", "2"], "nextInt")
+    # Fallback: pick top function from metrics --pagerank or find --type function
+    code, stdout, _, _ = run_cmd([str(rgctl), "-f", "json", "metrics", "--pagerank"], corpus)
+    if code == 0:
+        try:
+            top = json.loads(stdout).get("pagerank", {}).get("top", [])
+            if top:
+                node_id = top[0].get("node")
+                name = top[0].get("name") or "main"
+                if node_id:
+                    return ([node_id, "--depth", "2"], name)
+        except json.JSONDecodeError:
+            pass
+    code, stdout, _, _ = run_cmd(
+        [str(rgctl), "-f", "json", "find", "--type", "function", "--limit", "20"], corpus
+    )
+    if code == 0:
+        try:
+            entities = json.loads(stdout).get("entities", [])
+            for ent in entities:
+                name = ent.get("name", "")
+                if name and not name.startswith("anonymous@"):
+                    return ([ent.get("id", name), "--depth", "2"], name)
+        except json.JSONDecodeError:
+            pass
+    return (["main", "--depth", "2"], "main")
+
+
 def trajectory_blast(
     rgctl: Path, corpus: Path, skill_paths: list[Path]
 ) -> list[TrajectoryResult]:
-    out: list[TrajectoryResult] = []
-    # With-skill
     if not ensure_index(rgctl, corpus):
         return [
-            TrajectoryResult(
-                "Blast Radius",
-                str(corpus),
+            make_result(
+                "Blast Radius", corpus, "with_skill", False, 0, 0, 0, skill_paths, error="discover failed"
+            )
+        ]
+    blast_args, sym_name = pick_blast_target(rgctl, corpus)
+    code, stdout, err, ms = run_cmd(
+        [str(rgctl), "-f", "json", "blast-radius", *blast_args],
+        corpus,
+    )
+    # Apply the skill's jq projection (score, counts, top 20 direct_callers & impact_zone)
+    projected = stdout
+    if code == 0:
+        try:
+            doc = json.loads(stdout)
+            topo = doc.get("topology", {})
+            compact = {
+                "schema_version": doc.get("schema_version"),
+                "target": doc.get("target"),
+                "metrics": doc.get("metrics"),
+                "direct_callers": (topo.get("direct_callers") or [])[:20],
+                "impact_zone_sample": (topo.get("impact_zone") or [])[:20],
+                "gatekeeping": doc.get("gatekeeping"),
+            }
+            projected = json.dumps(compact).encode("utf-8")
+        except json.JSONDecodeError:
+            pass
+    with_res = make_result(
+        task="Blast Radius",
+        corpus=corpus,
+        arm="with_skill",
+        ok=code == 0,
+        wall_ms=ms,
+        stdout_tokens=estimate_tokens(projected),
+        tool_turns=1,
+        skill_paths=skill_paths,
+        detail=f"symbol={sym_name}",
+        error="" if code == 0 else err.decode(errors="replace")[:200],
+    )
+    no_res = run_no_skill_rg_and_read("Blast Radius", corpus, sym_name, max_files=6)
+    return [with_res, no_res]
+
+
+def trajectory_vuln(
+    rgctl: Path, corpus: Path, skill_paths: list[Path], osv_fixture: Path
+) -> list[TrajectoryResult]:
+    """Run the 3-step /rgctl:vuln trajectory (triage -> deps check -> analyze)."""
+    if not ensure_index(rgctl, corpus):
+        return [
+            make_result(
+                "OSV Reachability /rgctl:vuln",
+                corpus,
                 "with_skill",
                 False,
                 0,
                 0,
                 0,
-                0,
-                0,
+                skill_paths,
                 error="discover failed",
             )
         ]
-    # Pick a symbol via find
-    code, stdout, _, ms_find = run_cmd(
-        [str(rgctl), "-f", "json", "find", "--type", "function", "--limit", "5"],
+    jars_args = ["--include-jars", "lib"] if (corpus / "lib").is_dir() else []
+    total_ms = 0.0
+    total_stdout_tok = 0
+    ok = True
+    err_msg = ""
+
+    # Step 1: vuln triage
+    c1, out1, e1, ms1 = run_cmd(
+        [str(rgctl), "-f", "json", "vuln", "triage", "--osv", str(osv_fixture)], corpus
+    )
+    total_ms += ms1
+    total_stdout_tok += estimate_tokens(out1)
+    if c1 != 0:
+        ok = False
+        err_msg = e1.decode(errors="replace")[:200]
+
+    # Step 2: deps check
+    c2, out2, e2, ms2 = run_cmd(
+        [str(rgctl), "-f", "json", "deps", "check", "--osv", str(osv_fixture), *jars_args], corpus
+    )
+    total_ms += ms2
+    total_stdout_tok += estimate_tokens(out2)
+    if c2 != 0 and ok:
+        ok = False
+        err_msg = e2.decode(errors="replace")[:200]
+
+    # Step 3: vuln analyze (projecting the fields prescribed in skills/rgctl-vuln/SKILL.md)
+    c3, out3, e3, ms3 = run_cmd(
+        [str(rgctl), "-f", "json", "vuln", "analyze", "--osv", str(osv_fixture), *jars_args],
         corpus,
     )
-    symbol = "main"
+    total_ms += ms3
+    if c3 == 0:
+        try:
+            doc = json.loads(out3)
+            st = doc.get("sink_taint") or {}
+            projected = json.dumps(
+                {
+                    "deps_verdict": doc.get("deps_verdict"),
+                    "exploitability": doc.get("exploitability"),
+                    "openvex_status": (doc.get("openvex", {}).get("statements") or [{}])[0].get(
+                        "status"
+                    ),
+                    "call_sites": st.get("call_sites") or [],
+                    "paths": st.get("paths") or [],
+                }
+            ).encode("utf-8")
+            total_stdout_tok += estimate_tokens(projected)
+        except json.JSONDecodeError:
+            total_stdout_tok += estimate_tokens(out3)
+    else:
+        ok = False
+        err_msg = e3.decode(errors="replace")[:200]
+
+    with_res = make_result(
+        task="OSV Reachability /rgctl:vuln",
+        corpus=corpus,
+        arm="with_skill",
+        ok=ok,
+        wall_ms=total_ms,
+        stdout_tokens=total_stdout_tok,
+        tool_turns=3,
+        skill_paths=skill_paths,
+        detail="triage+deps+analyze",
+        error=err_msg,
+    )
+    no_res = run_no_skill_rg_and_read(
+        "OSV Reachability /rgctl:vuln",
+        corpus,
+        "ObjectMapper|readValue|jackson-databind|jsonToOrder",
+        max_files=5,
+    )
+    return [with_res, no_res]
+
+
+def trajectory_review(
+    rgctl: Path, corpus: Path, skill_paths: list[Path]
+) -> list[TrajectoryResult]:
+    """Run /rgctl:review: Step 0a (--synthetic-head worktree) on small dirty sets,
+    or Step 0b/1 (--base-artifact) on 1K+ corpora with large dirty trees."""
+    if not ensure_index(rgctl, corpus):
+        return [
+            make_result(
+                "Uncommitted Review /rgctl:review",
+                corpus,
+                "with_skill",
+                False,
+                0,
+                0,
+                0,
+                skill_paths,
+                error="discover failed",
+            )
+        ]
+    # Check git dirty file count via git status --porcelain
+    git_dirty = 0
+    c_git, out_git, _, ms_git = run_cmd(["git", "status", "--porcelain"], corpus)
+    if c_git == 0:
+        git_dirty = len([ln for ln in out_git.splitlines() if ln.strip()])
+
+    if "coolstore" in corpus.name and git_dirty <= 10:
+        review_argv = [
+            str(rgctl),
+            "-f",
+            "json",
+            "review",
+            "paths",
+            "--synthetic-head",
+            "worktree",
+            "--upstream-depth",
+            "2",
+            "--downstream-depth",
+            "1",
+            "--fanout",
+            "5",
+            "--max-symbols",
+            "25",
+        ]
+        detail_label = "review paths --synthetic-head worktree"
+        turns = 1
+        extra_ms = 0.0
+    else:
+        review_argv = [
+            str(rgctl),
+            "-f",
+            "json",
+            "review",
+            "paths",
+            "--base-artifact",
+            str(corpus),
+            "--base-ref",
+            "HEAD",
+            "--head-ref",
+            "HEAD",
+            "--upstream-depth",
+            "2",
+            "--downstream-depth",
+            "1",
+            "--fanout",
+            "5",
+            "--max-symbols",
+            "25",
+        ]
+        detail_label = f"review paths --base-artifact (git_dirty={git_dirty})"
+        turns = 1
+        extra_ms = ms_git
+
+    code, stdout, err, ms = run_cmd(review_argv, corpus, timeout=180.0)
+    with_res = make_result(
+        task="Uncommitted Review /rgctl:review",
+        corpus=corpus,
+        arm="with_skill",
+        ok=code == 0,
+        wall_ms=ms + extra_ms,
+        stdout_tokens=estimate_tokens(stdout),
+        tool_turns=turns,
+        skill_paths=skill_paths,
+        detail=detail_label,
+        error="" if code == 0 else err.decode(errors="replace")[:200],
+    )
+    no_res = run_no_skill_rg_and_read(
+        "Uncommitted Review /rgctl:review",
+        corpus,
+        "priceShoppingCart|GroupCoordinatorService",
+        max_files=5,
+    )
+    return [with_res, no_res]
+
+
+def trajectory_slice(
+    rgctl: Path, corpus: Path, skill_paths: list[Path]
+) -> list[TrajectoryResult]:
+    """Run lazy single-function slice with --with-alias."""
+    if not ensure_index(rgctl, corpus):
+        return [
+            make_result(
+                "Program Slicing", corpus, "with_skill", False, 0, 0, 0, skill_paths, error="discover failed"
+            )
+        ]
+    if "coolstore" in corpus.name:
+        rel_file = "src/main/java/com/redhat/coolstore/service/ShoppingCartService.java"
+        line_no = "68"
+        var_name = "sc"
+    else:
+        rel_file = "group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java"
+        line_no = "302"
+        var_name = "runtime"
+    target_fp = corpus / rel_file
+    if not target_fp.is_file():
+        # Generic fallback: cpg status
+        code, stdout, err, ms = run_cmd([str(rgctl), "-f", "json", "cpg", "status"], corpus)
+        with_res = make_result(
+            "Program Slicing",
+            corpus,
+            "with_skill",
+            code == 0,
+            ms,
+            estimate_tokens(stdout),
+            1,
+            skill_paths,
+            detail="cpg status fallback",
+            error="" if code == 0 else err.decode(errors="replace")[:200],
+        )
+        no_res = run_no_skill_rg_and_read("Program Slicing", corpus, "class ", max_files=3)
+        return [with_res, no_res]
+
+    code, stdout, err, ms = run_cmd(
+        [
+            str(rgctl),
+            "-f",
+            "json",
+            "slice",
+            rel_file,
+            "--line",
+            line_no,
+            "--variable",
+            var_name,
+            "--with-alias",
+        ],
+        corpus,
+        timeout=180.0,
+    )
+    with_res = make_result(
+        task="Program Slicing",
+        corpus=corpus,
+        arm="with_skill",
+        ok=code == 0,
+        wall_ms=ms,
+        stdout_tokens=estimate_tokens(stdout),
+        tool_turns=1,
+        skill_paths=skill_paths,
+        detail=f"{Path(rel_file).name}:{line_no} ({var_name})",
+        error="" if code == 0 else err.decode(errors="replace")[:200],
+    )
+    # No-skill baseline: must read the entire enclosing source file + grep for variable/method
+    no_res = run_no_skill_rg_and_read(
+        "Program Slicing",
+        corpus,
+        var_name,
+        max_files=2,
+        max_bytes_per_file=150000,
+        extra_files=[target_fp],
+    )
+    return [with_res, no_res]
+
+
+def trajectory_migrate(
+    rgctl: Path, corpus: Path, skill_paths: list[Path]
+) -> list[TrajectoryResult]:
+    """Run /rgctl:migrate Step 2-3: filtered communities list (member_count > 1, top 20)."""
+    if not ensure_index(rgctl, corpus):
+        return [
+            make_result(
+                "Migration Planning /rgctl:migrate",
+                corpus,
+                "with_skill",
+                False,
+                0,
+                0,
+                0,
+                skill_paths,
+                error="discover failed",
+            )
+        ]
+    code, stdout, err, ms = run_cmd(
+        [str(rgctl), "-f", "json", "communities", "list"],
+        corpus,
+        timeout=180.0,
+    )
+    projected = stdout
+    plan_steps_count = 0
+    plan_fp = corpus / ".rgctl" / "migration_plan.json"
+    if plan_fp.is_file():
+        try:
+            plan_doc = json.loads(plan_fp.read_bytes())
+            steps = [s for s in (plan_doc.get("steps") or []) if s.get("label") != "root"][:20]
+            plan_steps_count = len(steps)
+        except json.JSONDecodeError:
+            pass
     if code == 0:
         try:
             doc = json.loads(stdout)
-            hits = doc.get("results") or doc.get("symbols") or doc.get("hits") or []
-            if hits and isinstance(hits, list):
-                first = hits[0]
-                symbol = first.get("name") or first.get("qualified_name") or symbol
+            multi = [
+                c for c in (doc.get("communities") or []) if (c.get("member_count") or 0) > 1
+            ][:20]
+            compact = {
+                "schema_version": doc.get("schema_version"),
+                "modularity": doc.get("modularity"),
+                "top_multi_member_communities": multi,
+                "plan_top_steps_sampled": plan_steps_count,
+            }
+            projected = json.dumps(compact).encode("utf-8")
         except json.JSONDecodeError:
             pass
-    code, stdout, err, ms = run_cmd(
-        [str(rgctl), "-f", "json", "blast-radius", symbol, "--depth", "2", "--limit", "20"],
+    with_res = make_result(
+        task="Migration Planning /rgctl:migrate",
+        corpus=corpus,
+        arm="with_skill",
+        ok=code == 0,
+        wall_ms=ms,
+        stdout_tokens=estimate_tokens(projected),
+        tool_turns=2,
+        skill_paths=skill_paths,
+        detail="communities (member_count>1)[:20]",
+        error="" if code == 0 else err.decode(errors="replace")[:200],
+    )
+    no_res = run_no_skill_rg_and_read(
+        "Migration Planning /rgctl:migrate",
         corpus,
+        "^package ",
+        max_files=8,
     )
-    p1 = prompt_tax(skill_paths, 1)
-    p5 = prompt_tax(skill_paths, 5)
-    out.append(
-        TrajectoryResult(
-            task="Blast Radius",
-            corpus=str(corpus.relative_to(REPO_ROOT) if corpus.is_relative_to(REPO_ROOT) else corpus),
-            arm="with_skill",
-            ok=code == 0,
-            wall_ms=ms + ms_find,
-            stdout_tokens_est=estimate_tokens(stdout),
-            tool_turns=2,
-            prompt_tokens_1turn=p1,
-            prompt_tokens_5turn_cached=p5,
-            detail=f"symbol={symbol}",
-            error="" if code == 0 else err.decode(errors="replace")[:200],
-        )
-    )
-    # No-skill baseline: rg + read a few matching files
-    rg = find_rg()
-    if rg:
-        t0 = time.perf_counter()
-        code_rg, out_rg, err_rg, _ = run_cmd(
-            [rg, "-n", "--type-add", "src:*.{rs,java,go,py,js,ts}", "-t", "src", symbol],
-            corpus,
-            timeout=60.0,
-        )
-        # Read up to 3 hit files
-        files_read = 0
-        read_bytes = 0
-        for line in out_rg.decode(errors="replace").splitlines()[:30]:
-            if ":" not in line:
-                continue
-            rel = line.split(":", 1)[0]
-            fp = corpus / rel
-            if fp.is_file():
-                data = fp.read_bytes()[:8000]
-                read_bytes += len(data)
-                files_read += 1
-                if files_read >= 3:
-                    break
-        ms_ns = (time.perf_counter() - t0) * 1000.0
-        out.append(
-            TrajectoryResult(
-                task="Blast Radius",
-                corpus=str(corpus.relative_to(REPO_ROOT) if corpus.is_relative_to(REPO_ROOT) else corpus),
-                arm="no_skill",
-                ok=True,
-                wall_ms=ms_ns,
-                stdout_tokens_est=estimate_tokens(out_rg) + estimate_tokens(b"x" * read_bytes),
-                tool_turns=1 + files_read,
-                prompt_tokens_1turn=0,
-                prompt_tokens_5turn_cached=0,
-                detail=f"rg+{files_read} files",
-                error="" if code_rg in (0, 1) else err_rg.decode(errors="replace")[:200],
-            )
-        )
-    else:
-        out.append(
-            TrajectoryResult(
-                task="Blast Radius",
-                corpus=str(corpus.relative_to(REPO_ROOT) if corpus.is_relative_to(REPO_ROOT) else corpus),
-                arm="no_skill",
-                ok=False,
-                wall_ms=0,
-                stdout_tokens_est=0,
-                tool_turns=0,
-                prompt_tokens_1turn=0,
-                prompt_tokens_5turn_cached=0,
-                error="rg not found",
-            )
-        )
-    return out
+    return [with_res, no_res]
 
 
-def trajectory_simple(
-    task: str,
-    rgctl: Path,
-    corpus: Path,
-    skill_paths: list[Path],
-    with_argv: list[str],
-    no_skill_pattern: str,
-    need_cfg: bool = False,
-    tool_turns: int = 1,
+def trajectory_hotspots(
+    rgctl: Path, corpus: Path, skill_paths: list[Path]
 ) -> list[TrajectoryResult]:
-    out: list[TrajectoryResult] = []
-    rel = str(corpus.relative_to(REPO_ROOT) if corpus.is_relative_to(REPO_ROOT) else corpus)
-    if not ensure_index(rgctl, corpus, with_cfg=need_cfg):
+    """Run metrics --pagerank (resolved names + paths in 1 call)."""
+    if not ensure_index(rgctl, corpus):
         return [
-            TrajectoryResult(
-                task, rel, "with_skill", False, 0, 0, 0, 0, 0, error="discover failed"
+            make_result(
+                "Cross-File Callers/Hotspots",
+                corpus,
+                "with_skill",
+                False,
+                0,
+                0,
+                0,
+                skill_paths,
+                error="discover failed",
             )
         ]
-    code, stdout, err, ms = run_cmd([str(rgctl), *with_argv], corpus, timeout=180.0)
-    p1 = prompt_tax(skill_paths, 1)
-    p5 = prompt_tax(skill_paths, 5)
-    out.append(
-        TrajectoryResult(
-            task=task,
-            corpus=rel,
-            arm="with_skill",
-            ok=code == 0,
-            wall_ms=ms,
-            stdout_tokens_est=estimate_tokens(stdout),
-            tool_turns=tool_turns,
-            prompt_tokens_1turn=p1,
-            prompt_tokens_5turn_cached=p5,
-            error="" if code == 0 else err.decode(errors="replace")[:200],
-        )
+    code, stdout, err, ms = run_cmd(
+        [str(rgctl), "-f", "json", "metrics", "--pagerank"],
+        corpus,
+        timeout=180.0,
     )
-    rg = find_rg()
-    if rg:
-        t0 = time.perf_counter()
-        code_rg, out_rg, err_rg, _ = run_cmd(
-            [rg, "-n", no_skill_pattern, str(corpus)],
-            REPO_ROOT,
-            timeout=60.0,
-        )
-        files_read = 0
-        read_bytes = 0
-        for line in out_rg.decode(errors="replace").splitlines()[:40]:
-            # rg path:line:… when searching absolute; handle both
-            parts = line.split(":", 2)
-            if len(parts) < 2:
-                continue
-            candidate = Path(parts[0])
-            if not candidate.is_file():
-                candidate = corpus / parts[0]
-            if candidate.is_file():
-                read_bytes += len(candidate.read_bytes()[:8000])
-                files_read += 1
-                if files_read >= 3:
-                    break
-        ms_ns = (time.perf_counter() - t0) * 1000.0
-        out.append(
-            TrajectoryResult(
-                task=task,
-                corpus=rel,
-                arm="no_skill",
-                ok=True,
-                wall_ms=ms_ns,
-                stdout_tokens_est=estimate_tokens(out_rg) + (read_bytes // 4),
-                tool_turns=1 + files_read,
-                prompt_tokens_1turn=0,
-                prompt_tokens_5turn_cached=0,
-                detail=f"rg+{files_read} files",
-                error="" if code_rg in (0, 1) else err_rg.decode(errors="replace")[:200],
-            )
-        )
-    else:
-        out.append(
-            TrajectoryResult(
-                task, rel, "no_skill", False, 0, 0, 0, 0, 0, error="rg not found"
-            )
-        )
-    return out
+    with_res = make_result(
+        task="Cross-File Callers/Hotspots",
+        corpus=corpus,
+        arm="with_skill",
+        ok=code == 0,
+        wall_ms=ms,
+        stdout_tokens=estimate_tokens(stdout),
+        tool_turns=1,
+        skill_paths=skill_paths,
+        detail="metrics --pagerank",
+        error="" if code == 0 else err.decode(errors="replace")[:200],
+    )
+    no_res = run_no_skill_rg_and_read(
+        "Cross-File Callers/Hotspots",
+        corpus,
+        "public class |public interface ",
+        max_files=8,
+    )
+    return [with_res, no_res]
 
 
 def run_offline(args: argparse.Namespace) -> Report:
@@ -425,75 +802,24 @@ def run_offline(args: argparse.Namespace) -> Report:
     for corpus in corpora:
         # 1 Blast Radius
         report.trajectories.extend(trajectory_blast(rgctl, corpus, [meta_skill]))
-        # 2 OSV Reachability (/rgctl:vuln) — only if fixture exists
+        # 2 OSV Reachability (/rgctl:vuln)
         if osv_fixture.is_file():
             report.trajectories.extend(
-                trajectory_simple(
-                    "OSV Reachability /rgctl:vuln",
-                    rgctl,
-                    corpus,
-                    [vuln_skill],
-                    ["-f", "json", "vuln", "triage", "--osv", str(osv_fixture)],
-                    "ObjectMapper|readValue|jackson",
-                    need_cfg=False,
-                    tool_turns=1,
-                )
+                trajectory_vuln(rgctl, corpus, [vuln_skill], osv_fixture)
             )
-        # 3 Uncommitted Review — synthetic-head may fail without dirty tree; still measure CLI
-        report.trajectories.extend(
-            trajectory_simple(
-                "Uncommitted Review /rgctl:review",
-                rgctl,
-                corpus,
-                [review_skill],
-                ["-f", "json", "status"],
-                "TODO|FIXME",
-                tool_turns=1,
-            )
-        )
-        # 4 Program Slicing — status/cpg as cheap proxy when no known file:line
-        report.trajectories.extend(
-            trajectory_simple(
-                "Program Slicing",
-                rgctl,
-                corpus,
-                [meta_skill],
-                ["-f", "json", "cpg", "status"],
-                "function|class ",
-                tool_turns=1,
-            )
-        )
-        # 5 Migration Planning
-        report.trajectories.extend(
-            trajectory_simple(
-                "Migration Planning /rgctl:migrate",
-                rgctl,
-                corpus,
-                [migrate_skill],
-                ["-f", "json", "communities", "list"],
-                "package |module ",
-                tool_turns=1,
-            )
-        )
+        # 3 Uncommitted Review (/rgctl:review)
+        report.trajectories.extend(trajectory_review(rgctl, corpus, [review_skill]))
+        # 4 Program Slicing
+        report.trajectories.extend(trajectory_slice(rgctl, corpus, [meta_skill]))
+        # 5 Migration Planning (/rgctl:migrate)
+        report.trajectories.extend(trajectory_migrate(rgctl, corpus, [migrate_skill]))
         # 6 Cross-File Callers / Hotspots
-        report.trajectories.extend(
-            trajectory_simple(
-                "Cross-File Callers/Hotspots",
-                rgctl,
-                corpus,
-                [meta_skill],
-                ["-f", "json", "metrics", "--pagerank"],
-                "public |fn ",
-                tool_turns=1,
-            )
-        )
+        report.trajectories.extend(trajectory_hotspots(rgctl, corpus, [meta_skill]))
 
-    # Trajectories are informational on missing corpora / empty graphs; budget is the hard gate.
-    traj_hard_fail = any(
-        t.arm == "with_skill" and t.task == "Blast Radius" and not t.ok and "discover failed" in t.error
-        for t in report.trajectories
-    )
-    report.passed = budget_ok and not traj_hard_fail
+    with_skill_failures = [
+        t for t in report.trajectories if t.arm == "with_skill" and not t.ok
+    ]
+    report.passed = budget_ok and len(with_skill_failures) == 0
     return report
 
 
@@ -560,15 +886,15 @@ def emit_markdown(report: Report) -> str:
             "",
             "## Trajectories",
             "",
-            "| Task | Corpus | Arm | OK | Wall ms | Stdout tok | Turns | Prompt 1-turn | Prompt 5-turn cached | Detail |",
-            "|------|--------|-----|:--:|--------:|-----------:|------:|--------------:|---------------------:|--------|",
+            "| Task | Corpus | Arm | OK | Wall ms | Stdout tok | Turns | Prompt 1-turn | Prompt 5-turn cached | Net 5-turn tok | Detail |",
+            "|------|--------|-----|:--:|--------:|-----------:|------:|--------------:|---------------------:|---------------:|--------|",
         ]
         for t in report.trajectories:
             lines.append(
                 f"| {t.task} | `{t.corpus}` | {t.arm} | {'✓' if t.ok else '✗'} | "
                 f"{t.wall_ms:.0f} | {t.stdout_tokens_est} | {t.tool_turns} | "
                 f"{t.prompt_tokens_1turn} | {t.prompt_tokens_5turn_cached} | "
-                f"{t.detail or t.error} |"
+                f"{t.net_tokens_5turn_cached} | {t.detail or t.error} |"
             )
     if report.agent:
         lines += ["", "## Agent A/B", "", "```json", json.dumps(report.agent, indent=2), "```"]

@@ -12,7 +12,7 @@ rgctl-managed: true
 
 End-to-end OSV/CVE reachability and OpenVEX triage via **`vuln triage`**, **`deps check`**, and **`vuln analyze`**. No forge posts; no `serve` / `--watch`.
 
-Bound stdout on large repos: keep `--limit` / `--depth` small on follow-up probes; project JSON with `jq` (do not paste full analyze envelopes into chat).
+Bound stdout on large repos: keep `--depth` small on follow-up `blast-radius` probes and `--limit` on `find`/`callers`; project JSON with `jq` (do not paste full analyze envelopes into chat).
 
 ## When to Use
 
@@ -77,17 +77,17 @@ Read (prefer `jq` projections):
 | `.deps_verdict` | Deps-layer match |
 | `.exploitability` | `not_affected` \| `not_exploitable` \| `exploitable` \| `under_investigation` |
 | `.openvex.statements[0].status` | OpenVEX status |
-| `.sink_taint.call_sites[]` | `{caller, target_method, file, line}` from graph + parked relations |
+| `.sink_taint.call_sites // []` | `{caller, target_method, file, line}` from graph + parked relations (key omitted when empty) |
 | `.sink_taint.paths[]` | `{from, to, hops}` upstream entry → sink |
 
-`vuln analyze` already links parked external calls into `.sink_taint.call_sites` / `.paths` — do **not** re-run a full `find --package` / `callers --package` chain unless debugging empty sites.
+`vuln analyze` already links parked external calls into `.sink_taint.call_sites` / `.paths` (note: `call_sites` uses `skip_serializing_if` and is omitted when 0 sites match — use `.sink_taint.call_sites // []` in `jq`) — do **not** re-run a full `find --package` / `callers --package` chain unless debugging empty sites.
 
 ### Step 4: Optional slice + report
 
 On a hit call site (`file` + `line`), optional verification:
 
 ```bash
-rgctl -f json slice "<file>" --line <line> --variable <var> --with-alias --limit 40
+rgctl -f json slice "<file>" --line <line> --variable <var> --with-alias
 ```
 
 Then emit a **CVE Reachability & OpenVEX** report:
@@ -103,7 +103,7 @@ Then emit a **CVE Reachability & OpenVEX** report:
 ## Follow-ups
 ```
 
-Cite exact `file:line` from `.sink_taint.call_sites[]`. Empty paths with `cfg_available=false` is **not** PDG proof of safe.
+Cite exact `file:line` from `(.sink_taint.call_sites // [])[]`. When `call_sites` is absent/empty, state honestly that 0 direct sink call sites were found. Empty paths with `cfg_available=false` is **not** PDG proof of safe.
 
 ## Gotchas
 

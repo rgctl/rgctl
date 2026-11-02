@@ -12,7 +12,7 @@ rgctl-managed: true
 
 Dependency-ordered Strangler-Fig migration planning via **`--export-migration-hints`**, **`communities list`**, and **`blast-radius`**. No forge posts; no `serve` / `--watch` required (optional dashboard is out of scope for this skill).
 
-Bound stdout: filter plan steps with `jq`; use `--depth 3` and `--limit` on blast-radius / communities probes.
+Bound stdout: filter plan steps and communities with `jq '.[0:20]'`; use `--depth 2` or `--depth 3` on `blast-radius` probes (neither `blast-radius` nor `communities list` accepts `--limit`).
 
 ## When to Use
 
@@ -63,7 +63,7 @@ rgctl -f json communities list \
   | jq '[.communities[] | select(.member_count > 1)] | .[0:20]'
 
 # For top extraction candidates / shared boundary symbols:
-rgctl -f json blast-radius "<boundary_symbol>" --depth 3 --limit 20
+rgctl -f json blast-radius "<boundary_symbol>" --depth 3
 ```
 
 Prefer multi-member clusters (`member_count > 1`). Skip unlabeled singletons when labeling ownership (`select(.name | startswith("Community ") | not)` on named overlays).
