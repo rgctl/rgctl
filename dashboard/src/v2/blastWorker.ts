@@ -9,6 +9,8 @@ import init, { EngineContext } from "../../wasm/rgctl_wasm.js";
 
 export type BlastWorkerIn =
   | { type: "init"; requestId: number }
+  /** Expand a package's member indices into a subgraph: nodes plus the edges among them. */
+  | { type: "expand"; requestId: number; indices: Uint32Array; typeMask: number }
   | { type: "blast_by_uuid"; requestId: number; uuid: string; maxDepth: number }
   | { type: "index_of_uuid"; requestId: number; uuid: string };
 
@@ -34,6 +36,21 @@ export type BlastWorkerOut =
       };
     }
   | { type: "index_result"; requestId: number; index: number | null }
+  | {
+      type: "expand_result";
+      requestId: number;
+      payload: {
+        nodes: Array<{
+          index: number;
+          name: string;
+          node_type: number;
+          node_type_name: string;
+          complexity: number;
+          file_path?: string | null;
+        }>;
+        edges: Array<{ source: number; target: number; edge_type: number }>;
+      };
+    }
   | { type: "error"; requestId?: number; message: string };
 
 function bundleDataUrl(filename: string): URL {
@@ -84,6 +101,24 @@ self.onmessage = async (ev: MessageEvent<BlastWorkerIn>) => {
           ? P
           : never;
         const out: BlastWorkerOut = { type: "blast_result", requestId: msg.requestId, payload };
+        self.postMessage(out);
+        break;
+      }
+      case "expand": {
+        const eng = await ensureEngine();
+        const json = eng.expandIndices(msg.indices, msg.typeMask >>> 0);
+        const payload = JSON.parse(json) as {
+          nodes: Array<{
+            index: number;
+            name: string;
+            node_type: number;
+            node_type_name: string;
+            complexity: number;
+            file_path?: string | null;
+          }>;
+          edges: Array<{ source: number; target: number; edge_type: number }>;
+        };
+        const out: BlastWorkerOut = { type: "expand_result", requestId: msg.requestId, payload };
         self.postMessage(out);
         break;
       }

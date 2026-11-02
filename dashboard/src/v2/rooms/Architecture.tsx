@@ -9,10 +9,12 @@
  * It renders without a Focus and without a lens: a package is a set of functions, not a function, so there is
  * nothing here to carry in or out of another room.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Panel, Unavailable, Chip } from "../shell";
 import { channelReport, loadArchitecture, scalesFor } from "../architecture";
-import type { ArchitectureState, ArchitectureView } from "../architectureTypes";
+import { expandMembers, MEMBER_EDGE_KINDS } from "../expandEngine";
+import { loadMemberIndices } from "../metagraphMembers";
+import type { ArchitectureState, ArchitectureView, Metagraph } from "../architectureTypes";
 import type { HoverEntry, UniverseLayer, UniverseScene } from "../universe/UniverseScene";
 
 type Loaded = { kind: "loading" } | ArchitectureState;
@@ -23,6 +25,29 @@ export function ArchitectureRoom() {
   const [edges, setEdges] = useState(true);
   const [sharedOnly, setSharedOnly] = useState(false);
   const [hover, setHover] = useState<HoverEntry | null>(null);
+  /** The clicked object. Hover is a preview; expanding acts on a selection, so a control can carry it. */
+  const [selected, setSelected] = useState<HoverEntry | null>(null);
+  /**
+   * The district currently opened, and how its members were obtained.
+   *
+   * `drawn` is separate from `members` on purpose: a district with more members than `EXPLODE_MAX` must say
+   * how many it drew and by what rule, and a truthy "expanded" flag with no number is how a truncation
+   * becomes invisible.
+   */
+  const [expanded, setExpanded] = useState<{
+    id: number;
+    title: string;
+    members: number;
+    drawn: number;
+    edges: number;
+    truncated: boolean;
+  } | null>(null);
+  const [expandState, setExpandState] = useState<
+    | { kind: "idle" }
+    | { kind: "loading"; title: string }
+    | { kind: "absent"; title: string; reason: string }
+    | { kind: "failed"; title: string; reason: string }
+  >({ kind: "idle" });
   const [sceneFailed, setSceneFailed] = useState<string | null>(null);
 
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -39,6 +64,96 @@ export function ArchitectureRoom() {
   }, []);
 
   const view = state.kind === "ready" || state.kind === "no-communities" ? state.view : null;
+  // The metagraph is what membership is addressed against; `view` carries the derived packages only.
+  const metagraph: Metagraph | null =
+    state.kind === "ready" || state.kind === "no-communities" ? (state.metagraph ?? null) : null;
+  // The scene is created once and holds its callbacks, so it must call through a ref to reach the current
+  // closure — otherwise a district opened after a re-render would use a stale metagraph or a stale ceiling.
+  const expandRef = useRef<(entry: HoverEntry | null) => Promise<void>>(async () => {});
+
+  /**
+   * How many members a district will draw.
+   *
+   * The largest district on the measured corpus holds 15 686 members; drawing them all is a frame-rate cliff
+   * and an unreadable cloud, so the ceiling binds — and when it does, the view says so rather than quietly
+   * showing a sample.
+   */
+  const EXPLODE_MAX = 1500;
+
+  const collapse = useCallback(() => {
+    sceneRef.current?.collapse();
+    setExpanded(null);
+    setExpandState({ kind: "idle" });
+  }, []);
+
+  const expand = useCallback(
+    async (entry: HoverEntry | null) => {
+      if (!entry || entry.id === undefined) return;
+      if (entry.kind !== "package") {
+        setExpandState({
+          kind: "absent",
+          title: entry.title,
+          reason:
+            entry.kind === "volume"
+              ? "A namespace group is derived from package labels, not an exported object — it has no members of its own. Open a package inside it."
+              : "This object has no member list in the bundle.",
+        });
+        return;
+      }
+      if (!metagraph) return;
+      setExpandState({ kind: "loading", title: entry.title });
+      sceneRef.current?.collapse();
+      setExpanded(null);
+
+      const members = await loadMemberIndices(metagraph, entry.id);
+      if (members.kind !== "ready") {
+        setExpandState({
+          kind: members.kind === "loading" ? "loading" : members.kind === "absent" ? "absent" : "failed",
+          title: entry.title,
+          reason: "reason" in members ? members.reason : "…",
+        });
+        return;
+      }
+
+      const total = members.indices.length;
+      const truncated = total > EXPLODE_MAX;
+      const kept = truncated ? members.indices.slice(0, EXPLODE_MAX) : members.indices;
+
+      try {
+        const subgraph = await expandMembers(kept, 0);
+        const result = sceneRef.current?.expand(
+          entry.id,
+          subgraph.nodes.map((n) => ({ index: n.index, complexity: n.complexity })),
+          subgraph.edges,
+        );
+        setExpanded({
+          id: entry.id,
+          title: entry.title,
+          members: total,
+          drawn: result?.drawn ?? 0,
+          edges: result?.edges ?? 0,
+          truncated,
+        });
+        setExpandState({ kind: "idle" });
+      } catch (error) {
+        setExpandState({ kind: "failed", title: entry.title, reason: (error as Error).message });
+      }
+    },
+    [metagraph],
+  );
+
+  useEffect(() => {
+    expandRef.current = expand;
+  }, [expand]);
+
+  // Escape closes the district: the universal "go back a level", and cheaper than aiming at a solid.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && sceneRef.current?.isExpanded) collapse();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [collapse]);
 
   // The canvas is a canvas: jsdom has no WebGL, and neither does a browser with it switched off. Both get a
   // stated absence instead of a blank pane, and everything textual above still renders.
@@ -72,6 +187,8 @@ export function ArchitectureRoom() {
         return;
       }
       scene.onHoverChange(setHover);
+      scene.onPickChange(setSelected);
+      scene.onExplode((entry) => void expandRef.current(entry));
       scene.attachPointer(host);
       const scales = scalesFor(view);
       scene.setEdges(
@@ -169,6 +286,58 @@ export function ArchitectureRoom() {
               ))}
             </div>
           )}
+          {/* The labelled control is the discoverable half of the gesture: double-click works, but a
+              gesture nobody knows about is not an affordance. It states what it will open and how many
+              members that is, and the truncation line is next to it rather than buried in a tooltip. */}
+          <div className="absolute left-2 top-9 flex max-w-[calc(100%-320px)] flex-col gap-1">
+            <div className="flex flex-wrap items-center gap-1">
+              <button
+                type="button"
+                disabled={selected?.kind !== "package" || selected.id === undefined}
+                onClick={() => void expand(selected)}
+                className={`rounded border px-1.5 py-0.5 text-[10px] leading-none ${
+                  selected?.kind === "package"
+                    ? "border-sky-500/40 bg-sky-500/12 text-sky-200 hover:bg-sky-500/20"
+                    : "border-white/10 text-zinc-600"
+                }`}
+              >
+                expand{districtLabel(selected) ? ` ${districtLabel(selected)}` : ""}
+              </button>
+              <button
+                type="button"
+                disabled={!expanded}
+                onClick={collapse}
+                className={`rounded border px-1.5 py-0.5 text-[10px] leading-none ${
+                  expanded
+                    ? "border-white/20 text-zinc-200 hover:bg-white/[0.06]"
+                    : "border-white/10 text-zinc-600"
+                }`}
+              >
+                collapse (esc)
+              </button>
+              <span className="text-[10px] leading-none text-zinc-500">
+                {selected?.kind === "package"
+                  ? "double-click a district, or select it and expand"
+                  : "select a district to open it"}
+              </span>
+            </div>
+            {expandState.kind === "loading" && (
+              <Chip tone="zinc">reading members of {expandState.title}…</Chip>
+            )}
+            {expandState.kind === "absent" && (
+              <Chip tone="zinc">{expandState.title}: {expandState.reason}</Chip>
+            )}
+            {expandState.kind === "failed" && (
+              <Chip tone="zinc">{expandState.title}: {expandState.reason}</Chip>
+            )}
+            {expanded && (
+              <Chip tone="blue">
+                {expanded.title} · {expanded.drawn.toLocaleString()} of {expanded.members.toLocaleString()} members
+                {expanded.truncated ? " (largest by member count — the rest are not drawn)" : ""} ·{" "}
+                {expanded.edges.toLocaleString()} member edges ({MEMBER_EDGE_KINDS})
+              </Chip>
+            )}
+          </div>
           <div className="absolute bottom-2 right-2 flex gap-1">
             <Toggle on={layer === "packages"} onClick={() => setLayer("packages")}>namespace › package</Toggle>
             <Toggle on={layer === "communities"} onClick={() => setLayer("communities")}>communities</Toggle>
@@ -188,6 +357,12 @@ export function ArchitectureRoom() {
       </div>
     </div>
   );
+}
+
+/** A short name for a district, so the control says what it will open. */
+function districtLabel(entry: HoverEntry | null): string | null {
+  if (!entry || entry.kind !== "package") return null;
+  return entry.title.length > 28 ? `${entry.title.slice(0, 27)}…` : entry.title;
 }
 
 function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
