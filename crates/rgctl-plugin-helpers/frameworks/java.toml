@@ -63,3 +63,36 @@ annotations = ["ReflectiveAccess", "RegisterForReflection"]
 call_callees = ["forName", "getDeclaredMethod", "getDeclaredField", "getMethod", "getField", "newInstance", "invoke"]
 tags = ["role:reflection"]
 vocab = "reflection reflect dynamic class introspection invoke jvm"
+
+[[rules]]
+id = "jakarta.ee.di"
+framework = "jakarta-ee"
+kind = "FieldAnnotationInject"
+annotations = ["Inject", "EJB", "Resource", "PersistenceContext"]
+tags = ["role:di-consumer"]
+vocab = "dependency injection inject ejb resource persistence jakarta ee cdi"
+target_vocab = "dependency injection provider service injectable bean"
+
+[[rules]]
+id = "jakarta.ee.routes"
+framework = "jakarta-ee"
+kind = "RouteDecorator"
+class_prefix_annotations = ["Path", "WebServlet", "MessageDriven"]
+method_annotations = [
+  { name = "GET", method = "GET" },
+  { name = "POST", method = "POST" },
+  { name = "PUT", method = "PUT" },
+  { name = "DELETE", method = "DELETE" },
+  { name = "PATCH", method = "PATCH" },
+  { name = "Path", method = "GET" },
+]
+tags = ["role:endpoint", "protocol:http"]
+vocab = "endpoint endpoints route routes http rest servlet jaxrs jakarta ee mdb"
+
+[[rules]]
+id = "spring.messaging.entrypoints"
+framework = "spring"
+kind = "ConceptTagger"
+annotations = ["KafkaListener", "JmsListener", "RabbitListener", "Scheduled"]
+tags = ["role:entrypoint", "protocol:messaging"]
+vocab = "kafka jms rabbitmq listener scheduled messaging spring entrypoint consumer"

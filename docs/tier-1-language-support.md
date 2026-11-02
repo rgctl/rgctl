@@ -126,20 +126,24 @@ Required for high-quality `cpg mutations` / typed field writes. Reference: Java 
 | Python | `__init__` → `Class.<init>`; harvest `self.x` fields | Annotations when present |
 | C | No language ctors; struct fields + typed params required | Strong on structs; `file_stem::name` FQN; normalized `#include` Import graph |
 
-**Java extract honesty (java-extract-gaps + java-grammar-remainder + remainder gates):**
+**Java extract honesty (java-extract-gaps + java-grammar-remainder + A+ deep-analysis gates):**
 
-- Annotation types are `:Annotation` nodes (not `:Interface`). Usages emit `AnnotatedWith`; no classpath/FQN resolution beyond imports/package best-effort.
+- Annotation types are `:Annotation` nodes (not `:Interface`). Usages emit `AnnotatedWith` with import/`package`-resolved `to_qualified_hint` / `metadata.fqn` when available (`javax.*` vs `jakarta.*` distinguishable from file imports — still no classpath model).
 - Records are `Class` with `metadata.is_record`; compact ctors and `<clinit>` / `<initblock>N` are CFG entry points.
 - Annotation elements are Functions with `is_annotation_element`; interface `constant_declaration` becomes fields.
-- Generics/`throws` are symbol metadata (`type_params`, `throws`); not TypeParameter nodes. Structured `find` JSON can surface allowlisted properties where indexed (`type_params`, `throws`, `is_lambda`, `is_external_stub`, …).
+- Generics/`throws` are symbol metadata (`type_params`, `throws`); not TypeParameter nodes. Structured `find` JSON can surface allowlisted properties where indexed (`type_params`, `throws`, `is_lambda`, `is_external_stub`, …). Field/return types also get best-effort `field_type_fqns` / `return_type_fqn` from imports + same-file types.
+- Single-pass `Calls` resolve receivers from params, locals (`var` + `new Type`), try-with-resources, enhanced-for, catch, `instanceof`/switch pattern bindings, fields (`this.field.method`), static type receivers, and static imports — still **no** full points-to or interprocedural inference.
+- Lombok: `@Getter`/`@Setter`/`@Data`/`@Value`/`@Builder`/`@*ArgsConstructor`/`@Slf4j` (and kin) synthesize Functions/fields with `metadata.lombok_synthesized` when not explicitly declared — annotation-driven only; no delombok AST rewrite.
 - Lambdas are synthetic Functions (`$lambda$N`, `is_lambda`); direct CFG `$lambda$N` lookup is file-global (prefer enclosing-method CFG).
 - Anonymous classes use synthetic `Outer.$AnonymousN` owners.
 - Expression refs: field reads → `References`; array `new` → `Instantiates`; `.class` → `References`. No full points-to.
 - Type-use annotations (`annotated_type`) and declaration-site parameter annotations attach to the **owning method/constructor** (parameter encodings are not graph nodes). Field type-use attaches to the field symbol.
 - Unresolved Instantiates / DependsOn / Uses / AnnotatedWith / References / Calls targets become deduplicated **external stub** nodes (`is_external_stub`, file `<external>`) so graph edges survive in `relations`; stubs are placeholders, not a JDK model.
-- Pattern-matching (`record_pattern` / `type_pattern`) not first-class symbols.
-- No full reflection / retention-policy analysis.
+- Pattern bindings (`type_pattern` / `record_pattern`) feed local-type recovery for field-write / CFG; they are not first-class graph symbols.
+- CFG/def-use lower `synchronized`, `assert`, switch rules with `when` guards, resources, and `update_expression` — not a full Java 21 verifier.
+- No full reflection / retention-policy analysis. Enterprise taint/framework catalogs cover common Jakarta EE / Spring Boot 3 / messaging entrypoints and JNDI/deser/SpEL/SQL sinks (rules, not a closed-world JDK).
 - Langfeature gates: `cargo test --test java_langfeatures` (fixture `tests/fixtures/java/langfeatures`).
+- AST coverage: ~82/142 non-Skip handlers in `java-ast-coverage.json` (Symbol/Relation/CfgStatement/AstSkeleton); literals remain `Literal`.
 
 **Rust extract honesty (rust-extraction-depth):**
 

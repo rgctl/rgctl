@@ -15,46 +15,62 @@
 )]
 
 use crate::HandlerMask;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 /// Records hit counts per grammar `kind_id` (and optionally by kind name).
 #[derive(Debug, Default)]
 pub struct AstCoverageTracker {
     language_id: String,
-    /// kind_id → hit count
+    /// Active kind_id → hit count
     hits: Mutex<HashMap<u16, u64>>,
+    /// Passive / Unimplemented kind_id → hit count for empirical blind-spot ranking
+    skip_hits: Mutex<BTreeMap<u16, u64>>,
     /// Expected active kinds: name → kind_id (from manifest + live grammar)
     expected: HashMap<String, u16>,
+    /// Fast lookup set of expected active kind_ids
+    expected_ids: HashSet<u16>,
+    /// Passive / Unimplemented kind_id → grammar node kind name
+    passive_by_id: HashMap<u16, String>,
 }
 
 impl AstCoverageTracker {
     /// Build a tracker for `language_id` from coverage-manifest handler map + live grammar.
     ///
     /// Only non-`Skip` / non-`Literal` handlers are required to be exercised.
+    /// `Skip` and `Unimplemented` kinds are recorded in `skip_hits` for hotspot telemetry.
     pub fn from_manifest_handlers(
         language_id: impl Into<String>,
         handlers: &HashMap<String, String>,
         lang: &tree_sitter::Language,
     ) -> Self {
         let mut expected = HashMap::new();
+        let mut expected_ids = HashSet::new();
+        let mut passive_by_id = HashMap::new();
         for (name, label) in handlers {
             let Some(mask) = HandlerMask::from_coverage_label(label) else {
                 continue;
             };
-            if mask.is_passive() {
-                continue;
-            }
             let kind_id = lang.id_for_node_kind(name, true);
             if kind_id == 0 {
                 continue;
             }
+            if mask.is_passive() {
+                if matches!(label.as_str(), "Skip" | "Unimplemented") {
+                    passive_by_id.insert(kind_id, name.clone());
+                }
+                continue;
+            }
             expected.insert(name.clone(), kind_id);
+            expected_ids.insert(kind_id);
         }
         Self {
             language_id: language_id.into(),
             hits: Mutex::new(HashMap::new()),
+            skip_hits: Mutex::new(BTreeMap::new()),
             expected,
+            expected_ids,
+            passive_by_id,
         }
     }
 
@@ -76,13 +92,58 @@ impl AstCoverageTracker {
         Ok(Self::from_manifest_handlers(language_id, &handlers, lang))
     }
 
-    /// Record that `kind_id` produced a Symbol / Relation / CFG / skeleton result.
+    /// Record that `kind_id` was visited during AST extraction.
+    ///
+    /// Active kinds increment `hits`; tracked `Skip`/`Unimplemented` kinds increment `skip_hits`.
     pub fn hit(&self, kind_id: u16) {
         if kind_id == 0 {
             return;
         }
+        if !self.expected_ids.contains(&kind_id) && self.passive_by_id.contains_key(&kind_id) {
+            self.record_skip_hit(kind_id);
+            return;
+        }
         let mut guard = self.hits.lock().expect("AstCoverageTracker poisoned");
         *guard.entry(kind_id).or_insert(0) += 1;
+    }
+
+    /// Record a hit on a passive (`Skip` / `Unimplemented`) AST node kind for blind-spot ranking.
+    pub fn record_skip_hit(&self, kind_id: u16) {
+        if kind_id == 0 {
+            return;
+        }
+        let mut guard = self.skip_hits.lock().expect("AstCoverageTracker poisoned");
+        *guard.entry(kind_id).or_insert(0) += 1;
+    }
+
+    /// Hit count for a passive (`Skip` / `Unimplemented`) kind id.
+    pub fn skip_hit_count(&self, kind_id: u16) -> u64 {
+        self.skip_hits
+            .lock()
+            .expect("AstCoverageTracker poisoned")
+            .get(&kind_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Return the top `top_n` highest-frequency unhandled (`Skip` / `Unimplemented`) AST node kinds.
+    pub fn unhandled_hotspots(&self, top_n: usize) -> Vec<(String, u64)> {
+        let guard = self.skip_hits.lock().expect("AstCoverageTracker poisoned");
+        let mut items: Vec<(String, u64)> = guard
+            .iter()
+            .filter(|(_, count)| **count > 0)
+            .map(|(id, count)| {
+                let name = self
+                    .passive_by_id
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("kind_{id}"));
+                (name, *count)
+            })
+            .collect();
+        items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        items.truncate(top_n);
+        items
     }
 
     /// Alias for [`Self::hit`] (OpenSpec / depth-suite naming).
@@ -326,5 +387,30 @@ mod tests {
         // Only require function_item (present); struct_item absent from present set.
         assert!(tracker.assert_present_kinds_exercised([fn_id]).is_ok());
         assert!(tracker.assert_all_exercised().is_err());
+    }
+
+    #[test]
+    fn unhandled_hotspots_ranks_skip_and_unimplemented_hits() {
+        let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+        let mut handlers = HashMap::new();
+        handlers.insert("function_item".into(), "Symbol".into());
+        handlers.insert("macro_definition".into(), "Unimplemented".into());
+        handlers.insert("trait_item".into(), "Skip".into());
+        handlers.insert("block".into(), "SkipWrapper".into());
+        let tracker = AstCoverageTracker::from_manifest_handlers("rust", &handlers, &lang);
+        let macro_id = lang.id_for_node_kind("macro_definition", true);
+        let trait_id = lang.id_for_node_kind("trait_item", true);
+        tracker.hit(macro_id);
+        tracker.hit(macro_id);
+        tracker.hit(macro_id);
+        tracker.hit(trait_id);
+        let hotspots = tracker.unhandled_hotspots(5);
+        assert_eq!(
+            hotspots,
+            vec![
+                ("macro_definition".to_string(), 3),
+                ("trait_item".to_string(), 1),
+            ]
+        );
     }
 }

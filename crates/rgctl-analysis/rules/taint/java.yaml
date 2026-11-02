@@ -13,6 +13,14 @@ rules:
     - getHeader(
     - getQueryString(
     - request.get
+    - HttpServletRequest
+    - ServerRequest.queryParam
+    - '@RequestParam'
+    - '@PathVariable'
+    - '@RequestBody'
+    - '@RequestHeader'
+    - '@QueryParam'
+    - '@PathParam'
 - id: java-src-file
   role: source
   kind: FileInput
@@ -44,6 +52,24 @@ rules:
     values:
     - ResultSet
     - executeQuery
+- id: java-src-jndi
+  role: source
+  kind: NetworkInput
+  match:
+    type: any_substring
+    values:
+    - InitialContext.lookup
+    - Naming.lookup
+    - JndiTemplate.lookup
+- id: java-src-deser
+  role: source
+  kind: NetworkInput
+  match:
+    type: any_substring
+    values:
+    - ObjectInputStream.readObject
+    - XMLDecoder.readObject
+    - Yaml.load
 - id: java-sink-sql
   role: sink
   kind: SqlQuery
@@ -56,6 +82,42 @@ rules:
     - executeQuery
     - executeUpdate
     - .createQuery(
+    - createNativeQuery
+    - EntityManager.createQuery
+    - JdbcTemplate.query
+    - JdbcTemplate.execute
+    - JdbcClient.sql
+- id: java-sink-jndi
+  role: sink
+  kind: CodeEval
+  cwe: CWE-917
+  match:
+    type: any_substring
+    values:
+    - InitialContext.lookup
+    - Naming.lookup
+    - JndiTemplate.lookup
+- id: java-sink-deser
+  role: sink
+  kind: CodeEval
+  cwe: CWE-502
+  match:
+    type: any_substring
+    values:
+    - ObjectInputStream.readObject
+    - XMLDecoder.readObject
+    - Yaml.load
+- id: java-sink-spel
+  role: sink
+  kind: CodeEval
+  cwe: CWE-917
+  match:
+    type: any_substring
+    values:
+    - SpelExpressionParser
+    - parseExpression
+    - ExpressionFactory.createValueExpression
+    - createValueExpression
 - id: java-sink-shell
   role: sink
   kind: ShellCommand

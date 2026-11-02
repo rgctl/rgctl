@@ -118,6 +118,7 @@ pub use centrality_approx::{
 pub use cfg::{
     BasicBlock, BlockId, CfgEdge, CfgEdgeType, ControlFlowGraph, DefVar, Statement, StatementKind,
 };
+pub use cfg_builder::cfg_handled_kinds;
 pub use cfg_builder::{
     FunctionLocation, ParsedSourceFile, build_cfg_for_byte_range, build_cfg_for_function,
     build_cfg_for_function_in_tree, index_function_locations, seek_function_node,
@@ -161,6 +162,7 @@ pub use cpg::{
 };
 pub use cpg_export::{CpgExportFormat, CpgExportScope, export_cpg};
 pub use dataflow::{Definition, ReachingDefs, VarId, compute_reaching_definitions};
+pub use def_use::def_use_handled_kinds;
 pub use def_use::{extract_def_use, extract_used_variables};
 pub use dependency::{CircularDependency, DependencyAnalyzer, ImpactResult};
 pub use dominance::{DominatorTree, verify_idom_acyclic};

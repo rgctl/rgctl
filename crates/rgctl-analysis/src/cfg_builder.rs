@@ -15,6 +15,178 @@ use tree_sitter::{Node, Tree};
 /// Maximum AST recursion depth for CFG expression walks (matches C++ extraction cap).
 const AST_WALK_MAX_DEPTH: usize = 2048;
 
+/// Common CFG statement and control-flow AST node kinds recognized by [`CfgBuilder`].
+const CFG_HANDLED_KINDS: &[&str] = &[
+    "assert_statement",
+    "assignment",
+    "assignment_expression",
+    "assignment_statement",
+    "async_block",
+    "attribute",
+    "await_expression",
+    "begin_block",
+    "binary_expression",
+    "block",
+    "body_statement",
+    "break",
+    "break_expression",
+    "break_statement",
+    "call",
+    "case",
+    "case_clause",
+    "case_statement",
+    "catch_clause",
+    "closure_expression",
+    "co_await_expression",
+    "co_return_statement",
+    "co_yield_expression",
+    "co_yield_statement",
+    "compound_assignment_expr",
+    "compound_statement",
+    "conditional",
+    "conditional_access_expression",
+    "conditional_expression",
+    "const_declaration",
+    "continue_expression",
+    "continue_statement",
+    "control_transfer_statement",
+    "dec_statement",
+    "declaration",
+    "defer_statement",
+    "dictionary_comprehension",
+    "do_block",
+    "do_statement",
+    "do_while_statement",
+    "elif_clause",
+    "else_clause",
+    "elsif",
+    "empty_labeled_statement",
+    "enhanced_for_statement",
+    "ensure",
+    "except_clause",
+    "expression",
+    "expression_statement",
+    "expression_switch_statement",
+    "fallthrough_statement",
+    "finally_clause",
+    "for",
+    "for_clause",
+    "for_expression",
+    "for_in_expression",
+    "for_in_statement",
+    "for_range_loop",
+    "for_statement",
+    "foreach_statement",
+    "generator_expression",
+    "go_statement",
+    "goto_statement",
+    "guard",
+    "guard_statement",
+    "if",
+    "if_expression",
+    "if_modifier",
+    "if_statement",
+    "inc_statement",
+    "init_statement",
+    "instanceof_expression",
+    "labeled_statement",
+    "lambda_expression",
+    "let_chain",
+    "let_condition",
+    "let_declaration",
+    "let_statement",
+    "list_comprehension",
+    "local_declaration_statement",
+    "local_function_statement",
+    "local_variable_declaration",
+    "lock_statement",
+    "loop_expression",
+    "macro_invocation",
+    "match_arm",
+    "match_block",
+    "match_expression",
+    "match_statement",
+    "next",
+    "postfix_unary_expression",
+    "prefix_unary_expression",
+    "preproc_elif",
+    "preproc_else",
+    "preproc_if",
+    "preproc_ifdef",
+    "property_declaration",
+    "range_clause",
+    "repeat_statement",
+    "repeat_while_statement",
+    "rescue",
+    "rescue_modifier",
+    "resource",
+    "resource_specification",
+    "return",
+    "return_expression",
+    "return_statement",
+    "select_statement",
+    "selector",
+    "send_statement",
+    "set_comprehension",
+    "short_var_declaration",
+    "statement_block",
+    "statements",
+    "switch_body",
+    "switch_block",
+    "switch_block_statement_group",
+    "switch_case",
+    "switch_default",
+    "switch_entry",
+    "switch_expression",
+    "switch_label",
+    "switch_rule",
+    "switch_section",
+    "switch_statement",
+    "synchronized_statement",
+    "ternary_expression",
+    "then",
+    "throw_expression",
+    "throw_statement",
+    "try_expression",
+    "try_statement",
+    "try_with_resources_statement",
+    "type_switch_statement",
+    "unless",
+    "unless_modifier",
+    "unless_statement",
+    "unsafe_block",
+    "until",
+    "until_modifier",
+    "update_expression",
+    "using_statement",
+    "var_declaration",
+    "variable_declaration",
+    "when",
+    "when_entry",
+    "when_expression",
+    "while",
+    "while_expression",
+    "while_modifier",
+    "while_statement",
+    "with_statement",
+    "yield",
+    "yield_expression",
+    "yield_statement",
+];
+
+/// Return the slice of Tree-sitter AST node kinds handled by [`CfgBuilder`] for `language_id`.
+///
+/// Used by Tier-1 AST coverage parity gates (`check_plugin_manifest_sync` and
+/// `tier1_parity_gate`) to verify that `"CfgStatement"` entries in `{id}-ast-coverage.json`
+/// correspond to real CFG builder or plugin handlers.
+pub fn cfg_handled_kinds(language_id: &str) -> &'static [&'static str] {
+    if crate::language_profile::profile_for_language(language_id).is_some_and(|p| p.cfg_enabled) {
+        CFG_HANDLED_KINDS
+    } else {
+        &[]
+    }
+}
+
 /// Build a CFG for a named function in source text.
 pub fn build_cfg_for_function(
     language: &str,
@@ -984,7 +1156,7 @@ impl<'a> CfgBuilder<'a> {
 
             // C# resource / sync sugar → finally-style cleanup
             "using_statement" => self.visit_using_statement(node, source),
-            "lock_statement" => self.visit_lock_statement(node, source),
+            "lock_statement" | "synchronized_statement" => self.visit_lock_statement(node, source),
 
             // Null-conditional / coalescing (also visited from expr walk)
             "conditional_access_expression" => self.visit_conditional_access(node, source),
@@ -4030,13 +4202,58 @@ impl<'a> CfgBuilder<'a> {
                 }
             }
             "switch_block_statement_group" | "switch_rule" => {
+                // Java 21: `case Type x when cond -> body` — lower `guard` / `when`.
+                let mut guard_expr: Option<Node> = None;
                 let mut c = case.walk();
                 for child in case.children(&mut c) {
                     if !child.is_named() {
                         continue;
                     }
-                    // Skip labels (`case 1:` / `default:`).
                     if child.kind() == "switch_label" {
+                        let mut lc = child.walk();
+                        for lc_child in child.children(&mut lc) {
+                            if matches!(lc_child.kind(), "guard" | "when_clause") {
+                                guard_expr = lc_child
+                                    .child_by_field_name("condition")
+                                    .or_else(|| lc_child.child_by_field_name("value"))
+                                    .or_else(|| lc_child.named_child(0))
+                                    .or(Some(lc_child));
+                            }
+                            // Bare `when` keyword sibling: next named expr is the guard.
+                            if lc_child.kind() == "when" {
+                                // handled via guard node usually
+                            }
+                        }
+                        // Also: `guard` may be a direct child of switch_rule.
+                        continue;
+                    }
+                    if matches!(child.kind(), "guard" | "when_clause") {
+                        guard_expr = child
+                            .child_by_field_name("condition")
+                            .or_else(|| child.child_by_field_name("value"))
+                            .or_else(|| child.named_child(0))
+                            .or(Some(child));
+                        continue;
+                    }
+                }
+                if let Some(g) = guard_expr {
+                    let body = self.new_block();
+                    let fail = self
+                        .breakable_stack
+                        .last()
+                        .map(|b| b.exit)
+                        .unwrap_or_else(|| self.new_block());
+                    self.wire_condition(g, source, body, fail)?;
+                    self.flow_active = true;
+                    self.current_block = body;
+                }
+                let mut c = case.walk();
+                for child in case.children(&mut c) {
+                    if !child.is_named() {
+                        continue;
+                    }
+                    // Skip labels (`case 1:` / `default:`) and guard nodes (already wired).
+                    if matches!(child.kind(), "switch_label" | "guard" | "when_clause") {
                         continue;
                     }
                     self.visit_statement(child, source)?;
@@ -7815,6 +8032,67 @@ public class Demo {
                 })
             }),
             "return must reach resource close before exit"
+        );
+    }
+
+    #[test]
+    fn test_java_synchronized_and_assert() {
+        let code = r#"
+public class Demo {
+    private final Object lock = new Object();
+    private int x;
+    public void sync() {
+        synchronized (lock) {
+            x = 1;
+        }
+        assert x > 0;
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("java", code, "sync").unwrap();
+        assert!(
+            java_texts(&cfg)
+                .iter()
+                .any(|t| t.contains("x = 1") || t.contains("x=1")),
+            "synchronized body must lower, got {:?}",
+            java_texts(&cfg)
+        );
+        assert!(
+            java_kinds(&cfg).iter().any(|k| *k == StatementKind::Branch)
+                || java_texts(&cfg).iter().any(|t| t.contains("assert")),
+            "assert must lower, kinds={:?} texts={:?}",
+            java_kinds(&cfg),
+            java_texts(&cfg)
+        );
+    }
+
+    #[test]
+    fn test_java_switch_rule_with_when_guard() {
+        let code = r#"
+public class Demo {
+    public int sw(Object o) {
+        return switch (o) {
+            case Integer i when i > 0 -> i;
+            case String s -> s.length();
+            default -> 0;
+        };
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("java", code, "sw").unwrap();
+        assert!(
+            java_texts(&cfg)
+                .iter()
+                .any(|t| t.contains("i > 0") || t.trim() == "i > 0"),
+            "when guard must lower, got {:?}",
+            java_texts(&cfg)
+        );
+        assert!(
+            !java_texts(&cfg)
+                .iter()
+                .any(|t| t.trim_start().starts_with("return switch")),
+            "switch expression must not stay opaque, got {:?}",
+            java_texts(&cfg)
         );
     }
 

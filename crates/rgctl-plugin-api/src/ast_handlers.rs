@@ -55,7 +55,7 @@ impl HandlerMask {
             "CfgStatement" => Self::CFG_STMT,
             "AstSkeleton" => Self::AST_SKELETON,
             "Literal" => Self::LITERAL,
-            "Skip" => Self::SKIP,
+            "Skip" | "SkipWrapper" | "SkipTypeToken" | "Unimplemented" => Self::SKIP,
             _ => return None,
         })
     }

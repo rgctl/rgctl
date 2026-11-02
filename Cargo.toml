@@ -348,6 +348,9 @@ rgctl-lang-cpp = { workspace = true }
 rgctl-lang-javascript = { workspace = true }
 rgctl-lang-typescript = { workspace = true }
 rgctl-lang-rust = { workspace = true }
+rgctl-lang-java = { workspace = true }
+rgctl-ast-coverage = { workspace = true }
+walkdir = { workspace = true }
 
 [features]
 default = ["semantic-onnx"]

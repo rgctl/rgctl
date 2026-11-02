@@ -8,7 +8,8 @@ use crate::language_profile::{function_kinds_for, parse_source};
 use std::collections::HashMap;
 use tree_sitter::{Node, Tree};
 
-type VisitFn = fn(Node, &[u8], &str, &mut HashMap<String, String>, bool);
+/// Function signature for language-specific local variable and formal parameter type recovery.
+pub type VisitFn = fn(Node, &[u8], &str, &mut HashMap<String, String>, bool);
 
 /// Pre-parsed source for merging locals across many functions in one file.
 ///
@@ -59,7 +60,8 @@ impl<'a> LocalsParseContext<'a> {
     }
 }
 
-fn language_visit_fn(language: &str) -> Option<VisitFn> {
+/// Return the local-variable type recovery visitor for `language`, if supported (Layer F).
+pub fn language_visit_fn(language: &str) -> Option<VisitFn> {
     Some(match language {
         "java" => visit_java,
         "csharp" => visit_csharp,
@@ -343,6 +345,33 @@ fn visit_java(
     if now_in && kind == "local_variable_declaration" {
         collect_java_style_local(node, source, env);
     }
+    if now_in && kind == "resource" {
+        collect_java_resource(node, source, env);
+    }
+    if now_in && kind == "enhanced_for_statement" {
+        // `for (Type item : items)` — name/type are fields on the statement.
+        if let Some(name) = node
+            .child_by_field_name("name")
+            .and_then(|n| text_of(n, source))
+        {
+            let ty = node
+                .child_by_field_name("type")
+                .and_then(|n| text_of(n, source))
+                .map(|t| strip_java_type_sugar(&t));
+            if let Some(t) = ty {
+                insert_ty(env, &name, &t);
+            }
+        }
+    }
+    if now_in && kind == "catch_formal_parameter" {
+        collect_java_catch_param(node, source, env);
+    }
+    if now_in && kind == "instanceof_expression" {
+        collect_java_instanceof_binding(node, source, env);
+    }
+    if now_in && matches!(kind, "type_pattern" | "record_pattern") {
+        collect_java_pattern_binding(node, source, env);
+    }
     if now_in
         && kind == "formal_parameter"
         && let (Some(name), Some(ty)) = (
@@ -365,8 +394,20 @@ fn visit_java(
     );
 }
 
+fn strip_java_type_sugar(raw: &str) -> String {
+    raw.trim()
+        .split('<')
+        .next()
+        .unwrap_or(raw)
+        .trim_end_matches("[]")
+        .trim_end_matches("...")
+        .trim()
+        .to_string()
+}
+
 fn collect_java_style_local(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
     let mut ty = None;
+    let mut is_var = false;
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if matches!(
@@ -379,19 +420,166 @@ fn collect_java_style_local(node: Node, source: &[u8], env: &mut HashMap<String,
                 | "array_type"
                 | "nullable_type"
                 | "predefined_type"
+                | "scoped_type_identifier"
         ) {
-            ty = text_of(child, source);
+            let t = text_of(child, source).map(|t| strip_java_type_sugar(&t));
+            // Java 10+ `var` is a type_identifier in tree-sitter-java.
+            if t.as_deref() == Some("var") {
+                is_var = true;
+                ty = None;
+            } else {
+                ty = t;
+            }
         }
-        if child.kind() == "variable_declarator"
-            && let (Some(name), Some(t)) = (
+        if child.kind() == "variable_declarator" {
+            let name = child
+                .child_by_field_name("name")
+                .and_then(|n| text_of(n, source));
+            let inferred = if ty.is_none() || is_var {
                 child
-                    .child_by_field_name("name")
-                    .and_then(|n| text_of(n, source)),
-                ty.as_ref(),
-            )
-        {
-            insert_ty(env, &name, t);
+                    .child_by_field_name("value")
+                    .and_then(|v| infer_java_var_type(v, source))
+            } else {
+                None
+            };
+            let resolved = if is_var {
+                inferred.or(ty.clone())
+            } else {
+                ty.clone().or(inferred)
+            };
+            if let (Some(name), Some(t)) = (name, resolved) {
+                insert_ty(env, &name, &t);
+            }
         }
+    }
+}
+
+fn infer_java_var_type(value: Node, source: &[u8]) -> Option<String> {
+    match value.kind() {
+        "object_creation_expression" => value
+            .child_by_field_name("type")
+            .and_then(|n| text_of(n, source))
+            .map(|t| strip_java_type_sugar(&t)),
+        "string_literal" => Some("String".into()),
+        "true" | "false" => Some("boolean".into()),
+        "decimal_integer_literal"
+        | "hex_integer_literal"
+        | "octal_integer_literal"
+        | "binary_integer_literal" => Some("int".into()),
+        "decimal_floating_point_literal" => Some("double".into()),
+        "character_literal" => Some("char".into()),
+        "null_literal" => None,
+        _ => None,
+    }
+}
+
+fn collect_java_resource(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
+    // `try (Type name = …)` — resource may look like a mini local declaration.
+    if let Some(name) = node
+        .child_by_field_name("name")
+        .and_then(|n| text_of(n, source))
+    {
+        if let Some(ty) = node
+            .child_by_field_name("type")
+            .and_then(|n| text_of(n, source))
+        {
+            insert_ty(env, &name, &strip_java_type_sugar(&ty));
+            return;
+        }
+    }
+    // Fallback: scan children like a local_variable_declaration.
+    collect_java_style_local(node, source, env);
+}
+
+fn collect_java_catch_param(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
+    let name = node
+        .child_by_field_name("name")
+        .and_then(|n| text_of(n, source));
+    let mut ty = node
+        .child_by_field_name("type")
+        .and_then(|n| text_of(n, source));
+    if ty.is_none() {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if matches!(
+                child.kind(),
+                "catch_type" | "type_identifier" | "union_type" | "scoped_type_identifier"
+            ) {
+                ty = text_of(child, source);
+                break;
+            }
+        }
+    }
+    if let (Some(name), Some(ty)) = (name, ty) {
+        // Multi-catch `A | B` → use first alternative.
+        let first = ty.split('|').next().unwrap_or(&ty).trim();
+        insert_ty(env, &name, &strip_java_type_sugar(first));
+    }
+}
+
+fn collect_java_instanceof_binding(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
+    // Classic: `x instanceof Type name`
+    if let Some(name) = node
+        .child_by_field_name("name")
+        .and_then(|n| text_of(n, source))
+    {
+        if let Some(ty) = node
+            .child_by_field_name("right")
+            .and_then(|n| text_of(n, source))
+            .or_else(|| {
+                node.child_by_field_name("type")
+                    .and_then(|n| text_of(n, source))
+            })
+        {
+            insert_ty(env, &name, &strip_java_type_sugar(&ty));
+            return;
+        }
+    }
+    // Pattern form: `x instanceof Type name` / record patterns as `pattern` child.
+    if let Some(pattern) = node.child_by_field_name("pattern") {
+        collect_java_pattern_binding(pattern, source, env);
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if matches!(child.kind(), "type_pattern" | "record_pattern") {
+            collect_java_pattern_binding(child, source, env);
+        }
+    }
+}
+
+fn collect_java_pattern_binding(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
+    match node.kind() {
+        "type_pattern" => {
+            if let (Some(name), Some(ty)) = (
+                node.child_by_field_name("name")
+                    .and_then(|n| text_of(n, source)),
+                node.child_by_field_name("type")
+                    .and_then(|n| text_of(n, source)),
+            ) {
+                insert_ty(env, &name, &strip_java_type_sugar(&ty));
+            }
+        }
+        "record_pattern" => {
+            // `Order(String id, int n)` — bind nested type_pattern components.
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if matches!(
+                    child.kind(),
+                    "type_pattern" | "record_pattern" | "record_pattern_component"
+                ) {
+                    collect_java_pattern_binding(child, source, env);
+                }
+            }
+        }
+        "record_pattern_component" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if matches!(child.kind(), "type_pattern" | "record_pattern") {
+                    collect_java_pattern_binding(child, source, env);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1284,6 +1472,40 @@ public class OrderProcessor {
         merge_local_types("java", source, "process", &mut env);
         assert_eq!(env.get("order").map(String::as_str), Some("OrderDTO"));
         assert_eq!(env.get("other").map(String::as_str), Some("OrderDTO"));
+    }
+
+    #[test]
+    fn java_locals_try_foreach_catch_instanceof_var() {
+        let source = r#"
+import java.io.*;
+import java.util.*;
+public class Demo {
+    public void process(Object o, List<OrderDTO> orders) {
+        try (FileInputStream in = new FileInputStream("x")) {
+            in.read();
+        } catch (IOException ex) {
+            System.out.println(ex);
+        }
+        for (OrderDTO item : orders) {
+            item.status = "X";
+        }
+        if (o instanceof OrderDTO ord) {
+            ord.status = "Y";
+        }
+        var svc = new OrderService();
+        svc.run();
+    }
+}
+class OrderDTO { String status; }
+class OrderService { void run() {} }
+"#;
+        let mut env = HashMap::new();
+        merge_local_types("java", source, "process", &mut env);
+        assert_eq!(env.get("in").map(String::as_str), Some("FileInputStream"));
+        assert_eq!(env.get("ex").map(String::as_str), Some("IOException"));
+        assert_eq!(env.get("item").map(String::as_str), Some("OrderDTO"));
+        assert_eq!(env.get("ord").map(String::as_str), Some("OrderDTO"));
+        assert_eq!(env.get("svc").map(String::as_str), Some("OrderService"));
     }
 
     #[test]

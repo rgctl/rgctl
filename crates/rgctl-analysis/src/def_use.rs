@@ -8,6 +8,97 @@ use tree_sitter::Node;
 /// Maximum AST walk depth (matches C++ extraction and CFG expression walks).
 const AST_WALK_MAX_DEPTH: usize = 2048;
 
+/// AST node kinds inspected by [`extract_def_use`] for variable definitions, uses, and patterns.
+const DEF_USE_HANDLED_KINDS: &[&str] = &[
+    "array_declarator",
+    "array_pattern",
+    "assignment",
+    "assignment_expression",
+    "assignment_pattern",
+    "assignment_statement",
+    "Attribute",
+    "attribute",
+    "augmented_assignment",
+    "augmented_assignment_expression",
+    "catch_formal_parameter",
+    "compound_assignment_expr",
+    "declaration",
+    "enhanced_for_statement",
+    "expression_list",
+    "field_access",
+    "field_expression",
+    "field_identifier",
+    "for_clause",
+    "for_statement",
+    "formal_parameter",
+    "formal_parameters",
+    "function_declarator",
+    "identifier",
+    "inferred_parameters",
+    "init_declarator",
+    "instance_variable",
+    "instanceof_expression",
+    "let_declaration",
+    "let_statement",
+    "lexical_declaration",
+    "list_pattern",
+    "local_declaration_statement",
+    "local_variable_declaration",
+    "member_access_expression",
+    "member_expression",
+    "navigation_expression",
+    "object_assignment_pattern",
+    "object_pattern",
+    "pair_pattern",
+    "parameter_declaration",
+    "parenthesized_declarator",
+    "pattern",
+    "pointer_declarator",
+    "range_clause",
+    "record_pattern",
+    "record_pattern_component",
+    "resource",
+    "rest_pattern",
+    "scoped_identifier",
+    "selector_expression",
+    "short_var_declaration",
+    "shorthand_field_identifier",
+    "shorthand_property_identifier_pattern",
+    "spread_parameter",
+    "struct_pattern",
+    "tuple_pattern",
+    "tuple_struct_pattern",
+    "type_arguments",
+    "type_bound",
+    "type_identifier",
+    "type_parameter",
+    "type_parameters",
+    "type_pattern",
+    "unary_expression",
+    "update_expression",
+    "var_declaration",
+    "var_spec",
+    "var_spec_list",
+    "variable_declaration",
+    "variable_declaration_list",
+    "variable_declarator",
+    "variable_name",
+    "wildcard_pattern",
+];
+
+/// Return the slice of Tree-sitter AST node kinds handled by [`extract_def_use`] for `language_id`.
+///
+/// Used by Tier-1 AST coverage parity gates (`check_plugin_manifest_sync` and
+/// `tier1_parity_gate`) to verify that `"AstSkeleton"` entries in `{id}-ast-coverage.json`
+/// correspond to real def-use, CFG, or plugin handlers.
+pub fn def_use_handled_kinds(language_id: &str) -> &'static [&'static str] {
+    if crate::language_profile::profile_for_language(language_id).is_some_and(|p| p.cfg_enabled) {
+        DEF_USE_HANDLED_KINDS
+    } else {
+        &[]
+    }
+}
+
 /// Extract variables defined and used in a statement node.
 pub fn extract_def_use(
     node: Node,
@@ -319,7 +410,8 @@ fn collect_def_use_node<'a>(
         | "local_declaration_statement"
         | "local_variable_declaration"
         | "lexical_declaration"
-        | "variable_declaration_list" => {
+        | "variable_declaration_list"
+        | "resource" => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.kind() == "variable_declarator" {
@@ -336,6 +428,15 @@ fn collect_def_use_node<'a>(
                     stack.push((child, false, depth + 1));
                 }
             }
+            // try-with-resources: `resource` may expose name/value fields directly.
+            if kind == "resource" {
+                if let Some(name) = node.child_by_field_name("name") {
+                    collect_pattern_defs(name, source, defined, depth + 1);
+                }
+                if let Some(value) = node.child_by_field_name("value") {
+                    stack.push((value, false, depth + 1));
+                }
+            }
         }
         "variable_declarator" => {
             if let Some(name) = node.child_by_field_name("name") {
@@ -343,6 +444,66 @@ fn collect_def_use_node<'a>(
             }
             if let Some(value) = node.child_by_field_name("value") {
                 stack.push((value, false, depth + 1));
+            }
+        }
+        // Java pattern bindings (`instanceof` / `switch` `type_pattern`).
+        "instanceof_expression" => {
+            if let Some(name) = node.child_by_field_name("name") {
+                collect_pattern_defs(name, source, defined, depth + 1);
+            }
+            if let Some(pattern) = node.child_by_field_name("pattern") {
+                stack.push((pattern, true, depth + 1));
+            }
+            if let Some(left) = node.child_by_field_name("left") {
+                stack.push((left, false, depth + 1));
+            }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if matches!(child.kind(), "type_pattern" | "record_pattern") {
+                    stack.push((child, true, depth + 1));
+                }
+            }
+        }
+        "type_pattern" => {
+            if let Some(name) = node.child_by_field_name("name") {
+                collect_pattern_defs(name, source, defined, depth + 1);
+            }
+        }
+        "record_pattern" | "record_pattern_component" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if matches!(
+                    child.kind(),
+                    "type_pattern" | "record_pattern" | "record_pattern_component"
+                ) {
+                    stack.push((child, true, depth + 1));
+                }
+            }
+        }
+        "catch_formal_parameter" => {
+            if let Some(name) = node.child_by_field_name("name") {
+                collect_pattern_defs(name, source, defined, depth + 1);
+            }
+        }
+        "enhanced_for_statement" => {
+            if let Some(name) = node.child_by_field_name("name") {
+                collect_pattern_defs(name, source, defined, depth + 1);
+            }
+            if let Some(value) = node.child_by_field_name("value") {
+                stack.push((value, false, depth + 1));
+            }
+            if let Some(body) = node.child_by_field_name("body") {
+                stack.push((body, false, depth + 1));
+            }
+        }
+        // `i++` / `--i` — both define and use the operand.
+        "update_expression" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.is_named() {
+                    collect_assignment_lhs(child, source, defined, used, depth, stack);
+                    stack.push((child, false, depth + 1));
+                }
             }
         }
 
@@ -821,6 +982,48 @@ class OrderProcessor {
         assert!(
             !uses.iter().any(|u| u == "other"),
             "declarator name must not be a use, got {uses:?}"
+        );
+    }
+
+    #[test]
+    fn test_java_resource_type_pattern_and_update_def_use() {
+        let source = r#"
+class C {
+  void m(Object o) {
+    try (java.io.StringReader r = new java.io.StringReader("")) {
+      if (o instanceof String s) { System.out.println(s); }
+      int i = 0;
+      i++;
+    } catch (Exception ex) {}
+  }
+}
+"#;
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_java::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let resource = find_kind(tree.root_node(), "resource").expect("resource");
+        let (defs, _) = extract_def_use(resource, source.as_bytes());
+        assert!(
+            defs_has(&defs, "r"),
+            "resource should define r, got {defs:?}"
+        );
+
+        let inst =
+            find_kind(tree.root_node(), "instanceof_expression").expect("instanceof_expression");
+        let (defs, _) = extract_def_use(inst, source.as_bytes());
+        assert!(
+            defs_has(&defs, "s"),
+            "instanceof should define pattern binding s, got {defs:?}"
+        );
+
+        let upd = find_kind(tree.root_node(), "update_expression").expect("update");
+        let (defs, uses) = extract_def_use(upd, source.as_bytes());
+        assert!(defs_has(&defs, "i"), "i++ should define i, got {defs:?}");
+        assert!(
+            uses.iter().any(|u| u == "i"),
+            "i++ should use i, got {uses:?}"
         );
     }
 }
