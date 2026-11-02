@@ -6,7 +6,7 @@
  * and declaring no absence — the one lens whose text claimed a capability instead of showing one. Both
  * halves of that are tested here: the lines are drawn, and the description is gone.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -71,6 +71,33 @@ describe("the Code lens draws the source", () => {
       r.className.includes("bg-white/[0.035]"),
     );
     expect(banded.length).toBe(SOURCE_LINES.length);
+  });
+
+  it("remembers where you were reading, instead of snapping back to the subject", async () => {
+    const history = createMemoryHistory({ initialEntries: [`/understand?lens=code&focus=${SUBJECT}`] });
+    const router = createAppRouter(history);
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
+    const { unmount } = render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    const scroller = await screen.findByTestId("source-scroller");
+    // Read past the subject, the way a reader does, then leave the lens entirely (which unmounts the pane).
+    scroller.scrollTop = 420;
+    fireEvent.scroll(scroller);
+    unmount();
+
+    // Back to the same file through the other lens: the pane must resume at 420, not re-centre the span.
+    const history2 = createMemoryHistory({ initialEntries: [`/understand?lens=spine&focus=${SUBJECT}`] });
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={createAppRouter(history2)} />
+      </QueryClientProvider>,
+    );
+    const again = await screen.findByTestId("source-scroller");
+    await waitFor(() => expect(again.scrollTop).toBe(420));
   });
 
   it("is not a placeholder: an implemented lens renders no typed absence", async () => {

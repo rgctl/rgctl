@@ -91,17 +91,45 @@ export function cfgSpan(cfg: CfgDetail | null): { start: number; end: number } |
   return { start, end };
 }
 
-/** Scroll a row into view, honouring `prefers-reduced-motion`: motion is a courtesy, not a requirement. */
-function scrollRowIntoView(scroller: HTMLElement | null, line: number | null) {
-  if (line === null || scroller === null) return;
-  const row = scroller.querySelector<HTMLElement>(`tr[data-line="${line}"]`);
-  // jsdom has no `scrollIntoView`; a test asserting content must not depend on scrolling existing.
-  if (!row || typeof row.scrollIntoView !== "function") return;
-  const reduce =
+/**
+ * Where the reader was standing in each file, keyed by function.
+ *
+ * Module scope, not component state: switching lens unmounts the pane, so component state would be gone by
+ * the time you came back. Keyed by function rather than by lens because the file is the thing you were
+ * reading — jumping back to the function's first line on every lens switch throws away the one piece of
+ * state the reader built by hand.
+ */
+const readingPosition = new Map<string, number>();
+
+function reducedMotion(): boolean {
+  return (
     typeof window !== "undefined" &&
     typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  row.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+/**
+ * Centre a line inside the pane's own scroller.
+ *
+ * Deliberately **not** `Element.scrollIntoView`: that scrolls every scrollable ancestor, so centring a row
+ * also moved the room's outer `overflow-y-auto` container and the page appeared to jump on every lens
+ * switch. This touches only `scroller.scrollTop`, and computes the offset from bounding boxes because
+ * `offsetTop` of a `<tr>` is relative to an ancestor that differs by layout.
+ */
+function centerLine(scroller: HTMLElement | null, line: number | null, smooth: boolean) {
+  if (line === null || scroller === null) return;
+  const row = scroller.querySelector<HTMLElement>(`tr[data-line="${line}"]`);
+  if (!row) return;
+  const frame = scroller.getBoundingClientRect();
+  const target = row.getBoundingClientRect();
+  const delta = target.top - frame.top - frame.height / 2 + target.height / 2;
+  const top = Math.max(0, scroller.scrollTop + delta);
+  if (smooth && typeof scroller.scrollTo === "function") {
+    scroller.scrollTo({ top, behavior: "smooth" });
+  } else {
+    scroller.scrollTop = top;
+  }
 }
 
 export function SourcePane({
@@ -154,17 +182,28 @@ export function SourcePane({
   const rangeStart = focusRange?.start ?? null;
   const rangeEnd = focusRange?.end ?? null;
 
-  // On arrival (and whenever the subject changes) put the subject in view rather than the top of the file.
+  /**
+   * On arrival: resume where this file was left, and only fall back to the subject's first line.
+   *
+   * Restoring before scrolling is the whole point — a lens switch remounts the pane, and re-centring the
+   * function on every switch discards the position the reader scrolled to by hand. Reading is not a
+   * sequence of arrivals.
+   */
   useEffect(() => {
     if (!ready) return;
-    scrollRowIntoView(scroller.current, rangeStart);
+    const saved = readingPosition.get(entry.function_id);
+    if (saved !== undefined) {
+      if (scroller.current) scroller.current.scrollTop = saved;
+      return;
+    }
+    centerLine(scroller.current, rangeStart, false);
   }, [ready, rangeStart, entry.function_id]);
 
   // A block the caller selected moves the reader to that block. Keyed on the line, not on the call, so
   // re-selecting the same block does not fight a manual scroll.
   useEffect(() => {
     if (!ready) return;
-    scrollRowIntoView(scroller.current, scrollToLine ?? null);
+    centerLine(scroller.current, scrollToLine ?? null, !reducedMotion());
   }, [ready, scrollToLine, entry.function_id]);
 
   return (
@@ -172,7 +211,12 @@ export function SourcePane({
       {source.kind === "loading" && <p className="text-[11px] text-zinc-500">loading…</p>}
       {source.kind === "absent" && <Unavailable what="Source text is not available" why={source.reason} />}
       {source.kind === "ready" && (
-        <div ref={scroller} className="max-h-[56vh] overflow-auto">
+        <div
+          ref={scroller}
+          data-testid="source-scroller"
+          onScroll={(e) => readingPosition.set(entry.function_id, e.currentTarget.scrollTop)}
+          className="max-h-[56vh] overflow-auto"
+        >
           <table className="w-full border-collapse font-mono text-[11px] leading-[1.55]">
             <tbody>
               {source.lines.map(({ line, text }) => {
