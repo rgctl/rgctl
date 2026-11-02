@@ -10,22 +10,31 @@
  * nothing here to carry in or out of another room.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { Panel, Unavailable, Chip } from "../shell";
 import { channelReport, loadArchitecture, scalesFor } from "../architecture";
 import { expandMembers, MEMBER_EDGE_KINDS } from "../expandEngine";
 import { loadMemberIndices } from "../metagraphMembers";
+import { loadFunctions } from "../data";
 import type { ArchitectureState, ArchitectureView, Metagraph } from "../architectureTypes";
-import type { HoverEntry, UniverseLayer, UniverseScene } from "../universe/UniverseScene";
+import type { HoverEntry, MemberEntry, UniverseLayer, UniverseScene } from "../universe/UniverseScene";
 
 type Loaded = { kind: "loading" } | ArchitectureState;
 
 export function ArchitectureRoom() {
+  const navigate = useNavigate();
   const [state, setState] = useState<Loaded>({ kind: "loading" });
   const [layer, setLayer] = useState<UniverseLayer>("packages");
   const [edges, setEdges] = useState(true);
   const [sharedOnly, setSharedOnly] = useState(false);
   /** Drift is off by default once a district has been opened; the reader can turn it back on. */
   const [drift, setDrift] = useState(true);
+  /** What happened when a member was clicked: resolving, or why it could not be opened. */
+  const [memberState, setMemberState] = useState<
+    | { kind: "idle" }
+    | { kind: "resolving"; member: MemberEntry }
+    | { kind: "failed"; member: MemberEntry; reason: string }
+  >({ kind: "idle" });
   const [hover, setHover] = useState<HoverEntry | null>(null);
   /** The clicked object. Hover is a preview; expanding acts on a selection, so a control can carry it. */
   const [selected, setSelected] = useState<HoverEntry | null>(null);
@@ -83,6 +92,7 @@ export function ArchitectureRoom() {
   // closure — otherwise a district opened after a re-render would use a stale metagraph or a stale ceiling.
   const expandRef = useRef<(entry: HoverEntry | null) => Promise<void>>(async () => {});
   const driftRef = useRef(drift);
+  const openMemberRef = useRef<(member: MemberEntry | null) => Promise<void>>(async () => {});
 
   /**
    * How many members a district will draw.
@@ -154,7 +164,13 @@ export function ArchitectureRoom() {
         setExpandState({ kind: "loading", title: entry.title, phase: "expanding" });
         const result = sceneRef.current?.expand(
           entry.id,
-          subgraph.nodes.map((n) => ({ index: n.index, complexity: n.complexity })),
+          subgraph.nodes.map((n) => ({
+            index: n.index,
+            complexity: n.complexity,
+            name: n.name,
+            nodeTypeName: n.node_type_name,
+            filePath: n.file_path ?? null,
+          })),
           subgraph.edges,
         );
         setExpanded({
@@ -175,9 +191,6 @@ export function ArchitectureRoom() {
     [metagraph],
   );
 
-  useEffect(() => {
-    expandRef.current = expand;
-  }, [expand]);
 
   useEffect(() => {
     driftRef.current = drift;
@@ -193,6 +206,46 @@ export function ArchitectureRoom() {
     return () => window.removeEventListener("keydown", onKey);
   }, [collapse]);
 
+  /**
+   * Turn a clicked member into a Focus.
+   *
+   * The engine's subgraph payload carries `(file_path, name)` but not the node's UUID, so the identity is
+   * resolved against the dashboard's own function index — the same index the ⌘K palette uses. An ambiguous or
+   * missing match is **not** guessed: a Focus that points at the wrong function is worse than no link at all.
+   */
+  const openMember = useCallback(
+    async (member: MemberEntry | null) => {
+      if (!member) return;
+      setMemberState({ kind: "resolving", member });
+      const functions = await loadFunctions();
+      const matches = functions.filter(
+        (f) => f.name === member.name && (!member.filePath || f.file_path === member.filePath),
+      );
+      if (matches.length === 1) {
+        const focus = matches[0].function_id;
+        setMemberState({ kind: "idle" });
+        collapse();
+        void navigate({ to: "/$roomId", params: { roomId: "understand" }, search: { focus } as never });
+        return;
+      }
+      setMemberState({
+        kind: "failed",
+        member,
+        reason:
+          matches.length === 0
+            ? "no indexed function matches this member's name and file — the CFG index does not reach it"
+            : `${matches.length} indexed functions match this name and file, so opening one would be a guess`,
+      });
+    },
+    [collapse, navigate],
+  );
+
+  useEffect(() => {
+    expandRef.current = expand;
+  }, [expand]);
+  useEffect(() => {
+    openMemberRef.current = openMember;
+  }, [openMember]);
   // The canvas is a canvas: jsdom has no WebGL, and neither does a browser with it switched off. Both get a
   // stated absence instead of a blank pane, and everything textual above still renders.
   useEffect(() => {
@@ -227,6 +280,7 @@ export function ArchitectureRoom() {
       scene.setDrift(driftRef.current);
       scene.onHoverChange(setHover);
       scene.onPickChange(setSelected);
+      scene.onMemberPickChange((member) => void openMemberRef.current(member));
       scene.onExplode((entry) => void expandRef.current(entry));
       scene.attachPointer(host);
       const scales = scalesFor(view);
@@ -405,8 +459,18 @@ export function ArchitectureRoom() {
                   </span>
                 )}
                 <span className="text-[10px] leading-relaxed text-zinc-500">
-                  opened in {(expanded.ms / 1000).toFixed(1)} s · drag to orbit, scroll to zoom
+                  opened in {(expanded.ms / 1000).toFixed(1)} s · click a member to open it in Understand
                 </span>
+                {memberState.kind === "resolving" && (
+                  <span className="text-[10px] leading-relaxed text-sky-200/80">
+                    resolving {memberState.member.name}…
+                  </span>
+                )}
+                {memberState.kind === "failed" && (
+                  <span className="text-[10px] leading-relaxed text-amber-200/80">
+                    {memberState.member.name}: {memberState.reason}
+                  </span>
+                )}
               </div>
             )}
           </div>

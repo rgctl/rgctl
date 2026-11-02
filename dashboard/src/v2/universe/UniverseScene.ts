@@ -40,6 +40,14 @@ export interface UniverseInput {
   footprint: (functions: number) => number;
 }
 
+/** A drawn member, carrying what the dashboard needs to turn it into a Focus. */
+export interface MemberEntry {
+  index: number;
+  name: string;
+  nodeTypeName: string;
+  filePath: string | null;
+}
+
 export interface HoverEntry {
   kind: "package" | "volume" | "bucket" | "community";
   title: string;
@@ -68,6 +76,7 @@ export class UniverseScene {
   private onHover: (entry: HoverEntry | null) => void = () => {};
   private onPick: (entry: HoverEntry | null) => void = () => {};
   private onExplodeRequest: (entry: HoverEntry | null) => void = () => {};
+  private onMemberPick: (member: MemberEntry | null) => void = () => {};
 
   constructor(container: HTMLElement) {
     this.reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -111,6 +120,25 @@ export class UniverseScene {
   /** Double-click asks for the next level. The room decides whether the subject *has* one. */
   onExplode(fn: (entry: HoverEntry | null) => void): void {
     this.onExplodeRequest = fn;
+  }
+
+  /** A click on a member. This is the join between the universe and the rest of the dashboard. */
+  onMemberPickChange(fn: (member: MemberEntry | null) => void): void {
+    this.onMemberPick = fn;
+  }
+
+  /**
+   * Which member a ray hit, if any.
+   *
+   * Members are one `InstancedMesh`, so a hit reports an `instanceId` rather than an object: the mapping back
+   * to a node is the array order the instances were built in, which is why it is stored beside the mesh
+   * instead of being re-derived here.
+   */
+  private memberAt(): MemberEntry | null {
+    if (!this.expanded) return null;
+    const hit = this.raycaster.intersectObject(this.expanded.instanced, false)[0];
+    if (!hit || hit.instanceId === undefined) return null;
+    return this.expanded.members[hit.instanceId] ?? null;
   }
 
   resize(container: HTMLElement): void {
@@ -440,7 +468,7 @@ export class UniverseScene {
    */
   expand(
     subjectId: number,
-    members: Array<{ index: number; complexity: number }>,
+    members: Array<{ index: number; complexity: number; name?: string; nodeTypeName?: string; filePath?: string | null }>,
     edges: Array<{ source: number; target: number }>,
     options: { color?: THREE.Color; maxHeight?: number } = {},
   ): { drawn: number; edges: number; measuredHeight: boolean } {
@@ -552,7 +580,20 @@ export class UniverseScene {
     }
 
     this.world.add(group);
-    this.expanded = { group, dimmed, autoRotate, autoRotateSpeed, parent: parentSolid };
+    this.expanded = {
+      group,
+      dimmed,
+      autoRotate,
+      autoRotateSpeed,
+      parent: parentSolid,
+      instanced,
+      members: members.map((m) => ({
+        index: m.index,
+        name: m.name ?? `node ${m.index}`,
+        nodeTypeName: m.nodeTypeName ?? "node",
+        filePath: m.filePath ?? null,
+      })),
+    };
     return { drawn: count, edges: segments.length / 6, measuredHeight: measured };
   }
 
@@ -690,6 +731,18 @@ export class UniverseScene {
         -((event.clientY - rect.top) / rect.height) * 2 + 1,
       );
       this.raycaster.setFromCamera(this.pointer, this.camera);
+      const member = this.memberAt();
+      if (member) {
+        this.onHover({
+          kind: "package",
+          title: member.name,
+          lines: [
+            `${member.nodeTypeName}${member.filePath ? ` · ${member.filePath}` : ""}`,
+            "a member of the open district — click to open it in Understand",
+          ],
+        });
+        return;
+      }
       const hit = this.raycaster.intersectObjects(this.pickables.map((p) => p.mesh), false)[0];
       const found = hit ? this.pickables.find((p) => p.mesh === hit.object) : undefined;
       this.onHover(found?.entry ?? null);
@@ -697,6 +750,13 @@ export class UniverseScene {
     const leave = () => this.onHover(null);
     const click = () => {
       this.raycaster.setFromCamera(this.pointer, this.camera);
+      // Inside an open district, a click means "this member", not "the package behind it".
+      const member = this.memberAt();
+      if (member) {
+        this.onMemberPick(member);
+        return;
+      }
+      this.onMemberPick(null);
       const hit = this.raycaster.intersectObjects(this.pickables.map((p) => p.mesh), false)[0];
       const found = hit ? this.pickables.find((p) => p.mesh === hit.object) : undefined;
       this.onPick(found?.entry ?? null);
