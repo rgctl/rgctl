@@ -49,6 +49,8 @@ export interface HoverEntry {
 }
 
 const SINGLE = 0x67788c; // a package alone in its community — a finding, not a failure
+/** Member height when the bundle reports no per-member complexity: a legible stand-in, stated in the room. */
+const CONSTANT_MEMBER_HEIGHT = 9;
 
 export class UniverseScene {
   private readonly scene = new THREE.Scene();
@@ -307,7 +309,7 @@ export class UniverseScene {
     mesh.position.set(pos[0], height / 2, pos[2]);
     this.add(mesh);
     this.heights.set(pkg.id, height);
-    this.solids.set(pkg.id, { pos: [pos[0], 0, pos[2]], side, height });
+    this.solids.set(pkg.id, { pos: [pos[0], 0, pos[2]], side, height, mesh });
     if (pkg.kind === "package") this.coreObjects.push(mesh);
     if (isBucket) {
       const wire = new THREE.LineSegments(
@@ -413,7 +415,10 @@ export class UniverseScene {
   private edgeList: { source: number; target: number; weight: number }[] = [];
   private readonly byId = new Map<number, PackageNode>();
   /** Where each drawn solid sits — an expanded district grows from its own footprint, not the origin. */
-  private readonly solids = new Map<number, { pos: [number, number, number]; side: number; height: number }>();
+  private readonly solids = new Map<
+    number,
+    { pos: [number, number, number]; side: number; height: number; mesh: THREE.Object3D }
+  >();
   private expanded: { group: THREE.Group; dimmed: Array<{ material: THREE.Material & { opacity: number; transparent: boolean } }> } | null = null;
 
   setEdges(edges: { source: number; target: number; weight: number }[], byId: Map<number, PackageNode>): void {
@@ -438,10 +443,10 @@ export class UniverseScene {
     members: Array<{ index: number; complexity: number }>,
     edges: Array<{ source: number; target: number }>,
     options: { color?: THREE.Color; maxHeight?: number } = {},
-  ): { drawn: number; edges: number } {
+  ): { drawn: number; edges: number; measuredHeight: boolean } {
     this.collapse();
     const seat = this.solids.get(subjectId);
-    if (!seat || members.length === 0) return { drawn: 0, edges: 0 };
+    if (!seat || members.length === 0) return { drawn: 0, edges: 0, measuredHeight: false };
 
 
     // Stop the drift. The universe rotates slowly to invite exploration; a district is something to *read*,
@@ -451,16 +456,27 @@ export class UniverseScene {
     this.controls.autoRotate = false;
 
     const group = new THREE.Group();
-    const dimmed: Array<{ material: THREE.Material & { opacity: number; transparent: boolean } }> = [];
+    const dimmed: Array<{
+      material: THREE.Material & { opacity: number; transparent: boolean };
+      opacity: number;
+      transparent: boolean;
+    }> = [];
     for (const object of this.coreObjects) {
       const material = (object as THREE.Mesh).material as THREE.Material | undefined;
       if (!material || Array.isArray(material)) continue;
       const m = material as THREE.Material & { opacity: number; transparent: boolean };
       if (dimmed.some((d) => d.material === m)) continue;
+      // Remember what it was. A volume shell is 0.05 by design and a wire is 0.5; setting those back to 1
+      // on collapse turns the whole sky into one opaque slab — which is exactly what happened.
+      dimmed.push({ material: m, opacity: m.opacity, transparent: m.transparent });
       m.transparent = true;
-      dimmed.push({ material: m });
-      m.opacity = 0.18;
+      m.opacity = Math.min(m.opacity, 0.18);
     }
+
+    // The district *becomes* the plinth: leaving the parent solid underneath drew two objects in the same
+    // place, one of them a dimmed box poking through the stage.
+    const parentSolid = this.solids.get(subjectId)?.mesh ?? null;
+    if (parentSolid) parentSolid.visible = false;
 
     // Sit the stage on the parent's own footprint so the district keeps its place in the map.
     const stageRadius = Math.max(seat.side * 0.75, 18);
@@ -473,7 +489,15 @@ export class UniverseScene {
     group.add(plinth);
 
     const count = members.length;
-    const maxComplexity = Math.max(1, ...members.map((m) => m.complexity || 1));
+    const maxComplexity = Math.max(0, ...members.map((m) => m.complexity || 0));
+    /**
+     * Height channel: complexity when the bundle carries it, a constant when it does not.
+     *
+     * It does not, on the corpus this was built against — every member reports `complexity: 0` — and scaling by
+     * `0 / 0` drew a field of one-unit cubes that read as a rendering bug. A constant height with the absence
+     * stated is the honest version.
+     */
+    const measured = maxComplexity > 0;
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     const material = new THREE.MeshStandardMaterial({
       color: options.color ?? new THREE.Color(0x8fd0ff),
@@ -493,7 +517,9 @@ export class UniverseScene {
       const angle = i * 2.39996;
       const x = seat.pos[0] + Math.cos(angle) * radius;
       const z = seat.pos[2] + Math.sin(angle) * radius;
-      const memberHeight = Math.max(1, (member.complexity / maxComplexity) * (options.maxHeight ?? 26));
+      const memberHeight = measured
+        ? Math.max(1, (member.complexity / maxComplexity) * (options.maxHeight ?? 26))
+        : CONSTANT_MEMBER_HEIGHT;
       scale.set(slot * 0.8, memberHeight, slot * 0.8);
       matrix.compose(
         new THREE.Vector3(x, plinthHeight + memberHeight / 2, z),
@@ -526,15 +552,21 @@ export class UniverseScene {
     }
 
     this.world.add(group);
-    this.expanded = { group, dimmed, autoRotate, autoRotateSpeed };
-    return { drawn: count, edges: segments.length / 6 };
+    this.expanded = { group, dimmed, autoRotate, autoRotateSpeed, parent: parentSolid };
+    return { drawn: count, edges: segments.length / 6, measuredHeight: measured };
   }
 
   /** Put the scene back exactly as it was. */
   collapse(): void {
     if (!this.expanded) return;
-    for (const { material } of this.expanded.dimmed) material.opacity = 1;
-    this.controls.autoRotate = this.expanded.autoRotate;
+    for (const { material, opacity, transparent } of this.expanded.dimmed) {
+      material.opacity = opacity;
+      material.transparent = transparent;
+    }
+    if (this.expanded.parent) this.expanded.parent.visible = true;
+    // The drift does **not** resume on its own: the reader stopped it by opening a district, and a scene that
+    // starts moving again the moment they close it is startling at best. The `drift` control turns it back on.
+    this.controls.autoRotate = false;
     this.controls.autoRotateSpeed = this.expanded.autoRotateSpeed;
     this.world.remove(this.expanded.group);
     this.expanded.group.traverse((child) => {
@@ -545,6 +577,11 @@ export class UniverseScene {
       else m?.dispose();
     });
     this.expanded = null;
+  }
+
+  /** Drift on or off. Explicit, because "it stopped moving" and "it is broken" look the same. */
+  setDrift(on: boolean): void {
+    this.controls.autoRotate = on;
   }
 
   /** Whether a district is currently expanded — the room needs this to label its own control. */

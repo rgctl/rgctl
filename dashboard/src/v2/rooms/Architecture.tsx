@@ -24,6 +24,8 @@ export function ArchitectureRoom() {
   const [layer, setLayer] = useState<UniverseLayer>("packages");
   const [edges, setEdges] = useState(true);
   const [sharedOnly, setSharedOnly] = useState(false);
+  /** Drift is off by default once a district has been opened; the reader can turn it back on. */
+  const [drift, setDrift] = useState(true);
   const [hover, setHover] = useState<HoverEntry | null>(null);
   /** The clicked object. Hover is a preview; expanding acts on a selection, so a control can carry it. */
   const [selected, setSelected] = useState<HoverEntry | null>(null);
@@ -41,6 +43,10 @@ export function ArchitectureRoom() {
     drawn: number;
     edges: number;
     truncated: boolean;
+    /** Milliseconds from the click to the district being drawn — a number, not the word "smooth". */
+    ms: number;
+    /** False when the bundle carries no per-member complexity, so members are drawn at a constant height. */
+    measuredHeight: boolean;
   } | null>(null);
   const [expandState, setExpandState] = useState<
     | { kind: "idle" }
@@ -76,6 +82,7 @@ export function ArchitectureRoom() {
   // The scene is created once and holds its callbacks, so it must call through a ref to reach the current
   // closure — otherwise a district opened after a re-render would use a stale metagraph or a stale ceiling.
   const expandRef = useRef<(entry: HoverEntry | null) => Promise<void>>(async () => {});
+  const driftRef = useRef(drift);
 
   /**
    * How many members a district will draw.
@@ -129,6 +136,7 @@ export function ArchitectureRoom() {
         return;
       }
 
+      const startedAt = performance.now();
       const total = members.indices.length;
       const truncated = total > EXPLODE_MAX;
       const kept = truncated ? members.indices.slice(0, EXPLODE_MAX) : members.indices;
@@ -156,6 +164,8 @@ export function ArchitectureRoom() {
           drawn: result?.drawn ?? 0,
           edges: result?.edges ?? 0,
           truncated,
+          ms: Math.round(performance.now() - startedAt),
+          measuredHeight: result?.measuredHeight ?? false,
         });
         setExpandState({ kind: "idle" });
       } catch (error) {
@@ -168,6 +178,11 @@ export function ArchitectureRoom() {
   useEffect(() => {
     expandRef.current = expand;
   }, [expand]);
+
+  useEffect(() => {
+    driftRef.current = drift;
+    sceneRef.current?.setDrift(drift);
+  }, [drift]);
 
   // Escape closes the district: the universal "go back a level", and cheaper than aiming at a solid.
   useEffect(() => {
@@ -209,6 +224,7 @@ export function ArchitectureRoom() {
         setSceneFailed((error as Error).message);
         return;
       }
+      scene.setDrift(driftRef.current);
       scene.onHoverChange(setHover);
       scene.onPickChange(setSelected);
       scene.onExplode((entry) => void expandRef.current(entry));
@@ -383,8 +399,13 @@ export function ArchitectureRoom() {
                   {expanded.truncated ? " (largest by member count; the rest are not drawn)" : ""} ·{" "}
                   {expanded.edges.toLocaleString()} member edges ({MEMBER_EDGE_KINDS})
                 </span>
+                {!expanded.measuredHeight && (
+                  <span className="text-[10px] leading-relaxed text-amber-200/80">
+                    heights are constant — this bundle reports no per-member complexity
+                  </span>
+                )}
                 <span className="text-[10px] leading-relaxed text-zinc-500">
-                  drift paused while a district is open — drag to orbit, scroll to zoom
+                  opened in {(expanded.ms / 1000).toFixed(1)} s · drag to orbit, scroll to zoom
                 </span>
               </div>
             )}
@@ -394,6 +415,7 @@ export function ArchitectureRoom() {
             <Toggle on={layer === "packages"} onClick={() => setLayer("packages")}>namespace › package</Toggle>
             <Toggle on={layer === "communities"} onClick={() => setLayer("communities")}>communities</Toggle>
             <Toggle on={edges} onClick={() => setEdges((value) => !value)}>edges {edges ? "on" : "off"}</Toggle>
+            <Toggle on={drift} onClick={() => setDrift((value) => !value)}>drift {drift ? "on" : "off"}</Toggle>
           </div>
         </div>
         <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
