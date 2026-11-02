@@ -44,7 +44,13 @@ export function ArchitectureRoom() {
   } | null>(null);
   const [expandState, setExpandState] = useState<
     | { kind: "idle" }
-    | { kind: "loading"; title: string }
+    | {
+        kind: "loading";
+        title: string;
+        phase: "members" | "engine" | "parsing" | "expanding";
+        loaded?: number;
+        total?: number;
+      }
     | { kind: "absent"; title: string; reason: string }
     | { kind: "failed"; title: string; reason: string }
   >({ kind: "idle" });
@@ -109,7 +115,7 @@ export function ArchitectureRoom() {
         });
         return;
       }
-      setExpandState({ kind: "loading", title: entry.title });
+      setExpandState({ kind: "loading", title: entry.title, phase: "members" });
       sceneRef.current?.collapse();
       setExpanded(null);
 
@@ -128,7 +134,16 @@ export function ArchitectureRoom() {
       const kept = truncated ? members.indices.slice(0, EXPLODE_MAX) : members.indices;
 
       try {
-        const subgraph = await expandMembers(kept, 0);
+        const subgraph = await expandMembers(kept, 0, (progress) => {
+          setExpandState({
+            kind: "loading",
+            title: entry.title,
+            phase: progress.phase,
+            loaded: progress.loaded,
+            total: progress.total,
+          });
+        });
+        setExpandState({ kind: "loading", title: entry.title, phase: "expanding" });
         const result = sceneRef.current?.expand(
           entry.id,
           subgraph.nodes.map((n) => ({ index: n.index, complexity: n.complexity })),
@@ -343,7 +358,12 @@ export function ArchitectureRoom() {
               </span>
             )}
             {expandState.kind === "loading" && (
-              <Chip tone="blue">reading {expandState.title}'s members…</Chip>
+              <ProgressPanel
+                title={expandState.title}
+                phase={expandState.phase}
+                loaded={expandState.loaded}
+                total={expandState.total}
+              />
             )}
             {expandState.kind === "absent" && (
               <Chip tone="zinc">
@@ -387,6 +407,69 @@ export function ArchitectureRoom() {
           <Buckets view={view!} />
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * What is happening, with a bar only where a bar can be honest.
+ *
+ * The payload download reports real bytes, so it gets a real percentage. The WASM parse and the expand scan
+ * report nothing, so they get an indeterminate bar and a sentence naming the phase — a moving stripe that
+ * pretends to be 70% done is the lie this panel exists to avoid.
+ */
+function ProgressPanel({
+  title,
+  phase,
+  loaded,
+  total,
+}: {
+  title: string;
+  phase: "members" | "engine" | "parsing" | "expanding";
+  loaded?: number;
+  total?: number;
+}) {
+  const measuring = phase === "engine" && typeof total === "number" && total > 0;
+  const fraction = measuring && typeof loaded === "number" ? Math.min(1, loaded / total!) : null;
+  const mib = (bytes?: number) => (typeof bytes === "number" ? (bytes / (1024 * 1024)).toFixed(1) : null);
+  const label =
+    phase === "members"
+      ? `reading ${title}'s membership…`
+      : phase === "engine"
+        ? fraction === null
+          ? "loading the graph engine…"
+          : `loading the graph engine — ${mib(loaded)} of ${mib(total)} MiB (${Math.round(fraction * 100)}%)`
+        : phase === "parsing"
+          ? "parsing the graph engine (no progress to report — this is the slow step the first time)"
+          : "placing members…";
+
+  return (
+    <div className="w-72 rounded-md border border-sky-500/30 bg-sky-500/[0.08] px-2 py-1.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-medium leading-none text-sky-100">{title}</span>
+        <span className="text-[10px] tabular-nums leading-none text-sky-200/80">
+          {measuring && fraction !== null ? `${Math.round(fraction * 100)}%` : ""}
+        </span>
+      </div>
+      <div
+        className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-white/10"
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={measuring ? 0 : undefined}
+        aria-valuemax={measuring ? 100 : undefined}
+        aria-valuenow={measuring && fraction !== null ? Math.round(fraction * 100) : undefined}
+        aria-valuetext={label}
+      >
+        {fraction !== null ? (
+          <div
+            className="h-full rounded-full bg-sky-400 transition-[width] duration-200"
+            style={{ width: `${Math.max(2, fraction * 100)}%` }}
+          />
+        ) : (
+          <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-400/70" />
+        )}
+      </div>
+      <div className="mt-1 text-[10px] leading-snug text-sky-200/80">{label}</div>
     </div>
   );
 }
