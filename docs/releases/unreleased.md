@@ -1,8 +1,37 @@
-# Unreleased (post v0.4.22)
+# Unreleased (post v0.4.23)
 
 <!-- Add bullets here during development; move to docs/releases/v0.4.x.md at tag time. -->
 
 ## Highlights
+
+### Tier-1 AST & Deep-Analysis Coverage Enforcement (`rgctl-ast-coverage`, `rgctl-analysis`, `rgctl-lang-java`)
+
+Replaced permissive `"Skip"`-based AST coverage checks with a **5-pillar compile-time and CI enforcement architecture** across all 24 Tier-1 tree-sitter languages, using **Java (`rgctl-lang-java`, 98.0% Grade `A+`)** as the gold reference implementation:
+
+1. **Pillar 1 — Structured Passive Classification & Semantic Node Denylist (`crates/rgctl-ast-coverage`, `crates/rgctl-plugin-api`)**:
+   - Extended `HandlerMask` and `ALLOWED_HANDLERS` with explicit passive categories: `SkipWrapper` (structural syntax containers transparent to tree walking), `SkipTypeToken` (leaf primitive/modifier tokens consumed by parent handlers), and `Unimplemented` (tracked backlog requiring a non-empty reason in `skip_justifications`).
+   - Added `is_semantic_node_kind(kind)` denylist enforcement (`*_declaration`, `*_definition`, `*_statement`, `*_expression`, `*_invocation`, `*_call*`, `*_creation*`, `*_clause`, `*_pattern`, `*_directive`, `lambda*`, `closure*`) so semantic AST kinds cannot be silently dismissed without an explicit `skip_justifications` entry.
+   - Removed the `(often Skip)` suggestion from `check_manifest` error diagnostics when a grammar pin introduces new named AST kinds.
+2. **Pillar 2 — Quantitative Semantic AST Coverage Ratio & Monotonic Ratchet (`crates/rgctl-ast-coverage`)**:
+   - Added `CoverageGrade` (`A+` $\ge 85\%$, `A` $\ge 75\%$, `B` $\ge 50\%$, `C` $< 50\%$), `SemanticCoverageStats`, and `compute_semantic_coverage` over the semantic denominator (`handled + skip + unimplemented`, excluding `SkipWrapper` and `SkipTypeToken`).
+   - Added `min_handled_kinds` and `target_grade` monotonic ratchet fields to `CoverageSpec` across all 24 Tier-1 languages in `bundled_specs()` so handled AST counts and coverage grades can never regress.
+3. **Pillar 3 — Dispatch Table Gating & Three-Way Manifest Sync (`crates/rgctl-lang-java`, `crates/rgctl-analysis`, `crates/rgctl-ast-coverage`)**:
+   - Gated `crates/rgctl-lang-java/src/single_pass.rs` on `mask.is_passive()` so AST kinds marked passive in `java-ast-coverage.json` cannot execute hidden extraction logic.
+   - Exposed `cfg_handled_kinds(language_id)` in `crates/rgctl-analysis/src/cfg_builder.rs` and `def_use_handled_kinds(language_id)` in `crates/rgctl-analysis/src/def_use.rs`, and enforced 3-way agreement (`{id}-ast-coverage.json` $\leftrightarrow$ `plugin.declared_ast_handlers()` $\leftrightarrow$ `cfg_builder` / `def_use`) via `check_plugin_and_analysis_manifest_sync`.
+4. **Pillar 4 — Cross-Layer Behavioral Parity Gate (`crates/rgctl-analysis/tests/tier1_parity_gate.rs`)**:
+   - Added a 6-test cross-layer parity suite verifying all 24 Tier-1 languages across:
+     - Manifest ratchets & 3-way handler sync (`tier1_all_24_languages_pass_manifest_ratchet_and_three_way_sync`),
+     - **Layer A**: Symbol & relation extraction invariants (`tier1_layer_a_symbol_and_relation_invariants`),
+     - **Layer B**: CFG block/edge construction & PDG def-use invariants (`tier1_layer_b_cfg_and_pdg_invariants`),
+     - **Layer C**: Bundled taint rules ($\ge 1$ source, sink, and sanitizer across all 20 `taint_enabled` languages, adding `crates/rgctl-analysis/rules/taint/tier1-extended.yaml` for `swift`, `scala`, `dart`, `elixir`, `lua`, `bash` and sanitizer rules to `groovy.yaml` and `puppet.yaml`, plus Spring/JPA/JNDI/SpEL/deserialization rules in `java.yaml`),
+     - **Layer F**: `field_write_locals::language_visit_fn` registration & OOP metadata invariants (`tier1_layer_f_field_write_locals_and_oop_metadata_invariants`),
+     - **Corpus Hotspot Audit**: Unhandled AST node frequency ranking (`tier1_corpus_unhandled_ast_hotspot_audit`).
+5. **Pillar 5 — Unconditional `assert_all_exercised()` & Hotspot Telemetry (`crates/rgctl-ast-coverage/src/tracker.rs`, `scripts/check-tier1-coverage.py`)**:
+   - Added `record_skip_hit`, `skip_hit_count`, and `unhandled_hotspots(top_n)` to `AstCoverageTracker`.
+   - Upgraded Java (`crates/rgctl-lang-java/java-ast-coverage.json`) to **100 active handled kinds (`100/102 = 98.0%`, Grade `A+`)** with `0` raw `Skip`s (`31 SkipWrapper`, `9 SkipTypeToken`, `2 Unimplemented`) and unconditional `tracker.assert_all_exercised()` in both `java_depth_extraction.rs` and `tests/java_langfeatures.rs` (all 83 plugin-dispatched Java AST kinds exercised).
+   - Added [`scripts/check-tier1-coverage.py`](../../scripts/check-tier1-coverage.py) (`--json`, `--language <id>`, `--run-tests`) to audit all **69 languages** and classify them into honest sub-tiers (`1 Tier-1 Gold`, `13 Tier-1 Deep`, `6 Tier-1 Shallow`, `4 Tier-1 DSL`, `3 Mainframe Custom`, `42 Tier-2 tags.scm`).
+
+---
 
 ### Agent Pack Skills Split, Slash Commands & Guide Alignment (`skills/`, `agent-pack/`)
 
