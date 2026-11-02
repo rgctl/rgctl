@@ -109,13 +109,328 @@ impl GroovyPlugin {
         while let Some(n) = current {
             if matches!(
                 n.kind(),
-                "class_declaration" | "interface_declaration" | "enum_declaration"
+                "class_declaration"
+                    | "interface_declaration"
+                    | "enum_declaration"
+                    | "record_declaration"
+                    | "annotation_type_declaration"
             ) {
                 return Self::type_name(n, source);
             }
             current = n.parent();
         }
         None
+    }
+
+    fn enclosing_callable_qn(
+        node: Node,
+        source: &[u8],
+        package: Option<&str>,
+    ) -> Option<String> {
+        let mut current = node.parent();
+        while let Some(n) = current {
+            match n.kind() {
+                "method_declaration" | "function_definition" => {
+                    let name = n
+                        .child_by_field_name("name")
+                        .and_then(|c| c.utf8_text(source).ok())
+                        .map(|s| s.trim().to_string())?;
+                    return Some(if let Some(cls) = Self::enclosing_class(n, source) {
+                        Self::qualify(package, &format!("{cls}.{name}"))
+                    } else {
+                        Self::qualify(package, &name)
+                    });
+                }
+                "constructor_declaration" | "compact_constructor_declaration" => {
+                    let cls = Self::enclosing_class(n, source).unwrap_or_else(|| "Unknown".into());
+                    return Some(Self::qualify(package, &format!("{cls}.<init>")));
+                }
+                "static_initializer" => {
+                    let cls = Self::enclosing_class(n, source).unwrap_or_else(|| "Unknown".into());
+                    return Some(Self::qualify(package, &format!("{cls}.<clinit>")));
+                }
+                "lambda_expression" | "closure" => {
+                    // Prefer the outer named callable as the relation source.
+                }
+                _ => {}
+            }
+            current = n.parent();
+        }
+        None
+    }
+
+    pub(crate) fn extract_package_symbol(
+        &self,
+        node: Node,
+        source: &[u8],
+        file: &str,
+    ) -> Option<Symbol> {
+        let mut cursor = node.walk();
+        let name = node
+            .children(&mut cursor)
+            .find(|c| matches!(c.kind(), "identifier" | "scoped_identifier" | "type_identifier"))
+            .and_then(|n| n.utf8_text(source).ok())
+            .map(|s| s.trim().to_string())?;
+        Some(Symbol {
+            name: name.clone(),
+            symbol_type: SymbolType::Module,
+            qualified_name: Some(name),
+            location: Self::loc(file, node),
+            signature: None,
+            return_type: None,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({ "language": "groovy", "groovy_kind": "package" }),
+        })
+    }
+
+    pub(crate) fn extract_static_initializer(
+        &self,
+        node: Node,
+        source: &[u8],
+        file: &str,
+        package: Option<&str>,
+    ) -> Option<Symbol> {
+        let owner = Self::enclosing_class(node, source).unwrap_or_else(|| "Unknown".into());
+        let qn = Self::qualify(package, &format!("{owner}.<clinit>"));
+        Some(Symbol {
+            name: "<clinit>".into(),
+            symbol_type: SymbolType::Function,
+            qualified_name: Some(qn),
+            location: Self::loc(file, node),
+            signature: node
+                .utf8_text(source)
+                .ok()
+                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            return_type: None,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({
+                "language": "groovy",
+                "is_static_initializer": true,
+            }),
+        })
+    }
+
+    pub(crate) fn extract_lambda_symbol(
+        &self,
+        node: Node,
+        source: &[u8],
+        file: &str,
+        package: Option<&str>,
+        idx: u32,
+    ) -> Option<Symbol> {
+        let name = format!("$lambda${idx}");
+        let owner = Self::enclosing_callable_qn(node, source, package)
+            .or_else(|| {
+                Self::enclosing_class(node, source).map(|c| Self::qualify(package, &c))
+            });
+        let qn = owner.map(|o| format!("{o}.{name}"));
+        Some(Symbol {
+            name,
+            symbol_type: SymbolType::Function,
+            qualified_name: qn,
+            location: Self::loc(file, node),
+            signature: node
+                .utf8_text(source)
+                .ok()
+                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            return_type: None,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({ "language": "groovy", "is_lambda": true }),
+        })
+    }
+
+    pub(crate) fn extract_closure_symbol(
+        &self,
+        node: Node,
+        source: &[u8],
+        file: &str,
+        package: Option<&str>,
+        idx: u32,
+    ) -> Option<Symbol> {
+        let name = format!("$closure${idx}");
+        let owner = Self::enclosing_callable_qn(node, source, package)
+            .or_else(|| {
+                Self::enclosing_class(node, source).map(|c| Self::qualify(package, &c))
+            });
+        let qn = owner.map(|o| format!("{o}.{name}"));
+        Some(Symbol {
+            name,
+            symbol_type: SymbolType::Function,
+            qualified_name: qn,
+            location: Self::loc(file, node),
+            signature: node
+                .utf8_text(source)
+                .ok()
+                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            return_type: None,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({ "language": "groovy", "is_closure": true }),
+        })
+    }
+
+    pub(crate) fn extract_annotation_element(
+        &self,
+        node: Node,
+        source: &[u8],
+        file: &str,
+        package: Option<&str>,
+    ) -> Option<Symbol> {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            .map(|s| s.trim().to_string())?;
+        let owner = Self::enclosing_class(node, source)?;
+        let qn = Self::qualify(package, &format!("{owner}.{name}"));
+        let return_type = node
+            .child_by_field_name("type")
+            .and_then(|n| n.utf8_text(source).ok())
+            .map(|s| s.trim().to_string());
+        Some(Symbol {
+            name,
+            symbol_type: SymbolType::Function,
+            qualified_name: Some(qn),
+            location: Self::loc(file, node),
+            signature: node
+                .utf8_text(source)
+                .ok()
+                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            return_type,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({
+                "language": "groovy",
+                "is_annotation_element": true,
+            }),
+        })
+    }
+
+    pub(crate) fn extract_module_symbol(
+        &self,
+        node: Node,
+        source: &[u8],
+        file: &str,
+    ) -> Option<Symbol> {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())?;
+        Some(Symbol {
+            name: name.clone(),
+            symbol_type: SymbolType::Module,
+            qualified_name: Some(name),
+            location: Self::loc(file, node),
+            signature: None,
+            return_type: None,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({ "language": "groovy", "groovy_kind": "module" }),
+        })
+    }
+
+    pub(crate) fn extract_field_symbol(
+        &self,
+        node: Node,
+        source: &[u8],
+        file: &str,
+        package: Option<&str>,
+    ) -> Option<Symbol> {
+        let mut cursor = node.walk();
+        let declarator = node
+            .children(&mut cursor)
+            .find(|c| c.kind() == "variable_declarator")?;
+        let name = declarator
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            .map(|s| s.trim().to_string())
+            .or_else(|| {
+                let mut c = declarator.walk();
+                declarator.children(&mut c).find_map(|n| {
+                    if n.kind() == "identifier" {
+                        n.utf8_text(source).ok().map(|s| s.trim().to_string())
+                    } else {
+                        None
+                    }
+                })
+            })?;
+        let owner = Self::enclosing_class(node, source);
+        let qn = match &owner {
+            Some(cls) => Self::qualify(package, &format!("{cls}.{name}")),
+            None => Self::qualify(package, &name),
+        };
+        Some(Symbol {
+            name,
+            symbol_type: SymbolType::Variable,
+            qualified_name: Some(qn),
+            location: Self::loc(file, node),
+            signature: node
+                .utf8_text(source)
+                .ok()
+                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            return_type: node
+                .child_by_field_name("type")
+                .and_then(|n| n.utf8_text(source).ok())
+                .map(|s| s.trim().to_string()),
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({ "language": "groovy", "is_field": true }),
+        })
+    }
+
+    pub(crate) fn extract_enum_constant(
+        &self,
+        node: Node,
+        source: &[u8],
+        file: &str,
+        package: Option<&str>,
+    ) -> Option<Symbol> {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            .map(|s| s.trim().to_string())
+            .or_else(|| {
+                let mut c = node.walk();
+                node.children(&mut c).find_map(|n| {
+                    if n.kind() == "identifier" {
+                        n.utf8_text(source).ok().map(|s| s.trim().to_string())
+                    } else {
+                        None
+                    }
+                })
+            })?;
+        let owner = Self::enclosing_class(node, source).unwrap_or_else(|| "Unknown".into());
+        let qn = Self::qualify(package, &format!("{owner}.{name}"));
+        Some(Symbol {
+            name,
+            symbol_type: SymbolType::Variable,
+            qualified_name: Some(qn),
+            location: Self::loc(file, node),
+            signature: None,
+            return_type: None,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({ "language": "groovy", "is_enum_constant": true }),
+        })
     }
 
     pub(crate) fn extract_parameters(&self, node: Node, source: &[u8]) -> Vec<Parameter> {
@@ -292,49 +607,239 @@ impl GroovyPlugin {
         file_path: &Path,
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
+        let package = Self::package_name(root, source);
+        let file = file_path.to_string_lossy();
         let mut stack = vec![root];
         while let Some(node) = stack.pop() {
-            if node.kind() == "class_declaration"
-                && let Some(from) = Self::type_name(node, source)
-            {
-                let package = Self::package_name(root, source);
-                let from_qn = Self::qualify(package.as_deref(), &from);
-                let header = node
-                    .utf8_text(source)
-                    .ok()
-                    .map(|s| s.lines().next().unwrap_or("").to_string())
-                    .unwrap_or_default();
-                if let Some(rest) = header.split_once("extends").map(|(_, r)| r) {
-                    let parent = rest.split(['{', ',', 'i']).next().unwrap_or("").trim();
-                    if !parent.is_empty() {
-                        relations.push(Relation {
-                            from: from_qn.clone(),
-                            to: parent.to_string(),
-                            relation_type: RelationType::Extends,
-                            location: Self::loc(&file_path.to_string_lossy(), node),
-                            metadata: serde_json::json!({ "language": "groovy" }),
-                            to_qualified_hint: None,
-                            to_type_hint: None,
-                        });
+            match node.kind() {
+                "class_declaration" | "record_declaration" => {
+                    if let Some(from) = Self::type_name(node, source) {
+                        let from_qn = Self::qualify(package.as_deref(), &from);
+                        let header = node
+                            .utf8_text(source)
+                            .ok()
+                            .map(|s| s.lines().next().unwrap_or("").to_string())
+                            .unwrap_or_default();
+                        if let Some(rest) = header.split_once("extends").map(|(_, r)| r) {
+                            let parent = rest.split(['{', ',', 'i']).next().unwrap_or("").trim();
+                            if !parent.is_empty() {
+                                relations.push(Relation {
+                                    from: from_qn.clone(),
+                                    to: parent.to_string(),
+                                    relation_type: RelationType::Extends,
+                                    location: Self::loc(&file, node),
+                                    metadata: serde_json::json!({ "language": "groovy" }),
+                                    to_qualified_hint: None,
+                                    to_type_hint: None,
+                                });
+                            }
+                        }
+                        if let Some(rest) = header.split_once("implements").map(|(_, r)| r) {
+                            for iface in rest
+                                .split(['{', ',', 'p'])
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty() && *s != "permits")
+                            {
+                                if iface.starts_with("permits") {
+                                    continue;
+                                }
+                                relations.push(Relation {
+                                    from: from_qn.clone(),
+                                    to: iface.to_string(),
+                                    relation_type: RelationType::Implements,
+                                    location: Self::loc(&file, node),
+                                    metadata: serde_json::json!({ "language": "groovy" }),
+                                    to_qualified_hint: None,
+                                    to_type_hint: None,
+                                });
+                            }
+                        }
+                        if let Some(rest) = header.split_once("permits").map(|(_, r)| r) {
+                            for permitted in rest
+                                .split(['{', ','])
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                            {
+                                relations.push(Relation {
+                                    from: from_qn.clone(),
+                                    to: permitted.to_string(),
+                                    relation_type: RelationType::References,
+                                    location: Self::loc(&file, node),
+                                    metadata: serde_json::json!({
+                                        "language": "groovy",
+                                        "permits": true
+                                    }),
+                                    to_qualified_hint: None,
+                                    to_type_hint: None,
+                                });
+                            }
+                        }
                     }
                 }
-                if let Some(rest) = header.split_once("implements").map(|(_, r)| r) {
-                    for iface in rest
-                        .split(['{', ','])
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
+                "field_access" => {
+                    if let Some(from) =
+                        Self::enclosing_callable_qn(node, source, package.as_deref())
+                        && let Some(field) = node.child_by_field_name("field")
+                        && let Ok(name) = field.utf8_text(source)
                     {
+                        let name = name.trim();
+                        if !name.is_empty() {
+                            relations.push(Relation {
+                                from,
+                                to: name.to_string(),
+                                relation_type: RelationType::References,
+                                location: Self::loc(&file, node),
+                                metadata: serde_json::json!({ "language": "groovy" }),
+                                to_qualified_hint: None,
+                                to_type_hint: None,
+                            });
+                        }
+                    }
+                }
+                "array_creation_expression" => {
+                    if let Some(from) =
+                        Self::enclosing_callable_qn(node, source, package.as_deref())
+                        && let Some(type_node) = node.child_by_field_name("type")
+                        && let Ok(raw) = type_node.utf8_text(source)
+                    {
+                        let simple = raw.split('<').next().unwrap_or(raw).trim();
+                        let last = simple.rsplit('.').next().unwrap_or(simple);
+                        if !last.is_empty() {
+                            relations.push(Relation {
+                                from,
+                                to: last.to_string(),
+                                relation_type: RelationType::Instantiates,
+                                location: Self::loc(&file, node),
+                                metadata: serde_json::json!({
+                                    "language": "groovy",
+                                    "array": true
+                                }),
+                                to_qualified_hint: None,
+                                to_type_hint: Some(last.to_string()),
+                            });
+                        }
+                    }
+                }
+                "class_literal" => {
+                    if let Some(from) =
+                        Self::enclosing_callable_qn(node, source, package.as_deref())
+                        && let Some(type_node) = node.named_child(0)
+                        && let Ok(raw) = type_node.utf8_text(source)
+                    {
+                        let simple = raw.split('<').next().unwrap_or(raw).trim();
+                        let last = simple.rsplit('.').next().unwrap_or(simple);
+                        if !last.is_empty() {
+                            relations.push(Relation {
+                                from,
+                                to: last.to_string(),
+                                relation_type: RelationType::References,
+                                location: Self::loc(&file, node),
+                                metadata: serde_json::json!({
+                                    "language": "groovy",
+                                    "class_literal": true
+                                }),
+                                to_qualified_hint: None,
+                                to_type_hint: Some(last.to_string()),
+                            });
+                        }
+                    }
+                }
+                "method_reference" => {
+                    if let Some(from) =
+                        Self::enclosing_callable_qn(node, source, package.as_deref())
+                    {
+                        let to = node
+                            .child_by_field_name("name")
+                            .or_else(|| node.child_by_field_name("method"))
+                            .and_then(|n| n.utf8_text(source).ok())
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_else(|| "method_ref".into());
                         relations.push(Relation {
-                            from: from_qn.clone(),
-                            to: iface.to_string(),
-                            relation_type: RelationType::Implements,
-                            location: Self::loc(&file_path.to_string_lossy(), node),
-                            metadata: serde_json::json!({ "language": "groovy" }),
+                            from,
+                            to,
+                            relation_type: RelationType::Calls,
+                            location: Self::loc(&file, node),
+                            metadata: serde_json::json!({
+                                "language": "groovy",
+                                "method_reference": true
+                            }),
                             to_qualified_hint: None,
                             to_type_hint: None,
                         });
                     }
                 }
+                "method_declaration" | "constructor_declaration" | "function_definition" => {
+                    if let Some(throws) = {
+                        let mut c = node.walk();
+                        node.children(&mut c).find(|ch| ch.kind() == "throws")
+                    } {
+                        let from = match node.kind() {
+                            "constructor_declaration" => {
+                                let cls = Self::enclosing_class(node, source)
+                                    .unwrap_or_else(|| "Unknown".into());
+                                Self::qualify(package.as_deref(), &format!("{cls}.<init>"))
+                            }
+                            _ => {
+                                let name = node
+                                    .child_by_field_name("name")
+                                    .and_then(|n| n.utf8_text(source).ok())
+                                    .map(|s| s.trim().to_string())
+                                    .unwrap_or_default();
+                                if let Some(cls) = Self::enclosing_class(node, source) {
+                                    Self::qualify(package.as_deref(), &format!("{cls}.{name}"))
+                                } else {
+                                    Self::qualify(package.as_deref(), &name)
+                                }
+                            }
+                        };
+                        if let Ok(text) = throws.utf8_text(source) {
+                            for raw in text.trim_start_matches("throws").split(',') {
+                                let simple = raw.trim().rsplit('.').next().unwrap_or("").trim();
+                                if simple.is_empty() {
+                                    continue;
+                                }
+                                relations.push(Relation {
+                                    from: from.clone(),
+                                    to: simple.to_string(),
+                                    relation_type: RelationType::References,
+                                    location: Self::loc(&file, throws),
+                                    metadata: serde_json::json!({
+                                        "language": "groovy",
+                                        "throws": true
+                                    }),
+                                    to_qualified_hint: None,
+                                    to_type_hint: Some(simple.to_string()),
+                                });
+                            }
+                        }
+                    }
+                }
+                "module_declaration" => {
+                    let module_name = node
+                        .child_by_field_name("name")
+                        .and_then(|n| n.utf8_text(source).ok())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if !module_name.is_empty()
+                        && let Some(body) = node.child_by_field_name("body")
+                    {
+                        let mut c = body.walk();
+                        for directive in body.children(&mut c) {
+                            Self::push_module_directive_relation(
+                                directive,
+                                source,
+                                &file,
+                                &module_name,
+                                relations,
+                            );
+                        }
+                    }
+                }
+                "annotated_type" => {
+                    // Type-use annotation site; AnnotatedWith emitted from modifiers walk.
+                }
+                _ => {}
             }
             if matches!(
                 node.kind(),
@@ -342,6 +847,7 @@ impl GroovyPlugin {
                     | "interface_declaration"
                     | "enum_declaration"
                     | "annotation_type_declaration"
+                    | "record_declaration"
                     | "method_declaration"
                     | "function_definition"
                     | "constructor_declaration"
@@ -360,6 +866,66 @@ impl GroovyPlugin {
             }
         }
         Ok(())
+    }
+
+    fn push_module_directive_relation(
+        directive: Node,
+        source: &[u8],
+        file: &str,
+        module_name: &str,
+        relations: &mut Vec<Relation>,
+    ) {
+        let (relation_type, to) = match directive.kind() {
+            "requires_module_directive" => {
+                let to = directive
+                    .child_by_field_name("module")
+                    .and_then(|n| n.utf8_text(source).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+                (RelationType::DependsOn, to)
+            }
+            "exports_module_directive" | "opens_module_directive" => {
+                let to = directive
+                    .child_by_field_name("package")
+                    .and_then(|n| n.utf8_text(source).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+                (RelationType::Defines, to)
+            }
+            "uses_module_directive" => {
+                let to = directive
+                    .child_by_field_name("type")
+                    .and_then(|n| n.utf8_text(source).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+                (RelationType::Uses, to)
+            }
+            "provides_module_directive" => {
+                let to = directive
+                    .child_by_field_name("provided")
+                    .or_else(|| directive.child_by_field_name("type"))
+                    .and_then(|n| n.utf8_text(source).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+                (RelationType::Uses, to)
+            }
+            _ => return,
+        };
+        if to.is_empty() {
+            return;
+        }
+        relations.push(Relation {
+            from: module_name.to_string(),
+            to,
+            relation_type,
+            location: Self::loc(file, directive),
+            metadata: serde_json::json!({
+                "language": "groovy",
+                "module_directive": directive.kind()
+            }),
+            to_qualified_hint: None,
+            to_type_hint: None,
+        });
     }
 
     fn symbols_from_tree(
@@ -657,7 +1223,8 @@ impl GroovyPlugin {
             "class_declaration"
             | "interface_declaration"
             | "enum_declaration"
-            | "annotation_type_declaration" => {
+            | "annotation_type_declaration"
+            | "record_declaration" => {
                 Self::type_name(node, source).map(|n| Self::qualify(package.as_deref(), &n))
             }
             "method_declaration" | "function_definition" => {

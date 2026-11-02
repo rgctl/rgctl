@@ -3104,6 +3104,7 @@ dependencies = [
 name = "rgctl-lang-groovy"
 version = "0.4.24"
 dependencies = [
+ "rgctl-ast-coverage",
  "rgctl-plugin-api",
  "rgctl-plugin-helpers",
  "rgctl-registry",
@@ -3414,6 +3415,7 @@ dependencies = [
 name = "rgctl-lang-puppet"
 version = "0.4.24"
 dependencies = [
+ "rgctl-ast-coverage",
  "rgctl-plugin-api",
  "rgctl-plugin-helpers",
  "rgctl-registry",

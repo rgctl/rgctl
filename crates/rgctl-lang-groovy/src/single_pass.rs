@@ -11,57 +11,91 @@ const MANIFEST_JSON: &str = include_str!("../groovy-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
+    ("annotated_type", HandlerMask::RELATION),
     ("annotation", HandlerMask::RELATION),
     ("annotation_type_declaration", HandlerMask::SYMBOL),
-    ("argument_list", HandlerMask::AST_SKELETON),
+    ("annotation_type_element_declaration", HandlerMask::SYMBOL),
+    ("array_creation_expression", HandlerMask::RELATION),
     ("assert_statement", HandlerMask::CFG_STMT),
-    ("assignment_expression", HandlerMask::CFG_STMT),
+    ("assignment_expression", HandlerMask::AST_SKELETON),
+    ("binary_expression", HandlerMask::CFG_STMT),
     ("block", HandlerMask::CFG_STMT),
     ("break_statement", HandlerMask::CFG_STMT),
     ("catch_clause", HandlerMask::CFG_STMT),
-    ("class_body", HandlerMask::AST_SKELETON),
+    ("catch_formal_parameter", HandlerMask::AST_SKELETON),
     ("class_declaration", HandlerMask::SYMBOL),
+    ("class_literal", HandlerMask::RELATION),
     ("closure", HandlerMask::SYMBOL),
     ("compact_constructor_declaration", HandlerMask::SYMBOL),
     ("constant_declaration", HandlerMask::SYMBOL),
-    ("constructor_body", HandlerMask::AST_SKELETON),
     ("constructor_declaration", HandlerMask::SYMBOL),
     ("continue_statement", HandlerMask::CFG_STMT),
     ("do_statement", HandlerMask::CFG_STMT),
     ("enhanced_for_statement", HandlerMask::CFG_STMT),
-    ("enum_body", HandlerMask::AST_SKELETON),
     ("enum_constant", HandlerMask::SYMBOL),
     ("enum_declaration", HandlerMask::SYMBOL),
     ("explicit_constructor_invocation", HandlerMask::RELATION),
-    ("expression_statement", HandlerMask::CFG_STMT),
+    ("exports_module_directive", HandlerMask::RELATION),
     ("extends_interfaces", HandlerMask::RELATION),
+    ("field_access", HandlerMask::RELATION),
     ("field_declaration", HandlerMask::SYMBOL),
     ("finally_clause", HandlerMask::CFG_STMT),
     ("for_statement", HandlerMask::CFG_STMT),
     ("formal_parameter", HandlerMask::AST_SKELETON),
     ("formal_parameters", HandlerMask::AST_SKELETON),
     ("function_definition", HandlerMask::SYMBOL),
+    ("guard", HandlerMask::CFG_STMT),
     ("if_statement", HandlerMask::CFG_STMT),
-    ("import_declaration", HandlerMask::SYMBOL),
-    ("interface_body", HandlerMask::AST_SKELETON),
+    ("import_declaration", HandlerMask::RELATION),
+    ("inferred_parameters", HandlerMask::AST_SKELETON),
+    ("instanceof_expression", HandlerMask::CFG_STMT),
     ("interface_declaration", HandlerMask::SYMBOL),
     ("juxt_function_call", HandlerMask::RELATION),
     ("labeled_statement", HandlerMask::CFG_STMT),
+    ("lambda_expression", HandlerMask::SYMBOL),
+    ("local_variable_declaration", HandlerMask::AST_SKELETON),
     ("marker_annotation", HandlerMask::RELATION),
     ("method_declaration", HandlerMask::SYMBOL),
     ("method_invocation", HandlerMask::RELATION),
     ("method_reference", HandlerMask::RELATION),
-    ("modifiers", HandlerMask::AST_SKELETON),
+    ("module_declaration", HandlerMask::SYMBOL),
     ("object_creation_expression", HandlerMask::RELATION),
+    ("opens_module_directive", HandlerMask::RELATION),
     ("package_declaration", HandlerMask::SYMBOL),
-    ("program", HandlerMask::AST_SKELETON),
+    ("permits", HandlerMask::RELATION),
+    ("provides_module_directive", HandlerMask::RELATION),
+    ("range_expression", HandlerMask::CFG_STMT),
+    ("record_declaration", HandlerMask::SYMBOL),
+    ("record_pattern", HandlerMask::AST_SKELETON),
+    ("record_pattern_component", HandlerMask::AST_SKELETON),
+    ("requires_module_directive", HandlerMask::RELATION),
+    ("resource", HandlerMask::CFG_STMT),
+    ("resource_specification", HandlerMask::CFG_STMT),
     ("return_statement", HandlerMask::CFG_STMT),
+    ("spread_parameter", HandlerMask::AST_SKELETON),
+    ("static_initializer", HandlerMask::SYMBOL),
+    ("super_interfaces", HandlerMask::RELATION),
+    ("superclass", HandlerMask::RELATION),
     ("switch_block", HandlerMask::CFG_STMT),
     ("switch_block_statement_group", HandlerMask::CFG_STMT),
     ("switch_expression", HandlerMask::CFG_STMT),
+    ("switch_label", HandlerMask::CFG_STMT),
     ("switch_rule", HandlerMask::CFG_STMT),
+    ("synchronized_statement", HandlerMask::CFG_STMT),
+    ("ternary_expression", HandlerMask::CFG_STMT),
     ("throw_statement", HandlerMask::CFG_STMT),
+    ("throws", HandlerMask::RELATION),
     ("try_statement", HandlerMask::CFG_STMT),
+    ("try_with_resources_statement", HandlerMask::CFG_STMT),
+    ("type_arguments", HandlerMask::AST_SKELETON),
+    ("type_bound", HandlerMask::AST_SKELETON),
+    ("type_parameter", HandlerMask::AST_SKELETON),
+    ("type_parameters", HandlerMask::AST_SKELETON),
+    ("type_pattern", HandlerMask::AST_SKELETON),
+    ("unary_expression", HandlerMask::AST_SKELETON),
+    ("update_expression", HandlerMask::AST_SKELETON),
+    ("uses_module_directive", HandlerMask::RELATION),
+    ("variable_declarator", HandlerMask::AST_SKELETON),
     ("while_statement", HandlerMask::CFG_STMT),
     ("yield_statement", HandlerMask::CFG_STMT),
 ];
@@ -116,6 +150,8 @@ pub fn extract_all_single_pass(
     let mut relations = Vec::new();
     let mut pending_calls: Vec<PendingCall<'_>> = Vec::new();
     let mut depth_warned = false;
+    let mut lambda_idx: u32 = 0;
+    let mut closure_idx: u32 = 0;
 
     let mut stack = vec![Visit::Pre(root, 0)];
 
@@ -144,7 +180,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
@@ -152,7 +195,8 @@ pub fn extract_all_single_pass(
                     "class_declaration"
                     | "interface_declaration"
                     | "enum_declaration"
-                    | "annotation_type_declaration" => {
+                    | "annotation_type_declaration"
+                    | "record_declaration" => {
                         if let Some(simple) = GroovyPlugin::type_name(node, source) {
                             let symbol_type = match kind {
                                 "interface_declaration" => SymbolType::Interface,
@@ -166,6 +210,10 @@ pub fn extract_all_single_pass(
                                 _ => ScopeKind::Class,
                             };
                             let qn = GroovyPlugin::qualify(package.as_deref(), &simple);
+                            let mut metadata = serde_json::json!({ "language": "groovy" });
+                            if kind == "record_declaration" {
+                                metadata["is_record"] = serde_json::Value::Bool(true);
+                            }
                             ctx.symbols.push(Symbol {
                                 name: simple.clone(),
                                 symbol_type,
@@ -180,7 +228,7 @@ pub fn extract_all_single_pass(
                                 fields: vec![],
                                 modifiers: vec![],
                                 documentation: None,
-                                metadata: serde_json::json!({ "language": "groovy" }),
+                                metadata,
                             });
                             ctx.enter_scope(
                                 scope_kind,
@@ -248,8 +296,130 @@ pub fn extract_all_single_pass(
                             pushed_scope = true;
                         }
                     }
+                    "static_initializer" => {
+                        if let Some(sym) = plugin.extract_static_initializer(
+                            node,
+                            source,
+                            &file,
+                            package.as_deref(),
+                        ) {
+                            let name = sym.name.clone();
+                            let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
+                            ctx.symbols.push(sym);
+                            ctx.enter_scope(
+                                ScopeKind::Method,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                true,
+                            );
+                            if let Some(f) = ctx.scopes.current_function_mut() {
+                                f.complexity.cyclomatic = 1;
+                                f.complexity.loc = ((node.end_position().row
+                                    - node.start_position().row)
+                                    + 1)
+                                .max(1) as u32;
+                            }
+                            pushed_scope = true;
+                        }
+                    }
+                    "lambda_expression" => {
+                        lambda_idx += 1;
+                        if let Some(sym) = plugin.extract_lambda_symbol(
+                            node,
+                            source,
+                            &file,
+                            package.as_deref(),
+                            lambda_idx,
+                        ) {
+                            let name = sym.name.clone();
+                            let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
+                            ctx.symbols.push(sym);
+                            ctx.enter_scope(
+                                ScopeKind::Lambda,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                true,
+                            );
+                            pushed_scope = true;
+                        }
+                    }
+                    "closure" => {
+                        closure_idx += 1;
+                        if let Some(sym) = plugin.extract_closure_symbol(
+                            node,
+                            source,
+                            &file,
+                            package.as_deref(),
+                            closure_idx,
+                        ) {
+                            let name = sym.name.clone();
+                            let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
+                            ctx.symbols.push(sym);
+                            ctx.enter_scope(
+                                ScopeKind::Lambda,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                true,
+                            );
+                            pushed_scope = true;
+                        }
+                    }
+                    "annotation_type_element_declaration" => {
+                        if let Some(sym) = plugin.extract_annotation_element(
+                            node,
+                            source,
+                            &file,
+                            package.as_deref(),
+                        ) {
+                            ctx.symbols.push(sym);
+                        }
+                    }
+                    "module_declaration" => {
+                        if let Some(sym) = plugin.extract_module_symbol(node, source, &file) {
+                            let name = sym.name.clone();
+                            let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
+                            ctx.symbols.push(sym);
+                            ctx.enter_scope(
+                                ScopeKind::Module,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                true,
+                            );
+                            pushed_scope = true;
+                        }
+                    }
+                    "package_declaration" => {
+                        if let Some(sym) = plugin.extract_package_symbol(node, source, &file) {
+                            ctx.symbols.push(sym);
+                        }
+                    }
                     "import_declaration" => {
                         if let Some(sym) = GroovyPlugin::extract_import_symbol(node, source, &file)
+                        {
+                            ctx.symbols.push(sym);
+                        }
+                    }
+                    "field_declaration" | "constant_declaration" => {
+                        if let Some(sym) = plugin.extract_field_symbol(
+                            node,
+                            source,
+                            &file,
+                            package.as_deref(),
+                        ) {
+                            ctx.symbols.push(sym);
+                        }
+                    }
+                    "enum_constant" => {
+                        if let Some(sym) =
+                            plugin.extract_enum_constant(node, source, &file, package.as_deref())
                         {
                             ctx.symbols.push(sym);
                         }
@@ -319,7 +489,7 @@ pub fn extract_all_single_pass(
         );
     }
 
-    // Extends / implements / AnnotatedWith (same as prior relations_from_tree post-pass).
+    // Extends / implements / AnnotatedWith / field_access / array / class_literal / module.
     plugin.append_type_and_annotation_relations(root, source, file_path, &mut relations)?;
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))

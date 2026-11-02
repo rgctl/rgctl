@@ -11,9 +11,14 @@ const MANIFEST_JSON: &str = include_str!("../ruby-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
+    ("alias", HandlerMask::RELATION),
+    ("alternative_pattern", HandlerMask::AST_SKELETON),
+    ("array_pattern", HandlerMask::AST_SKELETON),
+    ("as_pattern", HandlerMask::AST_SKELETON),
     ("assignment", HandlerMask::AST_SKELETON),
     ("begin", HandlerMask::CFG_STMT),
     ("begin_block", HandlerMask::CFG_STMT),
+    ("binary", HandlerMask::CFG_STMT),
     ("block", HandlerMask::CFG_STMT),
     ("body_statement", HandlerMask::CFG_STMT),
     ("break", HandlerMask::CFG_STMT),
@@ -21,34 +26,53 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("case", HandlerMask::CFG_STMT),
     ("case_match", HandlerMask::CFG_STMT),
     ("class", HandlerMask::SYMBOL),
+    ("conditional", HandlerMask::CFG_STMT),
+    ("destructured_left_assignment", HandlerMask::AST_SKELETON),
     ("do_block", HandlerMask::CFG_STMT),
+    ("element_reference", HandlerMask::AST_SKELETON),
     ("else", HandlerMask::CFG_STMT),
     ("elsif", HandlerMask::CFG_STMT),
+    ("empty_statement", HandlerMask::CFG_STMT),
+    ("end_block", HandlerMask::CFG_STMT),
     ("ensure", HandlerMask::CFG_STMT),
+    ("expression_reference_pattern", HandlerMask::AST_SKELETON),
+    ("find_pattern", HandlerMask::AST_SKELETON),
     ("for", HandlerMask::CFG_STMT),
+    ("hash_pattern", HandlerMask::AST_SKELETON),
     ("if", HandlerMask::CFG_STMT),
     ("if_modifier", HandlerMask::CFG_STMT),
+    ("in_clause", HandlerMask::CFG_STMT),
+    ("keyword_pattern", HandlerMask::AST_SKELETON),
     ("lambda", HandlerMask::SYMBOL),
+    ("lambda_parameters", HandlerMask::AST_SKELETON),
+    ("left_assignment_list", HandlerMask::AST_SKELETON),
+    ("match_pattern", HandlerMask::AST_SKELETON),
     ("method", HandlerMask::SYMBOL),
     ("module", HandlerMask::SYMBOL),
     ("next", HandlerMask::CFG_STMT),
     ("operator_assignment", HandlerMask::AST_SKELETON),
     ("parenthesized_statements", HandlerMask::CFG_STMT),
+    ("range", HandlerMask::AST_SKELETON),
     ("redo", HandlerMask::CFG_STMT),
     ("rescue", HandlerMask::CFG_STMT),
     ("rescue_modifier", HandlerMask::CFG_STMT),
+    ("rest_assignment", HandlerMask::AST_SKELETON),
     ("retry", HandlerMask::CFG_STMT),
     ("return", HandlerMask::CFG_STMT),
+    ("right_assignment_list", HandlerMask::AST_SKELETON),
     ("singleton_class", HandlerMask::SYMBOL),
     ("singleton_method", HandlerMask::SYMBOL),
     ("subshell", HandlerMask::CFG_STMT),
     ("superclass", HandlerMask::RELATION),
+    ("test_pattern", HandlerMask::AST_SKELETON),
     ("then", HandlerMask::CFG_STMT),
+    ("unary", HandlerMask::AST_SKELETON),
     ("undef", HandlerMask::CFG_STMT),
     ("unless", HandlerMask::CFG_STMT),
     ("unless_modifier", HandlerMask::CFG_STMT),
     ("until", HandlerMask::CFG_STMT),
     ("until_modifier", HandlerMask::CFG_STMT),
+    ("variable_reference_pattern", HandlerMask::AST_SKELETON),
     ("when", HandlerMask::CFG_STMT),
     ("while", HandlerMask::CFG_STMT),
     ("while_modifier", HandlerMask::CFG_STMT),
@@ -137,7 +161,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
                 let mut pushed_name = false;
@@ -148,6 +179,34 @@ pub fn extract_all_single_pass(
                     .map(|t| t.qualified_prefix.clone());
 
                 match kind {
+                    "alias" => {
+                        if let (Some(new_n), Some(old_n)) = (
+                            node.child_by_field_name("alias"),
+                            node.child_by_field_name("name"),
+                        ) {
+                            if let (Some(new_name), Some(old_name)) = (
+                                RubyPlugin::constant_text(new_n, source),
+                                RubyPlugin::constant_text(old_n, source),
+                            ) {
+                                let from = match owner_type_qn.as_deref() {
+                                    Some(o) => format!("{o}#{new_name}"),
+                                    None => new_name.clone(),
+                                };
+                                relations.push(Relation {
+                                    from,
+                                    to: old_name.clone(),
+                                    relation_type: RelationType::References,
+                                    location: RubyPlugin::loc(node, &file_path_str),
+                                    metadata: serde_json::json!({
+                                        "language": "ruby",
+                                        "kind": "alias",
+                                    }),
+                                    to_qualified_hint: Some(old_name),
+                                    to_type_hint: None,
+                                });
+                            }
+                        }
+                    }
                     "class" if node.is_named() && node.child_by_field_name("name").is_some() => {
                         let (sym, type_qn) = plugin.extract_class_or_module(
                             node,

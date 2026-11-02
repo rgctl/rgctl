@@ -326,8 +326,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "groovy-ast-coverage.json",
             grammar_prefix: "tree-sitter-groovy@",
             language: || tree_sitter_groovy::LANGUAGE.into(),
-            min_handled_kinds: 70,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 106,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "java",
@@ -380,8 +380,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "puppet-ast-coverage.json",
             grammar_prefix: "tree-sitter-puppet@",
             language: || tree_sitter_puppet::LANGUAGE.into(),
-            min_handled_kinds: 44,
-            target_grade: CoverageGrade::B,
+            min_handled_kinds: 48,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "erb",
@@ -398,8 +398,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "python-ast-coverage.json",
             grammar_prefix: "tree-sitter-python@",
             language: || tree_sitter_python::LANGUAGE.into(),
-            min_handled_kinds: 55,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 95,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "ruby",
@@ -407,8 +407,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "ruby-ast-coverage.json",
             grammar_prefix: "tree-sitter-ruby@",
             language: || tree_sitter_ruby::LANGUAGE.into(),
-            min_handled_kinds: 87,
-            target_grade: CoverageGrade::B,
+            min_handled_kinds: 115,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "rust",

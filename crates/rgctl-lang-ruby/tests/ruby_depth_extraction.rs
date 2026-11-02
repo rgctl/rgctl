@@ -1,4 +1,4 @@
-//! Golden correctness for OpenSpec 3.6.5 Ruby AST depth.
+//! Golden correctness + unconditional AST coverage exercise for Ruby.
 
 use rgctl_lang_ruby::RubyPlugin;
 use rgctl_plugin_api::{LanguagePlugin, RelationType, SymbolType};
@@ -76,9 +76,6 @@ end
 
 #[test]
 fn ast_coverage_all_declared_handlers_exercised() {
-    if std::env::var_os("RGCTL_AST_COVERAGE_TRACK").is_none() {
-        return;
-    }
     const MANIFEST: &str = include_str!("../ruby-ast-coverage.json");
     let lang: tree_sitter::Language = tree_sitter_ruby::LANGUAGE.into();
     let tracker =
@@ -90,56 +87,133 @@ fn ast_coverage_all_declared_handlers_exercised() {
     );
     rgctl_ast_coverage::install_hit_callback(tracker);
 
-    let sources: &[(&str, &[u8])] = &[(
-        "ast_coverage_corpus.rb",
-        br#"
+    let sources: &[(&str, &[u8])] = &[
+        (
+            "ast_coverage_corpus.rb",
+            br#"
+# Coverage corpus exercising every active Ruby AST handler.
 module M; end
 class Animal; end
 class Dog < Animal
   attr_reader :name
   attr_writer :age
   attr_accessor :color
-  def initialize
-    @name = "x"
-  end
-  def run
+  alias bark woof
+
+  def initialize(a, *rest)
+    @name = a
     x = 1
     x += 1
-    if true; elsif false; else; end
-    for i in 1..1; break; end
-    begin; rescue; ensure; end
-    case 1; when 1; end
+    y = a ? 1 : 2
+    (p, q) = [1, 2]
+    r, s = 1, 2
+    *t = 1, 2
+    u = [1, 2]
+    u[0]
+    v = 1..2
+    w = !true
+    w = -1
+    if true
+    elsif false
+    else
+    end
+    unless false
+    end
+    while false
+      break
+      next
+      redo
+    end
+    until true
+    end
+    for i in 1..1
+      break
+    end
+    begin
+      raise "x"
+    rescue StandardError => e
+      retry
+    ensure
+      nil
+    end
+    case 1
+    when 1 then nil
+    else nil
+    end
+    case 1
+    in Integer => n if n > 0
+      n
+    in [a, b]
+      a
+    in [*, 1, *]
+      1
+    in {k:, **nil}
+      k
+    in A | B
+      1
+    in ^(1 + 1)
+      1
+    in ^@name
+      1
+    end
+    1 => Integer
+    1 in Integer
     lambda { |y| y }
     ->(z) { z }
     ping()
+    yield
     return
+    `echo hi`
+    undef ping
   end
+
+  def woof; end
   def self.ping; end
+
+  class << self
+    def class_side; end
+  end
+end
+
+BEGIN { }
+END { }
+;
+top if true
+top unless false
+top while false
+top until true
+top rescue nil
+(1; 2)
+mapped = [1].map do |n|
+  n
+end
+braced = [1].map { |n| n }
+"#,
+        ),
+        (
+            "heredoc_corpus.rb",
+            br#"
+def say
+  <<~MSG
+    hello
+  MSG
 end
 "#,
-    )];
+        ),
+    ];
 
-    let mut present = std::collections::HashSet::new();
     let plugin = RubyPlugin::new().expect("plugin");
     for (path, src) in sources {
-        present.extend(rgctl_ast_coverage::named_kind_ids_in_source(&lang, src));
         plugin
             .extract_all(std::path::Path::new(path), src)
             .expect("extract_all");
     }
 
     let tracker = rgctl_ast_coverage::AstCoverageTracker::global().expect("tracker installed");
-    match tracker.assert_all_exercised() {
-        Ok(msg) => eprintln!("{msg}"),
-        Err(full) => {
-            tracker
-                .assert_present_kinds_exercised(present.iter().copied())
-                .unwrap_or_else(|e| panic!("{e}\n(full gaps: {full})"));
-            assert!(
-                tracker.total_hits() > 0,
-                "RGCTL_AST_COVERAGE_TRACK=1 but no dispatch hits recorded"
-            );
-            eprintln!("soft-gate (full assert not met): {full}");
-        }
-    }
+    let summary = tracker
+        .assert_all_exercised()
+        .expect("every active Ruby AST kind in ruby-ast-coverage.json must be exercised");
+    eprintln!("{summary}");
+    let hotspots = tracker.unhandled_hotspots(10);
+    eprintln!("ruby unhandled hotspots: {hotspots:?}");
 }
