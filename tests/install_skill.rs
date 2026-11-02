@@ -83,12 +83,15 @@ fn install_skill_cursor_writes_only_rgctl() {
             .is_file()
     );
     assert!(repo.join(".cursor/skills/rgctl-review/SKILL.md").is_file());
-    assert!(!repo.join(".cursor/skills/rgctl-migrate").exists());
+    assert!(repo.join(".cursor/skills/rgctl-vuln/SKILL.md").is_file());
+    assert!(repo.join(".cursor/skills/rgctl-migrate/SKILL.md").is_file());
     assert!(!repo.join(".cursor/skills/rgctl-kantra").exists());
     assert!(!repo.join(".cursor/skills/rgctl-search").exists());
     assert!(!repo.join(".cursor/skills/rgctl-discover").exists());
-    // Registry: cursor commands_enabled — ships /rgctl-review slash command
+    // Registry: cursor commands_enabled — ships review/vuln/migrate slash commands
     assert!(repo.join(".cursor/commands/rgctl-review.md").is_file());
+    assert!(repo.join(".cursor/commands/rgctl-vuln.md").is_file());
+    assert!(repo.join(".cursor/commands/rgctl-migrate.md").is_file());
 }
 
 #[test]
@@ -147,10 +150,15 @@ fn install_json_schema_v3_shape() {
     let writes = doc["writes"].as_array().expect("writes");
     assert!(writes.iter().any(|w| w["agent"].as_str() == Some("cursor")));
     assert!(writes.iter().any(|w| w["kind"].as_str() == Some("meta")));
-    // Cursor ships the review slash command (`workflow: "review"`) when commands_enabled.
-    assert!(writes.iter().any(|w| {
-        w["kind"].as_str() == Some("command") && w["workflow"].as_str() == Some("review")
-    }));
+    // Cursor ships review/vuln/migrate slash commands when commands_enabled.
+    for workflow in ["review", "vuln", "migrate"] {
+        assert!(
+            writes.iter().any(|w| {
+                w["kind"].as_str() == Some("command") && w["workflow"].as_str() == Some(workflow)
+            }),
+            "missing command write for {workflow}"
+        );
+    }
     assert!(writes.iter().any(|w| w["kind"].as_str() == Some("skill")));
 }
 
@@ -262,11 +270,15 @@ fn install_opencode_and_pi_skills() {
     );
     assert!(repo.join(".opencode/skills/rgctl/SKILL.md").is_file());
     assert!(!repo.join(".opencode/skills/rgctl-search").exists());
-    // Registry: opencode/pi commands_enabled — review slash / prompt is installed with the pack
+    // Registry: opencode/pi commands_enabled — review/vuln/migrate slash / prompts
     assert!(repo.join(".opencode/commands/rgctl-review.md").is_file());
+    assert!(repo.join(".opencode/commands/rgctl-vuln.md").is_file());
+    assert!(repo.join(".opencode/commands/rgctl-migrate.md").is_file());
     assert!(repo.join(".pi/skills/rgctl/SKILL.md").is_file());
     assert!(!repo.join(".pi/skills/rgctl-kantra").exists());
     assert!(repo.join(".pi/prompts/rgctl-review.md").is_file());
+    assert!(repo.join(".pi/prompts/rgctl-vuln.md").is_file());
+    assert!(repo.join(".pi/prompts/rgctl-migrate.md").is_file());
 }
 
 #[test]

@@ -399,16 +399,22 @@ mod codegen_tests {
         let skills = out.join("agents/host-cursor/skills");
         assert!(skills.join("rgctl/SKILL.md").is_file());
         assert!(skills.join("rgctl-review/SKILL.md").is_file());
+        assert!(skills.join("rgctl-vuln/SKILL.md").is_file());
+        assert!(skills.join("rgctl-migrate/SKILL.md").is_file());
         assert!(skills.join("rgctl/references/workflows.md").is_file());
         assert!(!skills.join("rgctl-search").exists());
         assert!(!skills.join("rgctl-discover").exists());
-        assert!(!skills.join("rgctl-migrate").exists());
         assert!(!skills.join("rgctl-gql").exists());
-        let cmd = out.join("agents/host-cursor/commands/rgctl-review.md");
-        assert!(cmd.is_file(), "missing {}", cmd.display());
-        let body = fs::read_to_string(&cmd).expect("cmd");
-        assert!(body.contains("/rgctl:review") || body.contains("rgctl:review"));
-        assert!(body.contains("rgctl-managed: true"));
+        for id in ["review", "vuln", "migrate"] {
+            let cmd = out.join(format!("agents/host-cursor/commands/rgctl-{id}.md"));
+            assert!(cmd.is_file(), "missing {}", cmd.display());
+            let body = fs::read_to_string(&cmd).expect("cmd");
+            assert!(
+                body.contains(&format!("/rgctl:{id}")) || body.contains(&format!("rgctl:{id}")),
+                "{id} command missing slash name"
+            );
+            assert!(body.contains("rgctl-managed: true"));
+        }
     }
 
     #[test]
@@ -417,8 +423,10 @@ mod codegen_tests {
         let pack = repo.join("agent-pack");
         let out = repo.join("target/agent-pack-test-claude-cmd");
         generate(&pack, &out, "test").expect("gen");
-        let cmd = out.join("agents/host-claude/commands/rgctl/rgctl:review.md");
-        assert!(cmd.is_file(), "missing {}", cmd.display());
+        for id in ["review", "vuln", "migrate"] {
+            let cmd = out.join(format!("agents/host-claude/commands/rgctl/rgctl:{id}.md"));
+            assert!(cmd.is_file(), "missing {}", cmd.display());
+        }
     }
 
     #[test]
@@ -449,6 +457,8 @@ mod codegen_tests {
         let forge = out.join("agents/host-forgecode");
         assert!(forge.join("skills/rgctl/SKILL.md").is_file());
         assert!(forge.join("skills/rgctl-review/SKILL.md").is_file());
+        assert!(forge.join("skills/rgctl-vuln/SKILL.md").is_file());
+        assert!(forge.join("skills/rgctl-migrate/SKILL.md").is_file());
         // no commands dir expected (empty commands_subdir)
         assert!(
             !forge.join("commands").exists()
@@ -464,7 +474,7 @@ mod codegen_tests {
     #[test]
     fn dogfood_agents_skills_match_skills_tree() {
         let repo = repo_root();
-        for name in ["rgctl", "rgctl-review"] {
+        for name in ["rgctl", "rgctl-review", "rgctl-vuln", "rgctl-migrate"] {
             let src = repo.join("skills").join(name);
             let dst = repo.join(".agents/skills").join(name);
             assert!(src.is_dir(), "missing skills/{name}");
