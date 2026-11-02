@@ -77,6 +77,12 @@ pub fn language_visit_fn(language: &str) -> Option<VisitFn> {
         "puppet" => visit_puppet,
         "kotlin" | "kt" => visit_kotlin,
         "groovy" => visit_groovy,
+        "lua" => visit_lua,
+        "elixir" | "ex" => visit_elixir,
+        "bash" | "sh" | "shell" => visit_bash,
+        "scala" => visit_scala,
+        "swift" => visit_swift,
+        "dart" => visit_dart,
         _ => return None,
     })
 }
@@ -124,6 +130,14 @@ fn function_name_for_locals(language: &str, node: Node<'_>, source: &[u8]) -> Op
     {
         return find_ancestor_name(node, source, "class_declaration")
             .or_else(|| find_ancestor_name(node, source, "object_declaration"));
+    }
+    if matches!(language, "elixir" | "ex") && node.kind() == "call" {
+        return elixir_def_callable_name(node, source);
+    }
+    if matches!(language, "dart")
+        && matches!(node.kind(), "function_declaration" | "method_declaration")
+    {
+        return dart_callable_name(node, source);
     }
     node.child_by_field_name("name")
         .and_then(|n| text_of(n, source))
@@ -272,6 +286,12 @@ pub fn language_from_path(path: &str) -> String {
             "rb" => "ruby",
             "kt" | "kts" => "kotlin",
             "groovy" | "gradle" => "groovy",
+            "lua" => "lua",
+            "ex" | "exs" => "elixir",
+            "sh" | "bash" => "bash",
+            "scala" | "sc" => "scala",
+            "swift" => "swift",
+            "dart" => "dart",
             _ => "unknown",
         })
         .unwrap_or("unknown")
@@ -1217,6 +1237,566 @@ fn visit_puppet(
     );
 }
 
+/// Lua: parameters + `local` bindings (dynamic — empty type OK).
+fn visit_lua(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) {
+    let kind = node.kind();
+    let mut now_in = in_target;
+    if matches!(kind, "function_declaration" | "function_definition") {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| text_of(n, source))
+            .or_else(|| {
+                let mut c = node.walk();
+                node.children(&mut c).find_map(|ch| {
+                    if matches!(ch.kind(), "identifier" | "dot_index_expression" | "method_index_expression")
+                    {
+                        text_of(ch, source)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_default();
+        // `M.process` / `obj:method` → trailing simple name for lookup.
+        let simple = name.rsplit(['.', ':']).next().unwrap_or(&name);
+        now_in = name == function_name || simple == function_name;
+    }
+    if now_in && kind == "parameters" {
+        let mut c = node.walk();
+        for child in node.children(&mut c) {
+            if child.kind() == "identifier"
+                && let Some(n) = text_of(child, source)
+            {
+                insert_ty(env, &n, "");
+            }
+        }
+    }
+    if now_in && kind == "variable_declaration" {
+        // `local other = …` → assignment_statement → variable_list names.
+        let mut c = node.walk();
+        for child in node.children(&mut c) {
+            if child.kind() == "assignment_statement" {
+                collect_lua_assignment_names(child, source, env);
+            }
+        }
+    }
+    if now_in && kind == "assignment_statement" {
+        collect_lua_assignment_names(node, source, env);
+    }
+    walk_children(
+        node,
+        source,
+        function_name,
+        env,
+        now_in,
+        visit_lua,
+        &["function_declaration", "function_definition"],
+    );
+}
+
+fn collect_lua_assignment_names(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        if child.kind() != "variable_list" {
+            continue;
+        }
+        let mut vc = child.walk();
+        for v in child.children(&mut vc) {
+            if v.kind() == "identifier"
+                && let Some(n) = text_of(v, source)
+            {
+                insert_ty(env, &n, "");
+            }
+        }
+    }
+}
+
+/// Elixir: `def`/`defp` call hosts — params + `=` bindings (dynamic).
+fn visit_elixir(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) {
+    let kind = node.kind();
+    let mut now_in = in_target;
+    if kind == "call" {
+        if let Some(name) = elixir_def_callable_name(node, source) {
+            now_in = name == function_name;
+            if now_in {
+                collect_elixir_def_params(node, source, env);
+            }
+        }
+    }
+    if now_in && kind == "binary_operator" {
+        let is_assign = node
+            .child_by_field_name("operator")
+            .and_then(|n| text_of(n, source))
+            .as_deref()
+            == Some("=");
+        if is_assign
+            && let Some(left) = node.child_by_field_name("left")
+            && left.kind() == "identifier"
+            && let Some(n) = text_of(left, source)
+        {
+            let ty = node
+                .child_by_field_name("right")
+                .filter(|r| r.kind() == "identifier")
+                .and_then(|r| text_of(r, source))
+                .and_then(|rhs| env.get(&rhs).cloned())
+                .unwrap_or_default();
+            insert_ty(env, &n, &ty);
+        }
+    }
+    walk_children(
+        node,
+        source,
+        function_name,
+        env,
+        now_in,
+        visit_elixir,
+        &["call"],
+    );
+}
+
+fn elixir_def_callable_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    const DEF_FORMS: &[&str] = &["def", "defp", "defmacro", "defmacrop"];
+    let mut cursor = node.walk();
+    let head = node.children(&mut cursor).find_map(|ch| {
+        if ch.kind() == "identifier" {
+            ch.utf8_text(source).ok()
+        } else {
+            None
+        }
+    })?;
+    if !DEF_FORMS.contains(&head) {
+        return None;
+    }
+    let args = node.child_by_field_name("arguments").or_else(|| {
+        let mut c = node.walk();
+        node.children(&mut c).find(|ch| ch.kind() == "arguments")
+    })?;
+    let mut c = args.walk();
+    for ch in args.children(&mut c) {
+        match ch.kind() {
+            "call" => {
+                let mut ic = ch.walk();
+                for id in ch.children(&mut ic) {
+                    if id.kind() == "identifier" {
+                        return id.utf8_text(source).ok().map(str::to_string);
+                    }
+                    if id.is_named() {
+                        break;
+                    }
+                }
+            }
+            "identifier" => return ch.utf8_text(source).ok().map(str::to_string),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn collect_elixir_def_params(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
+    let Some(args) = node.child_by_field_name("arguments").or_else(|| {
+        let mut c = node.walk();
+        node.children(&mut c).find(|ch| ch.kind() == "arguments")
+    }) else {
+        return;
+    };
+    let mut c = args.walk();
+    for ch in args.children(&mut c) {
+        if ch.kind() != "call" {
+            continue;
+        }
+        let Some(params) = ch.child_by_field_name("arguments").or_else(|| {
+            let mut pc = ch.walk();
+            ch.children(&mut pc).find(|p| p.kind() == "arguments")
+        }) else {
+            continue;
+        };
+        collect_elixir_param_idents(params, source, env);
+    }
+}
+
+fn collect_elixir_param_idents(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
+    match node.kind() {
+        "identifier" => {
+            if let Some(n) = text_of(node, source) {
+                insert_ty(env, &n, "");
+            }
+        }
+        "binary_operator" => {
+            // `order \\ nil` default — bind left identifier.
+            if let Some(left) = node.child_by_field_name("left") {
+                collect_elixir_param_idents(left, source, env);
+            }
+        }
+        _ => {
+            let mut c = node.walk();
+            for child in node.children(&mut c) {
+                if child.is_named() {
+                    collect_elixir_param_idents(child, source, env);
+                }
+            }
+        }
+    }
+}
+
+/// Bash: `local` / assignment names inside `function_definition` (dynamic).
+fn visit_bash(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) {
+    let kind = node.kind();
+    let mut now_in = in_target;
+    if kind == "function_definition" {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| text_of(n, source))
+            .or_else(|| {
+                let mut c = node.walk();
+                node.children(&mut c).find_map(|ch| {
+                    if ch.kind() == "word" {
+                        text_of(ch, source)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_default();
+        now_in = name == function_name;
+    }
+    if now_in && matches!(kind, "variable_assignment" | "declaration_command") {
+        collect_bash_var_names(node, source, env);
+    }
+    walk_children(
+        node,
+        source,
+        function_name,
+        env,
+        now_in,
+        visit_bash,
+        &["function_definition"],
+    );
+}
+
+fn collect_bash_var_names(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
+    if node.kind() == "variable_assignment" {
+        if let Some(n) = node
+            .child_by_field_name("name")
+            .and_then(|n| text_of(n, source))
+            .or_else(|| {
+                let mut c = node.walk();
+                node.children(&mut c).find_map(|ch| {
+                    if ch.kind() == "variable_name" {
+                        text_of(ch, source)
+                    } else {
+                        None
+                    }
+                })
+            })
+        {
+            insert_ty(env, &n, "");
+        }
+        return;
+    }
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        if matches!(child.kind(), "variable_assignment" | "variable_name") {
+            collect_bash_var_names(child, source, env);
+        }
+    }
+}
+
+/// Scala: typed parameters + `val`/`var` locals.
+fn visit_scala(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) {
+    let kind = node.kind();
+    let mut now_in = in_target;
+    if matches!(kind, "function_definition" | "function_declaration") {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| text_of(n, source))
+            .unwrap_or_default();
+        now_in = name == function_name;
+    }
+    if now_in && kind == "parameter" {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| text_of(n, source));
+        let ty = node
+            .child_by_field_name("type")
+            .and_then(|n| text_of(n, source));
+        if let Some(n) = name {
+            insert_ty(env, &n, ty.as_deref().unwrap_or(""));
+        }
+    }
+    if now_in && matches!(kind, "val_definition" | "var_definition") {
+        let name = node
+            .child_by_field_name("pattern")
+            .and_then(|n| text_of(n, source))
+            .or_else(|| {
+                node.child_by_field_name("name")
+                    .and_then(|n| text_of(n, source))
+            });
+        let ty = node
+            .child_by_field_name("type")
+            .and_then(|n| text_of(n, source));
+        if let Some(n) = name {
+            insert_ty(env, &n, ty.as_deref().unwrap_or(""));
+        }
+    }
+    walk_children(
+        node,
+        source,
+        function_name,
+        env,
+        now_in,
+        visit_scala,
+        &["function_definition", "function_declaration"],
+    );
+}
+
+/// Swift: typed parameters + `let`/`var` property_declaration locals.
+fn visit_swift(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) {
+    let kind = node.kind();
+    let mut now_in = in_target;
+    if matches!(
+        kind,
+        "function_declaration" | "init_declaration" | "deinit_declaration" | "subscript_declaration"
+    ) {
+        let name = if kind == "init_declaration" {
+            "init".to_string()
+        } else if kind == "deinit_declaration" {
+            "deinit".to_string()
+        } else {
+            node.child_by_field_name("name")
+                .and_then(|n| text_of(n, source))
+                .or_else(|| {
+                    let mut c = node.walk();
+                    node.children(&mut c).find_map(|ch| {
+                        if ch.kind() == "simple_identifier" {
+                            text_of(ch, source)
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .unwrap_or_default()
+        };
+        now_in = name == function_name;
+    }
+    if now_in && kind == "parameter" {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| text_of(n, source));
+        let ty = {
+            let mut c = node.walk();
+            node.children(&mut c).find_map(|ch| {
+                if matches!(
+                    ch.kind(),
+                    "user_type" | "type_identifier" | "optional_type" | "dictionary_type" | "array_type"
+                ) {
+                    text_of(ch, source)
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(n) = name {
+            insert_ty(env, &n, ty.as_deref().unwrap_or(""));
+        }
+    }
+    if now_in && kind == "property_declaration" {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| text_of(n, source))
+            .or_else(|| {
+                node.child_by_field_name("pattern")
+                    .and_then(|p| {
+                        p.child_by_field_name("bound_identifier")
+                            .and_then(|n| text_of(n, source))
+                            .or_else(|| {
+                                let mut c = p.walk();
+                                p.children(&mut c).find_map(|ch| {
+                                    if ch.kind() == "simple_identifier" {
+                                        text_of(ch, source)
+                                    } else {
+                                        None
+                                    }
+                                })
+                            })
+                    })
+            });
+        let ty = node
+            .child_by_field_name("type")
+            .and_then(|n| text_of(n, source))
+            .or_else(|| find_child_kind_text(node, source, "type_annotation"))
+            .or_else(|| {
+                let mut c = node.walk();
+                node.children(&mut c).find_map(|ch| {
+                    if ch.kind() == "type_annotation" {
+                        let mut tc = ch.walk();
+                        ch.children(&mut tc).find_map(|t| {
+                            if t.is_named() {
+                                text_of(t, source)
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    }
+                })
+            });
+        if let Some(n) = name {
+            insert_ty(env, &n, ty.as_deref().unwrap_or(""));
+        }
+    }
+    walk_children(
+        node,
+        source,
+        function_name,
+        env,
+        now_in,
+        visit_swift,
+        &[
+            "function_declaration",
+            "init_declaration",
+            "deinit_declaration",
+            "subscript_declaration",
+        ],
+    );
+}
+
+/// Dart: typed formals + local variable declarations.
+fn visit_dart(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) {
+    let kind = node.kind();
+    let mut now_in = in_target;
+    if matches!(
+        kind,
+        "function_declaration" | "method_declaration" | "function_expression"
+    ) {
+        let name = dart_callable_name(node, source).unwrap_or_default();
+        now_in = name == function_name;
+    }
+    if now_in && kind == "formal_parameter" {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| text_of(n, source));
+        let ty = node
+            .child_by_field_name("type")
+            .and_then(|n| text_of(n, source))
+            .or_else(|| {
+                let mut c = node.walk();
+                node.children(&mut c).find_map(|ch| {
+                    if ch.kind() == "type" {
+                        text_of(ch, source)
+                    } else {
+                        None
+                    }
+                })
+            });
+        if let Some(n) = name {
+            insert_ty(env, &n, ty.as_deref().unwrap_or(""));
+        }
+    }
+    if now_in && kind == "initialized_variable_definition" {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| text_of(n, source));
+        let ty = node
+            .child_by_field_name("type")
+            .and_then(|n| text_of(n, source))
+            .or_else(|| {
+                let mut c = node.walk();
+                node.children(&mut c).find_map(|ch| {
+                    if ch.kind() == "type" {
+                        text_of(ch, source)
+                    } else {
+                        None
+                    }
+                })
+            });
+        if let Some(n) = name {
+            insert_ty(env, &n, ty.as_deref().unwrap_or(""));
+        }
+    }
+    walk_children(
+        node,
+        source,
+        function_name,
+        env,
+        now_in,
+        visit_dart,
+        &[
+            "function_declaration",
+            "method_declaration",
+            "function_expression",
+        ],
+    );
+}
+
+fn dart_callable_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    if let Some(n) = node
+        .child_by_field_name("name")
+        .and_then(|n| text_of(n, source))
+    {
+        return Some(n);
+    }
+    // method_declaration → method_signature → function_signature.name
+    // function_declaration → function_signature.name
+    let mut stack = vec![node];
+    while let Some(cur) = stack.pop() {
+        if matches!(cur.kind(), "function_signature" | "method_signature")
+            && let Some(n) = cur
+                .child_by_field_name("name")
+                .and_then(|n| text_of(n, source))
+        {
+            return Some(n);
+        }
+        let mut c = cur.walk();
+        for ch in cur.children(&mut c) {
+            if matches!(
+                ch.kind(),
+                "function_signature" | "method_signature" | "function_body" | "class_member"
+            ) || ch.kind().contains("signature")
+            {
+                stack.push(ch);
+            }
+        }
+    }
+    None
+}
+
 fn visit_javascript(
     node: Node,
     source: &[u8],
@@ -1574,6 +2154,93 @@ func Process(order *OrderDTO) {
                 .unwrap_or(false),
             "env={env:?}"
         );
+    }
+
+    #[test]
+    fn lua_locals_merge() {
+        let source = r#"
+function process(order)
+  local other = order
+  return other
+end
+"#;
+        let mut env = HashMap::new();
+        merge_local_types("lua", source, "process", &mut env);
+        assert!(env.contains_key("order"), "env={env:?}");
+        assert!(env.contains_key("other"), "env={env:?}");
+    }
+
+    #[test]
+    fn elixir_locals_merge() {
+        let source = r#"
+defmodule App do
+  def process(order) do
+    other = order
+    other
+  end
+end
+"#;
+        let mut env = HashMap::new();
+        merge_local_types("elixir", source, "process", &mut env);
+        assert!(env.contains_key("order"), "env={env:?}");
+        assert!(env.contains_key("other"), "env={env:?}");
+    }
+
+    #[test]
+    fn bash_locals_merge() {
+        let source = r#"
+process() {
+  local other="$1"
+  echo "$other"
+}
+"#;
+        let mut env = HashMap::new();
+        merge_local_types("bash", source, "process", &mut env);
+        assert!(env.contains_key("other"), "env={env:?}");
+    }
+
+    #[test]
+    fn scala_locals_merge() {
+        let source = r#"
+object App {
+  def process(order: OrderDTO): OrderDTO = {
+    val other: OrderDTO = order
+    other
+  }
+}
+"#;
+        let mut env = HashMap::new();
+        merge_local_types("scala", source, "process", &mut env);
+        assert_eq!(env.get("order").map(String::as_str), Some("OrderDTO"));
+        assert_eq!(env.get("other").map(String::as_str), Some("OrderDTO"));
+    }
+
+    #[test]
+    fn swift_locals_merge() {
+        let source = r#"
+func process(order: OrderDTO) -> OrderDTO {
+  let other: OrderDTO = order
+  return other
+}
+"#;
+        let mut env = HashMap::new();
+        merge_local_types("swift", source, "process", &mut env);
+        assert_eq!(env.get("order").map(String::as_str), Some("OrderDTO"));
+        assert_eq!(env.get("other").map(String::as_str), Some("OrderDTO"));
+    }
+
+    #[test]
+    fn dart_locals_merge() {
+        let source = r#"
+OrderDTO process(OrderDTO order) {
+  OrderDTO other = order;
+  return other;
+}
+"#;
+        let mut env = HashMap::new();
+        merge_local_types("dart", source, "process", &mut env);
+        assert_eq!(env.get("order").map(String::as_str), Some("OrderDTO"));
+        assert_eq!(env.get("other").map(String::as_str), Some("OrderDTO"));
     }
 
     #[test]

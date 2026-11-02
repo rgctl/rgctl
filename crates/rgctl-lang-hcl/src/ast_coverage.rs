@@ -9,7 +9,9 @@ const ALLOWED: &[&str] = &[
     "Relation",
     "CfgStatement",
     "AstSkeleton",
-    "Skip",
+    "SkipWrapper",
+    "SkipTypeToken",
+    "Unimplemented",
     "Literal",
 ];
 
@@ -25,7 +27,7 @@ pub fn load_manifest() -> HashMap<String, String> {
         .as_object()
         .expect("handlers object")
         .iter()
-        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Skip").to_string()))
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Unimplemented").to_string()))
         .collect()
 }
 
@@ -81,6 +83,40 @@ mod tests {
             manifest.get("function_call").map(String::as_str),
             Some("Relation"),
             "function_call must be Relation"
+        );
+        assert_eq!(
+            manifest.get("attribute").map(String::as_str),
+            Some("CfgStatement"),
+            "attribute must be CfgStatement"
+        );
+        assert_eq!(
+            manifest.get("conditional").map(String::as_str),
+            Some("CfgStatement"),
+            "conditional must be CfgStatement"
+        );
+        assert_eq!(
+            manifest.get("for_expr").map(String::as_str),
+            Some("CfgStatement"),
+            "for_expr must be CfgStatement"
+        );
+        assert_eq!(
+            manifest.get("variable_expr").map(String::as_str),
+            Some("AstSkeleton"),
+            "variable_expr must be AstSkeleton"
+        );
+        assert_eq!(
+            manifest.get("get_attr").map(String::as_str),
+            Some("AstSkeleton"),
+            "get_attr must be AstSkeleton"
+        );
+        assert_eq!(
+            manifest.get("template_directive").map(String::as_str),
+            Some("AstSkeleton"),
+            "template_directive must be AstSkeleton"
+        );
+        assert!(
+            !manifest.values().any(|h| h == "Skip"),
+            "hcl-ast-coverage.json must contain zero raw Skip entries"
         );
     }
 }

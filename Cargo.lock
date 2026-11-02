@@ -2816,6 +2816,7 @@ dependencies = [
 name = "rgctl-lang-bash"
 version = "0.4.24"
 dependencies = [
+ "rgctl-ast-coverage",
  "rgctl-plugin-api",
  "rgctl-plugin-helpers",
  "rgctl-registry",
@@ -2941,6 +2942,7 @@ dependencies = [
 name = "rgctl-lang-dart"
 version = "0.4.24"
 dependencies = [
+ "rgctl-ast-coverage",
  "rgctl-plugin-api",
  "rgctl-plugin-helpers",
  "rgctl-registry",
@@ -2966,6 +2968,7 @@ dependencies = [
 name = "rgctl-lang-elixir"
 version = "0.4.24"
 dependencies = [
+ "rgctl-ast-coverage",
  "rgctl-plugin-api",
  "rgctl-plugin-helpers",
  "rgctl-registry",
@@ -2992,6 +2995,7 @@ name = "rgctl-lang-erb"
 version = "0.4.24"
 dependencies = [
  "regex",
+ "rgctl-ast-coverage",
  "rgctl-plugin-api",
  "rgctl-plugin-helpers",
  "rgctl-registry",
@@ -3130,6 +3134,7 @@ dependencies = [
 name = "rgctl-lang-hcl"
 version = "0.4.24"
 dependencies = [
+ "rgctl-ast-coverage",
  "rgctl-plugin-api",
  "rgctl-plugin-helpers",
  "rgctl-registry",
@@ -3231,6 +3236,7 @@ dependencies = [
 name = "rgctl-lang-lua"
 version = "0.4.24"
 dependencies = [
+ "rgctl-ast-coverage",
  "rgctl-plugin-api",
  "rgctl-plugin-helpers",
  "rgctl-registry",
@@ -3258,6 +3264,7 @@ version = "0.4.24"
 dependencies = [
  "blake3",
  "pretty_assertions",
+ "rgctl-ast-coverage",
  "rgctl-plugin-api",
  "rgctl-registry",
  "serde_json",
@@ -3512,6 +3519,7 @@ dependencies = [
 name = "rgctl-lang-scala"
 version = "0.4.24"
 dependencies = [
+ "rgctl-ast-coverage",
  "rgctl-plugin-api",
  "rgctl-plugin-helpers",
  "rgctl-registry",
@@ -3549,6 +3557,7 @@ dependencies = [
 name = "rgctl-lang-sql"
 version = "0.4.24"
 dependencies = [
+ "rgctl-ast-coverage",
  "rgctl-plugin-api",
  "rgctl-plugin-helpers",
  "rgctl-registry",
@@ -3586,6 +3595,7 @@ dependencies = [
 name = "rgctl-lang-swift"
 version = "0.4.24"
 dependencies = [
+ "rgctl-ast-coverage",
  "rgctl-plugin-api",
  "rgctl-plugin-helpers",
  "rgctl-registry",

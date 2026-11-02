@@ -13,7 +13,7 @@ Replaced permissive `"Skip"`-based AST coverage checks with a **5-pillar compile
    - Added `is_semantic_node_kind(kind)` denylist enforcement (`*_declaration`, `*_definition`, `*_statement`, `*_expression`, `*_invocation`, `*_call*`, `*_creation*`, `*_clause`, `*_pattern`, `*_directive`, `lambda*`, `closure*`) so semantic AST kinds cannot be silently dismissed without an explicit `skip_justifications` entry.
    - Removed the `(often Skip)` suggestion from `check_manifest` error diagnostics when a grammar pin introduces new named AST kinds.
 2. **Pillar 2 — Quantitative Semantic AST Coverage Ratio & Monotonic Ratchet (`crates/rgctl-ast-coverage`)**:
-   - Added `CoverageGrade` (`A+` $\ge 85\%$, `A` $\ge 75\%$, `B` $\ge 50\%$, `C` $< 50\%$), `SemanticCoverageStats`, and `compute_semantic_coverage` over the semantic denominator (`handled + skip + unimplemented`, excluding `SkipWrapper` and `SkipTypeToken`).
+   - Added `CoverageGrade` (`A+` $\ge 98\%$, `A` $\ge 75\%$, `B` $\ge 50\%$, `C` $< 50\%$), `SemanticCoverageStats`, and `compute_semantic_coverage` over the semantic denominator (`handled + unimplemented`, excluding `SkipWrapper` and `SkipTypeToken`). Raw `"Skip"` is banned from manifests.
    - Added `min_handled_kinds` and `target_grade` monotonic ratchet fields to `CoverageSpec` across all 24 Tier-1 languages in `bundled_specs()` so handled AST counts and coverage grades can never regress.
 3. **Pillar 3 — Dispatch Table Gating & Three-Way Manifest Sync (`crates/rgctl-lang-java`, `crates/rgctl-analysis`, `crates/rgctl-ast-coverage`)**:
    - Gated `crates/rgctl-lang-java/src/single_pass.rs` on `mask.is_passive()` so AST kinds marked passive in `java-ast-coverage.json` cannot execute hidden extraction logic.

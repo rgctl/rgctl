@@ -16,11 +16,14 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "alternative_pattern",
     "annotated_expression",
     "anonymous_function_use_clause",
+    "arithmetic_expansion",
     "array_creation_expression",
     "array_declarator",
     "array_pattern",
+    "array_size_definition",
     "as_expression",
     "as_pattern",
+    "assignable_expression",
     "assignment",
     "assignment_expression",
     "assignment_pattern",
@@ -30,15 +33,23 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "augmented_assignment",
     "augmented_assignment_expression",
     "bitfield_clause",
+    "brace_expression",
     "case_pattern",
     "cast_expression",
+    "cast_pattern",
     "catch_formal_parameter",
     "class_parameters",
     "class_pattern",
     "clone_expression",
+    "column_definition",
+    "comment_statement",
+    "cte",
     "complex_pattern",
     "compound_assignment_expr",
+    "constant_pattern",
+    "constructor_param",
     "declaration",
+    "declaration_command",
     "default_parameter",
     "destructured_left_assignment",
     "dict_pattern",
@@ -46,18 +57,23 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "element_reference",
     "enhanced_for_statement",
     "error_suppression_expression",
+    "expansion",
     "expression_list",
     "expression_reference_pattern",
     "extension_expression",
     "field_access",
     "field_expression",
     "field_identifier",
+    "filter_expression",
     "find_pattern",
+    "frame_definition",
     "for_clause",
     "for_statement",
     "formal_parameter",
+    "formal_parameter_list",
     "formal_parameters",
     "function_declarator",
+    "function_declaration",
     "function_value_parameters",
     "generic_expression",
     "gnu_asm_expression",
@@ -65,6 +81,9 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "identifier",
     "inferred_parameters",
     "init_declarator",
+    "initialized_identifier",
+    "initialized_identifier_list",
+    "initialized_variable_definition",
     "instance_variable",
     "instanceof_expression",
     "keyword_pattern",
@@ -77,6 +96,7 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "list_splat_pattern",
     "local_declaration_statement",
     "local_variable_declaration",
+    "map_pattern",
     "mapped_type_clause",
     "match_pattern",
     "member_access_expression",
@@ -86,9 +106,12 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "navigation_expression",
     "non_null_expression",
     "not_operator",
+    "null_assert_pattern",
+    "null_check_pattern",
     "object_assignment_pattern",
     "object_pattern",
     "offsetof_expression",
+    "optional_formal_parameters",
     "optional_parameter",
     "pair_pattern",
     "parameter",
@@ -97,8 +120,11 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "parameters",
     "parenthesized_declarator",
     "pattern",
+    "pattern_assignment",
+    "pattern_variable_declaration",
     "pointer_declarator",
     "pointer_expression",
+    "postfix_expression",
     "preproc_call",
     "preproc_directive",
     "property_delegate",
@@ -115,11 +141,13 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "right_assignment_list",
     "satisfies_expression",
     "scoped_identifier",
+    "select_expression",
     "selector_expression",
     "sequence_expression",
     "short_var_declaration",
     "shorthand_field_identifier",
     "shorthand_property_identifier_pattern",
+    "simple_expansion",
     "simple_parameter",
     "sizeof_expression",
     "splat_pattern",
@@ -128,7 +156,9 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "static_variable_declaration",
     "struct_pattern",
     "subscript_expression",
+    "super_formal_parameter",
     "test_pattern",
+    "top_level_variable_declaration",
     "tuple_pattern",
     "tuple_struct_pattern",
     "type_arguments",
@@ -147,18 +177,23 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "unary_op_expression",
     "unary_operator",
     "union_pattern",
+    "unset_command",
     "update_expression",
     "var_declaration",
     "var_spec",
     "var_spec_list",
+    "variable_assignment",
     "variable_declaration",
     "variable_declaration_list",
     "variable_declarator",
     "variable_name",
+    "variable_pattern",
     "variable_reference_pattern",
     "variadic_parameter",
     "variadic_parameter_declaration",
     "wildcard_pattern",
+    "window_clause",
+    "window_function",
 ];
 
 /// Return the slice of Tree-sitter AST node kinds handled by [`extract_def_use`] for `language_id`.
@@ -408,6 +443,33 @@ fn collect_def_use_node<'a>(
             }
             if let Some(right) = node.child_by_field_name("right") {
                 stack.push((right, false, depth + 1));
+            }
+        }
+        // Bash: `NAME=value`, `declare/local/export …`, `unset NAME`
+        "variable_assignment" => {
+            if let Some(name) = node.child_by_field_name("name").or_else(|| {
+                let mut c = node.walk();
+                node.children(&mut c).find(|ch| ch.kind() == "variable_name")
+            }) {
+                collect_pattern_defs(name, source, defined, depth + 1);
+            }
+            if let Some(value) = node.child_by_field_name("value") {
+                stack.push((value, false, depth + 1));
+            }
+        }
+        "declaration_command" | "unset_command" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if matches!(
+                    child.kind(),
+                    "variable_name" | "variable_assignment" | "word"
+                ) {
+                    if child.kind() == "variable_assignment" {
+                        stack.push((child, false, depth + 1));
+                    } else {
+                        collect_pattern_defs(child, source, defined, depth + 1);
+                    }
+                }
             }
         }
         "for_statement" => {

@@ -12,16 +12,56 @@ const MANIFEST_JSON: &str = include_str!("../bash-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
+    ("arithmetic_expansion", HandlerMask::AST_SKELETON),
+    ("binary_expression", HandlerMask::CFG_STMT),
+    ("brace_expression", HandlerMask::AST_SKELETON),
+    ("c_style_for_statement", HandlerMask::CFG_STMT),
+    ("case_item", HandlerMask::CFG_STMT),
     ("case_statement", HandlerMask::CFG_STMT),
     ("command", HandlerMask::RELATION),
+    ("command_substitution", HandlerMask::RELATION),
+    ("compound_statement", HandlerMask::CFG_STMT),
+    ("declaration_command", HandlerMask::SYMBOL),
+    ("elif_clause", HandlerMask::CFG_STMT),
+    ("else_clause", HandlerMask::CFG_STMT),
+    ("expansion", HandlerMask::AST_SKELETON),
     ("for_statement", HandlerMask::CFG_STMT),
     ("function_definition", HandlerMask::SYMBOL),
     ("if_statement", HandlerMask::CFG_STMT),
+    ("list", HandlerMask::CFG_STMT),
+    ("negated_command", HandlerMask::CFG_STMT),
     ("pipeline", HandlerMask::CFG_STMT),
+    ("postfix_expression", HandlerMask::AST_SKELETON),
+    ("redirected_statement", HandlerMask::CFG_STMT),
+    ("simple_expansion", HandlerMask::AST_SKELETON),
+    ("subshell", HandlerMask::CFG_STMT),
+    ("ternary_expression", HandlerMask::CFG_STMT),
+    ("test_command", HandlerMask::CFG_STMT),
+    ("unary_expression", HandlerMask::CFG_STMT),
+    ("unset_command", HandlerMask::AST_SKELETON),
+    ("variable_assignment", HandlerMask::AST_SKELETON),
     ("while_statement", HandlerMask::CFG_STMT),
 ];
 
 const AST_MAX_DEPTH: usize = 2048;
+
+/// Control-flow hosts that contribute cyclomatic / cognitive complexity.
+const BRANCH_KINDS: &[&str] = &[
+    "binary_expression",
+    "c_style_for_statement",
+    "case_item",
+    "case_statement",
+    "elif_clause",
+    "for_statement",
+    "if_statement",
+    "list",
+    "negated_command",
+    "pipeline",
+    "subshell",
+    "ternary_expression",
+    "test_command",
+    "while_statement",
+];
 
 static HANDLERS: OnceLock<AstHandlerTable> = OnceLock::new();
 static DISPATCH: OnceLock<KindDispatchTable> = OnceLock::new();
@@ -67,6 +107,65 @@ fn bash_command_word(node: Node, source: &[u8]) -> Option<String> {
         }
     }
     name_node.utf8_text(source).ok().map(|s| s.to_string())
+}
+
+fn first_command_word_in(node: Node, source: &[u8]) -> Option<String> {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "command" {
+            if let Some(w) = bash_command_word(n, source) {
+                return Some(w);
+            }
+        }
+        for i in (0..n.child_count()).rev() {
+            if let Some(ch) = n.child(i) {
+                if ch.is_named() {
+                    stack.push(ch);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn declaration_var_names(node: Node, source: &[u8]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "variable_name" => {
+                if let Ok(t) = n.utf8_text(source) {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        names.push(t.to_string());
+                    }
+                }
+            }
+            "variable_assignment" => {
+                if let Some(name) = n.child_by_field_name("name").or_else(|| {
+                    let mut c = n.walk();
+                    n.children(&mut c).find(|ch| ch.kind() == "variable_name")
+                }) {
+                    if let Ok(t) = name.utf8_text(source) {
+                        let t = t.trim();
+                        if !t.is_empty() {
+                            names.push(t.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {
+                for i in (0..n.child_count()).rev() {
+                    if let Some(ch) = n.child(i) {
+                        if ch.is_named() {
+                            stack.push(ch);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    names
 }
 
 fn flush_bash_call(
@@ -155,7 +254,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask;
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
@@ -201,6 +307,27 @@ pub fn extract_all_single_pass(
                     }
                 }
 
+                if kind == "declaration_command" {
+                    for name in declaration_var_names(node, source) {
+                        ctx.symbols.push(Symbol {
+                            name: name.clone(),
+                            symbol_type: SymbolType::Variable,
+                            qualified_name: Some(name),
+                            location: node_to_location(node, &file_path_str),
+                            signature: None,
+                            return_type: None,
+                            parameters: vec![],
+                            fields: vec![],
+                            modifiers: vec![],
+                            documentation: None,
+                            metadata: serde_json::json!({
+                                "language": "bash",
+                                "kind": "declaration_command"
+                            }),
+                        });
+                    }
+                }
+
                 if kind == "command" {
                     if let Some(word) = bash_command_word(node, source) {
                         if matches!(word.as_str(), "return" | "exit") {
@@ -219,29 +346,47 @@ pub fn extract_all_single_pass(
                     }
                 }
 
-                if ctx.scopes.current_function().is_some() {
-                    match kind {
-                        "if_statement" | "while_statement" | "for_statement" | "case_statement"
-                        | "pipeline" => {
-                            let delta = 1 + ctx
-                                .scopes
-                                .current_function()
-                                .map(|f| f.complexity.cognitive_nesting)
-                                .unwrap_or(0);
-                            ctx.scopes.note_branch(delta);
-                            ctx.scopes.enter_branch();
-                            let scope_depth = ctx.scopes.depth();
-                            ctx.scopes.push(ScopeFrame::new(
-                                ScopeKind::GuardBlock,
-                                None,
-                                String::new(),
-                                node.start_byte(),
-                                node.end_byte(),
-                                scope_depth,
-                            ));
-                            stack.push(Visit::LeaveGuard);
+                if kind == "command_substitution" {
+                    if let Some(frame) = ctx.scopes.current_function() {
+                        if let Some(idx) = frame.symbol_idx {
+                            let callee = first_command_word_in(node, source)
+                                .unwrap_or_else(|| "$(...)".to_string());
+                            pending_calls.push(PendingCall {
+                                node,
+                                from_symbol_idx: idx,
+                                callee,
+                            });
                         }
-                        _ => {}
+                    }
+                }
+
+                if ctx.scopes.current_function().is_some() && BRANCH_KINDS.contains(&kind) {
+                    // binary_expression / list: only && and || add a decision point.
+                    let counts = match kind {
+                        "binary_expression" | "list" => {
+                            let text = node.utf8_text(source).unwrap_or("");
+                            text.contains("&&") || text.contains("||")
+                        }
+                        _ => true,
+                    };
+                    if counts {
+                        let delta = 1 + ctx
+                            .scopes
+                            .current_function()
+                            .map(|f| f.complexity.cognitive_nesting)
+                            .unwrap_or(0);
+                        ctx.scopes.note_branch(delta);
+                        ctx.scopes.enter_branch();
+                        let scope_depth = ctx.scopes.depth();
+                        ctx.scopes.push(ScopeFrame::new(
+                            ScopeKind::GuardBlock,
+                            None,
+                            String::new(),
+                            node.start_byte(),
+                            node.end_byte(),
+                            scope_depth,
+                        ));
+                        stack.push(Visit::LeaveGuard);
                     }
                 }
 
@@ -307,6 +452,36 @@ foo() {
             metrics.cyclomatic >= 2,
             "expected cyclomatic >= 2, got {}",
             metrics.cyclomatic
+        );
+    }
+
+    #[test]
+    fn bash_extracts_declaration_and_command_substitution() {
+        let src = r#"
+demo() {
+  declare -i COUNT=0
+  echo "$(helper)"
+}
+helper() { :; }
+"#;
+        let plugin = Plugin::new().unwrap();
+        let path = PathBuf::from("decl.sh");
+        let result = extract_all_single_pass(&plugin, &path, src.as_bytes()).unwrap();
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|s| s.symbol_type == SymbolType::Variable && s.name == "COUNT"),
+            "expected COUNT variable, got {:?}",
+            result.symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert!(
+            result
+                .relations
+                .iter()
+                .any(|r| r.relation_type == RelationType::Calls && r.to == "helper"),
+            "expected Calls to helper from substitution, got {:?}",
+            result.relations
         );
     }
 }

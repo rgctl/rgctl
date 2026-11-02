@@ -15,25 +15,42 @@ const MANIFEST_JSON: &str = include_str!("../swift-ast-coverage.json");
 /// Note: tree-sitter-swift folds `struct`/`enum`/`extension` into `class_declaration`
 /// (keyword child). Return/break/continue/throw share `control_transfer_statement`.
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
-    ("class_declaration", HandlerMask::SYMBOL),
-    ("protocol_declaration", HandlerMask::SYMBOL),
-    ("function_declaration", HandlerMask::SYMBOL),
-    ("init_declaration", HandlerMask::SYMBOL),
-    ("deinit_declaration", HandlerMask::SYMBOL),
-    ("subscript_declaration", HandlerMask::SYMBOL),
-    ("property_declaration", HandlerMask::SYMBOL),
-    ("typealias_declaration", HandlerMask::SYMBOL),
+    ("additive_expression", HandlerMask::CFG_STMT),
+    ("as_expression", HandlerMask::CFG_STMT),
+    ("associatedtype_declaration", HandlerMask::SYMBOL),
+    ("await_expression", HandlerMask::CFG_STMT),
     ("call_expression", HandlerMask::RELATION),
-    ("import_declaration", HandlerMask::RELATION),
-    ("if_statement", HandlerMask::CFG_STMT),
-    ("guard_statement", HandlerMask::CFG_STMT),
-    ("switch_statement", HandlerMask::CFG_STMT),
-    ("for_statement", HandlerMask::CFG_STMT),
-    ("while_statement", HandlerMask::CFG_STMT),
-    ("repeat_while_statement", HandlerMask::CFG_STMT),
-    ("do_statement", HandlerMask::CFG_STMT),
     ("catch_block", HandlerMask::CFG_STMT),
+    ("class_declaration", HandlerMask::SYMBOL),
+    ("comparison_expression", HandlerMask::CFG_STMT),
+    ("conjunction_expression", HandlerMask::CFG_STMT),
     ("control_transfer_statement", HandlerMask::CFG_STMT),
+    ("deinit_declaration", HandlerMask::SYMBOL),
+    ("disjunction_expression", HandlerMask::CFG_STMT),
+    ("do_statement", HandlerMask::CFG_STMT),
+    ("enum_entry", HandlerMask::SYMBOL),
+    ("equality_expression", HandlerMask::CFG_STMT),
+    ("for_statement", HandlerMask::CFG_STMT),
+    ("function_body", HandlerMask::CFG_STMT),
+    ("function_declaration", HandlerMask::SYMBOL),
+    ("guard_statement", HandlerMask::CFG_STMT),
+    ("if_statement", HandlerMask::CFG_STMT),
+    ("import_declaration", HandlerMask::RELATION),
+    ("init_declaration", HandlerMask::SYMBOL),
+    ("lambda_literal", HandlerMask::SYMBOL),
+    ("navigation_expression", HandlerMask::RELATION),
+    ("property_declaration", HandlerMask::SYMBOL),
+    ("protocol_declaration", HandlerMask::SYMBOL),
+    ("protocol_function_declaration", HandlerMask::SYMBOL),
+    ("protocol_property_declaration", HandlerMask::SYMBOL),
+    ("range_expression", HandlerMask::CFG_STMT),
+    ("repeat_while_statement", HandlerMask::CFG_STMT),
+    ("subscript_declaration", HandlerMask::SYMBOL),
+    ("switch_statement", HandlerMask::CFG_STMT),
+    ("ternary_expression", HandlerMask::CFG_STMT),
+    ("try_expression", HandlerMask::CFG_STMT),
+    ("typealias_declaration", HandlerMask::SYMBOL),
+    ("while_statement", HandlerMask::CFG_STMT),
 ];
 
 const SWIFT_CALL_KINDS: &[&str] = &["call_expression"];
@@ -340,7 +357,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask;
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
@@ -471,16 +495,172 @@ pub fn extract_all_single_pass(
                             });
                         }
                     }
-                    "typealias_declaration" => {
+                    "typealias_declaration" | "associatedtype_declaration" => {
+                        let meta = if kind == "associatedtype_declaration" {
+                            "associatedtype"
+                        } else {
+                            "typealias"
+                        };
                         let _ = push_named_symbol(
                             &mut ctx,
                             node,
                             source,
                             &file_path_str,
                             SymbolType::TypeAlias,
-                            "typealias",
+                            meta,
                             None,
                         );
+                    }
+                    "enum_entry" => {
+                        if let Some(name) = type_decl_name(node, source)
+                            .or_else(|| extract_name_from_node(node, source).ok().flatten())
+                        {
+                            let owner = ctx
+                                .scopes
+                                .current_type()
+                                .map(|t| t.qualified_prefix.clone());
+                            let qn = match owner.as_deref() {
+                                Some(o) => format!("{o}.{name}"),
+                                None => name.clone(),
+                            };
+                            ctx.symbols.push(Symbol {
+                                name,
+                                symbol_type: SymbolType::Enum,
+                                qualified_name: Some(qn),
+                                location: node_to_location(node, &file_path_str),
+                                signature: node
+                                    .utf8_text(source)
+                                    .ok()
+                                    .map(|s| s.trim().to_string()),
+                                return_type: None,
+                                parameters: vec![],
+                                fields: vec![],
+                                modifiers: vec![],
+                                documentation: None,
+                                metadata: serde_json::json!({
+                                    "language": "swift",
+                                    "kind": "enum_entry",
+                                }),
+                            });
+                        }
+                    }
+                    "protocol_function_declaration" => {
+                        let name = {
+                            let mut c = node.walk();
+                            node.children(&mut c)
+                                .find(|ch| {
+                                    matches!(ch.kind(), "simple_identifier" | "identifier")
+                                })
+                                .and_then(|ch| ch.utf8_text(source).ok().map(str::to_string))
+                                .or_else(|| extract_name_from_node(node, source).ok().flatten())
+                                .unwrap_or_else(|| "func".to_string())
+                        };
+                        let owner = ctx
+                            .scopes
+                            .current_type()
+                            .map(|t| t.qualified_prefix.clone());
+                        let qn = match owner.as_deref() {
+                            Some(o) => format!("{o}.{name}"),
+                            None => name.clone(),
+                        };
+                        ctx.symbols.push(Symbol {
+                            name,
+                            symbol_type: SymbolType::Function,
+                            qualified_name: Some(qn),
+                            location: node_to_location(node, &file_path_str),
+                            signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+                            return_type: None,
+                            parameters: vec![],
+                            fields: vec![],
+                            modifiers: vec![],
+                            documentation: None,
+                            metadata: serde_json::json!({
+                                "language": "swift",
+                                "kind": "protocol_function",
+                            }),
+                        });
+                    }
+                    "protocol_property_declaration" => {
+                        if let Some(name) = property_decl_name(node, source)
+                            .or_else(|| type_decl_name(node, source))
+                            .or_else(|| extract_name_from_node(node, source).ok().flatten())
+                        {
+                            let owner = ctx
+                                .scopes
+                                .current_type()
+                                .map(|t| t.qualified_prefix.clone());
+                            let qn = match owner.as_deref() {
+                                Some(o) => format!("{o}.{name}"),
+                                None => name.clone(),
+                            };
+                            ctx.symbols.push(Symbol {
+                                name,
+                                symbol_type: SymbolType::Variable,
+                                qualified_name: Some(qn),
+                                location: node_to_location(node, &file_path_str),
+                                signature: node
+                                    .utf8_text(source)
+                                    .ok()
+                                    .map(|s| s.trim().to_string()),
+                                return_type: None,
+                                parameters: vec![],
+                                fields: vec![],
+                                modifiers: vec![],
+                                documentation: None,
+                                metadata: serde_json::json!({
+                                    "language": "swift",
+                                    "kind": "protocol_property",
+                                }),
+                            });
+                        }
+                    }
+                    "lambda_literal" => {
+                        let owner = ctx
+                            .scopes
+                            .current_function()
+                            .map(|f| f.qualified_prefix.clone())
+                            .or_else(|| {
+                                ctx.scopes
+                                    .current_type()
+                                    .map(|t| t.qualified_prefix.clone())
+                            });
+                        let idx = ctx.symbols.len();
+                        let name = format!("$closure{idx}");
+                        let qn = match owner.as_deref() {
+                            Some(o) => format!("{o}.{name}"),
+                            None => name.clone(),
+                        };
+                        let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
+                            as u32;
+                        ctx.symbols.push(Symbol {
+                            name: name.clone(),
+                            symbol_type: SymbolType::Function,
+                            qualified_name: Some(qn.clone()),
+                            location: node_to_location(node, &file_path_str),
+                            signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+                            return_type: None,
+                            parameters: vec![],
+                            fields: vec![],
+                            modifiers: vec![],
+                            documentation: None,
+                            metadata: serde_json::json!({
+                                "language": "swift",
+                                "kind": "lambda",
+                            }),
+                        });
+                        ctx.enter_scope(
+                            ScopeKind::Function,
+                            Some(name),
+                            qn,
+                            node.start_byte(),
+                            node.end_byte(),
+                            true,
+                        );
+                        if let Some(f) = ctx.scopes.current_function_mut() {
+                            f.complexity.cyclomatic = 1;
+                            f.complexity.loc = loc;
+                        }
+                        pushed_scope = true;
                     }
                     "import_declaration" => {
                         if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
@@ -525,24 +705,47 @@ pub fn extract_all_single_pass(
                         | "while_statement"
                         | "repeat_while_statement"
                         | "do_statement"
-                        | "catch_block" => {
+                        | "catch_block"
+                        | "ternary_expression"
+                        | "conjunction_expression"
+                        | "disjunction_expression"
+                        | "comparison_expression"
+                        | "equality_expression"
+                        | "try_expression"
+                        | "await_expression"
+                        | "as_expression"
+                        | "range_expression"
+                        | "additive_expression" => {
                             let delta = 1 + ctx
                                 .scopes
                                 .current_function()
                                 .map(|f| f.complexity.cognitive_nesting)
                                 .unwrap_or(0);
                             ctx.scopes.note_branch(delta);
-                            ctx.scopes.enter_branch();
-                            let scope_depth = ctx.scopes.depth();
-                            ctx.scopes.push(ScopeFrame::new(
-                                ScopeKind::GuardBlock,
-                                None,
-                                String::new(),
-                                node.start_byte(),
-                                node.end_byte(),
-                                scope_depth,
-                            ));
-                            stack.push(Visit::LeaveGuard);
+                            // Only enter nesting for statement-level CFG, not every expr.
+                            if matches!(
+                                kind,
+                                "if_statement"
+                                    | "guard_statement"
+                                    | "switch_statement"
+                                    | "for_statement"
+                                    | "while_statement"
+                                    | "repeat_while_statement"
+                                    | "do_statement"
+                                    | "catch_block"
+                            ) {
+                                ctx.scopes.enter_branch();
+                                let scope_depth = ctx.scopes.depth();
+                                ctx.scopes.push(ScopeFrame::new(
+                                    ScopeKind::GuardBlock,
+                                    None,
+                                    String::new(),
+                                    node.start_byte(),
+                                    node.end_byte(),
+                                    scope_depth,
+                                ));
+                                stack.push(Visit::LeaveGuard);
+                            }
                         }
                         "control_transfer_statement" => {
                             let text = node.utf8_text(source).unwrap_or("").trim_start();

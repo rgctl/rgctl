@@ -56,7 +56,7 @@ impl AstCoverageTracker {
                 continue;
             }
             if mask.is_passive() {
-                if matches!(label.as_str(), "Skip" | "Unimplemented") {
+                if label == "Unimplemented" {
                     passive_by_id.insert(kind_id, name.clone());
                 }
                 continue;
@@ -87,14 +87,14 @@ impl AstCoverageTracker {
             .ok_or_else(|| "manifest missing `handlers` object".to_string())?;
         let handlers: HashMap<String, String> = handlers_obj
             .iter()
-            .map(|(k, val)| (k.clone(), val.as_str().unwrap_or("Skip").to_string()))
+            .map(|(k, val)| (k.clone(), val.as_str().unwrap_or("Unimplemented").to_string()))
             .collect();
         Ok(Self::from_manifest_handlers(language_id, &handlers, lang))
     }
 
     /// Record that `kind_id` was visited during AST extraction.
     ///
-    /// Active kinds increment `hits`; tracked `Skip`/`Unimplemented` kinds increment `skip_hits`.
+    /// Active kinds increment `hits`; tracked `Unimplemented` kinds increment `skip_hits`.
     pub fn hit(&self, kind_id: u16) {
         if kind_id == 0 {
             return;
@@ -346,7 +346,7 @@ mod tests {
         let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
         let mut handlers = HashMap::new();
         handlers.insert("function_item".into(), "Symbol".into());
-        handlers.insert("identifier".into(), "Skip".into());
+        handlers.insert("identifier".into(), "SkipTypeToken".into());
         let tracker = AstCoverageTracker::from_manifest_handlers("rust", &handlers, &lang);
         assert_eq!(tracker.expected_len(), 1);
         let id = lang.id_for_node_kind("function_item", true);
@@ -395,7 +395,7 @@ mod tests {
         let mut handlers = HashMap::new();
         handlers.insert("function_item".into(), "Symbol".into());
         handlers.insert("macro_definition".into(), "Unimplemented".into());
-        handlers.insert("trait_item".into(), "Skip".into());
+        handlers.insert("trait_item".into(), "Unimplemented".into());
         handlers.insert("block".into(), "SkipWrapper".into());
         let tracker = AstCoverageTracker::from_manifest_handlers("rust", &handlers, &lang);
         let macro_id = lang.id_for_node_kind("macro_definition", true);

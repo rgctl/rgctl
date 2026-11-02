@@ -9,7 +9,9 @@ const ALLOWED: &[&str] = &[
     "Relation",
     "CfgStatement",
     "AstSkeleton",
-    "Skip",
+    "SkipWrapper",
+    "SkipTypeToken",
+    "Unimplemented",
     "Literal",
 ];
 
@@ -25,7 +27,7 @@ pub fn load_manifest() -> HashMap<String, String> {
         .as_object()
         .expect("handlers object")
         .iter()
-        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Skip").to_string()))
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Unimplemented").to_string()))
         .collect()
 }
 
@@ -79,5 +81,14 @@ mod tests {
                 "{must_symbol} must be Symbol"
             );
         }
+        assert_eq!(
+            manifest.get("link_destination").map(String::as_str),
+            Some("Relation"),
+            "link_destination must be Relation"
+        );
+        assert!(
+            !manifest.values().any(|h| h == "Skip"),
+            "raw Skip must be zero (use SkipWrapper / SkipTypeToken / Unimplemented)"
+        );
     }
 }

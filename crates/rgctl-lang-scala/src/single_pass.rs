@@ -12,28 +12,88 @@ const MANIFEST_JSON: &str = include_str!("../scala-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
-    ("class_definition", HandlerMask::SYMBOL),
-    ("object_definition", HandlerMask::SYMBOL),
-    ("trait_definition", HandlerMask::SYMBOL),
-    ("enum_definition", HandlerMask::SYMBOL),
-    ("function_definition", HandlerMask::SYMBOL),
-    ("val_definition", HandlerMask::SYMBOL),
-    ("var_definition", HandlerMask::SYMBOL),
-    ("type_definition", HandlerMask::SYMBOL),
+    ("alternative_pattern", HandlerMask::AST_SKELETON),
+    ("annotation", HandlerMask::RELATION),
+    ("ascription_expression", HandlerMask::AST_SKELETON),
+    ("assignment_expression", HandlerMask::AST_SKELETON),
+    ("binding", HandlerMask::AST_SKELETON),
+    ("bindings", HandlerMask::AST_SKELETON),
+    ("block", HandlerMask::CFG_STMT),
     ("call_expression", HandlerMask::RELATION),
-    ("import_declaration", HandlerMask::RELATION),
-    ("extends_clause", HandlerMask::RELATION),
-    ("if_expression", HandlerMask::CFG_STMT),
-    ("while_expression", HandlerMask::CFG_STMT),
-    ("for_expression", HandlerMask::CFG_STMT),
-    ("match_expression", HandlerMask::CFG_STMT),
-    ("try_expression", HandlerMask::CFG_STMT),
+    ("case_class_pattern", HandlerMask::AST_SKELETON),
+    ("case_clause", HandlerMask::CFG_STMT),
+    ("catch_clause", HandlerMask::CFG_STMT),
+    ("class_definition", HandlerMask::SYMBOL),
+    ("class_parameter", HandlerMask::SYMBOL),
+    ("class_parameters", HandlerMask::AST_SKELETON),
+    ("colon_argument", HandlerMask::AST_SKELETON),
+    ("context_bound", HandlerMask::AST_SKELETON),
+    ("contravariant_type_parameter", HandlerMask::AST_SKELETON),
+    ("covariant_type_parameter", HandlerMask::AST_SKELETON),
+    ("derives_clause", HandlerMask::RELATION),
     ("do_while_expression", HandlerMask::CFG_STMT),
+    ("enum_definition", HandlerMask::SYMBOL),
+    ("enumerator", HandlerMask::AST_SKELETON),
+    ("enumerators", HandlerMask::AST_SKELETON),
+    ("export_declaration", HandlerMask::RELATION),
+    ("extends_clause", HandlerMask::RELATION),
+    ("extension_definition", HandlerMask::SYMBOL),
+    ("field_expression", HandlerMask::RELATION),
+    ("finally_clause", HandlerMask::CFG_STMT),
+    ("for_expression", HandlerMask::CFG_STMT),
+    ("full_enum_case", HandlerMask::SYMBOL),
+    ("function_declaration", HandlerMask::SYMBOL),
+    ("function_definition", HandlerMask::SYMBOL),
+    ("generic_function", HandlerMask::RELATION),
+    ("given_definition", HandlerMask::SYMBOL),
+    ("guard", HandlerMask::CFG_STMT),
+    ("if_expression", HandlerMask::CFG_STMT),
+    ("import_declaration", HandlerMask::RELATION),
+    ("infix_expression", HandlerMask::RELATION),
+    ("infix_pattern", HandlerMask::AST_SKELETON),
+    ("instance_expression", HandlerMask::RELATION),
+    ("lambda_expression", HandlerMask::SYMBOL),
+    ("lower_bound", HandlerMask::AST_SKELETON),
+    ("match_expression", HandlerMask::CFG_STMT),
+    ("name_and_type", HandlerMask::AST_SKELETON),
+    ("named_pattern", HandlerMask::AST_SKELETON),
+    ("object_definition", HandlerMask::SYMBOL),
+    ("package_clause", HandlerMask::SYMBOL),
+    ("package_object", HandlerMask::SYMBOL),
+    ("parameter", HandlerMask::AST_SKELETON),
+    ("parameters", HandlerMask::AST_SKELETON),
+    ("postfix_expression", HandlerMask::AST_SKELETON),
+    ("prefix_expression", HandlerMask::AST_SKELETON),
     ("return_expression", HandlerMask::CFG_STMT),
+    ("self_type", HandlerMask::AST_SKELETON),
+    ("simple_enum_case", HandlerMask::SYMBOL),
     ("throw_expression", HandlerMask::CFG_STMT),
+    ("trait_definition", HandlerMask::SYMBOL),
+    ("try_expression", HandlerMask::CFG_STMT),
+    ("tuple_expression", HandlerMask::AST_SKELETON),
+    ("tuple_pattern", HandlerMask::AST_SKELETON),
+    ("type_arguments", HandlerMask::AST_SKELETON),
+    ("type_definition", HandlerMask::SYMBOL),
+    ("type_parameters", HandlerMask::AST_SKELETON),
+    ("typed_pattern", HandlerMask::AST_SKELETON),
+    ("upper_bound", HandlerMask::AST_SKELETON),
+    ("val_declaration", HandlerMask::SYMBOL),
+    ("val_definition", HandlerMask::SYMBOL),
+    ("var_declaration", HandlerMask::SYMBOL),
+    ("var_definition", HandlerMask::SYMBOL),
+    ("vararg", HandlerMask::AST_SKELETON),
+    ("while_expression", HandlerMask::CFG_STMT),
 ];
 
-const SCALA_CALL_KINDS: &[&str] = &["call_expression"];
+/// Call-like nodes flushed as `Calls` after scope walk.
+const SCALA_CALL_KINDS: &[&str] = &[
+    "call_expression",
+    "generic_function",
+    "infix_expression",
+    "instance_expression",
+    "field_expression",
+];
+
 const AST_MAX_DEPTH: usize = 2048;
 
 static HANDLERS: OnceLock<AstHandlerTable> = OnceLock::new();
@@ -110,6 +170,43 @@ fn push_type_symbol(
     true
 }
 
+fn push_named_symbol(
+    ctx: &mut SinglePassCtx,
+    node: Node,
+    source: &[u8],
+    file_path: &str,
+    symbol_type: SymbolType,
+    kind_meta: &str,
+) {
+    let Some(name) = extract_name_from_node(node, source).ok().flatten() else {
+        return;
+    };
+    let owner = ctx
+        .scopes
+        .current_type()
+        .map(|t| t.qualified_prefix.clone());
+    let qn = match owner.as_deref() {
+        Some(o) => format!("{o}.{name}"),
+        None => name.clone(),
+    };
+    ctx.symbols.push(Symbol {
+        name,
+        symbol_type,
+        qualified_name: Some(qn),
+        location: node_to_location(node, file_path),
+        signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+        return_type: None,
+        parameters: vec![],
+        fields: vec![],
+        modifiers: vec![],
+        documentation: None,
+        metadata: serde_json::json!({
+            "language": "scala",
+            "kind": kind_meta,
+        }),
+    });
+}
+
 /// Single iterative DFS: symbols + deferred calls + complexity.
 pub fn extract_all_single_pass(
     _plugin: &Plugin,
@@ -129,6 +226,7 @@ pub fn extract_all_single_pass(
     let mut relations = Vec::new();
     let mut pending_calls: Vec<PendingCall<'_>> = Vec::new();
     let mut depth_warned = false;
+    let mut lambda_idx: u32 = 0;
 
     let mut stack = vec![Visit::Pre(root, 0)];
 
@@ -157,7 +255,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask;
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
@@ -173,14 +278,18 @@ pub fn extract_all_single_pass(
                             ScopeKind::Class,
                         );
                     }
-                    "object_definition" => {
+                    "object_definition" | "package_object" => {
                         pushed_scope = push_type_symbol(
                             &mut ctx,
                             node,
                             source,
                             &file_path_str,
                             SymbolType::Class,
-                            "object",
+                            if kind == "package_object" {
+                                "package_object"
+                            } else {
+                                "object"
+                            },
                             ScopeKind::Class,
                         );
                     }
@@ -206,7 +315,100 @@ pub fn extract_all_single_pass(
                             ScopeKind::Enum,
                         );
                     }
-                    "function_definition" => {
+                    "extension_definition" => {
+                        pushed_scope = push_type_symbol(
+                            &mut ctx,
+                            node,
+                            source,
+                            &file_path_str,
+                            SymbolType::Class,
+                            "extension",
+                            ScopeKind::Class,
+                        );
+                    }
+                    "given_definition" => {
+                        if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
+                            let owner = ctx
+                                .scopes
+                                .current_type()
+                                .map(|t| t.qualified_prefix.clone());
+                            let qn = match owner.as_deref() {
+                                Some(o) => format!("{o}.{name}"),
+                                None => name.clone(),
+                            };
+                            ctx.symbols.push(Symbol {
+                                name: name.clone(),
+                                symbol_type: SymbolType::Function,
+                                qualified_name: Some(qn.clone()),
+                                location: node_to_location(node, &file_path_str),
+                                signature: node
+                                    .utf8_text(source)
+                                    .ok()
+                                    .map(|s| s.trim().to_string()),
+                                return_type: None,
+                                parameters: vec![],
+                                fields: vec![],
+                                modifiers: vec![],
+                                documentation: None,
+                                metadata: serde_json::json!({
+                                    "language": "scala",
+                                    "kind": "given",
+                                }),
+                            });
+                            ctx.enter_scope(
+                                ScopeKind::Function,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                true,
+                            );
+                            pushed_scope = true;
+                        } else {
+                            // Anonymous given — still enter a function-like scope for calls.
+                            let name = format!("given${}", ctx.symbols.len());
+                            let qn = name.clone();
+                            ctx.symbols.push(Symbol {
+                                name: name.clone(),
+                                symbol_type: SymbolType::Function,
+                                qualified_name: Some(qn.clone()),
+                                location: node_to_location(node, &file_path_str),
+                                signature: node
+                                    .utf8_text(source)
+                                    .ok()
+                                    .map(|s| s.trim().to_string()),
+                                return_type: None,
+                                parameters: vec![],
+                                fields: vec![],
+                                modifiers: vec![],
+                                documentation: None,
+                                metadata: serde_json::json!({
+                                    "language": "scala",
+                                    "kind": "given",
+                                }),
+                            });
+                            ctx.enter_scope(
+                                ScopeKind::Function,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                true,
+                            );
+                            pushed_scope = true;
+                        }
+                    }
+                    "package_clause" => {
+                        push_named_symbol(
+                            &mut ctx,
+                            node,
+                            source,
+                            &file_path_str,
+                            SymbolType::Module,
+                            "package",
+                        );
+                    }
+                    "function_definition" | "function_declaration" => {
                         if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
                             let owner = ctx
                                 .scopes
@@ -234,7 +436,11 @@ pub fn extract_all_single_pass(
                                 documentation: None,
                                 metadata: serde_json::json!({
                                     "language": "scala",
-                                    "kind": "function",
+                                    "kind": if kind == "function_declaration" {
+                                        "function_decl"
+                                    } else {
+                                        "function"
+                                    },
                                 }),
                             });
                             ctx.enter_scope(
@@ -252,55 +458,96 @@ pub fn extract_all_single_pass(
                             pushed_scope = true;
                         }
                     }
-                    "val_definition" | "var_definition" => {
-                        if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
-                            ctx.symbols.push(Symbol {
-                                name: name.clone(),
-                                symbol_type: SymbolType::Variable,
-                                qualified_name: Some(name),
-                                location: node_to_location(node, &file_path_str),
-                                signature: None,
-                                return_type: None,
-                                parameters: vec![],
-                                fields: vec![],
-                                modifiers: vec![],
-                                documentation: None,
-                                metadata: serde_json::json!({
-                                    "language": "scala",
-                                    "kind": kind,
-                                }),
+                    "lambda_expression" => {
+                        lambda_idx += 1;
+                        let name = format!("lambda${lambda_idx}");
+                        let owner = ctx
+                            .scopes
+                            .current_function()
+                            .map(|f| f.qualified_prefix.clone())
+                            .or_else(|| {
+                                ctx.scopes
+                                    .current_type()
+                                    .map(|t| t.qualified_prefix.clone())
                             });
+                        let qn = match owner.as_deref() {
+                            Some(o) => format!("{o}.{name}"),
+                            None => name.clone(),
+                        };
+                        let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
+                            as u32;
+                        ctx.symbols.push(Symbol {
+                            name: name.clone(),
+                            symbol_type: SymbolType::Function,
+                            qualified_name: Some(qn.clone()),
+                            location: node_to_location(node, &file_path_str),
+                            signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+                            return_type: None,
+                            parameters: vec![],
+                            fields: vec![],
+                            modifiers: vec![],
+                            documentation: None,
+                            metadata: serde_json::json!({
+                                "language": "scala",
+                                "kind": "lambda",
+                            }),
+                        });
+                        ctx.enter_scope(
+                            ScopeKind::Function,
+                            Some(name),
+                            qn,
+                            node.start_byte(),
+                            node.end_byte(),
+                            true,
+                        );
+                        if let Some(f) = ctx.scopes.current_function_mut() {
+                            f.complexity.cyclomatic = 1;
+                            f.complexity.loc = loc;
                         }
+                        pushed_scope = true;
+                    }
+                    "val_definition"
+                    | "var_definition"
+                    | "val_declaration"
+                    | "var_declaration"
+                    | "class_parameter"
+                    | "full_enum_case"
+                    | "simple_enum_case" => {
+                        push_named_symbol(
+                            &mut ctx,
+                            node,
+                            source,
+                            &file_path_str,
+                            SymbolType::Variable,
+                            kind,
+                        );
                     }
                     "type_definition" => {
-                        if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
-                            ctx.symbols.push(Symbol {
-                                name: name.clone(),
-                                symbol_type: SymbolType::TypeAlias,
-                                qualified_name: Some(name),
-                                location: node_to_location(node, &file_path_str),
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.trim().to_string()),
-                                return_type: None,
-                                parameters: vec![],
-                                fields: vec![],
-                                modifiers: vec![],
-                                documentation: None,
-                                metadata: serde_json::json!({
-                                    "language": "scala",
-                                    "kind": "type",
-                                }),
-                            });
-                        }
+                        push_named_symbol(
+                            &mut ctx,
+                            node,
+                            source,
+                            &file_path_str,
+                            SymbolType::TypeAlias,
+                            "type",
+                        );
                     }
-                    "import_declaration" => {
+                    "import_declaration" | "export_declaration" => {
                         if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
+                            let keyword = if kind == "export_declaration" {
+                                "export"
+                            } else {
+                                "import"
+                            };
                             let full = node
                                 .utf8_text(source)
                                 .ok()
-                                .map(|s| s.trim().trim_start_matches("import").trim().to_string())
+                                .map(|s| {
+                                    s.trim()
+                                        .trim_start_matches(keyword)
+                                        .trim()
+                                        .to_string()
+                                })
                                 .unwrap_or(name);
                             ctx.symbols.push(Symbol {
                                 name: full.clone(),
@@ -315,26 +562,58 @@ pub fn extract_all_single_pass(
                                 documentation: None,
                                 metadata: serde_json::json!({
                                     "language": "scala",
-                                    "kind": "import",
+                                    "kind": keyword,
                                 }),
                             });
                         }
                     }
-                    "extends_clause" => {
+                    "extends_clause" | "derives_clause" => {
                         if let Some(from_type) = ctx.scopes.current_type() {
                             let from = from_type.qualified_prefix.clone();
                             if let Some(base) = extract_name_from_node(node, source).ok().flatten()
                             {
+                                let rel_ty = if kind == "derives_clause" {
+                                    RelationType::Implements
+                                } else {
+                                    RelationType::Extends
+                                };
                                 relations.push(Relation {
                                     from,
                                     to: base.clone(),
-                                    relation_type: RelationType::Extends,
+                                    relation_type: rel_ty,
                                     location: node_to_location(node, &file_path_str),
                                     metadata: serde_json::json!({
                                         "language": "scala",
-                                        "kind": "extends_clause",
+                                        "kind": kind,
                                     }),
                                     to_qualified_hint: Some(base),
+                                    to_type_hint: None,
+                                });
+                            }
+                        }
+                    }
+                    "annotation" => {
+                        if let Some(from) = ctx
+                            .scopes
+                            .current_function()
+                            .map(|f| f.qualified_prefix.clone())
+                            .or_else(|| {
+                                ctx.scopes
+                                    .current_type()
+                                    .map(|t| t.qualified_prefix.clone())
+                            })
+                        {
+                            if let Some(ann) = extract_name_from_node(node, source).ok().flatten() {
+                                relations.push(Relation {
+                                    from,
+                                    to: ann.clone(),
+                                    relation_type: RelationType::AnnotatedWith,
+                                    location: node_to_location(node, &file_path_str),
+                                    metadata: serde_json::json!({
+                                        "language": "scala",
+                                        "kind": "annotation",
+                                    }),
+                                    to_qualified_hint: Some(ann),
                                     to_type_hint: None,
                                 });
                             }
@@ -361,7 +640,11 @@ pub fn extract_all_single_pass(
                         | "for_expression"
                         | "match_expression"
                         | "try_expression"
-                        | "do_while_expression" => {
+                        | "do_while_expression"
+                        | "case_clause"
+                        | "catch_clause"
+                        | "guard"
+                        | "block" => {
                             let delta = 1 + ctx
                                 .scopes
                                 .current_function()
@@ -379,6 +662,9 @@ pub fn extract_all_single_pass(
                                 scope_depth,
                             ));
                             stack.push(Visit::LeaveGuard);
+                        }
+                        "finally_clause" => {
+                            // Visited for coverage / CFG shape; no extra cyclomatic edge.
                         }
                         "return_expression" | "throw_expression" => {
                             ctx.scopes.note_return();

@@ -44,7 +44,7 @@ fn load_manifest_handlers(
         .as_object()
         .expect("handlers object")
         .iter()
-        .map(|(k, val)| (k.clone(), val.as_str().unwrap_or("Skip").to_string()))
+        .map(|(k, val)| (k.clone(), val.as_str().unwrap_or("Unimplemented").to_string()))
         .collect();
     (json, handlers)
 }
@@ -359,6 +359,7 @@ fn tier1_layer_c_bundled_taint_rules_invariants() {
 
 #[test]
 fn tier1_layer_f_field_write_locals_and_oop_metadata_invariants() {
+    // All 20 general-purpose Tier-1 languages (Layer F visitors).
     const CORE_FIELD_WRITE_LANGS: &[&str] = &[
         "java",
         "csharp",
@@ -374,12 +375,103 @@ fn tier1_layer_f_field_write_locals_and_oop_metadata_invariants() {
         "puppet",
         "kotlin",
         "groovy",
+        "lua",
+        "elixir",
+        "bash",
+        "scala",
+        "swift",
+        "dart",
     ];
+    assert_eq!(
+        CORE_FIELD_WRITE_LANGS.len(),
+        20,
+        "Layer F must cover all 20 general-purpose Tier-1 languages"
+    );
 
     for &lang_id in CORE_FIELD_WRITE_LANGS {
         assert!(
             language_visit_fn(lang_id).is_some(),
             "Layer F ({lang_id}): field_write_locals::language_visit_fn must return Some"
+        );
+    }
+
+    // Lightweight smoke: each Wave-5 visitor recovers ≥1 local/param binding.
+    {
+        let mut env = HashMap::new();
+        merge_local_types(
+            "lua",
+            "function process(order)\n  local other = order\n  return other\nend\n",
+            "process",
+            &mut env,
+        );
+        assert!(
+            env.contains_key("order") || env.contains_key("other"),
+            "Layer F (lua): expected ≥1 binding, env={env:?}"
+        );
+    }
+    {
+        let mut env = HashMap::new();
+        merge_local_types(
+            "elixir",
+            "defmodule App do\n  def process(order) do\n    other = order\n    other\n  end\nend\n",
+            "process",
+            &mut env,
+        );
+        assert!(
+            env.contains_key("order") || env.contains_key("other"),
+            "Layer F (elixir): expected ≥1 binding, env={env:?}"
+        );
+    }
+    {
+        let mut env = HashMap::new();
+        merge_local_types(
+            "bash",
+            "process() {\n  local other=\"$1\"\n  echo \"$other\"\n}\n",
+            "process",
+            &mut env,
+        );
+        assert!(
+            env.contains_key("other"),
+            "Layer F (bash): expected local binding, env={env:?}"
+        );
+    }
+    {
+        let mut env = HashMap::new();
+        merge_local_types(
+            "scala",
+            "object App {\n  def process(order: OrderDTO): OrderDTO = {\n    val other: OrderDTO = order\n    other\n  }\n}\n",
+            "process",
+            &mut env,
+        );
+        assert!(
+            env.contains_key("order") || env.contains_key("other"),
+            "Layer F (scala): expected ≥1 binding, env={env:?}"
+        );
+    }
+    {
+        let mut env = HashMap::new();
+        merge_local_types(
+            "swift",
+            "func process(order: OrderDTO) -> OrderDTO {\n  let other: OrderDTO = order\n  return other\n}\n",
+            "process",
+            &mut env,
+        );
+        assert!(
+            env.contains_key("order") || env.contains_key("other"),
+            "Layer F (swift): expected ≥1 binding, env={env:?}"
+        );
+    }
+    {
+        let mut env = HashMap::new();
+        merge_local_types(
+            "dart",
+            "OrderDTO process(OrderDTO order) {\n  OrderDTO other = order;\n  return other;\n}\n",
+            "process",
+            &mut env,
+        );
+        assert!(
+            env.contains_key("order") || env.contains_key("other"),
+            "Layer F (dart): expected ≥1 binding, env={env:?}"
         );
     }
 

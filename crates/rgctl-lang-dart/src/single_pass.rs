@@ -12,28 +12,126 @@ const MANIFEST_JSON: &str = include_str!("../dart-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
-    ("class_declaration", HandlerMask::SYMBOL),
-    ("enum_declaration", HandlerMask::SYMBOL),
-    ("mixin_declaration", HandlerMask::SYMBOL),
-    ("extension_declaration", HandlerMask::SYMBOL),
-    ("function_declaration", HandlerMask::SYMBOL),
-    ("method_declaration", HandlerMask::SYMBOL),
-    ("function_expression", HandlerMask::SYMBOL),
-    ("call_expression", HandlerMask::RELATION),
-    ("import_or_export", HandlerMask::RELATION),
-    ("library_import", HandlerMask::RELATION),
-    ("if_statement", HandlerMask::CFG_STMT),
-    ("for_statement", HandlerMask::CFG_STMT),
-    ("while_statement", HandlerMask::CFG_STMT),
-    ("do_statement", HandlerMask::CFG_STMT),
-    ("switch_statement", HandlerMask::CFG_STMT),
-    ("try_statement", HandlerMask::CFG_STMT),
-    ("return_statement", HandlerMask::CFG_STMT),
+    ("additive_expression", HandlerMask::CFG_STMT),
+    ("annotation", HandlerMask::RELATION),
+    ("assert_statement", HandlerMask::CFG_STMT),
+    ("assignable_expression", HandlerMask::AST_SKELETON),
+    ("assignment_expression", HandlerMask::AST_SKELETON),
+    ("await_expression", HandlerMask::CFG_STMT),
+    ("bitwise_and_expression", HandlerMask::CFG_STMT),
+    ("bitwise_or_expression", HandlerMask::CFG_STMT),
+    ("bitwise_xor_expression", HandlerMask::CFG_STMT),
     ("break_statement", HandlerMask::CFG_STMT),
+    ("call_expression", HandlerMask::RELATION),
+    ("cascade_call_expression", HandlerMask::RELATION),
+    ("cascade_index_expression", HandlerMask::RELATION),
+    ("cascade_member_expression", HandlerMask::RELATION),
+    ("cascade_null_assertion_expression", HandlerMask::CFG_STMT),
+    ("cascade_null_aware_index_expression", HandlerMask::RELATION),
+    ("cascade_null_aware_member_expression", HandlerMask::RELATION),
+    ("cast_pattern", HandlerMask::AST_SKELETON),
+    ("catch_clause", HandlerMask::CFG_STMT),
+    ("class_declaration", HandlerMask::SYMBOL),
+    ("conditional_expression", HandlerMask::CFG_STMT),
+    ("const_object_expression", HandlerMask::RELATION),
+    ("constant_constructor_signature", HandlerMask::SYMBOL),
+    ("constant_pattern", HandlerMask::AST_SKELETON),
+    ("constructor_param", HandlerMask::AST_SKELETON),
+    ("constructor_signature", HandlerMask::SYMBOL),
     ("continue_statement", HandlerMask::CFG_STMT),
+    ("do_statement", HandlerMask::CFG_STMT),
+    ("empty_statement", HandlerMask::CFG_STMT),
+    ("enum_constant", HandlerMask::SYMBOL),
+    ("enum_declaration", HandlerMask::SYMBOL),
+    ("equality_expression", HandlerMask::CFG_STMT),
+    ("extension_declaration", HandlerMask::SYMBOL),
+    ("extension_type_declaration", HandlerMask::SYMBOL),
+    ("external_function_declaration", HandlerMask::SYMBOL),
+    ("external_getter_declaration", HandlerMask::SYMBOL),
+    ("external_setter_declaration", HandlerMask::SYMBOL),
+    ("external_variable_declaration", HandlerMask::SYMBOL),
+    ("factory_constructor_signature", HandlerMask::SYMBOL),
+    ("finally_clause", HandlerMask::CFG_STMT),
+    ("for_statement", HandlerMask::CFG_STMT),
+    ("formal_parameter", HandlerMask::AST_SKELETON),
+    ("formal_parameter_list", HandlerMask::AST_SKELETON),
+    ("function_declaration", HandlerMask::SYMBOL),
+    ("function_expression", HandlerMask::SYMBOL),
+    ("getter_declaration", HandlerMask::SYMBOL),
+    ("if_null_expression", HandlerMask::CFG_STMT),
+    ("if_statement", HandlerMask::CFG_STMT),
+    ("import_or_export", HandlerMask::RELATION),
+    ("index_expression", HandlerMask::RELATION),
+    ("initialized_identifier", HandlerMask::AST_SKELETON),
+    ("initialized_identifier_list", HandlerMask::AST_SKELETON),
+    ("initialized_variable_definition", HandlerMask::AST_SKELETON),
+    ("instantiation_expression", HandlerMask::RELATION),
+    ("interfaces", HandlerMask::RELATION),
+    ("labeled_statement", HandlerMask::CFG_STMT),
+    ("library_export", HandlerMask::RELATION),
+    ("library_import", HandlerMask::RELATION),
+    ("list_pattern", HandlerMask::AST_SKELETON),
+    ("local_function_declaration", HandlerMask::SYMBOL),
+    ("local_variable_declaration", HandlerMask::AST_SKELETON),
+    ("logical_and_expression", HandlerMask::CFG_STMT),
+    ("logical_or_expression", HandlerMask::CFG_STMT),
+    ("map_pattern", HandlerMask::AST_SKELETON),
+    ("member_expression", HandlerMask::RELATION),
+    ("method_declaration", HandlerMask::SYMBOL),
+    ("mixin_application_class", HandlerMask::SYMBOL),
+    ("mixin_declaration", HandlerMask::SYMBOL),
+    ("mixins", HandlerMask::RELATION),
+    ("multiplicative_expression", HandlerMask::CFG_STMT),
+    ("new_expression", HandlerMask::RELATION),
+    ("null_assert_pattern", HandlerMask::AST_SKELETON),
+    ("null_assertion_expression", HandlerMask::CFG_STMT),
+    ("null_aware_index_expression", HandlerMask::RELATION),
+    ("null_aware_member_expression", HandlerMask::RELATION),
+    ("null_check_pattern", HandlerMask::AST_SKELETON),
+    ("object_pattern", HandlerMask::AST_SKELETON),
+    ("operator_signature", HandlerMask::SYMBOL),
+    ("optional_formal_parameters", HandlerMask::AST_SKELETON),
+    ("part_directive", HandlerMask::RELATION),
+    ("part_of_directive", HandlerMask::RELATION),
+    ("pattern_assignment", HandlerMask::AST_SKELETON),
+    ("pattern_variable_declaration", HandlerMask::AST_SKELETON),
+    ("postfix_expression", HandlerMask::CFG_STMT),
+    ("record_pattern", HandlerMask::AST_SKELETON),
+    ("redirecting_factory_constructor_signature", HandlerMask::SYMBOL),
+    ("relational_expression", HandlerMask::CFG_STMT),
+    ("rest_pattern", HandlerMask::AST_SKELETON),
+    ("rethrow_statement", HandlerMask::CFG_STMT),
+    ("return_statement", HandlerMask::CFG_STMT),
+    ("setter_declaration", HandlerMask::SYMBOL),
+    ("shift_expression", HandlerMask::CFG_STMT),
+    ("static_final_declaration", HandlerMask::SYMBOL),
+    ("super_formal_parameter", HandlerMask::AST_SKELETON),
+    ("superclass", HandlerMask::RELATION),
+    ("switch_expression", HandlerMask::CFG_STMT),
+    ("switch_statement", HandlerMask::CFG_STMT),
+    ("throw_expression", HandlerMask::CFG_STMT),
+    ("top_level_variable_declaration", HandlerMask::AST_SKELETON),
+    ("try_statement", HandlerMask::CFG_STMT),
+    ("type_alias", HandlerMask::SYMBOL),
+    ("type_arguments", HandlerMask::AST_SKELETON),
+    ("type_cast_expression", HandlerMask::CFG_STMT),
+    ("type_parameter", HandlerMask::AST_SKELETON),
+    ("type_parameters", HandlerMask::AST_SKELETON),
+    ("type_test_expression", HandlerMask::CFG_STMT),
+    ("unary_expression", HandlerMask::CFG_STMT),
+    ("variable_pattern", HandlerMask::AST_SKELETON),
+    ("while_statement", HandlerMask::CFG_STMT),
+    ("yield_each_statement", HandlerMask::CFG_STMT),
+    ("yield_statement", HandlerMask::CFG_STMT),
 ];
 
-const DART_CALL_KINDS: &[&str] = &["call_expression"];
+const DART_CALL_KINDS: &[&str] = &[
+    "call_expression",
+    "cascade_call_expression",
+    "new_expression",
+    "const_object_expression",
+    "instantiation_expression",
+];
 const AST_MAX_DEPTH: usize = 2048;
 
 static HANDLERS: OnceLock<AstHandlerTable> = OnceLock::new();
@@ -224,7 +322,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask;
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
@@ -262,26 +367,148 @@ pub fn extract_all_single_pass(
                             ScopeKind::Class,
                         );
                     }
-                    "extension_declaration" => {
+                    "extension_declaration" | "extension_type_declaration" => {
+                        let meta = if kind == "extension_type_declaration" {
+                            "extension_type"
+                        } else {
+                            "extension"
+                        };
                         pushed_scope = push_type_symbol(
                             &mut ctx,
                             node,
                             source,
                             &file_path_str,
                             SymbolType::Class,
-                            "extension",
+                            meta,
                             ScopeKind::Class,
                         );
                     }
-                    "function_declaration" | "method_declaration" => {
+                    "mixin_application_class" => {
+                        pushed_scope = push_type_symbol(
+                            &mut ctx,
+                            node,
+                            source,
+                            &file_path_str,
+                            SymbolType::Class,
+                            "mixin_application_class",
+                            ScopeKind::Class,
+                        );
+                    }
+                    "type_alias" => {
                         if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
-                            let meta = if kind == "method_declaration" {
-                                "method"
-                            } else {
-                                "function"
+                            let qn = name.clone();
+                            ctx.symbols.push(Symbol {
+                                name: name.clone(),
+                                symbol_type: SymbolType::TypeAlias,
+                                qualified_name: Some(qn),
+                                location: node_to_location(node, &file_path_str),
+                                signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+                                return_type: None,
+                                parameters: vec![],
+                                fields: vec![],
+                                modifiers: vec![],
+                                documentation: None,
+                                metadata: serde_json::json!({
+                                    "language": "dart",
+                                    "kind": "type_alias",
+                                }),
+                            });
+                        }
+                    }
+                    "enum_constant" => {
+                        if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
+                            let owner = ctx
+                                .scopes
+                                .current_type()
+                                .map(|t| t.qualified_prefix.clone());
+                            let qn = match owner.as_deref() {
+                                Some(o) => format!("{o}.{name}"),
+                                None => name.clone(),
                             };
-                            pushed_scope =
-                                push_function(&mut ctx, node, source, &file_path_str, name, meta);
+                            ctx.symbols.push(Symbol {
+                                name,
+                                symbol_type: SymbolType::Variable,
+                                qualified_name: Some(qn),
+                                location: node_to_location(node, &file_path_str),
+                                signature: None,
+                                return_type: None,
+                                parameters: vec![],
+                                fields: vec![],
+                                modifiers: vec![],
+                                documentation: None,
+                                metadata: serde_json::json!({
+                                    "language": "dart",
+                                    "kind": "enum_constant",
+                                }),
+                            });
+                        }
+                    }
+                    "function_declaration" | "method_declaration"
+                    | "local_function_declaration" | "getter_declaration" | "setter_declaration"
+                    | "external_function_declaration" | "external_getter_declaration"
+                    | "external_setter_declaration" | "operator_signature"
+                    | "constructor_signature" | "factory_constructor_signature"
+                    | "constant_constructor_signature"
+                    | "redirecting_factory_constructor_signature"
+                    | "static_final_declaration" | "external_variable_declaration" => {
+                        if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
+                            let meta = match kind {
+                                "method_declaration" => "method",
+                                "getter_declaration" | "external_getter_declaration" => "getter",
+                                "setter_declaration" | "external_setter_declaration" => "setter",
+                                "local_function_declaration" => "local_function",
+                                "operator_signature" => "operator",
+                                "constructor_signature"
+                                | "factory_constructor_signature"
+                                | "constant_constructor_signature"
+                                | "redirecting_factory_constructor_signature" => "constructor",
+                                "static_final_declaration" | "external_variable_declaration" => {
+                                    "field"
+                                }
+                                _ => "function",
+                            };
+                            // Fields: record symbol without function scope.
+                            if matches!(
+                                kind,
+                                "static_final_declaration" | "external_variable_declaration"
+                            ) {
+                                let owner = ctx
+                                    .scopes
+                                    .current_type()
+                                    .map(|t| t.qualified_prefix.clone());
+                                let qn = match owner.as_deref() {
+                                    Some(o) => format!("{o}.{name}"),
+                                    None => name.clone(),
+                                };
+                                ctx.symbols.push(Symbol {
+                                    name,
+                                    symbol_type: SymbolType::Variable,
+                                    qualified_name: Some(qn),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: node
+                                        .utf8_text(source)
+                                        .ok()
+                                        .map(|s| s.trim().to_string()),
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "dart",
+                                        "kind": meta,
+                                    }),
+                                });
+                            } else {
+                                pushed_scope = push_function(
+                                    &mut ctx,
+                                    node,
+                                    source,
+                                    &file_path_str,
+                                    name,
+                                    meta,
+                                );
+                            }
                         }
                     }
                     "function_expression" => {
@@ -296,7 +523,8 @@ pub fn extract_all_single_pass(
                             "function_expression",
                         );
                     }
-                    "import_or_export" | "library_import" => {
+                    "import_or_export" | "library_import" | "library_export"
+                    | "part_directive" | "part_of_directive" => {
                         // Prefer handling once at `import_or_export` to avoid duplicates.
                         if kind == "library_import" {
                             if let Some(parent) = node.parent() {
@@ -357,7 +585,10 @@ pub fn extract_all_single_pass(
                 if ctx.scopes.current_function().is_some() {
                     match kind {
                         "if_statement" | "for_statement" | "while_statement" | "do_statement"
-                        | "switch_statement" | "try_statement" => {
+                        | "switch_statement" | "try_statement" | "switch_expression"
+                        | "catch_clause" | "assert_statement" | "conditional_expression"
+                        | "if_null_expression" | "logical_and_expression"
+                        | "logical_or_expression" => {
                             let delta = 1 + ctx
                                 .scopes
                                 .current_function()

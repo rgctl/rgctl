@@ -15,5 +15,8 @@ tree-sitter-sql = { package = "tree-sitter-sequel", version = "0.3.11" }
 serde_json = "1"
 tracing = "0.1"
 
+[dev-dependencies]
+rgctl-ast-coverage = { workspace = true }
+
 [lints.clippy]
 collapsible_if = "allow"

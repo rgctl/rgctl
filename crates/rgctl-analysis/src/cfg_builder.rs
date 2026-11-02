@@ -17,7 +17,10 @@ const AST_WALK_MAX_DEPTH: usize = 2048;
 
 /// Common CFG statement and control-flow AST node kinds recognized by [`CfgBuilder`].
 const CFG_HANDLED_KINDS: &[&str] = &[
+    "additive_expression",
+    "after_block",
     "annotated_expression",
+    "arithmetic_expansion",
     "as_expression",
     "assert_statement",
     "assignment",
@@ -29,18 +32,26 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "await",
     "await_expression",
     "begin_block",
+    "between_expression",
     "binary",
     "binary_expression",
     "binary_operator",
+    "bitwise_and_expression",
+    "bitwise_or_expression",
+    "bitwise_xor_expression",
     "block",
     "body_statement",
     "boolean_operator",
+    "brace_expression",
     "break",
     "break_expression",
     "break_statement",
+    "c_style_for_statement",
     "call",
+    "cascade_null_assertion_expression",
     "case",
     "case_clause",
+    "case_item",
     "case_statement",
     "catch_block",
     "catch_clause",
@@ -55,6 +66,8 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "co_yield_statement",
     "collection_expression",
     "comma_expression",
+    "command",
+    "command_substitution",
     "communication_case",
     "comparison_operator",
     "compound_assignment_expr",
@@ -69,6 +82,7 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "debugger_statement",
     "dec_statement",
     "declaration",
+    "declaration_command",
     "declare_directive",
     "declare_statement",
     "default_case",
@@ -77,10 +91,12 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "delete_statement",
     "dictionary_comprehension",
     "do_block",
+    "do_group",
     "do_statement",
     "do_while_statement",
     "echo_statement",
     "elif_clause",
+    "else_block",
     "else_clause",
     "else_if_clause",
     "elsif",
@@ -89,19 +105,23 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "end_block",
     "enhanced_for_statement",
     "ensure",
+    "equality_expression",
     "except_clause",
     "exec_statement",
     "exit_statement",
+    "expansion",
     "expression",
     "expression_case",
     "expression_statement",
     "expression_switch_statement",
     "fallthrough_statement",
+    "filter_expression",
     "finally_block",
     "finally_clause",
     "fixed_statement",
     "for",
     "for_clause",
+    "for_expr",
     "for_expression",
     "for_in_clause",
     "for_in_expression",
@@ -124,6 +144,7 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "if_clause",
     "if_expression",
     "if_modifier",
+    "if_null_expression",
     "if_statement",
     "in_clause",
     "in_expression",
@@ -143,11 +164,14 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "let_condition",
     "let_declaration",
     "let_statement",
+    "list",
     "list_comprehension",
     "local_declaration_statement",
     "local_function_statement",
     "local_variable_declaration",
     "lock_statement",
+    "logical_and_expression",
+    "logical_or_expression",
     "loop_expression",
     "macro_invocation",
     "match_arm",
@@ -156,11 +180,16 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "match_default_expression",
     "match_expression",
     "match_statement",
+    "multiplicative_expression",
     "named_label_statement",
+    "negated_command",
     "next",
     "nonlocal_statement",
+    "null_assertion_expression",
     "order_by_clause",
     "pass_statement",
+    "pipeline",
+    "postfix_expression",
     "postfix_unary_expression",
     "prefix_unary_expression",
     "preproc_elif",
@@ -174,12 +203,16 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "range_clause",
     "range_expression",
     "receive_statement",
+    "redirected_statement",
+    "relational_expression",
     "repeat_statement",
     "repeat_while_statement",
     "rescue",
+    "rescue_block",
     "rescue_modifier",
     "resource",
     "resource_specification",
+    "rethrow_statement",
     "return",
     "return_expression",
     "return_statement",
@@ -194,9 +227,13 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "sequence_expression",
     "set_comprehension",
     "shell_command_expression",
+    "shift_expression",
     "short_var_declaration",
+    "simple_expansion",
+    "stab_clause",
     "statement_block",
     "statements",
+    "subshell",
     "switch_block",
     "switch_block_statement_group",
     "switch_body",
@@ -211,6 +248,7 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "switch_statement",
     "synchronized_statement",
     "ternary_expression",
+    "test_command",
     "then",
     "throw_expression",
     "throw_statement",
@@ -218,19 +256,23 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "try_statement",
     "try_with_resources_statement",
     "type_case",
+    "type_cast_expression",
     "type_switch_statement",
+    "type_test_expression",
     "unary_expression",
     "unless",
     "unless_modifier",
     "unless_statement",
     "unsafe_block",
     "unsafe_statement",
+    "unset_command",
     "unset_statement",
     "until",
     "until_modifier",
     "update_expression",
     "using_statement",
     "var_declaration",
+    "variable_assignment",
     "variable_declaration",
     "when",
     "when_clause",
@@ -246,6 +288,7 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "with_item",
     "with_statement",
     "yield",
+    "yield_each_statement",
     "yield_expression",
     "yield_statement",
 ];
@@ -1163,8 +1206,9 @@ impl<'a> CfgBuilder<'a> {
             | "repeat_while_statement"
             | "repeat_statement" => self.visit_while(node, source),
             "do_statement" | "do_while_statement" => self.visit_do(node, source),
-            "for_statement" | "for_expression" | "for_in_expression" | "for_in_statement"
-            | "foreach_statement" | "for_range_loop" => self.visit_for(node, source),
+            "for_statement" | "for_expression" | "for_expr" | "for_in_expression"
+            | "for_in_statement" | "foreach_statement" | "for_range_loop"
+            | "c_style_for_statement" => self.visit_for(node, source),
             "enhanced_for_statement" => self.visit_enhanced_for(node, source),
             "loop_expression" => self.visit_loop(node, source),
             // Kotlin `when` — treat like switch expression (arm fan-out)
@@ -1400,6 +1444,7 @@ impl<'a> CfgBuilder<'a> {
                 if let Some(block) = find_child_kind(node, "block")
                     .or_else(|| find_child_kind(node, "statements"))
                     .or_else(|| find_child_kind(node, "compound_statement"))
+                    .or_else(|| find_child_kind(node, "do_group"))
                 {
                     self.visit_block(block, source)?;
                 } else {
@@ -1408,6 +1453,28 @@ impl<'a> CfgBuilder<'a> {
                         if child.is_named() && child.kind() != "else" {
                             self.visit_statement(child, source)?;
                         }
+                    }
+                }
+                Ok(())
+            }
+            // Bash `elif_clause` — same shape as nested if.
+            "elif_clause" => self.visit_if(node, source),
+            // Bash pipelines / lists / redirects / negation — walk named children.
+            "pipeline"
+            | "list"
+            | "redirected_statement"
+            | "negated_command"
+            | "command"
+            | "command_substitution"
+            | "test_command"
+            | "declaration_command"
+            | "unset_command"
+            | "variable_assignment"
+            | "case_item" => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.is_named() {
+                        self.visit_statement(child, source)?;
                     }
                 }
                 Ok(())
@@ -2293,6 +2360,7 @@ impl<'a> CfgBuilder<'a> {
             .child_by_field_name("alternative")
             .or_else(|| node.child_by_field_name("else_clause"))
             .or_else(|| find_direct_child_kind(node, "else_if_clause"))
+            .or_else(|| find_direct_child_kind(node, "elif_clause"))
             .or_else(|| find_direct_child_kind(node, "else_clause"))
             .or_else(|| find_direct_child_kind(node, "else_statement"))
             .or_else(|| find_direct_child_kind(node, "elsif_statement"))
@@ -2415,13 +2483,15 @@ impl<'a> CfgBuilder<'a> {
                     find_child_kind(alternative, "block")
                         .or_else(|| find_child_kind(alternative, "statements"))
                         .or_else(|| find_child_kind(alternative, "compound_statement"))
+                        .or_else(|| find_child_kind(alternative, "do_group"))
                         .unwrap_or(alternative)
                 } else if alternative.kind() == "if_expression"
                     || alternative.kind() == "if_statement"
                     || alternative.kind() == "elsif_statement"
                     || alternative.kind() == "else_if_clause"
+                    || alternative.kind() == "elif_clause"
                 {
-                    // `else if` / PHP else_if / Puppet elsif — visit as nested if-like.
+                    // `else if` / PHP else_if / Puppet elsif / Bash elif — visit as nested if-like.
                     alternative
                 } else {
                     alternative
@@ -2430,6 +2500,7 @@ impl<'a> CfgBuilder<'a> {
                     || alt.kind() == "if_statement"
                     || alt.kind() == "elsif_statement"
                     || alt.kind() == "else_if_clause"
+                    || alt.kind() == "elif_clause"
                 {
                     self.visit_if(alt, source)?;
                 } else if is_block_like(alt.kind()) {
@@ -4784,11 +4855,13 @@ fn is_block_like(kind: &str) -> bool {
             | "body_statement"
             | "begin_block"
             | "do_block"
+            | "do_group" // Bash for/while `do … done`
             | "else_block" // Elixir if/else arms
             | "body" // HCL / Terraform block body
             | "program"
             | "async_block"
             | "unsafe_block"
+            | "subshell" // Bash `( … )`
     )
 }
 

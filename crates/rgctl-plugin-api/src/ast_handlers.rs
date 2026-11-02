@@ -24,6 +24,8 @@ impl HandlerMask {
     pub const LITERAL: Self = Self(1 << 4);
     /// Kind is intentionally ignored.
     pub const SKIP: Self = Self(1 << 5);
+    /// Kind contributes property / attribute metadata (e.g. GraphQL directive bodies).
+    pub const PROPERTY: Self = Self(1 << 6);
 
     /// Empty mask.
     pub const fn empty() -> Self {
@@ -43,24 +45,33 @@ impl HandlerMask {
     /// True if this mask is only `SKIP` and/or `LITERAL` (no semantic handlers).
     pub const fn is_passive(self) -> bool {
         !self.intersects(Self(
-            Self::SYMBOL.0 | Self::RELATION.0 | Self::CFG_STMT.0 | Self::AST_SKELETON.0,
+            Self::SYMBOL.0
+                | Self::RELATION.0
+                | Self::CFG_STMT.0
+                | Self::AST_SKELETON.0
+                | Self::PROPERTY.0,
         ))
     }
 
     /// Map a `*-ast-coverage.json` handler label to a mask.
+    ///
+    /// Raw `"Skip"` is rejected — use `SkipWrapper` / `SkipTypeToken` / `Unimplemented`.
     pub fn from_coverage_label(label: &str) -> Option<Self> {
         Some(match label {
             "Symbol" => Self::SYMBOL,
             "Relation" => Self::RELATION,
             "CfgStatement" => Self::CFG_STMT,
             "AstSkeleton" => Self::AST_SKELETON,
+            "Property" => Self::PROPERTY,
             "Literal" => Self::LITERAL,
-            "Skip" | "SkipWrapper" | "SkipTypeToken" | "Unimplemented" => Self::SKIP,
+            "SkipWrapper" | "SkipTypeToken" | "Unimplemented" => Self::SKIP,
             _ => return None,
         })
     }
 
-    /// Primary coverage label for this mask (prefer semantic over Skip/Literal).
+    /// Primary coverage label for this mask (prefer semantic over passive/Literal).
+    ///
+    /// Pure [`Self::SKIP`] dumps as `"Unimplemented"` (raw `"Skip"` is banned in manifests).
     pub fn to_coverage_label(self) -> &'static str {
         if self.intersects(Self::SYMBOL) {
             "Symbol"
@@ -70,10 +81,12 @@ impl HandlerMask {
             "CfgStatement"
         } else if self.intersects(Self::AST_SKELETON) {
             "AstSkeleton"
+        } else if self.intersects(Self::PROPERTY) {
+            "Property"
         } else if self.intersects(Self::LITERAL) {
             "Literal"
         } else {
-            "Skip"
+            "Unimplemented"
         }
     }
 }
@@ -182,12 +195,19 @@ mod tests {
             "Relation",
             "CfgStatement",
             "AstSkeleton",
+            "Property",
             "Literal",
-            "Skip",
         ] {
             let m = HandlerMask::from_coverage_label(label).unwrap();
             assert_eq!(m.to_coverage_label(), label);
         }
+        for label in ["SkipWrapper", "SkipTypeToken", "Unimplemented"] {
+            let m = HandlerMask::from_coverage_label(label).unwrap();
+            assert!(m.is_passive());
+            assert_eq!(m, HandlerMask::SKIP);
+        }
+        assert!(HandlerMask::from_coverage_label("Skip").is_none());
+        assert_eq!(HandlerMask::SKIP.to_coverage_label(), "Unimplemented");
     }
 
     #[test]
@@ -196,6 +216,7 @@ mod tests {
         assert!(HandlerMask::LITERAL.is_passive());
         assert!(HandlerMask::SKIP.union(HandlerMask::LITERAL).is_passive());
         assert!(!HandlerMask::SYMBOL.is_passive());
+        assert!(!HandlerMask::PROPERTY.is_passive());
         assert!(!HandlerMask::RELATION.union(HandlerMask::SKIP).is_passive());
     }
 }

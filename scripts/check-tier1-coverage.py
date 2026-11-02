@@ -70,7 +70,7 @@ def is_semantic_node_kind(kind: str) -> bool:
 def grade_for_ratio(ratio: float) -> str:
     """Mirrors crates/rgctl-ast-coverage/src/lib.rs::CoverageGrade."""
     pct = ratio * 100.0
-    if pct >= 85.0:
+    if pct >= 98.0:
         return "A+"
     if pct >= 75.0:
         return "A"
@@ -220,11 +220,11 @@ def audit_tier1_languages() -> List[AstCoverageAudit]:
             GRADE_RANK[current_grade] >= GRADE_RANK[target_grade]
         )
 
-        # How many additional handled kinds (converting from Skip/Unimplemented) to reach A (75%) / A+ (85%)
+        # How many additional handled kinds (converting from Unimplemented) to reach A (75%) / A+ (98%)
         import math
 
         needed_a = max(0, math.ceil(0.75 * denom) - handled)
-        needed_a_plus = max(0, math.ceil(0.85 * denom) - handled)
+        needed_a_plus = max(0, math.ceil(0.98 * denom) - handled)
 
         single_pass_path = REPO_ROOT / f"crates/rgctl-lang-{lang_id}/src/single_pass.rs"
         has_single_pass = single_pass_path.is_file()
