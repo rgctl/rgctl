@@ -22,3 +22,9 @@ commands:
   - id: review
     title: Structural PR / branch review
     skill: rgctl-review
+  - id: vuln
+    title: OSV / CVE reachability and OpenVEX triage
+    skill: rgctl-vuln
+  - id: migrate
+    title: Strangler-Fig migration roadmap and boundary audit
+    skill: rgctl-migrate

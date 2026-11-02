@@ -84,6 +84,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | Build semantic index | `semantic index` |
 | Check CFG readiness | `cpg status` |
 | Full staged pipeline | `discover . --full` |
+| Markdown + code context graph | `discover . -l markdown,<lang>` then `find '<Heading>*' --type module` / `relations '<Heading>' --edge references --direction out` |
 
 **Common flags:**
 - `--with-cfg` — Pre-build whole-repo CFG/PDG archive (taint/mutations/batch inspect; not required for lazy `slice`)
@@ -93,21 +94,24 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 - `--export-migration-hints` — Write `.rgctl/migration_plan.json` (primary migration deliverable)
 - `--with-security --with-taint` — Security scanning
 - `--with-harmonic` — Harmonic centrality (used with migration ranking)
+- `-l cobol,pli,jcl,apex,pascal,perl,ada,matlab` — legacy/mainframe migration languages when those sources are present
 
 **See:** Discovering and Indexing Guide (product docs; not bundled in this skill pack)
 
 ### 1b. Migration roadmap (`--export-migration-hints`)
 
-**Primary deliverable for migration questions:** `.rgctl/migration_plan.json` — not ad-hoc rule dumps.
+**Primary deliverable for migration questions:** `.rgctl/migration_plan.json` — not ad-hoc rule dumps. Prefer slash command **`/rgctl:migrate`** (skill `rgctl-migrate`) for the full Strangler-Fig brief.
 
 | User Intent | CLI Command |
 |-------------|-------------|
-| Generate migration plan | `discover . --export-migration-hints` (add `--with-harmonic` for ranking) |
+| **Migration roadmap / extraction brief** | **`/rgctl:migrate`** → skill `rgctl-migrate` |
+| Generate migration plan (CLI) | `discover . --export-migration-hints` (add `--with-harmonic` for ranking) |
 | Preset / order | `--migration-preset hybrid_default\|foundational_first\|dense_cluster\|risk_mitigation` · `--migration-order scheduled\|priority` |
-| Read plan | `.rgctl/migration_plan.json` **and** `discover -f json … --export-migration-hints` stdout (migration plan JSON; plain `discover -f json` without the flag is DiscoverResponse telemetry) |
+| Read plan | `.rgctl/migration_plan.json` v2 `.steps[]` (`label != "root"`); plain `discover -f json` without the flag is DiscoverResponse telemetry |
+| Legacy / mainframe sources | add `-l cobol,pli,jcl` (also `apex,pascal,perl,ada,matlab` as needed) |
 | Dashboard view | `discover . --with-dashboard --export-migration-hints` then `serve --open` |
 
-**Supporting probes** (optional context before/after the plan): `status` → `inventory --by import-prefix --limit 40` → `find --annotation …` / suffix globs → `callers` / `blast-radius` on candidates.
+**Supporting probes** (optional): `communities list` (`member_count > 1`) → `blast-radius` on boundary candidates. Bound with `--limit` / `--depth`.
 
 **See:** Migration Planning Guide (product docs; not bundled in this skill pack), migrate workflow in [references/workflows.md](references/workflows.md)
 
@@ -133,12 +137,13 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | Git co-change files | `relations <FILE> --edge cochangeswith` (needs `discover --with-git`) |
 | Framework routes / DI | `relations --edge exposesroute` / `relations --edge injects` |
 | Natural-language search | `semantic query "checkout flow"` |
-| List communities | `communities list` |
-| Subsystem ownership | `semantic query "X" --scope community` |
+| List communities | `communities list` (filter `member_count > 1`; skip unlabeled `"Community N"` singletons) |
+| Subsystem ownership | `semantic query "X" --scope community` (prefer named clusters) |
 | Refresh community labels | `communities label --write` |
 | Community census | `inventory --by community` |
+| Markdown heading → code | `find 'Checkout*' --type module`; `relations 'Checkout Flow' --edge references --direction out` |
 
-**Migration:** prefer `--export-migration-hints` → `migration_plan.json`. Optional probes: `status` → `inventory --by import-prefix --limit 40` → `find --annotation …` / suffix globs → `callers` / `blast-radius`.
+**Migration:** prefer **`/rgctl:migrate`** or `--export-migration-hints` → `migration_plan.json` v2 `.steps[]`. Optional probes: `communities list` / `blast-radius` (keep `--limit` small).
 
 **Complexity honesty:** exact name = hash index; prefix/`*mid*`/`--scope` may scan keys/columns until better indexes land. Module re-index is still a strong speed lever. Annotation **arguments** (e.g. `@Path("/x")`) need `--show-attributes` when `annotation_args.json` is present.
 **See:** [Command Encyclopedia](references/command-encyclopedia.md) (find/callers/relations/inventory/status), Semantic Search Guide (product docs; not bundled in this skill pack)
@@ -147,23 +152,25 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 
 | User Intent | CLI Command |
 |-------------|-------------|
-| Blast radius | `blast-radius <Symbol> --depth N` |
+| Blast radius | `blast-radius <Symbol> --depth N` (prefer `--depth 2`/`3` + `--limit`) |
 | **Review a PR / branch** (report + verdict) | **`/rgctl:review`** → skill `rgctl-review` (writes `REVIEW_REPORT.md`) |
+| Review uncommitted local edits | `review paths --synthetic-head worktree` (via **`/rgctl:review`** Step 0a) |
 | Call paths before/after (CLI only) | `review paths --base-ref ORIGIN --head-ref HEAD` |
 | Temporal PR policy / CI gate | `review check --policy-file policy.json` (alias: `pr-check`) |
 | Policy check (full codebase) | `check --policy-file policy.json` |
 | Policy check (one symbol) | `blast-radius <Symbol> --policy-file policy.json` |
-| OSV / CVE / OpenVEX | `discover . --with-cfg` then `vuln triage` → `deps check` → `vuln analyze` (see vuln workflow) |
+| **OSV / CVE / OpenVEX triage** | **`/rgctl:vuln`** → skill `rgctl-vuln` |
+| OSV CLI-only | `discover . --with-cfg` then `vuln triage` → `deps check` → `vuln analyze` |
 
-**PR / branch review:** when the user asks to **review a PR**, branch, or call-path impact vs a base, prefer slash command **`/rgctl:review`** (skill `rgctl-review`) — base artifact, `review paths` / optional `review check`, session `REVIEW_REPORT.md` + four-section verdict. No forge posting.
+**High-ceremony slash commands** (keep palette ≤3): **`/rgctl:review`**, **`/rgctl:vuln`**, **`/rgctl:migrate`**. Atomic lookups (`find`, `callers`, `blast-radius`, `slice`, …) stay in this meta-skill — never as slash commands.
 
-**CLI-only PR family:** use **`review paths`** when the user only wants call-path JSON. Use **`review check`** / `pr-check` for policy/merge gates. Do **not** run `review check` solely to explain paths; do **not** treat paths JSON as pass/fail.
+**PR / branch / worktree review:** prefer **`/rgctl:review`**. Uncommitted dirty tree + warm `.rgctl/` → `--synthetic-head worktree` (no `.rgctl-base/`). Branch compare → base artifact + `--base-ref` / `--head-ref`.
 
-**Presenting `review paths`:** (1) call paths per symbol (before → after + deltas), (2) short prose summary, (3) unscored files. Unchanged path → one line. No raw JSON dump; no follow-up `callers`/`callees` when paths already returned.
+**CLI-only PR family:** `review paths` for call-path JSON; `review check` / `pr-check` for policy gates. Do not treat paths JSON as pass/fail.
 
-**Vuln scans:** index with `--with-cfg` before sink-first taint / blast classify / exploitability VEX; add `--with-taint` when PDG-backed confidence is required. Plain discover is enough only for triage + deps-only early exit.
+**Vuln scans:** prefer **`/rgctl:vuln`**. Index with `--with-cfg` before analyze; read `.sink_taint.call_sites[]` / `.paths[]` from `vuln analyze` (no redundant manual caller chain unless debugging).
 
-**See:** Blast Radius Guide (product docs; not bundled in this skill pack), CI Policy Guide (product docs; not bundled in this skill pack), vuln workflow in [references/workflows.md](references/workflows.md)
+**See:** Blast Radius Guide / CI Policy Guide (product docs), vuln workflow in [references/workflows.md](references/workflows.md)
 
 ### 4. Metrics & Analysis
 
@@ -211,13 +218,15 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 
 | User Says | Command |
 |-----------|---------|
-| "Generate migration plan" / "What should we extract first?" | `discover . --export-migration-hints` → `.rgctl/migration_plan.json` |
+| "Generate migration plan" / "What should we extract first?" | **`/rgctl:migrate`** (or `discover . --export-migration-hints` → `.steps[]`) |
 | "Bottlenecks / hotspots" | `metrics --pagerank` |
 | "Where is checkout flow?" | `semantic query "checkout flow" --limit 10` |
+| "How does this doc map to code?" | `discover . -l markdown,<lang>` → `find 'Heading*' --type module` → `relations … --edge references --direction out` |
 | "Impact if I change X" | `blast-radius X --depth 2` |
-| "Are we affected by this CVE / OSV?" | `discover . --with-cfg` → `vuln triage` / `deps check` / `vuln analyze` (vuln workflow) |
+| "Are we affected by this CVE / OSV?" | **`/rgctl:vuln`** (or vuln workflow in references) |
 | "Validate against policy" | `check --policy-file policy.json` |
-| "How did call paths change on this PR?" | `review paths --base-ref origin/main --head-ref HEAD` |
+| "Review my uncommitted changes" | **`/rgctl:review`** → `review paths --synthetic-head worktree` |
+| "How did call paths change on this PR?" | **`/rgctl:review`** or `review paths --base-ref origin/main --head-ref HEAD` |
 | "PR policy gate / new violations vs main" | `review check --policy-file …` (alias `pr-check`) |
 | "Who calls X" | `callers X --depth 2` (impact → `blast-radius X`) |
 | "javax imports / annotations" | `find "import javax*" --type import`; `relations --edge annotatedwith --from-type function --to-type annotation` |

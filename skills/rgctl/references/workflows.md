@@ -151,24 +151,36 @@ Report top `hits[]` (`name`, `score`, `file_path`).
 rgctl -r "$REPO" -f json semantic query "checkout" --scope community --limit 10
 ```
 
-Hits are pooled **community** results (same `hits[]` contract).
+Hits are pooled **community** results (same `hits[]` contract). Prefer named domain clusters — filter unlabeled singletons with `select(.name | startswith("Community ") | not)` when post-processing community lists, and use `select(.member_count > 1)` so singleton nodes do not dominate ownership answers.
 
 ### Concept search with empty hits
 
 If `find` / name globs return 0 for a concept (e.g., "ingress", "gateway"):
 
-1. Try `communities list` and grep labels
+1. Try `communities list` (keep `member_count > 1`) and grep labels
 2. Try `semantic query "<concept>"`
 3. Broaden with `find '*Gateway*' --type class` or `inventory --by type`
 
 Concepts often live in package/directory paths or type names, not bare function names.
+
+### Markdown context graph
+
+**User intent:** *"How does this doc section map to code?"* / index Markdown alongside source
+
+```bash
+rgctl discover . -l markdown,java
+rgctl -f json find 'Checkout*' --type module --limit 20
+rgctl -f json relations 'Checkout Flow' --edge references --direction out --limit 40
+```
+
+Headings become modules; `references` edges traverse doc→code. Combine `-l markdown,<lang>` for the languages present in the repo.
 
 
 ---
 
 # Migrate workflow
 
-**Primary migration deliverable for agents:** `.rgctl/migration_plan.json` from `--export-migration-hints`. With `-f json`, the same migration plan object is also printed on **stdout** (plain `discover -f json` without the flag still emits DiscoverResponse telemetry). Dashboard Migration tab via `serve --open` when `--with-dashboard` is set.
+**Primary migration deliverable for agents:** `.rgctl/migration_plan.json` from `--export-migration-hints`. Prefer slash command **`/rgctl:migrate`** for the full Strangler-Fig brief. With `-f json`, the same migration plan object is also printed on **stdout** (plain `discover -f json` without the flag still emits DiscoverResponse telemetry). Dashboard Migration tab via `serve --open` when `--with-dashboard` is set.
 
 Use this workflow for roadmap / extraction-order / "what should we migrate first?" questions. Summarize the plan — do not dump the whole JSON into context.
 
@@ -180,10 +192,15 @@ Use this workflow for roadmap / extraction-order / "what should we migrate first
 rgctl discover . --with-cfg --with-security --with-taint \
   --with-dashboard --with-harmonic --export-migration-hints \
   --migration-preset hybrid_default --migration-order scheduled
+# Legacy/mainframe sources when present:
+#   … -l cobol,pli,jcl,apex,pascal,perl,ada,matlab
 # read .rgctl/migration_plan.json (and/or dashboard Migration tab via serve --open)
+jq '[.steps[] | select(.label != "root") | {
+  step, label, schedule_step, priority_rank, avg_pagerank, avg_harmonic
+}] | .[0:20]' .rgctl/migration_plan.json
 ```
 
-Discover stdout (`-f json`) is **telemetry** — not the plan body. Report path + preset/order used + top `packages[]` / steps by priority.
+Discover stdout without `--export-migration-hints` is **telemetry** — not the plan body. Report path + preset/order + top **`.steps[]`** where `label != "root"` (v2 schema; not v1 `packages[]`).
 
 **Migration presets:**
 
@@ -197,6 +214,8 @@ Discover stdout (`-f json`) is **telemetry** — not the plan body. Report path 
 - `scheduled` - Dependency-aware sequence (default)
 - `priority` - Highest-impact packages first
 
+Cross-check multi-member Fast-Leiden clusters (`communities list` → `select(.member_count > 1)`) and `blast-radius <boundary> --depth 3` on shared methods before cutting a service boundary.
+
 ### Hotspots
 
 **User intent:** *"Which core functions are bottlenecks / central dependencies?"*
@@ -205,7 +224,7 @@ Discover stdout (`-f json`) is **telemetry** — not the plan body. Report path 
 rgctl -f json metrics --pagerank
 ```
 
-Report `.pagerank.top` nodes + why they are risky to change. Resolve UUIDs to function names using `cpg function`.
+Report `.pagerank.top` entries — JSON already includes `name`, `qualified_name`, `kind`, and `file_path` alongside `node` (UUID). No follow-up `cpg function` lookup needed.
 
 ### CPG export
 
@@ -339,9 +358,9 @@ Exit code 1 means violations. Parse JSON for violation details. Prefer `review c
 
 # Vuln / deps / reachability workflow
 
-**When:** OSV / CVE impact — “are we affected?”, “is it reachable?”, OpenVEX.
+**When:** OSV / CVE impact — “are we affected?”, “is it reachable?”, OpenVEX. Prefer slash command **`/rgctl:vuln`** for the full triage report.
 
-**Index for vuln scans (required before P4–P6):**
+**Index for vuln scans (required before analyze reachability):**
 
 ```bash
 cd "$REPO" && rgctl discover . --with-cfg
@@ -351,21 +370,25 @@ cd "$REPO" && rgctl discover . --with-cfg --with-taint
 
 - Run **`--with-cfg`** for any vulnerability scan that may reach sink-first taint, blast classify, or `vuln analyze` exploitability beyond deps-only.
 - Add **`--with-taint`** when you need discover-time / PDG-backed taint confidence. Without CFG, `cfg_available=false`: deps / package / callers still work, but empty taint paths are **not** PDG proof.
-- If `.rgctl/` exists from a plain `discover` (no CFG), **re-discover with `--with-cfg`** before P4–P6 — do not treat the warm index as sufficient for reachability/VEX.
-- Discover-time taint remains **opt-in**; on-demand `taint --sink … --source external` still needs the CFG archive from `--with-cfg`.
+- If `.rgctl/` exists from a plain `discover` (no CFG), **re-discover with `--with-cfg`** before analyze — do not treat the warm index as sufficient for reachability/VEX.
 
-**Pipeline:**
+**Primary pipeline (v0.4.22+):** `vuln analyze` populates `.sink_taint.call_sites[]` (`caller`, `target_method`, `file`, `line`) from the graph **and** `.rgctl/parked_relations.bin`, plus `.sink_taint.paths[]` (`from`, `to`, `hops`). That eliminates the older manual `find --package` / `callers --package` chain unless you are debugging empty sites.
 
 | Step | Command |
 |------|---------|
 | P−1 Index | `rgctl discover . --with-cfg` (+ `--with-taint` for PDG confidence) |
 | P0 Normalize OSV | `rgctl -f json vuln triage --osv ./advisory.json` |
 | P1 Deps match | `rgctl -r "$REPO" -f json deps check --osv ./advisory.json` (+ `--include-jars lib`) |
-| P2 Package imports | `rgctl -r "$REPO" -f json find --package '<coords>' --type import` |
-| P3 Facade callers | `rgctl -r "$REPO" -f json callers <Symbol> --package '<coords>' --methods readValue,…` |
-| P4 Boundary blast | `rgctl -r "$REPO" -f json blast-radius <Symbol> --classify-boundary` |
-| P5 Sink-first taint | `rgctl -r "$REPO" -f json taint --sink ObjectMapper.readValue --source external` |
-| P6 Orchestrated VEX | `rgctl -r "$REPO" -f json vuln analyze --osv ./advisory.json --include-jars lib` |
+| P2 Orchestrated VEX | `rgctl -r "$REPO" -f json vuln analyze --osv ./advisory.json --include-jars lib` → read `.sink_taint.call_sites[]` / `.paths[]` |
+| P3 Optional deepen | `slice FILE --line N --variable V --with-alias` or `blast-radius` on a hit caller |
+
+**Debug-only (when call_sites empty and you need to probe):**
+
+| Step | Command |
+|------|---------|
+| Package imports | `find --package '<coords>' --type import --limit 40` |
+| Facade callers | `callers <Symbol> --package '<coords>' --methods readValue,… --limit 40` |
+| Sink-first taint | `taint --sink ObjectMapper.readValue --source external` |
 
 **Verdicts:** deps `not_affected` | `affected_candidate`. Analyze `exploitability`: `not_affected` | `not_exploitable` | `exploitable` | `under_investigation`. OpenVEX statuses map accordingly; unresolved sinks alone MUST NOT force `not_affected` without caller evidence. With `cfg_available=false`, prefer wording grounded in caller/deps evidence — not “PDG confirmed no path.”
 
