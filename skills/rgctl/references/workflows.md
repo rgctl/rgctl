@@ -40,6 +40,22 @@ Artifacts live at `{repo}/.rgctl/` (`RGCL` v2 `graph.snapshot.bin`). Check CFG r
 
 **When:** Before refactors, renames, or API changes.
 
+### Refactor & migration verification loop
+
+**User intent:** *"Rename / migrate this API and prove callers stayed intact."*
+
+```bash
+# 1) Pre-edit: blast-radius / find enumerate targets
+rgctl -f json blast-radius <Symbol> --depth 2
+# 2) Edit files in dependency wave order
+# 3) Patch graph
+rgctl update
+# 4) Post-edit oracle
+rgctl -f json find "import <old>*" --type import   # total == 0 when migrating imports
+rgctl -f json callers <new_sym> --depth 1
+rgctl -f json review paths --synthetic-head worktree --max-symbols 25
+```
+
 ### Blast radius
 
 **User intent:** *"What's the impact if I change the signature of `updateQuantity`?"*
@@ -217,6 +233,18 @@ Discover stdout without `--export-migration-hints` is **telemetry** — not the 
 - `priority` - Highest-impact packages first
 
 Cross-check multi-member Fast-Leiden clusters (`communities list` → `select(.member_count > 1)`) and `blast-radius <boundary> --depth 3` on shared methods before cutting a service boundary.
+
+### Refactor & migration verification loop
+
+After applying a migration wave from `.steps[]`:
+
+```bash
+rgctl update
+rgctl -f json find "import <legacy>*" --type import   # expect total == 0
+rgctl -f json review paths --synthetic-head worktree --max-symbols 25
+```
+
+Do not conclude a wave while legacy imports remain or call spines look orphaned.
 
 ### Hotspots
 

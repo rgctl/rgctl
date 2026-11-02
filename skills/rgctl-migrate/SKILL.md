@@ -80,6 +80,18 @@ Prefer multi-member clusters (`member_count > 1`). Skip unlabeled singletons whe
 ## Sources (.rgctl/migration_plan.json, communities, blast-radius)
 ```
 
+### Step 5: Post-Edit Verification
+
+After executing a migration wave (e.g. `javax.*` → `jakarta.*` or a boundary cut), refresh and verify before concluding:
+
+```bash
+rgctl update
+rgctl -f json find "import <legacy>*" --type import   # expect total == 0
+rgctl -f json review paths --synthetic-head worktree --max-symbols 25
+```
+
+Confirm zero legacy imports and clean call-path deltas (`change_summary` / `symbols[].path_delta`). Re-query `callers <new_sym>` when signatures moved.
+
 ## Gotchas
 
 - Always `-f json` on query verbs; parse stdout; never `2>/dev/null`.

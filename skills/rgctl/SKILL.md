@@ -48,7 +48,9 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 2. SUBPROCESS      → rgctl -f json <structured command>
 3. GRAPH FACTS     → parse schema_version + payload
 4. LLM REASONING   → summarize using "what to report" guidelines
-5. ACTION          → edit / plan / check — re-query if graph may be stale
+5. ACTION & VERIFY → edit files in dependency wave order → `rgctl update` →
+                     verify (`find "import <old>*" --type import` total==0,
+                     `callers <new_sym>`, `review paths --synthetic-head worktree`)
 ```
 
 **Prerequisite (once per repo):** `discover` (and `semantic index` when using search). `rgctl slice` / `cpg flows` build single-function CFG/PDG lazily (no upfront `--with-cfg`). Reserve `discover --with-cfg` for `taint --sink`, `cpg mutations`, and batch `inspect`.
