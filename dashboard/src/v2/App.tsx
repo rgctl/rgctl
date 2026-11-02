@@ -4,7 +4,7 @@ import { Instrument } from "./Instrument";
 import { Palette } from "./Palette";
 import { Chip, Panel, Unavailable } from "./shell";
 import { Spine } from "./rooms/Spine";
-import { SourcePane } from "./rooms/SourcePane";
+import { CodeLens } from "./rooms/SourcePane";
 import { CfgPdgLens } from "./rooms/CfgPdg";
 import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
@@ -310,7 +310,7 @@ function UnderstandRoom({
           paragraph *saying* that — "source rendering is shared, so this lens is a view of the same reader"
           — while showing no source at all and no typed absence: a claim about a second caller of a reader
           that had to be extracted before it could have one. */}
-      {lens === "code" && <SourcePane entry={entry} />}
+      {lens === "code" && <CodeLens entry={entry} />}
       {lens === "cfgpdg" && <CfgPdgLens entry={entry} />}
       {lens !== "spine" && lens !== "code" && lens !== "cfgpdg" && <LensPlaceholder lens={lens} />}
     </div>

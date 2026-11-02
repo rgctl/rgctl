@@ -58,6 +58,21 @@ describe("the Code lens draws the source", () => {
     expect(container.textContent).toContain(SOURCE_PATH.split("/").pop()!);
   });
 
+  it("marks the subject's own span, not the whole file", async () => {
+    const { container } = renderLens();
+    await waitFor(() => expect(container.textContent).toContain(SOURCE_LINES[0]));
+
+    // The fixture's CFG covers lines 1–7 (blocks 1–2, 3–4, 6–7), so the whole file is the subject here —
+    // the chip proves the span came from the CFG rather than being invented by the pane.
+    expect(screen.getByText(/lines 1–7/)).toBeTruthy();
+
+    // In-range rows carry the band; this is what tells the reader where the subject is on arrival.
+    const banded = [...container.querySelectorAll("tr")].filter((r) =>
+      r.className.includes("bg-white/[0.035]"),
+    );
+    expect(banded.length).toBe(SOURCE_LINES.length);
+  });
+
   it("is not a placeholder: an implemented lens renders no typed absence", async () => {
     const { container } = renderLens();
     await waitFor(() => expect(container.textContent).toContain(SOURCE_LINES[0]));

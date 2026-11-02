@@ -22,7 +22,7 @@ import { relative, repoRoot, type CfgBlock, type FunctionEntry } from "../data";
 import { useCfgDetail } from "../useCfgDetail";
 import { BlockDetail } from "./BlockDetail";
 import { CfgGraph, frontierBlockIds, hasLines } from "./CfgGraph";
-import { SourcePane } from "./SourcePane";
+import { SourcePane, cfgSpan } from "./SourcePane";
 import { Chip, Command, Panel, Stat, Unavailable } from "../shell";
 
 export function Spine({ entry }: { entry: FunctionEntry }) {
@@ -62,6 +62,21 @@ export function Spine({ entry }: { entry: FunctionEntry }) {
     return map;
   }, [cfg]);
 
+  /** Where the function sits in its file, so the reader opens on the subject rather than line 1. */
+  const span = useMemo(() => cfgSpan(cfg), [cfg]);
+
+  /**
+   * The line to scroll to: the selected block's first, or the function's first when nothing is selected.
+   *
+   * Clicking a rectangle already highlighted its lines; before this it could highlight lines outside the
+   * scrolled viewport, which makes the binding invisible in exactly the case it exists for.
+   */
+  const scrollToLine = useMemo(() => {
+    const b = selectedBlock === null ? null : (cfg?.blocks.find((x) => x.id === selectedBlock) ?? null);
+    if (b && hasLines(b)) return b.start_line;
+    return null;
+  }, [selectedBlock, cfg]);
+
   /** The blocks covering the selected block's lines, so the code pane can show what the graph means. */
   const highlighted = useMemo(() => {
     const b = selectedBlock === null ? null : (cfg?.blocks.find((x) => x.id === selectedBlock) ?? null);
@@ -94,6 +109,8 @@ export function Spine({ entry }: { entry: FunctionEntry }) {
             blockForLine={blockForLine}
             selectedLines={highlighted.lines}
             onSelectBlock={(id) => setSelectedBlock(id === selectedBlock ? null : id)}
+            focusRange={span}
+            scrollToLine={scrollToLine}
             right={
               highlighted.block ? (
                 <Chip tone="blue">

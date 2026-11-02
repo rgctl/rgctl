@@ -14,17 +14,19 @@
  * What stays out, deliberately, in both callers: no file tree, no editing, no go-to-definition. This is a
  * view of the Focus, not an IDE.
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   excerpt,
   loadSourceForPath,
   relative,
   repoRoot,
   type CfgBlock,
+  type CfgDetail,
   type FunctionEntry,
 } from "../data";
 import { highlightLine, TOKEN_CLASS } from "../highlight";
-import { Panel, Unavailable } from "../shell";
+import { Chip, Panel, Unavailable } from "../shell";
+import { useCfgDetail } from "../useCfgDetail";
 import { hasLines, lineLabel } from "./CfgGraph";
 
 type SourceState =
@@ -57,11 +59,63 @@ export interface SourcePaneProps {
   onSelectBlock?: (blockId: number | null) => void;
   /** Right-hand slot in the panel header (Spine puts the selected-block chip here). */
   right?: ReactNode;
+  /**
+   * The function's own lines, when the caller can name them from its CFG.
+   *
+   * Both lenses pass this, and it changes what the pane does on arrival: the file used to open at line 1
+   * with nothing marked, so a 746-line file looked like a 746-line file and the subject was somewhere in
+   * the middle of it. The reader now scrolls to the first line of the subject and keeps the whole span
+   * faintly marked, so "where am I" has an answer before any click.
+   */
+  focusRange?: { start: number; end: number } | null;
+  /**
+   * Scroll this line into view when it changes.
+   *
+   * Spine passes the start line of the block you just clicked: selecting a rectangle already highlighted
+   * its lines, but without this the highlight could sit outside the scrolled viewport — a graph click that
+   * changes something you cannot see is half a binding.
+   */
+  scrollToLine?: number | null;
 }
 
-export function SourcePane({ entry, blockForLine, selectedLines, onSelectBlock, right }: SourcePaneProps) {
+/** The span a function occupies in its file, from its CFG blocks. `null` when there is no CFG to ask. */
+export function cfgSpan(cfg: CfgDetail | null): { start: number; end: number } | null {
+  const blocks = (cfg?.blocks ?? []).filter(hasLines);
+  if (blocks.length === 0) return null;
+  let start = Infinity;
+  let end = -Infinity;
+  for (const b of blocks) {
+    if (b.start_line < start) start = b.start_line;
+    if (b.end_line > end) end = b.end_line;
+  }
+  return { start, end };
+}
+
+/** Scroll a row into view, honouring `prefers-reduced-motion`: motion is a courtesy, not a requirement. */
+function scrollRowIntoView(scroller: HTMLElement | null, line: number | null) {
+  if (line === null || scroller === null) return;
+  const row = scroller.querySelector<HTMLElement>(`tr[data-line="${line}"]`);
+  // jsdom has no `scrollIntoView`; a test asserting content must not depend on scrolling existing.
+  if (!row || typeof row.scrollIntoView !== "function") return;
+  const reduce =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  row.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+}
+
+export function SourcePane({
+  entry,
+  blockForLine,
+  selectedLines,
+  onSelectBlock,
+  right,
+  focusRange,
+  scrollToLine,
+}: SourcePaneProps) {
   const [source, setSource] = useState<SourceState>({ kind: "loading" });
   const [prefix, setPrefix] = useState("");
+  const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,26 +150,46 @@ export function SourcePane({ entry, blockForLine, selectedLines, onSelectBlock, 
 
   const language = useMemo(() => languageFor(entry.file_path), [entry.file_path]);
   const highlighted = selectedLines ?? EMPTY;
+  const ready = source.kind === "ready";
+  const rangeStart = focusRange?.start ?? null;
+  const rangeEnd = focusRange?.end ?? null;
+
+  // On arrival (and whenever the subject changes) put the subject in view rather than the top of the file.
+  useEffect(() => {
+    if (!ready) return;
+    scrollRowIntoView(scroller.current, rangeStart);
+  }, [ready, rangeStart, entry.function_id]);
+
+  // A block the caller selected moves the reader to that block. Keyed on the line, not on the call, so
+  // re-selecting the same block does not fight a manual scroll.
+  useEffect(() => {
+    if (!ready) return;
+    scrollRowIntoView(scroller.current, scrollToLine ?? null);
+  }, [ready, scrollToLine, entry.function_id]);
 
   return (
     <Panel title="Source" subtitle={entry.file_path ? relative(entry.file_path, prefix) : undefined} right={right}>
       {source.kind === "loading" && <p className="text-[11px] text-zinc-500">loading…</p>}
       {source.kind === "absent" && <Unavailable what="Source text is not available" why={source.reason} />}
       {source.kind === "ready" && (
-        <div className="max-h-[56vh] overflow-auto">
+        <div ref={scroller} className="max-h-[56vh] overflow-auto">
           <table className="w-full border-collapse font-mono text-[11px] leading-[1.55]">
             <tbody>
               {source.lines.map(({ line, text }) => {
                 const owner = blockForLine?.get(line);
                 const inSelection = highlighted.has(line);
+                const inRange = rangeStart !== null && rangeEnd !== null && line >= rangeStart && line <= rangeEnd;
                 return (
                   <tr
                     key={line}
+                    data-line={line}
                     onClick={() => owner && onSelectBlock?.(owner.id)}
                     title={owner ? `block B${owner.id} (${lineLabel(owner)})` : undefined}
                     className={
                       inSelection
                         ? "bg-sky-500/15"
+                        : inRange
+                          ? "bg-white/[0.035]"
                         : owner && onSelectBlock
                           ? "cursor-pointer hover:bg-white/[0.04]"
                           : undefined
@@ -145,3 +219,24 @@ export function SourcePane({ entry, blockForLine, selectedLines, onSelectBlock, 
 }
 
 const EMPTY: Set<number> = new Set();
+
+/**
+ * The Code lens: the reader alone.
+ *
+ * It asks the CFG for the function's line span — from `cfg/<id>.json` when the export wrote per-file
+ * shards, from the record pack when it did not — and passes it down. That is *reading the graph*, not
+ * drawing it: the pane still shows no graph, but it can now say where the subject starts instead of
+ * opening a 746-line file at line 1 and leaving you to find it.
+ */
+export function CodeLens({ entry }: { entry: FunctionEntry }) {
+  const cfgState = useCfgDetail(entry.function_id);
+  const cfg = cfgState.kind === "ready" ? cfgState.cfg : null;
+  const span = useMemo(() => cfgSpan(cfg), [cfg]);
+  return (
+    <SourcePane
+      entry={entry}
+      focusRange={span}
+      right={span ? <Chip tone="blue">lines {span.start}–{span.end}</Chip> : undefined}
+    />
+  );
+}
