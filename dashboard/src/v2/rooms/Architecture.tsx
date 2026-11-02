@@ -294,58 +294,82 @@ export function ArchitectureRoom() {
               ))}
             </div>
           )}
-          {/* The labelled control is the discoverable half of the gesture: double-click works, but a
-              gesture nobody knows about is not an affordance. It states what it will open and how many
-              members that is, and the truncation line is next to it rather than buried in a tooltip. */}
-          <div className="absolute left-2 top-9 flex max-w-[calc(100%-320px)] flex-col gap-1">
-            <div className="flex flex-wrap items-center gap-1">
+          {/* The controls are the discoverable half of the gesture: double-click works, but a gesture nobody
+              knows about is not an affordance. They are sized and weighted like real actions rather than
+              hints, because a 10px ghost button next to a 3D scene is invisible in practice. */}
+          <div className="absolute left-2 top-9 flex max-w-[calc(100%-330px)] flex-col gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
-                disabled={selected?.kind !== "package" || selected.id === undefined}
+                disabled={selected?.kind !== "package" || selected.id === undefined || expandState.kind === "loading"}
                 onClick={() => void expand(selected)}
-                className={`rounded border px-1.5 py-0.5 text-[10px] leading-none ${
+                title={
                   selected?.kind === "package"
-                    ? "border-sky-500/40 bg-sky-500/12 text-sky-200 hover:bg-sky-500/20"
-                    : "border-white/10 text-zinc-600"
+                    ? `Open ${selected.title} — its members and the calls between them`
+                    : "Select a district first (click it in the scene), then expand"
+                }
+                className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium leading-none shadow-sm transition-colors ${
+                  selected?.kind === "package"
+                    ? "bg-sky-500 text-slate-950 hover:bg-sky-400"
+                    : "cursor-not-allowed border border-white/10 bg-white/[0.04] text-zinc-500"
                 }`}
               >
-                expand{districtLabel(selected) ? ` ${districtLabel(selected)}` : ""}
+                <span aria-hidden>⤢</span>
+                <span>Expand{districtLabel(selected) ? `: ${districtLabel(selected)}` : " district"}</span>
               </button>
               <button
                 type="button"
                 disabled={!expanded}
                 onClick={collapse}
-                className={`rounded border px-1.5 py-0.5 text-[10px] leading-none ${
+                title="Close the district and restore the universe (Esc)"
+                className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium leading-none shadow-sm transition-colors ${
                   expanded
-                    ? "border-white/20 text-zinc-200 hover:bg-white/[0.06]"
-                    : "border-white/10 text-zinc-600"
+                    ? "bg-white/[0.14] text-zinc-100 ring-1 ring-white/25 hover:bg-white/[0.22]"
+                    : "cursor-not-allowed border border-white/10 bg-white/[0.04] text-zinc-500"
                 }`}
               >
-                collapse (esc)
+                <span aria-hidden>⤡</span>
+                <span>Collapse</span>
+                <kbd className="ml-0.5 rounded border border-white/20 px-1 text-[9px] font-normal text-zinc-400">
+                  esc
+                </kbd>
               </button>
+            </div>
+            {expandState.kind === "idle" && !expanded && (
               <span className="text-[10px] leading-none text-zinc-500">
                 {selected?.kind === "package"
-                  ? "double-click a district, or select it and expand"
-                  : "select a district to open it"}
+                  ? "double-click a district, or select it and press Expand"
+                  : "click a district in the scene to select it"}
               </span>
-            </div>
+            )}
             {expandState.kind === "loading" && (
-              <Chip tone="zinc">reading members of {expandState.title}…</Chip>
+              <Chip tone="blue">reading {expandState.title}'s members…</Chip>
             )}
             {expandState.kind === "absent" && (
-              <Chip tone="zinc">{expandState.title}: {expandState.reason}</Chip>
-            )}
-            {expandState.kind === "failed" && (
-              <Chip tone="zinc">{expandState.title}: {expandState.reason}</Chip>
-            )}
-            {expanded && (
-              <Chip tone="blue">
-                {expanded.title} · {expanded.drawn.toLocaleString()} of {expanded.members.toLocaleString()} members
-                {expanded.truncated ? " (largest by member count — the rest are not drawn)" : ""} ·{" "}
-                {expanded.edges.toLocaleString()} member edges ({MEMBER_EDGE_KINDS})
+              <Chip tone="zinc">
+                {expandState.title}: {expandState.reason}
               </Chip>
             )}
+            {expandState.kind === "failed" && (
+              <Chip tone="zinc">
+                {expandState.title}: {expandState.reason}
+              </Chip>
+            )}
+            {expanded && (
+              <div className="flex flex-col gap-1 rounded-md border border-sky-500/30 bg-sky-500/[0.08] px-2 py-1.5">
+                <span className="text-[11px] font-medium leading-none text-sky-100">{expanded.title}</span>
+                <span className="text-[10px] leading-relaxed text-sky-200/80">
+                  {expanded.drawn.toLocaleString()} of {expanded.members.toLocaleString()} members drawn
+                  {expanded.truncated ? " (largest by member count; the rest are not drawn)" : ""} ·{" "}
+                  {expanded.edges.toLocaleString()} member edges ({MEMBER_EDGE_KINDS})
+                </span>
+                <span className="text-[10px] leading-relaxed text-zinc-500">
+                  drift paused while a district is open — drag to orbit, scroll to zoom
+                </span>
+              </div>
+            )}
           </div>
+
           <div className="absolute bottom-2 right-2 flex gap-1">
             <Toggle on={layer === "packages"} onClick={() => setLayer("packages")}>namespace › package</Toggle>
             <Toggle on={layer === "communities"} onClick={() => setLayer("communities")}>communities</Toggle>

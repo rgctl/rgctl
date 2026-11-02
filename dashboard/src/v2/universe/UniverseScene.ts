@@ -443,6 +443,13 @@ export class UniverseScene {
     const seat = this.solids.get(subjectId);
     if (!seat || members.length === 0) return { drawn: 0, edges: 0 };
 
+
+    // Stop the drift. The universe rotates slowly to invite exploration; a district is something to *read*,
+    // and a slowly turning model is the difference between inspecting and chasing. Manual orbit still works.
+    const autoRotate = this.controls.autoRotate;
+    const autoRotateSpeed = this.controls.autoRotateSpeed;
+    this.controls.autoRotate = false;
+
     const group = new THREE.Group();
     const dimmed: Array<{ material: THREE.Material & { opacity: number; transparent: boolean } }> = [];
     for (const object of this.coreObjects) {
@@ -519,7 +526,7 @@ export class UniverseScene {
     }
 
     this.world.add(group);
-    this.expanded = { group, dimmed };
+    this.expanded = { group, dimmed, autoRotate, autoRotateSpeed };
     return { drawn: count, edges: segments.length / 6 };
   }
 
@@ -527,6 +534,8 @@ export class UniverseScene {
   collapse(): void {
     if (!this.expanded) return;
     for (const { material } of this.expanded.dimmed) material.opacity = 1;
+    this.controls.autoRotate = this.expanded.autoRotate;
+    this.controls.autoRotateSpeed = this.expanded.autoRotateSpeed;
     this.world.remove(this.expanded.group);
     this.expanded.group.traverse((child) => {
       const mesh = child as THREE.Mesh;
