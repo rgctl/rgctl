@@ -1,10 +1,10 @@
 /**
- * The Code lens: the source, and nothing else.
+ * The source pane: the reader inside the Spine.
  *
- * This lens existed as a paragraph *describing* a shared source reader ("Source rendering is shared, so
- * this lens is a view of the same reader rather than a second implementation") while rendering no source
- * and declaring no absence — the one lens whose text claimed a capability instead of showing one. Both
- * halves of that are tested here: the lines are drawn, and the description is gone.
+ * It exists as its own component because the SourcePane is reached from one place now (the Spine's source
+ * column, which the `show source` control collapses) but it owns real behaviour: loading, two typed
+ * absences, the subject's line span, and a remembered reading position across lens switches. Those are the
+ * claims tested here, and they were the ones missing when this was a paragraph describing a reader.
  */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -15,7 +15,7 @@ import { installFetchStub, SOURCE_LINES, SOURCE_PATH, SUBJECT } from "./fixture"
 
 function renderLens(functionId = SUBJECT) {
   const history = createMemoryHistory({
-    initialEntries: [`/understand?lens=code&focus=${functionId}`],
+    initialEntries: [`/understand?lens=spine&focus=${functionId}`],
   });
   const router = createAppRouter(history);
   const { container } = render(
@@ -74,7 +74,7 @@ describe("the Code lens draws the source", () => {
   });
 
   it("remembers where you were reading, instead of snapping back to the subject", async () => {
-    const history = createMemoryHistory({ initialEntries: [`/understand?lens=code&focus=${SUBJECT}`] });
+    const history = createMemoryHistory({ initialEntries: [`/understand?lens=spine&focus=${SUBJECT}`] });
     const router = createAppRouter(history);
     const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
     const { unmount } = render(

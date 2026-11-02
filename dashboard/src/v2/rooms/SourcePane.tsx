@@ -25,8 +25,7 @@ import {
   type FunctionEntry,
 } from "../data";
 import { highlightLine, TOKEN_CLASS } from "../highlight";
-import { Chip, Panel, Unavailable } from "../shell";
-import { useCfgDetail } from "../useCfgDetail";
+import { Panel, Unavailable } from "../shell";
 import { hasLines, lineLabel } from "./CfgGraph";
 
 type SourceState =
@@ -263,24 +262,3 @@ export function SourcePane({
 }
 
 const EMPTY: Set<number> = new Set();
-
-/**
- * The Code lens: the reader alone.
- *
- * It asks the CFG for the function's line span — from `cfg/<id>.json` when the export wrote per-file
- * shards, from the record pack when it did not — and passes it down. That is *reading the graph*, not
- * drawing it: the pane still shows no graph, but it can now say where the subject starts instead of
- * opening a 746-line file at line 1 and leaving you to find it.
- */
-export function CodeLens({ entry }: { entry: FunctionEntry }) {
-  const cfgState = useCfgDetail(entry.function_id);
-  const cfg = cfgState.kind === "ready" ? cfgState.cfg : null;
-  const span = useMemo(() => cfgSpan(cfg), [cfg]);
-  return (
-    <SourcePane
-      entry={entry}
-      focusRange={span}
-      right={span ? <Chip tone="blue">lines {span.start}–{span.end}</Chip> : undefined}
-    />
-  );
-}

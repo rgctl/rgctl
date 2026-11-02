@@ -1,5 +1,5 @@
 /**
- * The CFG·PDG lens: the graph as a surface, not a guest of the source pane.
+ * The Spine's graph: the same surface the retired CFG·PDG lens owned.
  *
  * The claims here are the ones the lens exists to make, and each one was previously only true of the
  * retired prototype: the stat row reports the bundle's own numbers, the dominance-frontier overlay can be
@@ -15,7 +15,7 @@ import { installFetchStub, OTHER, SUBJECT } from "./fixture";
 
 function renderLens(functionId = SUBJECT) {
   const history = createMemoryHistory({
-    initialEntries: [`/understand?lens=cfgpdg&focus=${functionId}`],
+    initialEntries: [`/understand?lens=spine&focus=${functionId}`],
   });
   const router = createAppRouter(history);
   const { container } = render(
@@ -36,7 +36,7 @@ function statValue(label: string): string {
 
 beforeEach(() => installFetchStub());
 
-describe("the lens draws the bundle's CFG", () => {
+describe("the Spine draws the bundle's CFG", () => {
   it("reports blocks, edges, frontiers and exits from the sidecar", async () => {
     renderLens();
     await screen.findAllByText("handleAuth");
@@ -44,7 +44,7 @@ describe("the lens draws the bundle's CFG", () => {
     // The fixture's CFG: 4 blocks, 4 edges, one block in a dominance frontier (B2), one exit (B3).
     await waitFor(() => expect(statValue("Blocks")).toBe("4"));
     expect(statValue("Control-flow edges")).toBe("4");
-    expect(statValue("Dominance frontiers")).toBe("1");
+    expect(statValue("Dominance frontier")).toBe("1");
     expect(statValue("Exit blocks")).toBe("1");
 
     // The nodes and the edge-type legend come from the same payload.
@@ -116,5 +116,57 @@ describe("a subject with no CFG in the bundle is stated", () => {
     // Not a spinner: the previous behaviour was "loading…" forever, which reads as a slow disk.
     expect(screen.queryByText("loading…")).toBeNull();
     expect(screen.getByText(/inspect verify cfg/)).toBeTruthy();
+  });
+});
+
+/**
+ * The merge that removed two lenses.
+ *
+ * `code` and `cfgpdg` were the Spine in a different frame: same loader, same drawing, same frontier set,
+ * same block panel — one of them minus the source, the other minus the graph. They are controls now, and
+ * these tests hold the two claims that make the removal honest: the control no longer offers them as lenses,
+ * and the framings they used to own still exist and still work.
+ */
+describe("one lens, three framings", () => {
+  it("offers a lens per question, not a lens per frame", async () => {
+    renderLens();
+    await screen.findAllByText("handleAuth");
+
+    const lensBar = document.querySelector('[aria-label="Rooms"]')?.parentElement;
+    expect(lensBar).toBeTruthy();
+    // The questions remain; the two framings do not.
+    for (const label of ["Spine", "Dataflow", "Slice/Trace", "Blast", "Metrics", "Time"]) {
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
+    expect(screen.queryByRole("button", { name: "CFG·PDG" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Code" })).toBeNull();
+  });
+
+  it("collapses the source so the graph takes the whole surface, and brings it back", async () => {
+    renderLens();
+    await screen.findAllByText("handleAuth");
+    expect(await screen.findByTestId("source-scroller")).toBeTruthy();
+
+    const toggle = screen.getByRole("button", { name: "show source" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(toggle);
+
+    // What the retired CFG·PDG lens was: the graph alone, at full width.
+    await waitFor(() => expect(screen.queryByTestId("source-scroller")).toBeNull());
+    expect(screen.getByText("B1")).toBeTruthy();
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(toggle);
+    expect(await screen.findByTestId("source-scroller")).toBeTruthy();
+  });
+
+  it("turns the dominance-frontier overlay off, which was the other lens's control", async () => {
+    renderLens();
+    await screen.findAllByText("handleAuth");
+
+    const toggle = screen.getByRole("button", { name: "dominance frontier" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
   });
 });

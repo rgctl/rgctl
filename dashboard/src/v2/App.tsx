@@ -4,8 +4,6 @@ import { Instrument } from "./Instrument";
 import { Palette } from "./Palette";
 import { Chip, Panel, Unavailable } from "./shell";
 import { Spine } from "./rooms/Spine";
-import { CodeLens } from "./rooms/SourcePane";
-import { CfgPdgLens } from "./rooms/CfgPdg";
 import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
 import { MigrationRoom } from "./rooms/Migration";
@@ -306,13 +304,9 @@ function UnderstandRoom({
       </Panel>
 
       {lens === "spine" && <Spine entry={entry} />}
-      {/* The Code lens is the shared source reader with no graph beside it. Until now it rendered a
-          paragraph *saying* that — "source rendering is shared, so this lens is a view of the same reader"
-          — while showing no source at all and no typed absence: a claim about a second caller of a reader
-          that had to be extracted before it could have one. */}
-      {lens === "code" && <CodeLens entry={entry} />}
-      {lens === "cfgpdg" && <CfgPdgLens entry={entry} />}
-      {lens !== "spine" && lens !== "code" && lens !== "cfgpdg" && <LensPlaceholder lens={lens} />}
+      {/* Everything else in the control is a question phase 3 answers. `code` and `cfgpdg` are gone: both
+          were the Spine in another frame, and both are now controls inside it (show source / graph height). */}
+      {lens !== "spine" && <LensPlaceholder lens={lens} />}
     </div>
   );
 }
