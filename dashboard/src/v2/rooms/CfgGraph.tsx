@@ -19,8 +19,8 @@
  * Selection is controlled from the parent so the source pane and this pane share one selection rather
  * than each keeping its own — two selections for one Focus is the failure this design exists to avoid.
  *
- * Two homes, one drawing. The **Spine** lens puts it beside the source in a half-pane at `52vh`; the
- * **CFG·PDG** lens gives it a room, at `70vh`, with the dominance-frontier toggle and the stat row above.
+ * Two homes, one drawing, inside one lens. Beside the source it is a half-pane at `52vh`; with the source
+ * collapsed it gets the room, at `70vh`, with the dominance-frontier toggle and the stat row above.
  * Height and reading instructions are therefore props — the layout, the encoding and the interaction are
  * not, because those are what make it the same analysis in both places.
  */
@@ -125,13 +125,13 @@ export function CfgGraph({
   onSelect: (id: number | null) => void;
   /**
    * Draw the amber frontier dots. The *control* belongs to the caller: the lens offers it as a labelled
-   * toggle because it is a claim about the picture, while the Spine keeps the graph's default reading.
+   * toggle because it is a claim about the picture, while the CFG lens keeps the graph's default reading.
    */
   showFrontier?: boolean;
   onToggleFrontier?: () => void;
-  /** The graph has two homes — half a pane in the Spine, most of a room in the lens — so its height is a prop. */
+  /** The graph has two homes — half a pane beside the source, most of a room with the source collapsed — so its height is a prop. */
   maxHeightClass?: string;
-  /** The reading instructions differ with the neighbour: the Spine's source pane, or nothing. */
+  /** The reading instructions differ with the neighbour: the source pane beside it, or nothing. */
   footnote?: ReactNode;
 }) {
   const [hover, setHover] = useState<number | null>(null);

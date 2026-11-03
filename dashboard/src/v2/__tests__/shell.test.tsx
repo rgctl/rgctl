@@ -41,7 +41,7 @@ beforeEach(() => installFetchStub());
 
 describe("the Focus round-trips through the URL", () => {
   it("resolves a subject from the URL alone, and a reload keeps room, lens and subject", async () => {
-    const first = renderApp(`/understand?lens=spine&focus=${SUBJECT}`);
+    const first = renderApp(`/understand?lens=cfg&focus=${SUBJECT}`);
 
     // Resolved from the URL: the Focus bar names the subject.
     expect(await screen.findAllByText("handleAuth")).not.toHaveLength(0);
@@ -50,7 +50,7 @@ describe("the Focus round-trips through the URL", () => {
     // claim the whole design rests on — a view state is a link.
     const href = `${first.state.location.pathname}?${searchOf(first)}`;
     expect(href).toContain(`focus=${SUBJECT}`);
-    expect(href).toContain("lens=spine");
+    expect(href).toContain("lens=cfg");
 
     document.body.innerHTML = "";
     renderApp(href);
@@ -69,7 +69,7 @@ describe("the Focus round-trips through the URL", () => {
 
 describe("a lens is a control, not a destination", () => {
   it("switching lens preserves the subject", async () => {
-    const router = renderApp(`/understand?lens=spine&focus=${SUBJECT}`);
+    const router = renderApp(`/understand?lens=cfg&focus=${SUBJECT}`);
     await screen.findAllByText("handleAuth");
 
     fireEvent.click(screen.getByRole("button", { name: "Blast" }));
@@ -80,12 +80,12 @@ describe("a lens is a control, not a destination", () => {
   });
 
   it("carrying the Focus to another room keeps it", async () => {
-    const router = renderApp(`/understand?lens=spine&focus=${SUBJECT}`);
+    const router = renderApp(`/understand?lens=cfg&focus=${SUBJECT}`);
     await screen.findAllByText("handleAuth");
 
-    fireEvent.click(screen.getByRole("button", { name: "security →" }));
+    fireEvent.click(screen.getByRole("button", { name: "taint →" }));
 
-    await waitFor(() => expect(router.state.location.pathname).toBe("/security"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/taint"));
     expect(router.state.location.search).toMatchObject({ focus: SUBJECT });
   });
 });
@@ -104,6 +104,32 @@ describe("a room renders a default with no Focus", () => {
     renderApp("/repo");
     expect(await screen.findByText(/this screen is not a dashboard/i)).toBeTruthy();
     expect(await screen.findByText(/symbols carry data-flow/i)).toBeTruthy();
+  });
+});
+
+describe("/ is the universe, not a menu", () => {
+  /** Which room the vertical nav marks as current — the structural answer to "where am I?". */
+  function currentRoom(): string | null {
+    const nav = document.querySelector('nav[aria-label="Rooms"]');
+    return nav?.querySelector('button[aria-current="page"]')?.textContent ?? null;
+  }
+
+  it("redirects to Architecture", async () => {
+    const router = renderApp("/");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
+    await waitFor(() => expect(currentRoom()).toContain("Architecture"));
+  });
+
+  it("normalises an unknown room to Architecture instead of a lying URL", async () => {
+    const router = renderApp("/not-a-room");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
+    await waitFor(() => expect(currentRoom()).toContain("Architecture"));
+  });
+
+  it("keeps the Query string when it lands on Architecture", async () => {
+    const router = renderApp(`/?focus=${SUBJECT}`);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
+    expect(router.state.location.search).toMatchObject({ focus: SUBJECT });
   });
 });
 
@@ -167,7 +193,7 @@ describe("the palette lands you where the graph is", () => {
   });
 
   it("does not drag you out of a room that already reads the Focus", async () => {
-    const router = renderApp(`/security?focus=${SUBJECT}`);
+    const router = renderApp(`/taint?focus=${SUBJECT}`);
     await screen.findByRole("button", { name: /Search symbols, communities/ });
 
     fireEvent.click(screen.getByRole("button", { name: /Search symbols, communities/ }));
@@ -175,7 +201,64 @@ describe("the palette lands you where the graph is", () => {
     fireEvent.click(await within(dialog).findByText("verify"));
 
     await waitFor(() => expect(router.state.location.search).toMatchObject({ focus: OTHER }));
-    // Choosing a symbol while in Security should not move you to Understand.
-    expect(router.state.location.pathname).toBe("/security");
+    // Choosing a symbol while in Taint should not move you to Understand.
+    expect(router.state.location.pathname).toBe("/taint");
+  });
+});
+
+/**
+ * The open district is a URL param, and the reason is navigation rather than sharing.
+ *
+ * Double-clicking a member of a district opens its code in Understand. That unmounts the Architecture room and
+ * every piece of state in it, so without the URL the reader comes back to the universe and has to find the
+ * district again. Carrying `explode` in the search makes the return land on the level they were reading.
+ */
+describe("an open district survives leaving the room", () => {
+  it("keeps the level when you leave for a symbol and come back", async () => {
+    const router = renderApp(`/architecture?explode=42`);
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ explode: 42 }));
+
+    // What opening a member does: set the Focus and move to Understand. Both preserve the rest of the search.
+    await router.navigate({
+      to: "/$roomId",
+      params: { roomId: "understand" },
+      search: (prev) => ({ ...prev, focus: SUBJECT }),
+    });
+    expect(router.state.location.pathname).toBe("/understand");
+    expect(router.state.location.search).toMatchObject({ explode: 42, focus: SUBJECT });
+
+    // Coming back — the room switch, which is the same route with a different room.
+    await router.navigate({ to: "/$roomId", params: { roomId: "architecture" }, search: (prev) => prev });
+    expect(router.state.location.search).toMatchObject({ explode: 42 });
+  });
+
+  it("drops an explode value that is not a district id", async () => {
+    const router = renderApp(`/architecture?explode=not-a-number`);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
+    // Normalised at the URL boundary, like an unknown lens: a malformed link is "no level", not a broken room.
+    expect(router.state.location.search).not.toMatchObject({ explode: expect.anything() });
+  });
+});
+
+/**
+ * View state survives a redirect.
+ *
+ * The unknown-room redirect used to drop `search`, so `/nonsense?focus=…` normalised the room and silently
+ * threw the subject away — a shared link that lands somewhere else without saying so. The `/` redirect beside it
+ * had always forwarded the state, and the two must not disagree.
+ */
+describe("a redirect keeps the view state", () => {
+  it("normalises an unknown room without losing the Focus or the lens", async () => {
+    const router = renderApp(`/not-a-room?lens=dataflow&focus=${SUBJECT}&explode=42`);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
+    expect(router.state.location.search).toMatchObject({ focus: SUBJECT, lens: "dataflow", explode: 42 });
+    // And the room that reads the Focus can show it, so the state is not merely in the URL.
+    expect(await screen.findAllByText("handleAuth")).not.toHaveLength(0);
+  });
+
+  it("keeps the Focus on the bare-path redirect too", async () => {
+    const router = renderApp(`/?focus=${SUBJECT}`);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
+    expect(router.state.location.search).toMatchObject({ focus: SUBJECT });
   });
 });

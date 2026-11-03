@@ -1,0 +1,114 @@
+# Tier 1 CI: Format, Clippy, and Commit Policy
+#
+# Triggers:
+#   - workflow_dispatch  — run manually from the Actions tab (any branch/ref).
+#   - pull_request       — runs when a maintainer adds the `ci` or `ci:lint` label.
+name: CI — Format & Clippy
+
+on:
+  workflow_dispatch:
+    inputs:
+      features:
+        description: Optional Cargo features (e.g. proc-macros)
+        required: false
+        default: ""
+        type: string
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-lint-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Fail the build on grammar ↔ *-ast-coverage.json drift (rgctl-languages build.rs).
+  RGCTL_AST_COVERAGE_STRICT: "1"
+  FEATURES: ${{ github.event_name == 'workflow_dispatch' && inputs.features || '' }}
+
+jobs:
+  awaiting-ci-label:
+    name: awaiting maintainer `ci` or `ci:lint` label
+    if: >-
+      github.event_name == 'pull_request' &&
+      !contains(github.event.pull_request.labels.*.name, 'ci') &&
+      !contains(github.event.pull_request.labels.*.name, 'ci:lint')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Lint CI is gated until a maintainer opts in
+        run: |
+          cat <<'EOF'
+          Format & Clippy CI is gated behind maintainer labels:
+            - Add `ci:lint` to run only Format & Clippy
+            - Add `ci` to run Format & Clippy + Unit & Core Integration Tests
+          EOF
+
+  no-ai-commit-trailers:
+    name: no AI commit trailers
+    if: >-
+      github.event_name == 'pull_request' &&
+      (contains(github.event.pull_request.labels.*.name, 'ci') ||
+       contains(github.event.pull_request.labels.*.name, 'ci:lint'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check PR commits for AI agent trailers
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 scripts/check-no-ai-commit-trailers.py \
+            --range "${BASE_SHA}..${HEAD_SHA}"
+
+  fmt-and-clippy:
+    name: cargo fmt & clippy
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       (contains(github.event.pull_request.labels.*.name, 'ci') ||
+        contains(github.event.pull_request.labels.*.name, 'ci:lint')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ env.FEATURES }}
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo check --locked --bin rgctl
+        run: cargo check --locked --bin rgctl
+
+      - name: cargo clippy (workspace lib & bins)
+        run: cargo clippy --features "${{ env.FEATURES }}" --lib --bins -- -D warnings
+
+      - name: cargo clippy (rgctl-analysis)
+        run: cargo clippy -p rgctl-analysis --features "${{ env.FEATURES }}" -- -D warnings
+
+      - name: cargo clippy (rgctl-graph, rgctl-core)
+        run: cargo clippy -p rgctl-graph -p rgctl-core --features "${{ env.FEATURES }}" -- -D warnings
+
+      - name: Compile all unit & integration tests
+        run: cargo test --features "${{ env.FEATURES }}" --workspace --lib --bins --tests --no-run

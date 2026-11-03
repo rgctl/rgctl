@@ -716,13 +716,18 @@ fn test_discover_cli_flags() {
         );
     }
 
-    // Removed umbrella `--all` (#34): flag is ignored; discover must not gain extra stages.
-    let baseline = Sandbox::new();
-    let baseline_doc = discover_json_metrics(&baseline, &[]);
-    let with_all = Sandbox::new();
-    let all_doc = discover_json_metrics(&with_all, &["--all"]);
-    assert_eq!(
-        all_doc["metrics"]["nodes_generated"], baseline_doc["metrics"]["nodes_generated"],
-        "--all must not change discover output after #34"
+    // The umbrella `--all` was removed in #34, and unknown hyphen flags are now *rejected* rather than ignored —
+    // which is the better half of the same decision: silently accepting a flag nobody implements is how a user
+    // comes to believe it did something. This asserted the old no-op, so it failed the moment the rejection landed.
+    let sandbox = Sandbox::new();
+    let output = sandbox.run(&["discover", ".", "--languages", "java,rust", "--all"]);
+    assert!(
+        !output.status.success(),
+        "--all was removed (#34): discover must reject it, not silently ignore it"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unexpected argument") && stderr.contains("--all"),
+        "the rejection must name the flag, got: {stderr}"
     );
 }

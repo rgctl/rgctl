@@ -10,7 +10,7 @@
  *
  * A hand-written fixture encodes the author's belief about the shape, and here the shape is the question, so
  * every assertion below is a figure measured off a real corpus. Regenerate by re-running
- * `rgctl discover . --with-dashboard --with-cfg` and re-capturing the two files.
+ * `rgctl discover . --with-universe --with-cfg` and re-capturing the two files.
  */
 import { describe, expect, it } from "vitest";
 import { buildView, channelReport } from "../architecture";
@@ -101,5 +101,41 @@ describe("metasfresh, as captured", () => {
   it("has 8 labels that are absolute paths, and files them as artifacts", () => {
     const absolute = view.artifacts.filter((p) => p.label.startsWith("."));
     expect(absolute).toHaveLength(8);
+  });
+});
+
+/**
+ * The room cannot expand a district without the metagraph, and the metagraph is not in the *view*.
+ *
+ * This is the regression that shipped: `ArchitectureState` carried only `view`, the room read
+ * `state.metagraph` (undefined), and `expand()` returned early — so double-click and the labelled control
+ * both did nothing at all, with no absence, no error and no clue. A view is the derived packages; membership
+ * is addressed against the metanode ids, which live one step earlier.
+ */
+describe("the metagraph reaches the room", () => {
+  it("is carried on the ready state, not merely used to build the view", async () => {
+    const { loadArchitecture } = await import("../architecture");
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes("communities") ? summary : metagraphJson;
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const state = await loadArchitecture();
+      expect(state.kind === "ready" || state.kind === "no-communities").toBe(true);
+      if (state.kind === "ready" || state.kind === "no-communities") {
+        expect(state.metagraph.nodes.length).toBe(metagraph.nodes.length);
+        // The ids the expand is addressed by must survive the projection into the view.
+        const viewIds = new Set(state.view.packages.map((p) => p.id));
+        expect([...viewIds].some((id) => state.metagraph.nodes.some((n) => n.id === id))).toBe(true);
+      }
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });
