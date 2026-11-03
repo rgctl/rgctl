@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createAppRouter } from "../router";
+import { nameMatch } from "../rooms/SourcePane";
 import { installFetchStub, SOURCE_LINES, SOURCE_PATH, SUBJECT } from "./fixture";
 
 function renderLens(functionId = SUBJECT) {
@@ -66,11 +67,44 @@ describe("the Code lens draws the source", () => {
     // the chip proves the span came from the CFG rather than being invented by the pane.
     expect(screen.getByText(/lines 1–7/)).toBeTruthy();
 
-    // In-range rows carry the band; this is what tells the reader where the subject is on arrival.
-    const banded = [...container.querySelectorAll("tr")].filter((r) =>
-      r.className.includes("bg-white/[0.035]"),
-    );
-    expect(banded.length).toBe(SOURCE_LINES.length);
+    // Three levels of mark, and the reader can tell them apart: the declaration line in the light-blue theme,
+    // the rest of the span faint, everything outside it plain.
+    const rows = [...container.querySelectorAll("tr")];
+    const declaration = rows.find((r) => r.getAttribute("data-line") === "1");
+    expect(declaration?.className).toContain("bg-sky-400/[0.13]");
+    const bodyLines = rows.filter((r) => r.getAttribute("data-line") !== "1");
+    expect(bodyLines).toHaveLength(SOURCE_LINES.length - 1);
+    for (const row of bodyLines) expect(row.className).toContain("bg-white/[0.035]");
+  });
+
+  /**
+   * The two marks the drawer exists for.
+   *
+   * Opening a member's code from a level answers one question — *where is this function?* — and answering it with
+   * a faint band over seven lines is not an answer. The name is material yellow (the only filled, high-chroma
+   * mark in the pane, because a syntax theme has already spent colour on every other token), and the line that
+   * declares it is the app's light blue.
+   */
+  it("marks the function's name in yellow, on the line that declares it", async () => {
+    const { container } = renderLens();
+    await waitFor(() => expect(container.textContent).toContain(SOURCE_LINES[0]));
+
+    const marks = screen.getAllByTestId("subject-name-mark");
+    // Exactly one: a declaration line names the function once.
+    expect(marks).toHaveLength(1);
+    expect(marks[0].textContent).toBe("handleAuth");
+    expect(marks[0].className).toContain("ffd54f");
+    // On the declaration line, not merely somewhere in the file.
+    expect(marks[0].closest("tr")?.getAttribute("data-line")).toBe("1");
+  });
+
+  it("does not mark a name that only appears inside a longer identifier", async () => {
+    // `verify` is the other fixture function and appears on line 6 as a *call*; the declaration-line search
+    // must not accept `verifyToken`-style partial matches, which is why the match is word-bounded.
+    expect(nameMatch("  return verifyToken(token);", "verify")).toBeNull();
+    expect(nameMatch("  return verify(token);", "verify")?.hit).toBe("verify");
+    // And a name with regex metacharacters is matched literally rather than compiled.
+    expect(nameMatch("fn a.b(c) {}", "a.b")?.hit).toBe("a.b");
   });
 
   it("remembers where you were reading, instead of snapping back to the subject", async () => {

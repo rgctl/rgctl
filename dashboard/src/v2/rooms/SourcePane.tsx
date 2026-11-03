@@ -132,6 +132,61 @@ function centerLine(scroller: HTMLElement | null, line: number | null, smooth: b
   }
 }
 
+/**
+ * One line of source, with the subject's name marked.
+ *
+ * The tokens keep their syntax classes; the name is cut out of whichever token contains it and rendered as a
+ * filled chip instead. Only the first occurrence is marked, because a declaration line names a function once.
+ */
+function LineText({
+  text,
+  language,
+  markName,
+}: {
+  text: string;
+  language: string;
+  markName: string | null;
+}) {
+  const tokens = highlightLine(text, language);
+  if (!markName) {
+    return (
+      <>
+        {tokens.map((tok, i) => (
+          <span key={i} className={TOKEN_CLASS[tok.kind]}>
+            {tok.text}
+          </span>
+        ))}
+      </>
+    );
+  }
+
+  let marked = false;
+  return (
+    <>
+      {tokens.map((tok, i) => {
+        const hit = marked ? null : nameMatch(tok.text, markName);
+        if (!hit) {
+          return (
+            <span key={i} className={TOKEN_CLASS[tok.kind]}>
+              {tok.text}
+            </span>
+          );
+        }
+        marked = true;
+        return (
+          <span key={i} className={TOKEN_CLASS[tok.kind]}>
+            {hit.before}
+            <span className={NAME_MARK_CLASS} data-testid="subject-name-mark">
+              {hit.hit}
+            </span>
+            {hit.after}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 export function SourcePane({
   entry,
   blockForLine,
@@ -177,6 +232,34 @@ export function SourcePane({
   }, [entry.function_id, entry.file_path]);
 
   const language = useMemo(() => languageFor(entry.file_path), [entry.file_path]);
+
+  /**
+   * The line that declares the subject.
+   *
+   * Searched near the span rather than from line 1: an exported `verify` can appear in a file header, a type or a
+   * re-export, and the line worth marking is the one in the function the reader opened.
+   *
+   * **Above the span as well as inside it**, which is the part that is easy to get wrong. A CFG span starts at
+   * its first *block*, and the first block of a Rust function is its first statement — so `fn bucket_to_metanode`
+   * sits on line 503 while the span starts at 504, and a search bounded by the span found nothing at all. The
+   * search therefore walks up a few lines first (closest match wins), then inside the span, then gives up on the
+   * name but not on the line: the span start is still marked, so "where am I" keeps an answer and nothing is
+   * invented.
+   */
+  const declarationLine = useMemo(() => {
+    const span = focusRange ?? null;
+    if (source.kind !== "ready" || span === null) return null;
+    const above = Math.max(1, span.start - DECLARATION_LOOKBACK);
+    for (let line = span.start; line >= above; line -= 1) {
+      const text = source.lines.find((l) => l.line === line)?.text;
+      if (text !== undefined && nameMatch(text, entry.name)) return line;
+    }
+    for (const { line, text } of source.lines) {
+      if (line <= span.start || line > span.end) continue;
+      if (nameMatch(text, entry.name)) return line;
+    }
+    return span.start;
+  }, [source, focusRange, entry.name]);
   const highlighted = selectedLines ?? EMPTY;
   const ready = source.kind === "ready";
   const rangeStart = focusRange?.start ?? null;
@@ -196,8 +279,10 @@ export function SourcePane({
       if (scroller.current) scroller.current.scrollTop = saved;
       return;
     }
-    centerLine(scroller.current, rangeStart, false);
-  }, [ready, rangeStart, entry.function_id]);
+    // The declaration, not the span's first block: the reader came for the function, and those differ by a line
+    // on every Rust function in this corpus.
+    centerLine(scroller.current, declarationLine ?? rangeStart, false);
+  }, [ready, declarationLine, rangeStart, entry.function_id]);
 
   // A block the caller selected moves the reader to that block. Keyed on the line, not on the call, so
   // re-selecting the same block does not fight a manual scroll.
@@ -223,6 +308,7 @@ export function SourcePane({
                 const owner = blockForLine?.get(line);
                 const inSelection = highlighted.has(line);
                 const inRange = rangeStart !== null && rangeEnd !== null && line >= rangeStart && line <= rangeEnd;
+                const isSubjectLine = line === declarationLine;
                 return (
                   <tr
                     key={line}
@@ -232,23 +318,25 @@ export function SourcePane({
                     className={
                       inSelection
                         ? "bg-sky-500/15"
-                        : inRange
-                          ? "bg-white/[0.035]"
-                        : owner && onSelectBlock
-                          ? "cursor-pointer hover:bg-white/[0.04]"
-                          : undefined
+                        : isSubjectLine
+                          ? "bg-sky-400/[0.13]"
+                          : inRange
+                            ? "bg-white/[0.035]"
+                            : owner && onSelectBlock
+                              ? "cursor-pointer hover:bg-white/[0.04]"
+                              : undefined
                     }
                   >
-                    <td className="w-14 select-none pr-3 text-right align-top text-zinc-600">
+                    <td
+                      className={`w-14 select-none pr-3 text-right align-top ${
+                        isSubjectLine ? "text-sky-300" : "text-zinc-600"
+                      }`}
+                    >
                       {line}
                       {inSelection && <span className="ml-1 text-sky-400">▍</span>}
                     </td>
                     <td className="whitespace-pre-wrap break-all align-top">
-                      {highlightLine(text, language).map((tok, i) => (
-                        <span key={i} className={TOKEN_CLASS[tok.kind]}>
-                          {tok.text}
-                        </span>
-                      ))}
+                      <LineText text={text} language={language} markName={isSubjectLine ? entry.name : null} />
                       {text === "" && "\u00a0"}
                     </td>
                   </tr>
@@ -263,3 +351,34 @@ export function SourcePane({
 }
 
 const EMPTY: Set<number> = new Set();
+
+/** How far above a span's first block its declaration may sit: attributes, a signature split over lines. */
+const DECLARATION_LOOKBACK = 8;
+
+/**
+ * Material yellow for the subject's name: the one thing in the file the reader came for.
+ *
+ * Deliberately the only filled, high-chroma mark in the pane. A syntax theme already assigns a colour to every
+ * token, so emphasis here cannot be another token colour — it has to be a different *kind* of mark, which is
+ * what a filled chip is.
+ */
+const NAME_MARK_CLASS = "rounded-[2px] bg-[#ffd54f] px-[2px] font-semibold text-[#231c00]";
+
+/**
+ * Find the subject's name in one line of source, as a whole word.
+ *
+ * `verify` must not light up inside `verifyToken`, so the match is bounded by non-identifier characters rather
+ * than by `String#includes`. Returns the pieces to render, or `null` when this line does not carry the name.
+ */
+export function nameMatch(text: string, name: string): { before: string; hit: string; after: string } | null {
+  if (!name) return null;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`(^|[^\\w$])(${escaped})([^\\w$]|$)`).exec(text);
+  if (!match) return null;
+  const start = match.index + match[1].length;
+  return {
+    before: text.slice(0, start),
+    hit: name,
+    after: text.slice(start + name.length),
+  };
+}
