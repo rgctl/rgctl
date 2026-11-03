@@ -148,7 +148,15 @@ export function App() {
                 onCarry={goRoom}
               />
             )}
-            {room === "architecture" && <ArchitectureRoom />}
+            {room === "architecture" && (
+              <ArchitectureRoom
+                onOpenFocus={(focus) => {
+                  // The shell owns the Focus: write the key, then move to the room that renders it.
+                  setFocus(focus);
+                  goRoom("understand");
+                }}
+              />
+            )}
             {room === "migration" && <MigrationRoom />}
             {room === "taint" && <TaintRoom />}
             {room !== "repo" &&

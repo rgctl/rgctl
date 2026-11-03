@@ -10,7 +10,6 @@
  * nothing here to carry in or out of another room.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { Panel, Unavailable, Chip } from "../shell";
 import { channelReport, loadArchitecture, scalesFor } from "../architecture";
 import { expandMembers, MEMBER_EDGE_KINDS } from "../expandEngine";
@@ -21,8 +20,19 @@ import type { HoverEntry, MemberEntry, UniverseLayer, UniverseScene } from "../u
 
 type Loaded = { kind: "loading" } | ArchitectureState;
 
-export function ArchitectureRoom() {
-  const navigate = useNavigate();
+export function ArchitectureRoom({
+  onOpenFocus,
+}: {
+  /**
+   * Open a symbol in Understand.
+   *
+   * Supplied by the shell, which owns the Focus (`setFocus` + `goRoom` from `useFocus`). The room deliberately
+   * does not reach for the router itself: it is rendered standalone in tests, and a hook that needs a router
+   * would make every room test a router test. Absent, the room says it cannot open anything rather than
+   * silently doing nothing.
+   */
+  onOpenFocus?: (functionId: string) => void;
+} = {}) {
   const [state, setState] = useState<Loaded>({ kind: "loading" });
   const [layer, setLayer] = useState<UniverseLayer>("packages");
   const [edges, setEdges] = useState(true);
@@ -56,6 +66,8 @@ export function ArchitectureRoom() {
     ms: number;
     /** False when the bundle carries no per-member complexity, so members are drawn at a constant height. */
     measuredHeight: boolean;
+    /** Aggregate edges leaving this district, drawn outward and fading — package-level, not member-level. */
+    boundary: number;
   } | null>(null);
   const [expandState, setExpandState] = useState<
     | { kind: "idle" }
@@ -105,6 +117,7 @@ export function ArchitectureRoom() {
 
   const collapse = useCallback(() => {
     sceneRef.current?.collapse();
+    sceneRef.current?.highlightSolid(null);
     setExpanded(null);
     setExpandState({ kind: "idle" });
   }, []);
@@ -182,6 +195,7 @@ export function ArchitectureRoom() {
           truncated,
           ms: Math.round(performance.now() - startedAt),
           measuredHeight: result?.measuredHeight ?? false,
+          boundary: result?.boundary ?? 0,
         });
         setExpandState({ kind: "idle" });
       } catch (error) {
@@ -225,7 +239,15 @@ export function ArchitectureRoom() {
         const focus = matches[0].function_id;
         setMemberState({ kind: "idle" });
         collapse();
-        void navigate({ to: "/$roomId", params: { roomId: "understand" }, search: { focus } as never });
+        if (!onOpenFocus) {
+          setMemberState({
+            kind: "failed",
+            member,
+            reason: `resolved to ${focus}, but nothing here can open a symbol`,
+          });
+          return;
+        }
+        onOpenFocus(focus);
         return;
       }
       setMemberState({
@@ -237,7 +259,7 @@ export function ArchitectureRoom() {
             : `${matches.length} indexed functions match this name and file, so opening one would be a guess`,
       });
     },
-    [collapse, navigate],
+    [collapse, onOpenFocus],
   );
 
   useEffect(() => {
@@ -279,7 +301,10 @@ export function ArchitectureRoom() {
       }
       scene.setDrift(driftRef.current);
       scene.onHoverChange(setHover);
-      scene.onPickChange(setSelected);
+      scene.onPickChange((entry) => {
+        setSelected(entry);
+        scene.highlightSolid(entry?.kind === "package" ? (entry.id ?? null) : null);
+      });
       scene.onMemberPickChange((member) => void openMemberRef.current(member));
       scene.onExplode((entry) => void expandRef.current(entry));
       scene.attachPointer(host);
@@ -433,6 +458,7 @@ export function ArchitectureRoom() {
                   ],
                 });
                 sceneRef.current?.focusSolid(pkg.id);
+                sceneRef.current?.highlightSolid(pkg.id);
               }}
             />
             {expandState.kind === "idle" && !expanded && (
@@ -467,6 +493,12 @@ export function ArchitectureRoom() {
                   {expanded.drawn.toLocaleString()} of {expanded.members.toLocaleString()} members drawn
                   {expanded.truncated ? " (largest by member count; the rest are not drawn)" : ""} ·{" "}
                   {expanded.edges.toLocaleString()} member edges ({MEMBER_EDGE_KINDS})
+                  {expanded.boundary > 0
+                    ? ` · ${expanded.boundary} outgoing coupling edges fading outward (package-level)`
+                    : ""}
+                </span>
+                <span className="text-[10px] leading-relaxed text-zinc-500">
+                  the universe is hidden while this level is open — Collapse or esc returns to it, same angle
                 </span>
                 {!expanded.measuredHeight && (
                   <span className="text-[10px] leading-relaxed text-amber-200/80">
@@ -513,6 +545,7 @@ export function ArchitectureRoom() {
                 ],
               });
               sceneRef.current?.focusSolid(pkg.id);
+              sceneRef.current?.highlightSolid(pkg.id);
             }}
           />
           <Layers view={view!} />
@@ -695,8 +728,17 @@ function DistrictSearch({
     ? view.filter((p) => p.label.toLowerCase().includes(needle)).slice(0, 6)
     : view.slice(0, 6);
 
+  const pick = (pkg: PackageNode) => {
+    onPick(pkg);
+    setQuery(pkg.label);
+    setOpen(false);
+  };
+
   return (
-    <div className="relative w-64">
+    <div className="relative w-72">
+      <label className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-zinc-500">
+        <span aria-hidden>⌕</span> find a district
+      </label>
       <input
         value={query}
         onChange={(event) => {
@@ -705,9 +747,13 @@ function DistrictSearch({
         }}
         onFocus={() => setOpen(true)}
         onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-        placeholder="find a district…"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && matches.length > 0) pick(matches[0]);
+          if (event.key === "Escape") setOpen(false);
+        }}
+        placeholder="type a prefix — rgctl, crates, dashboard…"
         aria-label="Find a district by name"
-        className="w-full rounded-md border border-white/15 bg-black/70 px-2 py-1 text-[11px] text-zinc-200 placeholder:text-zinc-500 focus:border-sky-500/50 focus:outline-none"
+        className="w-full rounded-md border border-sky-500/40 bg-black/80 px-2 py-1.5 text-[11px] text-zinc-100 shadow-[0_0_0_1px_rgba(56,189,248,0.15)] placeholder:text-zinc-500 focus:border-sky-400 focus:outline-none"
       />
       {open && (
         <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-white/15 bg-[#0b1017] shadow-lg">
@@ -722,11 +768,7 @@ function DistrictSearch({
               <button
                 type="button"
                 onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  onPick(pkg);
-                  setQuery(pkg.label);
-                  setOpen(false);
-                }}
+                onClick={() => pick(pkg)}
                 className="flex w-full items-baseline justify-between gap-2 px-2 py-1 text-left text-[11px] text-zinc-300 hover:bg-white/[0.08]"
               >
                 <span className="truncate font-mono">{pkg.label}</span>

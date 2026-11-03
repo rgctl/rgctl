@@ -135,10 +135,10 @@ export class UniverseScene {
    * instead of being re-derived here.
    */
   private memberAt(): MemberEntry | null {
-    if (!this.expanded) return null;
-    const hit = this.raycaster.intersectObject(this.expanded.instanced, false)[0];
+    if (!this.drill) return null;
+    const hit = this.raycaster.intersectObject(this.drill.instanced, false)[0];
     if (!hit || hit.instanceId === undefined) return null;
-    return this.expanded.members[hit.instanceId] ?? null;
+    return this.drill.members[hit.instanceId] ?? null;
   }
 
   resize(container: HTMLElement): void {
@@ -447,7 +447,27 @@ export class UniverseScene {
     number,
     { pos: [number, number, number]; side: number; height: number; mesh: THREE.Object3D }
   >();
-  private expanded: { group: THREE.Group; dimmed: Array<{ material: THREE.Material & { opacity: number; transparent: boolean } }> } | null = null;
+  /** The selection halo, if a district is highlighted. */
+  private outline: THREE.LineSegments | null = null;
+  /**
+   * The open district, if any: its own scene, the camera to return to, and what a pick can hit.
+   *
+   * Distinct from "the universe with something dimmed in it" — a drill hides the universe entirely, because a
+   * lower level sharing a viewport with 255 districts it is not part of is what made navigating impossible.
+   */
+  private drill: {
+    group: THREE.Group;
+    subjectId: number;
+    cameraBefore: {
+      position: THREE.Vector3;
+      target: THREE.Vector3;
+      near: number;
+      far: number;
+      maxDistance: number;
+    };
+    instanced: THREE.InstancedMesh;
+    members: MemberEntry[];
+  } | null = null;
 
   setEdges(edges: { source: number; target: number; weight: number }[], byId: Map<number, PackageNode>): void {
     this.edgeList = edges;
@@ -466,66 +486,62 @@ export class UniverseScene {
    * members, and a mesh each would be a frame-rate cliff plus a picking array that is scanned on every
    * pointer move.
    */
+  /**
+   * Drill into a district: **the district becomes the scene**.
+   *
+   * An earlier version expanded in place — members on a plinth inside the universe, everything else dimmed.
+   * That is the wrong model for navigating: the camera, the orbit target and the framing all still belonged
+   * to the universe, so a district with 1 500 members in it shared a viewport with 255 districts that were
+   * no longer the subject. Reading a lower level needs a level change, not an overlay.
+   *
+   * So: the universe is hidden (not dimmed), members are laid out around the origin at their own scale, the
+   * camera is framed on them, and the district's *outgoing* coupling is drawn as edges leaving the cluster and
+   * fading with distance — the reminder that this level sits inside something larger.
+   *
+   * The incoming aggregate edges are the level-0 coupling edges that touch this district; they are package-level
+   * facts, not member-level ones, and the room says so.
+   */
   expand(
     subjectId: number,
     members: Array<{ index: number; complexity: number; name?: string; nodeTypeName?: string; filePath?: string | null }>,
     edges: Array<{ source: number; target: number }>,
     options: { color?: THREE.Color; maxHeight?: number } = {},
-  ): { drawn: number; edges: number; measuredHeight: boolean } {
+  ): { drawn: number; edges: number; measuredHeight: boolean; boundary: number } {
     this.collapse();
     const seat = this.solids.get(subjectId);
-    if (!seat || members.length === 0) return { drawn: 0, edges: 0, measuredHeight: false };
+    if (!seat || members.length === 0) return { drawn: 0, edges: 0, measuredHeight: false, boundary: 0 };
 
-
-    // Stop the drift. The universe rotates slowly to invite exploration; a district is something to *read*,
-    // and a slowly turning model is the difference between inspecting and chasing. Manual orbit still works.
+    // Stop the drift: a district is something to read, and a slowly turning model is the difference between
+    // inspecting and chasing.
     const autoRotate = this.controls.autoRotate;
     const autoRotateSpeed = this.controls.autoRotateSpeed;
     this.controls.autoRotate = false;
 
+    const cameraBefore = {
+      position: this.camera.position.clone(),
+      target: this.controls.target.clone(),
+      near: this.camera.near,
+      far: this.camera.far,
+      maxDistance: this.controls.maxDistance,
+    };
+
+    // The universe steps out of the way entirely.
+    this.world.visible = false;
+
     const group = new THREE.Group();
-    const dimmed: Array<{
-      material: THREE.Material & { opacity: number; transparent: boolean };
-      opacity: number;
-      transparent: boolean;
-    }> = [];
-    for (const object of this.coreObjects) {
-      const material = (object as THREE.Mesh).material as THREE.Material | undefined;
-      if (!material || Array.isArray(material)) continue;
-      const m = material as THREE.Material & { opacity: number; transparent: boolean };
-      if (dimmed.some((d) => d.material === m)) continue;
-      // Remember what it was. A volume shell is 0.05 by design and a wire is 0.5; setting those back to 1
-      // on collapse turns the whole sky into one opaque slab — which is exactly what happened.
-      dimmed.push({ material: m, opacity: m.opacity, transparent: m.transparent });
-      m.transparent = true;
-      m.opacity = Math.min(m.opacity, 0.18);
-    }
-
-    // The district *becomes* the plinth: leaving the parent solid underneath drew two objects in the same
-    // place, one of them a dimmed box poking through the stage.
-    const parentSolid = this.solids.get(subjectId)?.mesh ?? null;
-    if (parentSolid) parentSolid.visible = false;
-
-    // Sit the stage on the parent's own footprint so the district keeps its place in the map.
-    const stageRadius = Math.max(seat.side * 0.75, 18);
-    const plinthHeight = Math.max(2, seat.height * 0.04);
-    const plinth = new THREE.Mesh(
-      new THREE.BoxGeometry(stageRadius * 2.1, plinthHeight, stageRadius * 2.1),
-      new THREE.MeshStandardMaterial({ color: options.color ?? new THREE.Color(0x2a3340), roughness: 0.9 }),
-    );
-    plinth.position.set(seat.pos[0], plinthHeight / 2, seat.pos[2]);
-    group.add(plinth);
-
-    const count = members.length;
     const maxComplexity = Math.max(0, ...members.map((m) => m.complexity || 0));
     /**
      * Height channel: complexity when the bundle carries it, a constant when it does not.
      *
      * It does not, on the corpus this was built against — every member reports `complexity: 0` — and scaling by
-     * `0 / 0` drew a field of one-unit cubes that read as a rendering bug. A constant height with the absence
-     * stated is the honest version.
+     * `0 / 0` drew a field of one-unit cubes that read as a rendering bug.
      */
     const measured = maxComplexity > 0;
+
+    // Lay the members out around the **origin**, sized for a screen of their own rather than a footprint.
+    const count = members.length;
+    const spread = Math.max(60, 26 * Math.sqrt(count));
+    const slot = (spread * 2) / Math.sqrt(count);
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     const material = new THREE.MeshStandardMaterial({
       color: options.color ?? new THREE.Color(0x8fd0ff),
@@ -538,110 +554,183 @@ export class UniverseScene {
     const positions = new Map<number, THREE.Vector3>();
     const matrix = new THREE.Matrix4();
     const scale = new THREE.Vector3();
-    const slot = (stageRadius * 1.7) / Math.sqrt(count);
     members.forEach((member, i) => {
-      // Sunflower inside the footprint: the room's own placement primitive, not a second layout rule.
-      const radius = (stageRadius * 0.9) * Math.sqrt((i + 0.5) / count);
+      // Sunflower: the room's own placement primitive, used at this level too.
+      const radius = spread * Math.sqrt((i + 0.5) / count);
       const angle = i * 2.39996;
-      const x = seat.pos[0] + Math.cos(angle) * radius;
-      const z = seat.pos[2] + Math.sin(angle) * radius;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
       const memberHeight = measured
         ? Math.max(1, (member.complexity / maxComplexity) * (options.maxHeight ?? 26))
         : CONSTANT_MEMBER_HEIGHT;
       scale.set(slot * 0.8, memberHeight, slot * 0.8);
-      matrix.compose(
-        new THREE.Vector3(x, plinthHeight + memberHeight / 2, z),
-        new THREE.Quaternion(),
-        scale,
-      );
+      matrix.compose(new THREE.Vector3(x, memberHeight / 2, z), new THREE.Quaternion(), scale);
       instanced.setMatrixAt(i, matrix);
-      positions.set(member.index, new THREE.Vector3(x, plinthHeight + memberHeight, z));
+      positions.set(member.index, new THREE.Vector3(x, memberHeight, z));
     });
     instanced.instanceMatrix.needsUpdate = true;
     group.add(instanced);
 
-    // Member edges: only those whose both ends were drawn, so a truncated district does not draw lines to
-    // things that are not on screen.
+    // Member edges inside the district.
     const segments: number[] = [];
     for (const edge of edges) {
       const from = positions.get(edge.source);
       const to = positions.get(edge.target);
       if (!from || !to) continue;
-      segments.push(from.x, from.y, from.z, to.x, to.y, to.z);
+      segments.push(from.x, from.y * 0.6, from.z, to.x, to.y * 0.6, to.z);
     }
     if (segments.length > 0) {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute(segments, 3));
-      const lines = new THREE.LineSegments(
-        geo,
-        new THREE.LineBasicMaterial({ color: 0x9fe8c8, transparent: true, opacity: 0.55 }),
+      group.add(
+        new THREE.LineSegments(
+          geo,
+          new THREE.LineBasicMaterial({ color: 0x9fe8c8, transparent: true, opacity: 0.55 }),
+        ),
       );
-      group.add(lines);
     }
 
-    this.world.add(group);
-    this.expanded = {
-      group,
-      dimmed,
-      autoRotate,
-      autoRotateSpeed,
-      parent: parentSolid,
-      instanced,
-      members: members.map((m) => ({
-        index: m.index,
-        name: m.name ?? `node ${m.index}`,
-        nodeTypeName: m.nodeTypeName ?? "node",
-        filePath: m.filePath ?? null,
-      })),
+    // Outgoing coupling: level-0 aggregate edges that touch this district, drawn outward and fading.
+    const boundary: Array<{ direction: THREE.Vector3; weight: number }> = [];
+    for (const edge of this.edgeList) {
+      const otherId = edge.source === subjectId ? edge.target : edge.target === subjectId ? edge.source : null;
+      if (otherId === null) continue;
+      const other = this.solids.get(otherId);
+      if (!other) continue;
+      const direction = new THREE.Vector3(
+        other.pos[0] - seat.pos[0],
+        0,
+        other.pos[2] - seat.pos[2],
+      );
+      if (direction.lengthSq() < 1e-6) continue;
+      boundary.push({ direction: direction.normalize(), weight: edge.weight });
+    }
+    const perEdge: Array<[number, number]> = [];
+    for (const { direction, weight } of boundary) {
+      // Three segments each, dimmer with distance: the web continues past this level and thins out.
+      const steps: Array<[number, number, number]> = [
+        [spread, 0.5, 1.0],
+        [1.6, 0.26, 0.55],
+        [2.4, 0.1, 0.3],
+      ];
+      let previous = spread;
+      for (const [factor, opacity, taper] of steps) {
+        const next = spread * factor;
+        const a = direction.clone().multiplyScalar(previous);
+        const b = direction.clone().multiplyScalar(next);
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute([a.x, 2, a.z, b.x, 2, b.z], 3),
+        );
+        group.add(
+          new THREE.LineSegments(
+            geo,
+            new THREE.LineBasicMaterial({
+              color: 0xffd89a,
+              transparent: true,
+              opacity,
+            }),
+          ),
+        );
+        perEdge.push([weight, taper]);
+        previous = next;
+      }
+    }
+
+    this.scene.add(group);
+    this.drill = { group, subjectId, cameraBefore, instanced, members: members.map((m) => ({
+      index: m.index,
+      name: m.name ?? `node ${m.index}`,
+      nodeTypeName: m.nodeTypeName ?? "node",
+      filePath: m.filePath ?? null,
+    })) };
+
+    this.frameObjects(group, 1.35);
+    return {
+      drawn: count,
+      edges: segments.length / 6,
+      measuredHeight: measured,
+      boundary: boundary.length,
     };
-    return { drawn: count, edges: segments.length / 6, measuredHeight: measured };
   }
 
-  /** Put the scene back exactly as it was. */
+  /** Put the level back exactly as it was: universe visible, camera where the reader left it. */
   collapse(): void {
-    if (!this.expanded) return;
-    for (const { material, opacity, transparent } of this.expanded.dimmed) {
-      material.opacity = opacity;
-      material.transparent = transparent;
-    }
-    if (this.expanded.parent) this.expanded.parent.visible = true;
-    // The drift does **not** resume on its own: the reader stopped it by opening a district, and a scene that
-    // starts moving again the moment they close it is startling at best. The `drift` control turns it back on.
-    this.controls.autoRotate = false;
-    this.controls.autoRotateSpeed = this.expanded.autoRotateSpeed;
-    this.world.remove(this.expanded.group);
-    this.expanded.group.traverse((child) => {
+    if (!this.drill) return;
+    const { group, cameraBefore } = this.drill;
+    this.scene.remove(group);
+    group.traverse((child) => {
       const mesh = child as THREE.Mesh;
       mesh.geometry?.dispose();
       const m = mesh.material as THREE.Material | THREE.Material[] | undefined;
       if (Array.isArray(m)) m.forEach((x) => x.dispose());
       else m?.dispose();
     });
-    this.expanded = null;
+    this.world.visible = true;
+    this.camera.position.copy(cameraBefore.position);
+    this.controls.target.copy(cameraBefore.target);
+    this.camera.near = cameraBefore.near;
+    this.camera.far = cameraBefore.far;
+    this.controls.maxDistance = cameraBefore.maxDistance;
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+    this.controls.autoRotate = false;
+    this.drill = null;
+  }
+
+  /** Whether a district is open — the room labels its own control from this. */
+  get isExpanded(): boolean {
+    return this.drill !== null;
   }
 
   /**
-   * Fly to a solid the reader asked for **by name**.
+   * Emphasise one solid and quiet the rest.
    *
-   * Without this the room could not answer "which of these 256 boxes is `dashboard.slice`?" — the only
-   * identification was sweeping the pointer and reading a tooltip. A list that names things has to be able to
-   * point at them.
+   * Selecting a district has to be *visible*: moving the camera is not enough when the target is one box among
+   * 256, and a row picked from a list gives no sense of which box it became. The outline is the emphasis; the
+   * slight dimming is what makes the outline readable against its neighbours.
    */
-  focusSolid(id: number): boolean {
+  highlightSolid(id: number | null): void {
+    if (this.outline) {
+      this.world.remove(this.outline);
+      this.outline.traverse((child) => {
+        const line = child as THREE.LineSegments;
+        line.geometry?.dispose();
+        const m = line.material as THREE.Material | undefined;
+        m?.dispose();
+      });
+      this.outline = null;
+    }
+    for (const object of this.coreObjects) {
+      const material = (object as THREE.Mesh).material as THREE.Material | undefined;
+      if (!material || Array.isArray(material)) continue;
+      const m = material as THREE.Material & { opacity: number };
+      m.transparent = true;
+      m.opacity = id === null ? 1 : 0.55;
+    }
+    if (id === null || this.drill) return;
     const seat = this.solids.get(id);
-    if (!seat) return false;
-    this.flyTo(seat.pos);
-    return true;
+    if (!seat) return;
+    const box = new THREE.Box3().setFromObject(seat.mesh);
+    const size = new THREE.Vector3();
+    const centre = new THREE.Vector3();
+    box.getSize(size);
+    box.getCenter(centre);
+    const halo = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x + 10, size.y + 10, size.z + 10)),
+      new THREE.LineBasicMaterial({ color: 0x8fd0ff }),
+    );
+    halo.position.copy(centre);
+    this.world.add(halo);
+    this.outline = halo;
+    const material = (seat.mesh as THREE.Mesh).material as (THREE.Material & { opacity: number }) | undefined;
+    if (material) material.opacity = 1;
   }
 
   /** Drift on or off. Explicit, because "it stopped moving" and "it is broken" look the same. */
   setDrift(on: boolean): void {
     this.controls.autoRotate = on;
-  }
-
-  /** Whether a district is currently expanded — the room needs this to label its own control. */
-  get isExpanded(): boolean {
-    return this.expanded !== null;
   }
 
   flyTo(position: [number, number, number]): void {
@@ -705,6 +794,25 @@ export class UniverseScene {
    *
    * `Box3.setFromObject` costs one traversal of ~260 meshes and is immune to both.
    */
+  /** Frame an arbitrary object set. Same measurement rule as `frameWorld`, so both levels frame alike. */
+  private frameObjects(target: THREE.Object3D, margin = 1.25): void {
+    const box = new THREE.Box3().setFromObject(target);
+    if (box.isEmpty()) return;
+    const centre = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const radius = Math.max(size.length() / 2, 1);
+    this.controls.target.copy(centre);
+    this.controls.maxDistance = Math.max(9000, radius * 10);
+    const fov = (this.camera.fov * Math.PI) / 180;
+    const distance = (radius / Math.sin(fov / 2)) * margin;
+    const direction = new THREE.Vector3(0.55, 0.62, 0.75).normalize();
+    this.camera.position.copy(centre).addScaledVector(direction, distance);
+    this.camera.near = Math.max(0.1, radius / 500);
+    this.camera.far = Math.max(90000, radius * 40);
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+  }
+
   private frameWorld(): void {
     const box = new THREE.Box3();
     for (const object of this.coreObjects) box.expandByObject(object);
