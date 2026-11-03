@@ -87,7 +87,12 @@ impl AstCoverageTracker {
             .ok_or_else(|| "manifest missing `handlers` object".to_string())?;
         let handlers: HashMap<String, String> = handlers_obj
             .iter()
-            .map(|(k, val)| (k.clone(), val.as_str().unwrap_or("Unimplemented").to_string()))
+            .map(|(k, val)| {
+                (
+                    k.clone(),
+                    val.as_str().unwrap_or("Unimplemented").to_string(),
+                )
+            })
             .collect();
         Ok(Self::from_manifest_handlers(language_id, &handlers, lang))
     }

@@ -216,9 +216,9 @@ function View(props) {
     }
 
     let tracker = rgctl_ast_coverage::AstCoverageTracker::global().expect("tracker installed");
-    let summary = tracker
-        .assert_all_exercised()
-        .expect("every active JavaScript AST kind in javascript-ast-coverage.json must be exercised");
+    let summary = tracker.assert_all_exercised().expect(
+        "every active JavaScript AST kind in javascript-ast-coverage.json must be exercised",
+    );
     eprintln!("{summary}");
     let hotspots = tracker.unhandled_hotspots(10);
     eprintln!("javascript unhandled hotspots: {hotspots:?}");

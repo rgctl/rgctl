@@ -54,9 +54,7 @@ class Derived : public Base {
     assert!(
         out.symbols.iter().any(|s| {
             s.name == "NA"
-                && s.metadata
-                    .get("kind")
-                    .and_then(|v| v.as_str())
+                && s.metadata.get("kind").and_then(|v| v.as_str())
                     == Some("namespace_alias_definition")
         }),
         "namespace alias NA missing: {:?}",

@@ -71,14 +71,14 @@ cargo test --release --test cold_profile_gates -- --ignored --nocapture --test-t
 | `ecommerce_java_kantra_cold_discover_within_baseline` | `rgctl-tests/ecommerce-java` | `--with-kantra --kantra-rules <fixture>` | env `RGCTL_ECOMMERCE_JAVA_KANTRA_*` (fixture catalog; fast CI path) |
 | `rust_cold_discover_within_baseline` | `example/rust` | `-l rust` | **25 s** (2026-10-21; ~23.5 s) |
 | `llvm_cpp_cold_discover_within_baseline` | `example/llvm-project/clang` | `-l cpp` | **12 s** (2026-10-21; ~9.7 s) |
-| `roslyn_csharp_cold_discover_within_baseline` | `example/roslyn/src` | `-l csharp` | **18 s** (2026-10-21; ~16.0 s) |
+| `roslyn_csharp_cold_discover_within_baseline` | `example/roslyn/src` | `-l csharp` | **22 s** (2026-11-03 post-98% AST; ~20.2 s process) |
 | `vscode_typescript_cold_discover_within_baseline` | `example/vscode/src` | `-l typescript` | **17 s** (2026-10-21; ~15.0 s) |
 | `node_javascript_cold_discover_within_baseline` | `example/node/test` | `-l javascript` | **4 s** (2026-10-21; ~3.2 s) |
 | `node_javascript_cold_discover_with_cfg_within_baseline` | `example/node/test` | `-l javascript --with-cfg` | **5 s** (2026-10-21; ~3.8 s) |
 | `home_assistant_python_cold_discover_within_baseline` | `example/home-assistant` | `-l python` | **15 s** (2026-10-21; ~13.4 s) |
-| `discourse_cold_discover_within_baseline` | `example/discourse` | `-l ruby` | env `RGCTL_DISCOURSE_RUBY_COLD_BASELINE_SECS` (default **6 s**; 2026-10-21 ~4.5 s) |
-| `kotlin_cold_discover_within_baseline` | `example/kotlin` | `-l kotlin` | **11 s** (2026-10-21; ~10.0 s) |
-| `groovy_cold_discover_within_baseline` | `example/groovy` | `-l groovy` | **5.5 s** (2026-10-21; ~4.8 s) |
+| `discourse_cold_discover_within_baseline` | `example/discourse` | `-l ruby` | env `RGCTL_DISCOURSE_RUBY_COLD_BASELINE_SECS` (default **8 s**; 2026-11-03 ~7.0 s process) |
+| `kotlin_cold_discover_within_baseline` | `example/kotlin` | `-l kotlin` | **15 s** (2026-11-03 post-98% AST; ~13.7 s) |
+| `groovy_cold_discover_within_baseline` | `example/groovy` | `-l groovy` | **8 s** (2026-11-03 post-98% AST; ~6.9 s) |
 | `pr_check_rgctl_graph_slice_within_baseline` | `crates/rgctl-graph` | delta `pr-check` (base cache only) | **1.0 s** |
 | `linux_cold_diff_within_baseline` | `example/linux/.rgctl-diff` | `diff` (prep script; not discover) | **30 s** provisional |
 
@@ -284,7 +284,7 @@ Fixture-scale checks: `rgctl-tests/ecommerce-ruby` (`tests/ruby_langfeatures.rs`
 
 | Metric | Value |
 |--------|-------|
-| **Gate baseline** | **10 s** (pass ≤ 11 s; override `RGCTL_KOTLIN_COLD_BASELINE_SECS`) |
+| **Gate baseline** | **15 s** (pass ≤ 16.5 s; override `RGCTL_KOTLIN_COLD_BASELINE_SECS`; 2026-11-03 post-98% AST) |
 | Corpus | [JetBrains/kotlin](https://github.com/JetBrains/kotlin) sparse `libraries`+`plugins`+`analysis` (`./scripts/fetch-profile-repos.sh` → `example/kotlin`) |
 | Discover | `discover . -v -l kotlin` from repo root |
 | Wall (reference, 2026-09-29) | **~8.9 s** |
@@ -298,7 +298,7 @@ Fixture-scale: `rgctl-tests/ecommerce-kotlin`, `tests/dashboard_ecommerce_kotlin
 
 | Metric | Value |
 |--------|-------|
-| **Gate baseline** | **5 s** (pass ≤ 5.5 s; override `RGCTL_GROOVY_COLD_BASELINE_SECS`) |
+| **Gate baseline** | **8 s** (pass ≤ 8.8 s; override `RGCTL_GROOVY_COLD_BASELINE_SECS`; 2026-11-03 post-98% AST) |
 | Corpus | [gradle/gradle](https://github.com/gradle/gradle) (`./scripts/fetch-profile-repos.sh` → `example/groovy`; Jenkins core is not dense enough in `.groovy`) |
 | Discover | `discover . -v -l groovy` from repo root |
 | Wall (reference, 2026-09-29) | **~4.3 s** |

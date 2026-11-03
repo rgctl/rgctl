@@ -1194,7 +1194,11 @@ fn include_path_text(node: Node, source: &[u8]) -> Option<String> {
                 c.is_named()
                     && matches!(
                         c.kind(),
-                        "string" | "encapsed_string" | "name" | "variable_name" | "binary_expression"
+                        "string"
+                            | "encapsed_string"
+                            | "name"
+                            | "variable_name"
+                            | "binary_expression"
                     )
             })
         })

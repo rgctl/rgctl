@@ -136,8 +136,7 @@ fn plugin_manifest_handlers_in_sync() {
     const MANIFEST: &str = include_str!("../markdown-ast-coverage.json");
     let lang: tree_sitter::Language = tree_sitter_md::LANGUAGE.into();
     let table = rgctl_lang_markdown::ast_handlers();
-    let issues =
-        rgctl_ast_coverage::check_plugin_manifest_sync("markdown", MANIFEST, table, &lang);
+    let issues = rgctl_ast_coverage::check_plugin_manifest_sync("markdown", MANIFEST, table, &lang);
     assert!(
         issues.is_empty(),
         "HANDLED_KINDS / markdown-ast-coverage.json drift: {issues:?}"

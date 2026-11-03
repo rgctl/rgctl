@@ -1206,8 +1206,13 @@ impl<'a> CfgBuilder<'a> {
             | "repeat_while_statement"
             | "repeat_statement" => self.visit_while(node, source),
             "do_statement" | "do_while_statement" => self.visit_do(node, source),
-            "for_statement" | "for_expression" | "for_expr" | "for_in_expression"
-            | "for_in_statement" | "foreach_statement" | "for_range_loop"
+            "for_statement"
+            | "for_expression"
+            | "for_expr"
+            | "for_in_expression"
+            | "for_in_statement"
+            | "foreach_statement"
+            | "for_range_loop"
             | "c_style_for_statement" => self.visit_for(node, source),
             "enhanced_for_statement" => self.visit_enhanced_for(node, source),
             "loop_expression" => self.visit_loop(node, source),
@@ -2450,10 +2455,7 @@ impl<'a> CfgBuilder<'a> {
                     if after_cond
                         && !matches!(
                             child.kind(),
-                            "else_clause"
-                                | "else_statement"
-                                | "elsif_statement"
-                                | "else_if_clause"
+                            "else_clause" | "else_statement" | "elsif_statement" | "else_if_clause"
                         )
                     {
                         return Some(child);
@@ -3896,9 +3898,7 @@ impl<'a> CfgBuilder<'a> {
                 for arm in child.children(&mut bc) {
                     if matches!(
                         arm.kind(),
-                        "match_arm"
-                            | "match_conditional_expression"
-                            | "match_default_expression"
+                        "match_arm" | "match_conditional_expression" | "match_default_expression"
                     ) {
                         arms.push(arm);
                     }

@@ -84,7 +84,12 @@ pub fn coverage_handler_entries(manifest_json: &str) -> Vec<(String, String)> {
         .as_object()
         .expect("handlers object")
         .iter()
-        .map(|(k, val)| (k.clone(), val.as_str().unwrap_or("Unimplemented").to_string()))
+        .map(|(k, val)| {
+            (
+                k.clone(),
+                val.as_str().unwrap_or("Unimplemented").to_string(),
+            )
+        })
         .collect()
 }
 

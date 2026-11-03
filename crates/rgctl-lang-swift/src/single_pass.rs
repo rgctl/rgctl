@@ -548,9 +548,7 @@ pub fn extract_all_single_pass(
                         let name = {
                             let mut c = node.walk();
                             node.children(&mut c)
-                                .find(|ch| {
-                                    matches!(ch.kind(), "simple_identifier" | "identifier")
-                                })
+                                .find(|ch| matches!(ch.kind(), "simple_identifier" | "identifier"))
                                 .and_then(|ch| ch.utf8_text(source).ok().map(str::to_string))
                                 .or_else(|| extract_name_from_node(node, source).ok().flatten())
                                 .unwrap_or_else(|| "func".to_string())

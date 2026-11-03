@@ -4,7 +4,7 @@ Per-language markdown guides here were removed. **Single source of truth** for w
 
 | Artifact | Role |
 |----------|------|
-| `crates/rgctl-lang-*/{id}-ast-coverage.json` | Tier 1 (`handler = "custom"`): named tree-sitter kinds → handlers (`Symbol`, `Relation`, `CfgStatement`, `AstSkeleton`, `Literal`, `Skip`) + grammar pin |
+| `crates/rgctl-lang-*/{id}-ast-coverage.json` | Tier 1 (`handler = "custom"`): named tree-sitter kinds → handlers (`Symbol`, `Relation`, `CfgStatement`, `AstSkeleton`, `Property`, `Literal`, `SkipWrapper`, `SkipTypeToken`, `Unimplemented`; raw `"Skip"` banned; ≥98% `A+`) + grammar pin |
 | `crates/rgctl-lang-*/queries/tags.scm` | Tier 2 (`handler = "queries"`): declarative S-expression queries (`@definition.*`, `@reference.call`, `@reference.class`, `@reference.implementation`, `@import.path`, `@name`, `@doc`) compiled by `QueryLanguagePlugin` |
 | [`languages.toml`](../../languages.toml) | Extensions, aliases, `function_kinds`, `class_kinds`, plugin / grammar crate metadata |
 

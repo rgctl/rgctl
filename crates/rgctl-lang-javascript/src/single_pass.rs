@@ -74,7 +74,10 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("rest_pattern", HandlerMask::AST_SKELETON),
     ("return_statement", HandlerMask::CFG_STMT),
     ("sequence_expression", HandlerMask::CFG_STMT),
-    ("shorthand_property_identifier_pattern", HandlerMask::AST_SKELETON),
+    (
+        "shorthand_property_identifier_pattern",
+        HandlerMask::AST_SKELETON,
+    ),
     ("statement_block", HandlerMask::CFG_STMT),
     ("subscript_expression", HandlerMask::RELATION),
     ("super", HandlerMask::RELATION),

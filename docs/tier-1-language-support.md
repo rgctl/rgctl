@@ -143,7 +143,7 @@ Required for high-quality `cpg mutations` / typed field writes. Reference: Java 
 - CFG/def-use lower `synchronized`, `assert`, switch rules with `when` guards, resources, and `update_expression` — not a full Java 21 verifier.
 - No full reflection / retention-policy analysis. Enterprise taint/framework catalogs cover common Jakarta EE / Spring Boot 3 / messaging entrypoints and JNDI/deser/SpEL/SQL sinks (rules, not a closed-world JDK).
 - Langfeature gates: `cargo test --test java_langfeatures` (fixture `tests/fixtures/java/langfeatures`).
-- AST coverage: ~82/142 non-Skip handlers in `java-ast-coverage.json` (Symbol/Relation/CfgStatement/AstSkeleton); literals remain `Literal`.
+- AST coverage: **100/102 = 98.0% Grade `A+`** in `java-ast-coverage.json` (`31` SkipWrapper, `9` SkipTypeToken, `2` Unimplemented; raw `"Skip"` banned). All Tier-1 languages ratchet to $\ge 98\%$ `A+`.
 
 **Rust extract honesty (rust-extraction-depth):**
 
@@ -240,7 +240,7 @@ pub fn register(registry: &mut LanguageRegistry) {
 }
 ```
 
-5. Add `{id}-ast-coverage.json` (every named grammar kind → `Symbol` / `Relation` / `CfgStatement` / `AstSkeleton` / `Literal` / intentional `Skip`) plus `src/ast_coverage.rs` with `*_ast_coverage_manifest_matches_grammar` (see `rgctl-lang-ruby` / `rgctl-lang-java`). Update the JSON when bumping the grammar pin. Register the language in `rgctl-ast-coverage::bundled_specs` so `cargo check -p rgctl-languages` warns on drift (`RGCTL_AST_COVERAGE_STRICT=1` fails the build).
+5. Add `{id}-ast-coverage.json` (every named grammar kind → `Symbol` / `Relation` / `CfgStatement` / `AstSkeleton` / `Property` / `Literal` / `SkipWrapper` / `SkipTypeToken` / `Unimplemented` with justification — **raw `"Skip"` is banned**) plus `src/ast_coverage.rs` with `*_ast_coverage_manifest_matches_grammar` (see `rgctl-lang-ruby` / `rgctl-lang-java`). Target semantic coverage $\ge 98\%$ (`CoverageGrade::APlus`). Update the JSON when bumping the grammar pin. Register the language in `rgctl-ast-coverage::bundled_specs` so `cargo check -p rgctl-languages` warns on drift (`RGCTL_AST_COVERAGE_STRICT=1` fails the build).
 
 6. Add to **workspace root** `Cargo.toml`:
    - `members` list
@@ -439,7 +439,9 @@ Copy into your PR description. For the **testing** half (paths, asserts, command
 
 ---
 
-## 8. Current parity snapshot (2026-07)
+## 8. Current parity snapshot (2026-11)
+
+**AST coverage ratchet (all 24 Tier-1 `*-ast-coverage.json` plugins):** semantic coverage $\ge 98\%$ Grade `A+`, **0** raw `"Skip"`. Live tables: [rgctl.io/docs/languages/](https://rgctl.io/docs/languages/) (generated from manifests). Audit: `python3 scripts/check-tier1-coverage.py`.
 
 | Language | Tier | Calls | CFG | Taint | Dashboard gate | Layer F (CPG mutations) |
 |----------|------|-------|-----|-------|----------------|-------------------------|
@@ -456,8 +458,10 @@ Copy into your PR description. For the **testing** half (paths, asserts, command
 | Puppet | 1 custom | ✅ IncludesClass/InheritsClass/RequiresResource/DependsOnModule/Calls | ✅ if/unless/case | ✅ lookup/exec patterns | pending `dashboard_ecommerce_puppet` | ✅ F1/F3; F2 N/A; **F6 waived** (honesty) |
 | Kotlin | 1 custom | ✅ Calls/Extends/Implements; `tree-sitter-kotlin-ng` | ✅ if/when/loops | ✅ JVM patterns | ✅ `dashboard_ecommerce_kotlin`, langfeatures, verify script | ✅ Layer F (`navigation_expression`) |
 | Groovy | 1 custom | ✅ best-effort Calls; dynamic honesty | ✅ if/loops (Java-shaped AST) | ✅ script sinks | ✅ `dashboard_ecommerce_groovy`, langfeatures, verify script | ✅ Layer F (`field_access`) |
+| Swift / Scala / Dart / Elixir / Lua / Bash | 1 custom | ✅ | ✅ | ✅ extended pack | depth + langfeature gates | ✅ Layer F visitors |
+| ERB / Markdown / HCL / SQL | 1 DSL | ✅ (schema/template oriented) | HCL/SQL ✅ | — | depth gates | DSL layer bar |
 
-Layer F golden coverage lives in `crates/rgctl-analysis/src/field_write.rs` (`*_cfg_captures_field_write_and_query`). Update this table when promoting a language or when F tests regress.
+Layer F golden coverage lives in `crates/rgctl-analysis/src/field_write.rs` (`*_cfg_captures_field_write_and_query`) and `field_write_locals.rs` (20 general-purpose Tier-1 visitors). Update this table when promoting a language or when F tests regress.
 
 ---
 

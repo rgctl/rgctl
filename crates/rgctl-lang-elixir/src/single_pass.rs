@@ -435,7 +435,8 @@ pub fn extract_all_single_pass(
                             ctx.scopes.note_branch(delta);
                         }
                     }
-                    "stab_clause" | "catch_block" | "rescue_block" | "after_block" | "else_block"
+                    "stab_clause" | "catch_block" | "rescue_block" | "after_block"
+                    | "else_block"
                         if ctx.scopes.current_function().is_some() =>
                     {
                         let delta = 1 + ctx

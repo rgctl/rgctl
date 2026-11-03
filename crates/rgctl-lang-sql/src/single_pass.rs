@@ -235,8 +235,8 @@ fn push_invocation_call(
     from_fn: &Symbol,
     relations: &mut Vec<Relation>,
 ) {
-    let name = object_name(node, source)
-        .or_else(|| extract_name_from_node(node, source).ok().flatten());
+    let name =
+        object_name(node, source).or_else(|| extract_name_from_node(node, source).ok().flatten());
     let Some(name) = name else {
         return;
     };

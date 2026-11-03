@@ -30,6 +30,7 @@ Replaced permissive `"Skip"`-based AST coverage checks with a **5-pillar compile
    - Added `record_skip_hit`, `skip_hit_count`, and `unhandled_hotspots(top_n)` to `AstCoverageTracker`.
    - Upgraded Java (`crates/rgctl-lang-java/java-ast-coverage.json`) to **100 active handled kinds (`100/102 = 98.0%`, Grade `A+`)** with `0` raw `Skip`s (`31 SkipWrapper`, `9 SkipTypeToken`, `2 Unimplemented`) and unconditional `tracker.assert_all_exercised()` in both `java_depth_extraction.rs` and `tests/java_langfeatures.rs` (all 83 plugin-dispatched Java AST kinds exercised).
    - Added [`scripts/check-tier1-coverage.py`](../../scripts/check-tier1-coverage.py) (`--json`, `--language <id>`, `--run-tests`) to audit all **69 languages** and classify them into honest sub-tiers (`1 Tier-1 Gold`, `13 Tier-1 Deep`, `6 Tier-1 Shallow`, `4 Tier-1 DSL`, `3 Mainframe Custom`, `42 Tier-2 tags.scm`).
+   - Raised all 24 Tier-1 languages to $\ge 98\%$ `A+` with **0** raw `Skip` (raw `Skip` banned from `ALLOWED_HANDLERS`; `APlus` floor locked at 98). Gate B cold baselines remeasured for denser extract graphs: discourse **8 s**, groovy **8 s**, kotlin **15 s**, roslyn **22 s**.
 
 ---
 

@@ -506,13 +506,8 @@ pub fn extract_all_single_pass(
                         }
                         pushed_scope = true;
                     }
-                    "val_definition"
-                    | "var_definition"
-                    | "val_declaration"
-                    | "var_declaration"
-                    | "class_parameter"
-                    | "full_enum_case"
-                    | "simple_enum_case" => {
+                    "val_definition" | "var_definition" | "val_declaration" | "var_declaration"
+                    | "class_parameter" | "full_enum_case" | "simple_enum_case" => {
                         push_named_symbol(
                             &mut ctx,
                             node,
@@ -542,12 +537,7 @@ pub fn extract_all_single_pass(
                             let full = node
                                 .utf8_text(source)
                                 .ok()
-                                .map(|s| {
-                                    s.trim()
-                                        .trim_start_matches(keyword)
-                                        .trim()
-                                        .to_string()
-                                })
+                                .map(|s| s.trim().trim_start_matches(keyword).trim().to_string())
                                 .unwrap_or(name);
                             ctx.symbols.push(Symbol {
                                 name: full.clone(),

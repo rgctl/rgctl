@@ -44,7 +44,12 @@ fn load_manifest_handlers(
         .as_object()
         .expect("handlers object")
         .iter()
-        .map(|(k, val)| (k.clone(), val.as_str().unwrap_or("Unimplemented").to_string()))
+        .map(|(k, val)| {
+            (
+                k.clone(),
+                val.as_str().unwrap_or("Unimplemented").to_string(),
+            )
+        })
         .collect();
     (json, handlers)
 }

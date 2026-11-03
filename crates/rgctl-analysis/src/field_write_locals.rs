@@ -1254,8 +1254,10 @@ fn visit_lua(
             .or_else(|| {
                 let mut c = node.walk();
                 node.children(&mut c).find_map(|ch| {
-                    if matches!(ch.kind(), "identifier" | "dot_index_expression" | "method_index_expression")
-                    {
+                    if matches!(
+                        ch.kind(),
+                        "identifier" | "dot_index_expression" | "method_index_expression"
+                    ) {
                         text_of(ch, source)
                     } else {
                         None
@@ -1585,7 +1587,10 @@ fn visit_swift(
     let mut now_in = in_target;
     if matches!(
         kind,
-        "function_declaration" | "init_declaration" | "deinit_declaration" | "subscript_declaration"
+        "function_declaration"
+            | "init_declaration"
+            | "deinit_declaration"
+            | "subscript_declaration"
     ) {
         let name = if kind == "init_declaration" {
             "init".to_string()
@@ -1617,7 +1622,11 @@ fn visit_swift(
             node.children(&mut c).find_map(|ch| {
                 if matches!(
                     ch.kind(),
-                    "user_type" | "type_identifier" | "optional_type" | "dictionary_type" | "array_type"
+                    "user_type"
+                        | "type_identifier"
+                        | "optional_type"
+                        | "dictionary_type"
+                        | "array_type"
                 ) {
                     text_of(ch, source)
                 } else {
@@ -1634,21 +1643,20 @@ fn visit_swift(
             .child_by_field_name("name")
             .and_then(|n| text_of(n, source))
             .or_else(|| {
-                node.child_by_field_name("pattern")
-                    .and_then(|p| {
-                        p.child_by_field_name("bound_identifier")
-                            .and_then(|n| text_of(n, source))
-                            .or_else(|| {
-                                let mut c = p.walk();
-                                p.children(&mut c).find_map(|ch| {
-                                    if ch.kind() == "simple_identifier" {
-                                        text_of(ch, source)
-                                    } else {
-                                        None
-                                    }
-                                })
+                node.child_by_field_name("pattern").and_then(|p| {
+                    p.child_by_field_name("bound_identifier")
+                        .and_then(|n| text_of(n, source))
+                        .or_else(|| {
+                            let mut c = p.walk();
+                            p.children(&mut c).find_map(|ch| {
+                                if ch.kind() == "simple_identifier" {
+                                    text_of(ch, source)
+                                } else {
+                                    None
+                                }
                             })
-                    })
+                        })
+                })
             });
         let ty = node
             .child_by_field_name("type")

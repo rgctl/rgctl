@@ -28,7 +28,10 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("cascade_member_expression", HandlerMask::RELATION),
     ("cascade_null_assertion_expression", HandlerMask::CFG_STMT),
     ("cascade_null_aware_index_expression", HandlerMask::RELATION),
-    ("cascade_null_aware_member_expression", HandlerMask::RELATION),
+    (
+        "cascade_null_aware_member_expression",
+        HandlerMask::RELATION,
+    ),
     ("cast_pattern", HandlerMask::AST_SKELETON),
     ("catch_clause", HandlerMask::CFG_STMT),
     ("class_declaration", HandlerMask::SYMBOL),
@@ -97,7 +100,10 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("pattern_variable_declaration", HandlerMask::AST_SKELETON),
     ("postfix_expression", HandlerMask::CFG_STMT),
     ("record_pattern", HandlerMask::AST_SKELETON),
-    ("redirecting_factory_constructor_signature", HandlerMask::SYMBOL),
+    (
+        "redirecting_factory_constructor_signature",
+        HandlerMask::SYMBOL,
+    ),
     ("relational_expression", HandlerMask::CFG_STMT),
     ("rest_pattern", HandlerMask::AST_SKELETON),
     ("rethrow_statement", HandlerMask::CFG_STMT),
@@ -402,7 +408,10 @@ pub fn extract_all_single_pass(
                                 symbol_type: SymbolType::TypeAlias,
                                 qualified_name: Some(qn),
                                 location: node_to_location(node, &file_path_str),
-                                signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+                                signature: node
+                                    .utf8_text(source)
+                                    .ok()
+                                    .map(|s| s.trim().to_string()),
                                 return_type: None,
                                 parameters: vec![],
                                 fields: vec![],
@@ -443,14 +452,21 @@ pub fn extract_all_single_pass(
                             });
                         }
                     }
-                    "function_declaration" | "method_declaration"
-                    | "local_function_declaration" | "getter_declaration" | "setter_declaration"
-                    | "external_function_declaration" | "external_getter_declaration"
-                    | "external_setter_declaration" | "operator_signature"
-                    | "constructor_signature" | "factory_constructor_signature"
+                    "function_declaration"
+                    | "method_declaration"
+                    | "local_function_declaration"
+                    | "getter_declaration"
+                    | "setter_declaration"
+                    | "external_function_declaration"
+                    | "external_getter_declaration"
+                    | "external_setter_declaration"
+                    | "operator_signature"
+                    | "constructor_signature"
+                    | "factory_constructor_signature"
                     | "constant_constructor_signature"
                     | "redirecting_factory_constructor_signature"
-                    | "static_final_declaration" | "external_variable_declaration" => {
+                    | "static_final_declaration"
+                    | "external_variable_declaration" => {
                         if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
                             let meta = match kind {
                                 "method_declaration" => "method",
@@ -523,8 +539,8 @@ pub fn extract_all_single_pass(
                             "function_expression",
                         );
                     }
-                    "import_or_export" | "library_import" | "library_export"
-                    | "part_directive" | "part_of_directive" => {
+                    "import_or_export" | "library_import" | "library_export" | "part_directive"
+                    | "part_of_directive" => {
                         // Prefer handling once at `import_or_export` to avoid duplicates.
                         if kind == "library_import" {
                             if let Some(parent) = node.parent() {
@@ -584,10 +600,18 @@ pub fn extract_all_single_pass(
 
                 if ctx.scopes.current_function().is_some() {
                     match kind {
-                        "if_statement" | "for_statement" | "while_statement" | "do_statement"
-                        | "switch_statement" | "try_statement" | "switch_expression"
-                        | "catch_clause" | "assert_statement" | "conditional_expression"
-                        | "if_null_expression" | "logical_and_expression"
+                        "if_statement"
+                        | "for_statement"
+                        | "while_statement"
+                        | "do_statement"
+                        | "switch_statement"
+                        | "try_statement"
+                        | "switch_expression"
+                        | "catch_clause"
+                        | "assert_statement"
+                        | "conditional_expression"
+                        | "if_null_expression"
+                        | "logical_and_expression"
                         | "logical_or_expression" => {
                             let delta = 1 + ctx
                                 .scopes

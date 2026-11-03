@@ -117,10 +117,9 @@ fn ast_coverage_all_declared_handlers_exercised() {
     );
     rgctl_ast_coverage::install_hit_callback(tracker);
 
-    let sources: &[(&str, &[u8])] = &[
-        (
-            "ast_coverage_corpus.rs",
-            br#"
+    let sources: &[(&str, &[u8])] = &[(
+        "ast_coverage_corpus.rs",
+        br#"
 #![allow(dead_code, unused)]
 #![crate_type = "lib"]
 
@@ -281,8 +280,7 @@ fn gen_block() {
     };
 }
 "#,
-        ),
-    ];
+    )];
 
     let plugin = RustPlugin::new().expect("plugin");
     for (path, src) in sources {

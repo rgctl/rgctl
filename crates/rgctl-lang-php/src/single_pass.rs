@@ -430,13 +430,11 @@ pub fn extract_all_single_pass(
                     .current_function()
                     .and_then(|f| f.symbol_idx)
                     .and_then(|idx| ctx.symbols.get(idx))
-                    .map(|s| {
-                        s.qualified_name
-                            .clone()
-                            .unwrap_or_else(|| s.name.clone())
-                    })
+                    .map(|s| s.qualified_name.clone().unwrap_or_else(|| s.name.clone()))
                     .or_else(|| {
-                        ctx.scopes.current_type().map(|t| t.qualified_prefix.clone())
+                        ctx.scopes
+                            .current_type()
+                            .map(|t| t.qualified_prefix.clone())
                     });
                 plugin.collect_depth_relation_at(
                     node,

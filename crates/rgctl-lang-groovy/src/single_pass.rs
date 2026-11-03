@@ -316,10 +316,9 @@ pub fn extract_all_single_pass(
                             );
                             if let Some(f) = ctx.scopes.current_function_mut() {
                                 f.complexity.cyclomatic = 1;
-                                f.complexity.loc = ((node.end_position().row
-                                    - node.start_position().row)
-                                    + 1)
-                                .max(1) as u32;
+                                f.complexity.loc =
+                                    ((node.end_position().row - node.start_position().row) + 1)
+                                        .max(1) as u32;
                             }
                             pushed_scope = true;
                         }
@@ -408,12 +407,9 @@ pub fn extract_all_single_pass(
                         }
                     }
                     "field_declaration" | "constant_declaration" => {
-                        if let Some(sym) = plugin.extract_field_symbol(
-                            node,
-                            source,
-                            &file,
-                            package.as_deref(),
-                        ) {
+                        if let Some(sym) =
+                            plugin.extract_field_symbol(node, source, &file, package.as_deref())
+                        {
                             ctx.symbols.push(sym);
                         }
                     }

@@ -122,11 +122,7 @@ impl GroovyPlugin {
         None
     }
 
-    fn enclosing_callable_qn(
-        node: Node,
-        source: &[u8],
-        package: Option<&str>,
-    ) -> Option<String> {
+    fn enclosing_callable_qn(node: Node, source: &[u8], package: Option<&str>) -> Option<String> {
         let mut current = node.parent();
         while let Some(n) = current {
             match n.kind() {
@@ -168,7 +164,12 @@ impl GroovyPlugin {
         let mut cursor = node.walk();
         let name = node
             .children(&mut cursor)
-            .find(|c| matches!(c.kind(), "identifier" | "scoped_identifier" | "type_identifier"))
+            .find(|c| {
+                matches!(
+                    c.kind(),
+                    "identifier" | "scoped_identifier" | "type_identifier"
+                )
+            })
             .and_then(|n| n.utf8_text(source).ok())
             .map(|s| s.trim().to_string())?;
         Some(Symbol {
@@ -226,9 +227,7 @@ impl GroovyPlugin {
     ) -> Option<Symbol> {
         let name = format!("$lambda${idx}");
         let owner = Self::enclosing_callable_qn(node, source, package)
-            .or_else(|| {
-                Self::enclosing_class(node, source).map(|c| Self::qualify(package, &c))
-            });
+            .or_else(|| Self::enclosing_class(node, source).map(|c| Self::qualify(package, &c)));
         let qn = owner.map(|o| format!("{o}.{name}"));
         Some(Symbol {
             name,
@@ -258,9 +257,7 @@ impl GroovyPlugin {
     ) -> Option<Symbol> {
         let name = format!("$closure${idx}");
         let owner = Self::enclosing_callable_qn(node, source, package)
-            .or_else(|| {
-                Self::enclosing_class(node, source).map(|c| Self::qualify(package, &c))
-            });
+            .or_else(|| Self::enclosing_class(node, source).map(|c| Self::qualify(package, &c)));
         let qn = owner.map(|o| format!("{o}.{name}"));
         Some(Symbol {
             name,

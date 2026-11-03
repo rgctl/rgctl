@@ -29,10 +29,7 @@ CREATE VIEW v AS SELECT * FROM users;
             .any(|s| s.name == "foo" && s.symbol_type == SymbolType::Function),
         "function foo missing"
     );
-    assert!(
-        out.symbols.iter().any(|s| s.name == "v"),
-        "view v missing"
-    );
+    assert!(out.symbols.iter().any(|s| s.name == "v"), "view v missing");
 }
 
 #[test]

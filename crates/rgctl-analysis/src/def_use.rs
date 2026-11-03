@@ -449,7 +449,8 @@ fn collect_def_use_node<'a>(
         "variable_assignment" => {
             if let Some(name) = node.child_by_field_name("name").or_else(|| {
                 let mut c = node.walk();
-                node.children(&mut c).find(|ch| ch.kind() == "variable_name")
+                node.children(&mut c)
+                    .find(|ch| ch.kind() == "variable_name")
             }) {
                 collect_pattern_defs(name, source, defined, depth + 1);
             }

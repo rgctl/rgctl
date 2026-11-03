@@ -30,7 +30,9 @@ typealias UserId = Int
         out.symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
     );
     assert!(
-        out.symbols.iter().any(|s| s.name == "red" || s.name == "green"),
+        out.symbols
+            .iter()
+            .any(|s| s.name == "red" || s.name == "green"),
         "enum entries missing: {:?}",
         out.symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
     );

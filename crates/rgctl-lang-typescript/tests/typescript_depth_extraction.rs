@@ -118,10 +118,9 @@ fn ast_coverage_all_declared_handlers_exercised() {
     rgctl_ast_coverage::install_hit_callback(tracker);
 
     // Comprehensive corpus covering every active (non-passive) TypeScript AST kind.
-    let sources: &[(&str, &[u8])] = &[
-        (
-            "ast_coverage_corpus.ts",
-            br#"
+    let sources: &[(&str, &[u8])] = &[(
+        "ast_coverage_corpus.ts",
+        br#"
 #! /usr/bin/env node
 import type { Kind } from "./kinds";
 import foo, { bar as baz, type T } from "./mod" with { type: "json" };
@@ -278,8 +277,7 @@ function helper(..._args: unknown[]) {
   return 0;
 }
 "#,
-        ),
-    ];
+    )];
 
     let plugin = TypeScriptPlugin::new().expect("plugin");
     for (path, src) in sources {
@@ -289,9 +287,9 @@ function helper(..._args: unknown[]) {
     }
 
     let tracker = rgctl_ast_coverage::AstCoverageTracker::global().expect("tracker installed");
-    let summary = tracker
-        .assert_all_exercised()
-        .expect("every active TypeScript AST kind in typescript-ast-coverage.json must be exercised");
+    let summary = tracker.assert_all_exercised().expect(
+        "every active TypeScript AST kind in typescript-ast-coverage.json must be exercised",
+    );
     eprintln!("{summary}");
     let hotspots = tracker.unhandled_hotspots(10);
     eprintln!("typescript unhandled hotspots: {hotspots:?}");

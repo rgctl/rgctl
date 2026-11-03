@@ -694,7 +694,12 @@ pub fn check_plugin_and_analysis_manifest_sync(
 
     let handlers: HashMap<String, String> = handlers_obj
         .iter()
-        .map(|(k, val)| (k.clone(), val.as_str().unwrap_or("Unimplemented").to_string()))
+        .map(|(k, val)| {
+            (
+                k.clone(),
+                val.as_str().unwrap_or("Unimplemented").to_string(),
+            )
+        })
         .collect();
 
     // Plugin → manifest: semantic handlers must not be passive in JSON.

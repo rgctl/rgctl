@@ -40,8 +40,9 @@ end
 fn ast_coverage_all_declared_handlers_exercised() {
     const MANIFEST: &str = include_str!("../lua-ast-coverage.json");
     let lang: tree_sitter::Language = tree_sitter_lua::LANGUAGE.into();
-    let tracker = rgctl_ast_coverage::AstCoverageTracker::from_manifest_json("lua", MANIFEST, &lang)
-        .expect("tracker from manifest");
+    let tracker =
+        rgctl_ast_coverage::AstCoverageTracker::from_manifest_json("lua", MANIFEST, &lang)
+            .expect("tracker from manifest");
     assert!(
         tracker.expected_len() > 0,
         "manifest should declare active handlers"

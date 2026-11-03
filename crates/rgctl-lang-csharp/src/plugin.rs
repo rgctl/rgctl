@@ -237,11 +237,10 @@ impl CSharpPlugin {
         let kind = node.kind();
         let name = match kind {
             "indexer_declaration" => "this[]".to_string(),
-            "destructor_declaration" => {
-                self.find_containing_type_name(node, source)
-                    .map(|t| format!("~{t}"))
-                    .unwrap_or_else(|| "~".to_string())
-            }
+            "destructor_declaration" => self
+                .find_containing_type_name(node, source)
+                .map(|t| format!("~{t}"))
+                .unwrap_or_else(|| "~".to_string()),
             "accessor_declaration" => node
                 .child_by_field_name("name")
                 .or_else(|| {
@@ -249,7 +248,10 @@ impl CSharpPlugin {
                         matches!(
                             c.kind(),
                             "get_body" | "set_body" | "init_body" | "identifier"
-                        ) || matches!(c.utf8_text(source).ok(), Some("get" | "set" | "init" | "add" | "remove"))
+                        ) || matches!(
+                            c.utf8_text(source).ok(),
+                            Some("get" | "set" | "init" | "add" | "remove")
+                        )
                     })
                 })
                 .and_then(|n| n.utf8_text(source).ok())
@@ -257,11 +259,11 @@ impl CSharpPlugin {
                 .filter(|s| !s.is_empty())
                 .or_else(|| {
                     // Accessor keyword is often an anonymous child token.
-                    node.children(&mut node.walk())
-                        .find_map(|c| {
-                            let t = c.utf8_text(source).ok()?.trim();
-                            matches!(t, "get" | "set" | "init" | "add" | "remove").then(|| t.to_string())
-                        })
+                    node.children(&mut node.walk()).find_map(|c| {
+                        let t = c.utf8_text(source).ok()?.trim();
+                        matches!(t, "get" | "set" | "init" | "add" | "remove")
+                            .then(|| t.to_string())
+                    })
                 })
                 .unwrap_or_else(|| "accessor".to_string()),
             "operator_declaration" | "conversion_operator_declaration" => node
@@ -280,11 +282,9 @@ impl CSharpPlugin {
                         "operator".to_string()
                     }
                 }),
-            "lambda_expression" | "anonymous_method_expression" => format!(
-                "<{}@{}>",
-                kind,
-                node.start_position().row + 1
-            ),
+            "lambda_expression" | "anonymous_method_expression" => {
+                format!("<{}@{}>", kind, node.start_position().row + 1)
+            }
             _ => type_name(node, source).unwrap_or_else(|| kind.to_string()),
         };
 

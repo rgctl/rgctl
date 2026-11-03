@@ -72,7 +72,10 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("new_expression", HandlerMask::RELATION),
     ("offsetof_expression", HandlerMask::AST_SKELETON),
     ("optional_parameter_declaration", HandlerMask::AST_SKELETON),
-    ("optional_type_parameter_declaration", HandlerMask::AST_SKELETON),
+    (
+        "optional_type_parameter_declaration",
+        HandlerMask::AST_SKELETON,
+    ),
     ("parameter_declaration", HandlerMask::AST_SKELETON),
     ("pointer_expression", HandlerMask::AST_SKELETON),
     ("preproc_call", HandlerMask::RELATION),
@@ -96,7 +99,10 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("template_declaration", HandlerMask::SYMBOL),
     ("template_function", HandlerMask::RELATION),
     ("template_method", HandlerMask::RELATION),
-    ("template_template_parameter_declaration", HandlerMask::AST_SKELETON),
+    (
+        "template_template_parameter_declaration",
+        HandlerMask::AST_SKELETON,
+    ),
     ("throw_statement", HandlerMask::CFG_STMT),
     ("try_statement", HandlerMask::CFG_STMT),
     ("type_definition", HandlerMask::SYMBOL),
@@ -106,7 +112,10 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("update_expression", HandlerMask::AST_SKELETON),
     ("using_declaration", HandlerMask::RELATION),
     ("variadic_parameter_declaration", HandlerMask::AST_SKELETON),
-    ("variadic_type_parameter_declaration", HandlerMask::AST_SKELETON),
+    (
+        "variadic_type_parameter_declaration",
+        HandlerMask::AST_SKELETON,
+    ),
     ("while_statement", HandlerMask::CFG_STMT),
 ];
 
@@ -605,11 +614,7 @@ pub fn extract_all_single_pass(
                     }
                     "delete_expression" => {
                         let from = containing_function_from_scope(&ctx.scopes, &ctx.symbols)
-                            .map(|f| {
-                                f.qualified_name
-                                    .clone()
-                                    .unwrap_or_else(|| f.name.clone())
-                            })
+                            .map(|f| f.qualified_name.clone().unwrap_or_else(|| f.name.clone()))
                             .unwrap_or_else(|| file_path_str.to_string());
                         if let Some(rel) =
                             depth::delete_expression_relation(node, source, &file_path_str, &from)
