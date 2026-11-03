@@ -122,6 +122,39 @@ export function ArchitectureRoom({
     setExpandState({ kind: "idle" });
   }, []);
 
+  /**
+   * What choosing a district from a list means.
+   *
+   * Both lists are the universe's own index, so choosing a row is a request for the *universe* level: an open
+   * district is closed first (otherwise the camera flies to a coordinate the open level no longer shows), and
+   * if the reader is on the aggregated layer the room switches to the layer those packages are drawn on —
+   * otherwise the row highlights and the box it names is not on the screen. The flight is queued rather than
+   * issued in that case, because the solids it aims at do not exist until the scene has rebuilt.
+   */
+  const pendingFocus = useRef<number | null>(null);
+
+  const pickDistrict = useCallback(
+    (pkg: PackageNode) => {
+      setSelected({
+        kind: "package",
+        id: pkg.id,
+        title: pkg.label,
+        lines: [
+          `${pkg.functions.toLocaleString()} functions · ${pkg.classes.toLocaleString()} classes · ${pkg.size.toLocaleString()} members`,
+          `community: ${pkg.communityLabel}`,
+        ],
+      });
+      if (expanded) collapse();
+      if (layer === "packages") {
+        sceneRef.current?.focusSolid(pkg.id);
+        return;
+      }
+      pendingFocus.current = pkg.id;
+      setLayer("packages");
+    },
+    [collapse, expanded, layer],
+  );
+
   const expand = useCallback(
     async (entry: HoverEntry | null) => {
       if (!entry || entry.id === undefined) return;
@@ -150,14 +183,11 @@ export function ArchitectureRoom({
       setExpanded(null);
 
       const members = await loadMemberIndices(metagraph, entry.id);
-      if (members.kind !== "ready") {
-        setExpandState({
-          kind: members.kind === "loading" ? "loading" : members.kind === "absent" ? "absent" : "failed",
-          title: entry.title,
-          reason: "reason" in members ? members.reason : "…",
-        });
+      if (members.kind === "absent" || members.kind === "failed") {
+        setExpandState({ kind: members.kind, title: entry.title, reason: members.reason });
         return;
       }
+      if (members.kind !== "ready") return;
 
       const startedAt = performance.now();
       const total = members.indices.length;
@@ -294,29 +324,31 @@ export function ArchitectureRoom({
         return;
       }
       try {
-        scene = new module.UniverseScene(host);
+        const created = new module.UniverseScene(host);
+        scene = created;
+        created.setDrift(driftRef.current);
+        created.onHoverChange(setHover);
+        created.onPickChange((entry) => {
+          setSelected(entry);
+          // One call, so selecting always means the same thing: mark it *and* go to it.
+          created.focusSolid(entry && entry.id !== undefined ? entry.id : null);
+        });
+        created.onMemberPickChange((member) => void openMemberRef.current(member));
+        created.onExplode((entry) => void expandRef.current(entry));
+        created.attachPointer(host);
+        const scales = scalesFor(view);
+        created.setEdges(
+          edgeListFor(view),
+          new Map(view.packages.map((p) => [p.id, p])),
+        );
+        created.update({ view, layer, edges, height: scales.height, footprint: scales.footprint });
+        sceneRef.current = created;
+        observer = new ResizeObserver(() => created.resize(host));
+        observer.observe(host);
       } catch (error) {
         setSceneFailed((error as Error).message);
         return;
       }
-      scene.setDrift(driftRef.current);
-      scene.onHoverChange(setHover);
-      scene.onPickChange((entry) => {
-        setSelected(entry);
-        scene.highlightSolid(entry?.kind === "package" ? (entry.id ?? null) : null);
-      });
-      scene.onMemberPickChange((member) => void openMemberRef.current(member));
-      scene.onExplode((entry) => void expandRef.current(entry));
-      scene.attachPointer(host);
-      const scales = scalesFor(view);
-      scene.setEdges(
-        edgeListFor(view),
-        new Map(view.packages.map((p) => [p.id, p])),
-      );
-      scene.update({ view, layer, edges, height: scales.height, footprint: scales.footprint });
-      sceneRef.current = scene;
-      observer = new ResizeObserver(() => scene?.resize(host));
-      observer.observe(host);
     })();
 
     return () => {
@@ -338,6 +370,12 @@ export function ArchitectureRoom({
       new Map(view.packages.map((p) => [p.id, p])),
     );
     scene.update({ view, layer, edges, height: scales.height, footprint: scales.footprint });
+    // Declared after the update above, so a queued district is aimed at *after* the rebuild it waited for.
+    const queued = pendingFocus.current;
+    if (queued !== null) {
+      pendingFocus.current = null;
+      scene.focusSolid(queued);
+    }
   }, [view, layer, edges]);
 
   if (state.kind === "loading") {
@@ -445,22 +483,7 @@ export function ArchitectureRoom({
                 </kbd>
               </button>
             </div>
-            <DistrictSearch
-              packages={view!.packages}
-              onPick={(pkg) => {
-                setSelected({
-                  kind: "package",
-                  id: pkg.id,
-                  title: pkg.label,
-                  lines: [
-                    `${pkg.functions.toLocaleString()} functions · ${pkg.classes.toLocaleString()} classes · ${pkg.size.toLocaleString()} members`,
-                    `community: ${pkg.communityLabel}`,
-                  ],
-                });
-                sceneRef.current?.focusSolid(pkg.id);
-                sceneRef.current?.highlightSolid(pkg.id);
-              }}
-            />
+            <DistrictSearch packages={view!.packages} onPick={pickDistrict} />
             {expandState.kind === "idle" && !expanded && (
               <span className="text-[10px] leading-none text-zinc-500">
                 {selected?.kind === "package"
@@ -534,19 +557,7 @@ export function ArchitectureRoom({
             view={view!}
             selectedId={selected?.id ?? null}
             expandedId={expanded?.id ?? null}
-            onPick={(pkg) => {
-              setSelected({
-                kind: "package",
-                id: pkg.id,
-                title: pkg.label,
-                lines: [
-                  `${pkg.functions.toLocaleString()} functions · ${pkg.classes.toLocaleString()} classes · ${pkg.size.toLocaleString()} members`,
-                  `community: ${pkg.communityLabel}`,
-                ],
-              });
-              sceneRef.current?.focusSolid(pkg.id);
-              sceneRef.current?.highlightSolid(pkg.id);
-            }}
+            onPick={pickDistrict}
           />
           <Layers view={view!} />
           <Namespaces view={view!} />

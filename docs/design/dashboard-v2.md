@@ -483,6 +483,24 @@ and **1,725 of the 6,524 edges touch a bucket**. `(other)` is the `MAX_METANODES
 the graph**, and `root` is a path-heuristic bucket with **21,738 members and 0 functions**. They are drawn in a
 band of their own, labelled as buckets, and the coupling is named rather than drawn.
 
+**4. A level owns its camera, its clip planes and its fog — and choosing a subject is a move.** Two rules the
+Architecture room learned the hard way, both worth stating before the next drill level is built.
+
+*The level borrows nothing from the level above it.* Opening a district hides the universe rather than dimming
+it, lays the members out at their own scale and solves the camera for them. The first cut of that solve drew a
+blank panel while reporting "1 500 members drawn": it measured a `Box3` of the whole level — including the
+coupling lines that deliberately run past the members — and left the universe's fog range in force. Framed from
+~12 000 units out with fog ending at 7 200, every surface renders at the background colour. Camera, clip planes
+and fog therefore come from one solve (`dashboard/src/v2/universe/framing.ts`), the radius is the *members'*
+extent, and collapse restores all four. `dashboard/src/v2/__tests__/framing.test.ts` pins the invariants, because
+this is the class of bug a passing suite cannot see: nothing throws, nothing logs, and the read-out is truthful.
+
+*Selecting is a move, not a highlight.* A row in a list names a place, so choosing it flies the camera there and
+outlines it while the rest of the map dims slightly. Clicking in the scene and choosing from a list take the same
+route (`focusSolid`), because they had drifted: the lists called a method that had never been written, and an
+optional-chained call to a missing method compiles, bundles and does nothing. `npm run typecheck:v2` is part of
+`scripts/test-dashboard.sh` for that reason — `vite build` and `vitest` both strip types without checking them.
+
 **How these ship.** Two stacked draft PRs, because the v2 app itself is **not upstream yet** (`dashboard/src/v2`
 does not exist on `upstream/main` — only change 0 ever went up):
 

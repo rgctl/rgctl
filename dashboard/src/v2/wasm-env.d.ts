@@ -1,4 +1,12 @@
-/** wasm-bindgen glue shipped under `dashboard/wasm/` — CFG archive + blast engine. */
+/**
+ * wasm-bindgen glue shipped under `dashboard/wasm/` — CFG archive + blast engine.
+ *
+ * `dashboard/wasm/` is generated (`wasm-pack`) and gitignored, so a fresh checkout has no `.d.ts` beside the
+ * glue and these declarations are what typechecks against. They must therefore match
+ * `crates/rgctl-wasm/src/lib.rs` — a method added there and not here is a type error that only appears once
+ * someone has run `wasm-pack`, which is exactly the silent gap that shipped an engine missing
+ * `blastRadiusByUuid`.
+ */
 declare module "../../wasm/rgctl_wasm.js" {
   export default function __wbg_init(
     module_or_path?: { module_or_path: unknown } | unknown,
