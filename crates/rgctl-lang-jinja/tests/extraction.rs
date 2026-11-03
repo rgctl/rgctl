@@ -12,6 +12,23 @@ fn extract(source: &str) -> rgctl_plugin_api::ExtractAllResult {
 }
 
 #[test]
+fn slices_preserve_operands_and_later_template_inputs() {
+    let result = extract(
+        "{{ (computer | default('WIN'))[0:limit:step] }} {{ password }} {{ items[-4:] }} {{ items[:stop] }}",
+    );
+    assert_eq!(result.symbols[0].metadata["parse_status"], "complete");
+    let inputs: Vec<_> = result
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.metadata["kind"] == "jinja_context_input")
+        .map(|symbol| symbol.name.as_str())
+        .collect();
+    for name in ["computer", "limit", "step", "password", "items", "stop"] {
+        assert!(inputs.contains(&name), "missing {name}: {inputs:?}");
+    }
+}
+
+#[test]
 fn macro_parameters_and_loop_bindings_are_not_context_inputs() {
     let result = extract(
         "{% macro field(name, value='') %}{{ name }} {{ value }}{% endmacro %}\n{% for server in servers %}{{ server.name }}{% endfor %}",

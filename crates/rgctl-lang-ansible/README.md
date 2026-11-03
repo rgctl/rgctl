@@ -11,7 +11,10 @@ preserve the original spelling. Unknown collection actions remain source facts.
 `ExecutesTask`, `IncludesRole`, `DependsOnRole`, `IncludesPlaybook` and `DependsOn`
 represent static execution/declaration/reuse dependencies. A builtin template task
 uses `RendersTemplate` to the canonical local **File**; the remote `dest` remains
-metadata. Imported Jinja macros use callable `Calls` edges. Dependency edges are
+metadata. Literal `lookup('template', ...)`, `query`, and `q` targets use the
+same edge and search-context rules; dynamic lookup targets remain unresolved.
+Literal `include_role`/`import_role` `tasks_from` selects a role task source via
+`DependsOn`, separately from the `IncludesRole` edge. Imported Jinja macros use callable `Calls` edges. Dependency edges are
 not included in call-only blast radius.
 
 Resolution uses exact source/role/loader identities. A basename in another role
@@ -35,6 +38,16 @@ As with Puppet inventory support, inventory YAML, `group_vars`, `host_vars`, and
 role defaults/vars stay on generic config extraction. No dynamic inventory,
 lookup execution, collection loading, vault decryption, effective precedence,
 CFG/PDG or taint execution is performed.
+
+Literal task includes can promote eligible YAML files immediately inside a
+standalone `tasks/` directory in the discovery walk. Unreferenced files keep
+their normal YAML/config routing. Explicit associations cover other standalone
+layouts. Discovery respects ignore/exclude rules and never follows a reference
+outside the repository. Dynamic include paths (including `playbook_dir`),
+external roles and collections, `ansible.cfg` role paths, subprocess-invoked
+playbooks, and unavailable caller search stacks are not evaluated. Graph edges
+represent source dependencies, not guaranteed execution, rendered output, or
+resolved variable values.
 
 ```toml
 [languages.ansible]

@@ -12,6 +12,45 @@ fn extract(path: &str, source: &str) -> rgctl_plugin_api::ExtractAllResult {
 }
 
 #[test]
+fn role_task_selection_and_template_lookups_keep_precise_references() {
+    let result = extract(
+        "roles/web/tasks/main.yml",
+        r#"
+- name: select tasks
+  include_role: {name: common, tasks_from: setup}
+- name: render lookup
+  debug: {msg: "{{ lookup('template', 'config.j2') }}"}
+- name: dynamic lookup
+  debug: {msg: "{{ query('ansible.builtin.template', selected) }}"}
+"#,
+    );
+    let selected = result
+        .source_references
+        .iter()
+        .find(|r| r.kind == SourceReferenceKind::TaskInclude && r.target == "setup")
+        .expect("tasks_from");
+    assert_eq!(
+        selected.properties.get("role_name").map(String::as_str),
+        Some("common")
+    );
+    let lookup = result
+        .source_references
+        .iter()
+        .find(|r| r.kind == SourceReferenceKind::TemplateRender && r.target == "config.j2")
+        .expect("template lookup");
+    assert!(!lookup.dynamic);
+    assert_eq!(lookup.location.start_line, 5);
+    assert!(
+        result
+            .source_references
+            .iter()
+            .any(|r| r.kind == SourceReferenceKind::TemplateRender
+                && r.dynamic
+                && r.target == "selected")
+    );
+}
+
+#[test]
 fn playbook_structure_and_nested_tasks_have_stable_distinct_keys() {
     let source = "- name: Deploy\n  hosts: web\n  roles: [web]\n  tasks:\n    - name: duplicate\n      block:\n        - name: duplicate\n          ansible.builtin.debug: {msg: hello}\n      rescue:\n        - ansible.builtin.debug: {msg: failed}\n      always:\n        - ansible.builtin.debug: {msg: done}\n    - name: duplicate\n      ansible.builtin.debug: {msg: end}\n";
     let result = extract("deploy.yml", source);

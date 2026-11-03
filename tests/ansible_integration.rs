@@ -6,6 +6,201 @@ use rgctl_graph::{
     SnapshotNodeStore, assert_graph_invariants,
     schema::{EdgeType, NodeType},
 };
+
+#[test]
+fn literal_task_files_role_entrypoints_and_template_lookups_survive_updates() {
+    use std::fs;
+    let repo = tempfile::TempDir::new().unwrap();
+    let root = repo.path();
+    for dir in ["tasks", "roles/web/tasks", "roles/web/templates", "other"] {
+        fs::create_dir_all(root.join(dir)).unwrap();
+    }
+    let deploy = "- hosts: all\n  tasks:\n    - name: Include standalone\n      include_tasks: tasks/shared.yml\n    - name: Select role tasks\n      include_role: {name: web, tasks_from: setup}\n";
+    fs::write(root.join("deploy.yml"), deploy).unwrap();
+    fs::write(root.join("second.yml"), "- hosts: all\n  tasks:\n    - name: Select same role\n      include_role: {name: web, tasks_from: setup}\n    - name: Lookup by relative path\n      debug: {msg: \"{{ lookup('template', 'roles/web/templates/config.j2') }}\"}\n").unwrap();
+    fs::write(root.join("other/third.yml"), "- hosts: all\n  tasks:\n    - name: Include same role task from another directory\n      include_tasks: ../roles/web/tasks/setup.yml\n").unwrap();
+    fs::write(
+        root.join("tasks/shared.yml"),
+        "- name: Included task\n  debug: {msg: ok}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("tasks/unrelated.yml"),
+        "- name: unrelated configuration\n  value: one\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("roles/web/tasks/main.yml"),
+        "- name: Default role task\n  debug: {msg: default}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("roles/web/tasks/setup.yml"),
+        "- name: Render role lookup\n  debug: {msg: \"{{ lookup('template', 'config.j2') }}\"}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("roles/web/templates/config.j2"),
+        "{{ (computer | default('WIN'))[0:15] }} {{ password }}",
+    )
+    .unwrap();
+    let snapshot = root.join(".rgctl/graph.snapshot.bin");
+    let digest = || {
+        SnapshotNodeStore::open(&snapshot)
+            .unwrap()
+            .content_digest()
+            .unwrap()
+            .to_owned()
+    };
+    cli(root, &["discover", ".", "-l", "ansible,jinja"]);
+    let cold_digest = digest();
+    cli(root, &["discover", ".", "-l", "ansible,jinja"]);
+    assert_eq!(digest(), cold_digest, "warm discovery changed the graph");
+    let inspect = || {
+        let store = SnapshotNodeStore::open(&root.join(".rgctl/graph.snapshot.bin")).unwrap();
+        let col = store.columnar().unwrap();
+        let nodes: Vec<_> = (0..col.node_count())
+            .map(|i| col.materialize_node_at(i).unwrap())
+            .collect();
+        let edges = col.edge_topology_typed().unwrap();
+        (nodes, edges)
+    };
+    let (nodes, edges) = inspect();
+    let edge_to = |from: &str, suffix: &str, ty| {
+        edges.iter().any(|(a, b, edge)| {
+            *edge == ty
+                && nodes.iter().any(|n| n.id == *a && n.name == from)
+                && nodes.iter().any(|n| {
+                    n.id == *b && n.file_path.as_deref().is_some_and(|p| p.ends_with(suffix))
+                })
+        })
+    };
+    assert!(edge_to(
+        "Include standalone",
+        "tasks/shared.yml",
+        EdgeType::DependsOn
+    ));
+    assert!(edge_to(
+        "Select role tasks",
+        "roles/web/tasks/setup.yml",
+        EdgeType::DependsOn
+    ));
+    assert!(!edge_to(
+        "Select role tasks",
+        "roles/web/tasks/main.yml",
+        EdgeType::DependsOn
+    ));
+    assert!(edge_to(
+        "Render role lookup",
+        "roles/web/templates/config.j2",
+        EdgeType::RendersTemplate
+    ));
+    assert!(edge_to(
+        "Lookup by relative path",
+        "roles/web/templates/config.j2",
+        EdgeType::RendersTemplate
+    ));
+    assert!(nodes.iter().any(|n| n.name == "Included task"));
+    assert!(nodes.iter().any(|n| n.name == "password"));
+    assert!(
+        !nodes
+            .iter()
+            .any(|n| n.name == "unrelated configuration" && n.node_type == NodeType::AnsibleTask)
+    );
+    cli(root, &["discover", ".", "-l", "ansible,jinja"]);
+    fs::write(root.join("deploy.yml"), "- hosts: all\n  tasks:\n    - name: Select role tasks\n      include_role: {name: web, tasks_from: setup}\n").unwrap();
+    cli(
+        root,
+        &["update", "--files", "deploy.yml", "-l", "ansible,jinja"],
+    );
+    assert!(!inspect().0.iter().any(|n| n.name == "Included task"));
+    fs::write(root.join("deploy.yml"), deploy).unwrap();
+    cli(
+        root,
+        &["update", "--files", "deploy.yml", "-l", "ansible,jinja"],
+    );
+    assert!(inspect().0.iter().any(|n| n.name == "Included task"));
+    let updated_digest = digest();
+    fs::remove_dir_all(root.join(".rgctl")).unwrap();
+    cli(root, &["discover", ".", "-l", "ansible,jinja"]);
+    assert_eq!(digest(), updated_digest, "updated and cold graphs differ");
+}
+
+#[test]
+fn imported_playbooks_with_the_same_loader_root_resolve_literal_lookups() {
+    use std::fs;
+    let repo = tempfile::TempDir::new().unwrap();
+    let root = repo.path();
+    fs::create_dir_all(root.join("templates")).unwrap();
+    fs::write(root.join("first.yml"), "- import_playbook: child.yml\n").unwrap();
+    fs::write(root.join("second.yml"), "- import_playbook: child.yml\n").unwrap();
+    fs::write(root.join("child.yml"), "- hosts: all\n  tasks:\n    - name: Render shared lookup\n      debug: {msg: \"{{ lookup('template', 'config.j2') }}\"}\n").unwrap();
+    fs::write(root.join("templates/config.j2"), "{{ input }}").unwrap();
+    cli(root, &["discover", ".", "-l", "ansible,jinja"]);
+    let renders = cli(
+        root,
+        &["relations", "--edge", "renderstemplate", "--limit", "100"],
+    );
+    assert_eq!(renders["edges"].as_array().unwrap().len(), 1, "{renders}");
+    fs::create_dir_all(root.join("other/templates")).unwrap();
+    fs::write(
+        root.join("other/wrapper.yml"),
+        "- import_playbook: ../child.yml\n",
+    )
+    .unwrap();
+    fs::write(root.join("other/templates/config.j2"), "{{ other_input }}").unwrap();
+    cli(root, &["discover", ".", "-l", "ansible,jinja"]);
+    let renders = cli(
+        root,
+        &["relations", "--edge", "renderstemplate", "--limit", "100"],
+    );
+    assert!(renders["edges"].as_array().unwrap().is_empty(), "{renders}");
+}
+
+#[test]
+fn referenced_task_appearance_and_deletion_reclassify_without_bypassing_excludes() {
+    use std::fs;
+    let repo = tempfile::TempDir::new().unwrap();
+    let root = repo.path();
+    fs::create_dir_all(root.join("tasks")).unwrap();
+    fs::write(root.join("deploy.yml"), "- hosts: all\n  tasks:\n    - name: Include later\n      include_tasks: tasks/later.yml\n    - name: Include excluded\n      include_tasks: tasks/excluded.yml\n").unwrap();
+    fs::write(
+        root.join("tasks/excluded.yml"),
+        "- name: Excluded task\n  debug: {msg: no}\n",
+    )
+    .unwrap();
+    let discover = || {
+        cli(
+            root,
+            &[
+                "discover",
+                ".",
+                "-l",
+                "ansible,jinja",
+                "-e",
+                "tasks/excluded.yml",
+            ],
+        )
+    };
+    let total = |name: &str| {
+        cli(root, &["find", name, "--exact", "--lang", "ansible"])["total"]
+            .as_u64()
+            .unwrap()
+    };
+    discover();
+    assert_eq!(total("Excluded task"), 0);
+    fs::write(
+        root.join("tasks/later.yml"),
+        "- name: Later task\n  debug: {msg: yes}\n",
+    )
+    .unwrap();
+    discover();
+    assert_eq!(total("Later task"), 1);
+    assert_eq!(total("Excluded task"), 0);
+    fs::remove_file(root.join("tasks/later.yml")).unwrap();
+    discover();
+    assert_eq!(total("Later task"), 0);
+}
 #[test]
 fn ansible_cli_persists_roles_templates_variables_and_runtime_evidence() {
     let repo = fixture("ecommerce-ansible");

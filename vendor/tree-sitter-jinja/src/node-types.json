@@ -702,6 +702,10 @@
           {
             "type": "expression",
             "named": true
+          },
+          {
+            "type": "slice",
+            "named": true
           }
         ]
       },
@@ -1744,6 +1748,21 @@
         },
         {
           "type": "ternary_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "slice",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "expression",
           "named": true
         }
       ]

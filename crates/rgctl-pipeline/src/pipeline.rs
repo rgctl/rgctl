@@ -146,7 +146,9 @@ impl ProcessingPipeline {
         let discoverer =
             FileDiscoverer::with_config(Arc::clone(&registry), self.config.discovery.clone());
         let inventory = discoverer.discover_inventory(source_root)?;
-        let files_discovered = inventory.files.len() + inventory.template_candidates.len();
+        let files_discovered = inventory.files.len()
+            + inventory.template_candidates.len()
+            + inventory.ansible_candidates.len();
 
         let progress = self.make_progress(files_discovered);
         let store = artifact_root.unwrap_or(source_root);
@@ -224,12 +226,22 @@ impl ProcessingPipeline {
         let mut template_dependencies = builder.take_template_dependencies(&registry);
         template_dependencies.update_classifications(
             stream_stats.excluded_classifications,
-            inventory.files.iter().cloned().chain(
-                inventory
-                    .template_candidates
-                    .iter()
-                    .map(|(path, _)| path.clone()),
-            ),
+            inventory
+                .files
+                .iter()
+                .cloned()
+                .chain(
+                    inventory
+                        .template_candidates
+                        .iter()
+                        .map(|(path, _)| path.clone()),
+                )
+                .chain(
+                    inventory
+                        .ansible_candidates
+                        .iter()
+                        .map(|(path, _)| path.clone()),
+                ),
         );
         let spill_start = Instant::now();
         let finished = builder.finish_spill()?;
@@ -341,7 +353,9 @@ impl ProcessingPipeline {
         let discoverer =
             FileDiscoverer::with_config(Arc::clone(&registry), self.config.discovery.clone());
         let inventory = discoverer.discover_inventory(root)?;
-        let files_discovered = inventory.files.len() + inventory.template_candidates.len();
+        let files_discovered = inventory.files.len()
+            + inventory.template_candidates.len()
+            + inventory.ansible_candidates.len();
 
         let progress = self.make_progress(files_discovered);
         let facts = if self.config.facts_cache {

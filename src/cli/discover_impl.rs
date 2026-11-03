@@ -250,6 +250,13 @@ pub(crate) fn run_full_analysis(
             .filter(|(path, ordinary)| *ordinary || known.contains(path.to_string_lossy().as_ref()))
             .map(|(path, _)| path.clone()),
     );
+    files.extend(
+        inventory
+            .ansible_candidates
+            .iter()
+            .filter(|(path, ordinary)| *ordinary || known.contains(path.to_string_lossy().as_ref()))
+            .map(|(path, _)| path.clone()),
+    );
     files.sort();
     files.dedup();
 

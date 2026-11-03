@@ -243,6 +243,24 @@ impl LanguageRegistry {
                     .is_some_and(|p| p.matches_path(&path.to_string_lossy())))
     }
 
+    /// Standalone task files are promoted only when a literal include selects
+    /// them. Inventory and protected routes retain their existing semantics.
+    pub fn is_standalone_task_pool_path(&self, path: &Path) -> bool {
+        self.is_ansible_candidate(path)
+            && !self.is_template_pool_path(path)
+            && path
+                .parent()
+                .is_some_and(|parent| parent.file_name().is_some_and(|name| name == "tasks"))
+            && crate::template_options::role_root(path).is_none()
+            && !path.components().any(|part| {
+                matches!(
+                    part.as_os_str().to_str(),
+                    Some("inventory" | "inventories" | "group_vars" | "host_vars")
+                )
+            })
+            && self.association(path).ok().flatten().is_none()
+    }
+
     /// Register a language plugin
     pub fn register_language_plugin(&mut self, plugin: Arc<dyn LanguagePlugin>) {
         let id = plugin.language_id().to_string();

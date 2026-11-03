@@ -39,6 +39,9 @@ pub struct Invocation {
     pub name: String,
     /// Source spellings of arguments, without evaluating them.
     pub arguments: Vec<String>,
+    /// Decoded literal arguments, or `None` when an argument is an expression.
+    #[serde(default)]
+    pub literal_arguments: Vec<Option<String>>,
     /// Literal lookup-plugin name when one is supplied.
     pub plugin: Option<String>,
     /// Whether a test was negated with "is not".
@@ -210,6 +213,10 @@ fn invoke<'tree>(
         arguments: arguments
             .iter()
             .map(|arg| text(parsed, *arg).to_owned())
+            .collect(),
+        literal_arguments: arguments
+            .iter()
+            .map(|arg| literal_string(parsed, *arg))
             .collect(),
         plugin,
         negated,

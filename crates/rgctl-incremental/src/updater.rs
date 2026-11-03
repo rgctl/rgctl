@@ -201,6 +201,15 @@ impl IncrementalUpdater {
                 })
                 .map(|(path, _)| path.clone()),
         );
+        files.extend(
+            inventory
+                .ansible_candidates
+                .iter()
+                .filter(|(path, ordinary)| {
+                    *ordinary || known.contains(path.to_string_lossy().as_ref())
+                })
+                .map(|(path, _)| path.clone()),
+        );
         if let Some(dependencies) = &dependencies {
             dependencies.filter_declined_candidates(&self.registry, &mut files);
         }
@@ -229,6 +238,9 @@ impl IncrementalUpdater {
             .files
             .retain(|path| plan.affected.contains(path.to_string_lossy().as_ref()));
         for (path, ordinary) in &mut inventory.template_candidates {
+            *ordinary &= plan.affected.contains(path.to_string_lossy().as_ref());
+        }
+        for (path, ordinary) in &mut inventory.ansible_candidates {
             *ordinary &= plan.affected.contains(path.to_string_lossy().as_ref());
         }
         Ok((plan, inventory))
@@ -453,11 +465,15 @@ impl IncrementalUpdater {
         if let Some(walk) = &self.inventory {
             template_dependencies.update_classifications(
                 stream_stats.excluded_classifications,
-                walk.files.iter().cloned().chain(
-                    walk.template_candidates
-                        .iter()
-                        .map(|(path, _)| path.clone()),
-                ),
+                walk.files
+                    .iter()
+                    .cloned()
+                    .chain(
+                        walk.template_candidates
+                            .iter()
+                            .map(|(path, _)| path.clone()),
+                    )
+                    .chain(walk.ansible_candidates.iter().map(|(path, _)| path.clone())),
             );
         }
         let finished = builder.finish_spill()?;
@@ -680,11 +696,15 @@ impl IncrementalUpdater {
         if let Some(walk) = &self.inventory {
             template_dependencies.update_classifications(
                 stream_stats.excluded_classifications,
-                walk.files.iter().cloned().chain(
-                    walk.template_candidates
-                        .iter()
-                        .map(|(path, _)| path.clone()),
-                ),
+                walk.files
+                    .iter()
+                    .cloned()
+                    .chain(
+                        walk.template_candidates
+                            .iter()
+                            .map(|(path, _)| path.clone()),
+                    )
+                    .chain(walk.ansible_candidates.iter().map(|(path, _)| path.clone())),
             );
         }
         let finished = builder.finish_spill()?;
@@ -828,11 +848,15 @@ impl IncrementalUpdater {
         if let Some(walk) = &self.inventory {
             template_dependencies.update_classifications(
                 stream_stats.excluded_classifications,
-                walk.files.iter().cloned().chain(
-                    walk.template_candidates
-                        .iter()
-                        .map(|(path, _)| path.clone()),
-                ),
+                walk.files
+                    .iter()
+                    .cloned()
+                    .chain(
+                        walk.template_candidates
+                            .iter()
+                            .map(|(path, _)| path.clone()),
+                    )
+                    .chain(walk.ansible_candidates.iter().map(|(path, _)| path.clone())),
             );
         }
         let (new_nodes, new_edges) = builder.into_graph();

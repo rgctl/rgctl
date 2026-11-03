@@ -247,8 +247,11 @@ pub fn stream_inventory_into_graph(
     )?;
     let mut remaining: std::collections::BTreeMap<_, _> =
         inventory.template_candidates.iter().cloned().collect();
+    let mut remaining_tasks: std::collections::BTreeMap<_, _> =
+        inventory.ansible_candidates.iter().cloned().collect();
     loop {
         let wanted = builder.template_candidate_paths()?;
+        let wanted_tasks = builder.ansible_candidate_paths()?;
         let selected: Vec<_> = remaining
             .keys()
             .filter(|path| {
@@ -258,29 +261,60 @@ pub fn stream_inventory_into_graph(
             })
             .cloned()
             .collect();
-        if selected.is_empty() {
+        let selected_tasks: Vec<_> = remaining_tasks
+            .keys()
+            .filter(|path| {
+                wanted_tasks.contains(
+                    &rgctl_graph::normalize_path_str(&path.to_string_lossy()).into_owned(),
+                )
+            })
+            .cloned()
+            .collect();
+        if selected.is_empty() && selected_tasks.is_empty() {
             break;
         }
         for path in &selected {
             remaining.remove(path);
         }
-        let wave = extractor
-            .clone()
-            .with_template_targets(selected.iter().cloned().collect());
-        let (next, extra) = stream_into_graph(
-            thread_count,
-            &wave,
-            Arc::clone(&registry),
-            &selected,
-            capacity,
-            builder,
-            || {},
-        )?;
-        merge_stream_stats(&mut stats, next);
-        tails.extend(extra);
+        if !selected.is_empty() {
+            let wave = extractor
+                .clone()
+                .with_template_targets(selected.iter().cloned().collect());
+            let (next, extra) = stream_into_graph(
+                thread_count,
+                &wave,
+                Arc::clone(&registry),
+                &selected,
+                capacity,
+                builder,
+                || {},
+            )?;
+            merge_stream_stats(&mut stats, next);
+            tails.extend(extra);
+        }
+        for path in &selected_tasks {
+            remaining_tasks.remove(path);
+        }
+        if !selected_tasks.is_empty() {
+            let wave = extractor
+                .clone()
+                .with_ansible_targets(selected_tasks.iter().cloned().collect());
+            let (next, extra) = stream_into_graph(
+                thread_count,
+                &wave,
+                Arc::clone(&registry),
+                &selected_tasks,
+                capacity,
+                builder,
+                || {},
+            )?;
+            merge_stream_stats(&mut stats, next);
+            tails.extend(extra);
+        }
     }
     let ordinary: Vec<_> = remaining
         .into_iter()
+        .chain(remaining_tasks)
         .filter_map(|(path, selected)| selected.then_some(path))
         .collect();
     if !ordinary.is_empty() {

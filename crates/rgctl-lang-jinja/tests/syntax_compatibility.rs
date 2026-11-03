@@ -23,6 +23,7 @@ fn ansible_syntax_compatibility_matrix() {
         "{% block content scoped required %}{{ value }}{% endblock content %}",
         "{% call(user, index) render(users) %}{{ user }}{% endcall %}",
         "{{ hostvars[target]['ansible_host'] | default('127.0.0.1') }}",
+        "{{ (computer | default('WIN'))[0:limit:step] }} {{ items[-4:] }} {{ items[:stop] }}",
         "{{ (a + b) * -factor if enabled else +fallback }}",
         "{%- for item in items -%}{{- item -}}{%- endfor -%}",
         "{% raw %}{{ untouched }}{% endraw %}",

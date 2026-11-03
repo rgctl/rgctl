@@ -6,10 +6,11 @@ exports.rules = {
       choice(
         $.binary_expression,
         prec.left(20, seq(field('object', $.expression), '.', field('attribute', $.identifier))),
-        prec.left(20, seq(field('object', $.expression), '[', field('index', $.expression), ']')),
+        prec.left(20, seq(field('object', $.expression), '[', field('index', choice($.expression, $.slice)), ']')),
         prec.left(20, seq(field('function', $.expression), '(', commaSep($.arg), ')')),
       ),
     ),
+  slice: $ => seq(optional($.expression), ':', optional($.expression), optional(seq(':', optional($.expression)))),
   binary_expression: $ =>
     choice(
       $.unary_expression,

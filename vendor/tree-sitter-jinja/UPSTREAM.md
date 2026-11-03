@@ -13,7 +13,7 @@ The Jinja grammar's require paths are relocated to these local copies.
 The Rust dependency is constrained to rgctl's tree-sitter 0.25 series.
 Local changes: optional scoped blocks and named endblock, multiple call-block
 parameters, recursive binary operands, fielded postfix access/calls, qualified
-filters/tests, comma-separated from-import bindings, Jinja boolean/null aliases,
+filters/tests, slice expressions, comma-separated from-import bindings, Jinja boolean/null aliases,
 signed unary expressions, hash lines treated as literal text by
 default, and scanner state-length validation. Explicit line syntax is normalized
 by rgctl's syntax adapter before grammar parsing.

@@ -485,6 +485,36 @@ impl<'a, 'source> Extract<'a, 'source> {
                     }
                     for invocation in &mut facts.invocations {
                         invocation.range = scalar.range(invocation.range.clone());
+                        if matches!(
+                            invocation.plugin.as_deref(),
+                            Some("template" | "ansible.builtin.template")
+                        ) && let Some(argument) = invocation.arguments.get(1)
+                        {
+                            let literal =
+                                invocation.literal_arguments.get(1).and_then(Option::as_ref);
+                            let target = literal.cloned().unwrap_or_else(|| argument.clone());
+                            self.result.source_references.push(SourceReference {
+                                kind: SourceReferenceKind::TemplateRender,
+                                source: owner.to_owned(),
+                                target: target.clone(),
+                                candidates: literal.map(|_| vec![target]).unwrap_or_default(),
+                                dynamic: literal.is_none(),
+                                location: self
+                                    .yaml
+                                    .location(invocation.range.clone(), self.file.clone()),
+                                context: SourceReferenceContext {
+                                    role_root: self.role.clone(),
+                                    playbook: self.playbook.clone(),
+                                    template_roots: Vec::new(),
+                                },
+                                binding: None,
+                                member: None,
+                                properties: BTreeMap::from([(
+                                    "source_form".into(),
+                                    "template_lookup".into(),
+                                )]),
+                            });
+                        }
                     }
                 }
                 self.expressions
@@ -775,6 +805,26 @@ impl<'a, 'source> Extract<'a, 'source> {
                 "include_role" | "import_role" => {
                     if let Some(name) = get(&parameters, "name") {
                         self.add_reference(&qn, SourceReferenceKind::AnsibleRole, name);
+                        if let (Some(tasks_from), Ok(role)) =
+                            (get(&parameters, "tasks_from"), self.yaml.scalar(name))
+                            && let Ok(target) = self.yaml.scalar(tasks_from)
+                        {
+                            let mut reference = self.reference(
+                                &qn,
+                                SourceReferenceKind::TaskInclude,
+                                &target,
+                                tasks_from,
+                            );
+                            reference.dynamic |=
+                                role.value.contains("{{") || role.value.contains("{%");
+                            reference.properties.insert("role_name".into(), role.value);
+                            reference
+                                .properties
+                                .insert("source_form".into(), "role_tasks_from".into());
+                            self.result.symbols[task_index].metadata["tasks_from"] =
+                                json!(target.value);
+                            self.result.source_references.push(reference);
+                        }
                     }
                 }
                 "include_tasks" | "import_tasks" | "include" | "import_playbook" => {

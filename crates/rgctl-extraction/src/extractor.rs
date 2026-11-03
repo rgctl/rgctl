@@ -22,6 +22,7 @@ pub struct Extractor {
     facts: Option<Arc<FactsCache>>,
     languages: Option<Vec<String>>,
     template_targets: Arc<std::collections::HashSet<PathBuf>>,
+    ansible_targets: Arc<std::collections::HashSet<PathBuf>>,
 }
 
 /// Precomputed pass-1 work for one symbol (filled on extract workers).
@@ -93,12 +94,18 @@ impl Extractor {
             facts: None,
             languages: None,
             template_targets: Arc::default(),
+            ansible_targets: Arc::default(),
         }
     }
 
     /// Selected eligible targets from the same discovery walk.
     pub fn with_template_targets(mut self, targets: std::collections::HashSet<PathBuf>) -> Self {
         self.template_targets = Arc::new(targets);
+        self
+    }
+    /// Files selected by a literal task include within the eligible walk.
+    pub fn with_ansible_targets(mut self, targets: std::collections::HashSet<PathBuf>) -> Self {
+        self.ansible_targets = Arc::new(targets);
         self
     }
     /// Apply filters only after source classification on the worker.
@@ -161,7 +168,9 @@ impl Extractor {
         // Single BLAKE3: hex for FileTracker, raw bytes for FactsKey.
         let digest = blake3::hash(&source);
         let file_hash = Some(digest.to_hex().to_string());
-        let plugin = if self.template_targets.contains(path) {
+        let plugin = if self.ansible_targets.contains(path) {
+            self.registry.get_language_plugin("ansible")
+        } else if self.template_targets.contains(path) {
             self.registry.get_language_plugin("jinja")
         } else {
             self.registry
@@ -183,6 +192,9 @@ impl Extractor {
                 // language-version memo. Identical role mains must not relocate facts.
                 let mut salt = blake3::Hasher::new();
                 salt.update(&key.manifest_hash);
+                if self.ansible_targets.contains(path) {
+                    salt.update(b"literal-task-target-v1");
+                }
                 salt.update(rgctl_graph::normalize_path_str(&path.to_string_lossy()).as_bytes());
                 if let Some(options) = self.registry.template_options() {
                     salt.update(
@@ -229,7 +241,10 @@ impl Extractor {
                         .cloned()
                         .unwrap_or_default();
                     Some(plugin.extract_with_syntax(path, &source, &syntax)?)
-                } else if id == "ansible" && self.registry.association(path)? != Some("ansible") {
+                } else if id == "ansible"
+                    && self.registry.association(path)? != Some("ansible")
+                    && !self.ansible_targets.contains(path)
+                {
                     plugin.extract_candidate(path, &source)?
                 } else {
                     Some(plugin.extract_all(path, &source)?)

@@ -55,6 +55,8 @@ pub struct DiscoveryInventory {
     pub files: Vec<PathBuf>,
     /// Eligible targets. The bool preserves whether the ordinary route was selected.
     pub template_candidates: Vec<(PathBuf, bool)>,
+    /// Standalone task-directory YAML, promoted only by a literal include.
+    pub ansible_candidates: Vec<(PathBuf, bool)>,
 }
 
 /// Discovers source and config files in a repository.
@@ -105,6 +107,12 @@ impl FileDiscoverer {
                 .into_iter()
                 .filter_map(|(path, ordinary)| ordinary.then_some(path)),
         );
+        files.extend(
+            inventory
+                .ansible_candidates
+                .into_iter()
+                .filter_map(|(path, ordinary)| ordinary.then_some(path)),
+        );
         files.sort();
         Ok(files)
     }
@@ -139,6 +147,7 @@ impl FileDiscoverer {
 
         let mut files = Vec::new();
         let mut candidates = Vec::new();
+        let mut ansible_candidates = Vec::new();
 
         for entry in walker.flatten() {
             let path = entry.path();
@@ -166,13 +175,21 @@ impl FileDiscoverer {
                     .registry
                     .get_plugin_for_file_path_only_for_discovery(path)
                     .is_some_and(|id| id == "jinja");
-            if !selected && !candidate {
+            let task_candidate = self.registry.is_standalone_task_pool_path(path)
+                && self
+                    .config
+                    .languages
+                    .as_ref()
+                    .is_none_or(|ids| ids.iter().any(|id| id == "ansible"));
+            if !selected && !candidate && !task_candidate {
                 continue;
             }
             if self.is_too_large(path)? || self.is_binary(path)? {
                 continue;
             }
-            if candidate {
+            if task_candidate {
+                ansible_candidates.push((path.to_path_buf(), selected));
+            } else if candidate {
                 candidates.push((path.to_path_buf(), selected));
             } else {
                 files.push(path.to_path_buf());
@@ -181,9 +198,11 @@ impl FileDiscoverer {
 
         files.sort();
         candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        ansible_candidates.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(DiscoveryInventory {
             files,
             template_candidates: candidates,
+            ansible_candidates,
         })
     }
 

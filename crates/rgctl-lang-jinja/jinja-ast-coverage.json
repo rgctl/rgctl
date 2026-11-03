@@ -1,5 +1,5 @@
 {
-  "grammar": "tree-sitter-jinja@0.13.0+rgctl.1",
+  "grammar": "tree-sitter-jinja@0.13.0+rgctl.2",
   "handlers": {
     "arg": "Unimplemented",
     "assignment_expression": "Unimplemented",
@@ -75,6 +75,7 @@
     "set_block": "Symbol",
     "set_block_statement": "Unimplemented",
     "set_statement": "Symbol",
+    "slice": "Unimplemented",
     "source": "Symbol",
     "statement": "Unimplemented",
     "string_literal": "Unimplemented",

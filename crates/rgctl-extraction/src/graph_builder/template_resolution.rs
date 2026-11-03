@@ -377,6 +377,23 @@ impl GraphBuilder {
         Ok(paths)
     }
 
+    /// Literal included task paths that can be promoted from the eligible walk.
+    pub fn ansible_candidate_paths(&mut self) -> Result<BTreeSet<String>> {
+        let mut staged = std::mem::take(&mut self.pending_templates);
+        let contexts = self.template_contexts(&mut staged)?;
+        let mut paths = BTreeSet::new();
+        staged.visit(|node| {
+            for reference in refs(&node)? {
+                if reference.kind == Kind::TaskInclude && !reference.dynamic {
+                    paths.extend(self.reference_paths(&reference, &contexts).0);
+                }
+            }
+            Ok(())
+        })?;
+        self.pending_templates = staged;
+        Ok(paths)
+    }
+
     fn ansible_path(&self, root: &Path, target: &str) -> Option<String> {
         if rgctl_registry::template_options::safe_source_relative(target) {
             return safe_join(root, target);
@@ -405,11 +422,68 @@ impl GraphBuilder {
         candidate.starts_with(fence).then(|| key(&candidate))
     }
 
+    fn role_candidates(&self, reference: &SourceReference, name: &str) -> Vec<String> {
+        let file = Path::new(&reference.location.file);
+        let base = reference
+            .context
+            .role_root
+            .as_ref()
+            .and_then(|root| Path::new(root).parent())
+            .map(Path::to_path_buf)
+            .or_else(|| file.parent().map(|parent| parent.join("roles")));
+        let mut candidates = Vec::new();
+        if let Some(base) = base
+            && let Some(path) = safe_join(&base, name)
+        {
+            candidates.push(path);
+        }
+        if name.matches('.').count() == 2 {
+            let parts: Vec<_> = name.split('.').collect();
+            let suffix = format!(
+                "ansible_collections/{}/{}/roles/{}",
+                parts[0], parts[1], parts[2]
+            );
+            for root in self.templates.roles.keys() {
+                if root == &suffix || root.ends_with(&format!("/{suffix}")) {
+                    candidates.push(root.clone());
+                }
+            }
+        }
+        candidates
+    }
+
     fn reference_paths(
         &self,
         reference: &SourceReference,
         contexts: &BTreeMap<String, BTreeSet<String>>,
     ) -> (Vec<String>, bool) {
+        if reference.kind == Kind::TaskInclude
+            && let Some(role_name) = reference.properties.get("role_name")
+        {
+            let roles = self.role_candidates(reference, role_name);
+            let known = roles
+                .iter()
+                .filter(|root| self.templates.roles.contains_key(*root))
+                .count();
+            let mut paths = Vec::new();
+            let names = if Path::new(&reference.target).extension().is_none() {
+                vec![
+                    format!("{}.yml", reference.target),
+                    format!("{}.yaml", reference.target),
+                    reference.target.clone(),
+                ]
+            } else {
+                vec![reference.target.clone()]
+            };
+            for role in roles {
+                for name in &names {
+                    if let Some(path) = safe_join(&Path::new(&role).join("tasks"), name) {
+                        paths.push(path);
+                    }
+                }
+            }
+            return (paths, known > 1);
+        }
         let file = Path::new(&reference.location.file);
         let parent = file.parent().unwrap_or(Path::new(""));
         let mut roots = Vec::new();
@@ -426,6 +500,11 @@ impl GraphBuilder {
                     roots.push(Path::new(role).join("templates"));
                 }
                 roots.push(parent.join("templates"));
+                // A directly indexed playbook may also name a repository-local
+                // path relative to its own directory, after templates/.
+                if reference.context.playbook.as_deref() == Some(reference.location.file.as_str()) {
+                    roots.push(parent.to_path_buf());
+                }
                 let mut callers = contexts.get(&key(file)).cloned().unwrap_or_default();
                 if let Some(playbook) = &reference.context.playbook {
                     callers.insert(playbook.clone());
@@ -436,7 +515,11 @@ impl GraphBuilder {
                 {
                     unknown = true;
                 }
-                if callers.len() > 1 {
+                let caller_roots: BTreeSet<_> = callers
+                    .iter()
+                    .filter_map(|caller| Path::new(caller).parent().map(Path::to_path_buf))
+                    .collect();
+                if caller_roots.len() > 1 {
                     unknown = true;
                 }
                 for caller in callers {
@@ -531,34 +614,8 @@ impl GraphBuilder {
             );
         }
         if matches!(reference.kind, Kind::AnsibleRole | Kind::RoleDependency) {
-            let file = Path::new(&reference.location.file);
-            let base = reference
-                .context
-                .role_root
-                .as_ref()
-                .and_then(|root| Path::new(root).parent())
-                .map(Path::to_path_buf)
-                .or_else(|| file.parent().map(|parent| parent.join("roles")));
-            let target = reference.target.replace('.', "/");
-            let mut candidates = Vec::new();
-            if let Some(base) = base
-                && let Some(path) = safe_join(&base, &reference.target)
-            {
-                candidates.push(path);
-            }
-            if reference.target.matches('.').count() == 2 {
-                // Only exact collection-role layouts, never global bare-name suffixes.
-                let parts: Vec<_> = target.split('/').collect();
-                for root in self.templates.roles.keys() {
-                    let suffix = format!(
-                        "ansible_collections/{}/{}/roles/{}",
-                        parts[0], parts[1], parts[2]
-                    );
-                    if root == &suffix || root.ends_with(&format!("/{suffix}")) {
-                        candidates.push(root.clone());
-                    }
-                }
-            }
+            // Only exact collection-role layouts, never global bare-name suffixes.
+            let candidates = self.role_candidates(reference, &reference.target);
             let mut targets: Vec<_> = candidates
                 .iter()
                 .filter_map(|candidate| self.templates.roles.get(candidate).copied())
@@ -576,11 +633,27 @@ impl GraphBuilder {
                 .properties
                 .get("local_template")
                 .is_some_and(|value| value == "true");
-        let (paths, unknown) = if local_macro {
+        let (paths, mut unknown) = if local_macro {
             (vec![key(Path::new(&reference.location.file))], false)
         } else {
             self.reference_paths(reference, contexts)
         };
+        // A role's own template root precedes caller-role and playbook roots.
+        // Multiple callers cannot change an already indexed role-local target.
+        if unknown
+            && reference.kind == Kind::TemplateRender
+            && let Some(role) = &reference.context.role_root
+            && let Some(own_path) =
+                self.ansible_path(&Path::new(role).join("templates"), &reference.target)
+            && own_path.starts_with(&format!("{}/", key(&Path::new(role).join("templates"))))
+            && self
+                .templates
+                .files
+                .get(&own_path)
+                .is_some_and(|(_, language)| language == "jinja")
+        {
+            unknown = false;
+        }
         if unknown {
             return (vec![], Some("unknown_or_ambiguous_search_context"), paths);
         }
@@ -870,6 +943,28 @@ impl TemplateDependencies {
             let before = affected.len();
             let seeds: Vec<_> = affected.iter().cloned().collect();
             for seed in seeds {
+                // A removed/retargeted include can demote a previously promoted
+                // standalone task file back to its generic YAML route.
+                for (file, references) in self.index.references.values() {
+                    if file != &seed {
+                        continue;
+                    }
+                    for reference in references {
+                        if reference.kind != Kind::TaskInclude {
+                            continue;
+                        }
+                        if let Some(raw) = reference.properties.get("candidate_paths_json")
+                            && let Ok(paths) = serde_json::from_str::<Vec<String>>(raw)
+                        {
+                            affected.extend(paths.into_iter().filter(|path| {
+                                let path = Path::new(path);
+                                path.parent().is_some_and(|parent| {
+                                    parent.file_name().is_some_and(|name| name == "tasks")
+                                }) && rgctl_registry::template_options::role_root(path).is_none()
+                            }));
+                        }
+                    }
+                }
                 for (candidate, sources) in &self.reverse {
                     if seed == *candidate || seed.starts_with(&format!("{candidate}/")) {
                         affected.extend(sources.iter().cloned());
