@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "function_id": "8fcef6c3-dfc0-5338-ba7b-e14cc4816997",
+  "name": "handle",
+  "file_path": "/private/tmp/rgctl-taint-ui/repo/app.py",
+  "source_id": "f552a89c1bfda188",
+  "start_line": 2,
+  "end_line": 3,
+  "total_lines": 3,
+  "pdg": {
+    "nodes": [
+      {
+        "id": "node_0",
+        "line": 2,
+        "label": "q = request.GET[\"id\"]",
+        "kind": "Assignment",
+        "block_index": 1,
+        "defined": [
+          "q"
+        ],
+        "used": [
+          "request.GET",
+          "request"
+        ]
+      },
+      {
+        "id": "node_1",
+        "line": 3,
+        "label": "cursor.execute(q)",
+        "kind": "Expression",
+        "block_index": 1,
+        "defined": [],
+        "used": [
+          "cursor",
+          "cursor.execute",
+          "q"
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "source": "node_0",
+        "target": "node_1",
+        "kind": "data",
+        "variable": "q"
+      }
+    ]
+  }
+}

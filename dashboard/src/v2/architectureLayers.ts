@@ -165,6 +165,11 @@ export function coverageOf(metagraph: Metagraph, summary: CommunitySummary | nul
     const covered = withIndices.reduce((n, node) => n + (node.member_indices?.length ?? 0), 0);
     return { covered, declared, uncovered: Math.max(0, declared - covered), source: "member_indices" };
   }
+  // Out-of-line membership: the sidecar's own declared total, not a sum over nodes that carry no arrays.
+  if (typeof metagraph.members_total === "number" && metagraph.members_total > 0) {
+    const covered = metagraph.members_total;
+    return { covered, declared, uncovered: Math.max(0, declared - covered), source: "member_count" };
+  }
   if (summary && summary.communities.some((c) => typeof c.member_count === "number")) {
     const covered = summary.communities.reduce((n, c) => n + (c.member_count ?? 0), 0);
     return { covered, declared, uncovered: Math.max(0, declared - covered), source: "member_count" };

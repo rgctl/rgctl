@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "available": true,
+  "detail_dir": "slice",
+  "function_count": 1,
+  "functions": [
+    {
+      "function_id": "8fcef6c3-dfc0-5338-ba7b-e14cc4816997",
+      "name": "handle",
+      "file_path": "app.py",
+      "pdg_nodes": 2,
+      "data_edges": 1,
+      "block_count": 2
+    }
+  ]
+}
