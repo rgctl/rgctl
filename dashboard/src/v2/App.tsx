@@ -129,7 +129,14 @@ export function App() {
           )}
         </div>
 
-        <main className="flex min-w-0 flex-1 flex-col">
+        {/*
+          `min-h-0` is load-bearing. A column flex item's automatic minimum size is its *content*, so without it
+          this pane grew to its content's height (measured: 1933px inside a 813px window) and the scroll
+          container inside it never had anything to scroll — everything below the fold was clipped by the shell.
+          That is what made the universe look un-centred: its canvas was 946x1742, so the map was correctly framed
+          in a box three times taller than the window.
+        */}
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
             {functionsError != null && (
               <Unavailable

@@ -44,7 +44,6 @@ export function SymbolReader({
   variant,
   headerRight,
   footer,
-  sourceHeightClass,
 }: {
   entry: FunctionEntry;
   variant: SymbolVariant;
@@ -52,8 +51,6 @@ export function SymbolReader({
   headerRight?: ReactNode;
   /** Below the graph — the CFG lens puts its CLI command here. */
   footer?: ReactNode;
-  /** Ceiling for the source pane, so a drawer beside the universe is not a full-page scroll. */
-  sourceHeightClass?: string;
 }) {
   const cfgState = useCfgDetail(entry.function_id);
   const cfg = cfgState.kind === "ready" ? cfgState.cfg : null;
@@ -154,9 +151,7 @@ export function SymbolReader({
 
       <div className="flex min-h-0 flex-1 gap-3">
         {wantsSource && (
-          <div
-            className={`flex min-w-0 flex-1 flex-col ${sourceHeightClass ?? ""}`}
-          >
+          <div className="flex min-w-0 flex-1 flex-col">
             <SourcePane
               entry={entry}
               // Only the graph-inclusive framings can bind a line to a block; with no graph beside it, a

@@ -7,7 +7,14 @@
  * identity, and that the two biggest objects in the export are buckets rather than code.
  *
  * It renders without a Focus and without a lens: a package is a set of functions, not a function, so there is
- * nothing here to carry in or out of another room.
+ * nothing here to carry in or out of another room. A double-clicked *member* is a symbol, so it opens its source
+ * in a drawer beside the level — and the one thing the drawer deliberately does not do is re-implement the CFG
+ * lens: it points at it.
+ *
+ * Two layout facts that are not tidying, because both were invisible bugs with visible symptoms: `main` needs
+ * `min-h-0` (a column flex item's automatic minimum is its content, so the pane grew to 1933px inside an 813px
+ * window and the canvas became three times taller than the screen), and the grid needs `grid-rows-[minmax(0,1fr)]`
+ * (an implicit `auto` row is sized by the tallest column, which is the right-hand panels).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Panel, Unavailable, Chip } from "../shell";
@@ -133,12 +140,13 @@ export function ArchitectureRoom({
    * the bundle on the server" (one click). Both are stated; only one is actionable.
    */
   /**
-   * The symbol open beside the level, and whether it has the room to itself.
+   * The symbol open beside the level.
    *
-   * A double-click inside a district opens the member's code here rather than leaving the room.
+   * A double-click inside a district opens the member's code here rather than leaving the room. Source *and*
+   * graph already have a home — the CFG lens in Understand — so this drawer does one thing and offers the route
+   * to the other rather than growing a second version of it.
    */
   const [symbol, setSymbol] = useState<FunctionEntry | null>(null);
-  const [symbolMax, setSymbolMax] = useState(false);
   const [sceneFailed, setSceneFailed] = useState<{ reason: string; stale: boolean } | null>(null);
   /** False until the canvas exists — an effect that draws must wait for something to draw on. */
   const [sceneReady, setSceneReady] = useState(false);
@@ -186,7 +194,6 @@ export function ArchitectureRoom({
     // Expand painted as though it were still armed, against a district that is no longer open.
     setSelected(null);
     setSymbol(null);
-    setSymbolMax(false);
     // The level is a link, so closing it is a URL write like opening it was.
     onExplodeChange?.(null);
   }, [onExplodeChange]);
@@ -543,25 +550,26 @@ export function ArchitectureRoom({
       )}
       {/*
         Three things can share this row: the symbol drawer, the canvas, and the level's own column. Maximizing the
-        drawer is the one case where one thing deserves the whole width, so the canvas and the column step aside
-        rather than being squeezed — a half-width CFG beside a half-width universe is the worst of both.
+        The drawer takes a column of the canvas row rather than the whole width: source *and* graph is the CFG
+        lens, one click away, and a second full-width version of it here would be two things to keep in step.
       */}
-      <div className={`grid min-h-0 flex-1 gap-2 ${symbolMax ? "grid-cols-1" : "lg:grid-cols-[minmax(0,1fr)_300px]"}`}>
+      {/*
+        `grid-rows-[minmax(0,1fr)]` is load-bearing, not tidying: the implicit row is `auto`, so it was sized by
+        the *tallest* column — the right-hand panels — and the canvas stretched to that height. Measured in a
+        900px window the canvas came out **946x1742**, with the model centred in a box four times taller than the
+        visible area: the framing was right and the reading surface was wrong. The row now shrinks to the space
+        it is given, and the column scrolls inside it.
+      */}
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="flex min-h-0 min-w-0 gap-2">
           {symbol && (
             <SymbolDrawer
               entry={symbol}
-              maximized={symbolMax}
-              onToggleMaximize={() => setSymbolMax((value) => !value)}
-              onClose={() => {
-                setSymbol(null);
-                setSymbolMax(false);
-              }}
+              onClose={() => setSymbol(null)}
               onOpenInRoom={onOpenFocus ? () => onOpenFocus(symbol.function_id) : undefined}
             />
           )}
-          {!symbolMax && (
-        <div className="relative min-h-[280px] min-w-0 flex-1 overflow-hidden rounded-lg border border-white/8 bg-[#060a12]">
+          <div className="relative min-h-[280px] min-w-0 flex-1 overflow-hidden rounded-lg border border-white/8 bg-[#060a12]">
           <div ref={hostRef} className="absolute inset-0" data-testid="universe-canvas" />
           {sceneFailed && (
             <div className="absolute inset-0 flex items-center justify-center p-4">
@@ -707,11 +715,9 @@ export function ArchitectureRoom({
             <Toggle on={edges} onClick={() => setEdges((value) => !value)}>edges {edges ? "on" : "off"}</Toggle>
             <Toggle on={drift} onClick={() => setDrift((value) => !value)}>drift {drift ? "on" : "off"}</Toggle>
           </div>
+          </div>
         </div>
-          )}
-        </div>
-        {!symbolMax && (
-          <div className="flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto">
+        <div className="flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto">
             {/*
               The column answers "what am I looking at" for the level on screen: the universe's index when the
               universe is what is drawn, and the level's own members when a district is open. The district list
@@ -745,8 +751,7 @@ export function ArchitectureRoom({
                 <Buckets view={view!} />
               </>
             )}
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );
@@ -976,20 +981,16 @@ function DistrictSearch({
  * The symbol a level opened, read beside it.
  *
  * Double-clicking a member used to leave the room for Understand, which threw away the level the reader was
- * holding. The code opens here instead, at the width of a column; the control that matters is **maximize**,
- * because a function's source and its control-flow graph are two views of one thing and want reading together —
- * maximized is exactly the CFG lens's own framing, drawn by the same `SymbolReader`.
+ * holding. The code opens here instead, at the width of a column, and nothing else: source *and* graph already
+ * have a home in the CFG lens, so a "maximize" here would be a second version of that lens with its own controls
+ * to keep in step. The drawer offers the route instead of the copy.
  */
 function SymbolDrawer({
   entry,
-  maximized,
-  onToggleMaximize,
   onClose,
   onOpenInRoom,
 }: {
   entry: FunctionEntry;
-  maximized: boolean;
-  onToggleMaximize: () => void;
   onClose: () => void;
   /** Present when the shell can carry a Focus to another room; absent, the control is not offered. */
   onOpenInRoom?: () => void;
@@ -997,9 +998,7 @@ function SymbolDrawer({
   return (
     <div
       data-testid="symbol-drawer"
-      className={`flex min-h-0 flex-col rounded-lg border border-white/10 bg-[#0a0e14] ${
-        maximized ? "min-w-0 flex-1" : "w-[42%] min-w-[320px] max-w-[560px]"
-      }`}
+      className="flex min-h-0 w-[42%] min-w-[320px] max-w-[560px] flex-col rounded-lg border border-white/10 bg-[#0a0e14]"
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-white/8 px-2 py-1.5">
         <span className="truncate text-[12px] font-medium text-zinc-100">{entry.name}</span>
@@ -1019,19 +1018,6 @@ function SymbolDrawer({
           )}
           <button
             type="button"
-            onClick={onToggleMaximize}
-            aria-pressed={maximized}
-            title={maximized ? "Back to the level" : "Source beside the control-flow graph, full width"}
-            className={`rounded border px-1.5 py-0.5 text-[10px] ${
-              maximized
-                ? "border-sky-400/40 bg-sky-400/10 text-sky-200"
-                : "border-white/10 text-zinc-400 hover:border-white/20 hover:text-zinc-200"
-            }`}
-          >
-            {maximized ? "restore" : "maximize"}
-          </button>
-          <button
-            type="button"
             onClick={onClose}
             title="Close this symbol"
             className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:border-white/20 hover:text-zinc-200"
@@ -1041,11 +1027,7 @@ function SymbolDrawer({
         </span>
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-2">
-        <SymbolReader
-          entry={entry}
-          variant={maximized ? "source-and-graph" : "source"}
-          sourceHeightClass="max-h-[62vh]"
-        />
+        <SymbolReader entry={entry} variant="source" />
       </div>
     </div>
   );
