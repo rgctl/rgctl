@@ -64,14 +64,14 @@ Ship P0→P2 before investing in LLM naming.
    - Reuse `infer_label_from_names`, path-prefix logic from `community.rs`
 2. **Persist labels with analysis (preferred)** — Extend community sidecar so discover does not recompute labels only at dashboard time:
    - Option A (minimal): add `CommunityLabelTable { labels: Vec<(usize, String)> }` or `HashMap<usize, String>` next to `CommunityTable` in `AnalysisResults`
-   - Option B (lighter): compute labels only during dashboard export from graph + assignments (no schema bump) — acceptable for P0 if discover already hydrates for `--with-dashboard`
+   - Option B (lighter): compute labels only during dashboard export from graph + assignments (no schema bump) — acceptable for P0 if discover already hydrates for `--with-universe`
 3. **Fix export** — In `crates/rgctl-dashboard/src/communities.rs`, set `CommunitySummary.label` from the label builder / analysis, not `Community {id}`.
 4. **UI check** — Graph tab community legend / filters show the new strings; colors unchanged (`community_color_hex`).
 5. **Tests** — Unit test: two clusters with `login`/`logout` vs `get_user`/`list_users` → distinct non-placeholder labels; infra hub → `"Shared / Infrastructure"`.
 6. **Docs** — Note in [dashboard-user-guide.md](../dashboard-user-guide.md) that community names are heuristic.
 
 ### Acceptance
-- After `discover … --with-dashboard`, `.rgctl/dashboard/communities.json` has meaningful `label` values for ≥ majority of communities with size ≥ 2 on ecommerce-java (or fixture).
+- After `discover … --with-universe`, `.rgctl/dashboard/communities.json` has meaningful `label` values for ≥ majority of communities with size ≥ 2 on ecommerce-java (or fixture).
 - Fallback remains `Community {id}` when inference is weak.
 
 ---

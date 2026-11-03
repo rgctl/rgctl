@@ -66,7 +66,7 @@ Capability designs for contributors: [design/](design/README.md).
 | `--scip PATH` | SCIP overlay — upgrades ambiguous calls (`resolution = "scip"`) |
 | `--with-kantra` | Konveyor Kantra rule eval (Java-oriented; `VIOLATES` edges) |
 | `--full` | Full pipeline (large corpora / Gate B style runs) |
-| `--with-universe` / `--export-migration-hints` | Opt-in universe UI bundle / migration JSON (`--with-dashboard` is a deprecated alias) |
+| `--with-universe` / `--export-migration-hints` | Opt-in universe UI bundle / migration JSON (`--with-dashboard` was removed and is rejected) |
 
 ```bash
 rgctl discover . -l java,kotlin,python --with-cfg

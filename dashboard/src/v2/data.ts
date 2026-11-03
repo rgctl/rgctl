@@ -2,7 +2,7 @@
  * Read the dashboard bundle.
  *
  * Everything here comes from `.rgctl/dashboard/`, written by `rgctl discover --with-universe` (or the
- * deprecated `--with-dashboard` alias) and served next to the bundle itself.
+ * the removed `--with-dashboard` flag) and served next to the bundle itself.
  *
  * Shapes here were read off a real bundle (5,345 nodes, 1,479 functions), not assumed: the first draft of
  * this file expected `manifest.digest` and `sources_index.sources`, and the real manifest nests the digest

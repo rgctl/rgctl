@@ -420,12 +420,16 @@ export function ArchitectureRoom({
     setMemberState(member ? { kind: "picked", member } : { kind: "idle" });
     sceneRef.current?.highlightMember(member);
   }, []);
+  // One sync effect per ref, and a different ref in each. The scene closes over these callbacks once, so a ref
+  // that is never synced is a gesture that silently does nothing — which is what happened here: `expandRef` lost
+  // its effect to a duplicated `pickMemberRef` line, and double-click-to-expand stopped working without failing
+  // any test. Keep them adjacent and adjacent to the comment, so the next edit sees all four.
+  useEffect(() => {
+    expandRef.current = expand;
+  }, [expand]);
   useEffect(() => {
     openSymbolRef.current = openSymbol;
   }, [openSymbol]);
-  useEffect(() => {
-    pickMemberRef.current = pickMember;
-  }, [pickMember]);
   useEffect(() => {
     pickMemberRef.current = pickMember;
   }, [pickMember]);
@@ -672,6 +676,19 @@ export function ArchitectureRoom({
             {expandState.kind === "failed" && (
               <Chip tone="zinc">
                 {expandState.title}: {expandState.reason}
+              </Chip>
+            )}
+            {/*
+              A member that cannot be opened is a typed absence like any other, and it lives beside the other ones
+              rather than in the level's read-out: trimming the read-out to what the level *is* took this message
+              with it, so a double-clicked member that resolves to nothing reported nothing at all.
+            */}
+            {memberState.kind === "resolving" && (
+              <Chip tone="zinc">resolving {memberState.member.name}…</Chip>
+            )}
+            {memberState.kind === "failed" && (
+              <Chip tone="zinc">
+                {memberState.member.name}: {memberState.reason}
               </Chip>
             )}
             {expanded && (

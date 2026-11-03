@@ -233,7 +233,7 @@ The v1 dashboard's own `CfgView` was not changed.
 ### Consequences
 
 - **v1 stayed shippable during the rewrite.** Both `dist` and `dist-v2` embed; React and Preact are never both
-  loaded in one extract. After the flag swap, `--with-universe` (and deprecated `--with-dashboard`) extract
+  loaded in one extract. After the flag swap, `--with-universe` extracts
   v2; `RGCTL_DASHBOARD_LEGACY=1` is the one-release hatch back to Preact.
 - **No dual runtime.** v2 is a separate bundle, so React and Preact are never both loaded.
 - **The Preact → React migration of v1 is deferred**, and should happen only at the point the legacy
@@ -362,7 +362,7 @@ Rationale: the dashboard surface is guarded by **18 test files** in `tests/` —
 
 Rules:
 
-- **`--with-universe` extracts v2** (`manifest.mode: "universe"`). `--with-dashboard` is a deprecated alias that warns and routes to the same universe bundle. **`rgctl serve --open` defaults to universe** (re-extracts the v2 static shell if an older v1 bundle is on disk). v1 remains reachable via `--with-dashboard legacy` (or `RGCTL_DASHBOARD_LEGACY=1`) until `remove-v1-dashboard`.
+- **`--with-universe` extracts v2** (`manifest.mode: "universe"`). **`rgctl serve --open` defaults to universe** (re-extracts the v2 static shell if an older v1 bundle is on disk). v1 remains reachable via `RGCTL_DASHBOARD_LEGACY=1` until `remove-v1-dashboard`; there is no CLI spelling for it.
 - `tests/dashboard_harness.rs` is extended with v2 parity assertions rather than replaced.
 - Manifest gains a phase bump and `dashboard_version` on every change (`crates/rgctl-dashboard/src/manifest.rs:54`).
 
@@ -396,7 +396,7 @@ Rules:
 | U2 | `add-universe-drilldown` | L2 functions via the WASM `expand()` worker, lazy on camera proximity; `Universe › community › package › symbol` breadcrumb | 4 |
 | U3 | `add-universe-panels` | Context panels replacing tabs — blast, symbol detail, CFG/slice/dataflow insets — reusing the existing lenses | U2 |
 | U4 | `add-universe-commands` | Clickable in-universe actions: exact CLI + copy first, `serve`-spawned runs with progress second | 4, U3 |
-| U5 | `remove-v1-dashboard` | Delete the `RGCTL_DASHBOARD_LEGACY` hatch, the v1 app and bundle, ~20 v1 test files, and `--with-dashboard` — **next release, per the maintainer** | U3 (Migration/Taint parity) |
+| U5 | `remove-v1-dashboard` | Delete the `RGCTL_DASHBOARD_LEGACY` hatch, the v1 app and bundle, and ~20 v1 test files — **next release, per the maintainer**. (`--with-dashboard` is already gone; only the hatch names v1 now.) | U3 (Migration/Taint parity) |
 
 **Change 0 leads** because it is pure CLI/JSON: it has no UI opinions to argue about, it is independently useful to agent consumers, and it establishes the `workflows/` contract that the Review Room later renders.
 
@@ -450,8 +450,9 @@ Three decisions taken after the design was written, each from measurement or fro
 > instead. informing the user that the --with-dashboard will be removed in the next release."
 > — [comment](https://github.com/rgctl/rgctl/issues/61#issuecomment-6241198464)
 
-So `--with-universe` is the real flag and writes `manifest.mode: "universe"`; **`--with-dashboard` keeps
-working, warns, and routes to the same bundle**, and is removed next release. One regression has to be named,
+So `--with-universe` is the real flag and writes `manifest.mode: "universe"`. **`--with-dashboard` went one step
+further than the deprecation below: it was removed outright** and the CLI rejects it with a message naming
+`--with-universe` (`with_dashboard_flag_is_rejected`). One regression has to be named,
 because routing the flag makes it real immediately: **v1 is still the only place Migration and Taint render** —
 in v2 they are placeholders naming a future change. So this release keeps v1 reachable behind
 `RGCTL_DASHBOARD_LEGACY=1`, and `remove-v1-dashboard` (next release) deletes the hatch, the v1 app (59 source
@@ -565,10 +566,10 @@ rgctl -r <repo> serve --open
 `.rgctl/dashboard/` and writes `manifest.mode: "universe"` (and `bundle_version: "v2"`). `serve` then serves
 whatever was extracted.
 
-**`--with-dashboard` is deprecated:** it still works, prints a warning naming `--with-universe`, and routes to
+**`--with-dashboard` was removed:** the CLI now rejects it with a message naming `--with-universe`. It briefly
 the **same** universe bundle. It will be removed in a later release (change `remove-v1-dashboard`).
 
-**v1 hatch (one release):** `--with-dashboard legacy` (or `RGCTL_DASHBOARD_LEGACY=1`) forces the Preact v1 bundle (`manifest.mode: "dashboard"`)
+**v1 hatch (one release):** `RGCTL_DASHBOARD_LEGACY=1` forces the Preact v1 bundle (`manifest.mode: "dashboard"`)
 when a dashboard export runs. Unset it for the universe.
 
 `RGCTL_DASHBOARD_V2` is obsolete — v2/universe is the default whenever a dashboard is requested. If the v2
