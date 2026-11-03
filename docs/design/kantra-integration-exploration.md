@@ -12,7 +12,7 @@ Native evaluation of [Konveyor Kantra](https://github.com/konveyor/kantra) migra
 
 Kantra is the Konveyor CLI for static code analysis and transformation. It uses YAML-based rules with a `when` clause that dispatches to language providers (`java.referenced`, `go.referenced`, `builtin.filecontent`, etc.). Rules produce violations (issues) with severity, effort estimates, and remediation guidance.
 
-rgctl already indexes a rich graph of symbols, imports, call edges, annotations, dependencies, and community structure, and keeps every source file in memory during analysis. That makes it possible to evaluate the large majority of real-world Kantra rules directly against the graph and source cache — and, crucially, to *enrich* each violation with graph context (blast radius, community, centrality) that Kantra alone cannot provide.
+rgctl already indexes a rich graph of symbols, imports, call edges, annotations, dependencies, and community structure. When `--with-kantra` runs it preloads the source text it needs into its own cache (§6.1). That makes it possible to evaluate the large majority of real-world Kantra rules directly against the graph and source cache — and, crucially, to *enrich* each violation with graph context (blast radius, community, centrality) that Kantra alone cannot provide.
 
 The runtime embeds the Konveyor `stable/java` catalog (~2.6k rules) in release binaries, so `discover --with-kantra` works with no rule setup.
 
@@ -29,7 +29,7 @@ rgctl has four other rule and security systems. Kantra evaluation (`rgctl-kantra
 | Rule engine | `rgctl-rules` | (library) | JSON rulesets over graph nodes (`And/Or/Not` + leaf conditions, label/metadata actions) |
 | Policy/check | `rgctl-service` | `rgctl check --policy-file` | Blast-radius guardrails as a CI gate |
 
-Kantra findings are *not* currently fed into the `rgctl check` policy gate — see [§9 Open questions](#9-open-questions).
+Kantra findings are *not* currently fed into the `rgctl check` policy gate — see [§9 Boundaries & open questions](#9-boundaries--open-questions).
 
 ---
 
@@ -112,7 +112,7 @@ Key modules in `rgctl-kantra`: `loader`/`catalog` (YAML + embedded blob), `class
 ### 4.2 Alternatives considered
 
 - **Translation layer** — translate Kantra YAML into the existing `rgctl-rules` `MatchCondition`. Rejected: lossy for source/file/dependency conditions, and the rule engine has no source-text or manifest access.
-- **Kantra as peer runner** — shell out to the `kantra` CLI and ingest its `output.yaml`. Rejected as the default: 100% fidelity but requires the Kantra CLI + podman/docker and pays JDT LS / container startup. Still a viable complement for the conditions rgctl cannot evaluate (see §8); native eval is positioned as a fast pre-check.
+- **Kantra as peer runner** — shell out to the `kantra` CLI and ingest its `output.yaml`. Rejected as the default: 100% fidelity but requires the Kantra CLI + podman/docker and pays JDT LS / container startup. Still a viable complement for the conditions rgctl cannot evaluate (see [§9 Boundaries](#9-boundaries--open-questions)); native eval is positioned as a fast pre-check.
 
 ---
 
@@ -133,6 +133,7 @@ Coverage is driven by `classify.rs` and the `WhenClause` variants in `schema.rs`
 | `java.referenced` `PACKAGE` | `Import` nodes + source fallback | **Full** | Import match + filecontent fallback |
 | `java.referenced` `INHERITANCE`/`IMPLEMENTS_TYPE` | `EXTENDS`/`IMPLEMENTS` edges + source fallback | **Full** | Uses import-FQN stubs (Phase 0 external-stub edges) |
 | `java.referenced` `ANNOTATION` | `ANNOTATED_WITH` edges + `Annotation` nodes | **Full** | Match annotation name/qualified_name |
+| `java.referenced` `annotated.pattern` | — | **Unsupported** | Parsed into `WhenClause::JavaReferenced.annotated_pattern` but ignored by `eval_leaf` (`annotated_pattern: _`); only the top-level `pattern`/`location` are matched |
 | `java.referenced` (other locations: `METHOD`, `METHOD_CALL`, `FIELD`, `RETURN_TYPE`, …) | source cache | **Partial** | Falls back to filecontent regex over Java sources — no location-precise match |
 | `java.dependency` / `go.dependency` | `Dependency` nodes from manifest extraction | **Full** | `name`/`nameregex` + `lowerbound`/`upperbound` version range; manifests parsed by `rgctl-extraction/src/manifests/` (maven, gradle, go.mod, npm, cargo) |
 | `builtin.xml` (xpath) | on-demand XML reparse | **Partial** | Minimal XPath subset: `//tag`, `//tag[@attr='val']`, `/root/...` — not full XPath |
@@ -146,7 +147,7 @@ Note on fallbacks: the `java.referenced` `PACKAGE`/`INHERITANCE`/unknown-locatio
 
 ### 5.2 Coverage of real-world rulesets
 
-From the distribution of condition types in [konveyor/rulesets](https://github.com/konveyor/rulesets):
+Rough distribution of condition types in [konveyor/rulesets](https://github.com/konveyor/rulesets). The percentages below are **approximate, hand-estimated guidance** (not a measured census) — treat them as order-of-magnitude only:
 
 | Pattern | Approx. frequency | Status |
 |---------|-------------------|--------|
@@ -166,7 +167,7 @@ Rules that cannot be evaluated are not dropped silently — they are recorded in
 
 ### 6.1 Source text in memory
 
-`discover_cfg.rs` preloads every source file into `FileSourceCache` via `preload_file_sources()`. `--with-kantra` reuses this cache when `--with-cfg` already preloaded it, otherwise triggers its own preload. `builtin.filecontent` and the `java.referenced` fallbacks regex-match against it.
+`run_kantra_stage` always builds its own `SourceCache` via `preload_discovered_sources()` over the discovered file list (parallel read); this is independent of the CFG pipeline's `FileSourceCache` and happens whether or not `--with-cfg` is set. `builtin.filecontent`, `builtin.xml`/`builtin.json`, and the `java.referenced` fallbacks regex-match against it.
 
 ### 6.2 Import nodes
 
@@ -210,11 +211,17 @@ Nodes carry `qualified_name`, `signature`, `return_type`, `parameters`, `file_pa
 | `--kantra-catalog ROOT` | Rulesets tree (e.g. `stable/java`); overrides embedded catalog |
 | `--kantra-index-only` | Skip eval; still index catalog rules into the graph |
 
-`--with-kantra` does **not** imply `--with-cfg`. With `--with-cfg` also enabled, violations can additionally be correlated against taint/PDG results (flow-aware enrichment).
+`--with-kantra` does **not** imply `--with-cfg`, and Kantra evaluation does not use CFG/PDG/taint results today (enrichment is community/centrality/blast-radius only — see §8).
 
 ### 7.2 Where it hooks in
 
-Kantra evaluation runs after file indexing / topology / community / centrality (so enrichment metrics are available) and before (or independent of) the CFG batch. Stage timings are recorded separately in the discover profile: `kantra_index`, `kantra_eval`, `kantra_enrich`, `kantra_violates` (see `src/cli/stage_profile.rs`).
+In `src/cli/discover_impl.rs`, Kantra runs in three split phases within `discover`:
+
+1. **Eval** (`kantra_eval`) — `run_kantra_stage` runs after community/centrality (so those metrics exist) and before the CFG batch / `BlastRadiusEngine`. Builds the source cache, evaluates rules, writes initial `kantra_findings.json`.
+2. **Enrich** (`kantra_enrich`) — `run_kantra_enrich` runs after `BlastRadiusEngine` is built, so `blast_radius_score` / `impact_zone_size` are available to fill in.
+3. **Index + violates** (`kantra_index`, `kantra_violates`) — `run_kantra_index` and `run_kantra_violates` run at the very end, after `drop(cold)`, so rewriting `graph.snapshot.bin` (rule nodes + `VIOLATES` edges) doesn't mutate a still-open mmap.
+
+Stage timings are recorded separately in the discover profile: `kantra_eval`, `kantra_enrich`, `kantra_index`, `kantra_violates` (see `src/cli/stage_profile.rs`).
 
 ### 7.3 Outputs
 
@@ -238,9 +245,10 @@ This is what differentiates native evaluation from running Kantra directly. Each
 | **Blast radius** (`blast_radius_score`, `impact_zone_size`) | "This symbol is reached by N functions across the graph" |
 | **Community** (`community_id`) | "All violations cluster in community 7 — your payment module" |
 | **Centrality** (`pagerank`) | "This is a high-PageRank hotspot — fixing it has outsized impact" |
-| **Taint correlation** (with `--with-cfg`) | "This match is also on a vulnerable taint path (CWE-89)" |
 
 Kantra tells you *what* is wrong. The graph tells you *how much it matters*.
+
+> **Future work:** correlating a violation with taint/CWE flow ("this match is also on a vulnerable taint path") is *not* implemented — `rgctl-kantra` does not consume CFG/PDG/taint results. It would require threading taint output into the enrich stage.
 
 ---
 
@@ -248,12 +256,13 @@ Kantra tells you *what* is wrong. The graph tells you *how much it matters*.
 
 ### Boundaries
 
-1. **No structured annotation-element matching** — `annotated: { elements: [...] }` is unsupported; the raw `metadata["arguments"]` string can only be regex-grepped via a filecontent rule.
+1. **No structured annotation-element matching** — `annotated: { elements: [...] }` is unsupported; the raw `metadata["arguments"]` string can only be regex-grepped via a filecontent rule. The `annotated.pattern` form is parsed but currently ignored (see §5.1).
 2. **Minimal XML/JSON path support** — `builtin.xml`/`builtin.json` handle a small XPath/JSON-path subset, not the full spec.
 3. **Location-imprecise `java.referenced`** — `METHOD`/`METHOD_CALL`/`FIELD`/`RETURN_TYPE`/etc. fall back to filecontent regex rather than AST-precise matching.
 4. **No cross-condition chaining** (`as:`/`from:`) and **no custom variable interpolation**.
+5. **No taint/CWE correlation** — enrichment is community/centrality/blast-radius only; `rgctl-kantra` does not consume CFG/PDG/taint output (see §8 future work).
 
-Items 2–4 are where the Kantra peer-runner (§4.2) remains strictly more capable; native eval is the fast, container-free path for the ~90%+ of rules it does cover.
+Items 2–5 are where the Kantra peer-runner (§4.2) remains strictly more capable; native eval is the fast, container-free path for the large majority (roughly ~90%, by the approximate estimate in §5.2) of rules it does cover.
 
 ### Open questions
 
