@@ -72,59 +72,64 @@ export function App() {
         </button>
       </div>
 
-      <div className="flex min-h-0 flex-1">
-        <nav aria-label="Rooms" className="w-52 shrink-0 overflow-y-auto border-r border-white/8 bg-[#0c0f13] p-2">
-          <div className="px-2 pb-1.5 text-[10px] uppercase tracking-wider text-zinc-600">rooms</div>
-          {ROOMS.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              onClick={() => goRoom(r.id)}
-              aria-current={room === r.id ? "page" : undefined}
-              className={`mb-0.5 block w-full rounded px-2 py-1.5 text-left ${
-                room === r.id ? "bg-sky-500/12 text-sky-100" : "text-zinc-300 hover:bg-white/[0.04]"
-              }`}
-            >
-              <span className="block text-[12px]">{r.label}</span>
-              <span className="block truncate text-[10px] text-zinc-500">{r.blurb}</span>
-            </button>
-          ))}
-        </nav>
-
-        <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-white/8 bg-[#0e1116] px-3 py-1.5">
-            {/* Lenses are Understand controls — hiding them in other rooms avoids implying CFG/Dataflow
-                tabs apply to Migration/Taint/Architecture. */}
-            {room === "understand" ? (
-              <>
-                <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">lens</span>
-                {LENSES.map((l) => (
-                  <button
-                    key={l.id}
-                    type="button"
-                    onClick={() => setLens(l.id)}
-                    aria-pressed={lens === l.id}
-                    className={`rounded px-2 py-0.5 text-[11px] ${
-                      lens === l.id
-                        ? "bg-white/10 text-zinc-100"
-                        : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
-                    }`}
-                  >
-                    {l.label}
-                  </button>
-                ))}
-              </>
-            ) : (
-              <span className="text-[10px] uppercase tracking-wider text-zinc-600">
-                {ROOMS.find((r) => r.id === room)?.label}
-              </span>
-            )}
+      <div className="flex min-h-0 flex-1 flex-col">
+        {/*
+          One horizontal row of rooms, not a 208px column. The rail cost the full width of the left edge in every
+          room, and the room that needs width most — the universe — paid it twice: 208px of sidebar plus a 300px
+          column. Seven labels fit on one line; the question a room answers stays visible for the room you are
+          in, which is the only one where it is still a question.
+        */}
+        <div className="flex shrink-0 flex-col gap-1 border-b border-white/8 bg-[#0e1116] px-3 py-1.5">
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">rooms</span>
+            <nav aria-label="Rooms" className="flex flex-wrap items-center gap-1">
+              {ROOMS.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => goRoom(r.id)}
+                  aria-current={room === r.id ? "page" : undefined}
+                  title={r.blurb}
+                  className={`rounded px-2 py-1 text-[12px] leading-none ${
+                    room === r.id
+                      ? "bg-sky-500/12 text-sky-100"
+                      : "text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100"
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </nav>
             <span className="ml-auto flex items-center gap-2 text-[10px] text-zinc-600">
-              {room === "understand" && <span>{ROOMS.find((r) => r.id === room)?.label}</span>}
+              <span className="hidden sm:inline">{ROOMS.find((r) => r.id === room)?.blurb}</span>
               {entry && <Chip tone="blue">subject: {entry.name}</Chip>}
             </span>
           </div>
+          {/* Lenses are Understand controls — hiding them in other rooms avoids implying CFG/Dataflow
+              tabs apply to Migration/Taint/Architecture. */}
+          {room === "understand" && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">lens</span>
+              {LENSES.map((l) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  onClick={() => setLens(l.id)}
+                  aria-pressed={lens === l.id}
+                  className={`rounded px-2 py-0.5 text-[11px] ${
+                    lens === l.id
+                      ? "bg-white/10 text-zinc-100"
+                      : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+                  }`}
+                >
+                  {l.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
+        <main className="flex min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
             {functionsError != null && (
               <Unavailable

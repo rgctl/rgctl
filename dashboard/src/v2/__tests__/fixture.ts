@@ -23,16 +23,19 @@ export const SOURCE_LINES = [
   "}",
 ];
 
+/** The subject as the index carries it, so a test can render a reader without going through the router. */
+export const SUBJECT_ENTRY = {
+  function_id: SUBJECT,
+  name: "handleAuth",
+  file_path: SOURCE_PATH,
+  block_count: 5,
+  cfg_edge_count: 6,
+  source_lines: SOURCE_LINES.length,
+  pdg_nodes: 4,
+};
+
 const FUNCTIONS = [
-  {
-    function_id: SUBJECT,
-    name: "handleAuth",
-    file_path: SOURCE_PATH,
-    block_count: 5,
-    cfg_edge_count: 6,
-    source_lines: SOURCE_LINES.length,
-    pdg_nodes: 4,
-  },
+  SUBJECT_ENTRY,
   {
     function_id: OTHER,
     name: "verify",

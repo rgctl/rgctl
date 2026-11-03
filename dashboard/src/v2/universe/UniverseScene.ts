@@ -500,6 +500,14 @@ export class UniverseScene {
     };
     instanced: THREE.InstancedMesh;
     members: MemberEntry[];
+    /**
+     * Graph node index -> instance slot.
+     *
+     * The room's member list knows a member by its graph index, not by where it was drawn; the scene knows the
+     * slot. Both have to be able to mark the same box, so the mapping is built once with the level rather than
+     * searched for on every click.
+     */
+    slots: Map<number, number>;
   } | null = null;
 
   setEdges(edges: { source: number; target: number; weight: number }[], byId: Map<number, PackageNode>): void {
@@ -680,11 +688,16 @@ export class UniverseScene {
     }
 
     this.scene.add(group);
-    this.drill = { group, subjectId, cameraBefore, instanced, members: members.map((m) => ({
+    const slots = new Map<number, number>();
+    members.forEach((m, instance) => slots.set(m.index, instance));
+    this.drill = { group, subjectId, cameraBefore, instanced, slots, members: members.map((m, instance) => ({
       index: m.index,
       name: m.name ?? `node ${m.index}`,
       nodeTypeName: m.nodeTypeName ?? "node",
       filePath: m.filePath ?? null,
+      // Its slot in the InstancedMesh, so a mark can address it from anywhere — a scene click and a row in
+      // the level's list both end up here.
+      instance,
     })) };
 
     this.frameSphere(new THREE.Vector3(0, tallest / 2, 0), Math.hypot(spread + slot, tallest / 2), 1.45);
@@ -840,7 +853,7 @@ export class UniverseScene {
    * somewhere else. The mark is the same glow the universe uses for a selected district, so the two levels read
    * alike.
    */
-  highlightMember(instance: number | null): void {
+  highlightMember(member: MemberEntry | null): void {
     if (this.memberOutline) {
       this.memberOutline.parent?.remove(this.memberOutline);
       this.memberOutline.traverse((child) => {
@@ -850,9 +863,11 @@ export class UniverseScene {
       });
       this.memberOutline = null;
     }
-    if (instance === null || !this.drill) return;
+    if (!member || !this.drill) return;
+    const slot = member.instance ?? this.drill.slots.get(member.index);
+    if (slot === undefined) return;
     const matrix = new THREE.Matrix4();
-    this.drill.instanced.getMatrixAt(instance, matrix);
+    this.drill.instanced.getMatrixAt(slot, matrix);
     const centre = new THREE.Vector3();
     const scale = new THREE.Vector3();
     matrix.decompose(centre, new THREE.Quaternion(), scale);
