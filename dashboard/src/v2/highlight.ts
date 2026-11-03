@@ -1,5 +1,5 @@
 /**
- * Minimal syntax highlighting for the Spine's source pane.
+ * Minimal syntax highlighting for the CFG's source pane.
  *
  * Deliberately a tokenizer rather than a grammar. A real highlighter (Prism, highlight.js, Shiki) would
  * add tens of kilobytes gzipped to a bundle that has a recorded size budget, to decorate text a reader is

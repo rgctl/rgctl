@@ -80,15 +80,16 @@ export const ROOMS = [
  * How you look at the focused symbol.
  *
  * One implemented lens, then the questions phase 3 fills. `code` and `cfgpdg` used to be entries here and
- * were not questions — they were the Spine with a different frame (the graph at 70vh without the source;
- * the source without the graph), and both are now controls inside the Spine. A lens control that asks
- * "which frame?" is a menu; one that asks "which question?" is a set of views of the same subject.
+ * were not questions — they were this lens with a different frame (the graph at 70vh without the source; the
+ * source without the graph), and both are now controls inside it. A lens control that asks "which frame?" is
+ * a menu; one that asks "which question?" is a set of views of the same subject.
  *
- * Old `?lens=code` / `?lens=cfgpdg` links still resolve: `isLens` rejects them at the URL boundary and the
- * room falls back to `spine`, which is a superset of both.
+ * The id is `cfg` and the label is **CFG**, not "Spine": the lens draws the control-flow graph, and CFG is
+ * the term a reader already has. Renaming the id is safe precisely because unknown ids are normalised at the
+ * URL boundary — an old `?lens=spine` (or `code`, or `cfgpdg`) lands on this lens, which is a superset.
  */
 export const LENSES = [
-  { id: "spine", label: "Spine" },
+  { id: "cfg", label: "CFG" },
   { id: "dataflow", label: "Dataflow" },
   { id: "slice", label: "Slice/Trace" },
   { id: "blast", label: "Blast" },

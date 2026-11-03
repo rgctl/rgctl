@@ -1,5 +1,9 @@
 /**
- * The Spine lens — the focused symbol's source and its control-flow graph, one surface.
+ * The **CFG** lens — the focused symbol's source and its control-flow graph, one surface.
+ *
+ * Named CFG, not "Spine": the lens draws the control-flow graph, and that is the term a reader already has.
+ * "Spine" was our word for the composition of source + graph, and a word nobody knows is a word nobody
+ * clicks.
  *
  * This is the piece the maintainer named as missing on issue #61: "CFG, slice, blast, and dataflow only
  * make sense next to the actual source".
@@ -8,7 +12,7 @@
  *
  * This used to be three entries in the lens control: **Spine** (source beside the graph), **CFG·PDG** (the
  * same graph, `70vh`, plus a frontier toggle, exit count and dominator depth) and **Code** (the source
- * alone). They were not three ways of looking at a symbol — they were one surface with three framings, and
+ * alone) — the first of the three is the one that survives, under the name CFG. They were not three ways of looking at a symbol — they were one surface with three framings, and
  * the drawing, the loader, the frontier set and the block panel were identical across them. Two of the
  * three were strictly poorer than this one, which is what made the control confusing: clicking a lens asked
  * "which frame?" instead of "which question?".
@@ -63,7 +67,7 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
   );
 }
 
-export function Spine({ entry }: { entry: FunctionEntry }) {
+export function Cfg({ entry }: { entry: FunctionEntry }) {
   const cfgState = useCfgDetail(entry.function_id);
   const cfg = cfgState.kind === "ready" ? cfgState.cfg : null;
   const [selectedBlock, setSelectedBlock] = useState<number | null>(null);

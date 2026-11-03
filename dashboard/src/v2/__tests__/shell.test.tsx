@@ -41,7 +41,7 @@ beforeEach(() => installFetchStub());
 
 describe("the Focus round-trips through the URL", () => {
   it("resolves a subject from the URL alone, and a reload keeps room, lens and subject", async () => {
-    const first = renderApp(`/understand?lens=spine&focus=${SUBJECT}`);
+    const first = renderApp(`/understand?lens=cfg&focus=${SUBJECT}`);
 
     // Resolved from the URL: the Focus bar names the subject.
     expect(await screen.findAllByText("handleAuth")).not.toHaveLength(0);
@@ -50,7 +50,7 @@ describe("the Focus round-trips through the URL", () => {
     // claim the whole design rests on — a view state is a link.
     const href = `${first.state.location.pathname}?${searchOf(first)}`;
     expect(href).toContain(`focus=${SUBJECT}`);
-    expect(href).toContain("lens=spine");
+    expect(href).toContain("lens=cfg");
 
     document.body.innerHTML = "";
     renderApp(href);
@@ -69,7 +69,7 @@ describe("the Focus round-trips through the URL", () => {
 
 describe("a lens is a control, not a destination", () => {
   it("switching lens preserves the subject", async () => {
-    const router = renderApp(`/understand?lens=spine&focus=${SUBJECT}`);
+    const router = renderApp(`/understand?lens=cfg&focus=${SUBJECT}`);
     await screen.findAllByText("handleAuth");
 
     fireEvent.click(screen.getByRole("button", { name: "Blast" }));
@@ -80,7 +80,7 @@ describe("a lens is a control, not a destination", () => {
   });
 
   it("carrying the Focus to another room keeps it", async () => {
-    const router = renderApp(`/understand?lens=spine&focus=${SUBJECT}`);
+    const router = renderApp(`/understand?lens=cfg&focus=${SUBJECT}`);
     await screen.findAllByText("handleAuth");
 
     fireEvent.click(screen.getByRole("button", { name: "taint →" }));

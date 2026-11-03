@@ -1,10 +1,11 @@
 /**
  * The source pane — one reader, two lenses.
  *
- * **Spine** puts the control-flow graph beside this pane and binds the two directions: select a block and
- * its lines highlight, click a line and its block is selected. **Code** is this pane alone.
+ * The **CFG** lens puts the control-flow graph beside this pane and binds the two directions: select a block
+ * and its lines highlight, click a line and its block is selected. With `show source` off, this pane is
+ * collapsed and the graph takes the whole surface.
  *
- * The pane is shared because the Code lens always said it was: its `App.tsx` body read "the Code lens is
+ * The pane was extracted because the retired Code lens always said it was shared: its body read "the Code lens is
  * the same source pane as Spine without the control-flow graph beside it. Source rendering is shared, so
  * this lens is a view of the same reader rather than a second implementation" — while rendering **no
  * source at all** and no typed absence. A sentence describing a shared reader, with only one reader and no
@@ -56,7 +57,7 @@ export interface SourcePaneProps {
   selectedLines?: Set<number>;
   /** Omitted by Code for the same reason as `blockForLine`. */
   onSelectBlock?: (blockId: number | null) => void;
-  /** Right-hand slot in the panel header (Spine puts the selected-block chip here). */
+  /** Right-hand slot in the panel header (the CFG lens puts the selected-block chip here). */
   right?: ReactNode;
   /**
    * The function's own lines, when the caller can name them from its CFG.
@@ -70,7 +71,7 @@ export interface SourcePaneProps {
   /**
    * Scroll this line into view when it changes.
    *
-   * Spine passes the start line of the block you just clicked: selecting a rectangle already highlighted
+   * The CFG lens passes the start line of the block you just clicked: selecting a rectangle already highlighted
    * its lines, but without this the highlight could sit outside the scrolled viewport — a graph click that
    * changes something you cannot see is half a binding.
    */

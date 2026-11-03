@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Instrument } from "./Instrument";
 import { Palette } from "./Palette";
 import { Chip, Panel, Unavailable } from "./shell";
-import { Spine } from "./rooms/Spine";
+import { Cfg } from "./rooms/Cfg";
 import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
 import { MigrationRoom } from "./rooms/Migration";
@@ -91,7 +91,7 @@ export function App() {
 
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-white/8 bg-[#0e1116] px-3 py-1.5">
-            {/* Lenses are Understand controls — hiding them in other rooms avoids implying Spine/CFG
+            {/* Lenses are Understand controls — hiding them in other rooms avoids implying CFG/Dataflow
                 tabs apply to Migration/Taint/Architecture. */}
             {room === "understand" ? (
               <>
@@ -303,10 +303,10 @@ function UnderstandRoom({
         </div>
       </Panel>
 
-      {lens === "spine" && <Spine entry={entry} />}
+      {lens === "cfg" && <Cfg entry={entry} />}
       {/* Everything else in the control is a question phase 3 answers. `code` and `cfgpdg` are gone: both
-          were the Spine in another frame, and both are now controls inside it (show source / graph height). */}
-      {lens !== "spine" && <LensPlaceholder lens={lens} />}
+          were the CFG lens in another frame, and both are now controls inside it (show source / graph height). */}
+      {lens !== "cfg" && <LensPlaceholder lens={lens} />}
     </div>
   );
 }

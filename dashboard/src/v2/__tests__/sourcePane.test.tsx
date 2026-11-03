@@ -1,7 +1,7 @@
 /**
- * The source pane: the reader inside the Spine.
+ * The source pane: the reader inside the CFG lens.
  *
- * It exists as its own component because the SourcePane is reached from one place now (the Spine's source
+ * It exists as its own component because the SourcePane is reached from one place now (the CFG lens's source
  * column, which the `show source` control collapses) but it owns real behaviour: loading, two typed
  * absences, the subject's line span, and a remembered reading position across lens switches. Those are the
  * claims tested here, and they were the ones missing when this was a paragraph describing a reader.
@@ -15,7 +15,7 @@ import { installFetchStub, SOURCE_LINES, SOURCE_PATH, SUBJECT } from "./fixture"
 
 function renderLens(functionId = SUBJECT) {
   const history = createMemoryHistory({
-    initialEntries: [`/understand?lens=spine&focus=${functionId}`],
+    initialEntries: [`/understand?lens=cfg&focus=${functionId}`],
   });
   const router = createAppRouter(history);
   const { container } = render(
@@ -74,7 +74,7 @@ describe("the Code lens draws the source", () => {
   });
 
   it("remembers where you were reading, instead of snapping back to the subject", async () => {
-    const history = createMemoryHistory({ initialEntries: [`/understand?lens=spine&focus=${SUBJECT}`] });
+    const history = createMemoryHistory({ initialEntries: [`/understand?lens=cfg&focus=${SUBJECT}`] });
     const router = createAppRouter(history);
     const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
     const { unmount } = render(
@@ -90,7 +90,7 @@ describe("the Code lens draws the source", () => {
     unmount();
 
     // Back to the same file through the other lens: the pane must resume at 420, not re-centre the span.
-    const history2 = createMemoryHistory({ initialEntries: [`/understand?lens=spine&focus=${SUBJECT}`] });
+    const history2 = createMemoryHistory({ initialEntries: [`/understand?lens=cfg&focus=${SUBJECT}`] });
     render(
       <QueryClientProvider client={client}>
         <RouterProvider router={createAppRouter(history2)} />

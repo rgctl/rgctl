@@ -45,7 +45,7 @@ export function useFocus(): FocusState {
   const navigate = roomApi.useNavigate();
 
   const room = (isRoom(params.roomId) ? params.roomId : DEFAULT_ROOM) as RoomId;
-  const lens = (isLens(search.lens) ? search.lens : "spine") as LensId;
+  const lens = (isLens(search.lens) ? search.lens : "cfg") as LensId;
   const focus = (search.focus as Focus | undefined) ?? null;
 
   const functions = useQuery({ queryKey: ["functions"], queryFn: loadFunctions });
