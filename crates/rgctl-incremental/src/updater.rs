@@ -10,8 +10,8 @@ use rgctl_analysis::{
     BlastEngineSnapshot, CfgPdgArchive, MacroCallIndex, MacroCallLookupDb, SemanticIndex,
 };
 use rgctl_error::Result;
-use rgctl_extraction::discovery::{DiscoveryConfig, FileDiscoverer};
-use rgctl_extraction::{Extractor, FactsCache, GraphBuilder};
+use rgctl_extraction::discovery::{DiscoveryConfig, DiscoveryInventory, FileDiscoverer};
+use rgctl_extraction::{Extractor, FactsCache, GraphBuilder, TemplateDependencies};
 use rgctl_graph::code_graph::CodeGraph;
 use rgctl_graph::schema::EdgeType;
 use rgctl_graph::{
@@ -19,7 +19,7 @@ use rgctl_graph::{
     write_columnar_from_backend,
 };
 use rgctl_pipeline::parallel::par_map;
-use rgctl_pipeline::stream::{DEFAULT_STREAM_CHANNEL_CAPACITY, stream_into_graph};
+use rgctl_pipeline::stream::{DEFAULT_STREAM_CHANNEL_CAPACITY, stream_inventory_into_graph};
 use rgctl_pipeline::{PipelineConfig, ProcessingPipeline};
 use rgctl_registry::LanguageRegistry;
 use std::collections::HashMap;
@@ -77,6 +77,7 @@ impl UpdateResult {
 pub struct IncrementalUpdater {
     registry: Arc<LanguageRegistry>,
     config: UpdateOptions,
+    inventory: Option<Arc<DiscoveryInventory>>,
 }
 
 impl Default for UpdateOptions {
@@ -98,25 +99,214 @@ impl IncrementalUpdater {
         Self {
             registry,
             config: UpdateOptions::default(),
+            inventory: None,
         }
     }
 
     /// Create an updater with custom options.
     pub fn with_options(registry: Arc<LanguageRegistry>, config: UpdateOptions) -> Self {
-        Self { registry, config }
+        Self {
+            registry,
+            config,
+            inventory: None,
+        }
+    }
+
+    /// Apply the operation with immutable repository-local routing.
+    pub fn update(&self, graph: &mut CodeGraph, repo_root: &Path) -> Result<UpdateResult> {
+        self.bound(repo_root)?.update_bound(graph, repo_root)
+    }
+
+    /// Apply the operation with immutable repository-local routing.
+    pub fn update_files(
+        &self,
+        graph: &mut CodeGraph,
+        repo_root: &Path,
+        relative_paths: &[String],
+    ) -> Result<UpdateResult> {
+        self.bound(repo_root)?
+            .update_files_bound(graph, repo_root, relative_paths)
+    }
+
+    /// Apply the operation with immutable repository-local routing.
+    pub fn apply_change_set(
+        &self,
+        graph: &mut CodeGraph,
+        repo_root: &Path,
+        changes: ChangeSet,
+    ) -> Result<UpdateResult> {
+        self.bound(repo_root)?
+            .apply_change_set_bound(graph, repo_root, changes)
+    }
+
+    /// Apply the operation with immutable repository-local routing.
+    pub fn apply_change_set_to_snapshot(
+        &self,
+        base_snapshot: &Path,
+        output_snapshot: &Path,
+        work_root: &Path,
+        repo_root: &Path,
+        changes: ChangeSet,
+    ) -> Result<UpdateResult> {
+        self.bound(repo_root)?.apply_change_set_to_snapshot_bound(
+            base_snapshot,
+            output_snapshot,
+            work_root,
+            repo_root,
+            changes,
+        )
+    }
+
+    fn bound(&self, root: &Path) -> Result<Self> {
+        let registry = Arc::new(
+            self.registry
+                .for_repository(root)?
+                .with_language_filter(self.config.discovery.languages.clone()),
+        );
+        let inventory =
+            FileDiscoverer::with_config(Arc::clone(&registry), self.config.discovery.clone())
+                .discover_inventory(root)?;
+        Ok(Self {
+            registry,
+            config: self.config.clone(),
+            inventory: Some(Arc::new(inventory)),
+        })
+    }
+    fn discover_files(&self, root: &Path) -> Result<Vec<PathBuf>> {
+        let Some(inventory) = &self.inventory else {
+            return FileDiscoverer::with_config(
+                Arc::clone(&self.registry),
+                self.config.discovery.clone(),
+            )
+            .discover(root);
+        };
+        let mut files = inventory.files.clone();
+        let snapshot = MmappedGraphSnapshot::default_path(root);
+        let dependencies = if snapshot.is_file() {
+            let store = rgctl_graph::snapshot::SnapshotNodeStore::open(&snapshot)?;
+            TemplateDependencies::load(root, store.content_digest()?)
+        } else {
+            None
+        };
+        let known: std::collections::HashSet<_> = dependencies
+            .as_ref()
+            .map(|deps| deps.files().chain(deps.candidate_paths()).collect())
+            .unwrap_or_default();
+        files.extend(
+            inventory
+                .template_candidates
+                .iter()
+                .filter(|(path, ordinary)| {
+                    *ordinary || known.contains(path.to_string_lossy().as_ref())
+                })
+                .map(|(path, _)| path.clone()),
+        );
+        if let Some(dependencies) = &dependencies {
+            dependencies.filter_declined_candidates(&self.registry, &mut files);
+        }
+        files.sort();
+        files.dedup();
+        Ok(files)
+    }
+    fn template_delta(
+        &self,
+        root: &Path,
+        snapshot: &Path,
+        graph: Option<&CodeGraph>,
+        paths: &[String],
+        changes: &ChangeSet,
+    ) -> Result<(crate::template_update::TemplatePlan, DiscoveryInventory)> {
+        let mut changed: Vec<_> = paths
+            .iter()
+            .chain(changes.deleted.iter())
+            .map(|path| resolve_path(root, path))
+            .collect();
+        changed.sort();
+        changed.dedup();
+        let plan = crate::template_update::plan(&self.registry, root, snapshot, graph, &changed)?;
+        let mut inventory = self.inventory.as_deref().cloned().unwrap_or_default();
+        inventory
+            .files
+            .retain(|path| plan.affected.contains(path.to_string_lossy().as_ref()));
+        for (path, ordinary) in &mut inventory.template_candidates {
+            *ordinary &= plan.affected.contains(path.to_string_lossy().as_ref());
+        }
+        Ok((plan, inventory))
+    }
+    fn template_settings_changed(&self, root: &Path, snapshot: &Path) -> Result<bool> {
+        if !snapshot.is_file() {
+            return Ok(false);
+        }
+        let store = rgctl_graph::snapshot::SnapshotNodeStore::open(snapshot)?;
+        Ok(TemplateDependencies::load(root, store.content_digest()?)
+            .is_some_and(|deps| !deps.settings_match(&self.registry)))
+    }
+    fn save_tracker(
+        &self,
+        root: &Path,
+        graph: &CodeGraph,
+        new_hashes: &HashMap<String, String>,
+    ) -> Result<()> {
+        use rgctl_graph::backend::GraphBackend;
+        let old = FileTracker::load(root)?;
+        let mut hashes: HashMap<String, String> = old
+            .file_hashes()
+            .iter()
+            .map(|(path, hash)| {
+                (
+                    resolve_path(root, path).to_string_lossy().into_owned(),
+                    hash.clone(),
+                )
+            })
+            .collect();
+        hashes.extend(
+            new_hashes
+                .iter()
+                .map(|(path, hash)| (path.clone(), hash.clone())),
+        );
+        let mapping = crate::file_tracker::build_node_mapping(graph);
+        let mut files = Vec::new();
+        for path in mapping.keys() {
+            let file =
+                rgctl_graph::schema::Node::new(rgctl_graph::schema::NodeType::File, path.clone())
+                    .with_file_path(path.clone());
+            let source = resolve_path(root, path);
+            if graph.backend().get_node(file.id)?.is_some() && source.is_file() {
+                files.push(source);
+            }
+        }
+        files.sort();
+        let mut tracker = FileTracker::new(root);
+        tracker.index_files_with_mapping(&files, mapping, Some(&hashes))?;
+        tracker.save().map(|_| ())
+    }
+    fn save_template_dependencies(
+        &self,
+        dependencies: &mut TemplateDependencies,
+        root: &Path,
+        snapshot: &Path,
+    ) -> Result<()> {
+        let store = rgctl_graph::snapshot::SnapshotNodeStore::open(snapshot)?;
+        dependencies.save(root, store.content_digest()?)
     }
 
     /// Update the graph for a repository, returning statistics.
-    pub fn update(&self, graph: &mut CodeGraph, repo_root: &Path) -> Result<UpdateResult> {
+    fn update_bound(&self, graph: &mut CodeGraph, repo_root: &Path) -> Result<UpdateResult> {
         let start = Instant::now();
+        if self
+            .template_settings_changed(repo_root, &MmappedGraphSnapshot::default_path(repo_root))?
+        {
+            tracing::info!(
+                "Language selection or Ansible/Jinja routing/syntax settings changed; rebuilding graph"
+            );
+            return self.full_rebuild(graph, repo_root, start);
+        }
 
         if self.config.force {
             return self.full_rebuild(graph, repo_root, start);
         }
 
-        let discoverer =
-            FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
-        let all_files = discoverer.discover(repo_root)?;
+        let all_files = self.discover_files(repo_root)?;
 
         let changes = if let Some(ref since) = self.config.since {
             self.changes_from_git(repo_root, since, &all_files)?
@@ -136,22 +326,28 @@ impl IncrementalUpdater {
     }
 
     /// Apply a pre-built git or tracker [`ChangeSet`] to the repo snapshot.
-    pub fn apply_change_set(
+    fn apply_change_set_bound(
         &self,
         graph: &mut CodeGraph,
         repo_root: &Path,
         changes: ChangeSet,
     ) -> Result<UpdateResult> {
         let start = Instant::now();
+        if self
+            .template_settings_changed(repo_root, &MmappedGraphSnapshot::default_path(repo_root))?
+        {
+            tracing::info!(
+                "Language selection or Ansible/Jinja routing/syntax settings changed; rebuilding graph"
+            );
+            return self.full_rebuild(graph, repo_root, start);
+        }
         if changes.is_empty() {
             return Ok(UpdateResult {
                 duration: start.elapsed(),
                 ..Default::default()
             });
         }
-        let discoverer =
-            FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
-        let all_files = discoverer.discover(repo_root)?;
+        let all_files = self.discover_files(repo_root)?;
         self.apply_changes(graph, repo_root, &all_files, changes, start)
     }
 
@@ -160,7 +356,7 @@ impl IncrementalUpdater {
     ///
     /// Spill and compact scratch live under `work_root`. Source files are still read from
     /// `repo_root` (working tree). Used by review/pr-check delta-head synthesis (#124).
-    pub fn apply_change_set_to_snapshot(
+    fn apply_change_set_to_snapshot_bound(
         &self,
         base_snapshot: &Path,
         output_snapshot: &Path,
@@ -169,6 +365,28 @@ impl IncrementalUpdater {
         changes: ChangeSet,
     ) -> Result<UpdateResult> {
         let start = Instant::now();
+        if self.template_settings_changed(repo_root, base_snapshot)? {
+            let pipeline = ProcessingPipeline::with_config(
+                Arc::clone(&self.registry),
+                PipelineConfig {
+                    discovery: self.config.discovery.clone(),
+                    show_progress: self.config.show_progress,
+                    thread_count: self.config.thread_count,
+                    ..Default::default()
+                },
+            );
+            let (stats, _) = pipeline.process_repository_to_snapshot(
+                repo_root,
+                output_snapshot,
+                Some(work_root),
+            )?;
+            return Ok(UpdateResult {
+                nodes_added: stats.nodes_created,
+                edges_added: stats.edges_created,
+                duration: start.elapsed(),
+                ..Default::default()
+            });
+        }
         if !base_snapshot.is_file() {
             return Err(rgctl_error::Error::NotFound(format!(
                 "base snapshot not found at {}",
@@ -196,31 +414,52 @@ impl IncrementalUpdater {
         };
 
         let extract_paths = self.expand_extract_paths(repo_root, base_snapshot, &changes)?;
-        let paths_to_update: Vec<PathBuf> = extract_paths
-            .iter()
-            .map(|rel| resolve_path(repo_root, rel))
-            .collect();
+        let (template_plan, inventory) =
+            self.template_delta(repo_root, base_snapshot, None, &extract_paths, &changes)?;
+        let mut invalidations = template_plan.affected.clone();
+        invalidations.extend(template_plan.role_invalidations.iter().cloned());
 
         let facts = Arc::new(FactsCache::load(repo_root));
-        let extractor =
-            Extractor::new(Arc::clone(&self.registry)).with_facts_cache(Arc::clone(&facts));
+        let extractor = Extractor::new(Arc::clone(&self.registry))
+            .with_languages(self.config.discovery.languages.clone())
+            .with_facts_cache(Arc::clone(&facts));
         let spill_dir = work_root.join("spill_delta");
         if spill_dir.exists() {
             std::fs::remove_dir_all(&spill_dir)?;
         }
         std::fs::create_dir_all(&spill_dir)?;
+        let extractor = extractor.with_template_targets(template_plan.template_targets);
         let mut builder = GraphBuilder::with_spill(&spill_dir)?;
-        let (_stream_stats, tails) = stream_into_graph(
+        builder.set_template_context(&self.registry);
+        builder.seed_template_dependencies(
+            template_plan
+                .dependencies
+                .without_files(&template_plan.affected),
+        );
+        let (stream_stats, tails) = stream_inventory_into_graph(
             self.config.thread_count,
             &extractor,
             Arc::clone(&self.registry),
-            &paths_to_update,
+            &inventory,
             DEFAULT_STREAM_CHANNEL_CAPACITY,
             &mut builder,
             || {},
         )?;
+        invalidations.extend(stream_stats.file_hashes.keys().cloned());
+        let paths_to_update: Vec<_> = stream_stats.file_hashes.keys().map(PathBuf::from).collect();
         builder.build_resolution_indexes();
         extractor.populate_pass2(&tails, &mut builder)?;
+        let mut template_dependencies = builder.take_template_dependencies(&self.registry);
+        if let Some(walk) = &self.inventory {
+            template_dependencies.update_classifications(
+                stream_stats.excluded_classifications,
+                walk.files.iter().cloned().chain(
+                    walk.template_candidates
+                        .iter()
+                        .map(|(path, _)| path.clone()),
+                ),
+            );
+        }
         let finished = builder.finish_spill()?;
         let (new_nodes, new_edges) =
             rgctl_graph::segmented_spill::materialize_sorted_graph(&finished)?;
@@ -229,8 +468,9 @@ impl IncrementalUpdater {
         result.edges_added = new_edges.len();
 
         let mut delta = DeltaSegment::new();
-        for rel in extract_paths.iter().chain(changes.deleted.iter()) {
-            delta.invalidate_file(rel);
+        for path in &invalidations {
+            delta.invalidate_file(path);
+            delta.invalidate_file(&relative_path(repo_root, Path::new(path))?);
         }
         delta.new_nodes = new_nodes;
         delta.new_edges = new_edges;
@@ -245,6 +485,7 @@ impl IncrementalUpdater {
             let _ = write_columnar_from_backend(graph.backend(), output_snapshot)?;
         }
 
+        self.save_template_dependencies(&mut template_dependencies, work_root, output_snapshot)?;
         let _ = facts.save(repo_root);
 
         result.duration = start.elapsed();
@@ -252,13 +493,21 @@ impl IncrementalUpdater {
     }
 
     /// Update only the given repo-relative file paths.
-    pub fn update_files(
+    fn update_files_bound(
         &self,
         graph: &mut CodeGraph,
         repo_root: &Path,
         relative_paths: &[String],
     ) -> Result<UpdateResult> {
         let start = Instant::now();
+        if self
+            .template_settings_changed(repo_root, &MmappedGraphSnapshot::default_path(repo_root))?
+        {
+            tracing::info!(
+                "Language selection or Ansible/Jinja routing/syntax settings changed; rebuilding graph"
+            );
+            return self.full_rebuild(graph, repo_root, start);
+        }
         if relative_paths.is_empty() {
             return Ok(UpdateResult {
                 duration: start.elapsed(),
@@ -266,9 +515,7 @@ impl IncrementalUpdater {
             });
         }
 
-        let discoverer =
-            FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
-        let all_files = discoverer.discover(repo_root)?;
+        let all_files = self.discover_files(repo_root)?;
         let changes = crate::file_tracker::changes_for_paths(repo_root, relative_paths)?;
 
         if changes.is_empty() {
@@ -307,10 +554,12 @@ impl IncrementalUpdater {
         *graph = CodeGraph::open_snapshot(&snapshot_path)?;
 
         let mut tracker = FileTracker::new(repo_root);
-        let discoverer =
-            FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
-        let files = discoverer.discover(repo_root)?;
-        tracker.index_files(&files, graph)?;
+        let files: Vec<_> = stats.file_hashes.keys().map(PathBuf::from).collect();
+        tracker.index_files_with_mapping(
+            &files,
+            stats.node_path_mapping,
+            Some(&stats.file_hashes),
+        )?;
         tracker.save()?;
         // Keep legacy JSON export for callers that still read it.
         let _ = graph.save_to_repo(repo_root);
@@ -365,7 +614,7 @@ impl IncrementalUpdater {
         &self,
         graph: &mut CodeGraph,
         repo_root: &Path,
-        all_files: &[PathBuf],
+        _all_files: &[PathBuf],
         changes: ChangeSet,
         start: Instant,
         snapshot_path: &Path,
@@ -392,31 +641,52 @@ impl IncrementalUpdater {
         let edges_before = graph.edge_count();
 
         let extract_paths = self.expand_extract_paths(repo_root, snapshot_path, &changes)?;
-        let paths_to_update: Vec<PathBuf> = extract_paths
-            .iter()
-            .map(|rel| resolve_path(repo_root, rel))
-            .collect();
+        let (template_plan, inventory) =
+            self.template_delta(repo_root, snapshot_path, None, &extract_paths, &changes)?;
+        let mut invalidations = template_plan.affected.clone();
+        invalidations.extend(template_plan.role_invalidations.iter().cloned());
 
         let facts = Arc::new(FactsCache::load(repo_root));
-        let extractor =
-            Extractor::new(Arc::clone(&self.registry)).with_facts_cache(Arc::clone(&facts));
+        let extractor = Extractor::new(Arc::clone(&self.registry))
+            .with_languages(self.config.discovery.languages.clone())
+            .with_facts_cache(Arc::clone(&facts));
         let spill_dir = repo_root.join(".rgctl").join("spill_delta");
         if spill_dir.exists() {
             std::fs::remove_dir_all(&spill_dir)?;
         }
         std::fs::create_dir_all(&spill_dir)?;
+        let extractor = extractor.with_template_targets(template_plan.template_targets);
         let mut builder = GraphBuilder::with_spill(&spill_dir)?;
-        let (_stream_stats, tails) = stream_into_graph(
+        builder.set_template_context(&self.registry);
+        builder.seed_template_dependencies(
+            template_plan
+                .dependencies
+                .without_files(&template_plan.affected),
+        );
+        let (stream_stats, tails) = stream_inventory_into_graph(
             self.config.thread_count,
             &extractor,
             Arc::clone(&self.registry),
-            &paths_to_update,
+            &inventory,
             DEFAULT_STREAM_CHANNEL_CAPACITY,
             &mut builder,
             || {},
         )?;
+        invalidations.extend(stream_stats.file_hashes.keys().cloned());
+        let paths_to_update: Vec<_> = stream_stats.file_hashes.keys().map(PathBuf::from).collect();
         builder.build_resolution_indexes();
         extractor.populate_pass2(&tails, &mut builder)?;
+        let mut template_dependencies = builder.take_template_dependencies(&self.registry);
+        if let Some(walk) = &self.inventory {
+            template_dependencies.update_classifications(
+                stream_stats.excluded_classifications,
+                walk.files.iter().cloned().chain(
+                    walk.template_candidates
+                        .iter()
+                        .map(|(path, _)| path.clone()),
+                ),
+            );
+        }
         let finished = builder.finish_spill()?;
         let (new_nodes, new_edges) =
             rgctl_graph::segmented_spill::materialize_sorted_graph(&finished)?;
@@ -425,8 +695,9 @@ impl IncrementalUpdater {
         result.edges_added = new_edges.len();
 
         let mut delta = DeltaSegment::new();
-        for rel in extract_paths.iter().chain(changes.deleted.iter()) {
-            delta.invalidate_file(rel);
+        for path in &invalidations {
+            delta.invalidate_file(path);
+            delta.invalidate_file(&relative_path(repo_root, Path::new(path))?);
         }
         delta.new_nodes = new_nodes;
         delta.new_edges = new_edges;
@@ -464,11 +735,10 @@ impl IncrementalUpdater {
             pb.finish_with_message("done");
         }
 
-        let mut tracker = FileTracker::new(repo_root);
-        tracker.index_files(all_files, graph)?;
-        tracker.save()?;
+        self.save_tracker(repo_root, graph, &stream_stats.file_hashes)?;
         let _ = graph.save_to_repo(repo_root);
 
+        self.save_template_dependencies(&mut template_dependencies, repo_root, snapshot_path)?;
         result.duration = start.elapsed();
         Ok(result)
     }
@@ -478,7 +748,7 @@ impl IncrementalUpdater {
         &self,
         graph: &mut CodeGraph,
         repo_root: &Path,
-        all_files: &[PathBuf],
+        _all_files: &[PathBuf],
         changes: ChangeSet,
         start: Instant,
     ) -> Result<UpdateResult> {
@@ -502,33 +772,20 @@ impl IncrementalUpdater {
 
         let edges_before = graph.edge_count();
 
-        for rel in &changes.deleted {
-            let removed = graph.backend_mut().remove_nodes_for_file(rel)?;
-            result.nodes_removed += removed;
-            if let Some(pb) = &progress {
-                pb.inc(1);
-            }
-        }
-
         let snapshot_path = MmappedGraphSnapshot::default_path(repo_root);
-        let extract_paths = if snapshot_path.is_file() {
-            self.expand_extract_paths(repo_root, &snapshot_path, &changes)?
-        } else {
-            changes.extract_paths()
-        };
-        let paths_to_update: Vec<PathBuf> = extract_paths
-            .iter()
-            .map(|rel| resolve_path(repo_root, rel))
-            .collect();
-
-        for path in &paths_to_update {
-            if let Ok(rel) = relative_path(repo_root, path) {
-                let removed = graph.backend_mut().remove_nodes_for_file(&rel)?;
-                result.nodes_removed += removed;
-            }
-            if let Some(pb) = &progress {
-                pb.inc(1);
-            }
+        let extract_paths = changes.extract_paths();
+        let (template_plan, inventory) = self.template_delta(
+            repo_root,
+            &snapshot_path,
+            Some(graph),
+            &extract_paths,
+            &changes,
+        )?;
+        let mut invalidations = template_plan.affected.clone();
+        invalidations.extend(template_plan.role_invalidations.iter().cloned());
+        for path in &invalidations {
+            let rel = relative_path(repo_root, Path::new(path))?;
+            result.nodes_removed += graph.backend_mut().remove_nodes_for_file(&rel)?;
         }
 
         if let Some(pb) = progress {
@@ -536,21 +793,48 @@ impl IncrementalUpdater {
         }
 
         let facts = Arc::new(FactsCache::load(repo_root));
-        let extractor =
-            Extractor::new(Arc::clone(&self.registry)).with_facts_cache(Arc::clone(&facts));
+        let extractor = Extractor::new(Arc::clone(&self.registry))
+            .with_languages(self.config.discovery.languages.clone())
+            .with_facts_cache(Arc::clone(&facts));
+        let extractor = extractor.with_template_targets(template_plan.template_targets);
         let mut builder = GraphBuilder::new();
-        let (stream_stats, tails) = stream_into_graph(
+        builder.set_template_context(&self.registry);
+        builder.seed_template_dependencies(
+            template_plan
+                .dependencies
+                .without_files(&template_plan.affected),
+        );
+        let (stream_stats, tails) = stream_inventory_into_graph(
             self.config.thread_count,
             &extractor,
             Arc::clone(&self.registry),
-            &paths_to_update,
+            &inventory,
             DEFAULT_STREAM_CHANNEL_CAPACITY,
             &mut builder,
             || {},
         )?;
-        let _ = stream_stats;
+        let paths_to_update: Vec<_> = stream_stats.file_hashes.keys().map(PathBuf::from).collect();
+        for path in &paths_to_update {
+            let key = path.to_string_lossy();
+            if !invalidations.contains(key.as_ref()) {
+                result.nodes_removed += graph
+                    .backend_mut()
+                    .remove_nodes_for_file(&relative_path(repo_root, path)?)?;
+            }
+        }
         builder.build_resolution_indexes();
         extractor.populate_pass2(&tails, &mut builder)?;
+        let mut template_dependencies = builder.take_template_dependencies(&self.registry);
+        if let Some(walk) = &self.inventory {
+            template_dependencies.update_classifications(
+                stream_stats.excluded_classifications,
+                walk.files.iter().cloned().chain(
+                    walk.template_candidates
+                        .iter()
+                        .map(|(path, _)| path.clone()),
+                ),
+            );
+        }
         let (new_nodes, new_edges) = builder.into_graph();
         let nodes_added = new_nodes.len();
         let edges_added = new_edges.len();
@@ -566,13 +850,12 @@ impl IncrementalUpdater {
         result.edges_added = edges_added + relation_edges;
         result.edges_removed = edges_before.saturating_sub(graph.edge_count());
 
-        let mut tracker = FileTracker::new(repo_root);
-        tracker.index_files(all_files, graph)?;
-        tracker.save()?;
+        self.save_tracker(repo_root, graph, &stream_stats.file_hashes)?;
         graph.save_to_repo(repo_root)?;
         // Persist columnar snapshot so subsequent updates can use the compact path.
-        let _ = graph.save_snapshot(repo_root);
+        write_columnar_from_backend(graph.backend(), &snapshot_path)?;
         let _ = facts.save(repo_root);
+        self.save_template_dependencies(&mut template_dependencies, repo_root, &snapshot_path)?;
 
         result.duration = start.elapsed();
         Ok(result)
@@ -613,8 +896,9 @@ impl IncrementalUpdater {
         }
 
         let facts = Arc::new(FactsCache::load(repo_root));
-        let extractor =
-            Extractor::new(Arc::clone(&self.registry)).with_facts_cache(Arc::clone(&facts));
+        let extractor = Extractor::new(Arc::clone(&self.registry))
+            .with_languages(self.config.discovery.languages.clone())
+            .with_facts_cache(Arc::clone(&facts));
         let symbol_index = graph.backend().build_symbol_index();
         let repo_root = repo_root.to_path_buf();
 

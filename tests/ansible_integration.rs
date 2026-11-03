@@ -1,0 +1,240 @@
+//! Persisted CLI navigation across the automation graph; each command reopens mmap.
+#[path = "support/automation.rs"]
+mod automation;
+use automation::{cli, fixture};
+use rgctl_graph::{
+    SnapshotNodeStore, assert_graph_invariants,
+    schema::{EdgeType, NodeType},
+};
+#[test]
+fn ansible_cli_persists_roles_templates_variables_and_runtime_evidence() {
+    let repo = fixture("ecommerce-ansible");
+    let root = repo.path();
+    cli(root, &["discover", ".", "-l", "ansible,jinja"]);
+    let found = cli(
+        root,
+        &["find", "Render config", "--exact", "--lang", "ansible"],
+    );
+    assert_eq!(found["schema_version"], 2);
+    assert_eq!(found["entities"].as_array().unwrap().len(), 2);
+    let inventory = cli(root, &["inventory", "--by", "lang"]);
+    for language in ["ansible", "jinja"] {
+        assert!(
+            inventory["counts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["key"] == language && entry["count"].as_u64().unwrap() > 0),
+            "{inventory}"
+        );
+    }
+    let renders = cli(
+        root,
+        &["relations", "--edge", "renderstemplate", "--limit", "100"],
+    );
+    assert_eq!(renders["edges"].as_array().unwrap().len(), 2, "{renders}");
+    for edge in ["includesrole", "dependson", "references", "usesfact"] {
+        assert!(
+            cli(root, &["relations", "--edge", edge])["total"]
+                .as_u64()
+                .unwrap()
+                > 0,
+            "{edge}"
+        );
+    }
+    cli(root, &["callers", "webLabel"]);
+    cli(root, &["callees", "correctnessRoot"]);
+    let graph = SnapshotNodeStore::open(&root.join(".rgctl/graph.snapshot.bin")).unwrap();
+    let col = graph.columnar().unwrap();
+    assert_graph_invariants(col).unwrap();
+    let nodes: Vec<_> = (0..col.node_count())
+        .map(|i| col.materialize_node_at(i).unwrap())
+        .collect();
+    for (from, to, edge) in col.edge_topology_typed().unwrap() {
+        let source = nodes.iter().find(|node| node.id == from).unwrap();
+        let target = nodes.iter().find(|node| node.id == to).unwrap();
+        if edge == EdgeType::RendersTemplate || edge == EdgeType::NotifiesHandler {
+            assert!(
+                target
+                    .file_path
+                    .as_deref()
+                    .unwrap()
+                    .starts_with(source.get_property("role_root").unwrap())
+            );
+        }
+        if edge == EdgeType::RendersTemplate {
+            assert_eq!(target.node_type, NodeType::File);
+        }
+    }
+    assert!(nodes.iter().any(|node| {
+        node.get_property("source_references_json")
+            .unwrap_or("")
+            .contains("dynamic_target")
+    }));
+    assert!(!nodes.iter().any(|node| node.node_type == NodeType::Class));
+    // Existing JSON GQL node results retain compact scalar evidence after reopen.
+    let evidence = cli(
+        root,
+        &[
+            "gql",
+            "MATCH (n:AnsibleTask) WHERE n.source_references_json LIKE '*' RETURN n LIMIT 100",
+        ],
+    );
+    assert!(evidence["count"].as_u64().unwrap_or(0) > 0, "{evidence}");
+    cli(root, &["discover", ".", "-l", "ansible,jinja"]);
+    let warm = SnapshotNodeStore::open(&root.join(".rgctl/graph.snapshot.bin")).unwrap();
+    assert_eq!(
+        graph.content_digest().unwrap(),
+        warm.content_digest().unwrap()
+    );
+    cli(root, &["discover", "."]);
+    let all = SnapshotNodeStore::open(&root.join(".rgctl/graph.snapshot.bin")).unwrap();
+    let col = all.columnar().unwrap();
+    assert!(
+        (0..col.node_count())
+            .map(|i| col.materialize_node_at(i).unwrap())
+            .any(|node| node.node_type == NodeType::ConfigKey
+                && node
+                    .file_path
+                    .as_deref()
+                    .unwrap_or("")
+                    .ends_with("inventory.yml"))
+    );
+}
+
+#[test]
+fn warm_language_filter_changes_reclassify_yaml_and_update_tracker() {
+    let repo = tempfile::TempDir::new().unwrap();
+    let root = repo.path();
+    std::fs::write(
+        root.join("deploy.yaml"),
+        "- hosts: all\n  tasks:\n    - debug: {msg: '{{ value }}'}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("base.j2"), "{{ value }}").unwrap();
+    cli(root, &["discover", ".", "-l", "ansible"]);
+    assert!(
+        cli(root, &["find", "--lang", "ansible"])["total"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    cli(root, &["discover", ".", "-l", "yaml"]);
+    assert_eq!(cli(root, &["find", "--lang", "ansible"])["total"], 0);
+    let tracker = rgctl_incremental::FileTracker::load(root).unwrap();
+    assert!(!tracker.file_hashes().contains_key("deploy.yaml"));
+    cli(root, &["discover", ".", "-l", "jinja2"]);
+    assert!(
+        cli(root, &["find", "--lang", "jinja"])["total"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+}
+
+#[test]
+fn discover_recovers_a_missing_sidecar_from_persisted_metadata() {
+    let repo = fixture("ecommerce-ansible");
+    let root = repo.path();
+    cli(root, &["discover", "."]);
+    let snapshot = root.join(".rgctl/graph.snapshot.bin");
+    let before = SnapshotNodeStore::open(&snapshot)
+        .unwrap()
+        .content_digest()
+        .unwrap()
+        .to_owned();
+    std::fs::remove_file(root.join(".rgctl/template-dependencies.bin")).unwrap();
+    cli(root, &["discover", "."]);
+    let after = SnapshotNodeStore::open(&snapshot).unwrap();
+    assert_eq!(before, after.content_digest().unwrap());
+    assert!(rgctl_extraction::TemplateDependencies::load(root, &before).is_some());
+}
+
+#[test]
+fn collection_qualified_roles_resolve_to_exact_local_layouts() {
+    let repo = tempfile::TempDir::new().unwrap();
+    let root = repo.path();
+    let role = root.join("ansible_collections/acme/demo/roles/web");
+    std::fs::create_dir_all(role.join("tasks")).unwrap();
+    std::fs::create_dir_all(role.join("templates")).unwrap();
+    std::fs::write(
+        root.join("deploy.yml"),
+        "- hosts: all\n  roles: [acme.demo.web]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        role.join("tasks/main.yml"),
+        "- template: {src: config.j2, dest: /etc/config}\n",
+    )
+    .unwrap();
+    std::fs::write(role.join("templates/config.j2"), "{{ service }}").unwrap();
+    cli(root, &["discover", ".", "-l", "ansible,jinja"]);
+    assert_eq!(
+        cli(root, &["relations", "--edge", "includesrole"])["total"],
+        1
+    );
+    assert_eq!(
+        cli(root, &["relations", "--edge", "renderstemplate"])["total"],
+        1
+    );
+}
+
+#[test]
+fn excluded_yaml_classifications_are_warm_reusable_and_refresh_on_edits() {
+    let repo = tempfile::TempDir::new().unwrap();
+    let root = repo.path();
+    std::fs::write(root.join("deploy.yml"), "- hosts: all\n  tasks: []\n").unwrap();
+    std::fs::write(
+        root.join("inventory.yml"),
+        "all:\n  hosts:\n    example: {}\n",
+    )
+    .unwrap();
+    cli(root, &["discover", ".", "-l", "ansible"]);
+    let path = root.join(".rgctl/graph.snapshot.bin");
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    cli(root, &["discover", ".", "-l", "ansible"]);
+    assert_eq!(
+        modified,
+        std::fs::metadata(&path).unwrap().modified().unwrap()
+    );
+    std::fs::remove_file(root.join(".rgctl/template-dependencies.bin")).unwrap();
+    cli(root, &["discover", ".", "-l", "ansible"]);
+    assert_eq!(
+        modified,
+        std::fs::metadata(&path).unwrap().modified().unwrap()
+    );
+    std::fs::write(
+        root.join("inventory.yml"),
+        "- hosts: localhost\n  tasks: []\n",
+    )
+    .unwrap();
+    cli(root, &["discover", ".", "-l", "ansible"]);
+    assert_eq!(
+        cli(root, &["find", "--type", "ansibleplaybook"])["total"],
+        2
+    );
+}
+
+#[test]
+fn embedded_macro_language_matches_name_type_and_inventory_queries() {
+    let repo = tempfile::TempDir::new().unwrap();
+    let root = repo.path();
+    std::fs::write(root.join("deploy.yml"),"- hosts: all\n  tasks:\n    - debug:\n        msg: \"{% macro embedded(value) %}{{ value }}{% endmacro %}{{ embedded(input) }}\"\n").unwrap();
+    cli(root, &["discover", ".", "-l", "ansible"]);
+    assert_eq!(
+        cli(root, &["find", "embedded", "--exact", "--lang", "ansible"])["total"],
+        1
+    );
+    assert_eq!(
+        cli(root, &["find", "--type", "function", "--lang", "ansible"])["total"],
+        1
+    );
+    assert_eq!(
+        cli(root, &["find", "embedded", "--exact", "--lang", "jinja"])["total"],
+        0
+    );
+    assert_eq!(
+        cli(root, &["find", "--type", "function", "--lang", "jinja"])["total"],
+        0
+    );
+}

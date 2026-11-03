@@ -12,7 +12,7 @@ use crate::snapshot::SnapshotNodeStore;
 use rgctl_error::{Error, Result};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
 /// JSON schema version for structured-query envelopes.
@@ -281,12 +281,59 @@ pub struct QueryFilters {
 /// Session over an open snapshot store.
 pub struct StructuredQuery<'a> {
     store: &'a SnapshotNodeStore,
+    template_languages: OnceLock<HashMap<String, &'static str>>,
 }
 
 impl<'a> StructuredQuery<'a> {
     /// Borrow a snapshot store (must already be open; no hydrate).
     pub fn new(store: &'a SnapshotNodeStore) -> Self {
-        Self { store }
+        Self {
+            store,
+            template_languages: OnceLock::new(),
+        }
+    }
+
+    // Structural roots encode canonical language-qualified identities in hot
+    // columns. Consult only their type index, once per query, so associated HTML
+    // and content-detected YAML retain attribution without hydrating every file.
+    fn template_languages(&self) -> Result<&HashMap<String, &'static str>> {
+        if self.template_languages.get().is_none() {
+            let mut languages = HashMap::new();
+            if let Some(col) = self.store.columnar() {
+                let indexes = col.indexes_shared()?;
+                for ty in [
+                    NodeType::Module,
+                    NodeType::AnsiblePlaybook,
+                    NodeType::AnsibleRole,
+                ] {
+                    if let Some(ids) = indexes.1.get(&ty) {
+                        for id in ids {
+                            let Some(idx) = col.find_node_index(*id) else {
+                                continue;
+                            };
+                            let qn = col.node_qualified_name_str(idx)?.unwrap_or("");
+                            let language =
+                                if qn.starts_with("jinja:") && qn.ends_with("::@template") {
+                                    Some("jinja")
+                                } else if qn.starts_with("ansible:") {
+                                    Some("ansible")
+                                } else {
+                                    None
+                                };
+                            if let (Some(language), Some(file)) =
+                                (language, col.node_file_path_str(idx)?)
+                            {
+                                languages.insert(file.to_owned(), language);
+                            }
+                        }
+                    }
+                }
+            }
+            let _ = self.template_languages.set(languages);
+        }
+        self.template_languages
+            .get()
+            .ok_or_else(|| Error::Other("missing language attribution index".into()))
     }
 
     /// Documented serve offload contract: call heavy methods from `spawn_blocking`.
@@ -384,15 +431,19 @@ impl<'a> StructuredQuery<'a> {
             return true;
         };
         let want = want.to_ascii_lowercase();
+        let want = match want.as_str() {
+            "j2" | "jinja2" => "jinja",
+            _ => want.as_str(),
+        };
         if let Some(v) = node.get_property("language") {
-            return v.eq_ignore_ascii_case(&want);
+            return v.eq_ignore_ascii_case(want);
         }
         let ext = node
             .file_path
             .as_deref()
             .and_then(|p| p.rsplit('.').next())
             .unwrap_or("");
-        lang_from_ext(ext).eq_ignore_ascii_case(&want)
+        lang_from_ext(ext).eq_ignore_ascii_case(want)
     }
 
     fn matches_class(node: &Node, class: Option<&str>) -> bool {
@@ -580,6 +631,11 @@ impl<'a> StructuredQuery<'a> {
     ) -> Result<Vec<Node>> {
         if let Some(col) = self.store.columnar() {
             let need_cold = Self::filters_need_cold_ext(filters);
+            let template_languages = filters
+                .lang
+                .as_ref()
+                .map(|_| self.template_languages())
+                .transpose()?;
             let mut out = Vec::new();
             for idx in 0..col.node_count() {
                 if let Some(want) = type_filter
@@ -605,7 +661,7 @@ impl<'a> StructuredQuery<'a> {
                         continue;
                     }
                 }
-                let node = if need_cold {
+                let mut node = if need_cold {
                     col.materialize_node_at(idx)?
                 } else {
                     let mut n = col.materialize_node_hot_at(idx)?;
@@ -614,6 +670,14 @@ impl<'a> StructuredQuery<'a> {
                     }
                     n
                 };
+                if let Some(language) = template_languages.and_then(|languages| {
+                    node.file_path
+                        .as_deref()
+                        .and_then(|path| languages.get(path))
+                }) {
+                    node.properties
+                        .insert("language".into(), (*language).to_owned());
+                }
                 if self.node_passes(&node, filters) {
                     out.push(node);
                 }
@@ -1122,12 +1186,30 @@ impl<'a> StructuredQuery<'a> {
             }
             InventoryBy::Lang => {
                 let mut map: HashMap<String, usize> = HashMap::new();
-                // Prefer hot file-extension heuristic (0 cold_ext). Property
-                // `language` is only consulted when class filters already force cold.
+                let file_languages = self.template_languages()?;
                 for n in self.collect_nodes_hot_scan(None, filters)? {
                     let lang = n
                         .get_property("language")
                         .map(|s| s.to_string())
+                        .or_else(|| {
+                            n.file_path
+                                .as_deref()
+                                .and_then(|path| file_languages.get(path))
+                                .map(|language| (*language).to_owned())
+                        })
+                        .or_else(|| {
+                            matches!(
+                                n.node_type,
+                                NodeType::AnsibleRole
+                                    | NodeType::AnsiblePlaybook
+                                    | NodeType::AnsiblePlay
+                                    | NodeType::AnsibleTask
+                                    | NodeType::AnsibleHandler
+                                    | NodeType::AnsibleVariable
+                                    | NodeType::AnsibleTemplate
+                            )
+                            .then(|| "ansible".to_owned())
+                        })
                         .unwrap_or_else(|| {
                             let ext = n
                                 .file_path
@@ -1441,6 +1523,7 @@ fn glob_match_rec(pat: &[u8], val: &[u8]) -> bool {
 
 fn lang_from_ext(ext: &str) -> String {
     match ext.to_ascii_lowercase().as_str() {
+        "j2" | "jinja" | "jinja2" => "jinja".into(),
         "rs" => "rust".into(),
         "java" => "java".into(),
         "c" | "h" => "c".into(),

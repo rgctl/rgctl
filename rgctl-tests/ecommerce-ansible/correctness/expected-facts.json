@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "language": "ansible",
+  "project": "ecommerce-ansible",
+  "graph": {
+    "severity": "required",
+    "min_functions": 8,
+    "exact_calls_edges": 4,
+    "forbidden_edges": [
+      {
+        "from": "correctnessLeaf",
+        "to": "correctnessRoot",
+        "edge_type": "Calls"
+      },
+      {
+        "from": "Render config",
+        "to": "webLabel",
+        "edge_type": "Calls"
+      }
+    ]
+  },
+  "symbols": {
+    "root": {
+      "match": {
+        "name": "correctnessRoot"
+      },
+      "unique": true,
+      "exact_callees": [
+        "correctnessMid"
+      ],
+      "exact_callers": []
+    },
+    "mid": {
+      "match": {
+        "name": "correctnessMid"
+      },
+      "unique": true,
+      "exact_callees": [
+        "correctnessLeaf"
+      ],
+      "exact_callers": [
+        "correctnessRoot"
+      ]
+    },
+    "leaf": {
+      "match": {
+        "name": "correctnessLeaf"
+      },
+      "unique": true,
+      "exact_callees": [],
+      "exact_callers": [
+        "correctnessMid"
+      ]
+    }
+  },
+  "invariants": {}
+}

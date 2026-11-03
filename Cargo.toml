@@ -1,4 +1,5 @@
 [workspace]
+exclude = ["vendor/tree-sitter-jinja"]
 members = [
     ".",
     "rgctl-macros",
@@ -46,6 +47,8 @@ members = [
     "crates/rgctl-lang-ruby",
     "crates/rgctl-lang-puppet",
     "crates/rgctl-lang-erb",
+    "crates/rgctl-lang-jinja",
+    "crates/rgctl-lang-ansible",
     "crates/rgctl-lang-kotlin",
     "crates/rgctl-lang-groovy",
     "crates/rgctl-lang-zig",
@@ -149,6 +152,8 @@ rgctl-lang-php = { path = "crates/rgctl-lang-php", version = "0.4.24" }
 rgctl-lang-ruby = { path = "crates/rgctl-lang-ruby", version = "0.4.24" }
 rgctl-lang-puppet = { path = "crates/rgctl-lang-puppet", version = "0.4.24" }
 rgctl-lang-erb = { path = "crates/rgctl-lang-erb", version = "0.4.24" }
+rgctl-lang-jinja = { path = "crates/rgctl-lang-jinja", version = "0.4.24" }
+rgctl-lang-ansible = { path = "crates/rgctl-lang-ansible", version = "0.4.24" }
 rgctl-lang-kotlin = { path = "crates/rgctl-lang-kotlin", version = "0.4.24" }
 rgctl-lang-groovy = { path = "crates/rgctl-lang-groovy", version = "0.4.24" }
 rgctl-lang-zig = { path = "crates/rgctl-lang-zig", version = "0.4.24" }
@@ -199,6 +204,7 @@ rgctl-lang-html = { path = "crates/rgctl-lang-html", version = "0.4.24" }
 rgctl-ast-coverage = { path = "crates/rgctl-ast-coverage", version = "0.4.24" }
 rgctl-languages = { path = "crates/rgctl-languages", version = "0.4.24" }
 tree-sitter = "0.25"
+tree-sitter-jinja = { path = "vendor/tree-sitter-jinja", version = "=0.13.0" }
 # OSV schema parse (no client); OpenVEX types for later VEX emission
 osv = { version = "0.3", default-features = false, features = ["schema"] }
 openvex = "0.1.1"
@@ -576,6 +582,14 @@ path = "tests/scale_perf_ci_gate.rs"
 [[test]]
 name = "docs_guides_cli_fact_check"
 path = "tests/docs_guides_cli_fact_check.rs"
+
+[[test]]
+name = "ansible_integration"
+path = "tests/ansible_integration.rs"
+
+[[test]]
+name = "jinja_integration"
+path = "tests/jinja_integration.rs"
 
 [[bench]]
 name = "parsing"

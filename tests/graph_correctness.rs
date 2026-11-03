@@ -98,6 +98,16 @@ const PROJECTS: &[ProjectSpec] = &[
         dir_name: "ecommerce-puppet",
         exclude: "spec,vendor",
     },
+    ProjectSpec {
+        id: "ansible",
+        dir_name: "ecommerce-ansible",
+        exclude: "",
+    },
+    ProjectSpec {
+        id: "jinja",
+        dir_name: "ecommerce-jinja",
+        exclude: "",
+    },
 ];
 
 fn assert_project(spec: &ProjectSpec) {
@@ -197,4 +207,13 @@ fn correctness_groovy() {
 #[test]
 fn correctness_puppet() {
     assert_project(&PROJECTS[13]);
+}
+
+#[test]
+fn correctness_ansible() {
+    assert_project(&PROJECTS[14]);
+}
+#[test]
+fn correctness_jinja() {
+    assert_project(&PROJECTS[15]);
 }

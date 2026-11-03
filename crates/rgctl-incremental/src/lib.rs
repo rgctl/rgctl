@@ -30,3 +30,7 @@ pub use synthesize_head::{
     synthesize_worktree_head_snapshot_at,
 };
 pub use updater::{IncrementalUpdater, UpdateOptions, UpdateResult};
+
+mod template_update;
+
+pub use template_update::recover_template_dependencies;

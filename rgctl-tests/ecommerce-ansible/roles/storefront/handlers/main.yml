@@ -1,0 +1,6 @@
+- name: Reload service
+  listen: reload service
+  debug: {msg: reload}
+- name: Refresh health
+  listen: reload service
+  debug: {msg: health}

@@ -37,7 +37,11 @@ pub fn full_registry() -> LanguageRegistry {
 }
 
 /// Registry for all language and config format plugins
+#[derive(Clone)]
 pub struct LanguageRegistry {
+    repository_root: Option<std::path::PathBuf>,
+    language_filter: Option<Vec<String>>,
+    templates: Option<crate::template_options::CompiledOptions>,
     /// Language plugins by language ID
     language_plugins: HashMap<String, Arc<dyn LanguagePlugin>>,
 
@@ -55,6 +59,9 @@ impl LanguageRegistry {
     /// Create an empty registry with no plugins registered.
     pub fn empty() -> Self {
         Self {
+            repository_root: None,
+            language_filter: None,
+            templates: None,
             language_plugins: HashMap::new(),
             config_plugins: HashMap::new(),
             extension_map: HashMap::new(),
@@ -82,6 +89,158 @@ impl LanguageRegistry {
     /// List all language plugin IDs.
     pub fn language_plugin_ids(&self) -> Vec<String> {
         self.language_plugins.keys().cloned().collect()
+    }
+
+    /// Bind final language selection for snapshot-reuse compatibility. Extraction
+    /// facts stay independent of this filter and can be reused by later selections.
+    pub fn with_language_filter(mut self, mut languages: Option<Vec<String>>) -> Self {
+        if let Some(ids) = &mut languages {
+            for id in ids.iter_mut() {
+                *id = crate::canonical_language_id(id).to_owned();
+            }
+            ids.sort();
+            ids.dedup();
+        }
+        self.language_filter = languages;
+        self
+    }
+    /// Final worker selection used to bind dependency/reuse state.
+    pub fn language_filter(&self) -> Option<&[String]> {
+        self.language_filter.as_deref()
+    }
+
+    /// Bind immutable routing settings to a repository without changing this registry.
+    pub fn for_repository(&self, root: &Path) -> Result<Self> {
+        #[derive(serde::Deserialize, Default)]
+        struct Config {
+            #[serde(default)]
+            languages: crate::TemplateOptions,
+        }
+        let path = root.join("rgctl.toml");
+        let options = match std::fs::read_to_string(&path) {
+            Ok(raw) => {
+                toml::from_str::<Config>(&raw)
+                    .map_err(|e| Error::ConfigError(format!("{}: {e}", path.display())))?
+                    .languages
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => crate::TemplateOptions::default(),
+            Err(e) => return Err(e.into()),
+        };
+        self.with_template_options(root, options)
+    }
+
+    /// Bind already-loaded options; useful for callers hosting multiple repositories.
+    pub fn with_template_options(
+        &self,
+        root: &Path,
+        options: crate::TemplateOptions,
+    ) -> Result<Self> {
+        for template_root in &options.jinja.template_roots {
+            let target = root.join(template_root);
+            if target.exists()
+                && root.exists()
+                && !target.canonicalize()?.starts_with(root.canonicalize()?)
+            {
+                return Err(Error::ConfigError(format!(
+                    "template root escapes repository: {template_root}"
+                )));
+            }
+        }
+        let mut registry = self.clone();
+        registry.repository_root = Some(root.to_path_buf());
+        registry.templates = Some(crate::template_options::CompiledOptions::new(options)?);
+        Ok(registry)
+    }
+
+    /// Repository fence for exact local source dependencies.
+    pub fn repository_root(&self) -> Option<&Path> {
+        self.repository_root.as_deref()
+    }
+
+    /// Ordered absolute loader roots resolved once from repository-relative settings.
+    pub fn template_roots(&self) -> Vec<String> {
+        self.template_options()
+            .map(|options| {
+                options
+                    .jinja
+                    .template_roots
+                    .iter()
+                    .map(|root| {
+                        self.repository_root
+                            .as_deref()
+                            .unwrap_or(Path::new(""))
+                            .join(root)
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Immutable extraction settings, if a repository has been bound.
+    pub fn template_options(&self) -> Option<&crate::TemplateOptions> {
+        self.templates.as_ref().map(|compiled| &compiled.options)
+    }
+
+    /// Explicit association. Errors are surfaced by discovery before workers start.
+    pub fn association(&self, path: &Path) -> Result<Option<&'static str>> {
+        let relative = self
+            .repository_root
+            .as_ref()
+            .and_then(|root| path.strip_prefix(root).ok())
+            .unwrap_or(path);
+        let association = self
+            .templates
+            .as_ref()
+            .map(|compiled| compiled.association(relative))
+            .transpose()?
+            .flatten();
+        if association.is_some()
+            && matches!(
+                classify_ingest_path(path),
+                IngestRoute::Manifest | IngestRoute::Workflow
+            )
+        {
+            return Err(Error::ConfigError(format!(
+                "association cannot override protected ingest route: {}",
+                path.display()
+            )));
+        }
+        Ok(association)
+    }
+
+    /// Possible literal targets retained by the existing walk. Outside recognized
+    /// role roots they become Jinja only when an exact source reference selects them.
+    pub fn is_template_pool_path(&self, path: &Path) -> bool {
+        if crate::template_options::alternate_template_dialect(path) {
+            return false;
+        }
+        !matches!(
+            classify_ingest_path(path),
+            IngestRoute::Manifest | IngestRoute::Workflow
+        ) && (path
+            .components()
+            .any(|component| component.as_os_str() == "templates")
+            || self
+                .template_roots()
+                .iter()
+                .any(|root| path.starts_with(root)))
+    }
+
+    /// YAML must reach the worker before a final language filter is applied.
+    pub fn is_ansible_candidate(&self, path: &Path) -> bool {
+        self.has_plugin("ansible")
+            && !matches!(
+                classify_ingest_path(path),
+                IngestRoute::Manifest | IngestRoute::Workflow
+            )
+            && (path
+                .extension()
+                .is_some_and(|ext| ext == "yaml" || ext == "yml")
+                || self
+                    .get_language_plugin("ansible")
+                    .is_some_and(|p| p.matches_path(&path.to_string_lossy())))
     }
 
     /// Register a language plugin
@@ -148,7 +307,10 @@ impl LanguageRegistry {
         file_path: &Path,
         source: &[u8],
     ) -> Result<Arc<dyn LanguagePlugin>> {
-        if classify_ingest_path(file_path) == IngestRoute::Manifest {
+        if matches!(
+            classify_ingest_path(file_path),
+            IngestRoute::Manifest | IngestRoute::Workflow
+        ) {
             return Err(Error::UnsupportedLanguage(
                 file_path.to_string_lossy().to_string(),
             ));
@@ -164,11 +326,35 @@ impl LanguageRegistry {
         self.get_plugin_for_file_path_only(file_path)
     }
 
+    /// Path-only language id for walk admission; no source read.
+    pub fn get_plugin_for_file_path_only_for_discovery(&self, path: &Path) -> Option<String> {
+        self.get_plugin_for_file_path_only(path)
+            .ok()
+            .map(|plugin| plugin.language_id().to_owned())
+    }
+
     fn get_plugin_for_file_path_only(&self, file_path: &Path) -> Result<Arc<dyn LanguagePlugin>> {
-        if classify_ingest_path(file_path) == IngestRoute::Manifest {
+        if matches!(
+            classify_ingest_path(file_path),
+            IngestRoute::Manifest | IngestRoute::Workflow
+        ) {
             return Err(Error::UnsupportedLanguage(
                 file_path.to_string_lossy().to_string(),
             ));
+        }
+
+        if let Some(id) = self.association(file_path)?
+            && let Some(plugin) = self.get_language_plugin(id)
+        {
+            return Ok(plugin);
+        }
+        if (file_path
+            .extension()
+            .is_some_and(|ext| matches!(ext.to_str(), Some("j2" | "jinja" | "jinja2")))
+            || crate::template_options::role_template(file_path))
+            && let Some(plugin) = self.get_language_plugin("jinja")
+        {
+            return Ok(plugin);
         }
 
         // `.m` is shared by Objective-C and MATLAB. Without source bytes, default to
@@ -224,8 +410,7 @@ impl LanguageRegistry {
         &self,
         file_path: &Path,
     ) -> Result<Arc<dyn ConfigFormatPlugin>> {
-        let path_str = file_path.to_string_lossy().replace('\\', "/");
-        if self.language_plugin_for_path(&path_str).is_some() {
+        if self.get_plugin_for_file_path_only(file_path).is_ok() {
             return Err(Error::UnsupportedLanguage(
                 file_path.to_string_lossy().to_string(),
             ));

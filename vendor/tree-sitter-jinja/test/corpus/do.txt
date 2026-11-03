@@ -1,0 +1,28 @@
+============
+do
+============
+
+{% do navigation.append('a string') %}
+
+-----
+
+(source
+  (content)
+  (statement
+    (do_statement
+      (expression
+        (expression
+          (expression
+            (binary_expression
+              (unary_expression
+                (primary_expression
+                  (identifier)))))
+          (identifier))
+        (arg
+          (expression
+            (binary_expression
+              (unary_expression
+                (primary_expression
+                  (literal
+                    (string_literal))))))))))
+  (content))

@@ -1,0 +1,7 @@
+{% import 'macros.jinja' as fields %}
+{% set options = namespace(enabled=true) %}
+{% for server in servers %}
+server {{ server.name }}:{{ server.port | default(service_port) }}
+{% endfor %}
+{{ fields.field('hostname', ansible_facts['hostname']) }}
+{% raw %}literal = {{ untouched }}{% endraw %}

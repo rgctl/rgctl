@@ -1,0 +1,85 @@
+=============
+with
+=============
+
+{% with x = 10 %}
+{% endwith %}
+
+{% with foo = 42 %}
+    {{ foo }}
+{% endwith %}
+
+{% with %}
+    {% set foo = 42 %}
+    {{ foo }}
+{% endwith %}
+
+----
+
+(source
+  (content)
+  (with_block
+    (with_statement
+      (assignment_expression
+        (identifier)
+        (binary_operator)
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (number_literal
+                    (dec_literal)))))))))
+    (content)
+    (endwith_statement))
+  (content)
+  (with_block
+    (with_statement
+      (assignment_expression
+        (identifier)
+        (binary_operator)
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (number_literal
+                    (dec_literal)))))))))
+    (content)
+    (render_expression
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier))))))
+    (content)
+    (endwith_statement))
+  (content)
+  (with_block
+    (with_statement)
+    (content)
+    (statement
+      (set_statement
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (identifier)))))
+        (binary_operator)
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (number_literal
+                    (dec_literal)))))))))
+    (content)
+    (render_expression
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier))))))
+    (content)
+    (endwith_statement))
+  (content))

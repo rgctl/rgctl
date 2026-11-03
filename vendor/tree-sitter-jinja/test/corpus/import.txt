@@ -1,0 +1,82 @@
+===================
+import
+===================
+
+{% extends "layout.html" %}
+{% from "test.html" import a, b as c %}
+{% import "meh.html" as meh %}
+{% import "module" as m without context %}
+{% import "module" as m with context %}
+{% from "module" import test without context %}
+{% from "module" import test with context %}
+{% from "foo" import bar, baz with context %}
+
+----
+
+(source
+  (content)
+  (statement
+    (extends_statement
+      (string_literal)))
+  (content)
+  (statement
+    (import_statement
+      (import_from
+        (string_literal))
+      (import_binding
+        (identifier))
+      (import_binding
+        (identifier)
+        (identifier))))
+  (content)
+  (statement
+    (import_statement
+      (string_literal)
+      (import_as
+        (identifier))))
+  (content)
+  (statement
+    (import_statement
+      (string_literal)
+      (import_as
+        (identifier))
+      (import_attribute
+        (attribute_context))))
+  (content)
+  (statement
+    (import_statement
+      (string_literal)
+      (import_as
+        (identifier))
+      (import_attribute
+        (attribute_context))))
+  (content)
+  (statement
+    (import_statement
+      (import_from
+        (string_literal))
+      (import_binding
+        (identifier))
+      (import_attribute
+        (attribute_context))))
+  (content)
+  (statement
+    (import_statement
+      (import_from
+        (string_literal))
+      (import_binding
+        (identifier))
+      (import_attribute
+        (attribute_context))))
+  (content)
+  (statement
+    (import_statement
+      (import_from
+        (string_literal))
+      (import_binding
+        (identifier))
+      (import_binding
+        (identifier))
+      (import_attribute
+        (attribute_context))))
+  (content))

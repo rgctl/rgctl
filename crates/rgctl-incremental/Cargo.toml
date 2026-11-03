@@ -7,6 +7,7 @@ description = "Incremental graph updates for rgctl"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+tracing = "0.1"
 rgctl-analysis = { path = "../rgctl-analysis" }
 rgctl-error = { path = "../rgctl-error" }
 rgctl-extraction = { path = "../rgctl-extraction" }

@@ -1,0 +1,22 @@
+[package]
+name = "rgctl-lang-ansible"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "rgctl structural Ansible source extraction with shared Jinja parsing"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rgctl-lang-jinja = { workspace = true }
+rgctl-plugin-api = { workspace = true }
+rgctl-registry = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-yaml = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+serde_yaml = "0.9"
+
+[lints]
+workspace = true

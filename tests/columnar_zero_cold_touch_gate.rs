@@ -16,6 +16,9 @@ use std::path::Path;
 use tempfile::TempDir;
 use uuid::Uuid;
 
+// The deserialization counter is process-wide, so assertions must not overlap.
+static COLD_COUNTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn write_chain_graph(path: &Path, n: usize) -> Vec<Uuid> {
     let mut backend = MemoryBackend::new();
     let mut ids = Vec::with_capacity(n);
@@ -39,6 +42,7 @@ fn write_chain_graph(path: &Path, n: usize) -> Vec<Uuid> {
 
 #[test]
 fn diff_snapshots_zero_cold_ext() {
+    let _guard = COLD_COUNTER_LOCK.lock().unwrap();
     let tmp = TempDir::new().unwrap();
     let base_path = tmp.path().join("base.bin");
     let head_path = tmp.path().join("head.bin");
@@ -59,6 +63,7 @@ fn diff_snapshots_zero_cold_ext() {
 
 #[test]
 fn blast_scoped_and_cascade_zero_cold_ext() {
+    let _guard = COLD_COUNTER_LOCK.lock().unwrap();
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("g.bin");
     let ids = write_chain_graph(&path, 500);
@@ -84,6 +89,7 @@ fn blast_scoped_and_cascade_zero_cold_ext() {
 
 #[test]
 fn evaluate_pr_check_bounds_hydration_on_5k_graph() {
+    let _guard = COLD_COUNTER_LOCK.lock().unwrap();
     // CLI `review check` / `pr-check` is the public surface for evaluate_pr_check.
     // Bound cold materializations while opening + scoped blast on a 5k-node graph.
     let tmp = TempDir::new().unwrap();
@@ -102,6 +108,7 @@ fn evaluate_pr_check_bounds_hydration_on_5k_graph() {
 
 #[test]
 fn materialize_increments_counter() {
+    let _guard = COLD_COUNTER_LOCK.lock().unwrap();
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("g.bin");
     let a = Node::new(NodeType::Function, "a")
@@ -122,6 +129,7 @@ fn materialize_increments_counter() {
 
 #[test]
 fn fast_pagerank_and_leiden_zero_cold_ext() {
+    let _guard = COLD_COUNTER_LOCK.lock().unwrap();
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("g.bin");
     write_chain_graph(&path, 2_000);
@@ -143,6 +151,7 @@ fn fast_pagerank_and_leiden_zero_cold_ext() {
 
 #[test]
 fn hot_name_and_type_scan_zero_cold_ext() {
+    let _guard = COLD_COUNTER_LOCK.lock().unwrap();
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("g.bin");
     write_chain_graph(&path, 2_000);
@@ -175,5 +184,48 @@ fn hot_name_and_type_scan_zero_cold_ext() {
         cold_ext_deserialization_count(),
         0,
         "hot name/type/qn scan and filter_function_impact must not cold-deserialize NodeExtension"
+    );
+}
+
+#[test]
+fn template_language_attribution_uses_hot_root_indexes() {
+    let _guard = COLD_COUNTER_LOCK.lock().unwrap();
+    use rgctl_graph::{InventoryBy, QueryFilters, StructuredQuery};
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("languages.bin");
+    let file = Node::new(NodeType::File, "web/page.html")
+        .with_file_path("web/page.html")
+        .with_property("language".into(), "jinja".into());
+    let root = Node::new(NodeType::Module, "page.html")
+        .with_file_path("web/page.html")
+        .with_qualified_name("jinja:web/page.html::@template")
+        .with_property("language".into(), "jinja".into());
+    write_columnar_from_nodes_edges(vec![file, root], vec![], &path).unwrap();
+    let store = SnapshotNodeStore::open(&path).unwrap();
+    let query = StructuredQuery::new(&store);
+    reset_cold_ext_deserialization_count();
+    let inventory = query
+        .inventory(InventoryBy::Lang, &QueryFilters::default())
+        .unwrap();
+    assert!(
+        inventory
+            .counts
+            .iter()
+            .any(|entry| entry.key == "jinja" && entry.count == 2)
+    );
+    let found = query
+        .find(
+            None,
+            &QueryFilters {
+                lang: Some("jinja".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(found.total, 2);
+    assert_eq!(
+        cold_ext_deserialization_count(),
+        0,
+        "language attribution should not hydrate unrelated node properties"
     );
 }

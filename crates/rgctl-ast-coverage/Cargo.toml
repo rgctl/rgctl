@@ -8,6 +8,8 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
+tree-sitter-jinja = { workspace = true }
+tree-sitter-yaml = "0.7"
 rgctl-plugin-api = { path = "../rgctl-plugin-api" }
 serde_json = "1"
 tree-sitter = { workspace = true }

@@ -13,3 +13,14 @@ pub use registry::{
     LanguageRegistry, RegistryStats, full_registry, set_full_registry_builder,
     set_registry_pre_init,
 };
+
+pub mod template_options;
+pub use template_options::{AnsibleOptions, JinjaOptions, TemplateOptions};
+
+/// Canonical structural language aliases (generic YAML remains a config format).
+pub fn canonical_language_id(id: &str) -> &str {
+    match id {
+        "j2" | "jinja2" => "jinja",
+        _ => id,
+    }
+}

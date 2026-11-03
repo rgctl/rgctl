@@ -1,0 +1,6 @@
+- name: Write service configuration
+  ansible.builtin.template:
+    src: config.conf.j2
+    dest: /etc/example/service.conf
+  when: service_enabled
+  notify: restart service

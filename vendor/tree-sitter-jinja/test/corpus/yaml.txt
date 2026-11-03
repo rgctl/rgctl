@@ -1,0 +1,18 @@
+=============
+with
+=============
+
+# Basic header comment
+key: {{ var }}
+
+----
+
+(source
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (identifier))))))
+  (content))

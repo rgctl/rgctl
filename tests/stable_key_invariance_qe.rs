@@ -22,6 +22,18 @@ struct LangCase {
 /// One minimal function-bearing fixture per supported language plugin.
 const LANGS: &[LangCase] = &[
     LangCase {
+        id: "ansible",
+        filename: "deploy.yaml",
+        source: "- hosts: all\n  tasks:\n    - name: target_fn\n      debug: {msg: '{{ value }}'}\n",
+        comment_line: "# shift\n",
+    },
+    LangCase {
+        id: "jinja",
+        filename: "mod.j2",
+        source: "{% macro target_fn(value) %}{{ value }}{% endmacro %}\n",
+        comment_line: "{# shift #}\n",
+    },
+    LangCase {
         id: "rust",
         filename: "lib.rs",
         source: "pub fn target_fn() {\n    let x = 1;\n}\n",
@@ -146,6 +158,7 @@ fn write_snapshot(root: &Path, out: &Path) {
                 | NodeType::Variable
                 | NodeType::Struct
                 | NodeType::Interface
+                | NodeType::AnsibleTask
         )),
         "expected at least one symbol node in {}",
         root.display()
@@ -200,7 +213,7 @@ fn line_shift_preserves_stable_keys_all_languages() {
 
 #[test]
 fn line_shift_preserves_stable_keys_rust() {
-    run_lang(&LANGS[0]);
+    run_lang(LANGS.iter().find(|case| case.id == "rust").unwrap());
 }
 
 #[test]

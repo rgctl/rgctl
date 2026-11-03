@@ -86,3 +86,31 @@ fn puppet_ecommerce_module_present() {
     let n = node_count(&repo(), "PuppetModule");
     assert!(n > 0, "expected PuppetModule from metadata.json, got {n}");
 }
+
+#[test]
+fn puppet_config_and_erb_routes_remain_separate_from_ansible_jinja() {
+    let registry = std::sync::Arc::new(rgctl_languages::default_registry());
+    for (path, language) in [
+        ("modules/web/manifests/init.pp", "puppet"),
+        ("modules/web/templates/page.erb", "erb"),
+        ("roles/web/templates/legacy.erb", "erb"),
+    ] {
+        assert_eq!(
+            registry
+                .get_plugin_for_file(Path::new(path))
+                .expect("existing route")
+                .language_id(),
+            language
+        );
+    }
+    let extraction = rgctl_extraction::Extractor::new(registry)
+        .extract_file_with_source(
+            Path::new("modules/web/data/inventory.yaml"),
+            b"all:\n  hosts:\n    puppet_node:\n      profile::web::port: 8080\n".to_vec(),
+        )
+        .expect("generic YAML");
+    assert_eq!(extraction.language.as_deref(), Some("yaml"));
+    assert!(extraction.symbols.is_empty());
+    assert!(!extraction.config_keys.is_empty());
+    assert!(extraction.source_references.is_empty());
+}

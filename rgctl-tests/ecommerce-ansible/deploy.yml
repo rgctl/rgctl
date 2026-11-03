@@ -1,0 +1,11 @@
+- name: Deploy ecommerce
+  hosts: application
+  vars:
+    release: stable
+  roles: [storefront, database]
+  tasks:
+    - name: Guard release
+      debug: {msg: '{{ release }}'}
+      when: [enabled, "result is succeeded"]
+    - name: Reuse audit tasks
+      import_tasks: automation/tasks/audit.yml

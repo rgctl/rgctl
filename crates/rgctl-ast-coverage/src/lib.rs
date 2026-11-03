@@ -289,6 +289,24 @@ pub struct CoverageSpec {
 pub fn bundled_specs() -> &'static [CoverageSpec] {
     &[
         CoverageSpec {
+            id: "jinja",
+            crate_dir: "rgctl-lang-jinja",
+            manifest_file: "jinja-ast-coverage.json",
+            grammar_prefix: "tree-sitter-jinja@",
+            language: || tree_sitter_jinja::language(),
+            min_handled_kinds: 22,
+            target_grade: CoverageGrade::C,
+        },
+        CoverageSpec {
+            id: "ansible",
+            crate_dir: "rgctl-lang-ansible",
+            manifest_file: "ansible-ast-coverage.json",
+            grammar_prefix: "tree-sitter-yaml@",
+            language: || tree_sitter_yaml::LANGUAGE.into(),
+            min_handled_kinds: 14,
+            target_grade: CoverageGrade::C,
+        },
+        CoverageSpec {
             id: "c",
             crate_dir: "rgctl-lang-c",
             manifest_file: "c-ast-coverage.json",
@@ -1056,5 +1074,42 @@ mod tests {
             "{:?}",
             check_tags_scm("demo", scm)
         );
+    }
+}
+
+#[cfg(test)]
+mod automation_coverage_tests {
+    #[test]
+    fn automation_manifests_detect_missing_named_kind() {
+        for id in ["ansible", "jinja"] {
+            let spec = super::bundled_specs()
+                .iter()
+                .find(|spec| spec.id == id)
+                .unwrap();
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(spec.crate_dir)
+                .join(spec.manifest_file);
+            let raw = std::fs::read_to_string(path).unwrap();
+            let mut manifest: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            let removed = if id == "ansible" { "stream" } else { "source" };
+            manifest["handlers"]
+                .as_object_mut()
+                .unwrap()
+                .remove(removed);
+            let issues = super::check_manifest(
+                id,
+                &manifest.to_string(),
+                spec.grammar_prefix,
+                &(spec.language)(),
+            );
+            assert!(
+                issues
+                    .iter()
+                    .any(|issue| issue.message.contains(removed)
+                        && issue.message.contains("missing")),
+                "{issues:?}"
+            );
+        }
     }
 }

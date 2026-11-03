@@ -99,6 +99,9 @@ impl Default for WatchConfig {
 /// Root project configuration file.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RgctlConfig {
+    /// Optional repository-local Ansible/Jinja associations, loader roots and syntax.
+    #[serde(default)]
+    pub languages: rgctl_registry::TemplateOptions,
     /// Git hook settings.
     #[serde(default)]
     pub hooks: HooksConfig,
@@ -162,6 +165,23 @@ mod tests {
         let loaded = RgctlConfig::load(temp.path()).unwrap();
         assert_eq!(loaded.hooks.block_on_risk, RiskLevel::High);
         assert_eq!(loaded.watch.debounce_ms, 250);
+    }
+
+    #[test]
+    fn template_options_are_optional_and_round_trip() {
+        let old: RgctlConfig = toml::from_str("[watch]\ndebounce_ms=50\n").unwrap();
+        assert_eq!(old.languages, rgctl_registry::TemplateOptions::default());
+        let temp = TempDir::new().unwrap();
+        let mut config = old;
+        config.languages.ansible.include = vec!["automation/tasks/*.yaml".into()];
+        config.languages.jinja.include =
+            vec!["web/*.html".into(), "templates/extensionless".into()];
+        config.languages.jinja.template_roots = vec!["templates".into()];
+        config.languages.jinja.syntax.variable_start_string = "[[".into();
+        config.languages.jinja.syntax.variable_end_string = "]]".into();
+        config.save(temp.path()).unwrap();
+        let loaded = RgctlConfig::load(temp.path()).unwrap();
+        assert_eq!(loaded.languages, config.languages);
     }
 
     #[test]

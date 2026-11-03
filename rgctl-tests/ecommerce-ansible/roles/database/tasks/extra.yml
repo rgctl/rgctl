@@ -1,0 +1,2 @@
+- name: Verify configuration
+  debug: {msg: '{{ ansible_facts.os_family }}'}

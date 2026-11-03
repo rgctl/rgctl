@@ -1,0 +1,634 @@
+===========
+basic
+===========
+
+Hello {{ name }}!
+
+---
+
+(source
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (identifier))))))
+  (content))
+
+=============
+loop
+=============
+
+<ul>
+{% for item in sequence %}
+    <li>{{ item }}</li>
+{% endfor %}
+</ul>
+
+----
+
+(source
+  (content)
+  (for_block
+    (for_statement
+      (in_expression
+        (identifier)
+        (binary_operator)
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (identifier)))))))
+    (content)
+    (render_expression
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier))))))
+    (content)
+    (endfor_statement))
+  (content))
+
+============
+operator
+============
+
+{{ (!a + b) * (c - d) / e % f // g ~ h }}
+
+----
+
+(source
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (expression
+          (binary_expression
+            (expression
+              (binary_expression
+                (expression
+                  (binary_expression
+                    (expression
+                      (binary_expression
+                        (expression
+                          (binary_expression
+                            (unary_expression
+                              (primary_expression
+                                (literal
+                                  (tuple_literal
+                                    (expression
+                                      (binary_expression
+                                        (expression
+                                          (binary_expression
+                                            (unary_expression
+                                              (unary_operator)
+                                              (unary_expression
+                                                (primary_expression
+                                                  (identifier))))))
+                                        (binary_operator)
+                                        (expression
+                                          (binary_expression
+                                            (unary_expression
+                                              (primary_expression
+                                                (identifier)))))))))))))
+                        (binary_operator)
+                        (expression
+                          (binary_expression
+                            (unary_expression
+                              (primary_expression
+                                (literal
+                                  (tuple_literal
+                                    (expression
+                                      (binary_expression
+                                        (expression
+                                          (binary_expression
+                                            (unary_expression
+                                              (primary_expression
+                                                (identifier)))))
+                                        (binary_operator)
+                                        (expression
+                                          (binary_expression
+                                            (unary_expression
+                                              (primary_expression
+                                                (identifier)))))))))))))))
+                    (binary_operator)
+                    (expression
+                      (binary_expression
+                        (unary_expression
+                          (primary_expression
+                            (identifier)))))))
+                (binary_operator)
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (identifier)))))))
+            (binary_operator)
+            (expression
+              (binary_expression
+                (unary_expression
+                  (primary_expression
+                    (identifier)))))))
+        (binary_operator)
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (identifier))))))))
+  (content))
+
+===========
+whitespace
+===========
+
+foo {{- bar -}} baz {{ blah }} blub
+foo {#- comment -#} baz {# blah #} blub
+
+-----
+
+(source
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (identifier))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (identifier))))))
+  (content)
+  (comment)
+  (content)
+  (comment)
+  (content))
+
+================
+single bracket
+================
+
+{foo} foo {bar}
+
+----
+
+(source
+  (content))
+
+==========
+literals
+==========
+
+{{ true }}
+{{ false }}
+{{ null }}
+{{ 1.0 }}
+{{ 1_000.0 }}
+{{ 2 }}
+{{ 2_000 }}
+{{ [1, 2, 3] }}
+{{ {"foo": "bar"} }}
+{{ -9223372036854775808 }}
+{{ -9_223_372_036_854_775_808 }}
+{{ -170141183460469231731687303715884105728 }}
+{{ 170141183460469231731687303715884105727 }}
+{{ 340282366920938463463374607431768211455 }}
+{{ 0b1111 }}
+{{ 0B1001 }}
+{{ 0o777 }}
+{{ 0O777 }}
+{{ 0O7_77 }}
+{{ 0xdeadbeef }}
+{{ 0XDEADBEEF }}
+{{ 0XDEAD_BEEF }}
+{{ 1e2 }}
+{{ 1e_2 }}
+{{ 1_1e+_2 }}
+{{ 1_1e-_2 }}
+
+----
+
+(source
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (boolean_literal)))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (boolean_literal)))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (identifier))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (float_literal
+                (dec_literal)
+                (dec_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (float_literal
+                (dec_literal)
+                (dec_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (dec_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (dec_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (list_literal
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (number_literal
+                            (dec_literal)))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (number_literal
+                            (dec_literal)))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (number_literal
+                            (dec_literal))))))))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (dict_literal
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (string_literal))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (string_literal)))))))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (dec_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (dec_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (dec_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (dec_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (dec_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (bin_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (bin_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (oct_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (oct_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (oct_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (hex_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (hex_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (hex_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (big_dec_literal
+                  (dec_literal)
+                  (dec_literal)))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (big_dec_literal
+                  (dec_literal)
+                  (dec_literal)))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (big_dec_literal
+                  (dec_literal)
+                  (dec_literal)))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (big_dec_literal
+                  (dec_literal)
+                  (dec_literal)))))))))
+  (content))
+
+========
+attrs
+========
+
+{# useless comment #}
+{{ foo.bar[baz].blah }}
+{{ {"foo": "bar"}.test }}
+{{ [1, 2, 3].test }}
+
+----
+
+(source
+  (content)
+  (comment)
+  (content)
+  (render_expression
+    (expression
+      (expression
+        (expression
+          (expression
+            (binary_expression
+              (unary_expression
+                (primary_expression
+                  (identifier)))))
+          (identifier))
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (identifier))))))
+      (identifier)))
+  (content)
+  (render_expression
+    (expression
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (literal
+                (dict_literal
+                  (expression
+                    (binary_expression
+                      (unary_expression
+                        (primary_expression
+                          (literal
+                            (string_literal))))))
+                  (expression
+                    (binary_expression
+                      (unary_expression
+                        (primary_expression
+                          (literal
+                            (string_literal))))))))))))
+      (identifier)))
+  (content)
+  (render_expression
+    (expression
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (literal
+                (list_literal
+                  (expression
+                    (binary_expression
+                      (unary_expression
+                        (primary_expression
+                          (literal
+                            (number_literal
+                              (dec_literal)))))))
+                  (expression
+                    (binary_expression
+                      (unary_expression
+                        (primary_expression
+                          (literal
+                            (number_literal
+                              (dec_literal)))))))
+                  (expression
+                    (binary_expression
+                      (unary_expression
+                        (primary_expression
+                          (literal
+                            (number_literal
+                              (dec_literal)))))))))))))
+      (identifier)))
+  (content))
+
+=============
+block filter
+=============
+
+{% for item in seq -%}
+  {{ item }}{% endfor %}
+
+------
+
+(source
+  (content)
+  (for_block
+    (for_statement
+      (in_expression
+        (identifier)
+        (binary_operator)
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (identifier)))))))
+    (content)
+    (render_expression
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier))))))
+    (endfor_statement))
+  (content))
+
+=======================
+autoescape
+=======================
+
+{% autoescape true %}
+    Autoescaping is active within this block
+{% endautoescape %}
+
+{% autoescape false %}
+    Autoescaping is inactive within this block
+{% endautoescape %}
+
+----------
+
+(source
+  (content)
+  (autoescape_block
+    (autoescape_statement
+      (boolean_literal))
+    (content)
+    (endautoescape_statement))
+  (content)
+  (autoescape_block
+    (autoescape_statement
+      (boolean_literal))
+    (content)
+    (endautoescape_statement))
+  (content))

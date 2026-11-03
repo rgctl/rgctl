@@ -1,0 +1,22 @@
+==============
+if
+==============
+
+# for href, caption in [('index.html', 'Index'),
+                        ('about.html', 'About')]:
+
+# if loop.last
+# endif
+    {{ statement }}
+
+---
+
+(source
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (identifier))))))
+  (content))

@@ -18,6 +18,8 @@ pub fn register_languages(registry: &mut LanguageRegistry) {
     rgctl_lang_ruby::register(registry);
     rgctl_lang_puppet::register(registry);
     rgctl_lang_erb::register(registry);
+    rgctl_lang_jinja::register(registry);
+    rgctl_lang_ansible::register(registry);
     rgctl_lang_kotlin::register(registry);
     rgctl_lang_groovy::register(registry);
     rgctl_lang_swift::register(registry);
@@ -356,6 +358,83 @@ mod tests {
             failures.is_empty(),
             "plugin ↔ ast-coverage sync failures:\n{}",
             failures.join("\n")
+        );
+    }
+}
+
+#[cfg(test)]
+mod template_tests {
+    #![allow(clippy::expect_used)]
+    use super::*;
+    use std::path::Path;
+    #[test]
+    fn associations_are_local_and_protected_routes_win() {
+        let base = default_registry();
+        let mut options = rgctl_registry::TemplateOptions::default();
+        options.jinja.include = vec!["web/*.html".into(), "templates/*".into()];
+        let a = base
+            .with_template_options(Path::new("/a"), options.clone())
+            .expect("options");
+        let b = base
+            .with_template_options(Path::new("/b"), Default::default())
+            .expect("options");
+        assert_eq!(
+            a.get_plugin_for_file(Path::new("/a/web/page.html"))
+                .expect("jinja")
+                .language_id(),
+            "jinja"
+        );
+        assert_eq!(
+            b.get_plugin_for_file(Path::new("/b/web/page.html"))
+                .expect("html")
+                .language_id(),
+            "html"
+        );
+        for path in [
+            "main.j2",
+            "main.jinja",
+            "main.jinja2",
+            "roles/web/templates/nginx.conf",
+            "ansible_collections/acme/app/roles/web/templates/index.html",
+        ] {
+            assert_eq!(
+                a.get_plugin_for_file(Path::new(path))
+                    .expect(path)
+                    .language_id(),
+                "jinja"
+            );
+        }
+        for path in [
+            "data/config.yaml",
+            "inventory.yml",
+            "roles/web/defaults/main.yml",
+            ".github/workflows/build.yml",
+            "Cargo.toml",
+        ] {
+            assert!(a.get_plugin_for_file(Path::new(path)).is_err(), "{path}");
+        }
+        assert_eq!(
+            a.get_plugin_for_file(Path::new("roles/web/templates/legacy.erb"))
+                .expect("erb")
+                .language_id(),
+            "erb"
+        );
+        let mut protected = rgctl_registry::TemplateOptions::default();
+        protected.jinja.include = vec!["Cargo.toml".into()];
+        let protected = base
+            .with_template_options(Path::new("/a"), protected)
+            .expect("globs");
+        assert!(protected.association(Path::new("/a/Cargo.toml")).is_err());
+        options.ansible.include = vec!["web/*".into()];
+        let conflict = base
+            .with_template_options(Path::new("/a"), options)
+            .expect("valid globs");
+        assert!(conflict.association(Path::new("/a/web/page.html")).is_err());
+        let mut invalid = rgctl_registry::TemplateOptions::default();
+        invalid.jinja.template_roots = vec!["../outside".into()];
+        assert!(
+            base.with_template_options(Path::new("/a"), invalid)
+                .is_err()
         );
     }
 }

@@ -1,0 +1,406 @@
+==================
+string
+==================
+
+{% set a = "aaaaa" %}
+{% set a = "aaaaa\"" %}
+{% set a = 'aaaaa' %}
+{% set a = 'aaaaa\'' %}
+
+--------
+
+(source
+  (content)
+  (statement
+    (set_statement
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier)))))
+      (binary_operator)
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (literal
+                (string_literal))))))))
+  (content)
+  (statement
+    (set_statement
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier)))))
+      (binary_operator)
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (literal
+                (string_literal))))))))
+  (content)
+  (statement
+    (set_statement
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier)))))
+      (binary_operator)
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (literal
+                (string_literal))))))))
+  (content)
+  (statement
+    (set_statement
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier)))))
+      (binary_operator)
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (literal
+                (string_literal))))))))
+  (content))
+
+====================
+list
+====================
+
+{{ ["a", 1, 2, 3] }}
+{{ ["a", 1, 2, 3, ] }}
+{{ [call(), call() | to_list ] }}
+
+----
+
+(source
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (list_literal
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (string_literal))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (number_literal
+                            (dec_literal)))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (number_literal
+                            (dec_literal)))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (number_literal
+                            (dec_literal))))))))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (list_literal
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (string_literal))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (number_literal
+                            (dec_literal)))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (number_literal
+                            (dec_literal)))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (number_literal
+                            (dec_literal))))))))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (list_literal
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (function_call
+                          (identifier))))))
+                (expression
+                  (binary_expression
+                    (expression
+                      (binary_expression
+                        (unary_expression
+                          (primary_expression
+                            (function_call
+                              (identifier))))))
+                    (binary_operator)
+                    (expression
+                      (binary_expression
+                        (unary_expression
+                          (primary_expression
+                            (identifier))))))))))))))
+  (content))
+
+========================
+dict
+========================
+
+{{ { } }}
+
+{{
+    {
+        "aaa": 1
+    }
+}}
+
+{{
+    {
+        "aaa": 1,
+        "bbb": 2,
+        key(): value() | to_value,
+        key | to_string: value
+    }
+}}
+
+------
+
+(source
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (dict_literal)))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (dict_literal
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (string_literal))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (number_literal
+                            (dec_literal))))))))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (dict_literal
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (string_literal))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (number_literal
+                            (dec_literal)))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (string_literal))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (number_literal
+                            (dec_literal)))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (function_call
+                          (identifier))))))
+                (expression
+                  (binary_expression
+                    (expression
+                      (binary_expression
+                        (unary_expression
+                          (primary_expression
+                            (function_call
+                              (identifier))))))
+                    (binary_operator)
+                    (expression
+                      (binary_expression
+                        (unary_expression
+                          (primary_expression
+                            (identifier)))))))
+                (expression
+                  (binary_expression
+                    (expression
+                      (binary_expression
+                        (unary_expression
+                          (primary_expression
+                            (identifier)))))
+                    (binary_operator)
+                    (expression
+                      (binary_expression
+                        (unary_expression
+                          (primary_expression
+                            (identifier)))))))
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (identifier))))))))))))
+  (content))
+
+===================
+number
+===================
+
+{{ 123456 }}
+{{ 0xabcaf }}
+{{ 123.132 }}
+{{ 0b10110 }}
+{{ 0b1001010 }}
+{{ 1e4 }}
+{{ -1e4 }}
+{{ +123 }}
+
+---------
+
+(source
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (dec_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (hex_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (float_literal
+                (dec_literal)
+                (dec_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (bin_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (bin_literal))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (big_dec_literal
+                  (dec_literal)
+                  (dec_literal)))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (big_dec_literal
+                  (dec_literal)
+                  (dec_literal)))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (literal
+              (number_literal
+                (dec_literal))))))))
+  (content))

@@ -1,0 +1,35 @@
+====================
+call
+====================
+
+{{ page.title.capitalize() }}
+{%- call do_something() -%}
+{%- endcall %}
+
+---
+
+(source
+  (content)
+  (render_expression
+    (expression
+      (expression
+        (expression
+          (expression
+            (binary_expression
+              (unary_expression
+                (primary_expression
+                  (identifier)))))
+          (identifier))
+        (identifier))))
+  (content)
+  (call_block
+    (call_statement
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (function_call
+                (identifier)))))))
+    (content)
+    (endcall_statement))
+  (content))

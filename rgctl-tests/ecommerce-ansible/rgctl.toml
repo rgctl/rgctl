@@ -1,0 +1,4 @@
+[languages.ansible]
+include = ['automation/tasks/*.yml']
+[languages.jinja]
+template_roots = ['templates']

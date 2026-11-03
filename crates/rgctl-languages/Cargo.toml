@@ -7,6 +7,8 @@ description = "Built-in Tier 1 language plugins for rgctl"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+rgctl-lang-jinja = { workspace = true }
+rgctl-lang-ansible = { workspace = true }
 rgctl-registry = { workspace = true }
 rgctl-config-formats = { workspace = true }
 rgctl-ast-coverage = { workspace = true }
