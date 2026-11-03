@@ -21,8 +21,10 @@ export function App() {
     functions: list,
     functionsLoading,
     functionsError,
+    explode,
     setFocus,
     setLens,
+    setExplode,
     goRoom,
     pick: focusPick,
   } = useFocus();
@@ -150,6 +152,10 @@ export function App() {
             )}
             {room === "architecture" && (
               <ArchitectureRoom
+                // The open district rides the URL with the Focus, so opening a symbol from inside a level and
+                // coming back returns to that level rather than to the universe.
+                explode={explode}
+                onExplodeChange={setExplode}
                 onOpenFocus={(focus) => {
                   // The shell owns the Focus: write the key, then move to the room that renders it.
                   setFocus(focus);

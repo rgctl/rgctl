@@ -6,13 +6,15 @@ import {
   Outlet,
   type RouterHistory,
 } from "@tanstack/react-router";
-import { isLens, isRoom, parseFocus, DEFAULT_ROOM } from "./focus";
+import { isLens, isRoom, parseExplode, parseFocus, DEFAULT_ROOM } from "./focus";
 import { App } from "./App";
 
 /** Search params are the Focus's transport: a view state is a shareable link. */
 export interface ViewSearch {
   lens?: string;
   focus?: string;
+  /** The district whose level is open in Architecture — a level is a link, and a way back to it. */
+  explode?: number;
 }
 
 const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -54,6 +56,7 @@ const roomRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): ViewSearch => ({
     lens: isLens(search.lens) ? (search.lens as string) : undefined,
     focus: parseFocus(search.focus) ?? undefined,
+    explode: parseExplode(search.explode),
   }),
 });
 

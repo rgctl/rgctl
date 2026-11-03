@@ -22,6 +22,8 @@ type Loaded = { kind: "loading" } | ArchitectureState;
 
 export function ArchitectureRoom({
   onOpenFocus,
+  explode = null,
+  onExplodeChange,
 }: {
   /**
    * Open a symbol in Understand.
@@ -32,6 +34,15 @@ export function ArchitectureRoom({
    * silently doing nothing.
    */
   onOpenFocus?: (functionId: string) => void;
+  /**
+   * The district whose level is open, from the URL — the room's level is a link.
+   *
+   * Two jobs at once: a level someone can share, and the only way a *return* works. Opening a member leaves the
+   * room, which unmounts this component and its state; without the URL the reader comes back to the universe and
+   * has to find the district again.
+   */
+  explode?: number | null;
+  onExplodeChange?: (id: number | null) => void;
 } = {}) {
   const [state, setState] = useState<Loaded>({ kind: "loading" });
   const [layer, setLayer] = useState<UniverseLayer>("packages");
@@ -39,9 +50,10 @@ export function ArchitectureRoom({
   const [sharedOnly, setSharedOnly] = useState(false);
   /** Drift is off by default once a district has been opened; the reader can turn it back on. */
   const [drift, setDrift] = useState(true);
-  /** What happened when a member was clicked: resolving, or why it could not be opened. */
+  /** What happened when a member was clicked: picked (a name, no navigation), resolving, or why it failed. */
   const [memberState, setMemberState] = useState<
     | { kind: "idle" }
+    | { kind: "picked"; member: MemberEntry }
     | { kind: "resolving"; member: MemberEntry }
     | { kind: "failed"; member: MemberEntry; reason: string }
   >({ kind: "idle" });
@@ -82,6 +94,8 @@ export function ArchitectureRoom({
     | { kind: "failed"; title: string; reason: string }
   >({ kind: "idle" });
   const [sceneFailed, setSceneFailed] = useState<string | null>(null);
+  /** False until the canvas exists — an effect that draws must wait for something to draw on. */
+  const [sceneReady, setSceneReady] = useState(false);
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<UniverseScene | null>(null);
@@ -105,6 +119,7 @@ export function ArchitectureRoom({
   const expandRef = useRef<(entry: HoverEntry | null) => Promise<void>>(async () => {});
   const driftRef = useRef(drift);
   const openMemberRef = useRef<(member: MemberEntry | null) => Promise<void>>(async () => {});
+  const pickMemberRef = useRef<(member: MemberEntry | null) => void>(() => {});
 
   /**
    * How many members a district will draw.
@@ -120,7 +135,24 @@ export function ArchitectureRoom({
     sceneRef.current?.highlightSolid(null);
     setExpanded(null);
     setExpandState({ kind: "idle" });
-  }, []);
+    setMemberState({ kind: "idle" });
+    // The level is a link, so closing it is a URL write like opening it was.
+    onExplodeChange?.(null);
+  }, [onExplodeChange]);
+
+  /** What the room says about a district, in one place: the list, the lookup and the URL all use it. */
+  const selectionOf = useCallback(
+    (pkg: PackageNode): HoverEntry => ({
+      kind: "package",
+      id: pkg.id,
+      title: pkg.label,
+      lines: [
+        `${pkg.functions.toLocaleString()} functions · ${pkg.classes.toLocaleString()} classes · ${pkg.size.toLocaleString()} members`,
+        `community: ${pkg.communityLabel}`,
+      ],
+    }),
+    [],
+  );
 
   /**
    * What choosing a district from a list means.
@@ -135,15 +167,7 @@ export function ArchitectureRoom({
 
   const pickDistrict = useCallback(
     (pkg: PackageNode) => {
-      setSelected({
-        kind: "package",
-        id: pkg.id,
-        title: pkg.label,
-        lines: [
-          `${pkg.functions.toLocaleString()} functions · ${pkg.classes.toLocaleString()} classes · ${pkg.size.toLocaleString()} members`,
-          `community: ${pkg.communityLabel}`,
-        ],
-      });
+      setSelected(selectionOf(pkg));
       if (expanded) collapse();
       if (layer === "packages") {
         sceneRef.current?.focusSolid(pkg.id);
@@ -152,7 +176,7 @@ export function ArchitectureRoom({
       pendingFocus.current = pkg.id;
       setLayer("packages");
     },
-    [collapse, expanded, layer],
+    [collapse, expanded, layer, selectionOf],
   );
 
   const expand = useCallback(
@@ -228,12 +252,50 @@ export function ArchitectureRoom({
           boundary: result?.boundary ?? 0,
         });
         setExpandState({ kind: "idle" });
+        setSelected(entry);
+        // A level is a link: the open district goes into the URL, which is also what brings the reader back
+        // to this level after opening a symbol inside it.
+        onExplodeChange?.(entry.id);
       } catch (error) {
         setExpandState({ kind: "failed", title: entry.title, reason: (error as Error).message });
       }
     },
-    [metagraph],
+    [metagraph, onExplodeChange],
   );
+
+  /**
+   * Restore an open district from the URL.
+   *
+   * This is what makes "double-click a member, read the code, come back" land on the level rather than the
+   * universe. The district's *existence* is checked before the canvas is, so a stale link is reported as a stale
+   * link even where nothing can be drawn; `attempted` stops a failing link from retrying on every render.
+   */
+  const attempted = useRef<number | null>(null);
+  useEffect(() => {
+    if (explode === null || explode === undefined) {
+      attempted.current = null;
+      return;
+    }
+    if (!view || expanded?.id === explode) return;
+    const pkg = view.packages.find((p) => p.id === explode);
+    if (!pkg) {
+      // Checked against the data, before the canvas: a stale link is a stale link even where nothing draws.
+      if (attempted.current === explode) return;
+      attempted.current = explode;
+      setExpandState({
+        kind: "absent",
+        title: `district #${explode}`,
+        reason:
+          "The URL names a district that is not in this bundle, so there is nothing to open. The link is stale; the map is not empty.",
+      });
+      return;
+    }
+    if (!sceneReady || attempted.current === explode) return;
+    attempted.current = explode;
+    setLayer("packages");
+    setSelected(selectionOf(pkg));
+    void expand(selectionOf(pkg));
+  }, [explode, expanded, expand, sceneReady, selectionOf, view]);
 
 
   useEffect(() => {
@@ -251,11 +313,15 @@ export function ArchitectureRoom({
   }, [collapse]);
 
   /**
-   * Turn a clicked member into a Focus.
+   * Turn a double-clicked member into a Focus.
    *
    * The engine's subgraph payload carries `(file_path, name)` but not the node's UUID, so the identity is
    * resolved against the dashboard's own function index — the same index the ⌘K palette uses. An ambiguous or
    * missing match is **not** guessed: a Focus that points at the wrong function is worse than no link at all.
+   *
+   * The district is deliberately left open: the level is in the URL, so coming back returns to it instead of to
+   * a universe the reader has to re-navigate. Closing it here was the old behaviour and it threw away the
+   * reader's place for no reason.
    */
   const openMember = useCallback(
     async (member: MemberEntry | null) => {
@@ -268,7 +334,6 @@ export function ArchitectureRoom({
       if (matches.length === 1) {
         const focus = matches[0].function_id;
         setMemberState({ kind: "idle" });
-        collapse();
         if (!onOpenFocus) {
           setMemberState({
             kind: "failed",
@@ -289,8 +354,19 @@ export function ArchitectureRoom({
             : `${matches.length} indexed functions match this name and file, so opening one would be a guess`,
       });
     },
-    [collapse, onOpenFocus],
+    [onOpenFocus],
   );
+
+  /**
+   * A click on a member *names* it; it does not navigate.
+   *
+   * Two levels of intent on one surface: a click asks "what is this?", a double-click asks "take me there". The
+   * old handler navigated on a single click, which made every attempt to read a label a departure.
+   */
+  const pickMember = useCallback((member: MemberEntry | null) => {
+    setMemberState(member ? { kind: "picked", member } : { kind: "idle" });
+    sceneRef.current?.highlightMember(member ? member.instance ?? null : null);
+  }, []);
 
   useEffect(() => {
     expandRef.current = expand;
@@ -298,6 +374,9 @@ export function ArchitectureRoom({
   useEffect(() => {
     openMemberRef.current = openMember;
   }, [openMember]);
+  useEffect(() => {
+    pickMemberRef.current = pickMember;
+  }, [pickMember]);
   // The canvas is a canvas: jsdom has no WebGL, and neither does a browser with it switched off. Both get a
   // stated absence instead of a blank pane, and everything textual above still renders.
   useEffect(() => {
@@ -328,12 +407,11 @@ export function ArchitectureRoom({
         scene = created;
         created.setDrift(driftRef.current);
         created.onHoverChange(setHover);
-        created.onPickChange((entry) => {
-          setSelected(entry);
-          // One call, so selecting always means the same thing: mark it *and* go to it.
-          created.focusSolid(entry && entry.id !== undefined ? entry.id : null);
-        });
-        created.onMemberPickChange((member) => void openMemberRef.current(member));
+        // A press in the scene marks and flies itself (behind the double-click window), so the room only keeps
+        // the selection for its read-out and for Expand. Lists still go through `focusSolid`.
+        created.onPickChange(setSelected);
+        created.onMemberPickChange((member) => pickMemberRef.current(member));
+        created.onMemberOpen((member) => void openMemberRef.current(member));
         created.onExplode((entry) => void expandRef.current(entry));
         created.attachPointer(host);
         const scales = scalesFor(view);
@@ -343,6 +421,7 @@ export function ArchitectureRoom({
         );
         created.update({ view, layer, edges, height: scales.height, footprint: scales.footprint });
         sceneRef.current = created;
+        if (!disposed) setSceneReady(true);
         observer = new ResizeObserver(() => created.resize(host));
         observer.observe(host);
       } catch (error) {
@@ -353,6 +432,7 @@ export function ArchitectureRoom({
 
     return () => {
       disposed = true;
+      setSceneReady(false);
       observer?.disconnect();
       scene?.dispose();
       sceneRef.current = null;
@@ -446,6 +526,7 @@ export function ArchitectureRoom({
               knows about is not an affordance. They are sized and weighted like real actions rather than
               hints, because a 10px ghost button next to a 3D scene is invisible in practice. */}
           <div className="absolute left-2 top-9 flex max-w-[calc(100%-330px)] flex-col gap-1.5">
+            <DistrictSearch packages={view!.packages} onPick={pickDistrict} />
             <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
@@ -529,8 +610,16 @@ export function ArchitectureRoom({
                   </span>
                 )}
                 <span className="text-[10px] leading-relaxed text-zinc-500">
-                  opened in {(expanded.ms / 1000).toFixed(1)} s · click a member to open it in Understand
+                  opened in {(expanded.ms / 1000).toFixed(1)} s · click a member for its name, double-click to
+                  open it
                 </span>
+                {memberState.kind === "picked" && (
+                  <span className="text-[10px] leading-relaxed text-amber-100/90">
+                    {memberState.member.name} · {memberState.member.nodeTypeName}
+                    {memberState.member.filePath ? ` · ${memberState.member.filePath}` : ""} — double-click to
+                    open it in Understand
+                  </span>
+                )}
                 {memberState.kind === "resolving" && (
                   <span className="text-[10px] leading-relaxed text-sky-200/80">
                     resolving {memberState.member.name}…

@@ -47,6 +47,14 @@ export interface MemberEntry {
   name: string;
   nodeTypeName: string;
   filePath: string | null;
+  /**
+   * Its slot in the level's `InstancedMesh`.
+   *
+   * Separate from `index`: members are drawn as a *subset* of a district (the truncation ceiling binds on real
+   * corpora), so a graph index is not an instance id and resolving one to the other here would be arithmetic
+   * nobody checked. It is the handle a highlight addresses.
+   */
+  instance?: number;
 }
 
 export interface HoverEntry {
@@ -58,6 +66,14 @@ export interface HoverEntry {
 }
 
 const SINGLE = 0x67788c; // a package alone in its community — a finding, not a failure
+/**
+ * How long a press waits before it flies the camera.
+ *
+ * Long enough to swallow the second press of a double-click (a 240 ms gap is a slow double-click), short enough
+ * that a single click still feels like a move rather than a lag. The *mark* is immediate either way, so nothing
+ * waits on this except the camera.
+ */
+const DOUBLE_CLICK_WINDOW_MS = 240;
 
 export class UniverseScene {
   private readonly scene = new THREE.Scene();
@@ -83,6 +99,7 @@ export class UniverseScene {
   private onPick: (entry: HoverEntry | null) => void = () => {};
   private onExplodeRequest: (entry: HoverEntry | null) => void = () => {};
   private onMemberPick: (member: MemberEntry | null) => void = () => {};
+  private onMemberOpenRequest: (member: MemberEntry | null) => void = () => {};
 
   constructor(container: HTMLElement) {
     this.reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -128,9 +145,14 @@ export class UniverseScene {
     this.onExplodeRequest = fn;
   }
 
-  /** A click on a member. This is the join between the universe and the rest of the dashboard. */
+  /** A single click on a member: name it. This room has two levels of intent on one surface. */
   onMemberPickChange(fn: (member: MemberEntry | null) => void): void {
     this.onMemberPick = fn;
+  }
+
+  /** A double-click on a member: go to its code. The join between the universe and the rest of the dashboard. */
+  onMemberOpen(fn: (member: MemberEntry | null) => void): void {
+    this.onMemberOpenRequest = fn;
   }
 
   /**
@@ -140,11 +162,12 @@ export class UniverseScene {
    * to a node is the array order the instances were built in, which is why it is stored beside the mesh
    * instead of being re-derived here.
    */
-  private memberAt(): MemberEntry | null {
+  private memberAt(): { instance: number; entry: MemberEntry } | null {
     if (!this.drill) return null;
     const hit = this.raycaster.intersectObject(this.drill.instanced, false)[0];
     if (!hit || hit.instanceId === undefined) return null;
-    return this.drill.members[hit.instanceId] ?? null;
+    const entry = this.drill.members[hit.instanceId];
+    return entry ? { instance: hit.instanceId, entry } : null;
   }
 
   resize(container: HTMLElement): void {
@@ -454,7 +477,7 @@ export class UniverseScene {
     { pos: [number, number, number]; side: number; height: number; mesh: THREE.Object3D }
   >();
   /** The selection halo, if a district is highlighted. */
-  private outline: THREE.LineSegments | null = null;
+  private outline: THREE.Group | null = null;
   /**
    * The open district, if any: its own scene, the camera to return to, and what a pick can hit.
    *
@@ -724,51 +747,151 @@ export class UniverseScene {
    * deselecting turned every volume into an opaque pale-blue wall across the map.
    */
   highlightSolid(id: number | null): void {
-    if (this.outline) {
-      this.world.remove(this.outline);
-      this.outline.traverse((child) => {
-        const line = child as THREE.LineSegments;
-        line.geometry?.dispose();
-        const m = line.material as THREE.Material | undefined;
-        m?.dispose();
-      });
-      this.outline = null;
-    }
+    this.disposeOutline();
+    // The rest of the map recedes hard — 0.18 of its own opacity, not 0.55. At 0.55 a selected district sat in a
+    // field of near-equals and the outline had to carry the whole claim; the point of dimming is that the eye
+    // lands on one box without having to be told which.
     for (const object of this.coreObjects) {
       const material = (object as THREE.Mesh).material as THREE.Material | undefined;
       if (!material || Array.isArray(material)) continue;
-      const m = material as THREE.Material & { opacity: number };
-      let own = this.remembered.get(m);
-      if (!own) {
-        own = { opacity: m.opacity, transparent: m.transparent };
-        this.remembered.set(m, own);
-      }
-      m.opacity = id === null ? own.opacity : own.opacity * 0.55;
+      const m = material as THREE.Material & { opacity: number; emissive?: THREE.Color; emissiveIntensity?: number };
+      const own = this.remember(m);
+      m.opacity = id === null ? own.opacity : own.opacity * 0.18;
       m.transparent = own.transparent || id !== null;
+      if (m.emissive) {
+        m.emissive.setHex(own.emissive);
+        m.emissiveIntensity = own.emissiveIntensity;
+      }
     }
     if (id === null || this.drill) return;
     const box = this.boxFor(id);
     if (!box) return;
-    const material = (this.objectFor(id) as THREE.Mesh).material as
-      | (THREE.Material & { opacity: number })
+    const mesh = this.objectFor(id) as THREE.Mesh;
+    const material = mesh.material as
+      | (THREE.Material & { opacity: number; emissive?: THREE.Color; emissiveIntensity?: number })
       | undefined;
-    const own = material ? this.remembered.get(material) : undefined;
-    if (material) material.opacity = own?.opacity ?? 1;
-    const size = box.getSize(new THREE.Vector3());
-    const centre = box.getCenter(new THREE.Vector3());
-    // A fixed +10 pad is invisible on a 100-unit solid and overwhelming on a 6-unit one.
-    const pad = Math.max(6, Math.max(size.x, size.z) * 0.22);
-    const halo = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x + pad, size.y + pad, size.z + pad)),
-      new THREE.LineBasicMaterial({ color: 0x8fd0ff }),
-    );
-    halo.position.copy(centre);
+    if (material) {
+      const own = this.remember(material);
+      material.opacity = own.opacity;
+      material.transparent = own.transparent;
+      // A lit interior, not only an outline: the box itself brightens, which is what reads as a glow at the
+      // distance this room frames from. No bloom pass — one emissive material costs nothing.
+      if (material.emissive) {
+        material.emissive.setHex(0x2ea8ff);
+        material.emissiveIntensity = 0.85;
+      }
+    }
+    const halo = this.glowHalo(box, 0x8fd0ff);
     this.world.add(halo);
     this.outline = halo;
   }
 
-  /** Each dimmed material's own look, so a deselect restores it instead of flattening it to opaque. */
-  private readonly remembered = new Map<THREE.Material, { opacity: number; transparent: boolean }>();
+  /**
+   * A border glow, without a bloom pass.
+   *
+   * Three nested edge boxes at growing offsets and falling opacity, additive and `depthTest: false`, so the
+   * halo reads as light escaping the silhouette rather than as a wireframe sitting on it. One `LineSegments`
+   * with a fat shader would be the other way; this needs no custom material and no post-processing.
+   */
+  private glowHalo(box: THREE.Box3, colour: number): THREE.Group {
+    const group = new THREE.Group();
+    const size = box.getSize(new THREE.Vector3());
+    const centre = box.getCenter(new THREE.Vector3());
+    // Offsets scale with the object: a fixed pad is invisible on a 100-unit district and overwhelming on a 6.
+    const unit = Math.max(3, Math.max(size.x, size.z) * 0.045);
+    for (const [step, opacity] of [[0, 1], [1, 0.45], [2.2, 0.18]] as Array<[number, number]>) {
+      const geometry = new THREE.EdgesGeometry(
+        new THREE.BoxGeometry(size.x + unit * step, size.y + unit * step, size.z + unit * step),
+      );
+      const lines = new THREE.LineSegments(
+        geometry,
+        new THREE.LineBasicMaterial({
+          color: colour,
+          transparent: true,
+          opacity,
+          blending: THREE.AdditiveBlending,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      lines.position.copy(centre);
+      lines.renderOrder = 2;
+      group.add(lines);
+    }
+    return group;
+  }
+
+  private disposeOutline(): void {
+    if (!this.outline) return;
+    this.outline.parent?.remove(this.outline);
+    this.outline.traverse((child) => {
+      const line = child as THREE.LineSegments;
+      line.geometry?.dispose();
+      const m = line.material as THREE.Material | undefined;
+      m?.dispose();
+    });
+    this.outline = null;
+  }
+
+  /**
+   * Mark one member of the open district.
+   *
+   * A click inside a level asks "what is this?" — so it needs an answer on the surface, not just in a panel
+   * somewhere else. The mark is the same glow the universe uses for a selected district, so the two levels read
+   * alike.
+   */
+  highlightMember(instance: number | null): void {
+    if (this.memberOutline) {
+      this.memberOutline.parent?.remove(this.memberOutline);
+      this.memberOutline.traverse((child) => {
+        const line = child as THREE.LineSegments;
+        line.geometry?.dispose();
+        (line.material as THREE.Material | undefined)?.dispose();
+      });
+      this.memberOutline = null;
+    }
+    if (instance === null || !this.drill) return;
+    const matrix = new THREE.Matrix4();
+    this.drill.instanced.getMatrixAt(instance, matrix);
+    const centre = new THREE.Vector3();
+    const scale = new THREE.Vector3();
+    matrix.decompose(centre, new THREE.Quaternion(), scale);
+    const box = new THREE.Box3().setFromCenterAndSize(centre, scale);
+    const halo = this.glowHalo(box, 0xffcf7a);
+    this.drill.group.add(halo);
+    this.memberOutline = halo;
+  }
+
+  private memberOutline: THREE.Group | null = null;
+
+  /**
+   * Each dimmed material's own look, so a deselect restores it instead of flattening it to opaque.
+   *
+   * Emissive belongs here for the same reason opacity does: the glow writes to the same material it dimmed.
+   */
+  private readonly remembered = new Map<
+    THREE.Material,
+    { opacity: number; transparent: boolean; emissive: number; emissiveIntensity: number }
+  >();
+
+  private remember(material: THREE.Material): {
+    opacity: number;
+    transparent: boolean;
+    emissive: number;
+    emissiveIntensity: number;
+  } {
+    const existing = this.remembered.get(material);
+    if (existing) return existing;
+    const lit = material as THREE.Material & { emissive?: THREE.Color; emissiveIntensity?: number };
+    const own = {
+      opacity: (material as THREE.Material & { opacity: number }).opacity,
+      transparent: material.transparent,
+      emissive: lit.emissive?.getHex() ?? 0,
+      emissiveIntensity: lit.emissiveIntensity ?? 1,
+    };
+    this.remembered.set(material, own);
+    return own;
+  }
 
   /**
    * The drawn object behind an id: a package solid, a bucket, or a namespace volume.
@@ -797,7 +920,31 @@ export class UniverseScene {
    * what is being approached and not of the camera.
    */
   focusSolid(id: number | null): void {
+    this.cancelPendingFocus();
     this.highlightSolid(id);
+    this.flyToSolid(id);
+  }
+
+  /** Mark now, fly in a beat — the shape of a press that might be half of a double-click. */
+  private focusSoon(id: number | null): void {
+    this.cancelPendingFocus();
+    this.highlightSolid(id);
+    if (id === null) return;
+    this.flyTimer = globalThis.setTimeout(() => {
+      this.flyTimer = 0;
+      this.flyToSolid(id);
+    }, DOUBLE_CLICK_WINDOW_MS);
+  }
+
+  private cancelPendingFocus(): void {
+    if (!this.flyTimer) return;
+    globalThis.clearTimeout(this.flyTimer);
+    this.flyTimer = 0;
+  }
+
+  private flyTimer = 0;
+
+  private flyToSolid(id: number | null): void {
     if (id === null) return;
     const box = this.boxFor(id);
     if (!box) return;
@@ -935,6 +1082,10 @@ export class UniverseScene {
   }
 
   attachPointer(target: HTMLElement): void {
+    /** What the last press hit. A double-click reports *this*, not a fresh ray — see `dblclick` below. */
+    let pressedMember: MemberEntry | null = null;
+    let pressedEntry: HoverEntry | null = null;
+
     const move = (event: PointerEvent) => {
       const rect = target.getBoundingClientRect();
       this.pointer.set(
@@ -946,12 +1097,19 @@ export class UniverseScene {
       if (member) {
         this.onHover({
           kind: "package",
-          title: member.name,
+          title: member.entry.name,
           lines: [
-            `${member.nodeTypeName}${member.filePath ? ` · ${member.filePath}` : ""}`,
-            "a member of the open district — click to open it in Understand",
+            `${member.entry.nodeTypeName}${member.entry.filePath ? ` · ${member.entry.filePath}` : ""}`,
+            "click for its name · double-click to open it in Understand",
           ],
         });
+        return;
+      }
+      // Inside a level, the only things that exist for the pointer are the members. `world.visible = false` does
+      // not remove the universe from the ray: a press on empty space inside a district would otherwise hit one of
+      // the 256 hidden solids, select it, and fly the camera out of the level to a place it cannot show.
+      if (this.drill) {
+        this.onHover(null);
         return;
       }
       const hit = this.raycaster.intersectObjects(this.pickables.map((p) => p.mesh), false)[0];
@@ -964,22 +1122,40 @@ export class UniverseScene {
       // Inside an open district, a click means "this member", not "the package behind it".
       const member = this.memberAt();
       if (member) {
-        this.onMemberPick(member);
+        pressedMember = member.entry;
+        pressedEntry = null;
+        this.onMemberPick(member.entry);
         return;
       }
+      pressedMember = null;
+      // Cleared before the level check too, or a press on empty space inside a district would leave the
+      // previous press's universe solid armed for the next double-click.
+      pressedEntry = null;
       this.onMemberPick(null);
+      if (this.drill) return;
       const hit = this.raycaster.intersectObjects(this.pickables.map((p) => p.mesh), false)[0];
       const found = hit ? this.pickables.find((p) => p.mesh === hit.object) : undefined;
-      // Report only. The room answers by calling `focusSolid`, so a click in the scene and a row in a list
-      // take the same route and cannot drift apart — the click handler used to fly on its own while the lists
-      // called a method that did not exist.
-      this.onPick(found?.entry ?? null);
+      pressedEntry = found?.entry ?? null;
+      // Report, and mark. The flight waits one double-click window: a press that is half of a double-click
+      // must not move the camera out from under the second press, which is what made "double-click to expand"
+      // land on a neighbour or on empty space.
+      this.onPick(pressedEntry);
+      this.focusSoon(pressedEntry && pressedEntry.id !== undefined ? pressedEntry.id : null);
     };
+    /**
+     * A double-click acts on what the press hit, not on a fresh ray.
+     *
+     * A press now also *flies the camera* to what it hit, so by the time `dblclick` fires the camera is a third
+     * of the way through a 420 ms move and a fresh ray lands somewhere else — on a neighbour, or on nothing at
+     * all, which read as "double-click does not expand". The press already answered the question.
+     */
     const dblclick = () => {
-      this.raycaster.setFromCamera(this.pointer, this.camera);
-      const hit = this.raycaster.intersectObjects(this.pickables.map((p) => p.mesh), false)[0];
-      const found = hit ? this.pickables.find((p) => p.mesh === hit.object) : undefined;
-      this.onExplodeRequest(found?.entry ?? null);
+      this.cancelPendingFocus();
+      if (pressedMember) {
+        this.onMemberOpenRequest(pressedMember);
+        return;
+      }
+      if (pressedEntry) this.onExplodeRequest(pressedEntry);
     };
     target.addEventListener("pointermove", move);
     target.addEventListener("pointerleave", leave);
@@ -996,6 +1172,7 @@ export class UniverseScene {
 
   dispose(): void {
     this.mounted = false;
+    this.cancelPendingFocus();
     cancelAnimationFrame(this.frame);
     this.clear();
     this.controls.dispose();

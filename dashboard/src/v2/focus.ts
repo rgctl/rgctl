@@ -54,6 +54,20 @@ export function parseFocus(raw: unknown): Focus | null {
   return typeof raw === "string" && UUID.test(raw) ? raw : null;
 }
 
+/**
+ * The district whose level is open, as carried in the URL.
+ *
+ * Deliberately not part of the Focus: a Focus is a *symbol*, and an open district is a place in the map. But it
+ * is the same kind of thing — a view state worth a link — and it has a second job that has nothing to do with
+ * sharing: leaving the room for a symbol and coming back has to return to the level you were reading, not to the
+ * universe. Component state cannot do that; a search param can.
+ */
+export function parseExplode(raw: unknown): number | undefined {
+  const value = typeof raw === "string" ? Number(raw) : raw;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return undefined;
+  return value;
+}
+
 /** Resolve a Focus against the loaded index. `null` means it no longer resolves — a real state. */
 export function resolveFocus<T extends { function_id: string }>(key: Focus, entries: T[]): T | null {
   return entries.find((e) => e.function_id === key) ?? null;
