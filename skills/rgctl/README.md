@@ -5,7 +5,7 @@ A skill for answering structural questions about codebases using the rgctl CLI g
 ## Quick Stats
 
 - **Meta skill:** `rgctl` (router + structured verb tables + references)
-- **Companion skill + command:** `rgctl-review` / `/rgctl:review` (PR/branch review → `REVIEW_REPORT.md`)
+- **Companion skills + commands:** `rgctl-review` / `/rgctl:review` (PR/branch review), `rgctl-vuln` / `/rgctl:vuln` (advisory triage), `rgctl-migrate` / `/rgctl:migrate` (extraction roadmap)
 - **Reference files:** command encyclopedia, workflows, communities & policy
 - **Workflow families (docs only):** discover, impact, flow, search, migrate, gate, vuln, review
 - **Agent query path:** `find` / `callers` / `callees` / `relations` / `inventory` / `status` (no Cypher)
@@ -15,6 +15,8 @@ A skill for answering structural questions about codebases using the rgctl CLI g
 ```
 skills/rgctl/                 # Meta skill (this tree)
 skills/rgctl-review/          # Review protocol skill
+skills/rgctl-vuln/            # CVE/OSV triage skill
+skills/rgctl-migrate/         # Strangler-Fig roadmap skill
 agent-pack/commands/          # Thin slash-command stubs (codegen → per adapter)
 ```
 
@@ -25,6 +27,7 @@ agent-pack/commands/          # Thin slash-command stubs (codegen → per adapte
 ### Main SKILL.md (Always Loaded)
 
 - When to use rgctl
+- Route review, vulnerability triage, and extraction roadmaps to the matching companion skill; keep framework/API implementation in the core skill
 - **CLI subprocess workflow** — spawn `rgctl -f json` for agents
 - **Workflow families:**
   1. Discovery & Indexing
@@ -69,7 +72,7 @@ From a target repository (not the rgctl source tree unless you are dogfooding):
 rgctl install --skill --tools cursor,claude,codex,antigravity,agents
 ```
 
-Installs a single skill named `rgctl`. See Agent pack walkthrough (product docs; not bundled in this skill pack).
+Installs `rgctl` and its three companion skills. See Agent pack walkthrough (product docs; not bundled in this skill pack).
 
 If an older pack left `rgctl-discover` / `rgctl-impact` / … directories behind, delete them manually — install no longer writes those folders.
 
