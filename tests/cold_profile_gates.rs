@@ -33,8 +33,8 @@ const KAFKA_COLD_WALL_BASELINE_SECS: f64 = 12.0;
 const RUST_COLD_WALL_BASELINE_SECS: f64 = 25.0;
 /// llvm/llvm-project `clang/` sparse checkout with `-l cpp`. Baseline: **12 s** (2026-10-21; ~9.7 s).
 const LLVM_CPP_COLD_WALL_BASELINE_SECS: f64 = 12.0;
-/// dotnet/roslyn `src/` with `-l csharp`. Baseline: **18 s** (2026-10-21; ~16.0 s).
-const ROSLYN_CSHARP_COLD_WALL_BASELINE_SECS: f64 = 18.0;
+/// dotnet/roslyn `src/` with `-l csharp`. Baseline: **22 s** (2026-11-03 post-98% AST; ~20.2 s process).
+const ROSLYN_CSHARP_COLD_WALL_BASELINE_SECS: f64 = 22.0;
 /// microsoft/vscode `src/` with `-l typescript`. Baseline: **17 s** (2026-10-21; ~15.0 s).
 const VSCODE_TYPESCRIPT_COLD_WALL_BASELINE_SECS: f64 = 17.0;
 /// nodejs/node `test/` with `-l javascript`. Baseline: **4 s** (2026-10-21; ~3.2 s).
@@ -43,16 +43,16 @@ const NODE_JAVASCRIPT_COLD_WALL_BASELINE_SECS: f64 = 4.0;
 const NODE_JAVASCRIPT_COLD_WITH_CFG_WALL_BASELINE_SECS: f64 = 5.0;
 /// home-assistant/core with `-l python`. Baseline: **15 s** (2026-10-21; ~13.4 s).
 const HOME_ASSISTANT_PYTHON_COLD_WALL_BASELINE_SECS: f64 = 15.0;
-/// discourse with `-l ruby`. Baseline: **6 s** (2026-10-21; ~4.5 s).
-const DISCOURSE_RUBY_COLD_WALL_BASELINE_SECS: f64 = 6.0;
+/// discourse with `-l ruby`. Baseline: **8 s** (2026-11-03 post-98% AST; ~7.0 s process / ~5.4 s wall).
+const DISCOURSE_RUBY_COLD_WALL_BASELINE_SECS: f64 = 8.0;
 /// JetBrains/kotlin sparse `libraries`+`plugins`+`analysis` (`-l kotlin`).
-/// Baseline: **11 s** wall (2026-10-21; ~10.0 s, ~178k nodes).
+/// Baseline: **15 s** (2026-11-03 post-98% AST; ~13.7 s process, ~238k nodes).
 /// Override via `RGCTL_KOTLIN_COLD_BASELINE_SECS`.
-const KOTLIN_COLD_WALL_BASELINE_SECS: f64 = 11.0;
+const KOTLIN_COLD_WALL_BASELINE_SECS: f64 = 15.0;
 /// gradle/gradle under `example/groovy` (`-l groovy`).
-/// Baseline: **5.5 s** wall (2026-10-21; ~4.8 s, ~67k nodes).
+/// Baseline: **8 s** (2026-11-03 post-98% AST; ~6.9 s wall, ~139k nodes).
 /// Override via `RGCTL_GROOVY_COLD_BASELINE_SECS`.
-const GROOVY_COLD_WALL_BASELINE_SECS: f64 = 5.5;
+const GROOVY_COLD_WALL_BASELINE_SECS: f64 = 8.0;
 /// kubernetes/website markdown-only discover. Baseline: **9 s** (2026-10-21; ~7.7 s).
 const K8S_WEBSITE_MARKDOWN_COLD_WALL_BASELINE_SECS: f64 = 9.0;
 /// ecommerce-java default discover cold wall (inheritance stub gate).

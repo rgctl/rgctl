@@ -233,6 +233,21 @@ pub struct CompiledLanguageRules {
 }
 
 impl CompiledLanguageRules {
+    /// Number of compiled taint source matchers for this language.
+    pub fn source_count(&self) -> usize {
+        self.sources.len()
+    }
+
+    /// Number of compiled taint sink matchers for this language.
+    pub fn sink_count(&self) -> usize {
+        self.sinks.len()
+    }
+
+    /// Number of compiled taint sanitizer matchers for this language.
+    pub fn sanitizer_count(&self) -> usize {
+        self.sanitizers.len()
+    }
+
     /// Apply rules to statement text; returns first match per role.
     pub fn classify(
         &self,
@@ -612,6 +627,7 @@ const BUNDLED_PACKS: &[&str] = &[
     include_str!("../rules/taint/puppet.yaml"),
     include_str!("../rules/taint/kotlin.yaml"),
     include_str!("../rules/taint/groovy.yaml"),
+    include_str!("../rules/taint/tier1-extended.yaml"),
 ];
 
 const CWE_CATALOG_YAML: &str = include_str!("../rules/taint/cwe-catalog.yaml");
@@ -638,6 +654,12 @@ mod tests {
             "puppet",
             "kotlin",
             "groovy",
+            "swift",
+            "scala",
+            "dart",
+            "elixir",
+            "lua",
+            "bash",
         ] {
             assert!(set.for_language(lang).is_some(), "missing rules for {lang}");
         }

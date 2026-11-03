@@ -10,32 +10,66 @@ use tree_sitter::Node;
 const MANIFEST_JSON: &str = include_str!("../go-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
+/// Keep in sync with non-Literal active handlers in `go-ast-coverage.json`.
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("assignment_statement", HandlerMask::AST_SKELETON),
+    ("binary_expression", HandlerMask::CFG_STMT),
     ("block", HandlerMask::CFG_STMT),
     ("break_statement", HandlerMask::CFG_STMT),
     ("call_expression", HandlerMask::RELATION),
+    ("communication_case", HandlerMask::CFG_STMT),
     ("const_declaration", HandlerMask::SYMBOL),
     ("const_spec", HandlerMask::SYMBOL),
     ("continue_statement", HandlerMask::CFG_STMT),
+    ("dec_statement", HandlerMask::CFG_STMT),
+    ("default_case", HandlerMask::CFG_STMT),
+    ("defer_statement", HandlerMask::CFG_STMT),
+    ("empty_statement", HandlerMask::CFG_STMT),
+    ("expression_case", HandlerMask::CFG_STMT),
+    ("expression_switch_statement", HandlerMask::CFG_STMT),
+    ("fallthrough_statement", HandlerMask::CFG_STMT),
     ("field_declaration", HandlerMask::SYMBOL),
+    ("for_clause", HandlerMask::CFG_STMT),
     ("for_statement", HandlerMask::CFG_STMT),
     ("function_declaration", HandlerMask::SYMBOL),
+    ("go_statement", HandlerMask::CFG_STMT),
     ("goto_statement", HandlerMask::CFG_STMT),
     ("if_statement", HandlerMask::CFG_STMT),
     ("import_declaration", HandlerMask::RELATION),
     ("import_spec", HandlerMask::RELATION),
     ("import_spec_list", HandlerMask::RELATION),
+    ("inc_statement", HandlerMask::CFG_STMT),
+    ("index_expression", HandlerMask::RELATION),
+    ("labeled_statement", HandlerMask::CFG_STMT),
     ("method_declaration", HandlerMask::SYMBOL),
     ("method_elem", HandlerMask::SYMBOL),
+    ("package_clause", HandlerMask::AST_SKELETON),
+    ("parameter_declaration", HandlerMask::AST_SKELETON),
+    ("parameter_list", HandlerMask::AST_SKELETON),
+    ("range_clause", HandlerMask::CFG_STMT),
+    ("receive_statement", HandlerMask::CFG_STMT),
     ("return_statement", HandlerMask::CFG_STMT),
     ("select_statement", HandlerMask::CFG_STMT),
+    ("selector_expression", HandlerMask::RELATION),
+    ("send_statement", HandlerMask::CFG_STMT),
+    ("short_var_declaration", HandlerMask::AST_SKELETON),
+    ("slice_expression", HandlerMask::RELATION),
     ("type_alias", HandlerMask::SYMBOL),
+    ("type_arguments", HandlerMask::AST_SKELETON),
+    ("type_assertion_expression", HandlerMask::AST_SKELETON),
+    ("type_case", HandlerMask::CFG_STMT),
+    ("type_constraint", HandlerMask::AST_SKELETON),
+    ("type_conversion_expression", HandlerMask::AST_SKELETON),
     ("type_declaration", HandlerMask::SYMBOL),
     ("type_elem", HandlerMask::SYMBOL),
+    ("type_parameter_declaration", HandlerMask::AST_SKELETON),
+    ("type_parameter_list", HandlerMask::AST_SKELETON),
     ("type_spec", HandlerMask::SYMBOL),
+    ("type_switch_statement", HandlerMask::CFG_STMT),
+    ("unary_expression", HandlerMask::CFG_STMT),
     ("var_declaration", HandlerMask::SYMBOL),
     ("var_spec", HandlerMask::SYMBOL),
+    ("variadic_parameter_declaration", HandlerMask::AST_SKELETON),
 ];
 
 const AST_MAX_DEPTH: usize = 2048;
@@ -177,7 +211,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
 
                 // --- Symbols + scope enter ---

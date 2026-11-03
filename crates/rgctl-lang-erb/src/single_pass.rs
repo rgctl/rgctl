@@ -10,9 +10,11 @@ use tree_sitter::Node;
 const MANIFEST_JSON: &str = include_str!("../erb-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
+/// Keep in sync with non-Literal active handlers in `erb-ast-coverage.json`.
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("comment_directive", HandlerMask::SYMBOL),
     ("directive", HandlerMask::SYMBOL),
+    ("graphql_directive", HandlerMask::PROPERTY),
     ("output_directive", HandlerMask::SYMBOL),
 ];
 
@@ -81,7 +83,15 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
+
                 let kind = node.kind();
                 let before = ctx.symbols.len();
                 plugin.collect_block_at(
@@ -93,8 +103,10 @@ pub fn extract_all_single_pass(
                 );
 
                 let mut pushed_scope = false;
-                if matches!(kind, "output_directive" | "directive" | "comment_directive")
-                    && ctx.symbols.len() > before
+                if matches!(
+                    kind,
+                    "output_directive" | "directive" | "comment_directive" | "graphql_directive"
+                ) && ctx.symbols.len() > before
                 {
                     let sym = &ctx.symbols[before];
                     let loc =

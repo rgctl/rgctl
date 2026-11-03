@@ -291,3 +291,113 @@ fn jf07_class_fqn_qualified_name() {
         "expected LIKE on qualified_name, got {by_like}"
     );
 }
+
+#[test]
+fn jf09_ast_coverage_tracker_all_exercised() {
+    use rgctl_plugin_api::LanguagePlugin;
+
+    const MANIFEST: &str = include_str!("../crates/rgctl-lang-java/java-ast-coverage.json");
+    let specs = rgctl_ast_coverage::bundled_specs();
+    let java_spec = specs
+        .iter()
+        .find(|s| s.id == "java")
+        .expect("java spec in bundled_specs");
+    let tracker = rgctl_ast_coverage::AstCoverageTracker::from_manifest_json(
+        "java",
+        MANIFEST,
+        &(java_spec.language)(),
+    )
+    .expect("tracker from manifest");
+    rgctl_ast_coverage::install_hit_callback(tracker);
+
+    let plugin = rgctl_lang_java::JavaPlugin::new().expect("JavaPlugin");
+    let fixture_dir = repo();
+    for entry in walkdir::WalkDir::new(&fixture_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("java") {
+            let bytes = std::fs::read(entry.path()).expect("read java fixture");
+            plugin
+                .extract_all(entry.path(), &bytes)
+                .expect("extract_all on fixture");
+        }
+    }
+
+    let supplemental = br#"
+package demo;
+import java.util.List;
+@interface Tag { String value() default "x"; }
+interface Repo<T extends CharSequence> { int MAX = 10; void save(T item) throws Exception; }
+interface SubRepo extends Repo<String> {}
+enum Kind { ALPHA; }
+record Pair(int x, int y) { public Pair { assert x >= 0; } }
+sealed class Base permits Widget { Base(int v) {} void save(String item) throws Exception {} }
+@Tag("w")
+class Widget extends Base implements Repo<String> {
+    private int count = 0;
+    static { int boot = 1; }
+    Widget() { super(1); }
+    @Override
+    public void save(java.lang.@Tag("p") String item, String... extra) throws Exception {
+        List<@Tag("u") String> taggedList = List.of("a");
+        Class<?> cls = Widget.class;
+        int[] arr = new int[]{1, 2};
+        Runnable r = this::helper;
+        java.util.function.BiFunction<Integer, Integer, Integer> fn = (a, b) -> a + b;
+        int local = -count;
+        local++;
+        local = (local > 0 && arr.length > 0) ? 1 : 2;
+        outer:
+        while (local < 5) {
+            do {
+                for (int i = 0; i < 2; i++) {
+                    if (i == 1) { continue outer; }
+                    break;
+                }
+            } while (false);
+            break;
+        }
+        for (String s : List.of("a")) {
+            synchronized (this) {
+                switch (s) {
+                    case "a": break;
+                    default: break;
+                }
+            }
+        }
+        Object obj = new Pair(1, 2);
+        if (obj instanceof String str) { this.save(str); }
+        int res = switch (obj) {
+            case Pair(int px, int py) when px > 0 -> { yield px + py; }
+            case String tp -> tp.length();
+            default -> 0;
+        };
+        try { helper(); } catch (RuntimeException re) { helper(); }
+        try (AutoCloseable ac = () -> {}) { new Widget(); } catch (Exception e) { throw e; } finally { helper(); }
+        return;
+    }
+    void helper() {}
+}
+"#;
+    plugin
+        .extract_all(Path::new("Supplemental.java"), supplemental)
+        .expect("extract supplemental");
+    let module_src = br#"
+open module demo.mod {
+    requires transitive java.sql;
+    exports demo to other.mod;
+    opens demo to other.mod;
+    uses demo.Repo;
+    provides demo.Repo with demo.Widget;
+}
+"#;
+    plugin
+        .extract_all(Path::new("module-info.java"), module_src)
+        .expect("extract module-info");
+
+    let tracker = rgctl_ast_coverage::AstCoverageTracker::global().expect("tracker installed");
+    tracker
+        .assert_all_exercised()
+        .expect("all active Java AST kinds in java-ast-coverage.json must be exercised");
+}

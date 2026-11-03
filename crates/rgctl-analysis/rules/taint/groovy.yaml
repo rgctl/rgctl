@@ -32,3 +32,12 @@ rules:
     - Runtime.getRuntime().exec
     - ProcessBuilder
     - evaluate(
+- id: gr-san
+  role: sanitizer
+  kind: SqlParameterize
+  match:
+    type: any_substring
+    values:
+    - prepareStatement
+    - groovy.sql.Sql.expand
+    - StringEscapeUtils.escapeHtml

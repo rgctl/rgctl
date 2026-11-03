@@ -780,6 +780,35 @@ public class OrderProcessor {
         assert_eq!(env.get("other").map(String::as_str), Some("OrderDTO"));
     }
 
+    #[test]
+    fn java_instanceof_pattern_field_write_resolves_type() {
+        use crate::cfg_builder::build_cfg_for_function;
+
+        let source = r#"
+public class OrderDTO {
+    public String status;
+}
+public class Demo {
+    public void process(Object o) {
+        if (o instanceof OrderDTO ord) {
+            ord.status = "DONE";
+        }
+    }
+}
+"#;
+        let cfg = build_cfg_for_function("java", source, "process").expect("cfg");
+        assert!(
+            cfg.blocks
+                .values()
+                .flat_map(|b| &b.statements)
+                .any(|s| s.defines("ord.status")),
+            "CFG should define ord.status"
+        );
+        let mut env = HashMap::new();
+        crate::field_write_locals::merge_local_types("java", source, "process", &mut env);
+        assert_eq!(env.get("ord").map(String::as_str), Some("OrderDTO"));
+    }
+
     fn mutation_hit_helper(
         language: &str,
         source: &str,

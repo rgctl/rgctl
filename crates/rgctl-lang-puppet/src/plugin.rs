@@ -673,6 +673,83 @@ impl PuppetPlugin {
                     });
                 }
             }
+            "resource_collector" => {
+                // `File <| title == 'x' |>` — relate host to collected resource type.
+                if let Some(to) = Self::first_child_ident(node, source) {
+                    relations.push(Relation {
+                        from: from.clone(),
+                        to,
+                        relation_type: RelationType::References,
+                        location: Self::loc(node, file_path),
+                        metadata: serde_json::json!({
+                            "language": "puppet",
+                            "kind": "resource_collector"
+                        }),
+                        to_qualified_hint: None,
+                        to_type_hint: Some("puppetresource".to_string()),
+                    });
+                }
+            }
+            "resource_default" => {
+                if let Some(to) = node
+                    .child_by_field_name("type")
+                    .and_then(|n| Self::ident_text(n, source))
+                    .or_else(|| Self::first_child_ident(node, source))
+                {
+                    relations.push(Relation {
+                        from: from.clone(),
+                        to,
+                        relation_type: RelationType::References,
+                        location: Self::loc(node, file_path),
+                        metadata: serde_json::json!({
+                            "language": "puppet",
+                            "kind": "resource_default"
+                        }),
+                        to_qualified_hint: None,
+                        to_type_hint: Some("puppetresource".to_string()),
+                    });
+                }
+            }
+            "search_expression" => {
+                // `title == 'foo'` inside a collector — attribute filter reference.
+                if let Some(to) = Self::first_child_ident(node, source) {
+                    relations.push(Relation {
+                        from: from.clone(),
+                        to,
+                        relation_type: RelationType::References,
+                        location: Self::loc(node, file_path),
+                        metadata: serde_json::json!({
+                            "language": "puppet",
+                            "kind": "search_expression"
+                        }),
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
+                }
+            }
+            "tag_statement" => {
+                let mut c = node.walk();
+                for child in node.children(&mut c) {
+                    if matches!(
+                        child.kind(),
+                        "identifier" | "class_identifier" | "string" | "variable"
+                    ) && let Some(to) = Self::ident_text(child, source)
+                    {
+                        relations.push(Relation {
+                            from: from.clone(),
+                            to,
+                            relation_type: RelationType::References,
+                            location: Self::loc(node, file_path),
+                            metadata: serde_json::json!({
+                                "language": "puppet",
+                                "kind": "tag_statement"
+                            }),
+                            to_qualified_hint: None,
+                            to_type_hint: None,
+                        });
+                    }
+                }
+            }
             _ => {}
         }
     }

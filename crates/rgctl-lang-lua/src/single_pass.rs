@@ -11,16 +11,35 @@ use tree_sitter::Node;
 const MANIFEST_JSON: &str = include_str!("../lua-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
+/// Keep in sync with non-Literal active handlers in `lua-ast-coverage.json`.
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("assignment_statement", HandlerMask::SYMBOL),
+    ("binary_expression", HandlerMask::CFG_STMT),
+    ("block", HandlerMask::CFG_STMT),
+    ("bracket_index_expression", HandlerMask::AST_SKELETON),
+    ("break_statement", HandlerMask::CFG_STMT),
     ("do_statement", HandlerMask::CFG_STMT),
+    ("dot_index_expression", HandlerMask::AST_SKELETON),
+    ("else_statement", HandlerMask::CFG_STMT),
+    ("elseif_statement", HandlerMask::CFG_STMT),
+    ("empty_statement", HandlerMask::CFG_STMT),
+    ("for_generic_clause", HandlerMask::CFG_STMT),
+    ("for_numeric_clause", HandlerMask::CFG_STMT),
     ("for_statement", HandlerMask::CFG_STMT),
     ("function_call", HandlerMask::RELATION),
     ("function_declaration", HandlerMask::SYMBOL),
     ("function_definition", HandlerMask::SYMBOL),
+    ("goto_statement", HandlerMask::CFG_STMT),
     ("if_statement", HandlerMask::CFG_STMT),
+    ("implicit_variable_declaration", HandlerMask::AST_SKELETON),
+    ("label_statement", HandlerMask::CFG_STMT),
+    ("method_index_expression", HandlerMask::AST_SKELETON),
+    ("parameters", HandlerMask::AST_SKELETON),
     ("repeat_statement", HandlerMask::CFG_STMT),
     ("return_statement", HandlerMask::CFG_STMT),
+    ("table_constructor", HandlerMask::AST_SKELETON),
+    ("unary_expression", HandlerMask::CFG_STMT),
+    ("variable_declaration", HandlerMask::AST_SKELETON),
     ("while_statement", HandlerMask::CFG_STMT),
 ];
 
@@ -199,7 +218,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask;
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
@@ -254,6 +280,12 @@ pub fn extract_all_single_pass(
                                 scope_depth,
                             ));
                             stack.push(Visit::LeaveGuard);
+                        }
+                        "elseif_statement" | "else_statement" => {
+                            // Cyclomatic +1 without nesting (matches CFG branch fan-out).
+                            if let Some(f) = ctx.scopes.current_function_mut() {
+                                f.complexity.cyclomatic = f.complexity.cyclomatic.saturating_add(1);
+                            }
                         }
                         "return_statement" => {
                             ctx.scopes.note_return();

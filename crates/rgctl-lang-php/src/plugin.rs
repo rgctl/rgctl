@@ -24,6 +24,8 @@ pub(crate) const PHP_COMPLEXITY_BRANCH_KINDS: &[&str] = &[
     "foreach_statement",
     "switch_statement",
     "match_expression",
+    "match_conditional_expression",
+    "conditional_expression",
     "catch_clause",
 ];
 
@@ -823,6 +825,127 @@ impl PhpPlugin {
         );
         Ok(())
     }
+
+    /// Emit depth relations for include/require, `new`, member/scoped access, and attributes.
+    pub(crate) fn collect_depth_relation_at(
+        &self,
+        node: Node,
+        source: &[u8],
+        file_path: &str,
+        from_symbol: Option<&str>,
+        relations: &mut Vec<Relation>,
+    ) {
+        let from = from_symbol
+            .map(str::to_string)
+            .unwrap_or_else(|| file_path.to_string());
+        match node.kind() {
+            "include_expression"
+            | "include_once_expression"
+            | "require_expression"
+            | "require_once_expression" => {
+                let Some(to) = include_path_text(node, source) else {
+                    return;
+                };
+                relations.push(Relation {
+                    from,
+                    to,
+                    relation_type: RelationType::DependsOn,
+                    location: source_location(node, file_path),
+                    metadata: serde_json::json!({
+                        "language": "php",
+                        "kind": node.kind(),
+                    }),
+                    to_qualified_hint: None,
+                    to_type_hint: None,
+                });
+            }
+            "object_creation_expression" => {
+                let Some(to) = object_creation_type_name(node, source) else {
+                    return;
+                };
+                relations.push(Relation {
+                    from,
+                    to,
+                    relation_type: RelationType::Instantiates,
+                    location: source_location(node, file_path),
+                    metadata: serde_json::json!({ "language": "php" }),
+                    to_qualified_hint: None,
+                    to_type_hint: None,
+                });
+            }
+            "member_access_expression"
+            | "nullsafe_member_access_expression"
+            | "scoped_property_access_expression"
+            | "class_constant_access_expression" => {
+                let Some(to) = access_member_name(node, source) else {
+                    return;
+                };
+                relations.push(Relation {
+                    from,
+                    to,
+                    relation_type: RelationType::Uses,
+                    location: source_location(node, file_path),
+                    metadata: serde_json::json!({
+                        "language": "php",
+                        "kind": node.kind(),
+                    }),
+                    to_qualified_hint: None,
+                    to_type_hint: None,
+                });
+            }
+            "attribute" => {
+                let mut attrs = Vec::new();
+                push_attribute_text(node, source, &mut attrs);
+                for attr in attrs {
+                    relations.push(Relation {
+                        from: from.clone(),
+                        to: attr,
+                        relation_type: RelationType::AnnotatedWith,
+                        location: source_location(node, file_path),
+                        metadata: serde_json::json!({ "language": "php" }),
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
+                }
+            }
+            "attribute_group" => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "attribute" {
+                        self.collect_depth_relation_at(
+                            child,
+                            source,
+                            file_path,
+                            from_symbol,
+                            relations,
+                        );
+                    }
+                }
+            }
+            "namespace_use_clause" | "use_as_clause" | "use_instead_of_clause" => {
+                let Ok(to) = node.utf8_text(source) else {
+                    return;
+                };
+                let to = to.trim();
+                if to.is_empty() {
+                    return;
+                }
+                relations.push(Relation {
+                    from,
+                    to: to.to_string(),
+                    relation_type: RelationType::Uses,
+                    location: source_location(node, file_path),
+                    metadata: serde_json::json!({
+                        "language": "php",
+                        "kind": node.kind(),
+                    }),
+                    to_qualified_hint: None,
+                    to_type_hint: None,
+                });
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Default for PhpPlugin {
@@ -1060,6 +1183,60 @@ fn collect_attributes_from_list(list: Node, source: &[u8], attrs: &mut Vec<Strin
             _ => {}
         }
     }
+}
+
+fn include_path_text(node: Node, source: &[u8]) -> Option<String> {
+    node.child_by_field_name("argument")
+        .or_else(|| node.child_by_field_name("path"))
+        .or_else(|| {
+            let mut cursor = node.walk();
+            node.children(&mut cursor).find(|c| {
+                c.is_named()
+                    && matches!(
+                        c.kind(),
+                        "string"
+                            | "encapsed_string"
+                            | "name"
+                            | "variable_name"
+                            | "binary_expression"
+                    )
+            })
+        })
+        .and_then(|n| n.utf8_text(source).ok())
+        .map(|s| s.trim_matches(|c| c == '"' || c == '\'').to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn object_creation_type_name(node: Node, source: &[u8]) -> Option<String> {
+    node.child_by_field_name("name")
+        .or_else(|| {
+            let mut cursor = node.walk();
+            node.children(&mut cursor).find(|c| {
+                c.is_named()
+                    && matches!(
+                        c.kind(),
+                        "name" | "qualified_name" | "relative_name" | "variable_name"
+                    )
+            })
+        })
+        .and_then(|n| n.utf8_text(source).ok())
+        .map(|s| s.trim_start_matches('\\').to_string())
+        .filter(|s| !s.is_empty() && s != "class")
+}
+
+fn access_member_name(node: Node, source: &[u8]) -> Option<String> {
+    node.child_by_field_name("name")
+        .or_else(|| node.child_by_field_name("member"))
+        .or_else(|| {
+            let mut cursor = node.walk();
+            node.children(&mut cursor).find(|c| {
+                c.is_named()
+                    && matches!(c.kind(), "name" | "variable_name" | "dynamic_variable_name")
+            })
+        })
+        .and_then(|n| n.utf8_text(source).ok())
+        .map(|s| s.trim_start_matches('$').to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn push_attribute_text(attr: Node, source: &[u8], attrs: &mut Vec<String>) {

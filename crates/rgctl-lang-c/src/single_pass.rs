@@ -14,30 +14,69 @@ use tree_sitter::Node;
 const MANIFEST_JSON: &str = include_str!("../c-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
+/// Synced with `c-ast-coverage.json` non-passive kinds. AstSkeleton/CfgStatement
+/// extras stay zero-cost on cold discover via `c_active_kinds` short-circuit.
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
+    ("alignof_expression", HandlerMask::AST_SKELETON),
+    ("array_declarator", HandlerMask::AST_SKELETON),
     ("assignment_expression", HandlerMask::AST_SKELETON),
+    ("attribute_declaration", HandlerMask::AST_SKELETON),
+    ("attributed_statement", HandlerMask::CFG_STMT),
+    ("binary_expression", HandlerMask::CFG_STMT),
+    ("bitfield_clause", HandlerMask::AST_SKELETON),
     ("break_statement", HandlerMask::CFG_STMT),
     ("call_expression", HandlerMask::RELATION),
     ("case_statement", HandlerMask::CFG_STMT),
+    ("cast_expression", HandlerMask::AST_SKELETON),
+    ("comma_expression", HandlerMask::CFG_STMT),
     ("compound_statement", HandlerMask::CFG_STMT),
+    ("conditional_expression", HandlerMask::CFG_STMT),
     ("continue_statement", HandlerMask::CFG_STMT),
+    ("declaration", HandlerMask::AST_SKELETON),
     ("do_statement", HandlerMask::CFG_STMT),
     ("else_clause", HandlerMask::CFG_STMT),
     ("enum_specifier", HandlerMask::SYMBOL),
     ("enumerator", HandlerMask::SYMBOL),
+    ("extension_expression", HandlerMask::AST_SKELETON),
     ("field_declaration", HandlerMask::SYMBOL),
+    ("field_expression", HandlerMask::AST_SKELETON),
     ("for_statement", HandlerMask::CFG_STMT),
+    ("function_declarator", HandlerMask::AST_SKELETON),
     ("function_definition", HandlerMask::SYMBOL),
+    ("generic_expression", HandlerMask::AST_SKELETON),
+    ("gnu_asm_expression", HandlerMask::AST_SKELETON),
     ("goto_statement", HandlerMask::CFG_STMT),
     ("if_statement", HandlerMask::CFG_STMT),
+    ("init_declarator", HandlerMask::AST_SKELETON),
+    ("labeled_statement", HandlerMask::CFG_STMT),
+    ("ms_call_modifier", HandlerMask::AST_SKELETON),
+    ("offsetof_expression", HandlerMask::AST_SKELETON),
+    ("parameter_declaration", HandlerMask::AST_SKELETON),
+    ("parenthesized_declarator", HandlerMask::AST_SKELETON),
+    ("pointer_declarator", HandlerMask::AST_SKELETON),
+    ("pointer_expression", HandlerMask::AST_SKELETON),
+    ("preproc_call", HandlerMask::AST_SKELETON),
+    ("preproc_directive", HandlerMask::AST_SKELETON),
+    ("preproc_elif", HandlerMask::CFG_STMT),
+    ("preproc_elifdef", HandlerMask::CFG_STMT),
+    ("preproc_else", HandlerMask::CFG_STMT),
     ("preproc_if", HandlerMask::CFG_STMT),
     ("preproc_ifdef", HandlerMask::CFG_STMT),
     ("preproc_include", HandlerMask::RELATION),
     ("return_statement", HandlerMask::CFG_STMT),
+    ("seh_except_clause", HandlerMask::CFG_STMT),
+    ("seh_finally_clause", HandlerMask::CFG_STMT),
+    ("seh_leave_statement", HandlerMask::CFG_STMT),
+    ("seh_try_statement", HandlerMask::CFG_STMT),
+    ("sizeof_expression", HandlerMask::AST_SKELETON),
     ("struct_specifier", HandlerMask::SYMBOL),
+    ("subscript_expression", HandlerMask::AST_SKELETON),
     ("switch_statement", HandlerMask::CFG_STMT),
     ("type_definition", HandlerMask::SYMBOL),
+    ("unary_expression", HandlerMask::CFG_STMT),
     ("union_specifier", HandlerMask::SYMBOL),
+    ("update_expression", HandlerMask::CFG_STMT),
+    ("variadic_parameter", HandlerMask::AST_SKELETON),
     ("while_statement", HandlerMask::CFG_STMT),
 ];
 
@@ -157,7 +196,27 @@ pub fn extract_all_single_pass(
                 }
 
                 let kind_id = node.kind_id();
-                let _mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, kind_id);
+                // Pillar 3: gate on manifest passivity. Passive kinds (SkipWrapper /
+                // SkipTypeToken / Literal / Unimplemented) only walk children —
+                // no extract work. Keep `active_kinds` short-circuit below so
+                // AstSkeleton/CfgStatement expression nodes stay zero-cost on
+                // the Linux cold-discover hot path (CFG/DefUse run on --cfg/slice).
+                let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, kind_id);
+                if mask.is_passive() {
+                    let base = stack.len();
+                    for child in node.named_children(&mut cursor) {
+                        let cid = child.kind_id();
+                        if !active_kinds.get(cid as usize).copied().unwrap_or(false)
+                            && child.child_count() == 0
+                        {
+                            let _ = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, cid);
+                            continue;
+                        }
+                        stack.push(Visit::Pre(child, depth + 1));
+                    }
+                    stack[base..].reverse();
+                    continue;
+                }
                 if !active_kinds.get(kind_id as usize).copied().unwrap_or(false) {
                     let base = stack.len();
                     for child in node.named_children(&mut cursor) {

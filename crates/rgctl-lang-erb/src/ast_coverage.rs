@@ -7,9 +7,12 @@ const MANIFEST_JSON: &str = include_str!("../erb-ast-coverage.json");
 const ALLOWED: &[&str] = &[
     "Symbol",
     "Relation",
+    "Property",
     "CfgStatement",
     "AstSkeleton",
-    "Skip",
+    "SkipWrapper",
+    "SkipTypeToken",
+    "Unimplemented",
     "Literal",
 ];
 
@@ -24,7 +27,7 @@ pub fn load_manifest() -> HashMap<String, String> {
     let handlers = v["handlers"].as_object().expect("handlers object");
     handlers
         .iter()
-        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Skip").to_string()))
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Unimplemented").to_string()))
         .collect()
 }
 

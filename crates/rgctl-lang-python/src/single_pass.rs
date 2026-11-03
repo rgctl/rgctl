@@ -18,45 +18,79 @@ const MANIFEST_JSON: &str = include_str!("../python-ast-coverage.json");
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("aliased_import", HandlerMask::RELATION),
+    ("as_pattern", HandlerMask::AST_SKELETON),
     ("as_pattern_target", HandlerMask::SYMBOL),
     ("assert_statement", HandlerMask::CFG_STMT),
     ("assignment", HandlerMask::AST_SKELETON),
     ("attribute", HandlerMask::RELATION),
     ("augmented_assignment", HandlerMask::AST_SKELETON),
+    ("await", HandlerMask::CFG_STMT),
+    ("binary_operator", HandlerMask::CFG_STMT),
     ("block", HandlerMask::CFG_STMT),
+    ("boolean_operator", HandlerMask::CFG_STMT),
     ("break_statement", HandlerMask::CFG_STMT),
     ("call", HandlerMask::RELATION),
     ("case_clause", HandlerMask::CFG_STMT),
+    ("case_pattern", HandlerMask::AST_SKELETON),
     ("class_definition", HandlerMask::SYMBOL),
+    ("class_pattern", HandlerMask::AST_SKELETON),
+    ("comparison_operator", HandlerMask::CFG_STMT),
+    ("complex_pattern", HandlerMask::AST_SKELETON),
+    ("conditional_expression", HandlerMask::CFG_STMT),
     ("continue_statement", HandlerMask::CFG_STMT),
     ("decorated_definition", HandlerMask::RELATION),
     ("decorator", HandlerMask::RELATION),
+    ("default_parameter", HandlerMask::AST_SKELETON),
+    ("delete_statement", HandlerMask::CFG_STMT),
+    ("dict_pattern", HandlerMask::AST_SKELETON),
     ("dictionary_comprehension", HandlerMask::CFG_STMT),
+    ("dictionary_splat_pattern", HandlerMask::AST_SKELETON),
     ("elif_clause", HandlerMask::CFG_STMT),
     ("else_clause", HandlerMask::CFG_STMT),
     ("except_clause", HandlerMask::CFG_STMT),
+    ("exec_statement", HandlerMask::CFG_STMT),
     ("finally_clause", HandlerMask::CFG_STMT),
+    ("for_in_clause", HandlerMask::CFG_STMT),
     ("for_statement", HandlerMask::CFG_STMT),
     ("function_definition", HandlerMask::SYMBOL),
     ("future_import_statement", HandlerMask::RELATION),
     ("generator_expression", HandlerMask::CFG_STMT),
+    ("global_statement", HandlerMask::CFG_STMT),
+    ("if_clause", HandlerMask::CFG_STMT),
     ("if_statement", HandlerMask::CFG_STMT),
     ("import_from_statement", HandlerMask::RELATION),
     ("import_prefix", HandlerMask::RELATION),
     ("import_statement", HandlerMask::RELATION),
+    ("keyword_pattern", HandlerMask::AST_SKELETON),
     ("lambda", HandlerMask::SYMBOL),
+    ("lambda_parameters", HandlerMask::AST_SKELETON),
     ("list_comprehension", HandlerMask::CFG_STMT),
+    ("list_pattern", HandlerMask::AST_SKELETON),
+    ("list_splat_pattern", HandlerMask::AST_SKELETON),
     ("match_statement", HandlerMask::CFG_STMT),
     ("named_expression", HandlerMask::SYMBOL),
+    ("nonlocal_statement", HandlerMask::CFG_STMT),
+    ("not_operator", HandlerMask::AST_SKELETON),
+    ("parameters", HandlerMask::AST_SKELETON),
+    ("pass_statement", HandlerMask::CFG_STMT),
+    ("print_statement", HandlerMask::CFG_STMT),
     ("raise_statement", HandlerMask::CFG_STMT),
     ("relative_import", HandlerMask::RELATION),
     ("return_statement", HandlerMask::CFG_STMT),
     ("set_comprehension", HandlerMask::CFG_STMT),
+    ("splat_pattern", HandlerMask::AST_SKELETON),
     ("subscript", HandlerMask::RELATION),
     ("try_statement", HandlerMask::CFG_STMT),
+    ("tuple_pattern", HandlerMask::AST_SKELETON),
     ("type_alias_statement", HandlerMask::SYMBOL),
+    ("type_parameter", HandlerMask::AST_SKELETON),
+    ("typed_default_parameter", HandlerMask::AST_SKELETON),
+    ("typed_parameter", HandlerMask::AST_SKELETON),
+    ("unary_operator", HandlerMask::AST_SKELETON),
+    ("union_pattern", HandlerMask::AST_SKELETON),
     ("while_statement", HandlerMask::CFG_STMT),
     ("wildcard_import", HandlerMask::RELATION),
+    ("with_clause", HandlerMask::CFG_STMT),
     ("with_item", HandlerMask::CFG_STMT),
     ("with_statement", HandlerMask::CFG_STMT),
     ("yield", HandlerMask::CFG_STMT),
@@ -203,7 +237,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
 
                 // --- Symbols + scope enter ---

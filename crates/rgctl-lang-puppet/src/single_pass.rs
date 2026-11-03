@@ -12,6 +12,7 @@ const MANIFEST_JSON: &str = include_str!("../puppet-ast-coverage.json");
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("assignment", HandlerMask::AST_SKELETON),
+    ("binary_expression", HandlerMask::CFG_STMT),
     ("block", HandlerMask::CFG_STMT),
     ("case_item", HandlerMask::CFG_STMT),
     ("case_statement", HandlerMask::CFG_STMT),
@@ -21,6 +22,7 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("defined_resource_type", HandlerMask::SYMBOL),
     ("else_statement", HandlerMask::CFG_STMT),
     ("elsif_statement", HandlerMask::CFG_STMT),
+    ("field_expression", HandlerMask::AST_SKELETON),
     ("function_call", HandlerMask::RELATION),
     ("function_declaration", HandlerMask::SYMBOL),
     ("if_statement", HandlerMask::CFG_STMT),
@@ -34,9 +36,11 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("resource_declaration", HandlerMask::SYMBOL),
     ("resource_default", HandlerMask::RELATION),
     ("resource_reference", HandlerMask::RELATION),
+    ("search_expression", HandlerMask::RELATION),
     ("selector", HandlerMask::CFG_STMT),
     ("tag_statement", HandlerMask::RELATION),
     ("type_declaration", HandlerMask::SYMBOL),
+    ("unary_expression", HandlerMask::AST_SKELETON),
     ("unless_statement", HandlerMask::CFG_STMT),
     ("variable", HandlerMask::SYMBOL),
 ];
@@ -112,7 +116,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let before = ctx.symbols.len();
                 plugin.collect_symbol_at(node, source, &file_path_str, &mut ctx.symbols);

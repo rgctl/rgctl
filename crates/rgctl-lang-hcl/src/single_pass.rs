@@ -11,10 +11,16 @@ use tree_sitter::Node;
 const MANIFEST_JSON: &str = include_str!("../hcl-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
+/// Keep in sync with non-Literal active handlers in `hcl-ast-coverage.json`.
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
+    ("attribute", HandlerMask::CFG_STMT),
     ("block", HandlerMask::SYMBOL),
     ("conditional", HandlerMask::CFG_STMT),
+    ("for_expr", HandlerMask::CFG_STMT),
     ("function_call", HandlerMask::RELATION),
+    ("get_attr", HandlerMask::AST_SKELETON),
+    ("template_directive", HandlerMask::AST_SKELETON),
+    ("variable_expr", HandlerMask::AST_SKELETON),
 ];
 
 const HCL_CALL_KINDS: &[&str] = &["function_call"];
@@ -151,7 +157,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask;
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
@@ -205,7 +218,9 @@ pub fn extract_all_single_pass(
                     }
                 }
 
-                if ctx.scopes.current_function().is_some() && kind == "conditional" {
+                if ctx.scopes.current_function().is_some()
+                    && matches!(kind, "conditional" | "for_expr")
+                {
                     let delta = 1 + ctx
                         .scopes
                         .current_function()

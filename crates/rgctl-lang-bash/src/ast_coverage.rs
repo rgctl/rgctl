@@ -9,7 +9,9 @@ const ALLOWED: &[&str] = &[
     "Relation",
     "CfgStatement",
     "AstSkeleton",
-    "Skip",
+    "SkipWrapper",
+    "SkipTypeToken",
+    "Unimplemented",
     "Literal",
 ];
 
@@ -25,7 +27,7 @@ pub fn load_manifest() -> HashMap<String, String> {
         .as_object()
         .expect("handlers object")
         .iter()
-        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Skip").to_string()))
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Unimplemented").to_string()))
         .collect()
 }
 
@@ -81,6 +83,20 @@ mod tests {
             manifest.get("command").map(String::as_str),
             Some("Relation"),
             "command must be Relation"
+        );
+        assert_eq!(
+            manifest.get("declaration_command").map(String::as_str),
+            Some("Symbol"),
+            "declaration_command must be Symbol"
+        );
+        assert_eq!(
+            manifest.get("command_substitution").map(String::as_str),
+            Some("Relation"),
+            "command_substitution must be Relation"
+        );
+        assert!(
+            !manifest.values().any(|h| h == "Skip"),
+            "raw Skip must be zero for Tier-1 A+"
         );
     }
 }

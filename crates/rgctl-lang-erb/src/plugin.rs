@@ -33,6 +33,8 @@ enum BlockKind {
     Code,
     /// `<%# ... %>` — comment
     Comment,
+    /// `<%graphql ... %>` — GraphQL directive body (Property handler)
+    Graphql,
 }
 
 // ── Compiled regexes (one-time init) ────────────────────────────────
@@ -126,9 +128,20 @@ impl ErbPlugin {
         None
     }
 
+    /// Extract comment body text (`comment` child under `comment_directive`).
+    fn block_comment(node: Node, source: &[u8]) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "comment" {
+                return child.utf8_text(source).ok().map(|s| s.trim().to_string());
+            }
+        }
+        None
+    }
+
     /// Classify a block's translation complexity.
     fn classify_tier(code: &str, kind: BlockKind) -> Tier {
-        if kind == BlockKind::Comment {
+        if matches!(kind, BlockKind::Comment | BlockKind::Graphql) {
             return Tier::T1;
         }
 
@@ -348,23 +361,41 @@ impl ErbPlugin {
             "output_directive" => Some(BlockKind::Output),
             "directive" => Some(BlockKind::Code),
             "comment_directive" => Some(BlockKind::Comment),
-            // graphql_directive: <%graphql %> blocks are intentionally skipped.
-            // Coverage gap documented in erb-ast-coverage.json. Future: dedicated handler.
+            "graphql_directive" => Some(BlockKind::Graphql),
             _ => None,
         };
 
         if let Some(kind) = kind {
-            if let Some(code) = Self::block_code(node, source) {
+            // comment_directive aliases code as `comment`; graphql/others use `code`.
+            let code = Self::block_code(node, source).or_else(|| Self::block_comment(node, source));
+            if let Some(code) = code {
                 let tier = Self::classify_tier(&code, kind);
-                let at_vars = Self::extract_at_variables(&code);
-                let fact_paths = Self::extract_fact_paths(&code);
-                let scope_refs = Self::extract_scope_refs(&code);
-                let jinja2 = Self::jinja2_hint(&code, kind, tier);
+                let at_vars = if kind == BlockKind::Graphql {
+                    Vec::new()
+                } else {
+                    Self::extract_at_variables(&code)
+                };
+                let fact_paths = if kind == BlockKind::Graphql {
+                    Vec::new()
+                } else {
+                    Self::extract_fact_paths(&code)
+                };
+                let scope_refs = if kind == BlockKind::Graphql {
+                    Vec::new()
+                } else {
+                    Self::extract_scope_refs(&code)
+                };
+                let jinja2 = if kind == BlockKind::Graphql {
+                    None
+                } else {
+                    Self::jinja2_hint(&code, kind, tier)
+                };
 
                 let block_type = match kind {
                     BlockKind::Output => "output",
                     BlockKind::Code => "code",
                     BlockKind::Comment => "comment",
+                    BlockKind::Graphql => "graphql",
                 };
 
                 let line = node.start_position().row + 1;
@@ -381,16 +412,26 @@ impl ErbPlugin {
                     fields: vec![],
                     modifiers: vec![],
                     documentation: None,
-                    metadata: serde_json::json!({
-                        "language": "erb",
-                        "block_kind": block_type,
-                        "translation_tier": tier as u8,
-                        "ruby_code": code,
-                        "jinja2_hint": jinja2,
-                        "variables": at_vars,
-                        "fact_paths": fact_paths,
-                        "scope_refs": scope_refs,
-                    }),
+                    metadata: if kind == BlockKind::Graphql {
+                        serde_json::json!({
+                            "language": "erb",
+                            "block_kind": block_type,
+                            "translation_tier": tier as u8,
+                            "graphql_body": code,
+                            "handler": "Property",
+                        })
+                    } else {
+                        serde_json::json!({
+                            "language": "erb",
+                            "block_kind": block_type,
+                            "translation_tier": tier as u8,
+                            "ruby_code": code,
+                            "jinja2_hint": jinja2,
+                            "variables": at_vars,
+                            "fact_paths": fact_paths,
+                            "scope_refs": scope_refs,
+                        })
+                    },
                 });
 
                 let rel_from = sym_name;

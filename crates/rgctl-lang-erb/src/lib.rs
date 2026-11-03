@@ -18,10 +18,11 @@
 //! - Ruby inside `<% %>` blocks is parsed with regex, not `tree-sitter-ruby`.
 //!   Method calls like `@facts.dig(...)` / `@facts.get('os')` are not captured.
 //!   Non-`@` local variables and `require` statements produce no graph edges.
-//! - `<%graphql %>` directives are skipped (no symbols/relations emitted).
+//! - `<%graphql %>` directives emit a Property-tagged symbol with GraphQL body
+//!   metadata (no Ruby variable / fact / scope edges).
 //! - `.epp` (Puppet EPP) templates are out of scope; a future `rgctl-lang-epp`
 //!   would cover those.
-//! - `content` nodes (HTML/text between tags) are skipped; no layout structure.
+//! - `content` / `template` are SkipWrapper containers; no layout structure.
 //! - No CFG/taint/Layer F analysis — `enable_complexity = false` in `languages.toml`.
 
 use rgctl_registry::LanguageRegistry;

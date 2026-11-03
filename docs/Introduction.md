@@ -50,7 +50,7 @@ You do not need graph theory to use the CLI: **indexing builds the map; commands
 
 1. **Once** (or after large changes): `discover` from the repo you mean to index — see [Discovering and indexing](https://rgctl.io/docs/guides/discovering-and-indexing/) for `-r` vs `.` pitfalls.  
 2. **Many times:** query commands read `{repo}/.rgctl/`. Prefer **`-f json`** and never scrape stderr ([JSON API](json-api.md)).  
-3. **Agents:** install the pack (`rgctl install --skill --tools …`) — single skill `rgctl` ([agent-skill](https://rgctl.io/docs/guides/agent-skill/)).  
+3. **Agents:** install the pack (`rgctl install --skill --tools …`) — core skill `rgctl` plus `/rgctl:review` · `/rgctl:vuln` · `/rgctl:migrate` ([agent-skill](https://rgctl.io/docs/guides/agent-skill/)).  
 4. **Dashboard:** optional UI after `discover --with-dashboard` + `serve` — not required for structural answers.
 
 Capability designs for contributors: [design/](design/README.md).
@@ -108,13 +108,13 @@ Step-by-step how-tos: **[Guides](https://rgctl.io/docs/guides/)**. Full CLI walk
 
 ## Languages
 
-**Tier-1 deep-analysis** languages use custom tree-sitter plugins with grammar-verified `crates/rgctl-lang-*/{id}-ast-coverage.json` manifests, single-pass `extract_all` (`ScopeStack` + `KindDispatchTable` + `parse_with_pool`), and CFG/PDG support. Set `RGCTL_AST_COVERAGE_STRICT=1` to fail the build on grammar/manifest drift.
+**Tier-1 deep-analysis** languages use custom tree-sitter plugins with grammar-verified `crates/rgctl-lang-*/{id}-ast-coverage.json` manifests at **≥98% semantic Grade `A+`** (raw `"Skip"` banned), single-pass `extract_all` (`ScopeStack` + `KindDispatchTable` + `parse_with_pool`), and CFG/PDG support. Set `RGCTL_AST_COVERAGE_STRICT=1` to fail the build on grammar/manifest drift.
 
 Separately, [`languages.toml`](../languages.toml) registers **~60** language and config/IaC plugins (Tier 1 + generic tree-sitter + regex + formats). Do not equate “Tier 1 deep analysis” with the full plugin catalog count.
 
 The website **`/docs/languages/`** pages are generated from those JSON files at build time — do not maintain parallel hand-written coverage tables. Pointers: [languages/README.md](languages/README.md) · [tier-1-language-support.md](tier-1-language-support.md) · [CLI command reference](https://rgctl.io/docs/guides/cli-command-reference/).
 
-Current Tier-1 deep-analysis ids include C, C++, C#, Go, Groovy, Java, JavaScript, Kotlin, PHP, Puppet, Python, Ruby, Rust, TypeScript (plus markdown as a doc plugin; ERB and others with coverage JSON as they land).
+Current Tier-1 ids with `*-ast-coverage.json` (24): Bash, C, C++, C#, Dart, Elixir, ERB, Go, Groovy, HCL, Java, JavaScript, Kotlin, Lua, Markdown, PHP, Puppet, Python, Ruby, Rust, Scala, SQL, Swift, TypeScript.
 
 ---
 
