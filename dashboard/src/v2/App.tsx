@@ -90,10 +90,13 @@ export function App() {
                   onClick={() => goRoom(r.id)}
                   aria-current={room === r.id ? "page" : undefined}
                   title={r.blurb}
-                  className={`rounded px-2 py-1 text-[12px] leading-none ${
+                  // Rooms are the one control that is always on screen, so they carry a surface rather than
+                  // being text that happens to be clickable: a deep teal chip at rest, a lighter one with a
+                  // sky edge for the room you are in.
+                  className={`rounded-md border px-3 py-1.5 text-[12px] leading-none transition-colors ${
                     room === r.id
-                      ? "bg-sky-500/12 text-sky-100"
-                      : "text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100"
+                      ? "border-sky-400/70 bg-[#16566e] font-medium text-white"
+                      : "border-[#1d4b5e] bg-[#0d2f3e] text-zinc-200 hover:border-[#2b6d88] hover:bg-[#12455a] hover:text-white"
                   }`}
                 >
                   {r.label}
