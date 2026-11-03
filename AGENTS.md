@@ -21,7 +21,7 @@
 - **Artifacts:** Session data lives in `{repo}/.rgctl/`. Warm caches invalidate wall-time claims.
 - **Constrained discover (opt-in):** Prefer `rgctl discover . --with-limits max-mem-mb=4096,threads=1` (or `RGCTL_WITH_LIMITS`) in containers / cgroups — do **not** change default desktop discover for memory. Soft RSS tripwire at ~95%; smaller spill sort-runs and stream channel when `max-mem-mb` is set. Container smoke: `./scripts/run-container-with-limits-smoke.sh` (`tests/Containerfile`, mounts `example/linux`).
 - **Features:** Default semantic embedder is compiled **vocab**. Do not require ONNX / Python ML unless behind an explicit feature (e.g. `semantic-onnx` / code-daemon + Git LFS).
-- **OpenSpec language work:** Still cite [openspec/changes/_shared/starting-context.md](openspec/changes/_shared/starting-context.md) (pointer here); follow the sections below.
+- **OpenSpec language work:** Cite the OpenSpec starting context that ships with the change proposals (`starting-context.md`) and follow the sections below. It is not in this checkout: `openspec/` here is a gitignored, config-only pointer to the OpenSpec store, and the canonical policy is this file.
 - **Grammar bumps:** When you bump a tree-sitter grammar pin, update that language’s `*-ast-coverage.json` (and add the language to `rgctl-ast-coverage::bundled_specs` for new languages). Unit tests hard-fail the same drift; `cargo check -p rgctl-languages` warns (`RGCTL_AST_COVERAGE_STRICT=1` fails). The [rgctl-website](https://github.com/rgctl/rgctl-website) `/docs/languages/` pages are generated from those JSON files — do not maintain parallel tables under `docs/languages/`. User-facing guides are edited in **rgctl-website** (`docs/guides/`), not here.
 - **Releases:** Follow **Releases** below (and [docs/releasing.md](docs/releasing.md)). Do not hand-edit dozens of crate `version =` lines.
 - **AI-assisted contributions:** Contributors may use AI coding agents freely. The human author must still review every change and is solely responsible for the PR and its content. Do **not** add AI `Co-Authored-By` / `Assisted-By` / `Generated-By` trailers (or agent emails as author/committer) — PR CI enforces this via `scripts/check-no-ai-commit-trailers.py` (see [CONTRIBUTING.md](CONTRIBUTING.md#ai-coding-tools-and-authorship)). Prefer DCO `Signed-off-by` only.
@@ -165,7 +165,7 @@ Baselines and notes: [docs/internal/profile.md](docs/internal/profile.md#snapsho
 | [docs/language-testing-guide.md](docs/language-testing-guide.md) | New-language test locations, asserts, Tier 1 matrix |
 | [semantic search](https://rgctl.io/docs/guides/semantic-search/) | Embedders (if touching semantic) |
 | [docs/releasing.md](docs/releasing.md) | Version bump + GitHub Release tags |
-| [openspec/changes/_shared/starting-context.md](openspec/changes/_shared/starting-context.md) | OpenSpec pointer (canonical policy is this file) |
+| `starting-context.md` (ships with the OpenSpec change proposals) | OpenSpec pointer (canonical policy is this file) |
 
 ---
 

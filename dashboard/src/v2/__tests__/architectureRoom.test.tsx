@@ -107,4 +107,39 @@ describe("the Architecture room", () => {
     fireEvent.click(toggleBtn);
     expect(screen.getByRole("button", { name: /^shared only \(\d+\)$/ }).getAttribute("aria-pressed")).toBe("true");
   });
+
+  /**
+   * The room's own controls, in the order a reader uses them.
+   *
+   * Naming a district comes before acting on one: the lookup sat *below* Expand/Collapse, so the control that
+   * answers "which district?" was the one you found last, under a button that could not be used until you had.
+   */
+  it("puts the district lookup above the controls that act on a district", async () => {
+    stubBundle({ "metagraph.json": metagraphJson, "communities.json": summaryJson });
+    render(<ArchitectureRoom />);
+    // Two fields share the label (the overlay's lookup and the panel's filter), so the overlay's is the one
+    // inside the canvas wrapper — that is the ordering claim being tested.
+    await waitFor(() => expect(screen.getAllByLabelText("Find a district by name").length).toBeGreaterThan(0));
+
+    const lookup = screen.getAllByLabelText("Find a district by name")[0];
+    const expand = screen.getByRole("button", { name: /Expand/ });
+    const collapse = screen.getByRole("button", { name: /Collapse/ });
+
+    // Node.DOCUMENT_POSITION_FOLLOWING means the second node comes after the first.
+    expect(lookup.compareDocumentPosition(expand) & 4).toBeTruthy();
+    expect(lookup.compareDocumentPosition(collapse) & 4).toBeTruthy();
+  });
+
+  /**
+   * A level is a link, so a link to a level that is not in this bundle has to say so.
+   *
+   * Checked against the data and not against the canvas: this is what a stale `?explode=` from a previous index
+   * looks like, and "nothing happened" would be indistinguishable from a broken room.
+   */
+  it("reports a district named in the URL that this bundle does not contain", async () => {
+    stubBundle({ "metagraph.json": metagraphJson, "communities.json": summaryJson });
+    render(<ArchitectureRoom explode={999999} onExplodeChange={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/district #999999/)).toBeTruthy());
+    expect(screen.getByText(/The link is stale; the map is not empty/)).toBeTruthy();
+  });
 });

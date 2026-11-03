@@ -1,5 +1,5 @@
 /**
- * The Spine's graph: the same surface the retired CFG·PDG lens owned.
+ * The CFG lens's graph: the same surface the retired CFG·PDG lens owned.
  *
  * The claims here are the ones the lens exists to make, and each one was previously only true of the
  * retired prototype: the stat row reports the bundle's own numbers, the dominance-frontier overlay can be
@@ -15,7 +15,7 @@ import { installFetchStub, OTHER, SUBJECT } from "./fixture";
 
 function renderLens(functionId = SUBJECT) {
   const history = createMemoryHistory({
-    initialEntries: [`/understand?lens=spine&focus=${functionId}`],
+    initialEntries: [`/understand?lens=cfg&focus=${functionId}`],
   });
   const router = createAppRouter(history);
   const { container } = render(
@@ -36,7 +36,7 @@ function statValue(label: string): string {
 
 beforeEach(() => installFetchStub());
 
-describe("the Spine draws the bundle's CFG", () => {
+describe("the CFG lens draws the bundle's CFG", () => {
   it("reports blocks, edges, frontiers and exits from the sidecar", async () => {
     renderLens();
     await screen.findAllByText("handleAuth");
@@ -122,7 +122,7 @@ describe("a subject with no CFG in the bundle is stated", () => {
 /**
  * The merge that removed two lenses.
  *
- * `code` and `cfgpdg` were the Spine in a different frame: same loader, same drawing, same frontier set,
+ * `code` and `cfgpdg` were the CFG lens in a different frame: same loader, same drawing, same frontier set,
  * same block panel — one of them minus the source, the other minus the graph. They are controls now, and
  * these tests hold the two claims that make the removal honest: the control no longer offers them as lenses,
  * and the framings they used to own still exist and still work.
@@ -135,7 +135,7 @@ describe("one lens, three framings", () => {
     const lensBar = document.querySelector('[aria-label="Rooms"]')?.parentElement;
     expect(lensBar).toBeTruthy();
     // The questions remain; the two framings do not.
-    for (const label of ["Spine", "Dataflow", "Slice/Trace", "Blast", "Metrics", "Time"]) {
+    for (const label of ["CFG", "Dataflow", "Slice/Trace", "Blast", "Metrics", "Time"]) {
       expect(screen.getByRole("button", { name: label })).toBeTruthy();
     }
     expect(screen.queryByRole("button", { name: "CFG·PDG" })).toBeNull();

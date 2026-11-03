@@ -12,7 +12,7 @@ import { createAppRouter } from "../router";
 import { installFetchStub, SUBJECT } from "./fixture";
 
 function renderSpine() {
-  const history = createMemoryHistory({ initialEntries: [`/understand?lens=spine&focus=${SUBJECT}`] });
+  const history = createMemoryHistory({ initialEntries: [`/understand?lens=cfg&focus=${SUBJECT}`] });
   const router = createAppRouter(history);
   render(
     <QueryClientProvider

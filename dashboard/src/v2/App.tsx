@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Instrument } from "./Instrument";
 import { Palette } from "./Palette";
 import { Chip, Panel, Unavailable } from "./shell";
-import { Spine } from "./rooms/Spine";
+import { Cfg } from "./rooms/Cfg";
 import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
 import { MigrationRoom } from "./rooms/Migration";
@@ -21,8 +21,10 @@ export function App() {
     functions: list,
     functionsLoading,
     functionsError,
+    explode,
     setFocus,
     setLens,
+    setExplode,
     goRoom,
     pick: focusPick,
   } = useFocus();
@@ -70,59 +72,74 @@ export function App() {
         </button>
       </div>
 
-      <div className="flex min-h-0 flex-1">
-        <nav aria-label="Rooms" className="w-52 shrink-0 overflow-y-auto border-r border-white/8 bg-[#0c0f13] p-2">
-          <div className="px-2 pb-1.5 text-[10px] uppercase tracking-wider text-zinc-600">rooms</div>
-          {ROOMS.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              onClick={() => goRoom(r.id)}
-              aria-current={room === r.id ? "page" : undefined}
-              className={`mb-0.5 block w-full rounded px-2 py-1.5 text-left ${
-                room === r.id ? "bg-sky-500/12 text-sky-100" : "text-zinc-300 hover:bg-white/[0.04]"
-              }`}
-            >
-              <span className="block text-[12px]">{r.label}</span>
-              <span className="block truncate text-[10px] text-zinc-500">{r.blurb}</span>
-            </button>
-          ))}
-        </nav>
-
-        <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-white/8 bg-[#0e1116] px-3 py-1.5">
-            {/* Lenses are Understand controls — hiding them in other rooms avoids implying Spine/CFG
-                tabs apply to Migration/Taint/Architecture. */}
-            {room === "understand" ? (
-              <>
-                <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">lens</span>
-                {LENSES.map((l) => (
-                  <button
-                    key={l.id}
-                    type="button"
-                    onClick={() => setLens(l.id)}
-                    aria-pressed={lens === l.id}
-                    className={`rounded px-2 py-0.5 text-[11px] ${
-                      lens === l.id
-                        ? "bg-white/10 text-zinc-100"
-                        : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
-                    }`}
-                  >
-                    {l.label}
-                  </button>
-                ))}
-              </>
-            ) : (
-              <span className="text-[10px] uppercase tracking-wider text-zinc-600">
-                {ROOMS.find((r) => r.id === room)?.label}
-              </span>
-            )}
+      <div className="flex min-h-0 flex-1 flex-col">
+        {/*
+          One horizontal row of rooms, not a 208px column. The rail cost the full width of the left edge in every
+          room, and the room that needs width most — the universe — paid it twice: 208px of sidebar plus a 300px
+          column. Seven labels fit on one line; the question a room answers stays visible for the room you are
+          in, which is the only one where it is still a question.
+        */}
+        <div className="flex shrink-0 flex-col gap-1 border-b border-white/8 bg-[#0e1116] px-3 py-1.5">
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">rooms</span>
+            <nav aria-label="Rooms" className="flex flex-wrap items-center gap-1">
+              {ROOMS.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => goRoom(r.id)}
+                  aria-current={room === r.id ? "page" : undefined}
+                  title={r.blurb}
+                  // Rooms are the one control that is always on screen, so they carry a surface rather than
+                  // being text that happens to be clickable: a deep teal chip at rest, a lighter one with a
+                  // sky edge for the room you are in.
+                  className={`rounded-md border px-3 py-1.5 text-[12px] leading-none transition-colors ${
+                    room === r.id
+                      ? "border-sky-400/70 bg-[#16566e] font-medium text-white"
+                      : "border-[#1d4b5e] bg-[#0d2f3e] text-zinc-200 hover:border-[#2b6d88] hover:bg-[#12455a] hover:text-white"
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </nav>
             <span className="ml-auto flex items-center gap-2 text-[10px] text-zinc-600">
-              {room === "understand" && <span>{ROOMS.find((r) => r.id === room)?.label}</span>}
+              <span className="hidden sm:inline">{ROOMS.find((r) => r.id === room)?.blurb}</span>
               {entry && <Chip tone="blue">subject: {entry.name}</Chip>}
             </span>
           </div>
+          {/* Lenses are Understand controls — hiding them in other rooms avoids implying CFG/Dataflow
+              tabs apply to Migration/Taint/Architecture. */}
+          {room === "understand" && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">lens</span>
+              {LENSES.map((l) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  onClick={() => setLens(l.id)}
+                  aria-pressed={lens === l.id}
+                  className={`rounded px-2 py-0.5 text-[11px] ${
+                    lens === l.id
+                      ? "bg-white/10 text-zinc-100"
+                      : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+                  }`}
+                >
+                  {l.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
+        {/*
+          `min-h-0` is load-bearing. A column flex item's automatic minimum size is its *content*, so without it
+          this pane grew to its content's height (measured: 1933px inside a 813px window) and the scroll
+          container inside it never had anything to scroll — everything below the fold was clipped by the shell.
+          That is what made the universe look un-centred: its canvas was 946x1742, so the map was correctly framed
+          in a box three times taller than the window.
+        */}
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
             {functionsError != null && (
               <Unavailable
@@ -148,7 +165,19 @@ export function App() {
                 onCarry={goRoom}
               />
             )}
-            {room === "architecture" && <ArchitectureRoom />}
+            {room === "architecture" && (
+              <ArchitectureRoom
+                // The open district rides the URL with the Focus, so opening a symbol from inside a level and
+                // coming back returns to that level rather than to the universe.
+                explode={explode}
+                onExplodeChange={setExplode}
+                onOpenFocus={(focus) => {
+                  // The shell owns the Focus: write the key, then move to the room that renders it.
+                  setFocus(focus);
+                  goRoom("understand");
+                }}
+              />
+            )}
             {room === "migration" && <MigrationRoom />}
             {room === "taint" && <TaintRoom />}
             {room !== "repo" &&
@@ -303,10 +332,10 @@ function UnderstandRoom({
         </div>
       </Panel>
 
-      {lens === "spine" && <Spine entry={entry} />}
+      {lens === "cfg" && <Cfg entry={entry} />}
       {/* Everything else in the control is a question phase 3 answers. `code` and `cfgpdg` are gone: both
-          were the Spine in another frame, and both are now controls inside it (show source / graph height). */}
-      {lens !== "spine" && <LensPlaceholder lens={lens} />}
+          were the CFG lens in another frame, and both are now controls inside it (show source / graph height). */}
+      {lens !== "cfg" && <LensPlaceholder lens={lens} />}
     </div>
   );
 }

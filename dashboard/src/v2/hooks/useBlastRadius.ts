@@ -66,6 +66,9 @@ export function useBlastRadius(
     workerRef.current = worker;
     worker.onmessage = (ev: MessageEvent<BlastWorkerOut>) => {
       const data = ev.data;
+      // Progress is a broadcast about the payload download, not an answer to a request: it carries no
+      // request id, and nothing here asked for it. Returning first keeps the id lookup below honest.
+      if (data.type === "progress") return;
       if (data.type === "error") {
         if (data.requestId != null) {
           pending.current.get(data.requestId)?.reject(new Error(data.message));

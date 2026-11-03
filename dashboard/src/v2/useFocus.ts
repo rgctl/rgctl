@@ -29,11 +29,14 @@ export interface FocusState {
   entry: FunctionEntry | null;
   /** True when the URL carries a Focus the current index does not contain. */
   staleFocus: boolean;
+  /** The district open in Architecture, from the URL — so leaving the room and returning keeps the level. */
+  explode: number | null;
   functions: FunctionEntry[];
   functionsLoading: boolean;
   functionsError: unknown;
   setFocus: (key: Focus | null) => void;
   setLens: (lens: LensId) => void;
+  setExplode: (id: number | null) => void;
   goRoom: (room: RoomId) => void;
   /** Set Focus from an index entry (key only — never the payload). */
   pick: (entry: FunctionEntry) => void;
@@ -45,8 +48,9 @@ export function useFocus(): FocusState {
   const navigate = roomApi.useNavigate();
 
   const room = (isRoom(params.roomId) ? params.roomId : DEFAULT_ROOM) as RoomId;
-  const lens = (isLens(search.lens) ? search.lens : "spine") as LensId;
+  const lens = (isLens(search.lens) ? search.lens : "cfg") as LensId;
   const focus = (search.focus as Focus | undefined) ?? null;
+  const explode = (search.explode as number | undefined) ?? null;
 
   const functions = useQuery({ queryKey: ["functions"], queryFn: loadFunctions });
   const list = functions.data ?? [];
@@ -58,6 +62,9 @@ export function useFocus(): FocusState {
 
   const setLens = (next: LensId) =>
     void navigate({ search: (prev) => ({ ...prev, lens: next }) });
+
+  const setExplode = (id: number | null) =>
+    void navigate({ search: (prev) => ({ ...prev, explode: id ?? undefined }) });
 
   const goRoom = (next: RoomId) =>
     void navigate({ to: "/$roomId", params: { roomId: next }, search: (prev) => prev });
@@ -87,8 +94,10 @@ export function useFocus(): FocusState {
     functions: list,
     functionsLoading: functions.isLoading,
     functionsError: functions.error,
+    explode,
     setFocus,
     setLens,
+    setExplode,
     goRoom,
     pick,
   };

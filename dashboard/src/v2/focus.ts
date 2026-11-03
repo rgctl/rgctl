@@ -54,6 +54,20 @@ export function parseFocus(raw: unknown): Focus | null {
   return typeof raw === "string" && UUID.test(raw) ? raw : null;
 }
 
+/**
+ * The district whose level is open, as carried in the URL.
+ *
+ * Deliberately not part of the Focus: a Focus is a *symbol*, and an open district is a place in the map. But it
+ * is the same kind of thing — a view state worth a link — and it has a second job that has nothing to do with
+ * sharing: leaving the room for a symbol and coming back has to return to the level you were reading, not to the
+ * universe. Component state cannot do that; a search param can.
+ */
+export function parseExplode(raw: unknown): number | undefined {
+  const value = typeof raw === "string" ? Number(raw) : raw;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return undefined;
+  return value;
+}
+
 /** Resolve a Focus against the loaded index. `null` means it no longer resolves — a real state. */
 export function resolveFocus<T extends { function_id: string }>(key: Focus, entries: T[]): T | null {
   return entries.find((e) => e.function_id === key) ?? null;
@@ -80,15 +94,16 @@ export const ROOMS = [
  * How you look at the focused symbol.
  *
  * One implemented lens, then the questions phase 3 fills. `code` and `cfgpdg` used to be entries here and
- * were not questions — they were the Spine with a different frame (the graph at 70vh without the source;
- * the source without the graph), and both are now controls inside the Spine. A lens control that asks
- * "which frame?" is a menu; one that asks "which question?" is a set of views of the same subject.
+ * were not questions — they were this lens with a different frame (the graph at 70vh without the source; the
+ * source without the graph), and both are now controls inside it. A lens control that asks "which frame?" is
+ * a menu; one that asks "which question?" is a set of views of the same subject.
  *
- * Old `?lens=code` / `?lens=cfgpdg` links still resolve: `isLens` rejects them at the URL boundary and the
- * room falls back to `spine`, which is a superset of both.
+ * The id is `cfg` and the label is **CFG**, not "Spine": the lens draws the control-flow graph, and CFG is
+ * the term a reader already has. Renaming the id is safe precisely because unknown ids are normalised at the
+ * URL boundary — an old `?lens=spine` (or `code`, or `cfgpdg`) lands on this lens, which is a superset.
  */
 export const LENSES = [
-  { id: "spine", label: "Spine" },
+  { id: "cfg", label: "CFG" },
   { id: "dataflow", label: "Dataflow" },
   { id: "slice", label: "Slice/Trace" },
   { id: "blast", label: "Blast" },

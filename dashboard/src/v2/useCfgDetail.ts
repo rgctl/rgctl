@@ -1,12 +1,12 @@
 /**
  * The CFG sidecar, loaded once for every surface that draws it.
  *
- * The Spine lens and the CFG·PDG lens render the same `cfg/<function_id>.json`, so they read it through
+ * The CFG lens renders `cfg/<function_id>.json`, so they read it through
  * one loader rather than each owning an effect. Two effects would be two chances to disagree about what
  * an absent sidecar means.
  *
  * The state is four-valued on purpose. With `CfgDetail | null` as the only state, "still fetching" and
- * "this bundle has no CFG for this subject" are the same value — and the Spine rendered the second one as
+ * "this bundle has no CFG for this subject" are the same value — and the room rendered the second one as
  * `loading…` forever, which is the exact failure the shell's honesty rule exists to prevent: a reader
  * cannot tell "not built yet" from "built and found nothing".
  */

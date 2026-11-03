@@ -26,6 +26,7 @@ import {
   sunflower,
 } from "../architectureLayers";
 import type { ArchitectureView, CommunityGroup, PackageNode } from "../architectureTypes";
+import { frameLevel, UNIVERSE_FOG } from "./framing";
 
 export type UniverseLayer = "packages" | "communities";
 
@@ -46,6 +47,14 @@ export interface MemberEntry {
   name: string;
   nodeTypeName: string;
   filePath: string | null;
+  /**
+   * Its slot in the level's `InstancedMesh`.
+   *
+   * Separate from `index`: members are drawn as a *subset* of a district (the truncation ceiling binds on real
+   * corpora), so a graph index is not an instance id and resolving one to the other here would be arithmetic
+   * nobody checked. It is the handle a highlight addresses.
+   */
+  instance?: number;
 }
 
 export interface HoverEntry {
@@ -57,8 +66,14 @@ export interface HoverEntry {
 }
 
 const SINGLE = 0x67788c; // a package alone in its community — a finding, not a failure
-/** Member height when the bundle reports no per-member complexity: a legible stand-in, stated in the room. */
-const CONSTANT_MEMBER_HEIGHT = 9;
+/**
+ * How long a press waits before it flies the camera.
+ *
+ * Long enough to swallow the second press of a double-click (a 240 ms gap is a slow double-click), short enough
+ * that a single click still feels like a move rather than a lag. The *mark* is immediate either way, so nothing
+ * waits on this except the camera.
+ */
+const DOUBLE_CLICK_WINDOW_MS = 240;
 
 export class UniverseScene {
   private readonly scene = new THREE.Scene();
@@ -66,6 +81,13 @@ export class UniverseScene {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly controls: OrbitControls;
   private readonly world = new THREE.Group();
+  /**
+   * The scene's fog, held by its own type.
+   *
+   * `Scene.fog` is `Fog | FogExp2 | null`, so every range change through it needs a narrowing that is dead
+   * code here — and, worse, implies the range is the scene's business. It is the *level's*: see `frameLevel`.
+   */
+  private readonly fog = new THREE.Fog(0x060a12, UNIVERSE_FOG[0], UNIVERSE_FOG[1]);
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly pickables: { mesh: THREE.Mesh; entry: HoverEntry }[] = [];
@@ -77,11 +99,12 @@ export class UniverseScene {
   private onPick: (entry: HoverEntry | null) => void = () => {};
   private onExplodeRequest: (entry: HoverEntry | null) => void = () => {};
   private onMemberPick: (member: MemberEntry | null) => void = () => {};
+  private onMemberOpenRequest: (member: MemberEntry | null) => void = () => {};
 
   constructor(container: HTMLElement) {
     this.reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     this.scene.background = new THREE.Color(0x060a12);
-    this.scene.fog = new THREE.Fog(0x060a12, 2200, 7200);
+    this.scene.fog = this.fog;
 
     this.camera = new THREE.PerspectiveCamera(44, 1, 1, 90000);
     this.camera.position.set(760, 620, 900);
@@ -122,9 +145,14 @@ export class UniverseScene {
     this.onExplodeRequest = fn;
   }
 
-  /** A click on a member. This is the join between the universe and the rest of the dashboard. */
+  /** A single click on a member: name it. This room has two levels of intent on one surface. */
   onMemberPickChange(fn: (member: MemberEntry | null) => void): void {
     this.onMemberPick = fn;
+  }
+
+  /** A double-click on a member: go to its code. The join between the universe and the rest of the dashboard. */
+  onMemberOpen(fn: (member: MemberEntry | null) => void): void {
+    this.onMemberOpenRequest = fn;
   }
 
   /**
@@ -134,11 +162,12 @@ export class UniverseScene {
    * to a node is the array order the instances were built in, which is why it is stored beside the mesh
    * instead of being re-derived here.
    */
-  private memberAt(): MemberEntry | null {
-    if (!this.expanded) return null;
-    const hit = this.raycaster.intersectObject(this.expanded.instanced, false)[0];
+  private memberAt(): { instance: number; entry: MemberEntry } | null {
+    if (!this.drill) return null;
+    const hit = this.raycaster.intersectObject(this.drill.instanced, false)[0];
     if (!hit || hit.instanceId === undefined) return null;
-    return this.expanded.members[hit.instanceId] ?? null;
+    const entry = this.drill.members[hit.instanceId];
+    return entry ? { instance: hit.instanceId, entry } : null;
   }
 
   resize(container: HTMLElement): void {
@@ -447,7 +476,39 @@ export class UniverseScene {
     number,
     { pos: [number, number, number]; side: number; height: number; mesh: THREE.Object3D }
   >();
-  private expanded: { group: THREE.Group; dimmed: Array<{ material: THREE.Material & { opacity: number; transparent: boolean } }> } | null = null;
+  /** The selection halo, if a district is highlighted. */
+  private outline: THREE.Group | null = null;
+  /**
+   * The open district, if any: its own scene, the camera to return to, and what a pick can hit.
+   *
+   * Distinct from "the universe with something dimmed in it" — a drill hides the universe entirely, because a
+   * lower level sharing a viewport with 255 districts it is not part of is what made navigating impossible.
+   */
+  private drill: {
+    group: THREE.Group;
+    subjectId: number;
+    cameraBefore: {
+      position: THREE.Vector3;
+      target: THREE.Vector3;
+      near: number;
+      far: number;
+      maxDistance: number;
+      fogNear: number;
+      fogFar: number;
+      autoRotate: boolean;
+      autoRotateSpeed: number;
+    };
+    instanced: THREE.InstancedMesh;
+    members: MemberEntry[];
+    /**
+     * Graph node index -> instance slot.
+     *
+     * The room's member list knows a member by its graph index, not by where it was drawn; the scene knows the
+     * slot. Both have to be able to mark the same box, so the mapping is built once with the level rather than
+     * searched for on every click.
+     */
+    slots: Map<number, number>;
+  } | null = null;
 
   setEdges(edges: { source: number; target: number; weight: number }[], byId: Map<number, PackageNode>): void {
     this.edgeList = edges;
@@ -456,11 +517,20 @@ export class UniverseScene {
   }
 
   /**
-   * Expand a district into its members, in place.
+   * Drill into a district: **the district becomes the scene**.
    *
-   * The plinth treatment, first cut: the parent's footprint is the stage, members stand on it, everything
-   * else dims to a fifth and stops mattering. Nothing about the camera changes — the reader chose an angle
-   * and expanding a district is not a reason to take it away from them.
+   * An earlier version expanded in place — members on a plinth inside the universe, everything else dimmed.
+   * That is the wrong model for navigating: the camera, the orbit target and the framing all still belonged
+   * to the universe, so a district with 1 500 members in it shared a viewport with 255 districts that were
+   * no longer the subject. Reading a lower level needs a level change, not an overlay.
+   *
+   * So: the universe is hidden (not dimmed), members are laid out around the origin at their own scale, the
+   * camera, clip planes and fog are solved for them (`frameLevel` — see `framing.ts` for what inheriting the
+   * universe's fog range cost), and the district's *outgoing* coupling is drawn as edges leaving the cluster
+   * and fading with distance — the reminder that this level sits inside something larger.
+   *
+   * The incoming aggregate edges are the level-0 coupling edges that touch this district; they are package-level
+   * facts, not member-level ones, and the room says so.
    *
    * Members are one `InstancedMesh`, not N meshes: the largest district on the measured corpus holds 15 686
    * members, and a mesh each would be a frame-rate cliff plus a picking array that is scanned on every
@@ -471,61 +541,54 @@ export class UniverseScene {
     members: Array<{ index: number; complexity: number; name?: string; nodeTypeName?: string; filePath?: string | null }>,
     edges: Array<{ source: number; target: number }>,
     options: { color?: THREE.Color; maxHeight?: number } = {},
-  ): { drawn: number; edges: number; measuredHeight: boolean } {
+  ): { drawn: number; edges: number; measuredHeight: boolean; boundary: number } {
     this.collapse();
     const seat = this.solids.get(subjectId);
-    if (!seat || members.length === 0) return { drawn: 0, edges: 0, measuredHeight: false };
+    if (!seat || members.length === 0) return { drawn: 0, edges: 0, measuredHeight: false, boundary: 0 };
 
-
-    // Stop the drift. The universe rotates slowly to invite exploration; a district is something to *read*,
-    // and a slowly turning model is the difference between inspecting and chasing. Manual orbit still works.
+    // Stop the drift: a district is something to read, and a slowly turning model is the difference between
+    // inspecting and chasing.
     const autoRotate = this.controls.autoRotate;
     const autoRotateSpeed = this.controls.autoRotateSpeed;
     this.controls.autoRotate = false;
 
+    const cameraBefore = {
+      position: this.camera.position.clone(),
+      target: this.controls.target.clone(),
+      near: this.camera.near,
+      far: this.camera.far,
+      maxDistance: this.controls.maxDistance,
+      fogNear: this.fog.near,
+      fogFar: this.fog.far,
+      autoRotate,
+      autoRotateSpeed,
+    };
+
+    // The universe steps out of the way entirely.
+    this.world.visible = false;
+
     const group = new THREE.Group();
-    const dimmed: Array<{
-      material: THREE.Material & { opacity: number; transparent: boolean };
-      opacity: number;
-      transparent: boolean;
-    }> = [];
-    for (const object of this.coreObjects) {
-      const material = (object as THREE.Mesh).material as THREE.Material | undefined;
-      if (!material || Array.isArray(material)) continue;
-      const m = material as THREE.Material & { opacity: number; transparent: boolean };
-      if (dimmed.some((d) => d.material === m)) continue;
-      // Remember what it was. A volume shell is 0.05 by design and a wire is 0.5; setting those back to 1
-      // on collapse turns the whole sky into one opaque slab — which is exactly what happened.
-      dimmed.push({ material: m, opacity: m.opacity, transparent: m.transparent });
-      m.transparent = true;
-      m.opacity = Math.min(m.opacity, 0.18);
-    }
-
-    // The district *becomes* the plinth: leaving the parent solid underneath drew two objects in the same
-    // place, one of them a dimmed box poking through the stage.
-    const parentSolid = this.solids.get(subjectId)?.mesh ?? null;
-    if (parentSolid) parentSolid.visible = false;
-
-    // Sit the stage on the parent's own footprint so the district keeps its place in the map.
-    const stageRadius = Math.max(seat.side * 0.75, 18);
-    const plinthHeight = Math.max(2, seat.height * 0.04);
-    const plinth = new THREE.Mesh(
-      new THREE.BoxGeometry(stageRadius * 2.1, plinthHeight, stageRadius * 2.1),
-      new THREE.MeshStandardMaterial({ color: options.color ?? new THREE.Color(0x2a3340), roughness: 0.9 }),
-    );
-    plinth.position.set(seat.pos[0], plinthHeight / 2, seat.pos[2]);
-    group.add(plinth);
-
-    const count = members.length;
     const maxComplexity = Math.max(0, ...members.map((m) => m.complexity || 0));
     /**
      * Height channel: complexity when the bundle carries it, a constant when it does not.
      *
      * It does not, on the corpus this was built against — every member reports `complexity: 0` — and scaling by
-     * `0 / 0` drew a field of one-unit cubes that read as a rendering bug. A constant height with the absence
-     * stated is the honest version.
+     * `0 / 0` drew a field of one-unit cubes that read as a rendering bug.
      */
     const measured = maxComplexity > 0;
+
+    // Lay the members out around the **origin**, sized for a screen of their own rather than a footprint.
+    const count = members.length;
+    const spread = Math.max(60, 26 * Math.sqrt(count));
+    const slot = (spread * 2) / Math.sqrt(count);
+    /**
+     * Heights are a fraction of the *cell*, not an absolute number.
+     *
+     * The constant used to be 9 world units, chosen when this level was a plinth inside the universe with a
+     * footprint tens of units across. Once the district became the scene, its cells grew to ~50 units and a
+     * 9-unit pillar on a 2 000-unit disc is a coin seen edge-on: the level read as a flat sheet of confetti.
+     */
+    const tallest = measured ? slot * 2.4 : slot * 1.1;
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     const material = new THREE.MeshStandardMaterial({
       color: options.color ?? new THREE.Color(0x8fd0ff),
@@ -538,86 +601,375 @@ export class UniverseScene {
     const positions = new Map<number, THREE.Vector3>();
     const matrix = new THREE.Matrix4();
     const scale = new THREE.Vector3();
-    const slot = (stageRadius * 1.7) / Math.sqrt(count);
     members.forEach((member, i) => {
-      // Sunflower inside the footprint: the room's own placement primitive, not a second layout rule.
-      const radius = (stageRadius * 0.9) * Math.sqrt((i + 0.5) / count);
+      // Sunflower: the room's own placement primitive, used at this level too.
+      const radius = spread * Math.sqrt((i + 0.5) / count);
       const angle = i * 2.39996;
-      const x = seat.pos[0] + Math.cos(angle) * radius;
-      const z = seat.pos[2] + Math.sin(angle) * radius;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
       const memberHeight = measured
-        ? Math.max(1, (member.complexity / maxComplexity) * (options.maxHeight ?? 26))
-        : CONSTANT_MEMBER_HEIGHT;
-      scale.set(slot * 0.8, memberHeight, slot * 0.8);
-      matrix.compose(
-        new THREE.Vector3(x, plinthHeight + memberHeight / 2, z),
-        new THREE.Quaternion(),
-        scale,
-      );
+        ? Math.max(slot * 0.15, (member.complexity / maxComplexity) * (options.maxHeight ?? tallest))
+        : tallest;
+      // 0.55, not 0.8: at 0.8 of the cell the members touch, and a district reads as one solid ring rather
+      // than as the members it is made of.
+      scale.set(slot * 0.55, memberHeight, slot * 0.55);
+      matrix.compose(new THREE.Vector3(x, memberHeight / 2, z), new THREE.Quaternion(), scale);
       instanced.setMatrixAt(i, matrix);
-      positions.set(member.index, new THREE.Vector3(x, plinthHeight + memberHeight, z));
+      positions.set(member.index, new THREE.Vector3(x, memberHeight, z));
     });
     instanced.instanceMatrix.needsUpdate = true;
     group.add(instanced);
 
-    // Member edges: only those whose both ends were drawn, so a truncated district does not draw lines to
-    // things that are not on screen.
+    // Member edges inside the district.
     const segments: number[] = [];
     for (const edge of edges) {
       const from = positions.get(edge.source);
       const to = positions.get(edge.target);
       if (!from || !to) continue;
-      segments.push(from.x, from.y, from.z, to.x, to.y, to.z);
+      segments.push(from.x, from.y * 0.6, from.z, to.x, to.y * 0.6, to.z);
     }
     if (segments.length > 0) {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute(segments, 3));
-      const lines = new THREE.LineSegments(
-        geo,
-        new THREE.LineBasicMaterial({ color: 0x9fe8c8, transparent: true, opacity: 0.55 }),
+      group.add(
+        new THREE.LineSegments(
+          geo,
+          new THREE.LineBasicMaterial({ color: 0x9fe8c8, transparent: true, opacity: 0.55 }),
+        ),
       );
-      group.add(lines);
     }
 
-    this.world.add(group);
-    this.expanded = {
-      group,
-      dimmed,
-      autoRotate,
-      autoRotateSpeed,
-      parent: parentSolid,
-      instanced,
-      members: members.map((m) => ({
-        index: m.index,
-        name: m.name ?? `node ${m.index}`,
-        nodeTypeName: m.nodeTypeName ?? "node",
-        filePath: m.filePath ?? null,
-      })),
+    // Outgoing coupling: level-0 aggregate edges that touch this district, drawn outward and fading.
+    const boundary: Array<{ direction: THREE.Vector3; weight: number }> = [];
+    for (const edge of this.edgeList) {
+      const otherId = edge.source === subjectId ? edge.target : edge.target === subjectId ? edge.source : null;
+      if (otherId === null) continue;
+      const other = this.solids.get(otherId);
+      if (!other) continue;
+      const direction = new THREE.Vector3(
+        other.pos[0] - seat.pos[0],
+        0,
+        other.pos[2] - seat.pos[2],
+      );
+      if (direction.lengthSq() < 1e-6) continue;
+      boundary.push({ direction: direction.normalize(), weight: edge.weight });
+    }
+    const perEdge: Array<[number, number]> = [];
+    for (const { direction, weight } of boundary) {
+      // Three segments each, dimmer with distance: the web continues past this level and thins out.
+      const steps: Array<[number, number, number]> = [
+        [spread, 0.5, 1.0],
+        [1.6, 0.26, 0.55],
+        [2.4, 0.1, 0.3],
+      ];
+      let previous = spread;
+      for (const [factor, opacity, taper] of steps) {
+        const next = spread * factor;
+        const a = direction.clone().multiplyScalar(previous);
+        const b = direction.clone().multiplyScalar(next);
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute([a.x, 2, a.z, b.x, 2, b.z], 3),
+        );
+        group.add(
+          new THREE.LineSegments(
+            geo,
+            new THREE.LineBasicMaterial({
+              color: 0xffd89a,
+              transparent: true,
+              opacity,
+            }),
+          ),
+        );
+        perEdge.push([weight, taper]);
+        previous = next;
+      }
+    }
+
+    this.scene.add(group);
+    const slots = new Map<number, number>();
+    members.forEach((m, instance) => slots.set(m.index, instance));
+    this.drill = { group, subjectId, cameraBefore, instanced, slots, members: members.map((m, instance) => ({
+      index: m.index,
+      name: m.name ?? `node ${m.index}`,
+      nodeTypeName: m.nodeTypeName ?? "node",
+      filePath: m.filePath ?? null,
+      // Its slot in the InstancedMesh, so a mark can address it from anywhere — a scene click and a row in
+      // the level's list both end up here.
+      instance,
+    })) };
+
+    // Aim at the members' floor, and take the height into the radius — the same rule the universe frames by, so a
+    // level change does not move the reading point. Centring the middle of the bounding box instead put the field
+    // a quarter of the way down the panel; see `frameWorld`.
+    this.frameSphere(new THREE.Vector3(0, 0, 0), Math.hypot(spread + slot, tallest), 1.45);
+    return {
+      drawn: count,
+      edges: segments.length / 6,
+      measuredHeight: measured,
+      boundary: boundary.length,
     };
-    return { drawn: count, edges: segments.length / 6, measuredHeight: measured };
   }
 
-  /** Put the scene back exactly as it was. */
+  /**
+   * Put the level back exactly as it was: universe visible, camera, clip planes and fog where the reader left
+   * them, and the drift setting they had chosen.
+   *
+   * `cameraBefore` carries the fog as well as the camera, because the level changed both. Restoring only the
+   * camera would have left the universe drawn through a fog range solved for a district — the exact failure
+   * that made an open district look empty, in reverse.
+   */
   collapse(): void {
-    if (!this.expanded) return;
-    for (const { material, opacity, transparent } of this.expanded.dimmed) {
-      material.opacity = opacity;
-      material.transparent = transparent;
-    }
-    if (this.expanded.parent) this.expanded.parent.visible = true;
-    // The drift does **not** resume on its own: the reader stopped it by opening a district, and a scene that
-    // starts moving again the moment they close it is startling at best. The `drift` control turns it back on.
-    this.controls.autoRotate = false;
-    this.controls.autoRotateSpeed = this.expanded.autoRotateSpeed;
-    this.world.remove(this.expanded.group);
-    this.expanded.group.traverse((child) => {
+    if (!this.drill) return;
+    const { group, cameraBefore } = this.drill;
+    this.scene.remove(group);
+    group.traverse((child) => {
       const mesh = child as THREE.Mesh;
       mesh.geometry?.dispose();
       const m = mesh.material as THREE.Material | THREE.Material[] | undefined;
       if (Array.isArray(m)) m.forEach((x) => x.dispose());
       else m?.dispose();
     });
-    this.expanded = null;
+    this.world.visible = true;
+    this.camera.position.copy(cameraBefore.position);
+    this.controls.target.copy(cameraBefore.target);
+    this.camera.near = cameraBefore.near;
+    this.camera.far = cameraBefore.far;
+    this.controls.maxDistance = cameraBefore.maxDistance;
+    this.fog.near = cameraBefore.fogNear;
+    this.fog.far = cameraBefore.fogFar;
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+    this.controls.autoRotate = cameraBefore.autoRotate;
+    this.controls.autoRotateSpeed = cameraBefore.autoRotateSpeed;
+    this.drill = null;
+  }
+
+  /** Whether a district is open — the room labels its own control from this. */
+  get isExpanded(): boolean {
+    return this.drill !== null;
+  }
+
+  /**
+   * Emphasise one solid and quiet the rest.
+   *
+   * Selecting a district has to be *visible*: moving the camera is not enough when the target is one box among
+   * 256, and a row picked from a list gives no sense of which box it became. The outline is the emphasis; the
+   * slight dimming is what makes the outline readable against its neighbours.
+   *
+   * What gets dimmed is remembered per material and restored from that record. Setting every material back to
+   * `opacity = 1` on deselect looked equivalent and was not: the namespace shells are drawn at 0.05, so
+   * deselecting turned every volume into an opaque pale-blue wall across the map.
+   */
+  highlightSolid(id: number | null): void {
+    this.disposeOutline();
+    // The rest of the map recedes hard — 0.18 of its own opacity, not 0.55. At 0.55 a selected district sat in a
+    // field of near-equals and the outline had to carry the whole claim; the point of dimming is that the eye
+    // lands on one box without having to be told which.
+    for (const object of this.coreObjects) {
+      const material = (object as THREE.Mesh).material as THREE.Material | undefined;
+      if (!material || Array.isArray(material)) continue;
+      const m = material as THREE.Material & { opacity: number; emissive?: THREE.Color; emissiveIntensity?: number };
+      const own = this.remember(m);
+      m.opacity = id === null ? own.opacity : own.opacity * 0.18;
+      m.transparent = own.transparent || id !== null;
+      if (m.emissive) {
+        m.emissive.setHex(own.emissive);
+        m.emissiveIntensity = own.emissiveIntensity;
+      }
+    }
+    if (id === null || this.drill) return;
+    const box = this.boxFor(id);
+    if (!box) return;
+    const mesh = this.objectFor(id) as THREE.Mesh;
+    const material = mesh.material as
+      | (THREE.Material & { opacity: number; emissive?: THREE.Color; emissiveIntensity?: number })
+      | undefined;
+    if (material) {
+      const own = this.remember(material);
+      material.opacity = own.opacity;
+      material.transparent = own.transparent;
+      // A lit interior, not only an outline: the box itself brightens, which is what reads as a glow at the
+      // distance this room frames from. No bloom pass — one emissive material costs nothing.
+      if (material.emissive) {
+        material.emissive.setHex(0x2ea8ff);
+        material.emissiveIntensity = 0.85;
+      }
+    }
+    const halo = this.glowHalo(box, 0x8fd0ff);
+    this.world.add(halo);
+    this.outline = halo;
+  }
+
+  /**
+   * A border glow, without a bloom pass.
+   *
+   * Three nested edge boxes at growing offsets and falling opacity, additive and `depthTest: false`, so the
+   * halo reads as light escaping the silhouette rather than as a wireframe sitting on it. One `LineSegments`
+   * with a fat shader would be the other way; this needs no custom material and no post-processing.
+   */
+  private glowHalo(box: THREE.Box3, colour: number): THREE.Group {
+    const group = new THREE.Group();
+    const size = box.getSize(new THREE.Vector3());
+    const centre = box.getCenter(new THREE.Vector3());
+    // Offsets scale with the object: a fixed pad is invisible on a 100-unit district and overwhelming on a 6.
+    const unit = Math.max(3, Math.max(size.x, size.z) * 0.045);
+    for (const [step, opacity] of [[0, 1], [1, 0.45], [2.2, 0.18]] as Array<[number, number]>) {
+      const geometry = new THREE.EdgesGeometry(
+        new THREE.BoxGeometry(size.x + unit * step, size.y + unit * step, size.z + unit * step),
+      );
+      const lines = new THREE.LineSegments(
+        geometry,
+        new THREE.LineBasicMaterial({
+          color: colour,
+          transparent: true,
+          opacity,
+          blending: THREE.AdditiveBlending,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      lines.position.copy(centre);
+      lines.renderOrder = 2;
+      group.add(lines);
+    }
+    return group;
+  }
+
+  private disposeOutline(): void {
+    if (!this.outline) return;
+    this.outline.parent?.remove(this.outline);
+    this.outline.traverse((child) => {
+      const line = child as THREE.LineSegments;
+      line.geometry?.dispose();
+      const m = line.material as THREE.Material | undefined;
+      m?.dispose();
+    });
+    this.outline = null;
+  }
+
+  /**
+   * Mark one member of the open district.
+   *
+   * A click inside a level asks "what is this?" — so it needs an answer on the surface, not just in a panel
+   * somewhere else. The mark is the same glow the universe uses for a selected district, so the two levels read
+   * alike.
+   */
+  highlightMember(member: MemberEntry | null): void {
+    if (this.memberOutline) {
+      this.memberOutline.parent?.remove(this.memberOutline);
+      this.memberOutline.traverse((child) => {
+        const line = child as THREE.LineSegments;
+        line.geometry?.dispose();
+        (line.material as THREE.Material | undefined)?.dispose();
+      });
+      this.memberOutline = null;
+    }
+    if (!member || !this.drill) return;
+    const slot = member.instance ?? this.drill.slots.get(member.index);
+    if (slot === undefined) return;
+    const matrix = new THREE.Matrix4();
+    this.drill.instanced.getMatrixAt(slot, matrix);
+    const centre = new THREE.Vector3();
+    const scale = new THREE.Vector3();
+    matrix.decompose(centre, new THREE.Quaternion(), scale);
+    const box = new THREE.Box3().setFromCenterAndSize(centre, scale);
+    const halo = this.glowHalo(box, 0xffcf7a);
+    this.drill.group.add(halo);
+    this.memberOutline = halo;
+  }
+
+  private memberOutline: THREE.Group | null = null;
+
+  /**
+   * Each dimmed material's own look, so a deselect restores it instead of flattening it to opaque.
+   *
+   * Emissive belongs here for the same reason opacity does: the glow writes to the same material it dimmed.
+   */
+  private readonly remembered = new Map<
+    THREE.Material,
+    { opacity: number; transparent: boolean; emissive: number; emissiveIntensity: number }
+  >();
+
+  private remember(material: THREE.Material): {
+    opacity: number;
+    transparent: boolean;
+    emissive: number;
+    emissiveIntensity: number;
+  } {
+    const existing = this.remembered.get(material);
+    if (existing) return existing;
+    const lit = material as THREE.Material & { emissive?: THREE.Color; emissiveIntensity?: number };
+    const own = {
+      opacity: (material as THREE.Material & { opacity: number }).opacity,
+      transparent: material.transparent,
+      emissive: lit.emissive?.getHex() ?? 0,
+      emissiveIntensity: lit.emissiveIntensity ?? 1,
+    };
+    this.remembered.set(material, own);
+    return own;
+  }
+
+  /**
+   * The drawn object behind an id: a package solid, a bucket, or a namespace volume.
+   *
+   * Not just `solids`, which only the package layer fills: a namespace shell is a pickable with an id of its
+   * own, and clicking one has to be as answerable as clicking a package.
+   */
+  private objectFor(id: number): THREE.Object3D | null {
+    return this.solids.get(id)?.mesh ?? this.pickables.find((p) => p.entry.id === id)?.mesh ?? null;
+  }
+
+  /** Its world-space box, or `null` when this id is not drawn in the current layer. */
+  private boxFor(id: number): THREE.Box3 | null {
+    const object = this.objectFor(id);
+    if (!object) return null;
+    const box = new THREE.Box3().setFromObject(object);
+    return box.isEmpty() ? null : box;
+  }
+
+  /**
+   * Select something from *anywhere*: mark it, then go to it.
+   *
+   * The lists in this room name packages, and naming a place is asking to be taken there. Highlight without a
+   * move left the reader with a marked row in a list and no idea where the box it names sits among 256 of them.
+   * The standoff is derived from the thing's own footprint, because "close enough to read it" is a property of
+   * what is being approached and not of the camera.
+   */
+  focusSolid(id: number | null): void {
+    this.cancelPendingFocus();
+    this.highlightSolid(id);
+    this.flyToSolid(id);
+  }
+
+  /** Mark now, fly in a beat — the shape of a press that might be half of a double-click. */
+  private focusSoon(id: number | null): void {
+    this.cancelPendingFocus();
+    this.highlightSolid(id);
+    if (id === null) return;
+    this.flyTimer = globalThis.setTimeout(() => {
+      this.flyTimer = 0;
+      this.flyToSolid(id);
+    }, DOUBLE_CLICK_WINDOW_MS);
+  }
+
+  private cancelPendingFocus(): void {
+    if (!this.flyTimer) return;
+    globalThis.clearTimeout(this.flyTimer);
+    this.flyTimer = 0;
+  }
+
+  private flyTimer = 0;
+
+  private flyToSolid(id: number | null): void {
+    if (id === null) return;
+    const box = this.boxFor(id);
+    if (!box) return;
+    const size = box.getSize(new THREE.Vector3());
+    const centre = box.getCenter(new THREE.Vector3());
+    const reach = Math.max(size.x, size.z);
+    this.flyTo(centre, Math.min(1400, Math.max(180, reach * 3.4)));
   }
 
   /** Drift on or off. Explicit, because "it stopped moving" and "it is broken" look the same. */
@@ -625,15 +977,14 @@ export class UniverseScene {
     this.controls.autoRotate = on;
   }
 
-  /** Whether a district is currently expanded — the room needs this to label its own control. */
-  get isExpanded(): boolean {
-    return this.expanded !== null;
-  }
-
-  flyTo(position: [number, number, number]): void {
-    const target = new THREE.Vector3(position[0], position[1] + 20, position[2]);
+  /**
+   * Fly to a target, keeping the angle the reader chose.
+   *
+   * The distance is the caller's, because "close enough to read it" is a property of the thing being approached
+   * and not of the camera: a district 100 units across and one 6 units across do not want the same standoff.
+   */
+  private flyTo(target: THREE.Vector3, distance: number): void {
     const camera = this.camera;
-    const distance = 260;
     const dir = new THREE.Vector3().subVectors(camera.position, this.controls.target).normalize();
     const goal = target.clone().addScaledVector(dir, distance);
     if (this.reducedMotion) {
@@ -691,39 +1042,91 @@ export class UniverseScene {
    *
    * `Box3.setFromObject` costs one traversal of ~260 meshes and is immune to both.
    */
+  /** Frame an arbitrary object set. Same measurement rule as `frameWorld`, so both levels frame alike. */
+  /**
+   * Point the camera at a sphere of a given radius, and take the fog, near and far planes with it.
+   *
+   * Not derived from a `Box3` of the level's scene graph: the objects at a level are not all of the level. A
+   * district's coupling lines deliberately run out past its members, and framing those would have put the
+   * camera past the fog's far plane — a scene graph that measures bigger than the thing being read.
+   */
+  private frameSphere(centre: THREE.Vector3, radius: number, margin = 1.45): void {
+    const framing = frameLevel(Math.max(radius, 1), this.camera.fov, margin);
+    this.controls.target.copy(centre);
+    // OrbitControls clamps maxDistance silently, so the ceiling has to admit this framing
+    this.controls.maxDistance = Math.max(9000, radius * 10);
+    const direction = new THREE.Vector3(0.55, 0.62, 0.75).normalize();
+    this.camera.position.copy(centre).addScaledVector(direction, framing.distance);
+    this.camera.near = framing.near;
+    this.camera.far = framing.far;
+    this.camera.updateProjectionMatrix();
+    this.fog.near = framing.fogNear;
+    this.fog.far = framing.fogFar;
+    this.controls.update();
+  }
+
+  /**
+   * Aim at the **floor** of the map, not at the middle of its bounding box.
+   *
+   * `Box3.getCenter()` is a fact about the box; it is not where the thing is. This corpus makes the difference
+   * large and obvious: the tallest solid is 150 units and the disc's radius is ~130, so the box centre sits in
+   * the air above the city — and framing it there left the disc's own centre at NDC −0.23, a quarter of the way
+   * down the panel, with the whole map hugging the bottom edge. Centring the box is not centring the map.
+   *
+   * So the aim is the centre of the disc at the height the solids stand on, and the fit radius is measured *from
+   * that aim*: a sphere centred there still contains every corner, so nothing clips off the top even though the
+   * aim moved down.
+   *
+   * Why measurement rather than an offset: this method has now been wrong twice — once by assuming the geometry
+   * was a disc of a computed radius, once by assuming its box centre was its middle. Both fixes are the same
+   * rule, so it is worth stating: derive the camera from the box, and put the *centre of interest* in the middle
+   * of the panel — for a city, that is the floor.
+   */
   private frameWorld(): void {
     const box = new THREE.Box3();
     for (const object of this.coreObjects) box.expandByObject(object);
     if (box.isEmpty()) box.setFromObject(this.world);
     if (box.isEmpty()) return;
-    // A tight bound, not the box's circumscribed sphere: the diagonal of a wide, flat box is up to sqrt(3)
-    // longer than the geometry it holds, which framed this disc at about two-thirds of the panel height and
-    // read as an empty screen. Each object's own sphere, measured from the box centre, is the real extent.
+
     const centre = box.getCenter(new THREE.Vector3());
+    const aim = new THREE.Vector3(centre.x, box.min.y, centre.z);
+
+    // A tight bound, not the box's diagonal: a wide, flat model's diagonal is up to sqrt(3) longer than the
+    // geometry it holds, which framed this disc at about two-thirds the panel height and read as an empty screen.
+    // Each corner's own distance from the aim is the real extent.
     let radius = 0;
-    for (const object of this.coreObjects) {
-      const own = new THREE.Box3().setFromObject(object).getBoundingSphere(new THREE.Sphere());
-      if (Number.isFinite(own.radius)) radius = Math.max(radius, own.center.distanceTo(centre) + own.radius);
+    for (const x of [box.min.x, box.max.x]) {
+      for (const y of [box.min.y, box.max.y]) {
+        for (const z of [box.min.z, box.max.z]) {
+          radius = Math.max(radius, new THREE.Vector3(x, y, z).distanceTo(aim));
+        }
+      }
     }
     radius = Math.max(radius, 1);
 
-    this.controls.target.copy(centre);
+    this.controls.target.copy(aim);
     // OrbitControls clamps maxDistance silently, so the ceiling has to admit this framing
     this.controls.maxDistance = Math.max(9000, radius * 10);
 
-    // 1.25, not 1.0: a flat disc seen from above needs room toward its near edge, and a sphere fit does not
-    // know about the tilt — at 1.02 the near rim touched the bottom of the panel.
+    // 1.25, not 1.0: a flat disc seen from above needs room toward its near edge, and a sphere fit does not know
+    // about the tilt — at 1.02 the near rim touched the bottom of the panel.
     const fov = (this.camera.fov * Math.PI) / 180;
     const distance = (radius / Math.sin(fov / 2)) * 1.25;
     const direction = new THREE.Vector3(0.55, 0.62, 0.75).normalize();
-    this.camera.position.copy(centre).addScaledVector(direction, distance);
+    this.camera.position.copy(aim).addScaledVector(direction, distance);
     this.camera.near = Math.max(1, radius / 500);
     this.camera.far = Math.max(90000, radius * 40);
     this.camera.updateProjectionMatrix();
+    this.fog.near = UNIVERSE_FOG[0];
+    this.fog.far = UNIVERSE_FOG[1];
     this.controls.update();
   }
 
   attachPointer(target: HTMLElement): void {
+    /** What the last press hit. A double-click reports *this*, not a fresh ray — see `dblclick` below. */
+    let pressedMember: MemberEntry | null = null;
+    let pressedEntry: HoverEntry | null = null;
+
     const move = (event: PointerEvent) => {
       const rect = target.getBoundingClientRect();
       this.pointer.set(
@@ -735,12 +1138,19 @@ export class UniverseScene {
       if (member) {
         this.onHover({
           kind: "package",
-          title: member.name,
+          title: member.entry.name,
           lines: [
-            `${member.nodeTypeName}${member.filePath ? ` · ${member.filePath}` : ""}`,
-            "a member of the open district — click to open it in Understand",
+            `${member.entry.nodeTypeName}${member.entry.filePath ? ` · ${member.entry.filePath}` : ""}`,
+            "click for its name · double-click to open it in Understand",
           ],
         });
+        return;
+      }
+      // Inside a level, the only things that exist for the pointer are the members. `world.visible = false` does
+      // not remove the universe from the ray: a press on empty space inside a district would otherwise hit one of
+      // the 256 hidden solids, select it, and fly the camera out of the level to a place it cannot show.
+      if (this.drill) {
+        this.onHover(null);
         return;
       }
       const hit = this.raycaster.intersectObjects(this.pickables.map((p) => p.mesh), false)[0];
@@ -753,20 +1163,40 @@ export class UniverseScene {
       // Inside an open district, a click means "this member", not "the package behind it".
       const member = this.memberAt();
       if (member) {
-        this.onMemberPick(member);
+        pressedMember = member.entry;
+        pressedEntry = null;
+        this.onMemberPick(member.entry);
         return;
       }
+      pressedMember = null;
+      // Cleared before the level check too, or a press on empty space inside a district would leave the
+      // previous press's universe solid armed for the next double-click.
+      pressedEntry = null;
       this.onMemberPick(null);
+      if (this.drill) return;
       const hit = this.raycaster.intersectObjects(this.pickables.map((p) => p.mesh), false)[0];
       const found = hit ? this.pickables.find((p) => p.mesh === hit.object) : undefined;
-      this.onPick(found?.entry ?? null);
-      if (hit) this.flyTo([hit.object.position.x, hit.object.position.y, hit.object.position.z]);
+      pressedEntry = found?.entry ?? null;
+      // Report, and mark. The flight waits one double-click window: a press that is half of a double-click
+      // must not move the camera out from under the second press, which is what made "double-click to expand"
+      // land on a neighbour or on empty space.
+      this.onPick(pressedEntry);
+      this.focusSoon(pressedEntry && pressedEntry.id !== undefined ? pressedEntry.id : null);
     };
+    /**
+     * A double-click acts on what the press hit, not on a fresh ray.
+     *
+     * A press now also *flies the camera* to what it hit, so by the time `dblclick` fires the camera is a third
+     * of the way through a 420 ms move and a fresh ray lands somewhere else — on a neighbour, or on nothing at
+     * all, which read as "double-click does not expand". The press already answered the question.
+     */
     const dblclick = () => {
-      this.raycaster.setFromCamera(this.pointer, this.camera);
-      const hit = this.raycaster.intersectObjects(this.pickables.map((p) => p.mesh), false)[0];
-      const found = hit ? this.pickables.find((p) => p.mesh === hit.object) : undefined;
-      this.onExplodeRequest(found?.entry ?? null);
+      this.cancelPendingFocus();
+      if (pressedMember) {
+        this.onMemberOpenRequest(pressedMember);
+        return;
+      }
+      if (pressedEntry) this.onExplodeRequest(pressedEntry);
     };
     target.addEventListener("pointermove", move);
     target.addEventListener("pointerleave", leave);
@@ -783,6 +1213,7 @@ export class UniverseScene {
 
   dispose(): void {
     this.mounted = false;
+    this.cancelPendingFocus();
     cancelAnimationFrame(this.frame);
     this.clear();
     this.controls.dispose();

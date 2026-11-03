@@ -7,31 +7,86 @@
  * identity, and that the two biggest objects in the export are buckets rather than code.
  *
  * It renders without a Focus and without a lens: a package is a set of functions, not a function, so there is
- * nothing here to carry in or out of another room.
+ * nothing here to carry in or out of another room. A double-clicked *member* is a symbol, so it opens its source
+ * in a drawer beside the level — and the one thing the drawer deliberately does not do is re-implement the CFG
+ * lens: it points at it.
+ *
+ * Two layout facts that are not tidying, because both were invisible bugs with visible symptoms: `main` needs
+ * `min-h-0` (a column flex item's automatic minimum is its content, so the pane grew to 1933px inside an 813px
+ * window and the canvas became three times taller than the screen), and the grid needs `grid-rows-[minmax(0,1fr)]`
+ * (an implicit `auto` row is sized by the tallest column, which is the right-hand panels).
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Panel, Unavailable, Chip } from "../shell";
 import { channelReport, loadArchitecture, scalesFor } from "../architecture";
 import { expandMembers, MEMBER_EDGE_KINDS } from "../expandEngine";
 import { loadMemberIndices } from "../metagraphMembers";
-import { loadFunctions } from "../data";
-import type { ArchitectureState, ArchitectureView, Metagraph } from "../architectureTypes";
+import { loadFunctions, type FunctionEntry } from "../data";
+import { STALE_CHUNK_MESSAGE, isStaleChunkError } from "../staleChunk";
+import { SymbolReader } from "./SymbolReader";
+import type { ArchitectureState, ArchitectureView, Metagraph, PackageNode } from "../architectureTypes";
 import type { HoverEntry, MemberEntry, UniverseLayer, UniverseScene } from "../universe/UniverseScene";
 
 type Loaded = { kind: "loading" } | ArchitectureState;
 
-export function ArchitectureRoom() {
-  const navigate = useNavigate();
+/** One member as the level carries it: the engine's own fields, and nothing invented. */
+interface MemberNode {
+  index: number;
+  name: string;
+  kind: string;
+  filePath: string | null;
+}
+
+/**
+ * A row of the level's list, as a scene pick.
+ *
+ * The list carries no instance slot — it is derived from the subgraph payload rather than from the drawn array —
+ * so the scene resolves the slot from the graph index, which is what the level indexed it under.
+ */
+function memberOf(node: MemberNode): MemberEntry {
+  return { index: node.index, name: node.name, nodeTypeName: node.kind, filePath: node.filePath };
+}
+
+/** An import failure that means "reload" versus one that means "this browser cannot". */
+function staleChunkFailure(error: unknown): { reason: string; stale: boolean } {
+  if (isStaleChunkError(error)) return { reason: STALE_CHUNK_MESSAGE, stale: true };
+  return { reason: (error as Error)?.message ?? String(error), stale: false };
+}
+
+export function ArchitectureRoom({
+  onOpenFocus,
+  explode = null,
+  onExplodeChange,
+}: {
+  /**
+   * Carry a symbol to another room.
+   *
+   * Supplied by the shell, which owns the Focus (`setFocus` + `goRoom` from `useFocus`). A double-clicked member
+   * opens in this room's own drawer, because leaving the level to read one function throws away the context the
+   * reader is holding; the drawer offers this as a secondary action for readers who want the whole room. The room
+   * still does not reach for the router itself — it is rendered standalone in tests.
+   */
+  onOpenFocus?: (functionId: string) => void;
+  /**
+   * The district whose level is open, from the URL — the room's level is a link.
+   *
+   * Two jobs at once: a level someone can share, and the only way a *return* works. Opening a member leaves the
+   * room, which unmounts this component and its state; without the URL the reader comes back to the universe and
+   * has to find the district again.
+   */
+  explode?: number | null;
+  onExplodeChange?: (id: number | null) => void;
+} = {}) {
   const [state, setState] = useState<Loaded>({ kind: "loading" });
   const [layer, setLayer] = useState<UniverseLayer>("packages");
   const [edges, setEdges] = useState(true);
   const [sharedOnly, setSharedOnly] = useState(false);
   /** Drift is off by default once a district has been opened; the reader can turn it back on. */
   const [drift, setDrift] = useState(true);
-  /** What happened when a member was clicked: resolving, or why it could not be opened. */
+  /** What happened when a member was clicked: picked (a name, no navigation), resolving, or why it failed. */
   const [memberState, setMemberState] = useState<
     | { kind: "idle" }
+    | { kind: "picked"; member: MemberEntry }
     | { kind: "resolving"; member: MemberEntry }
     | { kind: "failed"; member: MemberEntry; reason: string }
   >({ kind: "idle" });
@@ -56,6 +111,15 @@ export function ArchitectureRoom() {
     ms: number;
     /** False when the bundle carries no per-member complexity, so members are drawn at a constant height. */
     measuredHeight: boolean;
+    /** Aggregate edges leaving this district, drawn outward and fading — package-level, not member-level. */
+    boundary: number;
+    /**
+     * The members that were drawn, in the order the engine returned them.
+     *
+     * Kept because the right column lists the level instead of the universe: a district of 1 500 members has
+     * 1 500 names, and finding one by sweeping a pointer across a 3D field is not a way to find it.
+     */
+    nodes: MemberNode[];
   } | null>(null);
   const [expandState, setExpandState] = useState<
     | { kind: "idle" }
@@ -69,7 +133,23 @@ export function ArchitectureRoom() {
     | { kind: "absent"; title: string; reason: string }
     | { kind: "failed"; title: string; reason: string }
   >({ kind: "idle" });
-  const [sceneFailed, setSceneFailed] = useState<string | null>(null);
+  /**
+   * Why the canvas is not there, and whether reloading is the fix.
+   *
+   * `stale` is the difference between "this browser cannot draw" (nothing to do) and "this page is older than
+   * the bundle on the server" (one click). Both are stated; only one is actionable.
+   */
+  /**
+   * The symbol open beside the level.
+   *
+   * A double-click inside a district opens the member's code here rather than leaving the room. Source *and*
+   * graph already have a home — the CFG lens in Understand — so this drawer does one thing and offers the route
+   * to the other rather than growing a second version of it.
+   */
+  const [symbol, setSymbol] = useState<FunctionEntry | null>(null);
+  const [sceneFailed, setSceneFailed] = useState<{ reason: string; stale: boolean } | null>(null);
+  /** False until the canvas exists — an effect that draws must wait for something to draw on. */
+  const [sceneReady, setSceneReady] = useState(false);
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<UniverseScene | null>(null);
@@ -92,7 +172,8 @@ export function ArchitectureRoom() {
   // closure — otherwise a district opened after a re-render would use a stale metagraph or a stale ceiling.
   const expandRef = useRef<(entry: HoverEntry | null) => Promise<void>>(async () => {});
   const driftRef = useRef(drift);
-  const openMemberRef = useRef<(member: MemberEntry | null) => Promise<void>>(async () => {});
+  const openSymbolRef = useRef<(member: MemberEntry | null) => Promise<void>>(async () => {});
+  const pickMemberRef = useRef<(member: MemberEntry | null) => void>(() => {});
 
   /**
    * How many members a district will draw.
@@ -105,9 +186,56 @@ export function ArchitectureRoom() {
 
   const collapse = useCallback(() => {
     sceneRef.current?.collapse();
+    sceneRef.current?.highlightSolid(null);
     setExpanded(null);
     setExpandState({ kind: "idle" });
-  }, []);
+    setMemberState({ kind: "idle" });
+    // Back at the universe level nothing is selected and no symbol is open: leaving the selection set kept
+    // Expand painted as though it were still armed, against a district that is no longer open.
+    setSelected(null);
+    setSymbol(null);
+    // The level is a link, so closing it is a URL write like opening it was.
+    onExplodeChange?.(null);
+  }, [onExplodeChange]);
+
+  /** What the room says about a district, in one place: the list, the lookup and the URL all use it. */
+  const selectionOf = useCallback(
+    (pkg: PackageNode): HoverEntry => ({
+      kind: "package",
+      id: pkg.id,
+      title: pkg.label,
+      lines: [
+        `${pkg.functions.toLocaleString()} functions · ${pkg.classes.toLocaleString()} classes · ${pkg.size.toLocaleString()} members`,
+        `community: ${pkg.communityLabel}`,
+      ],
+    }),
+    [],
+  );
+
+  /**
+   * What choosing a district from a list means.
+   *
+   * Both lists are the universe's own index, so choosing a row is a request for the *universe* level: an open
+   * district is closed first (otherwise the camera flies to a coordinate the open level no longer shows), and
+   * if the reader is on the aggregated layer the room switches to the layer those packages are drawn on —
+   * otherwise the row highlights and the box it names is not on the screen. The flight is queued rather than
+   * issued in that case, because the solids it aims at do not exist until the scene has rebuilt.
+   */
+  const pendingFocus = useRef<number | null>(null);
+
+  const pickDistrict = useCallback(
+    (pkg: PackageNode) => {
+      setSelected(selectionOf(pkg));
+      if (expanded) collapse();
+      if (layer === "packages") {
+        sceneRef.current?.focusSolid(pkg.id);
+        return;
+      }
+      pendingFocus.current = pkg.id;
+      setLayer("packages");
+    },
+    [collapse, expanded, layer, selectionOf],
+  );
 
   const expand = useCallback(
     async (entry: HoverEntry | null) => {
@@ -137,14 +265,11 @@ export function ArchitectureRoom() {
       setExpanded(null);
 
       const members = await loadMemberIndices(metagraph, entry.id);
-      if (members.kind !== "ready") {
-        setExpandState({
-          kind: members.kind === "loading" ? "loading" : members.kind === "absent" ? "absent" : "failed",
-          title: entry.title,
-          reason: "reason" in members ? members.reason : "…",
-        });
+      if (members.kind === "absent" || members.kind === "failed") {
+        setExpandState({ kind: members.kind, title: entry.title, reason: members.reason });
         return;
       }
+      if (members.kind !== "ready") return;
 
       const startedAt = performance.now();
       const total = members.indices.length;
@@ -182,14 +307,59 @@ export function ArchitectureRoom() {
           truncated,
           ms: Math.round(performance.now() - startedAt),
           measuredHeight: result?.measuredHeight ?? false,
+          boundary: result?.boundary ?? 0,
+          nodes: subgraph.nodes.map((n) => ({
+            index: n.index,
+            name: n.name,
+            kind: n.node_type_name,
+            filePath: n.file_path ?? null,
+          })),
         });
         setExpandState({ kind: "idle" });
+        setSelected(entry);
+        // A level is a link: the open district goes into the URL, which is also what brings the reader back
+        // to this level after opening a symbol inside it.
+        onExplodeChange?.(entry.id);
       } catch (error) {
         setExpandState({ kind: "failed", title: entry.title, reason: (error as Error).message });
       }
     },
-    [metagraph],
+    [metagraph, onExplodeChange],
   );
+
+  /**
+   * Restore an open district from the URL.
+   *
+   * This is what makes "double-click a member, read the code, come back" land on the level rather than the
+   * universe. The district's *existence* is checked before the canvas is, so a stale link is reported as a stale
+   * link even where nothing can be drawn; `attempted` stops a failing link from retrying on every render.
+   */
+  const attempted = useRef<number | null>(null);
+  useEffect(() => {
+    if (explode === null || explode === undefined) {
+      attempted.current = null;
+      return;
+    }
+    if (!view || expanded?.id === explode) return;
+    const pkg = view.packages.find((p) => p.id === explode);
+    if (!pkg) {
+      // Checked against the data, before the canvas: a stale link is a stale link even where nothing draws.
+      if (attempted.current === explode) return;
+      attempted.current = explode;
+      setExpandState({
+        kind: "absent",
+        title: `district #${explode}`,
+        reason:
+          "The URL names a district that is not in this bundle, so there is nothing to open. The link is stale; the map is not empty.",
+      });
+      return;
+    }
+    if (!sceneReady || attempted.current === explode) return;
+    attempted.current = explode;
+    setLayer("packages");
+    setSelected(selectionOf(pkg));
+    void expand(selectionOf(pkg));
+  }, [explode, expanded, expand, sceneReady, selectionOf, view]);
 
 
   useEffect(() => {
@@ -207,45 +377,58 @@ export function ArchitectureRoom() {
   }, [collapse]);
 
   /**
-   * Turn a clicked member into a Focus.
+   * Turn a double-clicked member into a Focus.
    *
    * The engine's subgraph payload carries `(file_path, name)` but not the node's UUID, so the identity is
    * resolved against the dashboard's own function index — the same index the ⌘K palette uses. An ambiguous or
    * missing match is **not** guessed: a Focus that points at the wrong function is worse than no link at all.
+   *
+   * The district is deliberately left open: the level is in the URL, so coming back returns to it instead of to
+   * a universe the reader has to re-navigate. Closing it here was the old behaviour and it threw away the
+   * reader's place for no reason.
    */
-  const openMember = useCallback(
-    async (member: MemberEntry | null) => {
-      if (!member) return;
-      setMemberState({ kind: "resolving", member });
-      const functions = await loadFunctions();
-      const matches = functions.filter(
-        (f) => f.name === member.name && (!member.filePath || f.file_path === member.filePath),
-      );
-      if (matches.length === 1) {
-        const focus = matches[0].function_id;
-        setMemberState({ kind: "idle" });
-        collapse();
-        void navigate({ to: "/$roomId", params: { roomId: "understand" }, search: { focus } as never });
-        return;
-      }
-      setMemberState({
-        kind: "failed",
-        member,
-        reason:
-          matches.length === 0
-            ? "no indexed function matches this member's name and file — the CFG index does not reach it"
-            : `${matches.length} indexed functions match this name and file, so opening one would be a guess`,
-      });
-    },
-    [collapse, navigate],
-  );
+  const openSymbol = useCallback(async (member: MemberEntry | null) => {
+    if (!member) return;
+    setMemberState({ kind: "resolving", member });
+    const functions = await loadFunctions();
+    const matches = functions.filter(
+      (f) => f.name === member.name && (!member.filePath || f.file_path === member.filePath),
+    );
+    if (matches.length === 1) {
+      setMemberState({ kind: "idle" });
+      setSymbol(matches[0]);
+      return;
+    }
+    setMemberState({
+      kind: "failed",
+      member,
+      reason:
+        matches.length === 0
+          ? "no indexed function matches this member's name and file, so there is no source or CFG to open — the CFG index does not reach it"
+          : `${matches.length} indexed functions match this name and file, so opening one would be a guess`,
+    });
+  }, []);
 
+  /**
+   * A click on a member *names* it; it does not navigate, and it no longer prints a paragraph.
+   *
+   * The hover tooltip already gives the name, the kind and the file, and the level's list marks the same member —
+   * so a second read-out on the canvas was noise over the thing being read. What the click adds is the **mark**:
+   * a glow on the box, which is the part hovering cannot leave behind.
+   */
+  const pickMember = useCallback((member: MemberEntry | null) => {
+    setMemberState(member ? { kind: "picked", member } : { kind: "idle" });
+    sceneRef.current?.highlightMember(member);
+  }, []);
   useEffect(() => {
-    expandRef.current = expand;
-  }, [expand]);
+    openSymbolRef.current = openSymbol;
+  }, [openSymbol]);
   useEffect(() => {
-    openMemberRef.current = openMember;
-  }, [openMember]);
+    pickMemberRef.current = pickMember;
+  }, [pickMember]);
+  useEffect(() => {
+    pickMemberRef.current = pickMember;
+  }, [pickMember]);
   // The canvas is a canvas: jsdom has no WebGL, and neither does a browser with it switched off. Both get a
   // stated absence instead of a blank pane, and everything textual above still renders.
   useEffect(() => {
@@ -263,39 +446,45 @@ export function ArchitectureRoom() {
       try {
         module = await import("../universe/UniverseScene");
       } catch (error) {
-        setSceneFailed((error as Error).message);
+        setSceneFailed(staleChunkFailure(error));
         return;
       }
       if (disposed) return;
       if (!module.webglAvailable()) {
-        setSceneFailed("this browser could not create a WebGL context");
+        setSceneFailed({ reason: "this browser could not create a WebGL context", stale: false });
         return;
       }
       try {
-        scene = new module.UniverseScene(host);
+        const created = new module.UniverseScene(host);
+        scene = created;
+        created.setDrift(driftRef.current);
+        created.onHoverChange(setHover);
+        // A press in the scene marks and flies itself (behind the double-click window), so the room only keeps
+        // the selection for its read-out and for Expand. Lists still go through `focusSolid`.
+        created.onPickChange(setSelected);
+        created.onMemberPickChange((member) => pickMemberRef.current(member));
+        created.onMemberOpen((member) => void openSymbolRef.current(member));
+        created.onExplode((entry) => void expandRef.current(entry));
+        created.attachPointer(host);
+        const scales = scalesFor(view);
+        created.setEdges(
+          edgeListFor(view),
+          new Map(view.packages.map((p) => [p.id, p])),
+        );
+        created.update({ view, layer, edges, height: scales.height, footprint: scales.footprint });
+        sceneRef.current = created;
+        if (!disposed) setSceneReady(true);
+        observer = new ResizeObserver(() => created.resize(host));
+        observer.observe(host);
       } catch (error) {
-        setSceneFailed((error as Error).message);
+        setSceneFailed(staleChunkFailure(error));
         return;
       }
-      scene.setDrift(driftRef.current);
-      scene.onHoverChange(setHover);
-      scene.onPickChange(setSelected);
-      scene.onMemberPickChange((member) => void openMemberRef.current(member));
-      scene.onExplode((entry) => void expandRef.current(entry));
-      scene.attachPointer(host);
-      const scales = scalesFor(view);
-      scene.setEdges(
-        edgeListFor(view),
-        new Map(view.packages.map((p) => [p.id, p])),
-      );
-      scene.update({ view, layer, edges, height: scales.height, footprint: scales.footprint });
-      sceneRef.current = scene;
-      observer = new ResizeObserver(() => scene?.resize(host));
-      observer.observe(host);
     })();
 
     return () => {
       disposed = true;
+      setSceneReady(false);
       observer?.disconnect();
       scene?.dispose();
       sceneRef.current = null;
@@ -313,6 +502,12 @@ export function ArchitectureRoom() {
       new Map(view.packages.map((p) => [p.id, p])),
     );
     scene.update({ view, layer, edges, height: scales.height, footprint: scales.footprint });
+    // Declared after the update above, so a queued district is aimed at *after* the rebuild it waited for.
+    const queued = pendingFocus.current;
+    if (queued !== null) {
+      pendingFocus.current = null;
+      scene.focusSolid(queued);
+    }
   }, [view, layer, edges]);
 
   if (state.kind === "loading") {
@@ -353,16 +548,49 @@ export function ArchitectureRoom() {
           why="`communities.json` is missing or empty, so there is no community to show as colour, as a list, or as an aggregate. The packages and their coupling are unaffected — this is not 'one big community'."
         />
       )}
-      <div className="grid min-h-0 flex-1 gap-2 md:grid-cols-[1fr_300px]">
-        <div className="relative min-h-[280px] overflow-hidden rounded-lg border border-white/8 bg-[#060a12]">
+      {/*
+        Three things can share this row: the symbol drawer, the canvas, and the level's own column. Maximizing the
+        The drawer takes a column of the canvas row rather than the whole width: source *and* graph is the CFG
+        lens, one click away, and a second full-width version of it here would be two things to keep in step.
+      */}
+      {/*
+        `grid-rows-[minmax(0,1fr)]` is load-bearing, not tidying: the implicit row is `auto`, so it was sized by
+        the *tallest* column — the right-hand panels — and the canvas stretched to that height. Measured in a
+        900px window the canvas came out **946x1742**, with the model centred in a box four times taller than the
+        visible area: the framing was right and the reading surface was wrong. The row now shrinks to the space
+        it is given, and the column scrolls inside it.
+      */}
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="flex min-h-0 min-w-0 gap-2">
+          {symbol && (
+            <SymbolDrawer
+              entry={symbol}
+              onClose={() => setSymbol(null)}
+              onOpenInRoom={onOpenFocus ? () => onOpenFocus(symbol.function_id) : undefined}
+            />
+          )}
+          <div className="relative min-h-[280px] min-w-0 flex-1 overflow-hidden rounded-lg border border-white/8 bg-[#060a12]">
           <div ref={hostRef} className="absolute inset-0" data-testid="universe-canvas" />
           {sceneFailed && (
             <div className="absolute inset-0 flex items-center justify-center p-4">
-              <Unavailable
-                tag="drawing unavailable"
-                what="The drawing could not be started"
-                why={`${sceneFailed}. The coverage, the layers and every list below are unaffected — a failure of the canvas is not a failure of the room.`}
-              />
+              <div className="flex flex-col items-start gap-2">
+                <Unavailable
+                  tag={sceneFailed.stale ? "older build" : "drawing unavailable"}
+                  what={sceneFailed.stale ? "This page is older than the bundle on the server" : "The drawing could not be started"}
+                  why={`${sceneFailed.reason} The coverage, the layers and every list beside this panel are unaffected — a failure of the canvas is not a failure of the room.`}
+                />
+                {sceneFailed.stale && (
+                  // The only action that can work: the chunks this page names are gone, so it has to come back
+                  // for a new entry script. Said as a button rather than as advice.
+                  <button
+                    type="button"
+                    onClick={() => globalThis.location?.reload()}
+                    className="rounded-md bg-sky-500 px-2.5 py-1 text-[11px] font-medium leading-none text-slate-950 hover:bg-sky-400"
+                  >
+                    Reload the dashboard
+                  </button>
+                )}
+              </div>
             </div>
           )}
           <div className="pointer-events-none absolute left-2 top-2 flex gap-1">
@@ -383,6 +611,7 @@ export function ArchitectureRoom() {
               knows about is not an affordance. They are sized and weighted like real actions rather than
               hints, because a 10px ghost button next to a 3D scene is invisible in practice. */}
           <div className="absolute left-2 top-9 flex max-w-[calc(100%-330px)] flex-col gap-1.5">
+            <DistrictSearch packages={view!.packages} onPick={pickDistrict} />
             <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
@@ -446,34 +675,39 @@ export function ArchitectureRoom() {
               </Chip>
             )}
             {expanded && (
-              <div className="flex flex-col gap-1 rounded-md border border-sky-500/30 bg-sky-500/[0.08] px-2 py-1.5">
-                <span className="text-[11px] font-medium leading-none text-sky-100">{expanded.title}</span>
-                <span className="text-[10px] leading-relaxed text-sky-200/80">
-                  {expanded.drawn.toLocaleString()} of {expanded.members.toLocaleString()} members drawn
-                  {expanded.truncated ? " (largest by member count; the rest are not drawn)" : ""} ·{" "}
-                  {expanded.edges.toLocaleString()} member edges ({MEMBER_EDGE_KINDS})
-                </span>
-                {!expanded.measuredHeight && (
-                  <span className="text-[10px] leading-relaxed text-amber-200/80">
-                    heights are constant — this bundle reports no per-member complexity
-                  </span>
-                )}
-                <span className="text-[10px] leading-relaxed text-zinc-500">
-                  opened in {(expanded.ms / 1000).toFixed(1)} s · click a member to open it in Understand
-                </span>
-                {memberState.kind === "resolving" && (
-                  <span className="text-[10px] leading-relaxed text-sky-200/80">
-                    resolving {memberState.member.name}…
-                  </span>
-                )}
-                {memberState.kind === "failed" && (
-                  <span className="text-[10px] leading-relaxed text-amber-200/80">
-                    {memberState.member.name}: {memberState.reason}
-                  </span>
-                )}
-              </div>
+              <span className="text-[10px] leading-none text-zinc-500">
+                click a box for its name, double-click for its code
+              </span>
             )}
           </div>
+
+
+          {/*
+            Top right, not top left: the left edge is where the reader is *doing* things (chips, lookup, Expand),
+            and this is a description of what is now on screen. Two lines came off it — the transition time, now
+            folded into the counts where it is one number instead of a sentence, and the clicked member's name and
+            absolute path, which the hover tooltip and the level's list already say.
+          */}
+          {expanded && (
+            <div className="absolute right-2 top-2 flex max-w-[340px] flex-col gap-0.5 rounded-md border border-sky-500/30 bg-[#0a1420]/95 px-2 py-1.5">
+              <span className="text-[11px] font-medium leading-none text-sky-100">{expanded.title}</span>
+              <span className="text-[10px] leading-relaxed text-sky-200/80">
+                {expanded.drawn.toLocaleString()} of {expanded.members.toLocaleString()} members drawn
+                {expanded.truncated ? " (largest by member count; the rest are not drawn)" : ""} ·{" "}
+                {expanded.edges.toLocaleString()} member edges ({MEMBER_EDGE_KINDS})
+                {expanded.boundary > 0 ? ` · ${expanded.boundary} outgoing coupling edges fading outward` : ""} ·{" "}
+                {(expanded.ms / 1000).toFixed(1)} s
+              </span>
+              <span className="text-[10px] leading-relaxed text-zinc-500">
+                the universe is hidden while this level is open — Collapse or esc returns to it, same angle
+              </span>
+              {!expanded.measuredHeight && (
+                <span className="text-[10px] leading-relaxed text-amber-200/80">
+                  heights are constant — this bundle reports no per-member complexity
+                </span>
+              )}
+            </div>
+          )}
 
           <div className="absolute bottom-2 right-2 flex gap-1">
             <Toggle on={layer === "packages"} onClick={() => setLayer("packages")}>namespace › package</Toggle>
@@ -481,16 +715,42 @@ export function ArchitectureRoom() {
             <Toggle on={edges} onClick={() => setEdges((value) => !value)}>edges {edges ? "on" : "off"}</Toggle>
             <Toggle on={drift} onClick={() => setDrift((value) => !value)}>drift {drift ? "on" : "off"}</Toggle>
           </div>
+          </div>
         </div>
-        <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
-          <Layers view={view!} />
-          <Namespaces view={view!} />
-          <Communities
-            view={view!}
-            sharedOnly={sharedOnly}
-            onToggleShared={() => setSharedOnly((value) => !value)}
-          />
-          <Buckets view={view!} />
+        <div className="flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto">
+            {/*
+              The column answers "what am I looking at" for the level on screen: the universe's index when the
+              universe is what is drawn, and the level's own members when a district is open. The district list
+              behind an open level is a list of places the reader is no longer in.
+            */}
+            {expanded ? (
+              <Members
+                district={expanded.title}
+                nodes={expanded.nodes}
+                drawn={expanded.drawn}
+                selectedIndex={memberState.kind === "picked" ? memberState.member.index : null}
+                onPick={(node) => pickMember(memberOf(node))}
+                onOpen={(node) => void openSymbol(memberOf(node))}
+              />
+            ) : (
+              <>
+                <Districts
+                  view={view!}
+                  selectedId={selected?.id ?? null}
+                  // This branch only runs when no level is open, so nothing is marked as expanded.
+                  expandedId={null}
+                  onPick={pickDistrict}
+                />
+                <Layers view={view!} />
+                <Namespaces view={view!} />
+                <Communities
+                  view={view!}
+                  sharedOnly={sharedOnly}
+                  onToggleShared={() => setSharedOnly((value) => !value)}
+                />
+                <Buckets view={view!} />
+              </>
+            )}
         </div>
       </div>
     </div>
@@ -638,6 +898,297 @@ function Coverage({ view }: { view: ArchitectureView }) {
 }
 
 /** The three objects, named. Getting this wrong is the failure that makes the whole view dishonest. */
+/**
+ * The same finder, in the overlay beside Expand.
+ *
+ * The right column carries the full list, but that column can be pushed off-screen by a narrow window — as it
+ * was when this was first added, leaving "how do I find the filter?" as a fair question. The control beside
+ * Expand cannot be clipped, so the search lives in both places.
+ */
+function DistrictSearch({
+  packages,
+  onPick,
+}: {
+  packages: PackageNode[];
+  onPick: (pkg: PackageNode) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const view = useMemo(
+    () => [...packages].sort((a, b) => b.size - a.size || a.label.localeCompare(b.label)),
+    [packages],
+  );
+  const [open, setOpen] = useState(false);
+  const needle = query.trim().toLowerCase();
+  const matches = needle
+    ? view.filter((p) => p.label.toLowerCase().includes(needle)).slice(0, 6)
+    : view.slice(0, 6);
+
+  const pick = (pkg: PackageNode) => {
+    onPick(pkg);
+    setQuery(pkg.label);
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative w-72">
+      <label className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-zinc-500">
+        <span aria-hidden>⌕</span> find a district
+      </label>
+      <input
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && matches.length > 0) pick(matches[0]);
+          if (event.key === "Escape") setOpen(false);
+        }}
+        placeholder="type a prefix — rgctl, crates, dashboard…"
+        aria-label="Find a district by name"
+        className="w-full rounded-md border border-sky-500/40 bg-black/80 px-2 py-1.5 text-[11px] text-zinc-100 shadow-[0_0_0_1px_rgba(56,189,248,0.15)] placeholder:text-zinc-500 focus:border-sky-400 focus:outline-none"
+      />
+      {open && (
+        <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-white/15 bg-[#0b1017] shadow-lg">
+          {matches.length === 0 && (
+            <li className="px-2 py-1 text-[10px] leading-snug text-zinc-500">
+              no district label contains “{query.trim()}” — labels are directory paths, try `crates` or
+              `dashboard`
+            </li>
+          )}
+          {matches.map((pkg) => (
+            <li key={pkg.id}>
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => pick(pkg)}
+                className="flex w-full items-baseline justify-between gap-2 px-2 py-1 text-left text-[11px] text-zinc-300 hover:bg-white/[0.08]"
+              >
+                <span className="truncate font-mono">{pkg.label}</span>
+                <span className="shrink-0 text-zinc-500">{pkg.size.toLocaleString()}m</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The symbol a level opened, read beside it.
+ *
+ * Double-clicking a member used to leave the room for Understand, which threw away the level the reader was
+ * holding. The code opens here instead, at the width of a column, and nothing else: source *and* graph already
+ * have a home in the CFG lens, so a "maximize" here would be a second version of that lens with its own controls
+ * to keep in step. The drawer offers the route instead of the copy.
+ */
+function SymbolDrawer({
+  entry,
+  onClose,
+  onOpenInRoom,
+}: {
+  entry: FunctionEntry;
+  onClose: () => void;
+  /** Present when the shell can carry a Focus to another room; absent, the control is not offered. */
+  onOpenInRoom?: () => void;
+}) {
+  return (
+    <div
+      data-testid="symbol-drawer"
+      className="flex min-h-0 w-[42%] min-w-[320px] max-w-[560px] flex-col rounded-lg border border-white/10 bg-[#0a0e14]"
+    >
+      <div className="flex shrink-0 items-center gap-2 border-b border-white/8 px-2 py-1.5">
+        <span className="truncate text-[12px] font-medium text-zinc-100">{entry.name}</span>
+        <span className="truncate text-[10px] text-zinc-500">
+          {entry.file_path?.split("/").pop() ?? "file unknown"}
+        </span>
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          {onOpenInRoom && (
+            <button
+              type="button"
+              onClick={onOpenInRoom}
+              title="Carry this symbol to Understand as the Focus"
+              className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:border-white/20 hover:text-zinc-200"
+            >
+              open in Understand
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            title="Close this symbol"
+            className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:border-white/20 hover:text-zinc-200"
+          >
+            close
+          </button>
+        </span>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-2">
+        <SymbolReader entry={entry} variant="source" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The level's own index: what is inside the district that is open.
+ *
+ * The right column answers "what am I looking at", so behind an open level the universe's district list is the
+ * wrong answer — it lists 256 places, one of which the reader is already inside. This lists the members that were
+ * *drawn*, states how many that is, and lets a reader find one by name instead of by sweeping a pointer across a
+ * 3D field.
+ */
+function Members({
+  district,
+  nodes,
+  drawn,
+  selectedIndex,
+  onPick,
+  onOpen,
+}: {
+  district: string;
+  nodes: MemberNode[];
+  drawn: number;
+  selectedIndex: number | null;
+  onPick: (node: MemberNode) => void;
+  onOpen: (node: MemberNode) => void;
+}) {
+  const [query, setQuery] = useState("");
+  /** Rows rendered at once. Stated when it binds, like every other ceiling in this room. */
+  const MAX_ROWS = 200;
+  const sorted = useMemo(() => [...nodes].sort((a, b) => a.name.localeCompare(b.name)), [nodes]);
+  const needle = query.trim().toLowerCase();
+  const matched = needle ? sorted.filter((n) => n.name.toLowerCase().includes(needle)) : sorted;
+  const rows = matched.slice(0, MAX_ROWS);
+
+  return (
+    <Panel title="Members" subtitle={`${drawn.toLocaleString()} drawn from ${district}`}>
+      <input
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="filter by name…"
+        aria-label="Filter the level's members by name"
+        className="mb-1.5 w-full rounded border border-white/10 bg-black/40 px-2 py-1 text-[11px] text-zinc-200 placeholder:text-zinc-600 focus:border-sky-400/60 focus:outline-none"
+      />
+      <ul className="max-h-[46vh] overflow-y-auto">
+        {rows.map((node) => {
+          const selected = node.index === selectedIndex;
+          return (
+            <li key={node.index}>
+              <button
+                type="button"
+                onClick={() => onPick(node)}
+                onDoubleClick={() => onOpen(node)}
+                title={`${node.kind}${node.filePath ? ` · ${node.filePath}` : ""} — click to mark it in the level, double-click to open its code`}
+                className={`flex w-full items-baseline gap-2 rounded px-1.5 py-0.5 text-left ${
+                  selected ? "bg-amber-400/12 text-amber-100" : "text-zinc-300 hover:bg-white/[0.05]"
+                }`}
+              >
+                <span className="truncate font-mono text-[11px]">{node.name}</span>
+                <span className="ml-auto shrink-0 truncate text-[9.5px] text-zinc-500">
+                  {node.filePath?.split("/").pop() ?? node.kind}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+        {rows.length === 0 && (
+          <li className="px-1.5 py-1 text-[10.5px] leading-relaxed text-zinc-500">
+            no drawn member of “{query.trim()}” — this filter covers the members the level drew, not the whole
+            graph
+          </li>
+        )}
+      </ul>
+      {matched.length > MAX_ROWS && (
+        <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">
+          showing the first {MAX_ROWS} of {matched.length.toLocaleString()} matching members, by name — filter to
+          narrow. The rest are drawn in the level.
+        </p>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * Find a district by name.
+ *
+ * The room draws 256 boxes with no labels, so an instruction like "open `dashboard.slice`" was impossible to
+ * act on — the only identification was a tooltip you found by sweeping the pointer across the scene. This list
+ * names them, filters as you type, and **points the camera** at the one you choose, selecting it so Expand is
+ * armed. Busiest districts first, because that is usually the one being looked for.
+ *
+ * It is not a symbol search: a district is a package, and the Focus palette (⌘K) is for the symbols inside one.
+ */
+function Districts({
+  view,
+  selectedId,
+  expandedId,
+  onPick,
+}: {
+  view: ArchitectureView;
+  selectedId: number | null;
+  expandedId: number | null;
+  onPick: (pkg: PackageNode) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const all = useMemo(
+    () => [...view.packages].sort((a, b) => b.size - a.size || a.label.localeCompare(b.label)),
+    [view.packages],
+  );
+  const needle = query.trim().toLowerCase();
+  const matches = needle ? all.filter((p) => p.label.toLowerCase().includes(needle)) : all;
+  const shown = matches.slice(0, 12);
+
+  return (
+    <Panel title="Districts" subtitle={`${all.length} packages — click one to fly to it`}>
+      <input
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="find a district by name…"
+        aria-label="Find a district by name"
+        className="mb-1.5 w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] text-zinc-200 placeholder:text-zinc-600 focus:border-sky-500/40 focus:outline-none"
+      />
+      {shown.length === 0 && (
+        <p className="text-[11px] text-zinc-500">
+          No district label contains “{query.trim()}”. Labels are directory paths as the export produced them,
+          so try a prefix like `crates.` or `dashboard`.
+        </p>
+      )}
+      <ul className="flex flex-col gap-0.5 text-[11px]">
+        {shown.map((pkg) => {
+          const isSelected = pkg.id === selectedId;
+          const isExpanded = pkg.id === expandedId;
+          return (
+            <li key={pkg.id}>
+              <button
+                type="button"
+                onClick={() => onPick(pkg)}
+                className={`flex w-full items-baseline justify-between gap-2 rounded px-1 py-0.5 text-left ${
+                  isSelected ? "bg-sky-500/15 text-sky-100" : "text-zinc-300 hover:bg-white/[0.06]"
+                }`}
+              >
+                <span className="truncate font-mono">{pkg.label}</span>
+                <span className="shrink-0 text-zinc-500">
+                  {isExpanded ? "open · " : ""}
+                  {pkg.size.toLocaleString()}m
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {matches.length > shown.length && (
+        <p className="mt-1 text-[10px] text-zinc-600">
+          {matches.length - shown.length} more match — keep typing to narrow.
+        </p>
+      )}
+    </Panel>
+  );
+}
+
 function Layers({ view }: { view: ArchitectureView }) {
   const report = channelReport(view);
   const shared = view.communities.filter((c) => c.shared).length;
