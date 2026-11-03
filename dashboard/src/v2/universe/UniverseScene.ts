@@ -620,6 +620,20 @@ export class UniverseScene {
     this.expanded = null;
   }
 
+  /**
+   * Fly to a solid the reader asked for **by name**.
+   *
+   * Without this the room could not answer "which of these 256 boxes is `dashboard.slice`?" — the only
+   * identification was sweeping the pointer and reading a tooltip. A list that names things has to be able to
+   * point at them.
+   */
+  focusSolid(id: number): boolean {
+    const seat = this.solids.get(id);
+    if (!seat) return false;
+    this.flyTo(seat.pos);
+    return true;
+  }
+
   /** Drift on or off. Explicit, because "it stopped moving" and "it is broken" look the same. */
   setDrift(on: boolean): void {
     this.controls.autoRotate = on;

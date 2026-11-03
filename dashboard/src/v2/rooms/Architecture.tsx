@@ -9,14 +9,14 @@
  * It renders without a Focus and without a lens: a package is a set of functions, not a function, so there is
  * nothing here to carry in or out of another room.
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Panel, Unavailable, Chip } from "../shell";
 import { channelReport, loadArchitecture, scalesFor } from "../architecture";
 import { expandMembers, MEMBER_EDGE_KINDS } from "../expandEngine";
 import { loadMemberIndices } from "../metagraphMembers";
 import { loadFunctions } from "../data";
-import type { ArchitectureState, ArchitectureView, Metagraph } from "../architectureTypes";
+import type { ArchitectureState, ArchitectureView, Metagraph, PackageNode } from "../architectureTypes";
 import type { HoverEntry, MemberEntry, UniverseLayer, UniverseScene } from "../universe/UniverseScene";
 
 type Loaded = { kind: "loading" } | ArchitectureState;
@@ -483,6 +483,23 @@ export function ArchitectureRoom() {
           </div>
         </div>
         <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
+          <Districts
+            view={view!}
+            selectedId={selected?.id ?? null}
+            expandedId={expanded?.id ?? null}
+            onPick={(pkg) => {
+              setSelected({
+                kind: "package",
+                id: pkg.id,
+                title: pkg.label,
+                lines: [
+                  `${pkg.functions.toLocaleString()} functions · ${pkg.classes.toLocaleString()} classes · ${pkg.size.toLocaleString()} members`,
+                  `community: ${pkg.communityLabel}`,
+                ],
+              });
+              sceneRef.current?.focusSolid(pkg.id);
+            }}
+          />
           <Layers view={view!} />
           <Namespaces view={view!} />
           <Communities
@@ -638,6 +655,83 @@ function Coverage({ view }: { view: ArchitectureView }) {
 }
 
 /** The three objects, named. Getting this wrong is the failure that makes the whole view dishonest. */
+/**
+ * Find a district by name.
+ *
+ * The room draws 256 boxes with no labels, so an instruction like "open `dashboard.slice`" was impossible to
+ * act on — the only identification was a tooltip you found by sweeping the pointer across the scene. This list
+ * names them, filters as you type, and **points the camera** at the one you choose, selecting it so Expand is
+ * armed. Busiest districts first, because that is usually the one being looked for.
+ *
+ * It is not a symbol search: a district is a package, and the Focus palette (⌘K) is for the symbols inside one.
+ */
+function Districts({
+  view,
+  selectedId,
+  expandedId,
+  onPick,
+}: {
+  view: ArchitectureView;
+  selectedId: number | null;
+  expandedId: number | null;
+  onPick: (pkg: PackageNode) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const all = useMemo(
+    () => [...view.packages].sort((a, b) => b.size - a.size || a.label.localeCompare(b.label)),
+    [view.packages],
+  );
+  const needle = query.trim().toLowerCase();
+  const matches = needle ? all.filter((p) => p.label.toLowerCase().includes(needle)) : all;
+  const shown = matches.slice(0, 12);
+
+  return (
+    <Panel title="Districts" subtitle={`${all.length} packages — click one to fly to it`}>
+      <input
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="find a district by name…"
+        aria-label="Find a district by name"
+        className="mb-1.5 w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] text-zinc-200 placeholder:text-zinc-600 focus:border-sky-500/40 focus:outline-none"
+      />
+      {shown.length === 0 && (
+        <p className="text-[11px] text-zinc-500">
+          No district label contains “{query.trim()}”. Labels are directory paths as the export produced them,
+          so try a prefix like `crates.` or `dashboard`.
+        </p>
+      )}
+      <ul className="flex flex-col gap-0.5 text-[11px]">
+        {shown.map((pkg) => {
+          const isSelected = pkg.id === selectedId;
+          const isExpanded = pkg.id === expandedId;
+          return (
+            <li key={pkg.id}>
+              <button
+                type="button"
+                onClick={() => onPick(pkg)}
+                className={`flex w-full items-baseline justify-between gap-2 rounded px-1 py-0.5 text-left ${
+                  isSelected ? "bg-sky-500/15 text-sky-100" : "text-zinc-300 hover:bg-white/[0.06]"
+                }`}
+              >
+                <span className="truncate font-mono">{pkg.label}</span>
+                <span className="shrink-0 text-zinc-500">
+                  {isExpanded ? "open · " : ""}
+                  {pkg.size.toLocaleString()}m
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {matches.length > shown.length && (
+        <p className="mt-1 text-[10px] text-zinc-600">
+          {matches.length - shown.length} more match — keep typing to narrow.
+        </p>
+      )}
+    </Panel>
+  );
+}
+
 function Layers({ view }: { view: ArchitectureView }) {
   const report = channelReport(view);
   const shared = view.communities.filter((c) => c.shared).length;
