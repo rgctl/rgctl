@@ -239,3 +239,26 @@ describe("an open district survives leaving the room", () => {
     expect(router.state.location.search).not.toMatchObject({ explode: expect.anything() });
   });
 });
+
+/**
+ * View state survives a redirect.
+ *
+ * The unknown-room redirect used to drop `search`, so `/nonsense?focus=…` normalised the room and silently
+ * threw the subject away — a shared link that lands somewhere else without saying so. The `/` redirect beside it
+ * had always forwarded the state, and the two must not disagree.
+ */
+describe("a redirect keeps the view state", () => {
+  it("normalises an unknown room without losing the Focus or the lens", async () => {
+    const router = renderApp(`/not-a-room?lens=dataflow&focus=${SUBJECT}&explode=42`);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
+    expect(router.state.location.search).toMatchObject({ focus: SUBJECT, lens: "dataflow", explode: 42 });
+    // And the room that reads the Focus can show it, so the state is not merely in the URL.
+    expect(await screen.findAllByText("handleAuth")).not.toHaveLength(0);
+  });
+
+  it("keeps the Focus on the bare-path redirect too", async () => {
+    const router = renderApp(`/?focus=${SUBJECT}`);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
+    expect(router.state.location.search).toMatchObject({ focus: SUBJECT });
+  });
+});

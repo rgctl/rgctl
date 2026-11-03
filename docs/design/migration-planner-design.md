@@ -217,7 +217,7 @@ Dashboard: **Roadmap sort** dropdown in Metrics & tuning.
 
 ### 6.1 `migration_graph.json` (schema v2)
 
-Written to `.rgctl/dashboard/migration_graph.json` on `discover --with-universe` (or deprecated `--with-dashboard`).
+Written to `.rgctl/dashboard/migration_graph.json` on `discover --with-universe`. (`--with-dashboard`, which used to write the same bundle, has been removed and is rejected by the CLI.)
 
 ```json
 {
@@ -389,7 +389,7 @@ Flags:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--with-harmonic` | off | Compute harmonic centrality (needed for migration β / dense_cluster) |
-| `--with-universe` | off | Write `.rgctl/dashboard/` universe (v2) bundle (`--with-dashboard` is a deprecated alias) |
+| `--with-universe` | off | Write `.rgctl/dashboard/` universe (v2) bundle |
 | `--export-migration-hints` | off | Write plan JSON (alias: `--export-migration-hints`) |
 | `--migration-preset` | `hybrid_default` | Strategy preset |
 | `--migration-order` | `scheduled` | `scheduled` or `priority` |

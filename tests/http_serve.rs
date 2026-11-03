@@ -20,34 +20,57 @@ fn rgctl_bin() -> std::path::PathBuf {
         })
 }
 
-/// A repo that already has a dashboard bundle, or `None`.
+/// A repository with a dashboard bundle, **built by this test**.
 ///
-/// This used to be the absolute path of one developer's checkout, so on every other machine the only
-/// dashboard test here skipped while reporting success — the same defect `0211f97` fixed in
-/// `test-dashboard-golden.sh`. Order: an explicit override, then this workspace (kept out of git), then any
-/// indexed corpus under `example/`.
-fn repo_with_dashboard() -> Option<std::path::PathBuf> {
-    let has_bundle = |dir: &std::path::Path| dir.join(".rgctl/dashboard/index.html").is_file();
-
-    if let Some(explicit) = std::env::var_os("RGCTL_HTTP_SERVE_REPO") {
-        let dir = std::path::PathBuf::from(explicit);
-        if has_bundle(&dir) {
-            return Some(dir);
-        }
-    }
-    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if has_bundle(&workspace) {
-        return Some(workspace);
-    }
-    if let Ok(entries) = std::fs::read_dir(workspace.join("example")) {
-        for entry in entries.flatten() {
-            let dir = entry.path();
-            if has_bundle(&dir) {
-                return Some(dir);
+/// This used to look for a pre-existing `.rgctl/dashboard/index.html` — the absolute path of one developer's
+/// checkout, then anything indexed under `example/`. Both halves were wrong in the same direction: on a clean CI
+/// checkout nothing matched, so all three tests here printed `skip:` and passed without testing anything, and on a
+/// machine where a *large* corpus was indexed they spawned three concurrent servers against it (loading a big
+/// snapshot three times, all writing into the same `.rgctl/dashboard/` through `ensure_static_shell`) and timed out.
+///
+/// So the fixture is a copy of `tests/fixtures/tiny_polyglot_repo` plus one real `discover --with-universe`, which
+/// writes the bundle the server serves. Measured at ~2 s. One fixture per test: the third test writes a shard into
+/// the bundle, and sharing a directory would make the tests order-dependent.
+fn fixture_repo() -> (tempfile::TempDir, std::path::PathBuf) {
+    fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) {
+        std::fs::create_dir_all(dst).expect("mkdir");
+        for entry in std::fs::read_dir(src).expect("read fixture dir").flatten() {
+            let from = entry.path();
+            let to = dst.join(entry.file_name());
+            if from.is_dir() {
+                copy_dir_all(&from, &to);
+            } else {
+                std::fs::copy(&from, &to).expect("copy fixture file");
             }
         }
     }
-    None
+
+    let bin = rgctl_bin();
+    assert!(bin.is_file(), "missing rgctl binary at {}", bin.display());
+    let source =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tiny_polyglot_repo");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    copy_dir_all(&source, &repo);
+    let _ = std::fs::remove_dir_all(repo.join(".rgctl"));
+    let _ = std::fs::remove_dir_all(repo.join(".rbuilder"));
+
+    let output = Command::new(&bin)
+        .args(["discover", ".", "--with-universe"])
+        .current_dir(&repo)
+        .output()
+        .expect("spawn rgctl discover");
+    assert!(
+        output.status.success(),
+        "seeding the fixture bundle failed: status={:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        repo.join(".rgctl/dashboard/index.html").is_file(),
+        "--with-universe must write the bundle the server later serves"
+    );
+    (tmp, repo)
 }
 
 struct ServerGuard {
@@ -77,12 +100,8 @@ fn wait_for_health(base: &str, timeout: Duration) -> bool {
 
 #[test]
 fn http_serve_serves_dashboard_and_query_api() {
-    let Some(repo) = repo_with_dashboard() else {
-        eprintln!("skip: no repo with a dashboard bundle (set RGCTL_HTTP_SERVE_REPO)");
-        return;
-    };
+    let (_tmp, repo) = fixture_repo();
     let bin = rgctl_bin();
-    assert!(bin.is_file(), "missing rgctl binary at {}", bin.display());
 
     let port = pick_port();
     let base = format!("http://127.0.0.1:{port}");
@@ -176,12 +195,8 @@ fn http_serve_serves_dashboard_and_query_api() {
 /// assets and turns an unknown endpoint into a 200.
 #[test]
 fn spa_fallback_serves_the_shell_for_client_routes_only() {
-    let Some(repo) = repo_with_dashboard() else {
-        eprintln!("skip: no repo with a dashboard bundle (set RGCTL_HTTP_SERVE_REPO)");
-        return;
-    };
+    let (_tmp, repo) = fixture_repo();
     let bin = rgctl_bin();
-    assert!(bin.is_file(), "missing rgctl binary at {}", bin.display());
 
     let port = pick_port();
     let base = format!("http://127.0.0.1:{port}");
@@ -283,12 +298,8 @@ fn spa_fallback_serves_the_shell_for_client_routes_only() {
 /// this test — a fix that answered the shell for everything under `/taint` would trade one bug for another.
 #[test]
 fn a_bundle_data_directory_does_not_hijack_a_room_url() {
-    let Some(repo) = repo_with_dashboard() else {
-        eprintln!("skip: no repo with a dashboard bundle (set RGCTL_HTTP_SERVE_REPO)");
-        return;
-    };
+    let (_tmp, repo) = fixture_repo();
     let bin = rgctl_bin();
-    assert!(bin.is_file(), "missing rgctl binary at {}", bin.display());
 
     // A bundle whose taint export found nothing still writes the directory, so create it for symmetry.
     let detail_dir = repo.join(".rgctl/dashboard/taint");

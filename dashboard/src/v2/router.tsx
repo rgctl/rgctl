@@ -43,12 +43,15 @@ const roomRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "$roomId",
   component: App,
-  beforeLoad: ({ params }) => {
-    // An unknown room is normalised rather than rendered as a broken shell with a lying URL.
+  beforeLoad: ({ params, search }) => {
+    // An unknown room is normalised rather than rendered as a broken shell with a lying URL — and the view state
+    // comes with it. Dropping `search` here made `/nonsense?focus=…` a link to *no* subject: the room changed and
+    // the Focus silently went with it, which is the failure a URL-carrying design exists to prevent.
     if (!isRoom(params.roomId)) {
       throw redirect({
         to: "/$roomId",
         params: { roomId: DEFAULT_ROOM },
+        search: search as Record<string, unknown>,
         replace: true,
       });
     }
