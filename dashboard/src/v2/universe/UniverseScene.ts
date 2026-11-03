@@ -700,7 +700,10 @@ export class UniverseScene {
       instance,
     })) };
 
-    this.frameSphere(new THREE.Vector3(0, tallest / 2, 0), Math.hypot(spread + slot, tallest / 2), 1.45);
+    // Aim at the members' floor, and take the height into the radius — the same rule the universe frames by, so a
+    // level change does not move the reading point. Centring the middle of the bounding box instead put the field
+    // a quarter of the way down the panel; see `frameWorld`.
+    this.frameSphere(new THREE.Vector3(0, 0, 0), Math.hypot(spread + slot, tallest), 1.45);
     return {
       drawn: count,
       edges: segments.length / 6,
@@ -1062,32 +1065,55 @@ export class UniverseScene {
     this.controls.update();
   }
 
+  /**
+   * Aim at the **floor** of the map, not at the middle of its bounding box.
+   *
+   * `Box3.getCenter()` is a fact about the box; it is not where the thing is. This corpus makes the difference
+   * large and obvious: the tallest solid is 150 units and the disc's radius is ~130, so the box centre sits in
+   * the air above the city — and framing it there left the disc's own centre at NDC −0.23, a quarter of the way
+   * down the panel, with the whole map hugging the bottom edge. Centring the box is not centring the map.
+   *
+   * So the aim is the centre of the disc at the height the solids stand on, and the fit radius is measured *from
+   * that aim*: a sphere centred there still contains every corner, so nothing clips off the top even though the
+   * aim moved down.
+   *
+   * Why measurement rather than an offset: this method has now been wrong twice — once by assuming the geometry
+   * was a disc of a computed radius, once by assuming its box centre was its middle. Both fixes are the same
+   * rule, so it is worth stating: derive the camera from the box, and put the *centre of interest* in the middle
+   * of the panel — for a city, that is the floor.
+   */
   private frameWorld(): void {
     const box = new THREE.Box3();
     for (const object of this.coreObjects) box.expandByObject(object);
     if (box.isEmpty()) box.setFromObject(this.world);
     if (box.isEmpty()) return;
-    // A tight bound, not the box's circumscribed sphere: the diagonal of a wide, flat box is up to sqrt(3)
-    // longer than the geometry it holds, which framed this disc at about two-thirds of the panel height and
-    // read as an empty screen. Each object's own sphere, measured from the box centre, is the real extent.
+
     const centre = box.getCenter(new THREE.Vector3());
+    const aim = new THREE.Vector3(centre.x, box.min.y, centre.z);
+
+    // A tight bound, not the box's diagonal: a wide, flat model's diagonal is up to sqrt(3) longer than the
+    // geometry it holds, which framed this disc at about two-thirds the panel height and read as an empty screen.
+    // Each corner's own distance from the aim is the real extent.
     let radius = 0;
-    for (const object of this.coreObjects) {
-      const own = new THREE.Box3().setFromObject(object).getBoundingSphere(new THREE.Sphere());
-      if (Number.isFinite(own.radius)) radius = Math.max(radius, own.center.distanceTo(centre) + own.radius);
+    for (const x of [box.min.x, box.max.x]) {
+      for (const y of [box.min.y, box.max.y]) {
+        for (const z of [box.min.z, box.max.z]) {
+          radius = Math.max(radius, new THREE.Vector3(x, y, z).distanceTo(aim));
+        }
+      }
     }
     radius = Math.max(radius, 1);
 
-    this.controls.target.copy(centre);
+    this.controls.target.copy(aim);
     // OrbitControls clamps maxDistance silently, so the ceiling has to admit this framing
     this.controls.maxDistance = Math.max(9000, radius * 10);
 
-    // 1.25, not 1.0: a flat disc seen from above needs room toward its near edge, and a sphere fit does not
-    // know about the tilt — at 1.02 the near rim touched the bottom of the panel.
+    // 1.25, not 1.0: a flat disc seen from above needs room toward its near edge, and a sphere fit does not know
+    // about the tilt — at 1.02 the near rim touched the bottom of the panel.
     const fov = (this.camera.fov * Math.PI) / 180;
     const distance = (radius / Math.sin(fov / 2)) * 1.25;
     const direction = new THREE.Vector3(0.55, 0.62, 0.75).normalize();
-    this.camera.position.copy(centre).addScaledVector(direction, distance);
+    this.camera.position.copy(aim).addScaledVector(direction, distance);
     this.camera.near = Math.max(1, radius / 500);
     this.camera.far = Math.max(90000, radius * 40);
     this.camera.updateProjectionMatrix();
