@@ -2,7 +2,8 @@
 #
 # Triggers:
 #   - workflow_dispatch  — run manually from the Actions tab (any branch/ref).
-#   - pull_request       — runs when a maintainer adds the `ci` or `ci:lint` label.
+#   - pull_request       — DCO sign-off and AI-trailer checks run on every PR;
+#                          cargo fmt & clippy runs when a maintainer adds `ci` or `ci:lint`.
 name: CI — Format & Clippy
 
 on:
@@ -48,12 +49,29 @@ jobs:
             - Add `ci` to run Format & Clippy + Unit & Core Integration Tests
           EOF
 
+  dco:
+    name: DCO sign-off
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check PR commits for DCO Signed-off-by trailer
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 scripts/check-no-ai-commit-trailers.py \
+            --dco-only \
+            --range "${BASE_SHA}..${HEAD_SHA}"
+
   no-ai-commit-trailers:
     name: no AI commit trailers
-    if: >-
-      github.event_name == 'pull_request' &&
-      (contains(github.event.pull_request.labels.*.name, 'ci') ||
-       contains(github.event.pull_request.labels.*.name, 'ci:lint'))
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
