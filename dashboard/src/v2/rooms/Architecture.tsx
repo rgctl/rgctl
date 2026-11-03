@@ -15,10 +15,17 @@ import { channelReport, loadArchitecture, scalesFor } from "../architecture";
 import { expandMembers, MEMBER_EDGE_KINDS } from "../expandEngine";
 import { loadMemberIndices } from "../metagraphMembers";
 import { loadFunctions } from "../data";
+import { STALE_CHUNK_MESSAGE, isStaleChunkError } from "../staleChunk";
 import type { ArchitectureState, ArchitectureView, Metagraph, PackageNode } from "../architectureTypes";
 import type { HoverEntry, MemberEntry, UniverseLayer, UniverseScene } from "../universe/UniverseScene";
 
 type Loaded = { kind: "loading" } | ArchitectureState;
+
+/** An import failure that means "reload" versus one that means "this browser cannot". */
+function staleChunkFailure(error: unknown): { reason: string; stale: boolean } {
+  if (isStaleChunkError(error)) return { reason: STALE_CHUNK_MESSAGE, stale: true };
+  return { reason: (error as Error)?.message ?? String(error), stale: false };
+}
 
 export function ArchitectureRoom({
   onOpenFocus,
@@ -93,7 +100,13 @@ export function ArchitectureRoom({
     | { kind: "absent"; title: string; reason: string }
     | { kind: "failed"; title: string; reason: string }
   >({ kind: "idle" });
-  const [sceneFailed, setSceneFailed] = useState<string | null>(null);
+  /**
+   * Why the canvas is not there, and whether reloading is the fix.
+   *
+   * `stale` is the difference between "this browser cannot draw" (nothing to do) and "this page is older than
+   * the bundle on the server" (one click). Both are stated; only one is actionable.
+   */
+  const [sceneFailed, setSceneFailed] = useState<{ reason: string; stale: boolean } | null>(null);
   /** False until the canvas exists — an effect that draws must wait for something to draw on. */
   const [sceneReady, setSceneReady] = useState(false);
 
@@ -394,12 +407,12 @@ export function ArchitectureRoom({
       try {
         module = await import("../universe/UniverseScene");
       } catch (error) {
-        setSceneFailed((error as Error).message);
+        setSceneFailed(staleChunkFailure(error));
         return;
       }
       if (disposed) return;
       if (!module.webglAvailable()) {
-        setSceneFailed("this browser could not create a WebGL context");
+        setSceneFailed({ reason: "this browser could not create a WebGL context", stale: false });
         return;
       }
       try {
@@ -425,7 +438,7 @@ export function ArchitectureRoom({
         observer = new ResizeObserver(() => created.resize(host));
         observer.observe(host);
       } catch (error) {
-        setSceneFailed((error as Error).message);
+        setSceneFailed(staleChunkFailure(error));
         return;
       }
     })();
@@ -501,11 +514,24 @@ export function ArchitectureRoom({
           <div ref={hostRef} className="absolute inset-0" data-testid="universe-canvas" />
           {sceneFailed && (
             <div className="absolute inset-0 flex items-center justify-center p-4">
-              <Unavailable
-                tag="drawing unavailable"
-                what="The drawing could not be started"
-                why={`${sceneFailed}. The coverage, the layers and every list below are unaffected — a failure of the canvas is not a failure of the room.`}
-              />
+              <div className="flex flex-col items-start gap-2">
+                <Unavailable
+                  tag={sceneFailed.stale ? "older build" : "drawing unavailable"}
+                  what={sceneFailed.stale ? "This page is older than the bundle on the server" : "The drawing could not be started"}
+                  why={`${sceneFailed.reason} The coverage, the layers and every list beside this panel are unaffected — a failure of the canvas is not a failure of the room.`}
+                />
+                {sceneFailed.stale && (
+                  // The only action that can work: the chunks this page names are gone, so it has to come back
+                  // for a new entry script. Said as a button rather than as advice.
+                  <button
+                    type="button"
+                    onClick={() => globalThis.location?.reload()}
+                    className="rounded-md bg-sky-500 px-2.5 py-1 text-[11px] font-medium leading-none text-slate-950 hover:bg-sky-400"
+                  >
+                    Reload the dashboard
+                  </button>
+                )}
+              </div>
             </div>
           )}
           <div className="pointer-events-none absolute left-2 top-2 flex gap-1">
@@ -564,7 +590,6 @@ export function ArchitectureRoom({
                 </kbd>
               </button>
             </div>
-            <DistrictSearch packages={view!.packages} onPick={pickDistrict} />
             {expandState.kind === "idle" && !expanded && (
               <span className="text-[10px] leading-none text-zinc-500">
                 {selected?.kind === "package"
