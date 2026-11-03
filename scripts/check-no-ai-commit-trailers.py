@@ -254,6 +254,11 @@ def _compile_patterns() -> tuple[
 
 AI_MESSAGE_PATTERNS, AI_IDENTITY_PATTERNS = _compile_patterns()
 
+DCO_SIGNOFF_RE = re.compile(
+    r"^\s*Signed-off-by:\s+.+\s+<[^>\s]+@[^>\s]+>\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 
 @dataclass(frozen=True)
 class Violation:
@@ -264,9 +269,17 @@ class Violation:
     evidence: tuple[str, ...]
 
 
-def git_log(repo: Path, rev_range: str | None, all_refs: bool) -> str:
-    fmt = "%H%x01%an <%ae>%x01%cn <%ce>%x01%B%x00"
+def git_log(
+    repo: Path,
+    rev_range: str | None,
+    all_refs: bool,
+    *,
+    no_merges: bool = False,
+) -> str:
+    fmt = "%H%x01%P%x01%an <%ae>%x01%cn <%ce>%x01%B%x00"
     cmd = ["git", "-C", str(repo), "log", f"--format={fmt}"]
+    if no_merges:
+        cmd.append("--no-merges")
     if all_refs:
         cmd.append("--all")
     elif rev_range:
@@ -279,34 +292,45 @@ def git_log(repo: Path, rev_range: str | None, all_refs: bool) -> str:
     return proc.stdout
 
 
-def scan(raw: str) -> list[Violation]:
+def scan(
+    raw: str,
+    *,
+    check_ai: bool = True,
+    require_dco: bool = False,
+) -> list[Violation]:
     violations: list[Violation] = []
     for block in raw.split("\0"):
         if not block.strip():
             continue
-        parts = block.split("\x01", 3)
-        if len(parts) < 4:
+        parts = block.split("\x01", 4)
+        if len(parts) < 5:
             continue
-        sha, author, committer, body = parts
+        sha, parents, author, committer, body = parts
         sha = sha.strip().lstrip("\n")
+        is_merge = len(parents.strip().split()) > 1
         subject = next((ln for ln in body.splitlines() if ln.strip()), "")
         reasons: list[str] = []
         evidence: list[str] = []
 
-        for label, rx in AI_MESSAGE_PATTERNS:
-            for m in rx.finditer(body):
-                reasons.append(label)
-                line = m.group(0).splitlines()[0].strip()
-                if line not in evidence:
-                    evidence.append(line)
+        if check_ai:
+            for label, rx in AI_MESSAGE_PATTERNS:
+                for m in rx.finditer(body):
+                    reasons.append(label)
+                    line = m.group(0).splitlines()[0].strip()
+                    if line not in evidence:
+                        evidence.append(line)
 
-        people = f"{author}\n{committer}"
-        for label, rx in AI_IDENTITY_PATTERNS:
-            if rx.search(people):
-                reasons.append(label)
-                hit = f"identity: {author} / {committer}"
-                if hit not in evidence:
-                    evidence.append(hit)
+            people = f"{author}\n{committer}"
+            for label, rx in AI_IDENTITY_PATTERNS:
+                if rx.search(people):
+                    reasons.append(label)
+                    hit = f"identity: {author} / {committer}"
+                    if hit not in evidence:
+                        evidence.append(hit)
+
+        if require_dco and not is_merge and not DCO_SIGNOFF_RE.search(body):
+            reasons.append("missing DCO sign-off (Signed-off-by: Name <email>)")
+            evidence.append("run `git commit --amend -s` (or `git rebase --signoff`)")
 
         seen: set[str] = set()
         uniq_reasons: list[str] = []
@@ -342,7 +366,7 @@ def list_agents() -> None:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Fail if commits contain AI agent assisted/created trailers."
+        description="Fail if commits contain AI agent trailers or lack DCO sign-off."
     )
     p.add_argument(
         "-C",
@@ -363,6 +387,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Scan all refs",
     )
     p.add_argument(
+        "--require-dco",
+        action="store_true",
+        help="Also require DCO `Signed-off-by: Name <email>` on non-merge commits",
+    )
+    p.add_argument(
+        "--dco-only",
+        action="store_true",
+        help="Check only DCO `Signed-off-by: Name <email>` on non-merge commits",
+    )
+    p.add_argument(
         "--list-agents",
         action="store_true",
         help="Print the agent catalog and exit",
@@ -381,21 +415,37 @@ def main(argv: list[str] | None = None) -> int:
         list_agents()
         return 0
 
+    check_ai = not args.dco_only
+    require_dco = args.require_dco or args.dco_only
+
     repo = Path(args.repo).expanduser().resolve()
-    raw = git_log(repo, args.rev_range, args.all)
-    violations = scan(raw)
+    raw = git_log(repo, args.rev_range, args.all, no_merges=args.dco_only)
+    violations = scan(raw, check_ai=check_ai, require_dco=require_dco)
 
     if not violations:
         if not args.quiet_ok:
             scope = args.rev_range or ("--all" if args.all else "HEAD")
-            print(f"OK: no AI agent trailers in {scope}")
+            if args.dco_only:
+                print(f"OK: all non-merge commits have DCO sign-off in {scope}")
+            elif require_dco:
+                print(f"OK: no AI agent trailers and DCO sign-off present in {scope}")
+            else:
+                print(f"OK: no AI agent trailers in {scope}")
         return 0
 
-    print(
-        f"error: {len(violations)} commit(s) contain AI agent "
-        f"created/assisted signals:\n",
-        file=sys.stderr,
-    )
+    if args.dco_only:
+        header = f"error: {len(violations)} commit(s) missing DCO sign-off:\n"
+    elif require_dco:
+        header = (
+            f"error: {len(violations)} commit(s) failed commit policy "
+            f"(AI attribution or missing DCO sign-off):\n"
+        )
+    else:
+        header = (
+            f"error: {len(violations)} commit(s) contain AI agent "
+            f"created/assisted signals:\n"
+        )
+    print(header, file=sys.stderr)
     for v in violations:
         print(f"  {v.sha[:12]}  {v.author}", file=sys.stderr)
         print(f"    {v.subject[:120]}", file=sys.stderr)
@@ -405,14 +455,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"      {ev}", file=sys.stderr)
         print(file=sys.stderr)
 
-    print(
-        "Remove AI Co-Authored-By / Assisted-By / Generated-By (and similar) "
-        "trailers and agent author emails, then push again.\n"
-        "Local tip: git commit --amend  or  interactive rebase on the PR branch.\n"
-        "Disable agent co-author / attribution settings in your coding tool.\n"
-        "Catalog: ./scripts/check-no-ai-commit-trailers.py --list-agents",
-        file=sys.stderr,
-    )
+    if args.dco_only:
+        print(
+            "Every non-merge commit must include a DCO sign-off trailer:\n"
+            "  Signed-off-by: Your Name <your.email@example.com>\n"
+            "Local tip: git commit --amend -s  or  git rebase --signoff origin/main",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "Remove AI Co-Authored-By / Assisted-By / Generated-By (and similar) "
+            "trailers and agent author emails, ensure `Signed-off-by:` (DCO) is present, then push again.\n"
+            "Local tip: git commit --amend -s  or  interactive rebase on the PR branch.\n"
+            "Disable agent co-author / attribution settings in your coding tool.\n"
+            "Catalog: ./scripts/check-no-ai-commit-trailers.py --list-agents",
+            file=sys.stderr,
+        )
     return 1
 
 
