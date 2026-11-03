@@ -353,8 +353,8 @@ export function ArchitectureRoom() {
           why="`communities.json` is missing or empty, so there is no community to show as colour, as a list, or as an aggregate. The packages and their coupling are unaffected — this is not 'one big community'."
         />
       )}
-      <div className="grid min-h-0 flex-1 gap-2 md:grid-cols-[1fr_300px]">
-        <div className="relative min-h-[280px] overflow-hidden rounded-lg border border-white/8 bg-[#060a12]">
+      <div className="grid min-h-0 flex-1 gap-2 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="relative min-h-[280px] min-w-0 overflow-hidden rounded-lg border border-white/8 bg-[#060a12]">
           <div ref={hostRef} className="absolute inset-0" data-testid="universe-canvas" />
           {sceneFailed && (
             <div className="absolute inset-0 flex items-center justify-center p-4">
@@ -420,6 +420,21 @@ export function ArchitectureRoom() {
                 </kbd>
               </button>
             </div>
+            <DistrictSearch
+              packages={view!.packages}
+              onPick={(pkg) => {
+                setSelected({
+                  kind: "package",
+                  id: pkg.id,
+                  title: pkg.label,
+                  lines: [
+                    `${pkg.functions.toLocaleString()} functions · ${pkg.classes.toLocaleString()} classes · ${pkg.size.toLocaleString()} members`,
+                    `community: ${pkg.communityLabel}`,
+                  ],
+                });
+                sceneRef.current?.focusSolid(pkg.id);
+              }}
+            />
             {expandState.kind === "idle" && !expanded && (
               <span className="text-[10px] leading-none text-zinc-500">
                 {selected?.kind === "package"
@@ -482,7 +497,7 @@ export function ArchitectureRoom() {
             <Toggle on={drift} onClick={() => setDrift((value) => !value)}>drift {drift ? "on" : "off"}</Toggle>
           </div>
         </div>
-        <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
+        <div className="flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto">
           <Districts
             view={view!}
             selectedId={selected?.id ?? null}
@@ -655,6 +670,76 @@ function Coverage({ view }: { view: ArchitectureView }) {
 }
 
 /** The three objects, named. Getting this wrong is the failure that makes the whole view dishonest. */
+/**
+ * The same finder, in the overlay beside Expand.
+ *
+ * The right column carries the full list, but that column can be pushed off-screen by a narrow window — as it
+ * was when this was first added, leaving "how do I find the filter?" as a fair question. The control beside
+ * Expand cannot be clipped, so the search lives in both places.
+ */
+function DistrictSearch({
+  packages,
+  onPick,
+}: {
+  packages: PackageNode[];
+  onPick: (pkg: PackageNode) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const view = useMemo(
+    () => [...packages].sort((a, b) => b.size - a.size || a.label.localeCompare(b.label)),
+    [packages],
+  );
+  const [open, setOpen] = useState(false);
+  const needle = query.trim().toLowerCase();
+  const matches = needle
+    ? view.filter((p) => p.label.toLowerCase().includes(needle)).slice(0, 6)
+    : view.slice(0, 6);
+
+  return (
+    <div className="relative w-64">
+      <input
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        placeholder="find a district…"
+        aria-label="Find a district by name"
+        className="w-full rounded-md border border-white/15 bg-black/70 px-2 py-1 text-[11px] text-zinc-200 placeholder:text-zinc-500 focus:border-sky-500/50 focus:outline-none"
+      />
+      {open && (
+        <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-white/15 bg-[#0b1017] shadow-lg">
+          {matches.length === 0 && (
+            <li className="px-2 py-1 text-[10px] leading-snug text-zinc-500">
+              no district label contains “{query.trim()}” — labels are directory paths, try `crates` or
+              `dashboard`
+            </li>
+          )}
+          {matches.map((pkg) => (
+            <li key={pkg.id}>
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onPick(pkg);
+                  setQuery(pkg.label);
+                  setOpen(false);
+                }}
+                className="flex w-full items-baseline justify-between gap-2 px-2 py-1 text-left text-[11px] text-zinc-300 hover:bg-white/[0.08]"
+              >
+                <span className="truncate font-mono">{pkg.label}</span>
+                <span className="shrink-0 text-zinc-500">{pkg.size.toLocaleString()}m</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /**
  * Find a district by name.
  *
