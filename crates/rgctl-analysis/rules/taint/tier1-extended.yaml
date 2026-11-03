@@ -1,0 +1,74 @@
+schema_version: 1
+id: tier1-extended-builtins
+languages:
+- swift
+- scala
+- dart
+- elixir
+- lua
+- bash
+rules:
+- id: ext-src-input
+  role: source
+  kind: HttpParameter
+  match:
+    type: any_substring
+    values:
+    - ProcessInfo.processInfo.environment
+    - CommandLine.arguments
+    - readLine(
+    - sys.env
+    - StdIn.readLine
+    - request.getParameter
+    - Platform.environment
+    - stdin.readLineSync
+    - System.get_env
+    - conn.params
+    - os.getenv
+    - io.read
+    - '$1'
+    - '$@'
+    - read -r
+- id: ext-sink-sql
+  role: sink
+  kind: SqlQuery
+  cwe: CWE-89
+  match:
+    type: any_substring
+    values:
+    - sqlite3_exec
+    - createStatement
+    - executeQuery
+    - rawQuery
+    - Ecto.Adapters.SQL.query
+    - conn:execute
+- id: ext-sink-shell
+  role: sink
+  kind: ShellCommand
+  cwe: CWE-78
+  match:
+    type: any_substring
+    values:
+    - Process.run
+    - Process.Start
+    - sys.process
+    - Process.runSync
+    - System.cmd
+    - ':os.cmd'
+    - os.execute
+    - io.popen
+    - eval 
+    - bash -c
+    - sh -c
+- id: ext-san-escape
+  role: sanitizer
+  kind: ShellEscape
+  match:
+    type: any_substring
+    values:
+    - sqlite3_bind_text
+    - prepareStatement
+    - HtmlEscape
+    - Plug.HTML.html_escape
+    - shellescape
+    - printf '%q'

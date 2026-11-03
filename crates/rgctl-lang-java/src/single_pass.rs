@@ -11,14 +11,20 @@ const MANIFEST_JSON: &str = include_str!("../java-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
+    ("annotated_type", HandlerMask::RELATION),
     ("annotation", HandlerMask::RELATION),
     ("annotation_type_declaration", HandlerMask::SYMBOL),
     ("annotation_type_element_declaration", HandlerMask::SYMBOL),
+    ("array_creation_expression", HandlerMask::RELATION),
+    ("assert_statement", HandlerMask::CFG_STMT),
     ("assignment_expression", HandlerMask::AST_SKELETON),
+    ("binary_expression", HandlerMask::CFG_STMT),
     ("block", HandlerMask::CFG_STMT),
     ("break_statement", HandlerMask::CFG_STMT),
     ("catch_clause", HandlerMask::CFG_STMT),
+    ("catch_formal_parameter", HandlerMask::AST_SKELETON),
     ("class_declaration", HandlerMask::SYMBOL),
+    ("class_literal", HandlerMask::RELATION),
     ("compact_constructor_declaration", HandlerMask::SYMBOL),
     ("constant_declaration", HandlerMask::SYMBOL),
     ("constructor_declaration", HandlerMask::SYMBOL),
@@ -27,26 +33,65 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("enhanced_for_statement", HandlerMask::CFG_STMT),
     ("enum_constant", HandlerMask::SYMBOL),
     ("enum_declaration", HandlerMask::SYMBOL),
+    ("explicit_constructor_invocation", HandlerMask::RELATION),
+    ("exports_module_directive", HandlerMask::RELATION),
     ("extends_interfaces", HandlerMask::RELATION),
+    ("field_access", HandlerMask::RELATION),
     ("field_declaration", HandlerMask::SYMBOL),
     ("finally_clause", HandlerMask::CFG_STMT),
     ("for_statement", HandlerMask::CFG_STMT),
+    ("formal_parameter", HandlerMask::AST_SKELETON),
+    ("formal_parameters", HandlerMask::AST_SKELETON),
+    ("guard", HandlerMask::CFG_STMT),
     ("if_statement", HandlerMask::CFG_STMT),
     ("import_declaration", HandlerMask::RELATION),
+    ("inferred_parameters", HandlerMask::AST_SKELETON),
+    ("instanceof_expression", HandlerMask::CFG_STMT),
     ("interface_declaration", HandlerMask::SYMBOL),
+    ("labeled_statement", HandlerMask::CFG_STMT),
+    ("lambda_expression", HandlerMask::SYMBOL),
+    ("local_variable_declaration", HandlerMask::AST_SKELETON),
     ("marker_annotation", HandlerMask::RELATION),
     ("method_declaration", HandlerMask::SYMBOL),
     ("method_invocation", HandlerMask::RELATION),
+    ("method_reference", HandlerMask::RELATION),
     ("module_declaration", HandlerMask::SYMBOL),
     ("object_creation_expression", HandlerMask::RELATION),
+    ("opens_module_directive", HandlerMask::RELATION),
+    ("package_declaration", HandlerMask::SYMBOL),
+    ("permits", HandlerMask::RELATION),
+    ("provides_module_directive", HandlerMask::RELATION),
     ("record_declaration", HandlerMask::SYMBOL),
+    ("record_pattern", HandlerMask::AST_SKELETON),
+    ("record_pattern_component", HandlerMask::AST_SKELETON),
+    ("requires_module_directive", HandlerMask::RELATION),
+    ("resource", HandlerMask::CFG_STMT),
+    ("resource_specification", HandlerMask::CFG_STMT),
     ("return_statement", HandlerMask::CFG_STMT),
+    ("spread_parameter", HandlerMask::AST_SKELETON),
+    ("static_initializer", HandlerMask::SYMBOL),
     ("super_interfaces", HandlerMask::RELATION),
     ("superclass", HandlerMask::RELATION),
+    ("switch_block", HandlerMask::CFG_STMT),
+    ("switch_block_statement_group", HandlerMask::CFG_STMT),
     ("switch_expression", HandlerMask::CFG_STMT),
+    ("switch_label", HandlerMask::CFG_STMT),
+    ("switch_rule", HandlerMask::CFG_STMT),
+    ("synchronized_statement", HandlerMask::CFG_STMT),
+    ("ternary_expression", HandlerMask::CFG_STMT),
     ("throw_statement", HandlerMask::CFG_STMT),
+    ("throws", HandlerMask::RELATION),
     ("try_statement", HandlerMask::CFG_STMT),
     ("try_with_resources_statement", HandlerMask::CFG_STMT),
+    ("type_arguments", HandlerMask::AST_SKELETON),
+    ("type_bound", HandlerMask::AST_SKELETON),
+    ("type_parameter", HandlerMask::AST_SKELETON),
+    ("type_parameters", HandlerMask::AST_SKELETON),
+    ("type_pattern", HandlerMask::AST_SKELETON),
+    ("unary_expression", HandlerMask::AST_SKELETON),
+    ("update_expression", HandlerMask::AST_SKELETON),
+    ("uses_module_directive", HandlerMask::RELATION),
+    ("variable_declarator", HandlerMask::AST_SKELETON),
     ("while_statement", HandlerMask::CFG_STMT),
     ("yield_statement", HandlerMask::CFG_STMT),
 ];
@@ -119,7 +164,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
@@ -359,20 +411,23 @@ pub fn extract_all_single_pass(
         }
     }
 
-    for pending in pending_calls {
-        let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
-            continue;
-        };
-        push_call_relation_from(
-            pending.node,
-            source,
-            file_path,
-            &ctx.symbols,
-            from_fn,
-            "java",
-            &mut relations,
-        );
-    }
+    plugin.apply_lombok_synthesis(root, source, &file_path_str, &extract_ctx, &mut ctx.symbols);
+    let same_file_types = JavaPlugin::same_file_types(&ctx.symbols);
+    plugin.enrich_symbol_type_fqns(&extract_ctx, &same_file_types, &mut ctx.symbols);
+
+    // Java-specific flush: resolve receivers via ExtractCtx (imports / static
+    // imports / locals / fields) rather than the language-agnostic hint path.
+    plugin.flush_pending_calls(
+        &pending_calls
+            .iter()
+            .map(|p| (p.node, p.from_symbol_idx))
+            .collect::<Vec<_>>(),
+        source,
+        file_path,
+        &extract_ctx,
+        &ctx.symbols,
+        &mut relations,
+    );
 
     plugin.collect_non_call_relations(
         root,

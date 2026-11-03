@@ -226,6 +226,95 @@ impl CSharpPlugin {
         })
     }
 
+    /// Lightweight Symbol for indexers / operators / destructors / accessors / lambdas.
+    pub(crate) fn extract_lightweight_callable(
+        &self,
+        node: Node,
+        source: &[u8],
+        file_path: &str,
+        ctx: &ExtractCtx,
+    ) -> Result<Symbol> {
+        let kind = node.kind();
+        let name = match kind {
+            "indexer_declaration" => "this[]".to_string(),
+            "destructor_declaration" => self
+                .find_containing_type_name(node, source)
+                .map(|t| format!("~{t}"))
+                .unwrap_or_else(|| "~".to_string()),
+            "accessor_declaration" => node
+                .child_by_field_name("name")
+                .or_else(|| {
+                    node.children(&mut node.walk()).find(|c| {
+                        matches!(
+                            c.kind(),
+                            "get_body" | "set_body" | "init_body" | "identifier"
+                        ) || matches!(
+                            c.utf8_text(source).ok(),
+                            Some("get" | "set" | "init" | "add" | "remove")
+                        )
+                    })
+                })
+                .and_then(|n| n.utf8_text(source).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    // Accessor keyword is often an anonymous child token.
+                    node.children(&mut node.walk()).find_map(|c| {
+                        let t = c.utf8_text(source).ok()?.trim();
+                        matches!(t, "get" | "set" | "init" | "add" | "remove")
+                            .then(|| t.to_string())
+                    })
+                })
+                .unwrap_or_else(|| "accessor".to_string()),
+            "operator_declaration" | "conversion_operator_declaration" => node
+                .children(&mut node.walk())
+                .find(|c| c.kind() == "operator")
+                .and_then(|op| {
+                    op.children(&mut op.walk())
+                        .find_map(|c| c.utf8_text(source).ok().map(|s| s.trim().to_string()))
+                })
+                .filter(|s| !s.is_empty())
+                .or_else(|| type_name(node, source))
+                .unwrap_or_else(|| {
+                    if kind == "conversion_operator_declaration" {
+                        "op_ImplicitOrExplicit".to_string()
+                    } else {
+                        "operator".to_string()
+                    }
+                }),
+            "lambda_expression" | "anonymous_method_expression" => {
+                format!("<{}@{}>", kind, node.start_position().row + 1)
+            }
+            _ => type_name(node, source).unwrap_or_else(|| kind.to_string()),
+        };
+
+        let type_qn = self
+            .find_containing_type_name(node, source)
+            .map(|ty| ctx.qualify(&ty));
+        let qualified_name = type_qn
+            .as_ref()
+            .map(|ty| format!("{ty}.{name}"))
+            .or_else(|| Some(ctx.qualify(&name)));
+        let parameters = self.extract_parameters(node, source).unwrap_or_default();
+
+        Ok(Symbol {
+            name,
+            symbol_type: SymbolType::Function,
+            qualified_name,
+            location: source_location(node, file_path),
+            signature: Some(first_line(node, source)),
+            return_type: method_return_type(node, source),
+            parameters,
+            fields: vec![],
+            modifiers: modifier_texts(node, source),
+            documentation: None,
+            metadata: serde_json::json!({
+                "language": "csharp",
+                "ast_kind": kind,
+            }),
+        })
+    }
+
     fn extract_parameters(&self, node: Node, source: &[u8]) -> Result<Vec<Parameter>> {
         let mut parameters = Vec::new();
         let params_node = if let Some(p) = node.child_by_field_name("parameters") {
@@ -952,7 +1041,13 @@ impl CSharpPlugin {
 
             if matches!(
                 node.kind(),
-                "object_creation_expression" | "implicit_object_creation_expression"
+                "object_creation_expression"
+                    | "implicit_object_creation_expression"
+                    | "array_creation_expression"
+                    | "implicit_array_creation_expression"
+                    | "anonymous_object_creation_expression"
+                    | "stackalloc_expression"
+                    | "implicit_stackalloc_expression"
             ) {
                 if let Some(from_fn) = containing_function(node, &function_symbols) {
                     let from = from_fn
@@ -973,28 +1068,76 @@ impl CSharpPlugin {
                                 to: simple,
                                 relation_type: RelationType::Instantiates,
                                 location: source_location(node, &file_path.to_string_lossy()),
-                                metadata: serde_json::json!({ "language": "csharp" }),
+                                metadata: serde_json::json!({
+                                    "language": "csharp",
+                                    "ast_kind": node.kind(),
+                                }),
                                 to_qualified_hint: Some(scoped),
                                 to_type_hint: None,
                             });
                         }
-                    } else if node.kind() == "implicit_object_creation_expression" {
-                        if let Some(containing) = self.find_containing_type_name(node, source) {
-                            let simple = simple_type_name(&containing);
-                            relations.push(Relation {
-                                from,
-                                to: simple.clone(),
-                                relation_type: RelationType::Instantiates,
-                                location: source_location(node, &file_path.to_string_lossy()),
-                                metadata: serde_json::json!({
-                                    "language": "csharp",
-                                    "implicit": true,
-                                }),
-                                to_qualified_hint: Some(ctx.qualify(&simple)),
-                                to_type_hint: None,
-                            });
-                        }
+                    } else if matches!(
+                        node.kind(),
+                        "implicit_object_creation_expression"
+                            | "anonymous_object_creation_expression"
+                            | "implicit_array_creation_expression"
+                            | "implicit_stackalloc_expression"
+                    ) {
+                        let target = self
+                            .find_containing_type_name(node, source)
+                            .unwrap_or_else(|| node.kind().to_string());
+                        let simple = simple_type_name(&target);
+                        relations.push(Relation {
+                            from,
+                            to: simple.clone(),
+                            relation_type: RelationType::Instantiates,
+                            location: source_location(node, &file_path.to_string_lossy()),
+                            metadata: serde_json::json!({
+                                "language": "csharp",
+                                "ast_kind": node.kind(),
+                                "implicit": true,
+                            }),
+                            to_qualified_hint: Some(ctx.qualify(&simple)),
+                            to_type_hint: None,
+                        });
                     }
+                }
+            } else if matches!(
+                node.kind(),
+                "member_access_expression"
+                    | "conditional_access_expression"
+                    | "element_access_expression"
+                    | "typeof_expression"
+                    | "sizeof_expression"
+            ) {
+                if let Some(from_fn) = containing_function(node, &function_symbols) {
+                    let from = from_fn
+                        .qualified_name
+                        .clone()
+                        .unwrap_or_else(|| from_fn.name.clone());
+                    let to = match node.kind() {
+                        "typeof_expression" | "sizeof_expression" => node
+                            .child_by_field_name("type")
+                            .and_then(|n| type_text(n, source))
+                            .unwrap_or_else(|| node.kind().to_string()),
+                        _ => node
+                            .child_by_field_name("name")
+                            .and_then(|n| n.utf8_text(source).ok().map(str::to_string))
+                            .or_else(|| callee_name(node, source))
+                            .unwrap_or_else(|| node.kind().to_string()),
+                    };
+                    relations.push(Relation {
+                        from,
+                        to,
+                        relation_type: RelationType::References,
+                        location: source_location(node, &file_path.to_string_lossy()),
+                        metadata: serde_json::json!({
+                            "language": "csharp",
+                            "ast_kind": node.kind(),
+                        }),
+                        to_qualified_hint: None,
+                        to_type_hint: None,
+                    });
                 }
             }
 

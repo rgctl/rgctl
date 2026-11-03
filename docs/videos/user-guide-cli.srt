@@ -1,27 +1,54 @@
 1
-00:00:00,000 --> 00:00:04,000
-discover (ecommerce-java)
+00:00:00,000 --> 00:00:06,500
+Index Once in Sub-Second Time (rgctl discover)
+Tree-sitter AST · RGCL v2 mmap graph · CFG/PDG · Konveyor Kantra · Migration plan
 
 2
-00:00:04,000 --> 00:00:08,000
-find — function inventory
+00:00:06,560 --> 00:00:11,500
+Zero-Grep Graph Readiness & Symbol Lookup (status · find)
+Deterministic -f json envelopes (schema_version) & <2ms mmap lookups
 
 3
-00:00:08,000 --> 00:00:12,000
-callers — who calls clearCart
+00:00:11,500 --> 00:00:16,350
+Instant Call-Graph Traversal (rgctl callers)
+Disambiguate overloads with --class / --file — no noisy text search
 
 4
-00:00:12,000 --> 00:00:16,000
-communities list — named clusters
+00:00:16,400 --> 00:00:24,600
+Know What Breaks Before You Edit (rgctl blast-radius)
+Precomputed SCC reachability · direct callers · full upstream impact zone
 
 5
-00:00:16,000 --> 00:00:20,000
-blast-radius — change impact
+00:00:24,640 --> 00:00:33,400
+Map Domain Architecture & Production Hotspots (communities · metrics)
+Fast-Leiden communities (hub-stripped) + pull-based CSR FastPageRank
 
 6
-00:00:20,000 --> 00:00:24,000
-Kantra rules — find + violates edges
+00:00:33,450 --> 00:00:40,500
+Hybrid CPG: Control Flow & Field Mutation Tracking (inspect · cpg)
+Inspect per-function CFG blocks & every statement mutating a domain model
 
 7
-00:00:24,000 --> 00:00:28,000
-Filter syntax (export): name:clearCart → Mermaid subgraph
+00:00:40,500 --> 00:00:47,900
+Statement-Level Backward Program Slicing (rgctl slice)
+Isolate the exact lines influencing a variable — cut 60–95% of prompt noise
+
+8
+00:00:47,960 --> 00:00:53,200
+Catch Copy-Paste & Structural Clones (rgctl clones)
+Exact, token-bloom, and SESE + 1-WL subgraph fragment clone detection
+
+9
+00:00:53,200 --> 00:00:58,700
+Offline Semantic Code Search — Zero GPU Required (rgctl semantic)
+Compiled vocab embedder + graph-distance score fusion in ~30ms
+
+10
+00:00:58,760 --> 00:01:07,200
+Native Konveyor Kantra Rules & CI Policy Gates (relations · check)
+Query migration rule violations as graph edges & enforce blast-radius gates
+
+11
+00:01:07,200 --> 00:01:17,500
+PR Call-Path Deltas & Drop-In AI Agent Skills (review · install)
+rgctl review paths + rgctl install --skill for Cursor, Claude, Codex & Antigravity

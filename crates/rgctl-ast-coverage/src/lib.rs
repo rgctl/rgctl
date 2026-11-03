@@ -19,14 +19,145 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Allowed handler labels in coverage manifests.
+///
+/// Raw `"Skip"` is banned — use `SkipWrapper` / `SkipTypeToken` / `Unimplemented`.
 pub const ALLOWED_HANDLERS: &[&str] = &[
     "Symbol",
     "Relation",
+    "Property",
     "CfgStatement",
     "AstSkeleton",
-    "Skip",
+    "SkipWrapper",
+    "SkipTypeToken",
+    "Unimplemented",
     "Literal",
 ];
+
+/// True if `label` is a passive classification (`SkipWrapper`, `SkipTypeToken`, `Unimplemented`).
+///
+/// Legacy raw `"Skip"` is treated as passive for sync/diagnostics but is not in [`ALLOWED_HANDLERS`].
+pub fn is_passive_handler_label(label: &str) -> bool {
+    matches!(
+        label,
+        "Skip" | "SkipWrapper" | "SkipTypeToken" | "Unimplemented"
+    )
+}
+
+/// True if `label` is an active handler (`Symbol`, `Relation`, `Property`, `CfgStatement`, `AstSkeleton`, `Literal`).
+pub fn is_active_handler_label(label: &str) -> bool {
+    matches!(
+        label,
+        "Symbol" | "Relation" | "Property" | "CfgStatement" | "AstSkeleton" | "Literal"
+    )
+}
+
+/// True if a Tree-sitter node kind name matches the semantic node-kind denylist
+/// (`*_declaration`, `*_definition`, `*_statement`, `*_expression`, `*_invocation`,
+/// `*_call*`, `*_creation*`, `*_clause`, `*_pattern`, `*_directive`, `lambda*`, `closure*`).
+pub fn is_semantic_node_kind(kind: &str) -> bool {
+    kind.ends_with("_declaration")
+        || kind.ends_with("_definition")
+        || kind.ends_with("_statement")
+        || kind.ends_with("_expression")
+        || kind.ends_with("_invocation")
+        || kind.contains("_call")
+        || kind.contains("_creation")
+        || kind.ends_with("_clause")
+        || kind.ends_with("_pattern")
+        || kind.ends_with("_directive")
+        || kind.starts_with("lambda")
+        || kind.starts_with("closure")
+}
+
+/// Ratified semantic AST coverage grade floor for a Tier-1 language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CoverageGrade {
+    /// `< 50%` semantic coverage (baseline / migration floor).
+    C,
+    /// `>= 50%` semantic coverage.
+    B,
+    /// `>= 75%` semantic coverage.
+    A,
+    /// `>= 98%` semantic coverage + full Layers A–F deep-analysis parity.
+    APlus,
+}
+
+impl CoverageGrade {
+    /// Minimum semantic coverage percentage (`0..=100`) required for this grade.
+    pub const fn min_semantic_coverage_pct(self) -> u8 {
+        match self {
+            Self::C => 0,
+            Self::B => 50,
+            Self::A => 75,
+            Self::APlus => 98,
+        }
+    }
+
+    /// Determine achieved grade from a semantic coverage percentage (`0.0..=100.0`).
+    pub fn from_percentage(pct: f64) -> Self {
+        if pct >= 98.0 {
+            Self::APlus
+        } else if pct >= 75.0 {
+            Self::A
+        } else if pct >= 50.0 {
+            Self::B
+        } else {
+            Self::C
+        }
+    }
+}
+
+/// Summary of active vs passive AST coverage for a manifest.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SemanticCoverageStats {
+    /// Total named node kinds in the manifest.
+    pub total_kinds: usize,
+    /// Active handlers (`Symbol`, `Relation`, `Property`, `CfgStatement`, `AstSkeleton`, `Literal`).
+    pub handled_kinds: usize,
+    /// Pure syntax wrappers (`SkipWrapper`) + leaf type tokens (`SkipTypeToken`).
+    pub excluded_wrapper_or_type_kinds: usize,
+    /// `Unimplemented` kinds included in the semantic denominator.
+    pub unimplemented_kinds: usize,
+    /// Semantic coverage percentage: `handled_kinds / (total_kinds - excluded_wrapper_or_type_kinds) * 100.0`.
+    pub semantic_coverage_pct: f64,
+}
+
+/// Compute semantic coverage statistics from a manifest handler map.
+pub fn compute_semantic_coverage(handlers: &HashMap<String, String>) -> SemanticCoverageStats {
+    let total_kinds = handlers.len();
+    let mut handled_kinds = 0usize;
+    let mut excluded_wrapper_or_type_kinds = 0usize;
+    let mut unimplemented_kinds = 0usize;
+
+    for label in handlers.values() {
+        match label.as_str() {
+            "Symbol" | "Relation" | "Property" | "CfgStatement" | "AstSkeleton" | "Literal" => {
+                handled_kinds += 1;
+            }
+            "SkipWrapper" | "SkipTypeToken" => {
+                excluded_wrapper_or_type_kinds += 1;
+            }
+            _ => {
+                unimplemented_kinds += 1;
+            }
+        }
+    }
+
+    let denom = total_kinds.saturating_sub(excluded_wrapper_or_type_kinds);
+    let semantic_coverage_pct = if denom == 0 {
+        100.0
+    } else {
+        (handled_kinds as f64 / denom as f64) * 100.0
+    };
+
+    SemanticCoverageStats {
+        total_kinds,
+        handled_kinds,
+        excluded_wrapper_or_type_kinds,
+        unimplemented_kinds,
+        semantic_coverage_pct,
+    }
+}
 
 /// Allowed `@capture` names in Tier-2 `tags.scm` packs (`handler = "queries"`).
 ///
@@ -148,6 +279,10 @@ pub struct CoverageSpec {
     pub grammar_prefix: &'static str,
     /// Live grammar.
     pub language: fn() -> tree_sitter::Language,
+    /// Non-decreasing ratchet floor of active (`Symbol`/`Relation`/`Property`/`CfgStatement`/`AstSkeleton`/`Literal`) kinds.
+    pub min_handled_kinds: usize,
+    /// Minimum semantic coverage grade floor.
+    pub target_grade: CoverageGrade,
 }
 
 /// All Tier 1 (+ markdown) coverage specs shipped in-tree.
@@ -159,6 +294,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "c-ast-coverage.json",
             grammar_prefix: "tree-sitter-c@",
             language: || tree_sitter_c::LANGUAGE.into(),
+            min_handled_kinds: 74,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "cpp",
@@ -166,6 +303,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "cpp-ast-coverage.json",
             grammar_prefix: "tree-sitter-cpp@",
             language: || tree_sitter_cpp::LANGUAGE.into(),
+            min_handled_kinds: 108,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "csharp",
@@ -173,6 +312,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "csharp-ast-coverage.json",
             grammar_prefix: "tree-sitter-c-sharp@",
             language: || tree_sitter_c_sharp::LANGUAGE.into(),
+            min_handled_kinds: 166,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "go",
@@ -180,6 +321,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "go-ast-coverage.json",
             grammar_prefix: "tree-sitter-go@",
             language: || tree_sitter_go::LANGUAGE.into(),
+            min_handled_kinds: 76,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "groovy",
@@ -187,6 +330,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "groovy-ast-coverage.json",
             grammar_prefix: "tree-sitter-groovy@",
             language: || tree_sitter_groovy::LANGUAGE.into(),
+            min_handled_kinds: 106,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "java",
@@ -194,6 +339,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "java-ast-coverage.json",
             grammar_prefix: "tree-sitter-java@",
             language: || tree_sitter_java::LANGUAGE.into(),
+            min_handled_kinds: 100,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "javascript",
@@ -201,6 +348,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "javascript-ast-coverage.json",
             grammar_prefix: "tree-sitter-javascript@",
             language: || tree_sitter_javascript::LANGUAGE.into(),
+            min_handled_kinds: 99,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "kotlin",
@@ -208,6 +357,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "kotlin-ast-coverage.json",
             grammar_prefix: "tree-sitter-kotlin-ng@",
             language: || tree_sitter_kotlin_ng::LANGUAGE.into(),
+            min_handled_kinds: 87,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "markdown",
@@ -215,6 +366,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "markdown-ast-coverage.json",
             grammar_prefix: "tree-sitter-md@",
             language: || tree_sitter_md::LANGUAGE.into(),
+            min_handled_kinds: 7,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "php",
@@ -222,6 +375,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "php-ast-coverage.json",
             grammar_prefix: "tree-sitter-php@",
             language: || tree_sitter_php::LANGUAGE_PHP.into(),
+            min_handled_kinds: 100,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "puppet",
@@ -229,6 +384,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "puppet-ast-coverage.json",
             grammar_prefix: "tree-sitter-puppet@",
             language: || tree_sitter_puppet::LANGUAGE.into(),
+            min_handled_kinds: 48,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "erb",
@@ -236,6 +393,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "erb-ast-coverage.json",
             grammar_prefix: "tree-sitter-embedded-template@",
             language: || tree_sitter_embedded_template::LANGUAGE.into(),
+            min_handled_kinds: 6,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "python",
@@ -243,6 +402,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "python-ast-coverage.json",
             grammar_prefix: "tree-sitter-python@",
             language: || tree_sitter_python::LANGUAGE.into(),
+            min_handled_kinds: 95,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "ruby",
@@ -250,6 +411,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "ruby-ast-coverage.json",
             grammar_prefix: "tree-sitter-ruby@",
             language: || tree_sitter_ruby::LANGUAGE.into(),
+            min_handled_kinds: 115,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "rust",
@@ -257,6 +420,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "rust-ast-coverage.json",
             grammar_prefix: "tree-sitter-rust@",
             language: || tree_sitter_rust::LANGUAGE.into(),
+            min_handled_kinds: 90,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "typescript",
@@ -264,6 +429,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "typescript-ast-coverage.json",
             grammar_prefix: "tree-sitter-typescript@",
             language: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            min_handled_kinds: 106,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "swift",
@@ -271,6 +438,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "swift-ast-coverage.json",
             grammar_prefix: "tree-sitter-swift@",
             language: || tree_sitter_swift::LANGUAGE.into(),
+            min_handled_kinds: 88,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "scala",
@@ -278,6 +447,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "scala-ast-coverage.json",
             grammar_prefix: "tree-sitter-scala@",
             language: || tree_sitter_scala::LANGUAGE.into(),
+            min_handled_kinds: 94,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "dart",
@@ -285,6 +456,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "dart-ast-coverage.json",
             grammar_prefix: "tree-sitter-dart@",
             language: || tree_sitter_dart::LANGUAGE.into(),
+            min_handled_kinds: 139,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "elixir",
@@ -292,6 +465,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "elixir-ast-coverage.json",
             grammar_prefix: "tree-sitter-elixir@",
             language: || tree_sitter_elixir::LANGUAGE.into(),
+            min_handled_kinds: 22,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "lua",
@@ -299,6 +474,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "lua-ast-coverage.json",
             grammar_prefix: "tree-sitter-lua@",
             language: || tree_sitter_lua::LANGUAGE.into(),
+            min_handled_kinds: 38,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "bash",
@@ -306,6 +483,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "bash-ast-coverage.json",
             grammar_prefix: "tree-sitter-bash@",
             language: || tree_sitter_bash::LANGUAGE.into(),
+            min_handled_kinds: 46,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "sql",
@@ -313,6 +492,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "sql-ast-coverage.json",
             grammar_prefix: "tree-sitter-sql@",
             language: || tree_sitter_sql::LANGUAGE.into(),
+            min_handled_kinds: 63,
+            target_grade: CoverageGrade::APlus,
         },
         CoverageSpec {
             id: "hcl",
@@ -320,6 +501,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "hcl-ast-coverage.json",
             grammar_prefix: "tree-sitter-hcl@",
             language: || tree_sitter_hcl::LANGUAGE.into(),
+            min_handled_kinds: 14,
+            target_grade: CoverageGrade::APlus,
         },
     ]
 }
@@ -382,14 +565,36 @@ pub fn check_manifest(
 
     let handlers: HashMap<String, String> = handlers_obj
         .iter()
-        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Skip").to_string()))
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Unimplemented").to_string()))
         .collect();
+
+    let skip_justifications: HashMap<String, String> = v["skip_justifications"]
+        .as_object()
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
 
     for (kind, handler) in &handlers {
         if !ALLOWED_HANDLERS.contains(&handler.as_str()) {
             issues.push(CoverageIssue {
                 language: language_id.into(),
                 message: format!("kind `{kind}` has invalid handler `{handler}`"),
+            });
+        }
+        if matches!(handler.as_str(), "SkipWrapper" | "SkipTypeToken")
+            && is_semantic_node_kind(kind)
+            && !skip_justifications
+                .get(kind)
+                .is_some_and(|reason| !reason.trim().is_empty())
+        {
+            issues.push(CoverageIssue {
+                language: language_id.into(),
+                message: format!(
+                    "semantic AST kind `{kind}` cannot be marked `{handler}` without an audited entry in `skip_justifications` (use an active handler, `Unimplemented`, or document why `{kind}` is a pure syntax wrapper)"
+                ),
             });
         }
     }
@@ -400,7 +605,7 @@ pub fn check_manifest(
             issues.push(CoverageIssue {
                 language: language_id.into(),
                 message: format!(
-                    "grammar kind `{kind}` missing from ast-coverage.json — add a handler (often `Skip`)"
+                    "grammar kind `{kind}` missing from ast-coverage.json — classify as an active handler (`Symbol`, `Relation`, `Property`, `CfgStatement`, `AstSkeleton`, `Literal`) or explicit passive category (`SkipWrapper`, `SkipTypeToken`, `Unimplemented`)"
                 ),
             });
         }
@@ -415,6 +620,32 @@ pub fn check_manifest(
             });
         }
     }
+
+    if let Some(spec) = bundled_specs().iter().find(|s| s.id == language_id) {
+        let stats = compute_semantic_coverage(&handlers);
+        if stats.handled_kinds < spec.min_handled_kinds {
+            issues.push(CoverageIssue {
+                language: language_id.into(),
+                message: format!(
+                    "coverage ratchet regression: active handled kinds ({}) dropped below min_handled_kinds floor ({})",
+                    stats.handled_kinds, spec.min_handled_kinds
+                ),
+            });
+        }
+        let achieved_grade = CoverageGrade::from_percentage(stats.semantic_coverage_pct);
+        if achieved_grade < spec.target_grade {
+            issues.push(CoverageIssue {
+                language: language_id.into(),
+                message: format!(
+                    "semantic coverage grade regression: {:.1}% ({achieved_grade:?}) is below target_grade {:?} (>= {}%)",
+                    stats.semantic_coverage_pct,
+                    spec.target_grade,
+                    spec.target_grade.min_semantic_coverage_pct()
+                ),
+            });
+        }
+    }
+
     issues
 }
 
@@ -430,6 +661,19 @@ pub fn check_plugin_manifest_sync(
     language_id: &str,
     manifest_json: &str,
     table: &AstHandlerTable,
+    lang: &tree_sitter::Language,
+) -> Vec<CoverageIssue> {
+    check_plugin_and_analysis_manifest_sync(language_id, manifest_json, table, &[], &[], lang)
+}
+
+/// Three-way sync across `{lang}-ast-coverage.json`, the plugin's [`AstHandlerTable`],
+/// `rgctl-analysis` CFG statement handlers (`cfg_kinds`), and def-use handlers (`def_use_kinds`).
+pub fn check_plugin_and_analysis_manifest_sync(
+    language_id: &str,
+    manifest_json: &str,
+    table: &AstHandlerTable,
+    cfg_kinds: &[&str],
+    def_use_kinds: &[&str],
     lang: &tree_sitter::Language,
 ) -> Vec<CoverageIssue> {
     let mut issues = Vec::new();
@@ -450,10 +694,15 @@ pub fn check_plugin_manifest_sync(
 
     let handlers: HashMap<String, String> = handlers_obj
         .iter()
-        .map(|(k, val)| (k.clone(), val.as_str().unwrap_or("Skip").to_string()))
+        .map(|(k, val)| {
+            (
+                k.clone(),
+                val.as_str().unwrap_or("Unimplemented").to_string(),
+            )
+        })
         .collect();
 
-    // Plugin → manifest: semantic handlers must not be Skip in JSON.
+    // Plugin → manifest: semantic handlers must not be passive in JSON.
     for (kind_id, kind_name, mask) in table.iter() {
         if mask.is_passive() {
             continue;
@@ -466,10 +715,10 @@ pub fn check_plugin_manifest_sync(
                     mask.to_coverage_label()
                 ),
             }),
-            Some("Skip") => issues.push(CoverageIssue {
+            Some(label) if is_passive_handler_label(label) => issues.push(CoverageIssue {
                 language: language_id.into(),
                 message: format!(
-                    "plugin handles `{kind_name}` as {} but ast-coverage.json marks it `Skip`",
+                    "plugin handles `{kind_name}` as {} but ast-coverage.json marks it `{label}` (passive)",
                     mask.to_coverage_label()
                 ),
             }),
@@ -490,7 +739,7 @@ pub fn check_plugin_manifest_sync(
         }
     }
 
-    // Manifest → plugin: active JSON kinds must be registered.
+    // Manifest → plugin / cfg_builder / def_use: active JSON kinds must be backed by a real handler.
     for (kind_name, label) in &handlers {
         let Some(expected) = HandlerMask::from_coverage_label(label) else {
             continue;
@@ -498,17 +747,24 @@ pub fn check_plugin_manifest_sync(
         if expected.is_passive() {
             continue;
         }
+        let in_analysis = (label == "CfgStatement" && cfg_kinds.contains(&kind_name.as_str()))
+            || (label == "AstSkeleton"
+                && (cfg_kinds.contains(&kind_name.as_str())
+                    || def_use_kinds.contains(&kind_name.as_str())));
         match table.get_by_name(kind_name) {
-            None => {
+            None if !in_analysis => {
                 let kind_id = lang.id_for_node_kind(kind_name, true);
                 issues.push(CoverageIssue {
                     language: language_id.into(),
                     message: format!(
-                        "ast-coverage.json marks `{kind_name}` as `{label}` (kind_id={kind_id}) but plugin AstHandlerTable has no entry"
+                        "ast-coverage.json marks `{kind_name}` as `{label}` (kind_id={kind_id}) but plugin AstHandlerTable (and cfg_builder/def_use) has no entry"
                     ),
                 });
             }
-            Some((_id, mask)) if mask.is_passive() || !mask.intersects(expected) => {
+            None => {}
+            Some((_id, mask))
+                if (mask.is_passive() || !mask.intersects(expected)) && !in_analysis =>
+            {
                 issues.push(CoverageIssue {
                     language: language_id.into(),
                     message: format!(
@@ -631,6 +887,50 @@ mod tests {
     }
 
     #[test]
+    fn all_bundled_specs_pass_manifest_ratchet_and_grade() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let issues = check_crates_dir(&crates);
+        assert!(issues.is_empty(), "workspace coverage issues: {issues:?}");
+    }
+
+    #[test]
+    fn semantic_denylist_rejects_unjustified_skip_wrapper() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let path = crates.join("rgctl-lang-java/java-ast-coverage.json");
+        let json = std::fs::read_to_string(&path).expect("java manifest");
+        let mut v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        v["handlers"]["try_with_resources_statement"] =
+            serde_json::Value::String("SkipWrapper".into());
+        let lang = tree_sitter_java::LANGUAGE.into();
+        let issues = check_manifest("java", &v.to_string(), "tree-sitter-java@", &lang);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("try_with_resources_statement")
+                    && i.message.contains("skip_justifications")),
+            "expected semantic denylist error, got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn coverage_ratchet_detects_regression_below_min_handled_kinds() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let path = crates.join("rgctl-lang-java/java-ast-coverage.json");
+        let json = std::fs::read_to_string(&path).expect("java manifest");
+        let mut v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        v["handlers"]["try_with_resources_statement"] =
+            serde_json::Value::String("Unimplemented".into());
+        let lang = tree_sitter_java::LANGUAGE.into();
+        let issues = check_manifest("java", &v.to_string(), "tree-sitter-java@", &lang);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("coverage ratchet regression")),
+            "expected ratchet regression error, got {issues:?}"
+        );
+    }
+
+    #[test]
     fn plugin_manifest_sync_detects_skip_drift() {
         let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
         let kind = "function_item";
@@ -642,12 +942,12 @@ mod tests {
 
         let manifest = r#"{
             "grammar": "tree-sitter-rust@0",
-            "handlers": { "function_item": "Skip" }
+            "handlers": { "function_item": "Unimplemented" }
         }"#;
         let issues = check_plugin_manifest_sync("rust", manifest, &table, &lang);
         assert!(
-            issues.iter().any(|i| i.message.contains("Skip")),
-            "expected Skip drift, got {issues:?}"
+            issues.iter().any(|i| i.message.contains("Unimplemented")),
+            "expected Unimplemented drift, got {issues:?}"
         );
     }
 

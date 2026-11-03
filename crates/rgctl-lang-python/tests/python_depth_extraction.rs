@@ -1,4 +1,4 @@
-//! Golden correctness for OpenSpec 3.2 Python AST depth.
+//! Golden correctness + unconditional AST coverage exercise for Python.
 
 use rgctl_lang_python::PythonPlugin;
 use rgctl_plugin_api::{LanguagePlugin, RelationType, SymbolType};
@@ -165,9 +165,6 @@ def read_map(d: dict):
 
 #[test]
 fn ast_coverage_all_declared_handlers_exercised() {
-    if std::env::var_os("RGCTL_AST_COVERAGE_TRACK").is_none() {
-        return;
-    }
     const MANIFEST: &str = include_str!("../python-ast-coverage.json");
     let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
     let tracker =
@@ -179,9 +176,10 @@ fn ast_coverage_all_declared_handlers_exercised() {
     );
     rgctl_ast_coverage::install_hit_callback(tracker);
 
-    let sources: &[(&str, &[u8])] = &[(
-        "ast_coverage_corpus.py",
-        br#"
+    let sources: &[(&str, &[u8])] = &[
+        (
+            "ast_coverage_corpus.py",
+            br#"
 from __future__ import annotations
 import sys as system
 from os import path as ospath
@@ -189,10 +187,7 @@ from . import sibling
 from ..pkg import util
 from typing import *
 
-type Point = tuple[int, int]
-
-class Status:
-    PENDING = "p"
+type Point[T] = list[T]
 
 @classmethod
 def decorate(cls):
@@ -200,19 +195,19 @@ def decorate(cls):
 
 class Client:
     host: str = "localhost"
-    transform = lambda x: x
+    transform = lambda x, y=1: x
 
     def __init__(self):
         self.session = None
 
-    def refresh(self):
+    def refresh(self, a: int, b: int = 1, /, *args, c: int, d: int = 2, **kwargs):
         self.token = "x"
         self.token += "y"
         x = self.host
-        y = d["a"] if False else 1
-        d = {"a": 1}
-        y = d["a"]
-        d["b"] = 2
+        dmap = {"a": 1}
+        y = dmap["a"] if False else 1
+        y = dmap["a"]
+        dmap["b"] = 2
         assert True
         if False:
             pass
@@ -235,44 +230,74 @@ class Client:
         with open("f") as handle:
             pass
         match i:
-            case 0:
+            case 0 | 1:
                 pass
-        [x for x in range(1)]
+            case Point(x=1, y=2):
+                pass
+            case [a, *rest]:
+                pass
+            case (a, b):
+                pass
+            case {"k": v, **rest}:
+                pass
+            case 1+2j:
+                pass
+            case int() as n:
+                pass
+            case _:
+                pass
+        [x for x in range(1) if x]
         {x for x in range(1)}
         {k: v for k, v in {}.items()}
         (x for x in range(1))
         if (n := 1):
             pass
+        z = a + b
+        z = a and b
+        z = a < b
+        z = not a
+        z = -a
+        f"{n:.2f}"
         yield 1
         return
 
-def read_map(d: dict):
-    x = d["a"]
-    d["b"] = 1
-"#,
-    )];
+async def go():
+    await decorate()
 
-    let mut present = std::collections::HashSet::new();
+g1 = 0
+
+def scope_demo():
+    global g1
+    def inner():
+        nonlocal g1
+        del g1
+        pass
+"#,
+        ),
+        (
+            "py2_compat_corpus.py",
+            // tree-sitter-python still emits print_statement / exec_statement / chevron
+            // for legacy statement forms that remain named grammar kinds.
+            br#"
+print "hi"
+print >> sys.stderr, "x"
+exec "x = 1"
+"#,
+        ),
+    ];
+
     let plugin = PythonPlugin::new().expect("plugin");
     for (path, src) in sources {
-        present.extend(rgctl_ast_coverage::named_kind_ids_in_source(&lang, src));
         plugin
             .extract_all(std::path::Path::new(path), src)
             .expect("extract_all");
     }
 
     let tracker = rgctl_ast_coverage::AstCoverageTracker::global().expect("tracker installed");
-    match tracker.assert_all_exercised() {
-        Ok(msg) => eprintln!("{msg}"),
-        Err(full) => {
-            tracker
-                .assert_present_kinds_exercised(present.iter().copied())
-                .unwrap_or_else(|e| panic!("{e}\n(full gaps: {full})"));
-            assert!(
-                tracker.total_hits() > 0,
-                "RGCTL_AST_COVERAGE_TRACK=1 but no dispatch hits recorded"
-            );
-            eprintln!("soft-gate (full assert not met): {full}");
-        }
-    }
+    let summary = tracker
+        .assert_all_exercised()
+        .expect("every active Python AST kind in python-ast-coverage.json must be exercised");
+    eprintln!("{summary}");
+    let hotspots = tracker.unhandled_hotspots(10);
+    eprintln!("python unhandled hotspots: {hotspots:?}");
 }

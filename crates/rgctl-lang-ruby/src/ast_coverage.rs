@@ -9,7 +9,9 @@ const ALLOWED: &[&str] = &[
     "Relation",
     "CfgStatement",
     "AstSkeleton",
-    "Skip",
+    "SkipWrapper",
+    "SkipTypeToken",
+    "Unimplemented",
     "Literal",
 ];
 
@@ -21,13 +23,12 @@ pub fn load_manifest() -> HashMap<String, String> {
         grammar.starts_with("tree-sitter-ruby@"),
         "unexpected grammar pin: {grammar}"
     );
-    let handlers = v["handlers"]
+    v["handlers"]
         .as_object()
         .expect("handlers object")
         .iter()
-        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Skip").to_string()))
-        .collect();
-    handlers
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Unimplemented").to_string()))
+        .collect()
 }
 
 /// Named node kinds from the pinned grammar (unique names).
@@ -35,10 +36,10 @@ pub fn grammar_named_kinds() -> HashSet<String> {
     let lang: tree_sitter::Language = tree_sitter_ruby::LANGUAGE.into();
     let mut set = HashSet::new();
     for i in 0..lang.node_kind_count() {
-        if lang.node_kind_is_named(i as u16) {
-            if let Some(k) = lang.node_kind_for_id(i as u16) {
-                set.insert(k.to_string());
-            }
+        if lang.node_kind_is_named(i as u16)
+            && let Some(k) = lang.node_kind_for_id(i as u16)
+        {
+            set.insert(k.to_string());
         }
     }
     set
@@ -73,14 +74,15 @@ mod tests {
             );
         }
 
-        let skip_without_reason: Vec<_> = manifest
-            .iter()
-            .filter(|(_, h)| h.as_str() == "Skip")
-            .map(|(k, _)| k.as_str())
-            .collect();
-        assert!(
-            !skip_without_reason.is_empty(),
-            "expected some Skip entries for leaf constructs"
+        assert_eq!(
+            manifest.get("alias").map(String::as_str),
+            Some("Relation"),
+            "alias must be Relation"
+        );
+        assert_eq!(
+            manifest.values().filter(|h| h.as_str() == "Skip").count(),
+            0,
+            "raw Skip must be reclassified to SkipWrapper/SkipTypeToken or an active handler"
         );
     }
 }

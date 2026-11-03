@@ -502,6 +502,194 @@ impl KotlinPlugin {
         })
     }
 
+    /// Synthetic function symbol for `lambda_literal` / `anonymous_function`.
+    pub(crate) fn emit_lambda_like(
+        &self,
+        node: Node,
+        source: &[u8],
+        file: &str,
+        package: Option<&str>,
+        idx: u32,
+        kind_tag: &str,
+    ) -> Option<Symbol> {
+        let name = format!("${kind_tag}${idx}");
+        let type_path = Self::enclosing_type_path(node, source);
+        let qn = if type_path.is_empty() {
+            Self::qualify(package, &name)
+        } else {
+            Self::qualify(package, &format!("{}.{}", type_path.join("."), name))
+        };
+        let parameters = self.extract_parameters(node, source);
+        Some(Symbol {
+            name,
+            symbol_type: SymbolType::Function,
+            qualified_name: Some(qn),
+            location: Self::loc(file, node),
+            signature: node
+                .utf8_text(source)
+                .ok()
+                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            return_type: None,
+            parameters,
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({
+                "language": "kotlin",
+                "is_lambda": kind_tag == "lambda",
+                "is_anonymous_function": kind_tag == "anon_fn",
+            }),
+        })
+    }
+
+    /// Anonymous `object : Type { ... }` literal.
+    pub(crate) fn emit_object_literal(
+        &self,
+        node: Node,
+        source: &[u8],
+        file: &str,
+        package: Option<&str>,
+        idx: u32,
+    ) -> Option<Symbol> {
+        let name = format!("$object${idx}");
+        let type_path = Self::enclosing_type_path(node, source);
+        let qn = if type_path.is_empty() {
+            Self::qualify(package, &name)
+        } else {
+            Self::qualify(package, &format!("{}.{}", type_path.join("."), name))
+        };
+        Some(Symbol {
+            name,
+            symbol_type: SymbolType::Class,
+            qualified_name: Some(qn),
+            location: Self::loc(file, node),
+            signature: node
+                .utf8_text(source)
+                .ok()
+                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            return_type: None,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({
+                "language": "kotlin",
+                "is_object_literal": true,
+            }),
+        })
+    }
+
+    /// Class `init { ... }` block.
+    pub(crate) fn emit_anonymous_initializer(
+        &self,
+        node: Node,
+        source: &[u8],
+        file: &str,
+        package: Option<&str>,
+        idx: u32,
+    ) -> Option<Symbol> {
+        let name = format!("$init${idx}");
+        let type_path = Self::enclosing_type_path(node, source);
+        let qn = if type_path.is_empty() {
+            Self::qualify(package, &name)
+        } else {
+            Self::qualify(package, &format!("{}.{}", type_path.join("."), name))
+        };
+        Some(Symbol {
+            name,
+            symbol_type: SymbolType::Function,
+            qualified_name: Some(qn),
+            location: Self::loc(file, node),
+            signature: Some("init".into()),
+            return_type: None,
+            parameters: vec![],
+            fields: vec![],
+            modifiers: vec![],
+            documentation: None,
+            metadata: serde_json::json!({
+                "language": "kotlin",
+                "is_initializer": true,
+            }),
+        })
+    }
+
+    /// `@Ann` / `@file:Ann` → `AnnotatedWith` from nearest enclosing symbol.
+    pub(crate) fn emit_annotation_relation(
+        &self,
+        node: Node,
+        source: &[u8],
+        file_path: &Path,
+        symbols: &[Symbol],
+        relations: &mut Vec<Relation>,
+    ) {
+        let text = node.utf8_text(source).unwrap_or("").trim();
+        let ann = text
+            .trim_start_matches("@file:")
+            .trim_start_matches('@')
+            .split(|c: char| c == '(' || c == '<' || c.is_whitespace())
+            .next()
+            .unwrap_or("")
+            .trim();
+        if ann.is_empty() {
+            return;
+        }
+        let from = symbols
+            .last()
+            .and_then(|s| s.qualified_name.clone().or_else(|| Some(s.name.clone())))
+            .unwrap_or_else(|| file_path.to_string_lossy().into_owned());
+        relations.push(Relation {
+            from,
+            to: ann.to_string(),
+            relation_type: RelationType::AnnotatedWith,
+            location: Self::loc(&file_path.to_string_lossy(), node),
+            metadata: serde_json::json!({ "language": "kotlin" }),
+            to_qualified_hint: Some(ann.to_string()),
+            to_type_hint: None,
+        });
+    }
+
+    /// Best-effort `References` for callable refs / navigation / infix / index / ctor delegation.
+    pub(crate) fn emit_reference_relation(
+        &self,
+        node: Node,
+        source: &[u8],
+        file_path: &Path,
+        from_fn: &Symbol,
+        relations: &mut Vec<Relation>,
+    ) {
+        let text = node.utf8_text(source).unwrap_or("").trim();
+        if text.is_empty() {
+            return;
+        }
+        let to = text
+            .rsplit(|c: char| c == '.' || c == ':' || c == '(' || c == '[' || c.is_whitespace())
+            .next()
+            .unwrap_or(text)
+            .trim()
+            .trim_start_matches("::")
+            .trim_end_matches(')')
+            .trim_end_matches(']');
+        if to.is_empty() || to == "this" || to == "super" {
+            return;
+        }
+        let from = from_fn
+            .qualified_name
+            .clone()
+            .unwrap_or_else(|| from_fn.name.clone());
+        relations.push(Relation {
+            from,
+            to: to.to_string(),
+            relation_type: RelationType::References,
+            location: Self::loc(&file_path.to_string_lossy(), node),
+            metadata: serde_json::json!({
+                "language": "kotlin",
+                "kind": node.kind(),
+            }),
+            to_qualified_hint: Some(to.to_string()),
+            to_type_hint: None,
+        });
+    }
+
     pub(crate) fn emit_import(
         &self,
         node: Node,

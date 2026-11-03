@@ -29,8 +29,8 @@ pub use osv::{
 };
 pub use package_resolve::{PackageResolution, PackageResolveError, resolve_package};
 pub use sink_taint::{
-    SinkFirstTaintResult, SinkPathSummary, SinkResolution, build_sink_first_result,
-    missing_cfg_error_message, rules_with_osv_overlays,
+    SinkCallSite, SinkFirstTaintResult, SinkPathSummary, SinkResolution, build_sink_first_result,
+    build_sink_first_result_with_sites, missing_cfg_error_message, rules_with_osv_overlays,
 };
 pub use version::{VersionEngine, engine_for_ecosystem};
 pub use vuln_analyze::{

@@ -8,7 +8,7 @@
 > rgctl -r "$REPO" install --skill --tools cursor,claude,codex,antigravity,agents
 > ```
 >
-> See [Agent pack](https://rgctl.io/docs/guides/agent-skill/). This template is a fallback / complementary channel — skills remain the canonical runtime guidance.
+> That writes core skill **`rgctl`** plus **`rgctl-review` / `rgctl-vuln` / `rgctl-migrate`** and slash commands **`/rgctl:review` · `/rgctl:vuln` · `/rgctl:migrate`**. See [Agent pack](https://rgctl.io/docs/guides/agent-skill/). This template is a fallback / complementary channel — skills remain the canonical runtime guidance.
 >
 > **Not for contributing to rgctl itself.** Contributors: see the repository root [AGENTS.md](../../AGENTS.md).
 

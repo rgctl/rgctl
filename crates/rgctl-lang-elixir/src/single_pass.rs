@@ -15,17 +15,21 @@ const MANIFEST_JSON: &str = include_str!("../elixir-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
+    ("access_call", HandlerMask::RELATION),
+    ("after_block", HandlerMask::CFG_STMT),
+    ("alias", HandlerMask::RELATION),
+    ("anonymous_function", HandlerMask::SYMBOL),
+    ("binary_operator", HandlerMask::CFG_STMT),
     (
         "call",
         HandlerMask::SYMBOL
             .union(HandlerMask::RELATION)
             .union(HandlerMask::CFG_STMT),
     ),
-    ("anonymous_function", HandlerMask::SYMBOL),
     ("catch_block", HandlerMask::CFG_STMT),
-    ("rescue_block", HandlerMask::CFG_STMT),
-    ("after_block", HandlerMask::CFG_STMT),
     ("else_block", HandlerMask::CFG_STMT),
+    ("rescue_block", HandlerMask::CFG_STMT),
+    ("stab_clause", HandlerMask::CFG_STMT),
 ];
 
 const AST_MAX_DEPTH: usize = 2048;
@@ -188,7 +192,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask;
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
@@ -352,7 +363,80 @@ pub fn extract_all_single_pass(
                         }
                         pushed_scope = true;
                     }
-                    "catch_block" | "rescue_block" | "after_block" | "else_block"
+                    "alias" => {
+                        if let Some(target) = node
+                            .utf8_text(source)
+                            .ok()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                        {
+                            let from = ctx
+                                .scopes
+                                .current_function()
+                                .map(|f| f.qualified_prefix.clone())
+                                .or_else(|| {
+                                    ctx.scopes
+                                        .current_type()
+                                        .map(|t| t.qualified_prefix.clone())
+                                })
+                                .unwrap_or_else(|| file_path_str.to_string());
+                            relations.push(Relation {
+                                from,
+                                to: target.clone(),
+                                relation_type: RelationType::References,
+                                location: node_to_location(node, &file_path_str),
+                                metadata: serde_json::json!({
+                                    "language": "elixir",
+                                    "kind": "alias",
+                                }),
+                                to_qualified_hint: Some(target),
+                                to_type_hint: None,
+                            });
+                        }
+                    }
+                    "access_call" => {
+                        if let Some(frame) = ctx.scopes.current_function() {
+                            let from = frame.qualified_prefix.clone();
+                            let target = node
+                                .utf8_text(source)
+                                .ok()
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or_else(|| "access".to_string());
+                            relations.push(Relation {
+                                from,
+                                to: target.clone(),
+                                relation_type: RelationType::References,
+                                location: node_to_location(node, &file_path_str),
+                                metadata: serde_json::json!({
+                                    "language": "elixir",
+                                    "kind": "access_call",
+                                }),
+                                to_qualified_hint: Some(target),
+                                to_type_hint: None,
+                            });
+                        }
+                    }
+                    "binary_operator" if ctx.scopes.current_function().is_some() => {
+                        let op = node
+                            .child_by_field_name("operator")
+                            .and_then(|n| n.utf8_text(source).ok())
+                            .unwrap_or("");
+                        // Short-circuit / comparison ops contribute to cyclomatic complexity.
+                        if matches!(
+                            op,
+                            "and" | "or" | "&&" | "||" | "andalso" | "orelse" | "in" | "not in"
+                        ) {
+                            let delta = 1 + ctx
+                                .scopes
+                                .current_function()
+                                .map(|f| f.complexity.cognitive_nesting)
+                                .unwrap_or(0);
+                            ctx.scopes.note_branch(delta);
+                        }
+                    }
+                    "stab_clause" | "catch_block" | "rescue_block" | "after_block"
+                    | "else_block"
                         if ctx.scopes.current_function().is_some() =>
                     {
                         let delta = 1 + ctx

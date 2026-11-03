@@ -1,0 +1,73 @@
+# Prepare a Release PR (bumps Cargo.toml, Cargo.lock, README.md, and scaffolds docs/releases/vX.Y.Z.md).
+#
+# Trigger via UI (Actions -> Prepare Release PR -> Run workflow) or CLI:
+#   gh workflow run release-pr.yml -f bump=patch
+#
+# When the resulting PR is merged into `main`, `.github/workflows/release.yml`
+# automatically tags `vX.Y.Z` and builds/publishes the 4-platform release binaries.
+name: Prepare Release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump level (patch | minor | major) or explicit X.Y.Z"
+        required: true
+        default: "patch"
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare-pr:
+    name: Open Release PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Bump workspace version and scaffold release notes
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/bump-version.sh "${{ inputs.bump }}"
+          VERSION="$(python3 -c 'import re,pathlib; print(re.search(r"(?ms)^\[workspace\.package\].*?^version = \"([^\"]+)\"", pathlib.Path("Cargo.toml").read_text()).group(1))')"
+          BRANCH="release/v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add Cargo.toml Cargo.lock README.md "docs/releases/v${VERSION}.md"
+          git commit -m "chore(release): v${VERSION}"
+          git push -f origin "$BRANCH"
+
+      - name: Create or update Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh pr view "$BRANCH" >/dev/null 2>&1; then
+            echo "Updated existing PR for $BRANCH"
+            gh pr view "$BRANCH" --json url -q .url
+            exit 0
+          fi
+          if gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "chore(release): v${VERSION}" \
+            --body "Automated release bump to \`v${VERSION}\`. Merging this PR into \`main\` will automatically tag \`v${VERSION}\` and publish the GitHub Release binaries."; then
+            echo "Created Release PR for v${VERSION}"
+          else
+            echo "::notice::Branch ${BRANCH} pushed. Open PR at: https://github.com/${GITHUB_REPOSITORY}/compare/main...${BRANCH}?expand=1"
+          fi

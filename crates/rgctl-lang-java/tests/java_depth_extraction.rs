@@ -74,9 +74,6 @@ class Widget extends Base implements Named {
 
 #[test]
 fn ast_coverage_all_declared_handlers_exercised() {
-    if std::env::var_os("RGCTL_AST_COVERAGE_TRACK").is_none() {
-        return;
-    }
     const MANIFEST: &str = include_str!("../java-ast-coverage.json");
     let lang: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
     let tracker =
@@ -88,47 +85,140 @@ fn ast_coverage_all_declared_handlers_exercised() {
     );
     rgctl_ast_coverage::install_hit_callback(tracker);
 
-    let sources: &[(&str, &[u8])] = &[(
-        "ast_coverage_corpus.java",
-        br#"
+    let sources: &[(&str, &[u8])] = &[
+        (
+            "ast_coverage_corpus.java",
+            br#"
 package demo;
 import java.util.List;
-interface Repo {
-  int MAX = 10;
-  void save();
+
+@Target({ElementType.TYPE_USE, ElementType.TYPE, ElementType.PARAMETER})
+@interface Tag {
+    String value() default "x";
 }
-class Base { void save() {} }
-class Widget extends Base implements Repo {
-  void run() {
-    this.save();
-    new Widget();
-    for (String s : List.of("a")) {}
-  }
+
+interface Repo<T extends CharSequence> {
+    int MAX = 10;
+    void save(T item) throws Exception;
+}
+
+interface SubRepo extends Repo<String> {}
+
+enum Kind {
+    ALPHA;
+}
+
+record Pair(int x, int y) {
+    public Pair {
+        assert x >= 0;
+    }
+}
+
+sealed class Base permits Widget {
+    Base(int v) {}
+    void save(String item) throws Exception {}
+}
+
+@Tag("w")
+class Widget extends Base implements Repo<String> {
+    private int count = 0;
+
+    static {
+        int boot = 1;
+    }
+
+    Widget() {
+        super(1);
+    }
+
+    @Override
+    public void save(java.lang.@Tag("p") String item, String... extra) throws Exception {
+        List<@Tag("u") String> taggedList = List.of("a");
+        Class<?> cls = Widget.class;
+        int[] arr = new int[]{1, 2};
+        Runnable r = this::helper;
+        java.util.function.BiFunction<Integer, Integer, Integer> fn = (a, b) -> a + b;
+        int local = -count;
+        local++;
+        local = (local > 0 && arr.length > 0) ? 1 : 2;
+        outer:
+        while (local < 5) {
+            do {
+                for (int i = 0; i < 2; i++) {
+                    if (i == 1) {
+                        continue outer;
+                    }
+                    break;
+                }
+            } while (false);
+            break;
+        }
+        for (String s : List.of("a")) {
+            synchronized (this) {
+                switch (s) {
+                    case "a":
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+        Object obj = new Pair(1, 2);
+        if (obj instanceof String str) {
+            this.save(str);
+        }
+        int res = switch (obj) {
+            case Pair(int px, int py) when px > 0 -> {
+                yield px + py;
+            }
+            case String tp -> tp.length();
+            default -> 0;
+        };
+        try {
+            helper();
+        } catch (RuntimeException re) {
+            helper();
+        }
+        try (AutoCloseable ac = () -> {}) {
+            new Widget();
+        } catch (Exception e) {
+            throw e;
+        } finally {
+            helper();
+        }
+        return;
+    }
+
+    void helper() {}
 }
 "#,
-    )];
+        ),
+        (
+            "module-info.java",
+            br#"
+module demo.mod {
+    requires java.base;
+    exports demo;
+    opens demo to java.base;
+    uses demo.Repo;
+    provides demo.Repo with demo.Widget;
+}
+"#,
+        ),
+    ];
 
-    let mut present = std::collections::HashSet::new();
     let plugin = JavaPlugin::new().expect("plugin");
     for (path, src) in sources {
-        present.extend(rgctl_ast_coverage::named_kind_ids_in_source(&lang, src));
         plugin
             .extract_all(std::path::Path::new(path), src)
             .expect("extract_all");
     }
 
     let tracker = rgctl_ast_coverage::AstCoverageTracker::global().expect("tracker installed");
-    match tracker.assert_all_exercised() {
-        Ok(msg) => eprintln!("{msg}"),
-        Err(full) => {
-            tracker
-                .assert_present_kinds_exercised(present.iter().copied())
-                .unwrap_or_else(|e| panic!("{e}\n(full gaps: {full})"));
-            assert!(
-                tracker.total_hits() > 0,
-                "RGCTL_AST_COVERAGE_TRACK=1 but no dispatch hits recorded"
-            );
-            eprintln!("soft-gate (full assert not met): {full}");
-        }
-    }
+    let summary = tracker
+        .assert_all_exercised()
+        .expect("every active Java AST kind in java-ast-coverage.json must be exercised");
+    eprintln!("{summary}");
+    let hotspots = tracker.unhandled_hotspots(10);
+    eprintln!("java unhandled hotspots: {hotspots:?}");
 }

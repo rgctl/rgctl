@@ -2,12 +2,15 @@
 # then publish a GitHub Release with downloadable archives.
 #
 # Triggers:
-#   - push tag v*     — primary release path (e.g. git tag v0.1.0 && git push origin v0.1.0)
+#   - push to main    — when Cargo.toml version vX.Y.Z has no tag yet, creates tag vX.Y.Z and builds/publishes
+#   - push tag v*     — direct tag push (e.g. git tag v0.1.0 && git push origin v0.1.0)
 #   - workflow_dispatch — rebuild and (re)publish for an existing tag or draft from a ref
 name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - v*
   workflow_dispatch:
@@ -34,8 +37,87 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  prepare:
+    name: Check release tag
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
+      checkout_ref: ${{ steps.check.outputs.checkout_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'push' && github.ref || (inputs.tag != '' && inputs.tag || inputs.ref) }}
+
+      - name: Resolve version and tag if needed
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_VERSION="$(python3 -c 'import re,pathlib; print(re.search(r"(?ms)^\[workspace\.package\].*?^version = \"([^\"]+)\"", pathlib.Path("Cargo.toml").read_text()).group(1))')"
+
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            TAG="v${CARGO_VERSION}"
+            if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+              echo "Tag ${TAG} already exists; skipping release build on main push."
+              echo "should_release=false" >> "$GITHUB_OUTPUT"
+              echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+              echo "version=${CARGO_VERSION}" >> "$GITHUB_OUTPUT"
+              echo "checkout_ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "New workspace version ${CARGO_VERSION} detected on main; creating and pushing tag ${TAG}."
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "${TAG}" -m "Release ${TAG}"
+            git push origin "${TAG}"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "version=${CARGO_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "checkout_ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            # Avoid duplicate run if this tag was just created by the main-branch push job above.
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+            if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              echo "Release ${TAG} already exists; skipping."
+              echo "should_release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "checkout_ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # workflow_dispatch
+          RAW_TAG="${{ inputs.tag }}"
+          if [[ -z "${RAW_TAG}" ]]; then
+            VERSION="${CARGO_VERSION}"
+            TAG="v${VERSION}"
+          else
+            VERSION="${RAW_TAG#v}"
+            TAG="v${VERSION}"
+          fi
+          REF="${{ inputs.tag != '' && inputs.tag || inputs.ref }}"
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=${REF}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
     name: ${{ matrix.target }}
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     strategy:
@@ -70,7 +152,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: true
-          ref: ${{ github.event_name == 'push' && github.ref || (inputs.tag != '' && inputs.tag || inputs.ref) }}
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -91,11 +173,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${{ github.event_name == 'push' && github.ref_name || inputs.tag }}"
-          VERSION="${VERSION#v}"
-          if [[ -z "$VERSION" ]]; then
-            VERSION="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
-          fi
+          VERSION="${{ needs.prepare.outputs.version }}"
           STAGING="package"
           mkdir -p "$STAGING"
           cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$STAGING/rgctl"
@@ -108,11 +186,7 @@ jobs:
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          $version = "${{ github.event_name == 'push' && github.ref_name || inputs.tag }}"
-          $version = $version -replace '^v',''
-          if ([string]::IsNullOrWhiteSpace($version)) {
-            $version = (Select-String -Path Cargo.toml -Pattern '^version' | Select-Object -First 1).Line -replace '.*"(.*)".*','$1'
-          }
+          $version = "${{ needs.prepare.outputs.version }}"
           New-Item -ItemType Directory -Force -Path package | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin }}" "package/rgctl.exe"
           $archive = "rgctl-${version}-${{ matrix.target }}.zip"
@@ -128,7 +202,8 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [prepare, build]
+    if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -136,7 +211,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: true
-          ref: ${{ github.event_name == 'push' && github.ref || (inputs.tag != '' && inputs.tag || inputs.ref) }}
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
 
       - name: Download all platform archives
         uses: actions/download-artifact@v4
@@ -183,16 +258,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            TAG="${GITHUB_REF_NAME}"
-          elif [[ -n "${{ inputs.tag }}" ]]; then
-            TAG="${{ inputs.tag }}"
-          else
-            VERSION="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
-            TAG="v${VERSION}"
-          fi
-          TAG="${TAG#v}"
-          TAG="v${TAG}"
+          TAG="${{ needs.prepare.outputs.tag }}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           NOTES="docs/releases/${TAG}.md"
           if [[ -f "$NOTES" ]]; then

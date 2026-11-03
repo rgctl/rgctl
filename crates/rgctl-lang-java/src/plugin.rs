@@ -11,7 +11,7 @@ use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
 use rgctl_plugin_helpers::ComplexityCalculator;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tree_sitter::{Node, Parser};
 
@@ -55,6 +55,9 @@ pub(crate) struct ExtractCtx {
     package: Option<String>,
     /// Simple import name → fully qualified type (e.g. `OncePerRequestFilter` → `org.springframework...`).
     imports: HashMap<String, String>,
+    /// Static import member → owner FQN (e.g. `emptyList` → `java.util.Collections`
+    /// or `PI` → `java.lang.Math` from `import static …`).
+    static_imports: HashMap<String, String>,
     /// Maps an anonymous class's `class_body` node id to a synthetic owner
     /// name (`$AnonymousN`), assigned in document order.
     anon_names: HashMap<usize, String>,
@@ -68,9 +71,11 @@ pub(crate) struct ExtractCtx {
 
 impl ExtractCtx {
     pub(crate) fn new(root: Node, source: &[u8]) -> Self {
+        let (imports, static_imports) = Self::collect_imports(root, source);
         Self {
             package: Self::find_package_name(root, source),
-            imports: Self::collect_imports(root, source),
+            imports,
+            static_imports,
             anon_names: Self::collect_anonymous_names(root),
             initblock_counters: RefCell::new(HashMap::new()),
             lambda_counters: RefCell::new(HashMap::new()),
@@ -81,11 +86,54 @@ impl ExtractCtx {
         self.imports.get(simple).cloned()
     }
 
-    fn collect_imports(root: Node, source: &[u8]) -> HashMap<String, String> {
-        let mut map = HashMap::new();
+    /// Resolve a raw type name to an FQN using imports, same-file types, and package.
+    ///
+    /// Strips generics (`List<Order>` → `List`) and array dims (`Order[]` → `Order`).
+    pub(crate) fn resolve_type_fqn(
+        &self,
+        raw_type: &str,
+        same_file_types: &HashSet<String>,
+    ) -> Option<String> {
+        let base = strip_java_type_sugar(raw_type);
+        if base.is_empty() {
+            return None;
+        }
+        if base.contains('.') {
+            return Some(base);
+        }
+        if let Some(fqn) = self.imports.get(&base) {
+            return Some(fqn.clone());
+        }
+        if same_file_types.contains(&base) {
+            return Some(self.qualify_type(&base));
+        }
+        // Same-package fallback for unqualified names that look like types.
+        if base
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_uppercase())
+            .unwrap_or(false)
+        {
+            return Some(self.qualify_type(&base));
+        }
+        None
+    }
+
+    /// Collect type imports and static imports separately.
+    fn collect_imports(
+        root: Node,
+        source: &[u8],
+    ) -> (HashMap<String, String>, HashMap<String, String>) {
+        let mut imports = HashMap::new();
+        let mut static_imports = HashMap::new();
         let mut stack = vec![root];
         while let Some(node) = stack.pop() {
             if node.kind() == "import_declaration" {
+                let text = node.utf8_text(source).unwrap_or("").trim().to_string();
+                let is_static = text.starts_with("import static") || {
+                    let mut c = node.walk();
+                    node.children(&mut c).any(|ch| ch.kind() == "static")
+                };
                 let mut cursor = node.walk();
                 if let Some(name_node) = node
                     .children(&mut cursor)
@@ -93,7 +141,19 @@ impl ExtractCtx {
                     && let Ok(fqn) = name_node.utf8_text(source)
                 {
                     let simple = fqn.rsplit('.').next().unwrap_or(fqn).to_string();
-                    map.insert(simple, fqn.to_string());
+                    if is_static {
+                        // `import static a.b.Util.method` → member `method` owned by `a.b.Util`
+                        // `import static a.b.Util.*` → skip (wildcard; no single member key)
+                        if simple != "*" {
+                            let owner = fqn
+                                .rsplit_once('.')
+                                .map(|(o, _)| o.to_string())
+                                .unwrap_or_else(|| fqn.to_string());
+                            static_imports.insert(simple, owner);
+                        }
+                    } else if simple != "*" {
+                        imports.insert(simple, fqn.to_string());
+                    }
                 }
             }
             let mut cursor = node.walk();
@@ -106,7 +166,7 @@ impl ExtractCtx {
                 stack.push(child);
             }
         }
-        map
+        (imports, static_imports)
     }
 
     fn find_package_name(root: Node, source: &[u8]) -> Option<String> {
@@ -156,6 +216,18 @@ impl ExtractCtx {
             None => path.to_string(),
         }
     }
+}
+
+/// Strip generics / array / varargs sugar from a Java type string.
+fn strip_java_type_sugar(raw: &str) -> String {
+    raw.trim()
+        .split('<')
+        .next()
+        .unwrap_or(raw)
+        .trim_end_matches("[]")
+        .trim_end_matches("...")
+        .trim()
+        .to_string()
 }
 
 fn source_location(node: Node, file_path: &str) -> SourceLocation {
@@ -231,34 +303,58 @@ impl JavaPlugin {
             .unwrap_or_default()
     }
 
-    fn annotation_name_and_args(&self, ann_node: Node, source: &[u8]) -> (String, Option<String>) {
+    fn annotation_name_and_args(
+        &self,
+        ann_node: Node,
+        source: &[u8],
+    ) -> (String, String, Option<String>) {
         let raw_name = ann_node
             .child_by_field_name("name")
             .and_then(|n| n.utf8_text(source).ok())
-            .unwrap_or("");
-        let simple = raw_name.rsplit('.').next().unwrap_or(raw_name).to_string();
+            .unwrap_or("")
+            .to_string();
+        let simple = raw_name
+            .rsplit('.')
+            .next()
+            .unwrap_or(raw_name.as_str())
+            .to_string();
         let args = ann_node
             .child_by_field_name("arguments")
             .and_then(|n| n.utf8_text(source).ok())
             .map(str::to_string);
-        (simple, args)
+        (simple, raw_name, args)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_annotated_with(
         &self,
         from: &str,
         ann_node: Node,
         source: &[u8],
         file_path: &Path,
+        ctx: &ExtractCtx,
+        same_file_types: &HashSet<String>,
         relations: &mut Vec<Relation>,
     ) {
-        let (name, args) = self.annotation_name_and_args(ann_node, source);
+        let (name, raw_name, args) = self.annotation_name_and_args(ann_node, source);
         if name.is_empty() {
             return;
         }
+        let fqn = ctx
+            .resolve_type_fqn(&raw_name, same_file_types)
+            .or_else(|| {
+                if raw_name.contains('.') {
+                    Some(raw_name)
+                } else {
+                    None
+                }
+            });
         let mut metadata = serde_json::json!({ "language": "java" });
         if let Some(args) = args {
             metadata["arguments"] = serde_json::Value::String(args);
+        }
+        if let Some(ref fqn) = fqn {
+            metadata["fqn"] = serde_json::Value::String(fqn.clone());
         }
         relations.push(Relation {
             from: from.to_string(),
@@ -266,9 +362,64 @@ impl JavaPlugin {
             relation_type: RelationType::AnnotatedWith,
             location: source_location(ann_node, &file_path.to_string_lossy()),
             metadata,
-            to_qualified_hint: None,
+            to_qualified_hint: fqn,
             to_type_hint: None,
         });
+    }
+
+    /// Simple type names declared in this file (class/interface/enum/annotation/record).
+    pub(crate) fn same_file_types(symbols: &[Symbol]) -> HashSet<String> {
+        symbols
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.symbol_type,
+                    SymbolType::Class
+                        | SymbolType::Interface
+                        | SymbolType::Enum
+                        | SymbolType::Annotation
+                )
+            })
+            .map(|s| s.name.clone())
+            .collect()
+    }
+
+    /// Attach `return_type_fqn` / `field_type_fqns` / param `type_fqn` metadata.
+    pub(crate) fn enrich_symbol_type_fqns(
+        &self,
+        ctx: &ExtractCtx,
+        same_file_types: &HashSet<String>,
+        symbols: &mut [Symbol],
+    ) {
+        for sym in symbols.iter_mut() {
+            if let Some(ref rt) = sym.return_type
+                && let Some(fqn) = ctx.resolve_type_fqn(rt, same_file_types)
+            {
+                sym.metadata["return_type_fqn"] = serde_json::Value::String(fqn);
+            }
+            if !sym.fields.is_empty() {
+                let mut map = serde_json::Map::new();
+                for f in &sym.fields {
+                    if let Some(ref ft) = f.field_type
+                        && let Some(fqn) = ctx.resolve_type_fqn(ft, same_file_types)
+                    {
+                        map.insert(f.name.clone(), serde_json::Value::String(fqn));
+                    }
+                }
+                if !map.is_empty() {
+                    sym.metadata["field_type_fqns"] = serde_json::Value::Object(map);
+                }
+            }
+            for p in &mut sym.parameters {
+                if let Some(ref pt) = p.param_type
+                    && let Some(fqn) = ctx.resolve_type_fqn(pt, same_file_types)
+                {
+                    // Parameter has no dedicated metadata slot; fold into symbol.
+                    let key = format!("param_type_fqn:{}", p.name);
+                    sym.metadata[key] = serde_json::Value::String(fqn);
+                }
+            }
+        }
     }
 
     // ---------------------------------------------------------------
@@ -955,6 +1106,419 @@ impl JavaPlugin {
         })
     }
 
+    /// Walk type declarations and synthesize Lombok-generated members into `symbols`.
+    pub(crate) fn apply_lombok_synthesis(
+        &self,
+        root: Node,
+        source: &[u8],
+        file_path: &str,
+        ctx: &ExtractCtx,
+        symbols: &mut Vec<Symbol>,
+    ) {
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            if matches!(node.kind(), "class_declaration" | "enum_declaration") {
+                self.synthesize_lombok_for_type(node, source, file_path, ctx, symbols);
+            }
+            let mut cursor = node.walk();
+            let children: Vec<Node> = node.children(&mut cursor).collect();
+            for child in children.into_iter().rev() {
+                stack.push(child);
+            }
+        }
+    }
+
+    fn annotation_simple_names(&self, node: Node, source: &[u8]) -> Vec<String> {
+        let mut cursor = node.walk();
+        let Some(modifiers) = node.children(&mut cursor).find(|c| c.kind() == "modifiers") else {
+            return Vec::new();
+        };
+        let (_, anns) = self.split_modifiers(modifiers, source);
+        anns.into_iter()
+            .filter_map(|a| {
+                a.child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source).ok())
+                    .map(|raw| raw.rsplit('.').next().unwrap_or(raw).to_string())
+            })
+            .collect()
+    }
+
+    fn field_is_final(visibility: Option<&str>) -> bool {
+        visibility
+            .map(|v| v.split_whitespace().any(|t| t == "final"))
+            .unwrap_or(false)
+    }
+
+    fn field_is_static(visibility: Option<&str>) -> bool {
+        visibility
+            .map(|v| v.split_whitespace().any(|t| t == "static"))
+            .unwrap_or(false)
+    }
+
+    fn lombok_getter_name(field_name: &str, field_type: Option<&str>) -> String {
+        let is_bool = field_type
+            .map(|t| {
+                let base = strip_java_type_sugar(t);
+                base == "boolean" || base == "Boolean"
+            })
+            .unwrap_or(false);
+        if is_bool {
+            if field_name.starts_with("is")
+                && field_name.len() > 2
+                && field_name
+                    .chars()
+                    .nth(2)
+                    .map(|c| c.is_ascii_uppercase())
+                    .unwrap_or(false)
+            {
+                return field_name.to_string();
+            }
+            return format!(
+                "is{}{}",
+                field_name
+                    .chars()
+                    .next()
+                    .map(|c| c.to_ascii_uppercase())
+                    .unwrap_or_default(),
+                field_name.chars().skip(1).collect::<String>()
+            );
+        }
+        format!(
+            "get{}{}",
+            field_name
+                .chars()
+                .next()
+                .map(|c| c.to_ascii_uppercase())
+                .unwrap_or_default(),
+            field_name.chars().skip(1).collect::<String>()
+        )
+    }
+
+    fn lombok_setter_name(field_name: &str) -> String {
+        format!(
+            "set{}{}",
+            field_name
+                .chars()
+                .next()
+                .map(|c| c.to_ascii_uppercase())
+                .unwrap_or_default(),
+            field_name.chars().skip(1).collect::<String>()
+        )
+    }
+
+    fn synthesize_lombok_for_type(
+        &self,
+        node: Node,
+        source: &[u8],
+        file_path: &str,
+        ctx: &ExtractCtx,
+        symbols: &mut Vec<Symbol>,
+    ) {
+        let class_anns: HashSet<String> = self
+            .annotation_simple_names(node, source)
+            .into_iter()
+            .collect();
+        let wants_getter = ["Getter", "Data", "Value"]
+            .iter()
+            .any(|a| class_anns.contains(*a));
+        let wants_setter = ["Setter", "Data"].iter().any(|a| class_anns.contains(*a));
+        let wants_builder = class_anns.contains("Builder");
+        let wants_required_ctor = ["RequiredArgsConstructor", "Data"]
+            .iter()
+            .any(|a| class_anns.contains(*a));
+        let wants_all_ctor = ["AllArgsConstructor", "Value"]
+            .iter()
+            .any(|a| class_anns.contains(*a));
+        let wants_no_ctor = class_anns.contains("NoArgsConstructor");
+        let wants_log = ["Slf4j", "Log4j2", "Log", "CommonsLog"]
+            .iter()
+            .any(|a| class_anns.contains(*a));
+
+        if !(wants_getter
+            || wants_setter
+            || wants_builder
+            || wants_required_ctor
+            || wants_all_ctor
+            || wants_no_ctor
+            || wants_log
+            || class_anns.iter().any(|a| a == "Getter" || a == "Setter"))
+        {
+            // Still may have field-level @Getter/@Setter only.
+            let mut has_field_lombok = false;
+            if let Some(body) = {
+                let mut c = node.walk();
+                node.children(&mut c)
+                    .find(|ch| ch.kind() == "class_body" || ch.kind() == "enum_body")
+            } {
+                let mut bc = body.walk();
+                for child in body.children(&mut bc) {
+                    if child.kind() == "field_declaration" {
+                        let fans: HashSet<String> = self
+                            .annotation_simple_names(child, source)
+                            .into_iter()
+                            .collect();
+                        if fans.contains("Getter") || fans.contains("Setter") {
+                            has_field_lombok = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !has_field_lombok {
+                return;
+            }
+        }
+
+        let owner_qn = self.type_node_qualified_name(node, source, ctx);
+        let owner_simple = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            .unwrap_or("")
+            .to_string();
+        if owner_simple.is_empty() {
+            return;
+        }
+
+        let class_idx = symbols.iter().position(|s| {
+            matches!(s.symbol_type, SymbolType::Class | SymbolType::Enum)
+                && (s.qualified_name.as_deref() == Some(owner_qn.as_str())
+                    || s.name == owner_simple)
+        });
+        let Some(class_idx) = class_idx else {
+            return;
+        };
+
+        let declared: HashSet<String> = symbols
+            .iter()
+            .filter(|s| {
+                s.symbol_type == SymbolType::Function
+                    && s.qualified_name
+                        .as_deref()
+                        .and_then(|qn| qn.rsplit_once('.').map(|(o, _)| o))
+                        == Some(owner_qn.as_str())
+            })
+            .map(|s| s.name.clone())
+            .collect();
+
+        let has_explicit_ctor = symbols.iter().any(|s| {
+            s.symbol_type == SymbolType::Function
+                && s.metadata
+                    .get("is_constructor")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                && s.qualified_name
+                    .as_deref()
+                    .map(|qn| qn.starts_with(&format!("{owner_qn}.")))
+                    .unwrap_or(false)
+        });
+
+        // Collect fields with annotations from AST (visibility already on class_sym.fields).
+        struct LombokFieldInfo {
+            name: String,
+            field_type: Option<String>,
+            visibility: Option<String>,
+            anns: HashSet<String>,
+            has_non_null: bool,
+        }
+        let mut field_infos: Vec<LombokFieldInfo> = Vec::new();
+        if let Some(body) = {
+            let mut c = node.walk();
+            node.children(&mut c)
+                .find(|ch| matches!(ch.kind(), "class_body" | "enum_body"))
+        } {
+            let mut bc = body.walk();
+            for child in body.children(&mut bc) {
+                if child.kind() != "field_declaration" {
+                    continue;
+                }
+                let fans: HashSet<String> = self
+                    .annotation_simple_names(child, source)
+                    .into_iter()
+                    .collect();
+                let field_type = child
+                    .child_by_field_name("type")
+                    .and_then(|n| n.utf8_text(source).ok())
+                    .map(str::to_string);
+                let visibility = {
+                    let kw = self.collect_keyword_modifiers(child, source);
+                    if kw.is_empty() {
+                        None
+                    } else {
+                        Some(kw.join(" "))
+                    }
+                };
+                let has_non_null = fans.contains("NonNull") || fans.contains("NotNull");
+                let mut dc = child.walk();
+                for decl in child.children(&mut dc) {
+                    if decl.kind() == "variable_declarator"
+                        && let Some(name_node) = decl.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(source)
+                    {
+                        field_infos.push(LombokFieldInfo {
+                            name: name.to_string(),
+                            field_type: field_type.clone(),
+                            visibility: visibility.clone(),
+                            anns: fans.clone(),
+                            has_non_null,
+                        });
+                    }
+                }
+            }
+        }
+
+        let mut synthetics = Vec::new();
+        let loc = source_location(node, file_path);
+
+        for f in &field_infos {
+            if Self::field_is_static(f.visibility.as_deref()) {
+                continue;
+            }
+            let field_getter = wants_getter || f.anns.contains("Getter");
+            let field_setter = (wants_setter || f.anns.contains("Setter"))
+                && !Self::field_is_final(f.visibility.as_deref());
+
+            if field_getter {
+                let gname = Self::lombok_getter_name(&f.name, f.field_type.as_deref());
+                if !declared.contains(&gname) {
+                    synthetics.push(Symbol {
+                        name: gname.clone(),
+                        symbol_type: SymbolType::Function,
+                        qualified_name: Some(format!("{owner_qn}.{gname}")),
+                        location: loc.clone(),
+                        signature: Some(format!(
+                            "public {} {}()",
+                            f.field_type.as_deref().unwrap_or("Object"),
+                            gname
+                        )),
+                        return_type: f.field_type.clone(),
+                        parameters: vec![],
+                        fields: vec![],
+                        modifiers: vec!["public".into()],
+                        documentation: None,
+                        metadata: serde_json::json!({
+                            "language": "java",
+                            "lombok_synthesized": true,
+                        }),
+                    });
+                }
+            }
+            if field_setter {
+                let sname = Self::lombok_setter_name(&f.name);
+                if !declared.contains(&sname) {
+                    synthetics.push(Symbol {
+                        name: sname.clone(),
+                        symbol_type: SymbolType::Function,
+                        qualified_name: Some(format!("{owner_qn}.{sname}")),
+                        location: loc.clone(),
+                        signature: Some(format!(
+                            "public void {}({} {})",
+                            sname,
+                            f.field_type.as_deref().unwrap_or("Object"),
+                            f.name
+                        )),
+                        return_type: Some("void".into()),
+                        parameters: vec![Parameter {
+                            name: f.name.clone(),
+                            param_type: f.field_type.clone(),
+                            default_value: None,
+                        }],
+                        fields: vec![],
+                        modifiers: vec!["public".into()],
+                        documentation: None,
+                        metadata: serde_json::json!({
+                            "language": "java",
+                            "lombok_synthesized": true,
+                        }),
+                    });
+                }
+            }
+        }
+
+        if wants_builder && !declared.contains("builder") {
+            synthetics.push(Symbol {
+                name: "builder".into(),
+                symbol_type: SymbolType::Function,
+                qualified_name: Some(format!("{owner_qn}.builder")),
+                location: loc.clone(),
+                signature: Some(format!("public static {owner_simple}Builder builder()")),
+                return_type: Some(format!("{owner_simple}Builder")),
+                parameters: vec![],
+                fields: vec![],
+                modifiers: vec!["public".into(), "static".into()],
+                documentation: None,
+                metadata: serde_json::json!({
+                    "language": "java",
+                    "lombok_synthesized": true,
+                }),
+            });
+        }
+
+        let push_ctor = |params: Vec<Parameter>, synthetics: &mut Vec<Symbol>| {
+            if has_explicit_ctor || declared.contains(&owner_simple) {
+                return;
+            }
+            synthetics.push(Symbol {
+                name: owner_simple.clone(),
+                symbol_type: SymbolType::Function,
+                qualified_name: Some(format!("{owner_qn}.<init>")),
+                location: loc.clone(),
+                signature: Some(format!("{owner_simple}(...)")),
+                return_type: None,
+                parameters: params,
+                fields: vec![],
+                modifiers: vec!["public".into()],
+                documentation: None,
+                metadata: serde_json::json!({
+                    "language": "java",
+                    "is_constructor": true,
+                    "lombok_synthesized": true,
+                }),
+            });
+        };
+
+        if wants_no_ctor && !has_explicit_ctor {
+            push_ctor(vec![], &mut synthetics);
+        } else if wants_all_ctor && !has_explicit_ctor {
+            let params: Vec<Parameter> = field_infos
+                .iter()
+                .filter(|f| !Self::field_is_static(f.visibility.as_deref()))
+                .map(|f| Parameter {
+                    name: f.name.clone(),
+                    param_type: f.field_type.clone(),
+                    default_value: None,
+                })
+                .collect();
+            push_ctor(params, &mut synthetics);
+        } else if wants_required_ctor && !has_explicit_ctor {
+            let params: Vec<Parameter> = field_infos
+                .iter()
+                .filter(|f| {
+                    !Self::field_is_static(f.visibility.as_deref())
+                        && (Self::field_is_final(f.visibility.as_deref()) || f.has_non_null)
+                })
+                .map(|f| Parameter {
+                    name: f.name.clone(),
+                    param_type: f.field_type.clone(),
+                    default_value: None,
+                })
+                .collect();
+            push_ctor(params, &mut synthetics);
+        }
+
+        if wants_log {
+            let class_sym = &mut symbols[class_idx];
+            if !class_sym.fields.iter().any(|f| f.name == "log") {
+                class_sym.fields.push(Field {
+                    name: "log".into(),
+                    field_type: Some("Logger".into()),
+                    visibility: Some("private static final".into()),
+                });
+            }
+        }
+
+        symbols.extend(synthetics);
+    }
+
     /// `record_declaration`: extracted as `SymbolType::Class` with
     /// `metadata.is_record: true` per D3 (records are JVM classes).
     pub(crate) fn extract_record(
@@ -1212,6 +1776,15 @@ impl JavaPlugin {
             &ctx,
             &mut symbols,
         )?;
+        self.apply_lombok_synthesis(
+            root,
+            source,
+            &file_path.to_string_lossy(),
+            &ctx,
+            &mut symbols,
+        );
+        let same = Self::same_file_types(&symbols);
+        self.enrich_symbol_type_fqns(&ctx, &same, &mut symbols);
         Ok(symbols)
     }
 
@@ -1224,17 +1797,18 @@ impl JavaPlugin {
         symbols: &[Symbol],
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
-        self.extract_inheritance(root, source, file_path, ctx, symbols, relations)?;
-        self.extract_annotated_with(root, source, file_path, ctx, relations)?;
-        self.extract_object_creation(root, source, file_path, ctx, relations)?;
-        self.extract_method_references(root, source, file_path, ctx, relations)?;
+        let same_file_types = Self::same_file_types(symbols);
+        self.extract_inheritance(root, source, file_path, ctx, &same_file_types, relations)?;
+        self.extract_annotated_with(root, source, file_path, ctx, &same_file_types, relations)?;
+        self.extract_object_creation(root, source, file_path, ctx, &same_file_types, relations)?;
+        self.extract_method_references(root, source, file_path, ctx, &same_file_types, relations)?;
         self.extract_ctor_chaining(root, source, file_path, ctx, relations)?;
         self.extract_import_uses(root, source, file_path, ctx, relations)?;
-        self.extract_field_access(root, source, file_path, ctx, relations)?;
-        self.extract_array_creation(root, source, file_path, ctx, relations)?;
-        self.extract_class_literal(root, source, file_path, ctx, relations)?;
+        self.extract_field_access(root, source, file_path, ctx, &same_file_types, relations)?;
+        self.extract_array_creation(root, source, file_path, ctx, &same_file_types, relations)?;
+        self.extract_class_literal(root, source, file_path, ctx, &same_file_types, relations)?;
         self.extract_lambda_calls(root, source, file_path, ctx, relations)?;
-        self.extract_throws_refs(root, source, file_path, ctx, relations)?;
+        self.extract_throws_refs(root, source, file_path, ctx, &same_file_types, relations)?;
         self.extract_module_relations(root, source, file_path, relations)?;
         Ok(())
     }
@@ -1612,7 +2186,7 @@ impl JavaPlugin {
         source: &[u8],
         file_path: &Path,
         ctx: &ExtractCtx,
-        _symbols: &[Symbol],
+        same_file_types: &HashSet<String>,
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         let mut cursor = node.walk();
@@ -1646,7 +2220,9 @@ impl JavaPlugin {
                                 end_column: child.end_position().column,
                             },
                             metadata: serde_json::json!({ "language": "java" }),
-                            to_qualified_hint: ctx.import_qualified_hint(&parent_class),
+                            to_qualified_hint: ctx
+                                .resolve_type_fqn(&parent_class, same_file_types)
+                                .or_else(|| ctx.import_qualified_hint(&parent_class)),
                             to_type_hint: None,
                         });
                     }
@@ -1682,7 +2258,9 @@ impl JavaPlugin {
                                         end_column: type_node.end_position().column,
                                     },
                                     metadata: serde_json::json!({ "language": "java" }),
-                                    to_qualified_hint: ctx.import_qualified_hint(&interface_name),
+                                    to_qualified_hint: ctx
+                                        .resolve_type_fqn(&interface_name, same_file_types)
+                                        .or_else(|| ctx.import_qualified_hint(&interface_name)),
                                     to_type_hint: None,
                                 });
                             }
@@ -1710,14 +2288,24 @@ impl JavaPlugin {
                                 end_column: interface_node.end_position().column,
                             },
                             metadata: serde_json::json!({ "language": "java" }),
-                            to_qualified_hint: ctx.import_qualified_hint(&interface_name),
+                            to_qualified_hint: ctx
+                                .resolve_type_fqn(&interface_name, same_file_types)
+                                .or_else(|| ctx.import_qualified_hint(&interface_name)),
                             to_type_hint: None,
                         });
                     }
                 }
             }
 
-            self.extract_permits_from(node, &owner, source, file_path, relations)?;
+            self.extract_permits_from(
+                node,
+                &owner,
+                source,
+                file_path,
+                ctx,
+                same_file_types,
+                relations,
+            )?;
         }
 
         // Handle interface declarations: `extends_interfaces` (child, not
@@ -1755,7 +2343,9 @@ impl JavaPlugin {
                                     end_column: t.end_position().column,
                                 },
                                 metadata: serde_json::json!({ "language": "java" }),
-                                to_qualified_hint: ctx.import_qualified_hint(&name),
+                                to_qualified_hint: ctx
+                                    .resolve_type_fqn(&name, same_file_types)
+                                    .or_else(|| ctx.import_qualified_hint(&name)),
                                 to_type_hint: None,
                             });
                         }
@@ -1763,12 +2353,20 @@ impl JavaPlugin {
                 }
             }
 
-            self.extract_permits_from(node, &owner, source, file_path, relations)?;
+            self.extract_permits_from(
+                node,
+                &owner,
+                source,
+                file_path,
+                ctx,
+                same_file_types,
+                relations,
+            )?;
         }
 
         // Recurse into children
         for child in node.children(&mut cursor) {
-            self.extract_inheritance(child, source, file_path, ctx, _symbols, relations)?;
+            self.extract_inheritance(child, source, file_path, ctx, same_file_types, relations)?;
         }
 
         Ok(())
@@ -1791,12 +2389,15 @@ impl JavaPlugin {
 
     /// Emit `Permits` relations for a sealed class/interface's `permits`
     /// clause (present as an optional `permits` field on both node kinds).
+    #[allow(clippy::too_many_arguments)]
     fn extract_permits_from(
         &self,
         node: Node,
         owner_name: &str,
         source: &[u8],
         file_path: &Path,
+        ctx: &ExtractCtx,
+        same_file_types: &HashSet<String>,
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         let Some(permits) = node.child_by_field_name("permits") else {
@@ -1816,11 +2417,12 @@ impl JavaPlugin {
                 "type_identifier" | "generic_type" | "scoped_type_identifier"
             ) && let Ok(raw) = t.utf8_text(source)
             {
-                let name = raw.split('<').next().unwrap_or(raw).to_string();
-                if !name.is_empty() {
+                let name = raw.split('<').next().unwrap_or(raw).trim().to_string();
+                let simple = name.rsplit('.').next().unwrap_or(&name).to_string();
+                if !simple.is_empty() {
                     relations.push(Relation {
                         from: owner_name.to_string(),
-                        to: name,
+                        to: simple.clone(),
                         relation_type: RelationType::Permits,
                         location: SourceLocation {
                             file: file_path.to_string_lossy().to_string(),
@@ -1830,7 +2432,7 @@ impl JavaPlugin {
                             end_column: t.end_position().column,
                         },
                         metadata: serde_json::json!({ "language": "java" }),
-                        to_qualified_hint: None,
+                        to_qualified_hint: ctx.resolve_type_fqn(&name, same_file_types),
                         to_type_hint: None,
                     });
                 }
@@ -1892,6 +2494,7 @@ impl JavaPlugin {
         source: &[u8],
         file_path: &Path,
         ctx: &ExtractCtx,
+        same_file_types: &HashSet<String>,
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         let from = match node.kind() {
@@ -1943,7 +2546,15 @@ impl JavaPlugin {
             if let Some(modifiers_node) = modifiers_node {
                 let (_, annotations) = self.split_modifiers(modifiers_node, source);
                 for ann in annotations {
-                    self.push_annotated_with(&from, ann, source, file_path, relations);
+                    self.push_annotated_with(
+                        &from,
+                        ann,
+                        source,
+                        file_path,
+                        ctx,
+                        same_file_types,
+                        relations,
+                    );
                 }
             }
         }
@@ -1956,14 +2567,22 @@ impl JavaPlugin {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if matches!(child.kind(), "annotation" | "marker_annotation") {
-                    self.push_annotated_with(&from, child, source, file_path, relations);
+                    self.push_annotated_with(
+                        &from,
+                        child,
+                        source,
+                        file_path,
+                        ctx,
+                        same_file_types,
+                        relations,
+                    );
                 }
             }
         }
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_annotated_with(child, source, file_path, ctx, relations)?;
+            self.extract_annotated_with(child, source, file_path, ctx, same_file_types, relations)?;
         }
         Ok(())
     }
@@ -1976,6 +2595,7 @@ impl JavaPlugin {
         source: &[u8],
         file_path: &Path,
         ctx: &ExtractCtx,
+        same_file_types: &HashSet<String>,
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         if node.kind() == "object_creation_expression"
@@ -1986,25 +2606,29 @@ impl JavaPlugin {
             let simple = raw.split('<').next().unwrap_or(raw).trim();
             let last_segment = simple.rsplit('.').next().unwrap_or(simple);
             if !last_segment.is_empty() {
+                let fqn = ctx.resolve_type_fqn(simple, same_file_types);
                 relations.push(Relation {
                     from,
                     to: last_segment.to_string(),
                     relation_type: RelationType::Instantiates,
                     location: source_location(node, &file_path.to_string_lossy()),
                     metadata: serde_json::json!({ "language": "java" }),
-                    to_qualified_hint: if simple.contains('.') {
-                        Some(simple.to_string())
-                    } else {
-                        None
-                    },
-                    to_type_hint: None,
+                    to_qualified_hint: fqn,
+                    to_type_hint: Some(last_segment.to_string()),
                 });
             }
         }
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_object_creation(child, source, file_path, ctx, relations)?;
+            self.extract_object_creation(
+                child,
+                source,
+                file_path,
+                ctx,
+                same_file_types,
+                relations,
+            )?;
         }
         Ok(())
     }
@@ -2016,6 +2640,7 @@ impl JavaPlugin {
         source: &[u8],
         file_path: &Path,
         ctx: &ExtractCtx,
+        same_file_types: &HashSet<String>,
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         if node.kind() == "method_reference"
@@ -2024,7 +2649,7 @@ impl JavaPlugin {
             let mut cursor = node.walk();
             let children: Vec<Node> = node.children(&mut cursor).collect();
             if let (Some(first), Some(last)) = (children.first(), children.last()) {
-                let owner = first.utf8_text(source).ok().map(str::to_string);
+                let owner_raw = first.utf8_text(source).ok().map(str::to_string);
                 let method_name = if last.kind() == "new" {
                     "<init>".to_string()
                 } else if last.kind() == "identifier" {
@@ -2033,7 +2658,16 @@ impl JavaPlugin {
                     String::new()
                 };
                 if !method_name.is_empty() {
-                    let to_qualified_hint = owner.as_ref().map(|o| format!("{o}.{method_name}"));
+                    let owner_fqn = owner_raw.as_ref().and_then(|o| {
+                        ctx.resolve_type_fqn(o, same_file_types)
+                            .or_else(|| Some(o.clone()))
+                    });
+                    let to_type_hint = owner_fqn
+                        .as_ref()
+                        .map(|o| strip_java_type_sugar(o))
+                        .or(owner_raw.clone());
+                    let to_qualified_hint =
+                        owner_fqn.as_ref().map(|o| format!("{o}.{method_name}"));
                     relations.push(Relation {
                             from,
                             to: method_name,
@@ -2041,7 +2675,7 @@ impl JavaPlugin {
                             location: source_location(node, &file_path.to_string_lossy()),
                             metadata: serde_json::json!({ "language": "java", "method_reference": true }),
                             to_qualified_hint,
-                            to_type_hint: owner,
+                            to_type_hint,
                         });
                 }
             }
@@ -2049,7 +2683,14 @@ impl JavaPlugin {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_method_references(child, source, file_path, ctx, relations)?;
+            self.extract_method_references(
+                child,
+                source,
+                file_path,
+                ctx,
+                same_file_types,
+                relations,
+            )?;
         }
         Ok(())
     }
@@ -2127,6 +2768,7 @@ impl JavaPlugin {
         source: &[u8],
         file_path: &Path,
         ctx: &ExtractCtx,
+        same_file_types: &HashSet<String>,
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         if node.kind() == "field_access"
@@ -2143,9 +2785,12 @@ impl JavaPlugin {
                         .and_then(|t| t.child_by_field_name("name"))
                         .and_then(|n| n.utf8_text(source).ok())
                         .map(|owner| {
+                            let owner_fqn = ctx
+                                .resolve_type_fqn(owner, same_file_types)
+                                .unwrap_or_else(|| owner.to_string());
                             (
-                                Some(format!("{owner}.{field_name}")),
-                                Some(owner.to_string()),
+                                Some(format!("{owner_fqn}.{field_name}")),
+                                Some(strip_java_type_sugar(&owner_fqn)),
                             )
                         })
                         .unwrap_or((None, None)),
@@ -2154,7 +2799,15 @@ impl JavaPlugin {
                         self.find_containing_class_node(node)
                             .and_then(|c| self.find_field_type(c, obj_text, source))
                             .or_else(|| self.find_local_variable_type(node, obj_text, source))
-                            .map(|owner| (Some(format!("{owner}.{field_name}")), Some(owner)))
+                            .map(|owner| {
+                                let owner_fqn = ctx
+                                    .resolve_type_fqn(&owner, same_file_types)
+                                    .unwrap_or(owner);
+                                (
+                                    Some(format!("{owner_fqn}.{field_name}")),
+                                    Some(strip_java_type_sugar(&owner_fqn)),
+                                )
+                            })
                             .unwrap_or((None, None))
                     }
                     _ => (None, None),
@@ -2173,7 +2826,7 @@ impl JavaPlugin {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_field_access(child, source, file_path, ctx, relations)?;
+            self.extract_field_access(child, source, file_path, ctx, same_file_types, relations)?;
         }
         Ok(())
     }
@@ -2186,6 +2839,7 @@ impl JavaPlugin {
         source: &[u8],
         file_path: &Path,
         ctx: &ExtractCtx,
+        same_file_types: &HashSet<String>,
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         if node.kind() == "array_creation_expression"
@@ -2194,22 +2848,24 @@ impl JavaPlugin {
             && let Ok(raw) = type_node.utf8_text(source)
         {
             let simple = raw.split('<').next().unwrap_or(raw).trim();
-            if !simple.is_empty() {
+            let last = simple.rsplit('.').next().unwrap_or(simple);
+            if !last.is_empty() {
+                let fqn = ctx.resolve_type_fqn(simple, same_file_types);
                 relations.push(Relation {
                     from,
-                    to: simple.to_string(),
+                    to: last.to_string(),
                     relation_type: RelationType::Instantiates,
                     location: source_location(node, &file_path.to_string_lossy()),
                     metadata: serde_json::json!({ "language": "java", "array": true }),
-                    to_qualified_hint: None,
-                    to_type_hint: None,
+                    to_qualified_hint: fqn,
+                    to_type_hint: Some(last.to_string()),
                 });
             }
         }
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_array_creation(child, source, file_path, ctx, relations)?;
+            self.extract_array_creation(child, source, file_path, ctx, same_file_types, relations)?;
         }
         Ok(())
     }
@@ -2221,6 +2877,7 @@ impl JavaPlugin {
         source: &[u8],
         file_path: &Path,
         ctx: &ExtractCtx,
+        same_file_types: &HashSet<String>,
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         if node.kind() == "class_literal"
@@ -2229,22 +2886,24 @@ impl JavaPlugin {
             && let Ok(raw) = type_node.utf8_text(source)
         {
             let simple = raw.split('<').next().unwrap_or(raw).trim();
-            if !simple.is_empty() {
+            let last = simple.rsplit('.').next().unwrap_or(simple);
+            if !last.is_empty() {
+                let fqn = ctx.resolve_type_fqn(simple, same_file_types);
                 relations.push(Relation {
                     from,
-                    to: simple.to_string(),
+                    to: last.to_string(),
                     relation_type: RelationType::References,
                     location: source_location(node, &file_path.to_string_lossy()),
                     metadata: serde_json::json!({ "language": "java", "class_literal": true }),
-                    to_qualified_hint: None,
-                    to_type_hint: None,
+                    to_qualified_hint: fqn,
+                    to_type_hint: Some(last.to_string()),
                 });
             }
         }
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_class_literal(child, source, file_path, ctx, relations)?;
+            self.extract_class_literal(child, source, file_path, ctx, same_file_types, relations)?;
         }
         Ok(())
     }
@@ -2294,6 +2953,7 @@ impl JavaPlugin {
         source: &[u8],
         file_path: &Path,
         ctx: &ExtractCtx,
+        same_file_types: &HashSet<String>,
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         let from = match node.kind() {
@@ -2313,25 +2973,22 @@ impl JavaPlugin {
                 if simple.is_empty() {
                     continue;
                 }
+                let fqn = ctx.resolve_type_fqn(raw.trim(), same_file_types);
                 relations.push(Relation {
                     from: from.clone(),
                     to: simple.to_string(),
                     relation_type: RelationType::References,
                     location: source_location(node, &file_path.to_string_lossy()),
                     metadata: serde_json::json!({ "language": "java", "throws": true }),
-                    to_qualified_hint: if raw.contains('.') {
-                        Some(raw.to_string())
-                    } else {
-                        None
-                    },
-                    to_type_hint: None,
+                    to_qualified_hint: fqn,
+                    to_type_hint: Some(simple.to_string()),
                 });
             }
         }
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_throws_refs(child, source, file_path, ctx, relations)?;
+            self.extract_throws_refs(child, source, file_path, ctx, same_file_types, relations)?;
         }
         Ok(())
     }
@@ -2566,6 +3223,239 @@ impl JavaPlugin {
             line: node.start_position().row + 1,
             message: "Class missing name".to_string(),
         })
+    }
+
+    /// Flush deferred `method_invocation` nodes with ExtractCtx-aware receiver resolution.
+    pub(crate) fn flush_pending_calls(
+        &self,
+        pending: &[(Node, usize)],
+        source: &[u8],
+        file_path: &Path,
+        extract_ctx: &ExtractCtx,
+        symbols: &[Symbol],
+        relations: &mut Vec<Relation>,
+    ) {
+        let same_file_types: HashSet<String> = symbols
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.symbol_type,
+                    SymbolType::Class
+                        | SymbolType::Interface
+                        | SymbolType::Enum
+                        | SymbolType::Annotation
+                )
+            })
+            .map(|s| s.name.clone())
+            .collect();
+
+        for &(node, from_idx) in pending {
+            let Some(from_fn) = symbols.get(from_idx) else {
+                continue;
+            };
+            let Some(name_node) = node.child_by_field_name("name") else {
+                continue;
+            };
+            let Ok(callee) = name_node.utf8_text(source).map(str::trim) else {
+                continue;
+            };
+            if callee.is_empty() {
+                continue;
+            }
+
+            let from = from_fn
+                .qualified_name
+                .clone()
+                .unwrap_or_else(|| from_fn.name.clone());
+
+            let (to_type_hint, to_qualified_hint) = self.resolve_call_receiver(
+                node,
+                source,
+                extract_ctx,
+                symbols,
+                from_fn,
+                callee,
+                &same_file_types,
+            );
+
+            let same_file_matches: Vec<_> = symbols
+                .iter()
+                .filter(|s| {
+                    s.name == callee
+                        && s.symbol_type == SymbolType::Function
+                        && s.location.file == file_path.to_string_lossy()
+                })
+                .collect();
+            let local_target = match same_file_matches.as_slice() {
+                [only] => only
+                    .qualified_name
+                    .clone()
+                    .unwrap_or_else(|| callee.to_string()),
+                _ => to_qualified_hint
+                    .clone()
+                    .unwrap_or_else(|| callee.to_string()),
+            };
+
+            relations.push(Relation {
+                from,
+                to: local_target,
+                relation_type: RelationType::Calls,
+                location: source_location(node, &file_path.to_string_lossy()),
+                metadata: serde_json::json!({ "language": "java" }),
+                to_qualified_hint,
+                to_type_hint,
+            });
+        }
+    }
+
+    /// Resolve `object.method` / bare `method` receivers for single-pass Calls.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_call_receiver(
+        &self,
+        call: Node,
+        source: &[u8],
+        extract_ctx: &ExtractCtx,
+        symbols: &[Symbol],
+        from_fn: &Symbol,
+        callee: &str,
+        same_file_types: &HashSet<String>,
+    ) -> (Option<String>, Option<String>) {
+        let owner_fqn = from_fn
+            .qualified_name
+            .as_deref()
+            .and_then(|qn| qn.rsplit_once('.').map(|(o, _)| o.to_string()));
+        let owner_simple = owner_fqn.as_deref().map(strip_java_type_sugar).or_else(|| {
+            from_fn
+                .qualified_name
+                .as_deref()
+                .and_then(|qn| qn.rsplit('.').nth(1).map(|s| s.to_string()))
+        });
+
+        let Some(object) = call.child_by_field_name("object") else {
+            // Bare call: static import member, else enclosing type.
+            if let Some(owner) = extract_ctx.static_imports.get(callee) {
+                let simple = strip_java_type_sugar(owner);
+                return (Some(simple.clone()), Some(format!("{owner}.{callee}")));
+            }
+            let qh = owner_fqn
+                .as_ref()
+                .map(|o| format!("{o}.{callee}"))
+                .or_else(|| owner_simple.as_ref().map(|o| format!("{o}.{callee}")));
+            return (owner_simple.or(owner_fqn), qh);
+        };
+
+        let Ok(obj_text) = object.utf8_text(source).map(str::trim) else {
+            return (None, None);
+        };
+
+        if object.kind() == "this" || obj_text == "this" {
+            let qh = owner_fqn
+                .as_ref()
+                .map(|o| format!("{o}.{callee}"))
+                .or_else(|| owner_simple.as_ref().map(|o| format!("{o}.{callee}")));
+            return (owner_simple.or(owner_fqn), qh);
+        }
+        if object.kind() == "super" || obj_text == "super" {
+            return (owner_simple.clone(), Some(format!("super.{callee}")));
+        }
+
+        // `this.field.method()` / `recv.field.method()` via field_access receiver.
+        if object.kind() == "field_access" {
+            if let Some(field_node) = object.child_by_field_name("field")
+                && let Ok(field_name) = field_node.utf8_text(source)
+            {
+                let obj_obj = object.child_by_field_name("object");
+                let field_owner_is_this = obj_obj
+                    .map(|o| o.kind() == "this" || o.utf8_text(source).ok() == Some("this"))
+                    .unwrap_or(false);
+                if field_owner_is_this || obj_obj.is_none() {
+                    if let Some(owner_name) = owner_fqn.as_ref().or(owner_simple.as_ref())
+                        && let Some(class_sym) = symbols.iter().find(|s| {
+                            matches!(
+                                s.symbol_type,
+                                SymbolType::Class | SymbolType::Interface | SymbolType::Enum
+                            ) && (s.name == strip_java_type_sugar(owner_name)
+                                || s.qualified_name.as_deref() == Some(owner_name.as_str()))
+                        })
+                        && let Some(ft) = class_sym
+                            .fields
+                            .iter()
+                            .find(|f| f.name == field_name)
+                            .and_then(|f| f.field_type.as_deref())
+                    {
+                        let fqn = extract_ctx
+                            .resolve_type_fqn(ft, same_file_types)
+                            .unwrap_or_else(|| strip_java_type_sugar(ft));
+                        let simple = strip_java_type_sugar(&fqn);
+                        return (Some(simple.clone()), Some(format!("{fqn}.{callee}")));
+                    }
+                }
+            }
+        }
+
+        if object.kind() == "identifier" {
+            // Formal parameters.
+            if let Some(param_ty) = from_fn
+                .parameters
+                .iter()
+                .find(|p| p.name == obj_text)
+                .and_then(|p| p.param_type.as_deref())
+            {
+                let fqn = extract_ctx
+                    .resolve_type_fqn(param_ty, same_file_types)
+                    .unwrap_or_else(|| strip_java_type_sugar(param_ty));
+                let simple = strip_java_type_sugar(&fqn);
+                return (Some(simple), Some(format!("{fqn}.{callee}")));
+            }
+
+            // Locals / try-resource / foreach / catch / pattern (AST walk).
+            if let Some(type_name) = self.find_local_variable_type(call, obj_text, source) {
+                let fqn = extract_ctx
+                    .resolve_type_fqn(&type_name, same_file_types)
+                    .unwrap_or(type_name);
+                let simple = strip_java_type_sugar(&fqn);
+                return (Some(simple), Some(format!("{fqn}.{callee}")));
+            }
+
+            // Enclosing class fields.
+            if let Some(owner_name) = owner_fqn.as_ref().or(owner_simple.as_ref())
+                && let Some(class_sym) = symbols.iter().find(|s| {
+                    matches!(
+                        s.symbol_type,
+                        SymbolType::Class | SymbolType::Interface | SymbolType::Enum
+                    ) && (s.name == strip_java_type_sugar(owner_name)
+                        || s.qualified_name.as_deref() == Some(owner_name.as_str()))
+                })
+                && let Some(ft) = class_sym
+                    .fields
+                    .iter()
+                    .find(|f| f.name == obj_text)
+                    .and_then(|f| f.field_type.as_deref())
+            {
+                let fqn = extract_ctx
+                    .resolve_type_fqn(ft, same_file_types)
+                    .unwrap_or_else(|| strip_java_type_sugar(ft));
+                let simple = strip_java_type_sugar(&fqn);
+                return (Some(simple), Some(format!("{fqn}.{callee}")));
+            }
+
+            // Static type receiver: PascalCase or imported type.
+            let looks_like_type = obj_text
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_uppercase())
+                .unwrap_or(false)
+                || extract_ctx.imports.contains_key(obj_text);
+            if looks_like_type {
+                let fqn = extract_ctx
+                    .resolve_type_fqn(obj_text, same_file_types)
+                    .unwrap_or_else(|| obj_text.to_string());
+                let simple = strip_java_type_sugar(&fqn);
+                return (Some(simple), Some(format!("{fqn}.{callee}")));
+            }
+        }
+
+        (None, None)
     }
 
     /// Best-effort attempt to infer the target class for a method call.
@@ -3811,6 +4701,129 @@ public class OrderController {
         assert!(
             refl.contains("reflection"),
             "reflection tags on load={refl:?}"
+        );
+    }
+
+    #[test]
+    fn test_lombok_data_synthesizes_getters_setters_and_required_ctor() {
+        let source = br#"
+import lombok.Data;
+import lombok.NonNull;
+
+@Data
+public class Order {
+    private final String id;
+    @NonNull private String status;
+    private int count;
+}
+"#;
+        let symbols = symbols_of(source, "Order.java");
+        let get_id = symbols.iter().find(|s| s.name == "getId").expect("getId");
+        assert_eq!(
+            get_id
+                .metadata
+                .get("lombok_synthesized")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert!(symbols.iter().any(|s| s.name == "getStatus"));
+        assert!(symbols.iter().any(|s| s.name == "setStatus"));
+        assert!(symbols.iter().any(|s| s.name == "getCount"));
+        assert!(symbols.iter().any(|s| s.name == "setCount"));
+        // final id → no setId
+        assert!(!symbols.iter().any(|s| s.name == "setId"));
+        let ctor = symbols
+            .iter()
+            .find(|s| {
+                s.metadata
+                    .get("is_constructor")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                    && s.metadata
+                        .get("lombok_synthesized")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+            })
+            .expect("lombok ctor");
+        let param_names: Vec<_> = ctor.parameters.iter().map(|p| p.name.as_str()).collect();
+        assert!(param_names.contains(&"id"));
+        assert!(param_names.contains(&"status"));
+    }
+
+    #[test]
+    fn test_lombok_builder_and_slf4j_and_call_resolution() {
+        let source = br#"
+import lombok.Builder;
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Getter
+@Builder
+@RequiredArgsConstructor
+@Slf4j
+public class Customer {
+    private final String name;
+    private int age;
+}
+
+class Service {
+    void use(Customer c) {
+        String n = c.getName();
+        Customer.builder();
+        new Customer("x");
+        log.info(n);
+    }
+}
+"#;
+        let plugin = JavaPlugin::new().unwrap();
+        let result = plugin
+            .extract_all(Path::new("Customer.java"), source)
+            .unwrap();
+        assert!(
+            result.symbols.iter().any(|s| s.name == "getName"
+                && s.metadata
+                    .get("lombok_synthesized")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)),
+            "expected synthetic getName"
+        );
+        assert!(result.symbols.iter().any(|s| s.name == "builder"));
+        let customer = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "Customer")
+            .expect("Customer");
+        assert!(
+            customer.fields.iter().any(|f| f.name == "log"),
+            "expected synthetic log field"
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                matches!(r.relation_type, RelationType::Calls)
+                    && (r.to.contains("getName")
+                        || r.to_qualified_hint
+                            .as_deref()
+                            .map(|h| h.contains("getName"))
+                            .unwrap_or(false))
+            }),
+            "expected Calls toward getName, got {:?}",
+            result
+                .relations
+                .iter()
+                .filter(|r| matches!(r.relation_type, RelationType::Calls))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                matches!(r.relation_type, RelationType::Calls)
+                    && (r.to.contains("builder")
+                        || r.to_qualified_hint
+                            .as_deref()
+                            .map(|h| h.contains("builder"))
+                            .unwrap_or(false))
+            }),
+            "expected Calls toward builder()"
         );
     }
 }

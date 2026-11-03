@@ -53,13 +53,11 @@ pub fn track_ast_kind(kind_id: u16) {
     f(kind_id);
 }
 
-/// Lookup dispatch mask and optionally track non-passive kinds.
+/// Lookup dispatch mask and optionally track AST kind hits when a coverage tracker is installed.
 #[inline]
 pub fn dispatch_lookup_tracked(dispatch: &KindDispatchTable, kind_id: u16) -> HandlerMask {
     let mask = dispatch.lookup(kind_id);
-    if !mask.is_passive() {
-        track_ast_kind(kind_id);
-    }
+    track_ast_kind(kind_id);
     mask
 }
 
@@ -86,7 +84,12 @@ pub fn coverage_handler_entries(manifest_json: &str) -> Vec<(String, String)> {
         .as_object()
         .expect("handlers object")
         .iter()
-        .map(|(k, val)| (k.clone(), val.as_str().unwrap_or("Skip").to_string()))
+        .map(|(k, val)| {
+            (
+                k.clone(),
+                val.as_str().unwrap_or("Unimplemented").to_string(),
+            )
+        })
         .collect()
 }
 

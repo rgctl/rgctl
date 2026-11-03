@@ -4,40 +4,62 @@ description: >-
   Review a PR or branch with rgctl review (paths / check): call-path deltas,
   optional blast radius, architecture-doc soft pass, and REVIEW_REPORT.md plus a
   short four-section verdict. Session-only — no GitHub/GitLab posting. Use when
-  asked to review a PR, branch diff, or call-path impact vs a base ref.
+  asked to review a PR, branch diff, uncommitted worktree edits, or call-path
+  impact vs a base ref.
+rgctl-managed: true
 ---
 
 # rgctl-review (`/rgctl:review`)
 
-Local structural PR/branch review via **`rgctl review paths`** and **`rgctl review check`**. No `rgctl serve`, no `--watch`, no forge API posts.
+Local structural PR/branch/worktree review via **`rgctl review paths`** and **`rgctl review check`**. No `rgctl serve`, no `--watch`, no forge API posts.
 
-Default mode synthesizes a delta head from the base graph artifact + git name-status between `--base-ref` and `--head-ref`.
+Two prep paths: **0a** uncommitted worktree vs indexed `HEAD` (`--synthetic-head worktree`); **0b** branch/PR vs a base ref (`.rgctl-base/` artifact).
 
 ## When to Use
 
 - User asks to review a PR, MR, branch, or code diff.
+- User asks to review **uncommitted local edits** against the current index.
 - User asks for blast radius / call-path impact of changes vs a base.
 - User wants architecture or policy findings before merge (session report).
 
 ## Prerequisites
 
 - Work in the repo root (`REPO_PATH`, default `.`). `cd` there before git/rgctl.
-- `base_ref` and `head_ref` fetchable (working tree at head is fine). Default base: `origin/main`.
-- A **base graph artifact** for `base_ref`. Without it, review fails with `base graph snapshot not configured`.
+- For **0a**: `.rgctl/graph.snapshot.bin` already present for `HEAD`.
+- For **0b**: `base_ref` / `head_ref` fetchable (default base `origin/main`) and a **base graph artifact**.
 
-Base artifact resolution (root must contain `.rgctl/graph.snapshot.bin`):
+Base artifact resolution (0b; root must contain `.rgctl/graph.snapshot.bin`):
 
 1. `--base-artifact` / session `artifact_path`
 2. `$RGCTL_BASE_ARTIFACT`
 3. `{repo}/.rgctl-base/`
 
-Expected layout: `{base_root}/.rgctl/graph.snapshot.bin`.
-
 Do **not** start `rgctl serve` or `rgctl serve --watch` for this skill.
 
 ## Steps
 
-### Step 0: Resolve / create base artifact
+### Step 0a: Fast path — uncommitted working-tree edits
+
+Use when reviewing **local uncommitted changes** (not a branch compare), `git status --porcelain` has a small dirty set ($\le 10$ files), and `.rgctl/graph.snapshot.bin` exists. (On 1K+ file repos with many dirty files, use Step 0b `--base-artifact` instead.)
+
+```bash
+cd "${REPO_PATH:-.}"
+test -f .rgctl/graph.snapshot.bin \
+  || { echo "ERROR: no HEAD graph; run rgctl discover . first"; exit 1; }
+mkdir -p .rgctl
+rgctl -f json review paths --synthetic-head worktree \
+  --upstream-depth "${upstream_depth:-2}" \
+  --downstream-depth "${downstream_depth:-1}" \
+  --fanout "${fanout:-5}" \
+  --max-symbols "${max_symbols:-25}" \
+  > .rgctl/review-paths.json
+```
+
+Do **not** create a detached `git worktree` or `.rgctl-base/` on this path. Parse `.rgctl/review-paths.json` (`schema_version: 1`): extract `change_summary.call_edges` (`{added, removed, retargeted, unchanged}`), per-symbol `symbols[].path_delta[]` (`{kind, from, to_before, to_after}` or `{from, to, kind}`), and `truncation` flags. Continue at Step 2 (optional blast) / Step 3 (policy if configured — pass the same `--synthetic-head worktree`).
+
+### Step 0b: Branch / PR comparison (`--base-ref` / `--head-ref`)
+
+Use when comparing two git refs (e.g. `origin/main`…`HEAD`). Resolve/create the base artifact, then run Step 1.
 
 ```bash
 cd "${REPO_PATH:-.}"
@@ -75,7 +97,9 @@ export RGCTL_BASE_ARTIFACT="$(cd "${BASE_ROOT}" && pwd)"
 
 Notes: seed with `cp -a .rgctl .rgctl-base/` after discovering **at `base_ref`**. Do **not** copy the PR-branch `.rgctl/` into `.rgctl-base/`. Prefer a pre-seeded base on large repos — worktree discover can be expensive.
 
-### Step 1: Call-path delta
+### Step 1: Call-path delta (branch / PR path only)
+
+Skip if Step 0a already wrote `.rgctl/review-paths.json`.
 
 ```bash
 mkdir -p "${REPO_PATH:-.}/.rgctl"
@@ -90,7 +114,7 @@ rgctl -f json review paths \
   > "${REPO_PATH:-.}/.rgctl/review-paths.json"
 ```
 
-Parse JSON (`schema_version: 1`). Extract `path_delta` (`added` / `removed` / `retargeted`), top symbols, truncation flags. Exit **2** → disambiguate with `--symbol`.
+Parse JSON (`schema_version: 1`). Extract `change_summary.call_edges` (`{added, removed, retargeted, unchanged}`), per-symbol `symbols[].path_delta[]` (`{kind, from, to_before, to_after}` or `{from, to, kind}`), top `symbols[]`, and `truncation` flags. Exit **2** → disambiguate with `--symbol`.
 
 ### Step 2: Blast radius (optional, top-N)
 
@@ -112,13 +136,22 @@ if [ ! -f "${POLICY_FILE}" ] && [ -f "${REPO_PATH:-.}/policy.json" ]; then
 fi
 
 if [ -f "${POLICY_FILE}" ]; then
-  rgctl -f json review check \
-    --policy-file "${POLICY_FILE}" \
-    --bisect \
-    --base-artifact "${RGCTL_BASE_ARTIFACT}" \
-    --base-ref "${BASE_REF}" \
-    --head-ref "${HEAD_REF}" \
-    > "${REPO_PATH:-.}/.rgctl/review-check.json"
+  if [ -n "${RGCTL_BASE_ARTIFACT:-}" ]; then
+    rgctl -f json review check \
+      --policy-file "${POLICY_FILE}" \
+      --bisect \
+      --base-artifact "${RGCTL_BASE_ARTIFACT}" \
+      --base-ref "${BASE_REF}" \
+      --head-ref "${HEAD_REF}" \
+      > "${REPO_PATH:-.}/.rgctl/review-check.json"
+  else
+    # Step 0a path
+    rgctl -f json review check \
+      --policy-file "${POLICY_FILE}" \
+      --bisect \
+      --synthetic-head worktree \
+      > "${REPO_PATH:-.}/.rgctl/review-check.json"
+  fi
 else
   echo "No policy configured" > "${REPO_PATH:-.}/.rgctl/review-check.json"
 fi
@@ -181,9 +214,9 @@ Section 4 bullets MUST start with `` `path:line` `` or `` `path:start-end` `` (n
 
 ## Gotchas
 
-- Base artifact is mandatory — `--base-ref` alone is not enough.
-- Layout: `cp -a .rgctl .rgctl-base/` (keep nested `.rgctl/`).
+- **0a** needs an existing HEAD `.rgctl/graph.snapshot.bin`; do not invent `.rgctl-base/` for local dirty reviews.
+- **0b** base artifact is mandatory — `--base-ref` alone is not enough. Layout: `cp -a .rgctl .rgctl-base/` (keep nested `.rgctl/`).
 - No serve/watch/update for this workflow.
 - `review paths` schema_version **1** (int); `review check` schema_version **"2"** (string).
 - Always constrain discover: `--with-limits`.
-- Prefer scratch JSON under `{repo}/.rgctl/`.
+- Prefer scratch JSON under `{repo}/.rgctl/`; bound with `--max-symbols` / `--fanout` / `--depth`.

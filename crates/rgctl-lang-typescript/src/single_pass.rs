@@ -19,27 +19,40 @@ const MANIFEST_JSON: &str = include_str!("../typescript-ast-coverage.json");
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("abstract_class_declaration", HandlerMask::SYMBOL),
     ("abstract_method_signature", HandlerMask::SYMBOL),
+    ("accessibility_modifier", HandlerMask::AST_SKELETON),
+    ("ambient_declaration", HandlerMask::SYMBOL),
+    ("array_pattern", HandlerMask::AST_SKELETON),
     ("arrow_function", HandlerMask::SYMBOL),
+    ("as_expression", HandlerMask::AST_SKELETON),
     ("assignment_expression", HandlerMask::AST_SKELETON),
+    ("assignment_pattern", HandlerMask::AST_SKELETON),
     ("augmented_assignment_expression", HandlerMask::AST_SKELETON),
     ("await_expression", HandlerMask::CFG_STMT),
+    ("binary_expression", HandlerMask::CFG_STMT),
     ("break_statement", HandlerMask::CFG_STMT),
     ("call_expression", HandlerMask::RELATION),
     ("catch_clause", HandlerMask::CFG_STMT),
     ("class", HandlerMask::SYMBOL),
     ("class_declaration", HandlerMask::SYMBOL),
+    ("class_heritage", HandlerMask::RELATION),
+    ("class_static_block", HandlerMask::SYMBOL),
     ("continue_statement", HandlerMask::CFG_STMT),
+    ("debugger_statement", HandlerMask::CFG_STMT),
     ("decorator", HandlerMask::RELATION),
     ("do_statement", HandlerMask::CFG_STMT),
     ("else_clause", HandlerMask::CFG_STMT),
+    ("empty_statement", HandlerMask::CFG_STMT),
     ("enum_assignment", HandlerMask::SYMBOL),
     ("enum_declaration", HandlerMask::SYMBOL),
+    ("export_clause", HandlerMask::RELATION),
     ("export_specifier", HandlerMask::RELATION),
     ("export_statement", HandlerMask::RELATION),
     ("extends_clause", HandlerMask::RELATION),
+    ("extends_type_clause", HandlerMask::RELATION),
     ("finally_clause", HandlerMask::CFG_STMT),
     ("for_in_statement", HandlerMask::CFG_STMT),
     ("for_statement", HandlerMask::CFG_STMT),
+    ("formal_parameters", HandlerMask::AST_SKELETON),
     ("function_declaration", HandlerMask::SYMBOL),
     ("function_expression", HandlerMask::SYMBOL),
     ("generator_function", HandlerMask::SYMBOL),
@@ -53,18 +66,38 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("import_require_clause", HandlerMask::RELATION),
     ("import_specifier", HandlerMask::RELATION),
     ("import_statement", HandlerMask::RELATION),
+    ("instantiation_expression", HandlerMask::RELATION),
     ("interface_declaration", HandlerMask::SYMBOL),
     ("internal_module", HandlerMask::SYMBOL),
+    ("labeled_statement", HandlerMask::CFG_STMT),
+    ("lexical_declaration", HandlerMask::AST_SKELETON),
+    ("mapped_type_clause", HandlerMask::AST_SKELETON),
+    ("member_expression", HandlerMask::RELATION),
     ("method_definition", HandlerMask::SYMBOL),
     ("method_signature", HandlerMask::SYMBOL),
     ("module", HandlerMask::SYMBOL),
     ("named_imports", HandlerMask::RELATION),
+    ("namespace_export", HandlerMask::RELATION),
     ("namespace_import", HandlerMask::RELATION),
     ("new_expression", HandlerMask::RELATION),
+    ("non_null_expression", HandlerMask::AST_SKELETON),
+    ("object_assignment_pattern", HandlerMask::AST_SKELETON),
+    ("object_pattern", HandlerMask::AST_SKELETON),
+    ("optional_parameter", HandlerMask::AST_SKELETON),
+    ("pair_pattern", HandlerMask::AST_SKELETON),
     ("property_signature", HandlerMask::SYMBOL),
     ("public_field_definition", HandlerMask::SYMBOL),
+    ("required_parameter", HandlerMask::AST_SKELETON),
+    ("rest_pattern", HandlerMask::AST_SKELETON),
     ("return_statement", HandlerMask::CFG_STMT),
+    ("satisfies_expression", HandlerMask::AST_SKELETON),
+    ("sequence_expression", HandlerMask::AST_SKELETON),
+    (
+        "shorthand_property_identifier_pattern",
+        HandlerMask::AST_SKELETON,
+    ),
     ("statement_block", HandlerMask::CFG_STMT),
+    ("subscript_expression", HandlerMask::RELATION),
     ("switch_case", HandlerMask::CFG_STMT),
     ("switch_default", HandlerMask::CFG_STMT),
     ("switch_statement", HandlerMask::CFG_STMT),
@@ -72,7 +105,12 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("throw_statement", HandlerMask::CFG_STMT),
     ("try_statement", HandlerMask::CFG_STMT),
     ("type_alias_declaration", HandlerMask::SYMBOL),
+    ("unary_expression", HandlerMask::AST_SKELETON),
+    ("update_expression", HandlerMask::AST_SKELETON),
+    ("variable_declaration", HandlerMask::AST_SKELETON),
+    ("variable_declarator", HandlerMask::AST_SKELETON),
     ("while_statement", HandlerMask::CFG_STMT),
+    ("with_statement", HandlerMask::CFG_STMT),
     ("yield_expression", HandlerMask::CFG_STMT),
 ];
 
@@ -158,7 +196,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
                 let mut pushed_scope = false;
 

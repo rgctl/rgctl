@@ -15,46 +15,107 @@ use tree_sitter::Node;
 const MANIFEST_JSON: &str = include_str!("../cpp-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
+/// CfgStatement / AstSkeleton entries are declared for Tier-1 sync; CFG/PDG work
+/// stays lazy in `rgctl-analysis` (no cold-discover alloc beyond existing complexity counters).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("alias_declaration", HandlerMask::SYMBOL),
+    ("alignof_expression", HandlerMask::AST_SKELETON),
     ("assignment_expression", HandlerMask::AST_SKELETON),
+    ("attribute_declaration", HandlerMask::RELATION),
+    ("attributed_statement", HandlerMask::CFG_STMT),
     ("base_class_clause", HandlerMask::RELATION),
+    ("binary_expression", HandlerMask::CFG_STMT),
+    ("bitfield_clause", HandlerMask::AST_SKELETON),
     ("break_statement", HandlerMask::CFG_STMT),
     ("call_expression", HandlerMask::RELATION),
     ("case_statement", HandlerMask::CFG_STMT),
+    ("cast_expression", HandlerMask::AST_SKELETON),
     ("catch_clause", HandlerMask::CFG_STMT),
     ("class_specifier", HandlerMask::SYMBOL),
     ("co_await_expression", HandlerMask::CFG_STMT),
     ("co_return_statement", HandlerMask::CFG_STMT),
     ("co_yield_statement", HandlerMask::CFG_STMT),
+    ("comma_expression", HandlerMask::CFG_STMT),
     ("compound_statement", HandlerMask::CFG_STMT),
     ("concept_definition", HandlerMask::SYMBOL),
+    ("condition_clause", HandlerMask::CFG_STMT),
+    ("conditional_expression", HandlerMask::CFG_STMT),
     ("continue_statement", HandlerMask::CFG_STMT),
+    ("declaration", HandlerMask::AST_SKELETON),
+    ("default_method_clause", HandlerMask::AST_SKELETON),
+    ("delete_expression", HandlerMask::RELATION),
+    ("delete_method_clause", HandlerMask::AST_SKELETON),
     ("do_statement", HandlerMask::CFG_STMT),
     ("else_clause", HandlerMask::CFG_STMT),
     ("enum_specifier", HandlerMask::SYMBOL),
     ("enumerator", HandlerMask::SYMBOL),
+    ("extension_expression", HandlerMask::AST_SKELETON),
     ("field_declaration", HandlerMask::SYMBOL),
+    ("field_expression", HandlerMask::AST_SKELETON),
+    ("fold_expression", HandlerMask::AST_SKELETON),
     ("for_range_loop", HandlerMask::CFG_STMT),
     ("for_statement", HandlerMask::CFG_STMT),
+    ("friend_declaration", HandlerMask::RELATION),
     ("function_definition", HandlerMask::SYMBOL),
+    ("generic_expression", HandlerMask::AST_SKELETON),
+    ("gnu_asm_expression", HandlerMask::AST_SKELETON),
     ("goto_statement", HandlerMask::CFG_STMT),
     ("if_statement", HandlerMask::CFG_STMT),
+    ("init_statement", HandlerMask::CFG_STMT),
+    ("labeled_statement", HandlerMask::CFG_STMT),
+    ("lambda_capture_initializer", HandlerMask::AST_SKELETON),
+    ("lambda_capture_specifier", HandlerMask::AST_SKELETON),
+    ("lambda_default_capture", HandlerMask::AST_SKELETON),
+    ("lambda_expression", HandlerMask::SYMBOL),
+    ("namespace_alias_definition", HandlerMask::SYMBOL),
     ("namespace_definition", HandlerMask::SYMBOL),
     ("new_expression", HandlerMask::RELATION),
+    ("offsetof_expression", HandlerMask::AST_SKELETON),
+    ("optional_parameter_declaration", HandlerMask::AST_SKELETON),
+    (
+        "optional_type_parameter_declaration",
+        HandlerMask::AST_SKELETON,
+    ),
+    ("parameter_declaration", HandlerMask::AST_SKELETON),
+    ("pointer_expression", HandlerMask::AST_SKELETON),
+    ("preproc_call", HandlerMask::RELATION),
+    ("preproc_directive", HandlerMask::CFG_STMT),
     ("preproc_if", HandlerMask::CFG_STMT),
     ("preproc_ifdef", HandlerMask::CFG_STMT),
     ("preproc_include", HandlerMask::RELATION),
+    ("pure_virtual_clause", HandlerMask::AST_SKELETON),
+    ("requires_clause", HandlerMask::AST_SKELETON),
+    ("requires_expression", HandlerMask::AST_SKELETON),
     ("return_statement", HandlerMask::CFG_STMT),
+    ("seh_except_clause", HandlerMask::CFG_STMT),
+    ("seh_finally_clause", HandlerMask::CFG_STMT),
+    ("seh_leave_statement", HandlerMask::CFG_STMT),
+    ("seh_try_statement", HandlerMask::CFG_STMT),
+    ("sizeof_expression", HandlerMask::AST_SKELETON),
+    ("static_assert_declaration", HandlerMask::CFG_STMT),
     ("struct_specifier", HandlerMask::SYMBOL),
+    ("subscript_expression", HandlerMask::AST_SKELETON),
     ("switch_statement", HandlerMask::CFG_STMT),
+    ("template_declaration", HandlerMask::SYMBOL),
     ("template_function", HandlerMask::RELATION),
     ("template_method", HandlerMask::RELATION),
+    (
+        "template_template_parameter_declaration",
+        HandlerMask::AST_SKELETON,
+    ),
     ("throw_statement", HandlerMask::CFG_STMT),
     ("try_statement", HandlerMask::CFG_STMT),
     ("type_definition", HandlerMask::SYMBOL),
+    ("type_parameter_declaration", HandlerMask::AST_SKELETON),
+    ("unary_expression", HandlerMask::CFG_STMT),
     ("union_specifier", HandlerMask::SYMBOL),
+    ("update_expression", HandlerMask::AST_SKELETON),
     ("using_declaration", HandlerMask::RELATION),
+    ("variadic_parameter_declaration", HandlerMask::AST_SKELETON),
+    (
+        "variadic_type_parameter_declaration",
+        HandlerMask::AST_SKELETON,
+    ),
     ("while_statement", HandlerMask::CFG_STMT),
 ];
 
@@ -135,7 +196,14 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1, scope.clone()));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
 
                 let next_scope = match kind {
@@ -495,6 +563,80 @@ pub fn extract_all_single_pass(
                                     });
                                 }
                             }
+                        }
+                    }
+                    "lambda_expression" => {
+                        if let Some(mut sym) = depth::extract_lambda_expression(
+                            node,
+                            source,
+                            &file_path_str,
+                            &ctx.scopes,
+                        ) {
+                            let params = 0u32;
+                            let loc = ((node.end_position().row - node.start_position().row) + 1)
+                                .max(1) as u32;
+                            let name = sym.name.clone();
+                            let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
+                            sym.metadata["is_lambda"] = serde_json::Value::Bool(true);
+                            ctx.symbols.push(sym);
+                            ctx.enter_scope(
+                                ScopeKind::Function,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                true,
+                            );
+                            if let Some(f) = ctx.scopes.current_function_mut() {
+                                f.complexity.cyclomatic = 1;
+                                f.complexity.param_count = params;
+                                f.complexity.loc = loc;
+                            }
+                            pushed_scope = true;
+                        }
+                    }
+                    "namespace_alias_definition" => {
+                        if let Some(sym) = depth::extract_namespace_alias(
+                            node,
+                            source,
+                            &file_path_str,
+                            &ctx.scopes,
+                        ) {
+                            ctx.symbols.push(sym);
+                        }
+                    }
+                    "friend_declaration" => {
+                        if let Some(rel) =
+                            depth::friend_declaration_relation(node, source, &file_path_str)
+                        {
+                            relations.push(rel);
+                        }
+                    }
+                    "delete_expression" => {
+                        let from = containing_function_from_scope(&ctx.scopes, &ctx.symbols)
+                            .map(|f| f.qualified_name.clone().unwrap_or_else(|| f.name.clone()))
+                            .unwrap_or_else(|| file_path_str.to_string());
+                        if let Some(rel) =
+                            depth::delete_expression_relation(node, source, &file_path_str, &from)
+                        {
+                            relations.push(rel);
+                        }
+                    }
+                    "attribute_declaration" | "preproc_call" => {
+                        let text = node.utf8_text(source)?.trim().to_string();
+                        if !text.is_empty() {
+                            relations.push(Relation {
+                                from: file_path_str.to_string(),
+                                to: text,
+                                relation_type: RelationType::Uses,
+                                location: source_location(node, &file_path_str),
+                                metadata: serde_json::json!({
+                                    "language": "cpp",
+                                    "kind": kind,
+                                }),
+                                to_qualified_hint: None,
+                                to_type_hint: None,
+                            });
                         }
                     }
                     _ => {}

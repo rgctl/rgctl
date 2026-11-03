@@ -79,6 +79,8 @@ version = "0.2"
 optional = true
 
 [dev-dependencies]
+rgctl-ast-coverage = { path = "../rgctl-ast-coverage" }
+rgctl-languages = { path = "../rgctl-languages" }
 tempfile = "3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

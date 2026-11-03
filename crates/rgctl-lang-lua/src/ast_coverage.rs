@@ -9,7 +9,9 @@ const ALLOWED: &[&str] = &[
     "Relation",
     "CfgStatement",
     "AstSkeleton",
-    "Skip",
+    "SkipWrapper",
+    "SkipTypeToken",
+    "Unimplemented",
     "Literal",
 ];
 
@@ -25,7 +27,7 @@ pub fn load_manifest() -> HashMap<String, String> {
         .as_object()
         .expect("handlers object")
         .iter()
-        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Skip").to_string()))
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("Unimplemented").to_string()))
         .collect()
 }
 
@@ -83,6 +85,11 @@ mod tests {
             manifest.get("function_call").map(String::as_str),
             Some("Relation"),
             "function_call must be Relation"
+        );
+        assert_eq!(
+            manifest.values().filter(|h| h.as_str() == "Skip").count(),
+            0,
+            "raw Skip must be zero for Tier-1 Gold"
         );
     }
 }

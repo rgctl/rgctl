@@ -16,46 +16,80 @@ const MANIFEST_JSON: &str = include_str!("../rust-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
+    ("array_expression", HandlerMask::AST_SKELETON),
     ("assignment_expression", HandlerMask::AST_SKELETON),
     ("associated_type", HandlerMask::SYMBOL),
     ("async_block", HandlerMask::CFG_STMT),
+    ("attribute", HandlerMask::RELATION),
+    ("attribute_item", HandlerMask::RELATION),
+    ("await_expression", HandlerMask::CFG_STMT),
+    ("binary_expression", HandlerMask::CFG_STMT),
     ("block", HandlerMask::CFG_STMT),
     ("break_expression", HandlerMask::CFG_STMT),
     ("call_expression", HandlerMask::RELATION),
+    ("captured_pattern", HandlerMask::AST_SKELETON),
     ("closure_expression", HandlerMask::CFG_STMT),
+    ("closure_parameters", HandlerMask::AST_SKELETON),
     ("compound_assignment_expr", HandlerMask::AST_SKELETON),
     ("const_item", HandlerMask::SYMBOL),
     ("continue_expression", HandlerMask::CFG_STMT),
     ("else_clause", HandlerMask::CFG_STMT),
+    ("empty_statement", HandlerMask::CFG_STMT),
     ("enum_item", HandlerMask::SYMBOL),
     ("enum_variant", HandlerMask::SYMBOL),
     ("extern_crate_declaration", HandlerMask::SYMBOL),
     ("field_declaration", HandlerMask::SYMBOL),
+    ("field_expression", HandlerMask::RELATION),
+    ("field_pattern", HandlerMask::AST_SKELETON),
     ("for_expression", HandlerMask::CFG_STMT),
     ("function_item", HandlerMask::SYMBOL),
     ("function_signature_item", HandlerMask::SYMBOL),
     ("generic_function", HandlerMask::RELATION),
+    ("generic_pattern", HandlerMask::AST_SKELETON),
     ("if_expression", HandlerMask::CFG_STMT),
     ("impl_item", HandlerMask::SYMBOL),
+    ("index_expression", HandlerMask::AST_SKELETON),
+    ("inner_attribute_item", HandlerMask::RELATION),
     ("let_chain", HandlerMask::CFG_STMT),
     ("let_condition", HandlerMask::CFG_STMT),
     ("let_declaration", HandlerMask::CFG_STMT),
     ("loop_expression", HandlerMask::CFG_STMT),
     ("macro_definition", HandlerMask::SYMBOL),
     ("macro_invocation", HandlerMask::RELATION),
+    ("match_arm", HandlerMask::CFG_STMT),
     ("match_block", HandlerMask::CFG_STMT),
     ("match_expression", HandlerMask::CFG_STMT),
+    ("match_pattern", HandlerMask::AST_SKELETON),
     ("mod_item", HandlerMask::SYMBOL),
+    ("mut_pattern", HandlerMask::AST_SKELETON),
+    ("or_pattern", HandlerMask::AST_SKELETON),
+    ("range_expression", HandlerMask::CFG_STMT),
+    ("range_pattern", HandlerMask::AST_SKELETON),
+    ("ref_pattern", HandlerMask::AST_SKELETON),
+    ("reference_expression", HandlerMask::AST_SKELETON),
+    ("reference_pattern", HandlerMask::AST_SKELETON),
+    ("remaining_field_pattern", HandlerMask::AST_SKELETON),
     ("return_expression", HandlerMask::CFG_STMT),
     ("scoped_identifier", HandlerMask::RELATION),
+    ("slice_pattern", HandlerMask::AST_SKELETON),
     ("static_item", HandlerMask::SYMBOL),
+    ("struct_expression", HandlerMask::RELATION),
     ("struct_item", HandlerMask::SYMBOL),
+    ("struct_pattern", HandlerMask::AST_SKELETON),
     ("trait_item", HandlerMask::SYMBOL),
     ("try_expression", HandlerMask::CFG_STMT),
+    ("tuple_expression", HandlerMask::AST_SKELETON),
+    ("tuple_pattern", HandlerMask::AST_SKELETON),
+    ("tuple_struct_pattern", HandlerMask::AST_SKELETON),
+    ("type_cast_expression", HandlerMask::AST_SKELETON),
     ("type_item", HandlerMask::SYMBOL),
+    ("unary_expression", HandlerMask::CFG_STMT),
     ("union_item", HandlerMask::SYMBOL),
+    ("unit_expression", HandlerMask::AST_SKELETON),
     ("unsafe_block", HandlerMask::CFG_STMT),
+    ("use_as_clause", HandlerMask::RELATION),
     ("use_declaration", HandlerMask::RELATION),
+    ("where_clause", HandlerMask::AST_SKELETON),
     ("while_expression", HandlerMask::CFG_STMT),
     ("yield_expression", HandlerMask::CFG_STMT),
 ];
@@ -137,10 +171,15 @@ pub fn extract_all_single_pass(
                     continue;
                 }
 
-                // `dispatch` drives future per-kind skips; handlers are matched by
-                // kind name today so behavior matches the prior multi-pass extractors.
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask; // keep for future passive skip
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
                 let kind = node.kind();
 
                 // --- Symbols + scope enter ---

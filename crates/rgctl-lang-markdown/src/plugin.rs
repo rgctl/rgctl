@@ -1,8 +1,8 @@
 //! Markdown language plugin (tree-sitter-md).
 
-use crate::extract::extract;
-use crate::parse::parse_markdown;
-use rgctl_plugin_api::{ComplexityMetrics, LanguageCapabilities, LanguagePlugin, Result, Symbol};
+use rgctl_plugin_api::{
+    AstHandlerTable, ComplexityMetrics, LanguageCapabilities, LanguagePlugin, Result, Symbol,
+};
 use std::path::Path;
 use tree_sitter::Language;
 
@@ -59,8 +59,7 @@ impl LanguagePlugin for MarkdownPlugin {
         file_path: &Path,
         source: &[u8],
     ) -> Result<rgctl_plugin_api::ExtractAllResult> {
-        let parsed = parse_markdown(source, file_path)?;
-        extract(&parsed, file_path, source)
+        crate::single_pass::extract_all_single_pass(file_path, source)
     }
 
     fn calculate_complexity(
@@ -69,6 +68,10 @@ impl LanguagePlugin for MarkdownPlugin {
         _source: &[u8],
     ) -> Result<Option<ComplexityMetrics>> {
         Ok(None)
+    }
+
+    fn declared_ast_handlers(&self) -> Option<&AstHandlerTable> {
+        Some(crate::single_pass::ast_handlers())
     }
 }
 

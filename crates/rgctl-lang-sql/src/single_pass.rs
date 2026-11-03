@@ -11,17 +11,87 @@ use tree_sitter::Node;
 const MANIFEST_JSON: &str = include_str!("../sql-ast-coverage.json");
 
 /// Plugin-handled AST kinds (source of truth for declared_ast_handlers).
+/// Must stay in sync with non-Literal active labels in `sql-ast-coverage.json`.
 const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
-    ("case", HandlerMask::CFG_STMT),
+    // Symbol
+    ("alter_schema", HandlerMask::SYMBOL),
+    ("alter_table", HandlerMask::SYMBOL),
+    ("alter_type", HandlerMask::SYMBOL),
+    ("alter_view", HandlerMask::SYMBOL),
+    ("column_definition", HandlerMask::SYMBOL),
+    ("create_database", HandlerMask::SYMBOL),
+    ("create_extension", HandlerMask::SYMBOL),
     ("create_function", HandlerMask::SYMBOL),
+    ("create_index", HandlerMask::SYMBOL),
+    ("create_materialized_view", HandlerMask::SYMBOL),
+    ("create_role", HandlerMask::SYMBOL),
+    ("create_schema", HandlerMask::SYMBOL),
+    ("create_sequence", HandlerMask::SYMBOL),
     ("create_table", HandlerMask::SYMBOL),
+    ("create_trigger", HandlerMask::SYMBOL),
+    ("create_type", HandlerMask::SYMBOL),
     ("create_view", HandlerMask::SYMBOL),
+    ("drop_function", HandlerMask::SYMBOL),
+    ("drop_index", HandlerMask::SYMBOL),
+    ("drop_schema", HandlerMask::SYMBOL),
+    ("drop_table", HandlerMask::SYMBOL),
+    ("drop_type", HandlerMask::SYMBOL),
+    ("drop_view", HandlerMask::SYMBOL),
+    ("function_declaration", HandlerMask::SYMBOL),
+    // Relation
+    ("cross_join", HandlerMask::RELATION),
     ("from", HandlerMask::RELATION),
+    ("invocation", HandlerMask::RELATION),
     ("join", HandlerMask::RELATION),
+    ("lateral_cross_join", HandlerMask::RELATION),
+    ("lateral_join", HandlerMask::RELATION),
+    // CfgStatement
+    ("between_expression", HandlerMask::CFG_STMT),
+    ("binary_expression", HandlerMask::CFG_STMT),
+    ("case", HandlerMask::CFG_STMT),
+    ("filter_expression", HandlerMask::CFG_STMT),
+    ("unary_expression", HandlerMask::CFG_STMT),
+    ("when_clause", HandlerMask::CFG_STMT),
+    // AstSkeleton
+    ("add_column", HandlerMask::AST_SKELETON),
+    ("add_constraint", HandlerMask::AST_SKELETON),
+    ("alter_column", HandlerMask::AST_SKELETON),
+    ("array_size_definition", HandlerMask::AST_SKELETON),
+    ("comment_statement", HandlerMask::AST_SKELETON),
+    ("cte", HandlerMask::AST_SKELETON),
+    ("delete", HandlerMask::AST_SKELETON),
+    ("drop_column", HandlerMask::AST_SKELETON),
+    ("drop_constraint", HandlerMask::AST_SKELETON),
+    ("frame_definition", HandlerMask::AST_SKELETON),
+    ("group_by", HandlerMask::AST_SKELETON),
+    ("insert", HandlerMask::AST_SKELETON),
+    ("limit", HandlerMask::AST_SKELETON),
+    ("offset", HandlerMask::AST_SKELETON),
+    ("order_by", HandlerMask::AST_SKELETON),
+    ("reset_statement", HandlerMask::AST_SKELETON),
+    ("select", HandlerMask::AST_SKELETON),
+    ("select_expression", HandlerMask::AST_SKELETON),
+    ("set_operation", HandlerMask::AST_SKELETON),
+    ("set_statement", HandlerMask::AST_SKELETON),
     ("statement", HandlerMask::AST_SKELETON),
+    ("transaction", HandlerMask::AST_SKELETON),
+    ("update", HandlerMask::AST_SKELETON),
+    ("where", HandlerMask::AST_SKELETON),
+    ("window_clause", HandlerMask::AST_SKELETON),
+    ("window_function", HandlerMask::AST_SKELETON),
 ];
 
 const AST_MAX_DEPTH: usize = 2048;
+
+/// Control-flow hosts that contribute cyclomatic / cognitive complexity.
+const BRANCH_KINDS: &[&str] = &[
+    "between_expression",
+    "binary_expression",
+    "case",
+    "filter_expression",
+    "unary_expression",
+    "when_clause",
+];
 
 static HANDLERS: OnceLock<AstHandlerTable> = OnceLock::new();
 static DISPATCH: OnceLock<KindDispatchTable> = OnceLock::new();
@@ -86,6 +156,17 @@ fn push_named_symbol(
     });
 }
 
+fn symbol_type_for_ddl(kind: &str) -> SymbolType {
+    match kind {
+        "create_function" | "function_declaration" | "create_trigger" | "drop_function" => {
+            SymbolType::Function
+        }
+        "column_definition" => SymbolType::Variable,
+        "create_schema" | "alter_schema" | "drop_schema" | "create_database" => SymbolType::Module,
+        _ => SymbolType::Table,
+    }
+}
+
 /// Soft Calls from `from` / `join` relation targets (table references).
 fn push_table_ref_call(
     node: Node,
@@ -147,6 +228,37 @@ fn push_table_ref_call(
     }
 }
 
+fn push_invocation_call(
+    node: Node,
+    source: &[u8],
+    file_path: &Path,
+    from_fn: &Symbol,
+    relations: &mut Vec<Relation>,
+) {
+    let name =
+        object_name(node, source).or_else(|| extract_name_from_node(node, source).ok().flatten());
+    let Some(name) = name else {
+        return;
+    };
+    let from = from_fn
+        .qualified_name
+        .clone()
+        .unwrap_or_else(|| from_fn.name.clone());
+    relations.push(Relation {
+        from,
+        to: name,
+        relation_type: RelationType::Calls,
+        location: node_to_location(node, &file_path.to_string_lossy()),
+        metadata: serde_json::json!({
+            "language": "sql",
+            "soft": true,
+            "kind": "invocation",
+        }),
+        to_qualified_hint: None,
+        to_type_hint: None,
+    });
+}
+
 /// Single iterative DFS: table/function/view symbols + soft from/join + case complexity.
 pub fn extract_all_single_pass(
     _plugin: &Plugin,
@@ -193,32 +305,50 @@ pub fn extract_all_single_pass(
                 }
 
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
-                let _ = mask;
+                if mask.is_passive() {
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            stack.push(Visit::Pre(child, depth + 1));
+                        }
+                    }
+                    continue;
+                }
+
                 let kind = node.kind();
                 let mut pushed_scope = false;
 
                 match kind {
-                    "create_table" => {
+                    "create_table"
+                    | "create_view"
+                    | "create_materialized_view"
+                    | "create_index"
+                    | "create_type"
+                    | "create_schema"
+                    | "create_database"
+                    | "create_role"
+                    | "create_sequence"
+                    | "create_extension"
+                    | "create_trigger"
+                    | "alter_table"
+                    | "alter_view"
+                    | "alter_type"
+                    | "alter_schema"
+                    | "drop_table"
+                    | "drop_view"
+                    | "drop_function"
+                    | "drop_index"
+                    | "drop_type"
+                    | "drop_schema"
+                    | "column_definition"
+                    | "function_declaration" => {
                         if let Some(name) = object_name(node, source) {
                             push_named_symbol(
                                 &mut ctx,
                                 node,
                                 name,
-                                SymbolType::Table,
+                                symbol_type_for_ddl(kind),
                                 &file_path_str,
-                                "create_table",
-                            );
-                        }
-                    }
-                    "create_view" => {
-                        if let Some(name) = object_name(node, source) {
-                            push_named_symbol(
-                                &mut ctx,
-                                node,
-                                name,
-                                SymbolType::Table,
-                                &file_path_str,
-                                "create_view",
+                                kind,
                             );
                         }
                     }
@@ -250,13 +380,28 @@ pub fn extract_all_single_pass(
                             pushed_scope = true;
                         }
                     }
-                    "from" | "join" => {
+                    "from" | "join" | "cross_join" | "lateral_join" | "lateral_cross_join" => {
                         if let Some(frame) = ctx.scopes.current_function() {
                             if let Some(idx) = frame.symbol_idx {
                                 if let Some(from_fn) = ctx.symbols.get(idx) {
-                                    // Clone fields needed; push after to avoid borrow issues
                                     let from_sym = from_fn.clone();
                                     push_table_ref_call(
+                                        node,
+                                        source,
+                                        file_path,
+                                        &from_sym,
+                                        &mut relations,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    "invocation" => {
+                        if let Some(frame) = ctx.scopes.current_function() {
+                            if let Some(idx) = frame.symbol_idx {
+                                if let Some(from_fn) = ctx.symbols.get(idx) {
+                                    let from_sym = from_fn.clone();
+                                    push_invocation_call(
                                         node,
                                         source,
                                         file_path,
@@ -270,24 +415,26 @@ pub fn extract_all_single_pass(
                     _ => {}
                 }
 
-                if ctx.scopes.current_function().is_some() && kind == "case" {
+                if ctx.scopes.current_function().is_some() && BRANCH_KINDS.contains(&kind) {
                     let delta = 1 + ctx
                         .scopes
                         .current_function()
                         .map(|f| f.complexity.cognitive_nesting)
                         .unwrap_or(0);
                     ctx.scopes.note_branch(delta);
-                    ctx.scopes.enter_branch();
-                    let scope_depth = ctx.scopes.depth();
-                    ctx.scopes.push(ScopeFrame::new(
-                        ScopeKind::GuardBlock,
-                        None,
-                        String::new(),
-                        node.start_byte(),
-                        node.end_byte(),
-                        scope_depth,
-                    ));
-                    stack.push(Visit::LeaveGuard);
+                    if kind == "case" || kind == "when_clause" {
+                        ctx.scopes.enter_branch();
+                        let scope_depth = ctx.scopes.depth();
+                        ctx.scopes.push(ScopeFrame::new(
+                            ScopeKind::GuardBlock,
+                            None,
+                            String::new(),
+                            node.start_byte(),
+                            node.end_byte(),
+                            scope_depth,
+                        ));
+                        stack.push(Visit::LeaveGuard);
+                    }
                 }
 
                 if pushed_scope {

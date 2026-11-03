@@ -32,11 +32,11 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-# Prefer release on PATH; fall back to a local build.
-if command -v rgctl >/dev/null 2>&1; then
-  :
-elif [[ -x "$ROOT/target/release/rgctl" ]]; then
+# Prefer local release build first; fall back to PATH.
+if [[ -x "$ROOT/target/release/rgctl" ]]; then
   export PATH="$ROOT/target/release:$PATH"
+elif command -v rgctl >/dev/null 2>&1; then
+  :
 else
   echo "error: rgctl not on PATH — run: cargo build --release --bin rgctl" >&2
   exit 1

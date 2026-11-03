@@ -2,17 +2,19 @@
   "grammar": "tree-sitter-embedded-template@0.25.0",
   "handlers": {
     "code": "Literal",
-    "comment": "Skip",
+    "comment": "Literal",
     "comment_directive": "Symbol",
-    "content": "Skip",
+    "content": "SkipWrapper",
     "directive": "Symbol",
-    "graphql_directive": "Skip",
+    "graphql_directive": "Property",
     "output_directive": "Symbol",
-    "template": "Skip"
+    "template": "SkipWrapper"
   },
   "_honesty_notes": {
-    "code": "Text consumed by parent directive/output_directive; not emitted as its own symbol",
-    "content": "HTML/text between ERB tags; layout structure not extracted in Layer A",
-    "graphql_directive": "<%graphql %> blocks not walked; silent gap until dedicated support added"
+    "code": "Text consumed by parent directive/output_directive/graphql_directive; not emitted as its own symbol",
+    "comment": "Comment body text under comment_directive; kept as Literal leaf",
+    "content": "HTML/text between ERB tags; layout structure not extracted in Layer A (pure syntax wrapper)",
+    "template": "Root repeat container; children walked, no symbol of its own",
+    "graphql_directive": "<%graphql %> blocks emit a Property-tagged symbol with GraphQL body metadata"
   }
 }

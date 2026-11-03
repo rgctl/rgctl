@@ -49,6 +49,7 @@ Prefer the **Canonical** column in examples and agent workflows. Aliases/façade
 - [clones](#clones)
 - [cpg](#cpg)
 - [check](#check)
+- [vuln analyze](#vuln-analyze)
 - [review](#review)
 - [export](#export)
 - [serve](#serve)
@@ -334,7 +335,7 @@ rgctl -f json slice src/main/java/com/example/ecommerce/service/CartService.java
 
 **Layer flags:** `cfg --prune` drops unreachable blocks before display. `pdg --edge-layer data|control` filters to one dependence type (default `all`); `--def-use` adds def-use variable lists per node. `dom --frontiers` prints dominance frontiers instead of just the tree.
 
-**Sample:**
+**Sample (`cfg` / `pdg`):**
 
 ```json
 {
@@ -367,6 +368,8 @@ rgctl -f json slice src/main/java/com/example/ecommerce/service/CartService.java
 ```
 
 There are **no** `nodes_count` / `edges_count` fields — use `len(nodes)` / `len(edges)`.
+
+**`dom` layer (not `.edges`):** `inspect <SYM> dom` emits immediate dominators in `.idom[]` as `{block, immediate_dominator}` and (with `--frontiers`) dominance frontiers in `.frontiers[]`. Do **not** expect a CFG-style `.edges[]` array on the `dom` layer.
 
 **Pitfalls:** Ambiguous symbols fail; resolve FQN/name carefully. CFG may be **partial** on complex methods (covering only the first branch/entry block) — supplement with source reading if the block count seems low for the method's complexity.
 
@@ -484,7 +487,7 @@ rgctl -f json semantic query "…" [--limit N] [--scope function|community] \
 }
 ```
 
-**Agent should report:** top labels + sizes; use `inventory --by community` for census; explore ownership via `semantic query --scope community` / `blast-radius` (responses may include `community_id`).
+**Agent should report:** top labels + sizes; filter `member_count > 1` for domain clusters (raw lists include singletons); when using `semantic query --scope community`, prefer named clusters (`select(.name | startswith("Community ") | not)`). Use `inventory --by community` for census; explore ownership via `semantic query --scope community` / `blast-radius` (responses may include `community_id`).
 
 ---
 
@@ -677,17 +680,33 @@ rgctl cpg export --format graphson --output cpg.json [--path-contains src/] \
 
 ---
 
+## vuln analyze
+
+**Command:** `rgctl -f json vuln analyze --osv PATH [--include-jars DIR]`
+
+**Purpose:** Orchestrated OSV → deps match → sink-first reachability → OpenVEX. Prefer after `discover . --with-cfg`.
+
+**Key fields:** `.deps_verdict`, `.exploitability`, `.openvex.statements[].status`, and `.sink_taint`:
+- `.sink_taint.call_sites // []` — `{caller, target_method, file, line}` (graph + parked external calls; key omitted when empty)
+- `.sink_taint.paths[]` — `{from, to, hops}` upstream entry → sink summaries
+
+**Pitfalls:** Empty paths with `cfg_available=false` is not PDG proof of safe. Prefer `/rgctl:vuln` for the full triage protocol. Related: `vuln triage`, `deps check`.
+
+**Agent should report:** exploitability + OpenVEX status + concrete `file:line` call sites — not the full envelope.
+
+---
+
 ## review
 
 **Family:** temporal PR analysis under `rgctl review …`.
 
 ### review paths
 
-**Command:** `rgctl -f json review paths [--base-ref REF] [--head-ref REF] [--full-snapshots] [--upstream-depth N] [--downstream-depth N] [--symbol NAME]`
+**Command:** `rgctl -f json review paths [--base-ref REF] [--head-ref REF] [--synthetic-head worktree] [--full-snapshots] [--upstream-depth N] [--downstream-depth N] [--symbol NAME]`
 
 **Purpose:** Before/after call-path report for changed symbols (spines + `path_delta`). Not a policy gate.
 
-**Prerequisites:** Base/head graph snapshots (same prep as `review check` / `pr-check`).
+**Prerequisites:** Base/head graph snapshots (same prep as `review check` / `pr-check`), **or** `--synthetic-head worktree` when reviewing uncommitted working-tree edits against an already-indexed `HEAD` session (no `.rgctl-base/` required).
 
 **Sample (shape):**
 

@@ -32,3 +32,12 @@ rules:
     values:
     - 'file {'
     - 'content =>'
+- id: pp-san
+  role: sanitizer
+  kind: ShellEscape
+  match:
+    type: any_substring
+    values:
+    - shellquote(
+    - shell_escape(
+    - regsubst(

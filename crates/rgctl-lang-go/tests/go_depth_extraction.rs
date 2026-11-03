@@ -1,4 +1,4 @@
-//! Golden correctness for OpenSpec 3.5 Go const/var/type parity.
+//! Golden correctness + unconditional AST coverage exercise for Go.
 
 use rgctl_lang_go::GoPlugin;
 use rgctl_plugin_api::{LanguagePlugin, SymbolType};
@@ -41,9 +41,6 @@ type ID = string
 
 #[test]
 fn ast_coverage_all_declared_handlers_exercised() {
-    if std::env::var_os("RGCTL_AST_COVERAGE_TRACK").is_none() {
-        return;
-    }
     const MANIFEST: &str = include_str!("../go-ast-coverage.json");
     let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
     let tracker = rgctl_ast_coverage::AstCoverageTracker::from_manifest_json("go", MANIFEST, &lang)
@@ -54,44 +51,115 @@ fn ast_coverage_all_declared_handlers_exercised() {
     );
     rgctl_ast_coverage::install_hit_callback(tracker);
 
+    // Corpus must exercise every non-Literal active kind in go-ast-coverage.json.
     let sources: &[(&str, &[u8])] = &[(
         "ast_coverage_corpus.go",
         br#"
 package main
-import "fmt"
-const Max = 10
-var Count int
+
+import (
+	"fmt"
+	"io"
+)
+
+const (
+	Max = 10
+	IotaVal = iota
+)
+
+var (
+	Count int
+	Ptr   *int
+	Arr   [3]int
+	Slice []int
+	Ch    chan int
+	MapV  map[string]int
+	FnTy  func(int) int
+)
+
 type ID = string
-type S struct { X int }
-func (s *S) M() {
-  if true { return }
-  for i := 0; i < 1; i++ { break }
-  fmt.Println(Max)
+
+type Pair[T ~int | string] struct {
+	X T `json:"x"`
 }
+
+type Reader interface {
+	Read([]byte) (int, error)
+	io.Closer
+}
+
+type Neg = ~int
+
+func (p *Pair[T]) Method(a int, rest ...int) T {
+	return p.X
+}
+
+func Demo[T any](v T, w *Pair[int]) (out int) {
+	;
+	x := 1
+	x = 2
+	x++
+	x--
+	_ = -x + 1
+	_ = Arr[0]
+	_ = Slice[0:1:2]
+	_ = fmt.Println
+	_ = w.X
+	_ = interface{}(x).(int)
+	_ = int(x)
+	_ = Pair[int]{}
+	go Demo(1, w)
+	defer fmt.Println(Max)
+	if true {
+		return
+	}
+	for i := 0; i < 1; i++ {
+		break
+	}
+	for range Slice {
+		continue
+	}
+Loop:
+	for {
+		goto Loop
+	}
+	switch x {
+	case 0:
+		fallthrough
+	default:
+		break
+	}
+	switch any(x).(type) {
+	case int:
+		break
+	default:
+		break
+	}
+	select {
+	case Ch <- 1:
+	case v := <-Ch:
+		_ = v
+	default:
+	}
+	return Count
+}
+
+func Empty() {}
 "#,
     )];
 
-    let mut present = std::collections::HashSet::new();
     let plugin = GoPlugin::new().expect("plugin");
     for (path, src) in sources {
-        present.extend(rgctl_ast_coverage::named_kind_ids_in_source(&lang, src));
         plugin
             .extract_all(std::path::Path::new(path), src)
             .expect("extract_all");
     }
 
     let tracker = rgctl_ast_coverage::AstCoverageTracker::global().expect("tracker installed");
-    match tracker.assert_all_exercised() {
-        Ok(msg) => eprintln!("{msg}"),
-        Err(full) => {
-            tracker
-                .assert_present_kinds_exercised(present.iter().copied())
-                .unwrap_or_else(|e| panic!("{e}\n(full gaps: {full})"));
-            assert!(
-                tracker.total_hits() > 0,
-                "RGCTL_AST_COVERAGE_TRACK=1 but no dispatch hits recorded"
-            );
-            eprintln!("soft-gate (full assert not met): {full}");
-        }
-    }
+    let summary = tracker
+        .assert_all_exercised()
+        .expect("every active Go AST kind in go-ast-coverage.json must be exercised");
+    eprintln!("{summary}");
+    let hotspots = tracker.unhandled_hotspots(10);
+    eprintln!("go unhandled hotspots: {hotspots:?}");
 }

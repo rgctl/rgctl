@@ -11,33 +11,30 @@ How maintainers publish versioned binaries and GitHub Releases.
 - **`[workspace.dependencies]`** path pins still carry an explicit `version = "…"` (crates.io metadata); keep them in lockstep with the workspace version.
 - **Git tags** use a `v` prefix: `v0.4.18` (not `0.4.18` alone).
 
-### Automating the bump
+### Automating the release (PR-first workflow)
 
-Install once:
+Because `main` is protected by a PR-only ruleset, releases happen in two automated steps:
+
+1. **Open a Release PR** (bumps `Cargo.toml`, `Cargo.lock`, `README.md` links, and scaffolds `docs/releases/vX.Y.Z.md`):
+   - **From your terminal (one command):**
+     ```bash
+     ./scripts/bump-version.sh patch --pr    # or: minor | major | 0.4.22
+     ```
+   - **Or from GitHub Actions (`Prepare Release PR` workflow):**
+     ```bash
+     gh workflow run release-pr.yml -f bump=patch
+     ```
+     *(To allow the GitHub Action to open the PR directly rather than printing a compare link, enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** in the `rgctl` organization/repository settings.)*
+
+2. **Merge the Release PR into `main`:**
+   - When the PR merges into `main`, [`.github/workflows/release.yml`](../.github/workflows/release.yml) detects the new `[workspace.package] version` in `Cargo.toml`, automatically creates and pushes tag `vX.Y.Z`, builds the 4 platform binaries, and publishes the GitHub Release with `docs/releases/vX.Y.Z.md` and `SHA256SUMS.txt`.
+
+**Bump files locally without committing/opening a PR:**
 
 ```bash
-cargo install cargo-edit --locked      # cargo set-version
-cargo install cargo-release --locked  # cargo release
+./scripts/bump-version.sh patch       # or: minor | major | 0.4.22
+git diff   # review changes
 ```
-
-**Bump TOMLs only** (no commit/tag) — updates workspace package version, path pins, and README release link:
-
-```bash
-./scripts/bump-version.sh patch       # or: minor | major | 0.4.18
-git diff   # review, commit yourself, then tag (below)
-```
-
-**Bump + commit + tag + push** (see [`release.toml`](../release.toml); dry-run by default).
-Requires a **clean git tree** (commit the inheritance / docs changes first):
-
-```bash
-cargo release patch --workspace              # preview
-cargo release patch --workspace --execute    # commit, tag vX.Y.Z, push
-```
-
-`publish = false`: we do **not** `cargo publish` to crates.io yet. Pushing the `v*` tag still triggers the GitHub Release binary workflow below.
-
-Write `docs/releases/vX.Y.Z.md` before or right after the bump so CI can attach curated notes.
 
 ---
 
