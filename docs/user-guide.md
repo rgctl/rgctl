@@ -407,7 +407,7 @@ Konveyor labels (`konveyor.io/target`, `konveyor.io/source`, …) are stored on 
 
 **Source builds:** full embedded catalog requires the git submodule — `git submodule update --init crates/rgctl-kantra/assets/rulesets` or `./scripts/init-kantra-rulesets.sh`. Without it, the build falls back to `tests/fixtures/kantra-rules/`. See [`crates/rgctl-kantra/README.md`](../crates/rgctl-kantra/README.md).
 
-**Further reading:** [Kantra integration exploration](design/kantra-integration-exploration.md) · [Architecture options (embedded catalog + rules graph)](../KANTRA_ARCHITECTURE_OPTIONS.md) · [JSON schema](json-api.md#kantra_findingsjson)
+**Further reading:** [Kantra integration — design & current state](design/kantra-integration-exploration.md) · [`rgctl-kantra` crate README](../crates/rgctl-kantra/README.md) · [JSON schema](json-api.md#kantra_findingsjson)
 
 Does **not** require `--with-cfg`. Unsupported rule providers and invalid regex patterns are skipped with reasons in `skipped_rules`. After full eval, `violates` edges link each `KantraRule` to matched code nodes (`rgctl relations --edge violates --from-type kantrarule`).
 
