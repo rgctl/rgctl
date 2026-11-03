@@ -1,7 +1,7 @@
 /**
  * One block of a CFG, read out.
  *
- * Shared by the Spine lens, where it sits under the source pane, and the CFG·PDG lens, where it sits above
+ * Shared by the CFG lens, where it sits under the source pane, and the CFG·PDG lens, where it sits above
  * the graph. Two placements, one implementation: the alternative is two statement renderers that drift, and
  * the first thing to drift would be the honesty rule below.
  *

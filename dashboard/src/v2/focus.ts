@@ -54,6 +54,20 @@ export function parseFocus(raw: unknown): Focus | null {
   return typeof raw === "string" && UUID.test(raw) ? raw : null;
 }
 
+/**
+ * The district whose level is open, as carried in the URL.
+ *
+ * Deliberately not part of the Focus: a Focus is a *symbol*, and an open district is a place in the map. But it
+ * is the same kind of thing — a view state worth a link — and it has a second job that has nothing to do with
+ * sharing: leaving the room for a symbol and coming back has to return to the level you were reading, not to the
+ * universe. Component state cannot do that; a search param can.
+ */
+export function parseExplode(raw: unknown): number | undefined {
+  const value = typeof raw === "string" ? Number(raw) : raw;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return undefined;
+  return value;
+}
+
 /** Resolve a Focus against the loaded index. `null` means it no longer resolves — a real state. */
 export function resolveFocus<T extends { function_id: string }>(key: Focus, entries: T[]): T | null {
   return entries.find((e) => e.function_id === key) ?? null;
@@ -71,15 +85,25 @@ export const ROOMS = [
   { id: "repo", label: "Repo", blurb: "where do I start?" },
   { id: "understand", label: "Understand", blurb: "what does this symbol do?" },
   { id: "review", label: "Review", blurb: "what changed, what does it touch?" },
-  { id: "security", label: "Security", blurb: "what is reachable and dangerous?" },
+  { id: "taint", label: "Taint", blurb: "where does untrusted data reach a sink?" },
   { id: "migration", label: "Migration", blurb: "what order should we move it?" },
   { id: "proof", label: "Proof", blurb: "why should I believe any of this?" },
 ] as const;
 
+/**
+ * How you look at the focused symbol.
+ *
+ * One implemented lens, then the questions phase 3 fills. `code` and `cfgpdg` used to be entries here and
+ * were not questions — they were this lens with a different frame (the graph at 70vh without the source; the
+ * source without the graph), and both are now controls inside it. A lens control that asks "which frame?" is
+ * a menu; one that asks "which question?" is a set of views of the same subject.
+ *
+ * The id is `cfg` and the label is **CFG**, not "Spine": the lens draws the control-flow graph, and CFG is
+ * the term a reader already has. Renaming the id is safe precisely because unknown ids are normalised at the
+ * URL boundary — an old `?lens=spine` (or `code`, or `cfgpdg`) lands on this lens, which is a superset.
+ */
 export const LENSES = [
-  { id: "spine", label: "Spine" },
-  { id: "code", label: "Code" },
-  { id: "cfgpdg", label: "CFG·PDG" },
+  { id: "cfg", label: "CFG" },
   { id: "dataflow", label: "Dataflow" },
   { id: "slice", label: "Slice/Trace" },
   { id: "blast", label: "Blast" },
@@ -89,6 +113,16 @@ export const LENSES = [
 
 export type RoomId = (typeof ROOMS)[number]["id"];
 export type LensId = (typeof LENSES)[number]["id"];
+
+/**
+ * Where `/` lands.
+ *
+ * Architecture, not Repo: the universe is the surface this dashboard exists for, and "how is it
+ * structured?" is the question a reader arrives with. It is also the room whose data every
+ * `--with-universe` bundle carries, so the landing view is never an absence state. Repo keeps its job
+ * (`where do I start?`) and is one click away.
+ */
+export const DEFAULT_ROOM: RoomId = "architecture";
 
 export const isRoom = (v: unknown): v is RoomId => ROOMS.some((r) => r.id === v);
 export const isLens = (v: unknown): v is LensId => LENSES.some((l) => l.id === v);

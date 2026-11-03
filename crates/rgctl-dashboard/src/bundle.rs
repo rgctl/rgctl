@@ -3,6 +3,7 @@
 use include_dir::{Dir, include_dir};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 static DASHBOARD_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../dashboard/dist");
 static DASHBOARD_DIST_V2: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../dashboard/dist-v2");
@@ -14,18 +15,28 @@ pub const DASHBOARD_DIR_NAME: &str = "dashboard";
 /// `--with-universe`, and the v2 bundle is what it serves.
 pub const DASHBOARD_V2_ENV: &str = "RGCTL_DASHBOARD_V2";
 
-/// Serves the pre-universe dashboard for one release.
+/// Emergency hatch: force the pre-universe (v1) embed until `remove-v1-dashboard`.
 ///
-/// `--with-dashboard` no longer produces v1 — it routes to the universe and says it is deprecated
-/// (issue #61). But v1 is still the only place `Migration` and `Taint` render, so removing it in the
-/// same release as the swap would ship a binary with fewer reachable views than the one before it.
-/// This hatch is documented, is removed next release together with v1's app and bundle.
+/// The CLI only exposes `--with-universe`. This env is for scripts / one-release rollback.
 pub const DASHBOARD_LEGACY_ENV: &str = "RGCTL_DASHBOARD_LEGACY";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BundleVersion {
     V1,
     V2,
+}
+
+/// Process-local CLI override: 0 = none, 1 = V1, 2 = V2. Wins over env.
+static BUNDLE_OVERRIDE: AtomicU8 = AtomicU8::new(0);
+
+/// Pin the bundle for this process (discover/serve CLI). `None` clears the override.
+pub fn set_bundle_override(version: Option<BundleVersion>) {
+    let tag = match version {
+        None => 0,
+        Some(BundleVersion::V1) => 1,
+        Some(BundleVersion::V2) => 2,
+    };
+    BUNDLE_OVERRIDE.store(tag, Ordering::SeqCst);
 }
 
 fn truthy(value: Option<&str>) -> bool {
@@ -35,13 +46,10 @@ fn truthy(value: Option<&str>) -> bool {
     }
 }
 
-/// Which bundle to extract.
+/// Which bundle to extract from env alone.
 ///
-/// **The universe is the default**, because both flags now mean it: `--with-universe` is the flag, and
-/// `--with-dashboard` routes to it while warning (issue #61). The only way to get v1 is the documented
-/// one-release hatch, which is checked first so a regression can be worked around without a rebuild.
-///
-/// Pure, so it can be tested without mutating process-global state.
+/// Pure, so it can be tested without mutating process-global state. CLI overrides go through
+/// [`set_bundle_override`] and are applied in [`selected_version`].
 fn version_from_env(legacy: Option<&str>, universe: Option<&str>) -> BundleVersion {
     if truthy(legacy) {
         return BundleVersion::V1;
@@ -51,6 +59,11 @@ fn version_from_env(legacy: Option<&str>, universe: Option<&str>) -> BundleVersi
 }
 
 pub fn selected_version() -> BundleVersion {
+    match BUNDLE_OVERRIDE.load(Ordering::SeqCst) {
+        1 => return BundleVersion::V1,
+        2 => return BundleVersion::V2,
+        _ => {}
+    }
     version_from_env(
         std::env::var(DASHBOARD_LEGACY_ENV).ok().as_deref(),
         std::env::var(DASHBOARD_V2_ENV).ok().as_deref(),
@@ -85,10 +98,107 @@ pub fn warn_if_legacy_selected() {
     if selected_version() == BundleVersion::V1 {
         eprintln!(
             "note: {} is set, so the pre-universe dashboard is being served.\n  \
-             It is deprecated and is removed in the next release — unset it to get the universe.",
+             Unset it (and use `--with-universe`) for the universe UI — removed next release.",
             DASHBOARD_LEGACY_ENV
         );
     }
+}
+
+/// Re-extract the static SPA for `version` when on-disk shell does not match.
+///
+/// Used by `rgctl serve` so `--open` defaults to the universe shell even if an older v1
+/// bundle is still under `.rgctl/dashboard/`. JSON sidecars are left untouched.
+///
+/// Matching `manifest.mode` alone is not enough: a prior partial swap can leave mixed
+/// `assets/` (v1 + v2 hashes) or a missing entry script while mode already says `universe`.
+pub fn ensure_static_shell(out_dir: &Path, version: BundleVersion) -> Result<(), String> {
+    set_bundle_override(Some(version));
+    let want_mode = selected_mode();
+    let want_tag = selected_version_tag();
+    let manifest_path = out_dir.join("manifest.json");
+    let current_mode = read_manifest_mode(&manifest_path);
+    if current_mode.as_deref() == Some(want_mode) && index_matches_version(out_dir, version) {
+        return Ok(());
+    }
+    // Drop stale hashed SPA chunks so v1 files cannot shadow / confuse a v2 extract.
+    let assets = out_dir.join("assets");
+    if assets.is_dir() {
+        let _ = fs::remove_dir_all(&assets);
+    }
+    extract_static_assets(out_dir)?;
+    if manifest_path.is_file() {
+        patch_manifest_bundle_fields(&manifest_path, want_mode, want_tag)?;
+    }
+    Ok(())
+}
+
+/// True when the on-disk `index.html` is the *same build* as the embedded one for this version.
+///
+/// Comparing the entry-script naming alone (`index.v2-`) answered "does this look like a v2 shell", not
+/// "is it the v2 shell in this binary". Vite emits content-hashed names, so after any dashboard rebuild the
+/// on-disk copy still carried the old hashes, matched, and `ensure_static_shell` returned early: `rgctl
+/// serve` kept serving the previous build with no message, and the only way to see a rebuild was to delete
+/// `index.html` by hand — which reads as the dashboard being stale or the build being broken.
+///
+/// The entry filename *is* the build identity here, so it is compared exactly.
+fn index_matches_version(out_dir: &Path, version: BundleVersion) -> bool {
+    let Ok(disk) = fs::read_to_string(out_dir.join("index.html")) else {
+        return false;
+    };
+    let Some(want) = embedded_entry_ref(version) else {
+        return false;
+    };
+    entry_ref(&disk, version).as_deref() == Some(want.as_str())
+}
+
+/// The entry script a shell's `index.html` loads, e.g. `assets/index.v2-n9DL2Vn8.js`.
+///
+/// v2's vite build prefixes the entry as `index.v2-*`; v1's is `index-*`, and the two prefixes cannot
+/// match one another because the `.` sits inside the first.
+fn entry_ref(html: &str, version: BundleVersion) -> Option<String> {
+    let marker = match version {
+        BundleVersion::V1 => "assets/index-",
+        BundleVersion::V2 => "assets/index.v2-",
+    };
+    let start = html.find(marker)?;
+    let rest = &html[start..];
+    let end = rest.find('"').or_else(|| rest.find('\''))?;
+    Some(rest[..end].to_string())
+}
+
+/// The same entry filename, read from the bundle compiled into this binary.
+fn embedded_entry_ref(version: BundleVersion) -> Option<String> {
+    let html = embedded_for(version).get_file("index.html")?;
+    entry_ref(html.contents_utf8()?, version)
+}
+
+fn read_manifest_mode(path: &Path) -> Option<String> {
+    let bytes = fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&bytes).ok()?;
+    value
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+}
+
+fn patch_manifest_bundle_fields(
+    path: &Path,
+    mode: &str,
+    bundle_version: &str,
+) -> Result<(), String> {
+    let bytes = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&bytes).map_err(|e| format!("parse manifest for shell swap: {e}"))?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("mode".into(), serde_json::Value::String(mode.into()));
+        obj.insert(
+            "bundle_version".into(),
+            serde_json::Value::String(bundle_version.into()),
+        );
+    }
+    let pretty = serde_json::to_string_pretty(&value)
+        .map_err(|e| format!("serialize manifest after shell swap: {e}"))?;
+    fs::write(path, pretty).map_err(|e| e.to_string())
 }
 
 /// Say so when a bundle was requested that this build cannot serve.
@@ -288,10 +398,20 @@ mod tests {
             BundleVersion::V2
         );
         assert_eq!(version_from_env(None, Some("1")), BundleVersion::V2);
-        // the one-release hatch is the only way back, and it wins over everything
+        // the one-release hatch is the only way back via env
         assert_eq!(version_from_env(Some("1"), None), BundleVersion::V1);
         assert_eq!(version_from_env(Some("true"), Some("1")), BundleVersion::V1);
         assert_eq!(version_from_env(Some("TRUE"), None), BundleVersion::V1);
+    }
+
+    #[test]
+    fn cli_override_wins_over_env_default() {
+        set_bundle_override(Some(BundleVersion::V1));
+        assert_eq!(selected_version(), BundleVersion::V1);
+        set_bundle_override(Some(BundleVersion::V2));
+        assert_eq!(selected_version(), BundleVersion::V2);
+        set_bundle_override(None);
+        assert_eq!(selected_version(), version_from_env(None, None));
     }
 
     /// The v2 bundle is committed, so a fresh checkout must carry a complete one. The embed is the check.
@@ -324,6 +444,53 @@ mod tests {
             return;
         }
         assert_paths(&DASHBOARD_DIST);
+    }
+
+    /// A rebuilt dashboard must be swapped in; an *older build of the same version* must not look current.
+    ///
+    /// This is the regression: `index_matches_version` compared the entry-script naming, which a rebuild
+    /// does not change, so `rgctl serve` kept serving the previous build silently.
+    #[test]
+    fn a_stale_build_of_the_same_version_is_not_current() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let out = tmp.path().join("dashboard");
+        fs::create_dir_all(out.join("assets")).expect("assets dir");
+
+        // Build A: an entry filename that is not the embedded build's.
+        fs::write(
+            out.join("index.html"),
+            r#"<!doctype html><html><head><title>rgctl</title></head><body><script type="module" src="/assets/index.v2-STALEBUILD.js"></script></body></html>"#,
+        )
+        .expect("write index");
+        assert!(
+            !index_matches_version(&out, BundleVersion::V2),
+            "a different build of the same version must not count as current"
+        );
+
+        // The embedded build itself: extracted verbatim, so this asserts the identity comparison works.
+        extract_static_assets_from(&out, &tmp.path().join("no-disk"), &DASHBOARD_DIST_V2)
+            .expect("extract embedded v2");
+        assert!(
+            index_matches_version(&out, BundleVersion::V2),
+            "the embedded build must match itself"
+        );
+    }
+
+    #[test]
+    fn entry_ref_reads_the_v2_and_v1_entry_names() {
+        let v2 = r#"<script type="module" crossorigin src="/assets/index.v2-abc123.js"></script>"#;
+        let v1 = r#"<script type="module" src="./assets/index-Xy9.js"></script>"#;
+        assert_eq!(
+            entry_ref(v2, BundleVersion::V2).as_deref(),
+            Some("assets/index.v2-abc123.js")
+        );
+        assert_eq!(
+            entry_ref(v1, BundleVersion::V1).as_deref(),
+            Some("assets/index-Xy9.js")
+        );
+        // The markers must not match each other's build.
+        assert_eq!(entry_ref(v2, BundleVersion::V1), None);
+        assert_eq!(entry_ref("<html></html>", BundleVersion::V2), None);
     }
 
     #[test]

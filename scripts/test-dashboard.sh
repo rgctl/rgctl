@@ -45,6 +45,19 @@ suite "v1 suite" ""
 step "npm: v2 dashboard (React)"
 suite "v2 suite" "vitest.config.v2.ts"
 
+# --- typecheck ------------------------------------------------------------------------------------
+#
+# Not implied by the suite. `vite build` and `vitest` both strip types without checking them, so a call to a
+# method that does not exist is compiled, bundled and silently does nothing at runtime — which is how a
+# "select a district" control shipped that highlighted a row in a list and moved no camera:
+# `scene.focusSolid(...)` was optional-chained, the method had never been written, and every gate passed.
+step "npm: v2 typecheck"
+if (cd "$ROOT/dashboard" && npx tsc -p tsconfig.v2.json --noEmit); then
+  ok "v2 typecheck"
+else
+  bad "v2 typecheck"
+fi
+
 # --- offline gate ---------------------------------------------------------------------------------
 #
 # The bundle is embedded in the binary and must work with no network. This checks the *resource*

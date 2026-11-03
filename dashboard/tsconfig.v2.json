@@ -23,6 +23,11 @@
     "jsxImportSource": "react"
   },
   "include": [
-    "src/v2"
+    "src/v2",
+    "src/migration/**/*.ts",
+    "src/cfgRecordIndex.ts"
+  ],
+  "exclude": [
+    "src/migration/**/*.test.ts"
   ]
 }
