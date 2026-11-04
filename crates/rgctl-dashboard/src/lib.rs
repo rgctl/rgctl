@@ -125,7 +125,9 @@ pub fn export_dashboard_bundle_if_changed_with_context(
                 let same_graph =
                     manifest.export_fingerprint.as_deref() == Some(fingerprint.as_str());
                 let same_bundle = manifest.bundle_version.as_deref() == Some(version);
-                if same_graph && same_bundle {
+                // index.html is the serve entrypoint; if it was deleted, rewrite even when
+                // the fingerprint still matches (full-pipeline warm recovery).
+                if same_graph && same_bundle && out_dir.join("index.html").is_file() {
                     return Ok(false);
                 }
             }

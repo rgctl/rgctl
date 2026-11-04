@@ -265,12 +265,23 @@ fn enrich_violations(
     violations: &mut [crate::findings::KantraViolation],
     rule: &crate::schema::KantraRule,
 ) {
+    let targets = crate::catalog::rule_konveyor_targets(rule);
+    let sources = crate::catalog::rule_konveyor_sources(rule);
     for v in violations {
         if v.message.is_none() {
             v.message = rule.message.clone();
         }
         if v.category.is_none() {
             v.category = rule.category.clone();
+        }
+        if v.targets.is_empty() {
+            v.targets = targets.clone();
+        }
+        if v.sources.is_empty() {
+            v.sources = sources.clone();
+        }
+        if v.effort.is_none() {
+            v.effort = rule.effort;
         }
     }
 }

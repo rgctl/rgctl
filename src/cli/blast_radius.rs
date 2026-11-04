@@ -33,6 +33,8 @@ pub struct BlastRadiusArgs {
     pub classify_boundary: bool,
     /// Allowlist boundary kinds / HTTP methods (`REST_ENDPOINT`, `POST`, …).
     pub boundary: Vec<String>,
+    /// Compact summary instead of full impact-zone node dump.
+    pub summary: bool,
 }
 
 struct PreparedImpact {
@@ -475,10 +477,84 @@ fn emit_output(
     if args.classify_boundary {
         enrich_boundaries(&mut response, &args.boundary);
     }
+    if args.summary {
+        return emit_summary(ctx, &response);
+    }
     if ctx.format == OutputFormat::Json {
         return ctx.emit_json_value(&response_to_json(&response));
     }
     ctx.emit(&emit_text(&response))
+}
+
+fn emit_summary(ctx: &CliContext, response: &BlastRadiusResponse) -> Result<()> {
+    use std::collections::BTreeMap;
+    let direct = response.metrics.direct_callers_count;
+    let zone = response.metrics.impact_zone_size;
+    let transitive = zone.saturating_sub(direct);
+    let mut file_counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for sym in &response.topology.impact_zone {
+        if !sym.file_path.is_empty() {
+            *file_counts.entry(sym.file_path.as_str()).or_default() += 1;
+        }
+    }
+    let mut top_files: Vec<_> = file_counts.into_iter().collect();
+    top_files.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    top_files.truncate(10);
+
+    if ctx.format == OutputFormat::Json {
+        let files: Vec<_> = top_files
+            .iter()
+            .map(|(path, count)| {
+                serde_json::json!({
+                    "file": path,
+                    "impacted_symbols": count,
+                })
+            })
+            .collect();
+        let direct_callers: Vec<_> = response
+            .topology
+            .direct_callers
+            .iter()
+            .take(10)
+            .map(|c| {
+                serde_json::json!({
+                    "fqn": c.fqn,
+                    "file_path": c.file_path,
+                })
+            })
+            .collect();
+        let mut out = serde_json::json!({
+            "schema_version": 1,
+            "command": "blast_radius_summary",
+            "target": {
+                "symbol": response.target.symbol,
+                "canonical_fqn": response.target.canonical_fqn,
+                "file_path": response.target.file_path,
+            },
+            "score": response.metrics.score,
+            "distance_buckets": {
+                "direct": direct,
+                "transitive": transitive,
+                "impact_zone_size": zone,
+            },
+            "direct_callers": direct_callers,
+            "top_files": files,
+        });
+        if let Some(depth) = response.metrics.caller_depth_limit {
+            out.as_object_mut()
+                .unwrap()
+                .insert("caller_depth_limit".into(), serde_json::json!(depth));
+        }
+        return ctx.emit_json_value(&out);
+    }
+    ctx.stdout_line(&format!(
+        "blast-radius summary: {} score={:.1} direct={} transitive={} zone={}",
+        response.target.canonical_fqn, response.metrics.score, direct, transitive, zone
+    ))?;
+    for (path, count) in top_files.iter().take(5) {
+        ctx.stdout_line(&format!("  {path}: {count}"))?;
+    }
+    Ok(())
 }
 
 fn enrich_boundaries(response: &mut BlastRadiusResponse, allowlist: &[String]) {
@@ -514,7 +590,9 @@ fn enrich_boundaries(response: &mut BlastRadiusResponse, allowlist: &[String]) {
 }
 
 pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
+    // `--summary` needs the structured response path (not the service Impact shortcut).
     if ctx.format == OutputFormat::Json
+        && !args.summary
         && args.policy_file.is_none()
         && !args.with_slices
         && !args.classify_boundary

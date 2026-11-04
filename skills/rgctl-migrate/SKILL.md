@@ -1,88 +1,106 @@
 ---
 name: rgctl-migrate
 description: >-
-  Plan a Strangler-Fig extraction with rgctl discover --export-migration-hints,
-  migration_plan.json v2 steps, Fast-Leiden communities, and blast-radius on
-  boundary symbols. Use when asked for a migration roadmap, extraction order,
-  or service-boundary audit.
+  Code-intelligence migration planning with rgctl: framework/runtime/version
+  upgrades, API/package/library refactors, and Strangler-Fig architectural
+  extraction. Prefer rgctl structural queries first; Kantra is an optional
+  accelerator only for its embedded target catalog. Use when asked for a
+  migration roadmap, modernization plan, javax→jakarta / Quarkus / Spring Boot
+  upgrade, package move, or service-boundary cut.
 rgctl-managed: true
 ---
 
 # rgctl-migrate (`/rgctl:migrate`)
 
-Dependency-ordered Strangler-Fig migration planning via **`--export-migration-hints`**, **`communities list`**, and **`blast-radius`**. No forge posts; no `serve` / `--watch` required (optional dashboard is out of scope for this skill).
+Plan and execute migrations with **rgctl code intelligence** — not grep-first, not Kantra-first.
 
-Bound stdout: filter plan steps and communities with `jq '.[0:20]'`; use `--depth 2` or `--depth 3` on `blast-radius` probes (neither `blast-radius` nor `communities list` accepts `--limit`).
-
-## When to Use
-
-- User wants a migration / extraction roadmap or “what should we move first?”
-- User is modernizing legacy/mainframe sources (`cobol`, `pli`, `jcl`, …) or carving a service boundary.
-- User asks for coupling bottlenecks or test/adapter handoffs for a Strangler-Fig cut.
-
-## Prerequisites
-
-- Work in the repo root (`REPO_PATH`, default `.`).
-- Choose preset/order to match intent (defaults below are fine for a first pass).
-
-Do **not** start `rgctl serve` solely for this skill.
-
-## Steps
-
-### Step 1: Discover + migration plan
+## Step 0: Acquire `.rgctl/` First (mandatory)
 
 ```bash
 cd "${REPO_PATH:-.}"
-PRESET="${migration_preset:-hybrid_default}"
-ORDER="${migration_order:-scheduled}"
-# When legacy sources exist, add e.g.: -l cobol,pli,jcl
-# LANG_FLAGS="-l cobol,pli,jcl"
-LANG_FLAGS="${LANG_FLAGS:-}"
-
-rgctl discover . --export-migration-hints --with-harmonic \
-  --migration-preset "${PRESET}" --migration-order "${ORDER}" \
-  ${LANG_FLAGS}
+rgctl -f json status   # if graph.snapshot.bin missing →
+rgctl discover .
 ```
 
-Other presets: `foundational_first`, `dense_cluster`, `risk_mitigation`. Order: `scheduled` (dependency-safe) or `priority` (score rank).
+Prefer `rgctl -f json` (`inventory`, `find`, `relations`, `callers`, `blast-radius`, `slice`) **before** reading source files. For multi-wave work, start `rgctl serve --watch` or run `rgctl update` between waves.
 
-### Step 2: Parse `migration_plan.json` (schema v2)
+## Choose a track
+
+| Track | When | Lead with |
+|-------|------|-----------|
+| **A — Framework / Runtime / Version** | EE→Quarkus, Spring Boot 2→3, Jakarta namespace, JDK bumps | import census + annotations + DI/routes |
+| **B — API / Package / Library** | Move packages, rename types, swap libraries | `find --package`, callers, CPG mutations, blast-radius |
+| **C — Architectural / Strangler-Fig** | Extract a service / bounded context | `--export-migration-hints`, communities, boundary blast-radius |
+
+Optional note: if sources are COBOL/PL/I/JCL, add `-l cobol,pli,jcl` on discover — do **not** lead with mainframe flags for mainstream Java/TS/Go work.
+
+## Track A — Framework, Runtime & Version Migration
 
 ```bash
-jq '.schema_version, [.steps[] | select(.label != "root") | {
-  step, label, schedule_step, priority_rank, avg_pagerank, avg_harmonic
-}] | .[0:20]' "${REPO_PATH:-.}/.rgctl/migration_plan.json"
+rgctl -f json inventory --by import-prefix --limit 50
+# optional focus: --prefix javax.  or --prefix org.springframework.
+
+rgctl -f json find "import <legacy_prefix>*" --type import --limit 50
+rgctl -f json find --annotation "@PersistenceContext,@Inject,@ConfigProperty,@Autowired,@Path,@RequestMapping" --show-attributes --limit 40
+rgctl -f json relations --edge injects --limit 40
+rgctl -f json relations --edge exposesroute --limit 40
+rgctl -f json callers <entry_sym> --depth 2
+rgctl -f json blast-radius <entry_sym> --summary
 ```
 
-Ignore the synthetic `"root"` step. Summarize ordered waves — do not paste the full plan into chat.
+Order edit waves by callers / blast-radius. After each wave: `rgctl update` → re-check `find "import <legacy>*" --type import` (`total == 0`).
 
-### Step 3: Communities + blast radius on boundaries
+## Track B — API, Package & Library Refactoring
 
 ```bash
-rgctl -f json communities list \
-  | jq '[.communities[] | select(.member_count > 1)] | .[0:20]'
-
-# For top extraction candidates / shared boundary symbols:
-rgctl -f json blast-radius "<boundary_symbol>" --depth 3
+rgctl -f json find --package <maven.or.npm.coords> --limit 40
+rgctl -f json callers <TypeOrMethod> --depth 2
+rgctl -f json cpg mutations --type <DTO> --exclude-ctors   # needs discover --with-cfg
+rgctl -f json slice <FILE> --line N --variable V
+rgctl -f json blast-radius <TypeOrMethod> --summary
 ```
 
-Prefer multi-member clusters (`member_count > 1`). Skip unlabeled singletons when labeling ownership (`select(.name | startswith("Community ") | not)` on named overlays).
+## Track C — Architectural / Strangler-Fig Decomposition
 
-### Step 4: Strangler-Fig Extraction Brief
+```bash
+rgctl discover . --export-migration-hints --with-harmonic
+jq '[.steps[] | select(.label != "root")] | .[0:20]' .rgctl/migration_plan.json
+rgctl -f json communities list | jq '[.communities[] | select(.member_count > 1)] | .[0:20]'
+rgctl -f json blast-radius "<boundary_symbol>" --depth 3 --summary
+```
+
+Presets: `hybrid_default` | `foundational_first` | `dense_cluster` | `risk_mitigation`. Order: `scheduled` | `priority`.
+
+### Extraction brief template
 
 ```markdown
 ## Extraction Brief
-
 ## Ordered phases (from steps[])
 ## Coupling bottlenecks (communities + blast-radius)
-## Shared boundaries / adapters to introduce
+## Shared boundaries / adapters
 ## Test handoffs
 ## Sources (.rgctl/migration_plan.json, communities, blast-radius)
 ```
 
-### Step 5: Post-Edit Verification
+## Optional Kantra overlay (target-specific only)
 
-After executing a migration wave (e.g. `javax.*` → `jakarta.*` or a boundary cut), refresh and verify before concluding:
+Kantra is **not** the primary migration workflow. Use it only when the destination matches the embedded catalog:
+
+`openjdk11+`, `openjdk17+`, `openjdk21+`, `jakarta-ee9+`, `quarkus`, `quarkus3+`, `spring-boot3+`, `spring6+`, `hibernate6+`, `camel3+`, `camel4+`, `eap7`, `eap8`, `openliberty`, `cloud-readiness`, `angular`, `patternfly-v6`, `dotnet-core`
+
+```bash
+# All-target eval during discover (writes .rgctl/kantra_findings.json with targets[])
+rgctl discover . --with-kantra
+rgctl -f json rules targets
+rgctl -f json rules findings --target quarkus,jakarta-ee9+ --limit 40
+
+# Or post-discover against embedded catalog (no DIR required)
+rgctl -f json rules run --target quarkus
+```
+
+For every other migration, stay on Tracks A–C with core structural queries.
+
+## Post-edit verification
 
 ```bash
 rgctl update
@@ -90,11 +108,9 @@ rgctl -f json find "import <legacy>*" --type import   # expect total == 0
 rgctl -f json review paths --synthetic-head worktree --max-symbols 25
 ```
 
-Confirm zero legacy imports and clean call-path deltas (`change_summary` / `symbols[].path_delta`). Re-query `callers <new_sym>` when signatures moved.
-
 ## Gotchas
 
 - Always `-f json` on query verbs; parse stdout; never `2>/dev/null`.
 - `migration_plan.json` uses **`.steps[]`** (v2), not v1 `packages[]`.
-- PageRank / harmonic names are already on plan steps and `metrics --pagerank` JSON — no `cpg function` UUID lookup.
-- Constrain heavy discovers with `--with-limits` in containers when needed.
+- Inventory JSON uses **`.counts`**, not `.items`.
+- Prefer `blast-radius --summary` / `inventory --limit` over dumping huge payloads.

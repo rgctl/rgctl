@@ -1,5 +1,6 @@
 //! Kantra findings artifact schema.
 
+use crate::catalog::{rule_konveyor_sources, rule_konveyor_targets};
 use crate::schema::KantraRule;
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +32,12 @@ pub struct KantraViolation {
     pub matched_by: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enrichment: Option<ViolationEnrichment>,
 }
@@ -93,7 +100,7 @@ impl KantraFindings {
             .sort_by(|a, b| (&a.file, a.line, &a.rule_id).cmp(&(&b.file, b.line, &b.rule_id)));
     }
 
-    /// Attach message/category from rule metadata.
+    /// Attach message/category/targets/sources/effort from rule metadata.
     pub fn enrich_from_rule(&mut self, rule: &KantraRule, idx: usize) {
         if let Some(v) = self.violations.get_mut(idx) {
             if v.message.is_none() {
@@ -102,11 +109,87 @@ impl KantraFindings {
             if v.category.is_none() {
                 v.category = rule.category.clone();
             }
+            if v.targets.is_empty() {
+                v.targets = rule_konveyor_targets(rule);
+            }
+            if v.sources.is_empty() {
+                v.sources = rule_konveyor_sources(rule);
+            }
+            if v.effort.is_none() {
+                v.effort = rule.effort;
+            }
         }
     }
 
     /// Parse findings JSON (tolerant of schema v1 missing enrichment fields).
     pub fn from_json(bytes: &[u8]) -> Result<Self, serde_json::Error> {
         serde_json::from_slice(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_rule() -> KantraRule {
+        KantraRule {
+            rule_id: "r1".into(),
+            description: None,
+            category: Some("mandatory".into()),
+            effort: Some(3),
+            message: Some("migrate me".into()),
+            labels: vec![
+                "konveyor.io/target=quarkus".into(),
+                "konveyor.io/target=jakarta-ee9+".into(),
+                "konveyor.io/source=java-ee".into(),
+            ],
+            when: serde_yaml::from_str("builtin.filecontent:\n  pattern: x\n").unwrap(),
+        }
+    }
+
+    #[test]
+    fn enrich_from_rule_populates_targets_sources_effort() {
+        let mut findings = KantraFindings::new("test", Some("c@1"), None, 1);
+        findings.violations.push(KantraViolation {
+            rule_id: "r1".into(),
+            category: None,
+            file: "a.java".into(),
+            line: 1,
+            message: None,
+            matched_by: "builtin.filecontent".into(),
+            symbol: None,
+            targets: Vec::new(),
+            sources: Vec::new(),
+            effort: None,
+            enrichment: None,
+        });
+        findings.enrich_from_rule(&sample_rule(), 0);
+        let v = &findings.violations[0];
+        assert_eq!(v.message.as_deref(), Some("migrate me"));
+        assert_eq!(v.category.as_deref(), Some("mandatory"));
+        assert_eq!(v.targets, vec!["quarkus", "jakarta-ee9+"]);
+        assert_eq!(v.sources, vec!["java-ee"]);
+        assert_eq!(v.effort, Some(3));
+    }
+
+    #[test]
+    fn from_json_tolerates_missing_targets_sources_effort() {
+        let raw = r#"{
+            "schema_version": 2,
+            "command": "kantra_findings",
+            "ruleset": "t",
+            "evaluated_rules": 1,
+            "violations": [{
+                "rule_id": "r1",
+                "file": "a.java",
+                "line": 1,
+                "matched_by": "builtin.filecontent"
+            }],
+            "skipped_rules": []
+        }"#;
+        let findings = KantraFindings::from_json(raw.as_bytes()).unwrap();
+        assert!(findings.violations[0].targets.is_empty());
+        assert!(findings.violations[0].sources.is_empty());
+        assert_eq!(findings.violations[0].effort, None);
     }
 }

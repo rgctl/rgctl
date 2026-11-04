@@ -256,6 +256,7 @@ pub(crate) fn run_full_analysis(
         (stats, digest)
     } else {
         std::fs::create_dir_all(rgctl_graph::paths::artifact_dir(store))?;
+        rgctl_graph::paths::ensure_rgctl_git_exclude(store);
         let (stats, digest) =
             pipeline.process_repository_to_snapshot(root, &snapshot_path, Some(store))?;
         if verbose {
@@ -1318,6 +1319,7 @@ pub(crate) fn run_full_analysis(
     // Save analysis results (columnar format - separate from graph!)
     let save_analysis_start = Instant::now();
     std::fs::create_dir_all(rgctl_graph::paths::artifact_dir(store))?;
+    rgctl_graph::paths::ensure_rgctl_git_exclude(store);
     analysis_results.save(&analysis_path)?;
     profile.save_analysis.secs = secs(save_analysis_start.elapsed());
 

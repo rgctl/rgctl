@@ -144,7 +144,7 @@ fn discover_full_json_is_one_object_with_plan() {
 }
 
 #[test]
-fn discover_full_does_not_require_taint() {
+fn discover_full_includes_taint_and_kantra() {
     let (_tmp, repo) = materialize();
     let repo_s = repo.to_str().unwrap();
     let output = run_in(
@@ -159,12 +159,31 @@ fn discover_full_does_not_require_taint() {
             "java,rust",
         ],
     );
-    assert_ok(&output, "discover --full without taint");
+    assert_ok(&output, "discover --full with taint+kantra");
     let taint = repo.join(".rgctl/dashboard/taint_index.json");
-    if taint.is_file() {
-        let doc: Value = serde_json::from_slice(&fs::read(taint).unwrap()).unwrap();
-        assert_ne!(doc["available"].as_bool(), Some(true));
-    }
+    assert!(
+        taint.is_file(),
+        "deep stage must export dashboard/taint_index.json"
+    );
+    let kantra = repo.join(".rgctl/kantra_findings.json");
+    assert!(
+        kantra.is_file(),
+        "deep stage must write kantra_findings.json"
+    );
+}
+
+#[test]
+fn discover_help_full_mentions_taint_and_kantra() {
+    let output = Command::new(rgctl_bin())
+        .args(["discover", "--help"])
+        .output()
+        .expect("help");
+    assert_ok(&output, "discover --help");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("taint") && text.contains("Kantra"),
+        "--full help should mention taint and Kantra:\n{text}"
+    );
 }
 
 #[test]

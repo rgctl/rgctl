@@ -1783,9 +1783,182 @@ impl JavaPlugin {
             &ctx,
             &mut symbols,
         );
+        // Emit Variable nodes for annotated fields so `find --annotation` and
+        // AnnotatedWith edges resolve without requiring `--with-cfg` field materialization.
+        self.emit_annotated_field_variables(
+            root,
+            source,
+            &file_path.to_string_lossy(),
+            &ctx,
+            None,
+            &mut symbols,
+        )?;
         let same = Self::same_file_types(&symbols);
         self.enrich_symbol_type_fqns(&ctx, &same, &mut symbols);
         Ok(symbols)
+    }
+
+    /// True when a `field_declaration` carries at least one non-noise annotation
+    /// (excluding Lombok/nullability/compiler markers that would inflate large corpora).
+    pub(crate) fn has_meaningful_field_annotation(&self, node: Node, source: &[u8]) -> bool {
+        let mut cursor = node.walk();
+        let Some(modifiers) = node.children(&mut cursor).find(|c| c.kind() == "modifiers") else {
+            return false;
+        };
+        let mut mcursor = modifiers.walk();
+        for child in modifiers.children(&mut mcursor) {
+            if !matches!(child.kind(), "annotation" | "marker_annotation") {
+                continue;
+            }
+            let Some(name_node) = child.child_by_field_name("name") else {
+                continue;
+            };
+            let Ok(raw) = name_node.utf8_text(source) else {
+                continue;
+            };
+            let simple = raw.rsplit('.').next().unwrap_or(raw);
+            if !matches!(
+                simple,
+                "NonNull"
+                    | "NotNull"
+                    | "Nullable"
+                    | "Getter"
+                    | "Setter"
+                    | "SuppressWarnings"
+                    | "Deprecated"
+                    | "Override"
+                    | "Serial"
+                    | "ToString"
+                    | "EqualsAndHashCode"
+                    | "Builder"
+                    | "With"
+                    | "Singular"
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Push `Variable` symbols for a single annotated `field_declaration` node.
+    pub(crate) fn push_field_declaration_variables(
+        &self,
+        node: Node,
+        source: &[u8],
+        file_path: &str,
+        owner_qn: Option<&str>,
+        symbols: &mut Vec<Symbol>,
+    ) {
+        if !self.has_meaningful_field_annotation(node, source) {
+            return;
+        }
+        let field_type = node
+            .child_by_field_name("type")
+            .and_then(|n| n.utf8_text(source).ok())
+            .map(str::to_string);
+        let kw = self.collect_keyword_modifiers(node, source);
+        let visibility = if kw.is_empty() {
+            None
+        } else {
+            Some(kw.join(" "))
+        };
+        let mut decl_cursor = node.walk();
+        for decl in node.children(&mut decl_cursor) {
+            if decl.kind() != "variable_declarator" {
+                continue;
+            }
+            let Some(name_node) = decl.child_by_field_name("name") else {
+                continue;
+            };
+            let Ok(name) = name_node.utf8_text(source) else {
+                continue;
+            };
+            let qn = match owner_qn {
+                Some(o) if !o.is_empty() => format!("{o}.{name}"),
+                _ => name.to_string(),
+            };
+            let mut metadata = serde_json::json!({
+                "language": "java",
+                "kind": "field",
+            });
+            if let Some(ref ft) = field_type {
+                metadata["field_type"] = serde_json::Value::String(ft.clone());
+            }
+            if let Some(ref vis) = visibility {
+                metadata["visibility"] = serde_json::Value::String(vis.clone());
+            }
+            if let Some(o) = owner_qn.filter(|o| !o.is_empty()) {
+                metadata["member_of"] = serde_json::Value::String(o.to_string());
+            }
+            symbols.push(Symbol {
+                name: name.to_string(),
+                symbol_type: SymbolType::Variable,
+                qualified_name: Some(qn),
+                location: source_location(node, file_path),
+                signature: None,
+                return_type: field_type.clone(),
+                parameters: vec![],
+                fields: vec![],
+                modifiers: kw.clone(),
+                documentation: None,
+                metadata,
+            });
+        }
+    }
+
+    /// Materialize `Variable` symbols for fields that carry annotations (legacy `extract_symbols` path).
+    pub(crate) fn emit_annotated_field_variables(
+        &self,
+        node: Node,
+        source: &[u8],
+        file_path: &str,
+        ctx: &ExtractCtx,
+        owner_qn: Option<&str>,
+        symbols: &mut Vec<Symbol>,
+    ) -> Result<()> {
+        match node.kind() {
+            "field_declaration" => {
+                self.push_field_declaration_variables(node, source, file_path, owner_qn, symbols);
+                return Ok(());
+            }
+            "class_declaration"
+            | "interface_declaration"
+            | "enum_declaration"
+            | "record_declaration" => {
+                let qn = self.type_node_qualified_name(node, source, ctx);
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if matches!(
+                        child.kind(),
+                        "class_body" | "interface_body" | "enum_body" | "enum_body_declarations"
+                    ) {
+                        self.emit_annotated_field_variables(
+                            child,
+                            source,
+                            file_path,
+                            ctx,
+                            Some(&qn),
+                            symbols,
+                        )?;
+                    }
+                }
+                return Ok(());
+            }
+            "program"
+            | "class_body"
+            | "interface_body"
+            | "enum_body"
+            | "enum_body_declarations" => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.emit_annotated_field_variables(
+                        child, source, file_path, ctx, owner_qn, symbols,
+                    )?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     pub(crate) fn collect_non_call_relations(
@@ -3855,6 +4028,110 @@ public class Service {
                 .any(|r| matches!(r.relation_type, RelationType::AnnotatedWith)
                     && r.to == "AddOnStartup"),
             "expected AnnotatedWith relation to AddOnStartup"
+        );
+        let plugin = JavaPlugin::new().unwrap();
+        let result = plugin
+            .extract_all(Path::new("Service.java"), source)
+            .unwrap();
+        assert!(
+            result.symbols.iter().any(|s| {
+                s.symbol_type == SymbolType::Variable
+                    && s.name == "name"
+                    && s.qualified_name.as_deref() == Some("Service.name")
+            }),
+            "annotated field should emit a Variable symbol: {:?}",
+            result.symbols
+        );
+    }
+
+    #[test]
+    fn field_di_annotations_emit_annotated_with_args_and_injects_context() {
+        let source = br#"
+public class Greeter {
+    @PersistenceContext(unitName = "primary")
+    private EntityManager em;
+
+    @ConfigProperty(name = "app.greeting")
+    private String greeting;
+
+    @Inject
+    private OrderService orders;
+}
+"#;
+        let plugin = JavaPlugin::new().unwrap();
+        let result = plugin
+            .extract_all(Path::new("Greeter.java"), source)
+            .unwrap();
+
+        let persistence = result
+            .relations
+            .iter()
+            .find(|r| {
+                r.relation_type == RelationType::AnnotatedWith
+                    && r.to == "PersistenceContext"
+                    && r.from.contains("em")
+            })
+            .expect("AnnotatedWith PersistenceContext on field");
+        let args = persistence
+            .metadata
+            .get("arguments")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            args.contains("unitName"),
+            "expected unitName in annotation args, got {args:?}"
+        );
+
+        let config = result
+            .relations
+            .iter()
+            .find(|r| {
+                r.relation_type == RelationType::AnnotatedWith
+                    && r.to == "ConfigProperty"
+                    && r.from.contains("greeting")
+            })
+            .expect("AnnotatedWith ConfigProperty on field");
+        let config_args = config
+            .metadata
+            .get("arguments")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            config_args.contains("name"),
+            "expected name in ConfigProperty args, got {config_args:?}"
+        );
+
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|s| { s.symbol_type == SymbolType::Variable && s.name == "em" })
+                && result
+                    .symbols
+                    .iter()
+                    .any(|s| { s.symbol_type == SymbolType::Variable && s.name == "greeting" }),
+            "expected Variable symbols for annotated fields"
+        );
+
+        let injects: Vec<_> = result
+            .relations
+            .iter()
+            .filter(|r| r.relation_type == RelationType::Injects)
+            .collect();
+        assert!(
+            injects.iter().any(|r| {
+                r.to.contains("EntityManager")
+                    && r.metadata.get("call_context").and_then(|v| v.as_str())
+                        == Some("@PersistenceContext")
+            }),
+            "expected Injects EntityManager with @PersistenceContext call_context, got {injects:?}"
+        );
+        assert!(
+            injects.iter().any(|r| {
+                r.to.contains("OrderService")
+                    && r.metadata.get("call_context").and_then(|v| v.as_str()) == Some("@Inject")
+            }),
+            "expected Injects OrderService with @Inject call_context, got {injects:?}"
         );
     }
 

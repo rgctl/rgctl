@@ -67,6 +67,9 @@ pub struct PipelineStatus {
     pub dashboard_ready: bool,
     pub semantic_ready: bool,
     pub cfg_ready: bool,
+    /// Whether `.rgctl/kantra_findings.json` exists (session eval present; universe export may lag).
+    #[serde(default)]
+    pub kantra_findings: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     pub plan: Vec<PipelineStagePlan>,
@@ -295,6 +298,7 @@ pub fn default_status(repo: &Path) -> PipelineStatus {
         dashboard_ready: false,
         semantic_ready: false,
         cfg_ready: false,
+        kantra_findings: false,
         message: Some("Pipeline has not started".into()),
         plan: pending_plan(),
     }
@@ -359,6 +363,8 @@ pub fn refresh_ready_flags(status: &mut PipelineStatus, repo: &Path) {
     status.dashboard_ready = dash.is_file();
     status.cfg_ready = rgctl_analysis::CfgPdgArchive::default_path(repo).is_file();
     status.semantic_ready = rgctl_analysis::SemanticIndex::default_path(repo).is_file();
+    status.kantra_findings =
+        rgctl_graph::paths::artifact_path(repo, "kantra_findings.json").is_file();
 }
 
 fn message_for(status: &PipelineStatus) -> String {

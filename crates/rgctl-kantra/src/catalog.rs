@@ -249,6 +249,19 @@ pub fn rule_konveyor_targets(rule: &KantraRule) -> Vec<String> {
     out
 }
 
+/// All `konveyor.io/source` values on a rule (ruleset + rule labels).
+pub fn rule_konveyor_sources(rule: &KantraRule) -> Vec<String> {
+    let mut out = Vec::new();
+    for label in &rule.labels {
+        if let Some(source) = label.strip_prefix("konveyor.io/source=")
+            && !out.iter().any(|s| s == source)
+        {
+            out.push(source.to_string());
+        }
+    }
+    out
+}
+
 fn collect_ruleset_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     if root.join("ruleset.yaml").is_file() {
         return vec![root.to_path_buf()];
@@ -317,6 +330,19 @@ mod tests {
             rule_konveyor_targets(&rule),
             vec!["quarkus", "spring-boot3+"]
         );
+    }
+
+    #[test]
+    fn konveyor_sources_deduped_from_labels() {
+        let rule = sample_rule(
+            "r1",
+            &[
+                "konveyor.io/source=java-ee",
+                "konveyor.io/source=java-ee",
+                "konveyor.io/source=springboot",
+            ],
+        );
+        assert_eq!(rule_konveyor_sources(&rule), vec!["java-ee", "springboot"]);
     }
 
     #[test]

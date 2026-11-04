@@ -17,6 +17,8 @@ fn main() {
     println!("cargo:rerun-if-changed=skills/rgctl/README.md");
     println!("cargo:rerun-if-changed=skills/rgctl/references");
     println!("cargo:rerun-if-changed=skills/rgctl-review");
+    println!("cargo:rerun-if-changed=skills/rgctl-migrate");
+    println!("cargo:rerun-if-changed=skills/rgctl-vuln");
 
     rgctl_agent_pack_codegen::generate(&pack_root, &embed_dir, &version)
         .expect("agent-pack codegen failed");

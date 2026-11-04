@@ -292,7 +292,7 @@ rgctl discover . --with-cfg --with-security --with-taint \
 
 Choose `--migration-preset` to match user intent. Use `--migration-order priority` when the user wants highest-impact packages first instead of a dependency-safe sequence.
 
-Optional structural probes to explain plan steps: `inventory --by import-prefix | jq '.items[:40]'`, `find --annotation … --limit 40`, `blast-radius <sym> --depth 2` on candidate packages.
+Optional structural probes to explain plan steps: `inventory --by import-prefix --limit 40`, `find --annotation … --show-attributes --limit 40`, `blast-radius <sym> --depth 2 --summary` on candidate packages.
 
 **See:** Migration Planning Guide (product docs; not bundled in this skill pack)
 

@@ -140,6 +140,9 @@ mod tests {
             message: None,
             matched_by: "java.referenced".into(),
             symbol: Some("javax.servlet.http.HttpServlet".into()),
+            targets: Vec::new(),
+            sources: Vec::new(),
+            effort: None,
             enrichment: None,
         };
         assert_eq!(resolver.resolve(&violation), Some(import_id));
@@ -158,6 +161,9 @@ mod tests {
             message: None,
             matched_by: "builtin.filecontent".into(),
             symbol: None,
+            targets: Vec::new(),
+            sources: Vec::new(),
+            effort: None,
             enrichment: None,
         };
         assert_eq!(resolver.resolve(&violation), Some(file_id));

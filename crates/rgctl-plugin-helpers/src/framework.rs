@@ -811,6 +811,7 @@ fn apply_field_annotation_inject(
             Some("class"),
             rule,
             loc,
+            Some(&ann),
         ));
         if let Some(sym) = find_symbol_mut(symbols, &class_qn) {
             stamp_tags_vocab(sym, &rule.tags, &rule.vocab);
@@ -913,6 +914,7 @@ fn apply_ctor_or_stereotype_inject(
                     Some("class"),
                     rule,
                     sym.location.clone(),
+                    None,
                 ));
             }
             stamped = true;
@@ -954,6 +956,7 @@ fn apply_param_wrapper_inject(
                     Some("struct"),
                     rule,
                     sym.location.clone(),
+                    None,
                 ));
                 stamped = true;
             }
@@ -986,6 +989,7 @@ fn apply_param_call_inject(
                         Some("function"),
                         rule,
                         sym.location.clone(),
+                        None,
                     ));
                     stamped = true;
                 }
@@ -1060,12 +1064,21 @@ fn injects_relation(
     to_type_hint: Option<&str>,
     rule: &FrameworkRuleSpec,
     loc: SourceLocation,
+    annotation: Option<&str>,
 ) -> Relation {
     let mut meta = Map::new();
     meta.insert("framework".into(), Value::String(rule.framework.clone()));
     meta.insert("rule_id".into(), Value::String(rule.id.clone()));
     if let Some(tv) = &rule.target_vocab {
         meta.insert("target_vocab".into(), Value::String(tv.clone()));
+    }
+    if let Some(ann) = annotation.filter(|a| !a.is_empty()) {
+        let ctx = if ann.starts_with('@') {
+            ann.to_string()
+        } else {
+            format!("@{ann}")
+        };
+        meta.insert("call_context".into(), Value::String(ctx));
     }
     Relation {
         from: from.to_string(),

@@ -444,3 +444,170 @@ fn kantra_dashboard_export_writes_index() {
     assert_eq!(index["available"], true);
     assert!(index.get("files").and_then(|v| v.as_array()).is_some());
 }
+
+#[test]
+fn kantra_all_target_findings_include_targets_metadata() {
+    let _guard = ECOMMERCE_LOCK.lock().unwrap();
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("rgctl-tests/ecommerce-java");
+    if !repo.is_dir() {
+        return;
+    }
+    let out = Command::new(rgctl_bin())
+        .args(["discover", ".", "--languages", "java", "--with-kantra"])
+        .current_dir(&repo)
+        .output()
+        .expect("discover");
+    assert!(
+        out.status.success(),
+        "discover failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let findings_path = repo.join(".rgctl/kantra_findings.json");
+    let doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&findings_path).unwrap()).unwrap();
+    let violations = doc.get("violations").and_then(|v| v.as_array()).unwrap();
+    assert!(!violations.is_empty());
+    let with_targets = violations
+        .iter()
+        .filter(|v| {
+            v.get("targets")
+                .and_then(|t| t.as_array())
+                .is_some_and(|a| !a.is_empty())
+        })
+        .count();
+    assert!(
+        with_targets > 0,
+        "expected violations to carry targets[] from rule labels"
+    );
+}
+
+#[test]
+fn rules_run_target_findings_and_targets_cli() {
+    let _guard = ECOMMERCE_LOCK.lock().unwrap();
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("rgctl-tests/ecommerce-java");
+    if !repo.is_dir() {
+        return;
+    }
+    // Ensure a snapshot exists (discover without kantra is enough for rules run).
+    let discover = Command::new(rgctl_bin())
+        .args(["discover", ".", "--languages", "java"])
+        .current_dir(&repo)
+        .output()
+        .expect("discover");
+    assert!(
+        discover.status.success(),
+        "discover failed: {}",
+        String::from_utf8_lossy(&discover.stderr)
+    );
+
+    let run = Command::new(rgctl_bin())
+        .args(["-f", "json", "rules", "run", "--target", "quarkus"])
+        .current_dir(&repo)
+        .output()
+        .expect("rules run");
+    assert!(
+        run.status.success(),
+        "rules run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let run_doc: serde_json::Value = serde_json::from_slice(&run.stdout).unwrap();
+    assert_eq!(
+        run_doc.get("command").and_then(|v| v.as_str()),
+        Some("rules_run")
+    );
+    assert!(run_doc.get("summary").is_some());
+    assert!(run_doc.get("skipped_rules_count").is_some());
+    assert!(
+        run_doc.get("skipped_rules").is_none(),
+        "rules_run JSON stdout should omit raw skipped_rules[] for token efficiency"
+    );
+
+    let findings = Command::new(rgctl_bin())
+        .args([
+            "-f", "json", "rules", "findings", "--target", "quarkus", "--limit", "5",
+        ])
+        .current_dir(&repo)
+        .output()
+        .expect("rules findings");
+    assert!(
+        findings.status.success(),
+        "rules findings failed: {}",
+        String::from_utf8_lossy(&findings.stderr)
+    );
+    let findings_doc: serde_json::Value = serde_json::from_slice(&findings.stdout).unwrap();
+    assert_eq!(
+        findings_doc.get("command").and_then(|v| v.as_str()),
+        Some("rules_findings")
+    );
+    let per_rule = findings_doc
+        .get("per_rule")
+        .and_then(|v| v.as_array())
+        .expect("per_rule array");
+    let total_matched = findings_doc
+        .get("total_matched")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let summary_violations = findings_doc
+        .pointer("/summary/violations")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    assert_eq!(
+        summary_violations, total_matched,
+        "summary.violations must reflect total_matched before --limit truncation"
+    );
+    let per_rule_sum: u64 = per_rule
+        .iter()
+        .filter_map(|r| r.get("count").and_then(|c| c.as_u64()))
+        .sum();
+    assert_eq!(
+        per_rule_sum, total_matched,
+        "per_rule counts must sum to total_matched before --limit truncation"
+    );
+    let returned = findings_doc
+        .get("returned")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    assert!(returned <= 5);
+    if let Some(first_v) = findings_doc
+        .get("violations")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+    {
+        assert!(
+            first_v.get("message").is_none(),
+            "individual violations should omit duplicate message (carried once in per_rule[])"
+        );
+    }
+
+    let targets = Command::new(rgctl_bin())
+        .args(["-f", "json", "rules", "targets"])
+        .current_dir(&repo)
+        .output()
+        .expect("rules targets");
+    assert!(
+        targets.status.success(),
+        "rules targets failed: {}",
+        String::from_utf8_lossy(&targets.stderr)
+    );
+    let targets_doc: serde_json::Value = serde_json::from_slice(&targets.stdout).unwrap();
+    assert_eq!(
+        targets_doc.get("command").and_then(|v| v.as_str()),
+        Some("rules_targets")
+    );
+    let target_list = targets_doc
+        .get("targets")
+        .and_then(|v| v.as_array())
+        .unwrap();
+    assert!(
+        target_list
+            .iter()
+            .any(|t| t.get("name").and_then(|n| n.as_str()) == Some("quarkus")),
+        "expected quarkus in rules targets"
+    );
+    assert_eq!(
+        targets_doc
+            .get("findings_present")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+}

@@ -228,7 +228,7 @@ Stage timings are recorded separately in the discover profile: `kantra_eval`, `k
 - **`.rgctl/kantra_findings.json`** — `schema_version`, `catalog_id`, `ruleset`, `target_filter`, `evaluated_rules`, `violations[]` (with per-violation `enrichment`), `skipped_rules[]`, and `cache_hits`/`cache_misses`. Schema: [json-api.md](../json-api.md#kantra_findingsjson).
 - **Graph nodes** — `NodeType::KantraRuleset` and `NodeType::KantraRule`, linked by `Contains` edges; queryable via `rgctl -f json find --type kantrarule`.
 - **`VIOLATES` edges** — after full eval, `EdgeType::Violates` links each `KantraRule` node to matched code nodes; `rgctl relations --edge violates --from-type kantrarule`.
-- **Dashboard** — with `--with-universe`, exports `kantra_index.json` + per-file violation shards (Migration Rules view).
+- **Dashboard** — with `--with-universe`, exports `kantra_index.json` + per-file violation shards (Universe **Static rules** room).
 
 ### 7.4 Incremental caching
 

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "path": "src/main/java/Demo.java",
+  "source_id": "srcdemo0001",
+  "violations": [
+    {
+      "rule_id": "jdbc-to-quarkus-00001",
+      "category": "optional",
+      "file": "src/main/java/Demo.java",
+      "line": 12,
+      "message": "Direct JDBC usage detected.",
+      "matched_by": "java.referenced",
+      "symbol": "java.sql.Connection",
+      "targets": ["quarkus"]
+    },
+    {
+      "rule_id": "jdbc-to-quarkus-00001",
+      "category": "optional",
+      "file": "src/main/java/Demo.java",
+      "line": 20,
+      "matched_by": "java.referenced",
+      "targets": ["quarkus"]
+    }
+  ]
+}

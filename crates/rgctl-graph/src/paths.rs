@@ -90,6 +90,34 @@ pub fn artifact_path(repo_root: &Path, relative: impl AsRef<Path>) -> PathBuf {
     artifact_dir(repo_root).join(relative)
 }
 
+/// Ensure `.rgctl/` is listed in `<repo>/.git/info/exclude` when `.git/info` exists.
+///
+/// Never modifies a tracked `.gitignore`. Best-effort: missing `.git` / permission
+/// errors are ignored so discover/update stay non-fatal.
+pub fn ensure_rgctl_git_exclude(repo_root: &Path) {
+    let info_dir = repo_root.join(".git").join("info");
+    if !info_dir.is_dir() {
+        return;
+    }
+    let exclude_path = info_dir.join("exclude");
+    let entry = format!("{ARTIFACT_DIR_NAME}/");
+    let existing = std::fs::read_to_string(&exclude_path).unwrap_or_default();
+    let already = existing.lines().any(|line| {
+        let t = line.trim();
+        t == ARTIFACT_DIR_NAME || t == entry.as_str() || t == format!("/{ARTIFACT_DIR_NAME}/")
+    });
+    if already {
+        return;
+    }
+    let mut contents = existing;
+    if !contents.is_empty() && !contents.ends_with('\n') {
+        contents.push('\n');
+    }
+    contents.push_str(&entry);
+    contents.push('\n');
+    let _ = std::fs::write(&exclude_path, contents);
+}
+
 /// Read `RGCTL_{suffix}`, falling back to legacy `RGBUILDER_{suffix}` then `RBUILDER_{suffix}`.
 pub fn env_var(suffix: &str) -> Option<String> {
     env_var_os(suffix).and_then(|v| v.into_string().ok())
@@ -205,6 +233,28 @@ mod tests {
         let neu = ensure_artifact_dir_migrated(tmp.path());
         assert_eq!(neu, tmp.path().join(ARTIFACT_DIR_NAME));
         assert!(tmp.path().join(LEGACY_RGBUILDER_DIR_NAME).exists());
+    }
+
+    #[test]
+    fn ensure_rgctl_git_exclude_appends_once() {
+        let tmp = TempDir::new().unwrap();
+        let info = tmp.path().join(".git").join("info");
+        std::fs::create_dir_all(&info).unwrap();
+        let exclude = info.join("exclude");
+        std::fs::write(&exclude, "# local\n").unwrap();
+
+        ensure_rgctl_git_exclude(tmp.path());
+        ensure_rgctl_git_exclude(tmp.path());
+        let text = std::fs::read_to_string(&exclude).unwrap();
+        assert_eq!(text.matches(".rgctl/").count(), 1);
+        assert!(text.contains(".rgctl/"));
+    }
+
+    #[test]
+    fn ensure_rgctl_git_exclude_skips_without_git_info() {
+        let tmp = TempDir::new().unwrap();
+        ensure_rgctl_git_exclude(tmp.path());
+        assert!(!tmp.path().join(".git").exists());
     }
 
     #[test]

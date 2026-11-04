@@ -299,6 +299,7 @@ impl IncrementalUpdater {
 
         let snapshot_path = MmappedGraphSnapshot::default_path(repo_root);
         std::fs::create_dir_all(repo_root.join(".rgctl"))?;
+        rgctl_graph::paths::ensure_rgctl_git_exclude(repo_root);
         let nodes_removed = graph.node_count();
         let edges_removed = graph.edge_count();
 
@@ -312,8 +313,6 @@ impl IncrementalUpdater {
         let files = discoverer.discover(repo_root)?;
         tracker.index_files(&files, graph)?;
         tracker.save()?;
-        // Keep legacy JSON export for callers that still read it.
-        let _ = graph.save_to_repo(repo_root);
 
         Ok(UpdateResult {
             files_changed: stats.files_processed,
@@ -467,7 +466,7 @@ impl IncrementalUpdater {
         let mut tracker = FileTracker::new(repo_root);
         tracker.index_files(all_files, graph)?;
         tracker.save()?;
-        let _ = graph.save_to_repo(repo_root);
+        rgctl_graph::paths::ensure_rgctl_git_exclude(repo_root);
 
         result.duration = start.elapsed();
         Ok(result)
@@ -569,8 +568,9 @@ impl IncrementalUpdater {
         let mut tracker = FileTracker::new(repo_root);
         tracker.index_files(all_files, graph)?;
         tracker.save()?;
-        graph.save_to_repo(repo_root)?;
+        rgctl_graph::paths::ensure_rgctl_git_exclude(repo_root);
         // Persist columnar snapshot so subsequent updates can use the compact path.
+        // Do not write legacy `.rgctl/graph.json` (matches `rgctl discover`).
         let _ = graph.save_snapshot(repo_root);
         let _ = facts.save(repo_root);
 

@@ -525,6 +525,9 @@ impl GraphBuilder {
                     _ => None,
                 };
                 if let Some(s) = prop_val {
+                    if k == "kind" && s == "field" {
+                        node = node.with_label("field".to_string());
+                    }
                     node = node.with_property(k.clone(), s);
                 }
             }
@@ -982,7 +985,13 @@ impl GraphBuilder {
                 relation.relation_type,
                 RelationType::ExposesRoute | RelationType::Injects
             ) {
-                for key in ["http_method", "route_path", "framework", "rule_id"] {
+                for key in [
+                    "http_method",
+                    "route_path",
+                    "framework",
+                    "rule_id",
+                    "call_context",
+                ] {
                     if let Some(v) = relation
                         .metadata
                         .get(key)

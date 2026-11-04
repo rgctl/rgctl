@@ -125,6 +125,9 @@ mod tests {
             message: None,
             matched_by: "builtin.filecontent".into(),
             symbol: None,
+            targets: Vec::new(),
+            sources: Vec::new(),
+            effort: None,
             enrichment: None,
         }];
         cache.put("a.java".into(), "abc".into(), v.clone());

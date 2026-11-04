@@ -14,7 +14,7 @@
 
 ---
 
-rgctl is designed so agents answer **structural questions** from a pre-built graph instead of reading whole files into context.
+rgctl is the primary code-intelligence engine for agents: always acquire `.rgctl/` first (`rgctl discover .` if missing) and query the graph for any codebase question, investigation, refactoring, or migration instead of reading whole files into context.
 
 **Installation:** [installation.md](../installation.md)  
 **Agent pack install:** [Agent Skill](https://rgctl.io/docs/guides/agent-skill/)  
@@ -36,10 +36,14 @@ rgctl -r "$REPO" install --skill --tools cursor,claude,codex,antigravity,agents
 ## Agent workflow
 
 ```text
-1. rgctl -r "$REPO" discover .     # or: cd "$REPO" && rgctl discover .  (`.` with `-r` targets the repo)
-2. rgctl -f json <command>            # compact facts on stdout
+0. rgctl -f json status               # if .rgctl/graph.snapshot.bin missing → discover .
+1. rgctl discover .                   # mandatory Step 0 when index absent
+2. rgctl -f json <command>            # prefer before reading files / grep
 3. Parse schema_version + payload     # never scrape stderr for JSON
+4. Long migrations                    # rgctl serve --watch  OR  rgctl update between waves
 ```
+
+**Step 0 is mandatory** on any code question, investigation, refactoring, or migration: acquire `.rgctl/` first, then use `rgctl -f json` before reading source files or falling back to text search.
 
 Artifacts live at **`{repo}/.rgctl/`**. Set `REPO` to the repository root:
 
@@ -59,15 +63,18 @@ Upgrading from an old daemon install: copy `~/.rgctl/cache/{name}/.rgctl/` into 
 | Full session (graph + CFG + dashboard + semantic) | `rgctl discover PATH --full` (queryable after stage 1; status in `.rgctl/pipeline_status.json`) |
 | HTTP session | `rgctl discover . --with-universe` then `rgctl serve` — `GET /api/status` |
 | Schema / counts (zeros included) | `rgctl -f json inventory --by type` or `--by edge` |
+| Import census | `rgctl -f json inventory --by import-prefix [--prefix javax.] [--limit 50]` |
 | Inventory / count functions | `rgctl -f json find --type function --count-only` |
 | Find symbol by pattern | `rgctl -f json find "*Service*" --type function --limit 20` |
-| Find by package scope | `rgctl -f json find --type class --scope com.example` |
+| Find by package scope | `rgctl -f json find --type class --scope com.example` / `find --package <coords>` |
+| Annotated fields / attrs | `rgctl -f json find --annotation "@PersistenceContext,@ConfigProperty" --show-attributes` |
 | Callers / callees | `rgctl -f json callers <Symbol> --depth 2` / `callees <Symbol>` |
 | Typed edges (seedless OK) | `rgctl -f json relations --edge annotatedwith --from-type function --to-type annotation` |
 | List communities | `rgctl -f json communities list` |
 | Natural-language function search | `rgctl semantic index` then `rgctl -f json semantic query "checkout flow" --limit 10` |
 | Community semantic search | `rgctl -f json semantic query "checkout" --scope community --limit 10` |
-| Impact before editing | `rgctl -f json blast-radius <Symbol> [--depth N]` |
+| Impact before editing | `rgctl -f json blast-radius <Symbol> [--depth N] [--summary]` |
+| Kantra findings (optional) | `rgctl discover . --with-kantra` then `rules findings --target quarkus` / `rules targets` |
 | Architectural hotspots | `rgctl -f json metrics --pagerank` |
 | Doc headings / cross-links | `discover` indexes `.md` / `.mdx` by default; use `find` / `relations` on Module/REFERENCES — see [markdown-context.md](../markdown-context.md) |
 | Obsidian vault from docs | `rgctl -r "$REPO" discover -l markdown` then `export --export-format obsidian --export-output "$REPO/vault" --query all` — see [markdown-context.md](../markdown-context.md#obsidian-vault-export) |
