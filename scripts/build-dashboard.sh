@@ -2,8 +2,12 @@
 # Build both dashboard UIs (Vite) and the WASM engine, for embed + local preview.
 #
 # Produces:
-#   dashboard/dist      — v1, the Preact dashboard, what `--with-dashboard` serves today
-#   dashboard/dist-v2   — v2, the React dashboard, selected with RGCTL_DASHBOARD_V2=1
+#   dashboard/dist      — v1, the Preact dashboard. **No flag reaches it any more.** Since `--with-universe`
+#                         became the only dashboard flag, v1 survives as a legacy hatch: it is served only
+#                         when `RGCTL_DASHBOARD_LEGACY=1` is set, and that run prints "removed next release"
+#   dashboard/dist-v2   — v2, the React universe dashboard, and the default: `discover --with-universe`
+#                         exports it, and `serve --open` always serves this shell (swapping it in when an
+#                         older bundle is on disk)
 #
 # Both are committed and both are embedded at compile time by `rgctl-dashboard`, so both must be
 # regenerated in the same commit as any change under `dashboard/src`. A source change with a forgotten
@@ -14,19 +18,26 @@ DASH="$ROOT/dashboard"
 
 # Recorded budgets, in KiB of *gzipped* JS + CSS, which is what actually ships in the binary and crosses a
 # network. Measured on this tree rather than chosen: v1 (Preact, Sigma, graphology, CodeMirror, Bootstrap)
-# is 312 KiB; v2 (React, TanStack Router, Radix, Tailwind) is 131 KiB — smaller than v1 despite adding
-# React, because it does not carry CodeMirror's ~150 KiB or Sigma's ~29 KiB. Headroom is ~10%, enough for a
-# dependency bump without silencing a real regression.
+# measured 312 KiB when this gate was written and 321 KiB today; v2 (React, TanStack Router, Radix, Tailwind)
+# was 131 KiB before the rooms — smaller than v1 despite adding React, because it does not carry CodeMirror's
+# ~150 KiB or Sigma's ~29 KiB. Headroom is ~10%, enough for a dependency bump without silencing a real
+# regression.
 BUDGET_KIB_V1=345
 # v2 was 145 KiB until the Architecture room arrived. The universe draws, so it carries three.js: measured on
-# this tree, `dist-v2` is **287 KiB gzipped** against 137 before — a +150 KiB delta, of which ~139 KiB is the
-# lazily-loaded `UniverseScene` chunk (three.js + the scene) and the rest is the room, the adapter and the
-# derived layers. The vendored, untree-shaken three.js copy the demos use is 430 KiB, so the bundled cost is
-# about a third of it — which is why the number is measured here rather than quoted from the demos.
+# this tree, `dist-v2` is **300 KiB gzipped** against 137 before — a +163 KiB delta, dominated by three.js,
+# which lands in the `OrbitControls` chunk (**131 KiB gzipped**) because that addon is what imports it; the
+# scene chunk itself is 4 KiB, so the chunk names here describe entry points, not cost. The vendored,
+# untree-shaken three.js copy the demos use is 430 KiB, so the bundled cost is about a third of it — which is
+# why the number is measured here rather than quoted from the demos.
 #
-# The chunk is split deliberately: the shell's own first paint stays at ~148 KiB and three.js is only fetched
-# when someone opens the Architecture room. The gate sums the whole directory, so it is the total that is
-# budgeted, not the initial payload.
+# The split is deliberate: the shell's first paint is the assets `index.html` references — **157 KiB gzipped**
+# today (react 71, tanstack 38, index.v2 31, radix 9, css 5) — and three.js is fetched only when someone opens
+# a room that draws. The gate sums the whole directory, so it is the total that is budgeted, not the initial
+# payload.
+#
+# What the gate does **not** weigh: it globs `assets/*.js` and `assets/*.css`, so the ~193 KiB wasm engine
+# (`assets/rgctl_wasm_bg-*.wasm`) is outside both budgets. If that engine ever needs a budget of its own, it
+# needs a new check rather than a raised constant here.
 BUDGET_KIB_V2=320
 
 echo "==> wasm-pack (rgctl-wasm)"

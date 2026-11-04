@@ -1,38 +1,36 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getRouteApi } from "@tanstack/react-router";
 import { Instrument } from "./Instrument";
 import { Palette } from "./Palette";
 import { Chip, Panel, Unavailable } from "./shell";
-import { Spine } from "./rooms/Spine";
-import { CfgPdgLens } from "./rooms/CfgPdg";
+import { Cfg } from "./rooms/Cfg";
 import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
-import { loadFunctions, loadManifest, type FunctionEntry } from "./data";
-import { LENSES, ROOMS, isLens, isRoom, keyOf, resolveFocus, type LensId, type RoomId } from "./focus";
-import { useState } from "react";
-
-const roomApi = getRouteApi("/$roomId");
+import { MigrationRoom } from "./rooms/Migration";
+import { TaintRoom } from "./rooms/Taint";
+import { loadManifest, type FunctionEntry } from "./data";
+import { LENSES, ROOMS, keyOf, type LensId, type RoomId } from "./focus";
+import { useFocus } from "./useFocus";
 
 export function App() {
-  const params = roomApi.useParams();
-  const search = roomApi.useSearch();
-  const navigate = roomApi.useNavigate();
-
-  const room = (isRoom(params.roomId) ? params.roomId : "repo") as RoomId;
-  const lens = (isLens(search.lens) ? search.lens : "spine") as LensId;
-  const focus = search.focus ?? null;
+  const {
+    room,
+    lens,
+    entry,
+    staleFocus,
+    functions: list,
+    functionsLoading,
+    functionsError,
+    explode,
+    setFocus,
+    setLens,
+    setExplode,
+    goRoom,
+    pick: focusPick,
+  } = useFocus();
 
   const [paletteOpen, setPaletteOpen] = useState(false);
-
   const manifest = useQuery({ queryKey: ["manifest"], queryFn: loadManifest });
-  const functions = useQuery({ queryKey: ["functions"], queryFn: loadFunctions });
-
-  const list = functions.data ?? [];
-  // A Focus that no longer resolves is a real state (a stale link, or a symbol that was removed), and the
-  // shell says so rather than silently showing no subject.
-  const entry: FunctionEntry | null = focus ? resolveFocus(focus, list) : null;
-  const staleFocus = focus !== null && !entry && !functions.isLoading;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -45,27 +43,14 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const setFocus = (key: string | null) =>
-    void navigate({ search: (prev) => ({ ...prev, focus: key ?? undefined }), replace: false });
-
   /**
-   * Picking a symbol sets the Focus, and leaves the orientation surface if that is where you are.
-   *
-   * The intent is that the graph is one action from the landing page. Setting only the Focus left Repo on
-   * screen with a subject it does not render, so the graph stayed two actions away — pick, then guess that
-   * Understand is where it lives. Rooms that read the Focus are left alone: choosing a symbol while in
-   * Security should not drag you out of Security.
+   * Picking a symbol sets the Focus (key only). From Repo, land in Understand so the graph is one
+   * action away; other rooms keep their place.
    */
   const pick = (f: FunctionEntry) => {
     setPaletteOpen(false);
-    setFocus(keyOf(f));
-    if (room === "repo") {
-      void navigate({ to: "/$roomId", params: { roomId: "understand" }, search: (prev) => ({ ...prev, focus: keyOf(f) }) });
-    }
+    focusPick(f);
   };
-
-  const goRoom = (next: RoomId) =>
-    void navigate({ to: "/$roomId", params: { roomId: next }, search: (prev) => prev });
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -87,55 +72,84 @@ export function App() {
         </button>
       </div>
 
-      <div className="flex min-h-0 flex-1">
-        <nav aria-label="Rooms" className="w-52 shrink-0 overflow-y-auto border-r border-white/8 bg-[#0c0f13] p-2">
-          <div className="px-2 pb-1.5 text-[10px] uppercase tracking-wider text-zinc-600">rooms</div>
-          {ROOMS.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              onClick={() => goRoom(r.id)}
-              aria-current={room === r.id ? "page" : undefined}
-              className={`mb-0.5 block w-full rounded px-2 py-1.5 text-left ${
-                room === r.id ? "bg-sky-500/12 text-sky-100" : "text-zinc-300 hover:bg-white/[0.04]"
-              }`}
-            >
-              <span className="block text-[12px]">{r.label}</span>
-              <span className="block truncate text-[10px] text-zinc-500">{r.blurb}</span>
-            </button>
-          ))}
-        </nav>
-
-        <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-white/8 bg-[#0e1116] px-3 py-1.5">
-            <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">lens</span>
-            {LENSES.map((l) => (
-              <button
-                key={l.id}
-                type="button"
-                onClick={() => void navigate({ search: (prev) => ({ ...prev, lens: l.id }) })}
-                aria-pressed={lens === l.id}
-                className={`rounded px-2 py-0.5 text-[11px] ${
-                  lens === l.id ? "bg-white/10 text-zinc-100" : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
-                }`}
-              >
-                {l.label}
-              </button>
-            ))}
+      <div className="flex min-h-0 flex-1 flex-col">
+        {/*
+          One horizontal row of rooms, not a 208px column. The rail cost the full width of the left edge in every
+          room, and the room that needs width most — the universe — paid it twice: 208px of sidebar plus a 300px
+          column. Seven labels fit on one line; the question a room answers stays visible for the room you are
+          in, which is the only one where it is still a question.
+        */}
+        <div className="flex shrink-0 flex-col gap-1 border-b border-white/8 bg-[#0e1116] px-3 py-1.5">
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">rooms</span>
+            <nav aria-label="Rooms" className="flex flex-wrap items-center gap-1">
+              {ROOMS.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => goRoom(r.id)}
+                  aria-current={room === r.id ? "page" : undefined}
+                  title={r.blurb}
+                  // Rooms are the one control that is always on screen, so they carry a surface rather than
+                  // being text that happens to be clickable: a deep teal chip at rest, a lighter one with a
+                  // sky edge for the room you are in.
+                  className={`rounded-md border px-3 py-1.5 text-[12px] leading-none transition-colors ${
+                    room === r.id
+                      ? "border-sky-400/70 bg-[#16566e] font-medium text-white"
+                      : "border-[#1d4b5e] bg-[#0d2f3e] text-zinc-200 hover:border-[#2b6d88] hover:bg-[#12455a] hover:text-white"
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </nav>
             <span className="ml-auto flex items-center gap-2 text-[10px] text-zinc-600">
-              <span>{ROOMS.find((r) => r.id === room)?.label}</span>
+              <span className="hidden sm:inline">{ROOMS.find((r) => r.id === room)?.blurb}</span>
               {entry && <Chip tone="blue">subject: {entry.name}</Chip>}
             </span>
           </div>
+          {/* Lenses are Understand controls — hiding them in other rooms avoids implying CFG/Dataflow
+              tabs apply to Migration/Taint/Architecture. */}
+          {room === "understand" && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="mr-1 text-[10px] uppercase tracking-wider text-zinc-600">lens</span>
+              {LENSES.map((l) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  onClick={() => setLens(l.id)}
+                  aria-pressed={lens === l.id}
+                  className={`rounded px-2 py-0.5 text-[11px] ${
+                    lens === l.id
+                      ? "bg-white/10 text-zinc-100"
+                      : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+                  }`}
+                >
+                  {l.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
+        {/*
+          `min-h-0` is load-bearing. A column flex item's automatic minimum size is its *content*, so without it
+          this pane grew to its content's height (measured: 1933px inside a 813px window) and the scroll
+          container inside it never had anything to scroll — everything below the fold was clipped by the shell.
+          That is what made the universe look un-centred: its canvas was 946x1742, so the map was correctly framed
+          in a box three times taller than the window.
+        */}
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
-            {functions.isError && (
+            {functionsError != null && (
               <Unavailable
                 what="The function index could not be read"
-                why={String(functions.error)}
+                why={String(functionsError)}
               />
             )}
-            {room === "repo" && <RepoRoom functions={list} loading={functions.isLoading} onGo={goRoom} onPick={pick} />}
+            {room === "repo" && (
+              <RepoRoom functions={list} loading={functionsLoading} onGo={goRoom} onPick={pick} />
+            )}
             {room === "understand" && staleFocus && (
               <Unavailable
                 what="This Focus does not resolve against the current bundle"
@@ -143,22 +157,39 @@ export function App() {
               />
             )}
             {room === "understand" && !staleFocus && (
-              <UnderstandRoom entry={entry} lens={lens} loading={functions.isLoading} onOpenPalette={() => setPaletteOpen(true)} onCarry={goRoom} />
+              <UnderstandRoom
+                entry={entry}
+                lens={lens}
+                loading={functionsLoading}
+                onOpenPalette={() => setPaletteOpen(true)}
+                onCarry={goRoom}
+              />
             )}
-            {room === "architecture" && <ArchitectureRoom />}
-            {room !== "repo" && room !== "understand" && room !== "architecture" && (
-              <Placeholder room={room} />
+            {room === "architecture" && (
+              <ArchitectureRoom
+                // The open district rides the URL with the Focus, so opening a symbol from inside a level and
+                // coming back returns to that level rather than to the universe.
+                explode={explode}
+                onExplodeChange={setExplode}
+                onOpenFocus={(focus) => {
+                  // The shell owns the Focus: write the key, then move to the room that renders it.
+                  setFocus(focus);
+                  goRoom("understand");
+                }}
+              />
             )}
+            {room === "migration" && <MigrationRoom />}
+            {room === "taint" && <TaintRoom />}
+            {room !== "repo" &&
+              room !== "understand" &&
+              room !== "architecture" &&
+              room !== "migration" &&
+              room !== "taint" && <Placeholder room={room} />}
           </div>
         </main>
       </div>
 
-      <Palette
-        open={paletteOpen}
-        onOpenChange={setPaletteOpen}
-        functions={list}
-        onPick={pick}
-      />
+      <Palette open={paletteOpen} onOpenChange={setPaletteOpen} functions={list} onPick={pick} />
     </div>
   );
 }
@@ -190,7 +221,11 @@ function RepoRoom({
         </p>
       </Panel>
 
-      {loading && <Panel title="Loading the bundle…"><p className="text-[11px] text-zinc-500">reading indexes…</p></Panel>}
+      {loading && (
+        <Panel title="Loading the bundle…">
+          <p className="text-[11px] text-zinc-500">reading indexes…</p>
+        </Panel>
+      )}
 
       {!loading && (
         <>
@@ -281,14 +316,10 @@ function UnderstandRoom({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <Panel
-        title={entry.name}
-        subtitle={entry.file_path ?? undefined}
-        right={<Chip tone="blue">focus</Chip>}
-      >
+      <Panel title={entry.name} subtitle={entry.file_path ?? undefined} right={<Chip tone="blue">focus</Chip>}>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[10px] uppercase tracking-wider text-zinc-500">carry this focus to</span>
-          {(["review", "security", "architecture", "migration", "proof"] as RoomId[]).map((r) => (
+          {(["review", "taint", "architecture", "migration", "proof"] as RoomId[]).map((r) => (
             <button
               key={r}
               type="button"
@@ -301,18 +332,10 @@ function UnderstandRoom({
         </div>
       </Panel>
 
-      {lens === "spine" && <Spine entry={entry} />}
-      {lens === "code" && (
-        <Panel title="Code" subtitle={`${entry.file_path ?? "—"}`}>
-          <p className="text-[11px] text-zinc-400">
-            The Code lens is the same source pane as Spine without the control-flow graph beside it.
-            Source rendering is shared, so this lens is a view of the same reader rather than a second
-            implementation.
-          </p>
-        </Panel>
-      )}
-      {lens === "cfgpdg" && <CfgPdgLens entry={entry} />}
-      {lens !== "spine" && lens !== "code" && lens !== "cfgpdg" && <LensPlaceholder lens={lens} />}
+      {lens === "cfg" && <Cfg entry={entry} />}
+      {/* Everything else in the control is a question phase 3 answers. `code` and `cfgpdg` are gone: both
+          were the CFG lens in another frame, and both are now controls inside it (show source / graph height). */}
+      {lens !== "cfg" && <LensPlaceholder lens={lens} />}
     </div>
   );
 }

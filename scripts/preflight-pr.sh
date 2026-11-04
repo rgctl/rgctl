@@ -151,20 +151,8 @@ if [[ "$RUN_LINT" -eq 1 ]]; then
     MERGE_BASE="$(git merge-base "$BASE_REF" HEAD 2>/dev/null || true)"
     if [[ -n "$MERGE_BASE" && "$MERGE_BASE" != "$(git rev-parse HEAD)" ]]; then
       step "Tier 1 (ci-lint): Checking commits in ${MERGE_BASE:0:8}..HEAD (no AI trailers & DCO sign-off)"
-      python3 scripts/check-no-ai-commit-trailers.py --range "${MERGE_BASE}..HEAD"
-
-      MISSING_DCO=0
-      while IFS= read -r sha; do
-        [[ -z "$sha" ]] && continue
-        if ! git log -1 --format=%B "$sha" | grep -qi '^Signed-off-by:'; then
-          warn "Commit ${sha:0:8} is missing 'Signed-off-by:' (DCO). Use 'git commit -s'."
-          MISSING_DCO=1
-        fi
-      done < <(git rev-list --no-merges "${MERGE_BASE}..HEAD")
-
-      if [[ "$MISSING_DCO" -eq 0 ]]; then
-        pass "Commit range checks passed (no AI trailers, DCO sign-off present)"
-      fi
+      python3 scripts/check-no-ai-commit-trailers.py --range "${MERGE_BASE}..HEAD" --require-dco
+      pass "Commit range checks passed (no AI trailers, DCO sign-off present)"
     fi
   fi
 

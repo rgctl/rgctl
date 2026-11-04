@@ -463,6 +463,10 @@ isolated case-sensitive checkout passed Gate A with 63.1 s discover wall,
 1,819,406 nodes, 15.528 s `index_graph_build`, and 65.37 s test elapsed.
 This single run is not a new reference baseline.
 
+After merging upstream `7192a656b6151b4489eca3af4741d1ecb43211b6`, a fresh
+release build passed the same gate with 60.2 s discover wall, 1,819,406 nodes,
+14.925 s `index_graph_build`, and 62.41 s test elapsed.
+
 Pinned corpus: `ansible/ansible` **v2.19.0**, commit
 `82529e534dd3edd84aba03d86b337f88c58b9982`, sparse checkout of
 `test/integration/targets` (recipe in `example/README.md`). A NUL-delimited

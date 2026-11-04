@@ -64,34 +64,13 @@ impl FullPipelineArgs {
             limits,
         }
     }
-
-    pub fn default_serve() -> Self {
-        Self {
-            languages: None,
-            exclude: None,
-            with_security: false,
-            with_taint: false,
-            taint_rules: None,
-            scip: None,
-            with_git: false,
-            git_since: "90.days".into(),
-            with_dfg_loops: false,
-            with_ast_skeleton: false,
-            write_json_graph: false,
-            export_migration_hints: false,
-            migration_preset: "hybrid_default".into(),
-            migration_order: "scheduled".into(),
-            artifact_root: None,
-            limits: None,
-        }
-    }
 }
 
 /// Print the three-stage plan (stderr via tracing).
 pub fn print_plan() {
     info!("Full pipeline plan:");
     info!("  1. {STAGE_BASIC}  — index + analysis (queryable snapshot)");
-    info!("  2. {STAGE_DEEP}      — --with-cfg --with-dashboard --with-harmonic");
+    info!("  2. {STAGE_DEEP}      — --with-cfg --with-universe --with-harmonic");
     info!("  3. {STAGE_SEMANTIC} — semantic index (vocab embedder)");
 }
 
@@ -300,6 +279,9 @@ fn analysis_opts<'a>(
         BasicOrDeep::Basic { force_reindex } => (false, false, false, force_reindex, false),
         BasicOrDeep::Deep => (true, true, true, false, true),
     };
+    if with_dashboard {
+        rgctl_dashboard::set_bundle_override(Some(rgctl_dashboard::BundleVersion::V2));
+    }
     AnalysisOptions {
         languages: extras.languages.clone(),
         exclude: extras.exclude.clone(),
@@ -414,18 +396,4 @@ fn should_skip_semantic(store: &Path) -> bool {
         return false;
     };
     index.graph_digest.as_deref() == Some(digest.as_str())
-}
-
-/// Spawn the full pipeline on a dedicated OS thread (HTTP/MCP).
-pub fn spawn_full_pipeline(root: PathBuf, verbose: bool) -> std::thread::JoinHandle<()> {
-    std::thread::Builder::new()
-        .name("rgctl-pipeline".into())
-        .spawn(move || {
-            let ctx = CliContext::new(Some(root.clone()), None, OutputFormat::Json, None, verbose);
-            let path = root.to_string_lossy().into_owned();
-            if let Err(err) = run_full_pipeline(&ctx, &path, FullPipelineArgs::default_serve()) {
-                eprintln!("[!] full pipeline: {err:#}");
-            }
-        })
-        .expect("spawn pipeline thread")
 }

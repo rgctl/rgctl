@@ -1,0 +1,83 @@
+# Tier 4 CI: Release Performance, Scale Gates & Benchmark Smoke
+#
+# Disabled on pull_request events to conserve GitHub Actions minutes.
+# Run manually from Actions → "CI — Release Perf & Benchmarks" → Run workflow,
+# or locally via `./scripts/preflight-pr.sh --perf`.
+name: CI — Release Perf & Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      features:
+        description: Optional Cargo features (e.g. proc-macros)
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-perf-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RGCTL_AST_COVERAGE_STRICT: "1"
+  FEATURES: ${{ inputs.features || '' }}
+
+jobs:
+  perf:
+    name: Release CLI golden paths, scale/perf gates & bench smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: ci-release-${{ env.FEATURES }}
+
+      - name: CLI subprocess golden paths (release)
+        run: cargo test --release --features "${{ env.FEATURES }}" --test subprocess_golden_path
+
+      - name: CLI all-commands sanity (release)
+        run: cargo test --release --features "${{ env.FEATURES }}" --test all_commands_sanity
+
+      - name: Blast-radius performance gates (release)
+        run: cargo test --release --features "${{ env.FEATURES }}" --test blast_radius_perf
+
+      - name: Scale perf CI gate (release)
+        run: |
+          cargo test --release --features "${{ env.FEATURES }}" --test scale_perf_ci_gate -- --nocapture
+          echo '{"gate":"scale_perf_ci_gate","status":"PASS"}' >> .rgctl-ci-gate-status.jsonl
+
+      - name: Fast-Leiden 150K & Centrality Scale Gates (release)
+        run: |
+          cargo test --release --features "${{ env.FEATURES }}" --test community_audit --test centrality_audit --test centrality_approx_scale -- --nocapture
+          echo '{"gate":"centrality_scale","status":"PASS"}' >> .rgctl-ci-gate-status.jsonl
+
+      - name: Benchmark Compilation & Smoke Gate
+        run: |
+          cargo bench --no-run
+          echo '{"gate":"bench_smoke","status":"PASS"}' >> .rgctl-ci-gate-status.jsonl
+
+      - name: Generate CI Gate Summary
+        if: always()
+        run: python3 scripts/generate-ci-gate-summary.py
+
+      - name: Upload CI Gate Report Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rgctl-perf-gate-report
+          path: .rgctl-ci-gate-report.json
+          if-no-files-found: ignore

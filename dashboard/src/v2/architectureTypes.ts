@@ -5,7 +5,9 @@
  * that surprised us are in the comments, because each one would otherwise become a silent wrong answer:
  *
  *   * `member_indices` is **absent** above 50,000 nodes (`include_member_indices = source_node_count <
- *     COMMUNITY_ONLY_THRESHOLD`, metagraph.rs), so any coverage figure derived from it evaluates to zero.
+ *     COMMUNITY_ONLY_THRESHOLD`, metagraph.rs) — above it the same indices live in
+ *     `metanode_members.bin` and are addressed by `member_offset` / `member_count`, so a coverage figure
+ *     must consult both forms and must not read the empty array as zero.
  *   * `modularity` is `null` on the metagraph and present on the summary. It lives in one file only.
  *   * A metagraph node is a **package** — a directory — not a community. Its `community_id` is a majority
  *     vote of its members, and the vote counts are not exported.
@@ -27,8 +29,12 @@ export interface MetaNode {
   y: number;
   /** Majority vote of the bucket's members. The vote counts never leave the exporter. */
   community_id: number;
-  /** Present only below `threshold_community_only`; absent on every large corpus. */
+  /** Inline membership, below `threshold_community_only` only. */
   member_indices?: number[];
+  /** Byte offset of this package's run in `metanode_members.bin` (little-endian `u32`). */
+  member_offset?: number;
+  /** How many `u32` indices that run holds. Zero means the package has no exported members. */
+  member_count?: number;
 }
 
 export interface MetaEdge {
@@ -41,6 +47,12 @@ export interface MetaEdge {
 
 export interface Metagraph {
   schema_version?: number;
+  /** Bundle-relative path to the member-index sidecar, when membership was exported out of line. */
+  members_path?: string;
+  /** Total `u32` indices in that sidecar. */
+  members_total?: number;
+  /** Element format of the sidecar — `u32le`. Stated rather than inferred from the byte length. */
+  members_format?: string;
   /** `"community_only"` above 50,000 nodes, `"package_metagraph"` below. */
   mode?: string;
   community_only?: boolean;
@@ -160,5 +172,5 @@ export interface ArchitectureView {
 export type ArchitectureState =
   | { kind: "no-metagraph" }
   | { kind: "unreadable"; reason: string }
-  | { kind: "no-communities"; view: ArchitectureView }
-  | { kind: "ready"; view: ArchitectureView };
+  | { kind: "no-communities"; view: ArchitectureView; metagraph: Metagraph }
+  | { kind: "ready"; view: ArchitectureView; metagraph: Metagraph };

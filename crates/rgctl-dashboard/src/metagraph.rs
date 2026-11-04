@@ -14,6 +14,10 @@ use uuid::Uuid;
 
 pub const METAGRAPH_SCHEMA_VERSION: u32 = 3;
 pub const METAGRAPH_FILE: &str = "metagraph.json";
+/// Member indices exported out of line, as little-endian `u32` — one package's run after another, in
+/// metanode order. Present only above [`COMMUNITY_ONLY_THRESHOLD`]; below it they stay inline in
+/// `metagraph.json`, where the payload is small enough not to matter and existing consumers read them.
+pub const METANODE_MEMBERS_FILE: &str = "metanode_members.bin";
 /// Above this raw node count the UI hides per-function nodes (community-only mode).
 pub const COMMUNITY_ONLY_THRESHOLD: u64 = 50_000;
 pub const MAX_METANODES: usize = 256;
@@ -25,6 +29,15 @@ pub struct MetagraphPayload {
     pub community_only: bool,
     pub threshold_community_only: u64,
     pub source_node_count: u64,
+    /// Bundle-relative path to the member-index sidecar, when membership was exported out of line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members_path: Option<String>,
+    /// Total `u32` member indices in the sidecar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members_total: Option<u32>,
+    /// Element format of the sidecar, stated so a reader does not have to infer it from the size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members_format: Option<String>,
     pub nodes: Vec<Metanode>,
     pub edges: Vec<Metaedge>,
 }
@@ -40,8 +53,22 @@ pub struct Metanode {
     pub x: f64,
     pub y: f64,
     /// Columnar row indices in `graph_payload.bin` for WASM LOD drill-down.
+    ///
+    /// Inline only for graphs below [`COMMUNITY_ONLY_THRESHOLD`]. Above it the same indices live in
+    /// `metanode_members.bin` and are addressed by `member_offset` / `member_count` — the file is the part
+    /// that used to be dropped entirely, which is why a district could not be opened.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub member_indices: Vec<u32>,
+    /// Byte offset of this package's run in `metanode_members.bin`.
+    ///
+    /// Always serialized, including when it is `0`: the first package's run starts at byte zero, and an
+    /// elided "0" is indistinguishable from "no field" — which is how a consumer ends up unable to open the
+    /// largest district in the bundle while the others work.
+    #[serde(default)]
+    pub member_offset: u32,
+    /// Number of `u32` indices in this package's run. `0` means this package exported no members.
+    #[serde(default)]
+    pub member_count: u32,
     /// Fast-Leiden community id (majority vote of member nodes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub community_id: Option<usize>,
@@ -195,10 +222,10 @@ pub fn write_metagraph(
             bucket.complexity_sum += c;
             bucket.complexity_count += 1;
         }
-        if include_member_indices {
-            if let Some(col_idx) = uuid_to_col.get(&n.id) {
-                bucket.member_indices.push(*col_idx);
-            }
+        // Collected unconditionally: above the threshold these go to the sidecar instead of the JSON, which
+        // is a serialization choice, not a reason to throw the data away during the walk.
+        if let Some(col_idx) = uuid_to_col.get(&n.id) {
+            bucket.member_indices.push(*col_idx);
         }
     });
 
@@ -326,6 +353,9 @@ pub fn write_metagraph(
         community_only,
         threshold_community_only: COMMUNITY_ONLY_THRESHOLD,
         source_node_count,
+        members_path: None,
+        members_total: None,
+        members_format: None,
         nodes: metanodes,
         edges,
     };
@@ -354,6 +384,47 @@ pub fn write_metagraph(
         }
         map
     };
+    // Membership: inline for small graphs (unchanged shape for every existing consumer), out of line above
+    // the threshold, where it used to be dropped.
+    let mut payload = payload;
+    let mut members_bytes: Vec<u8> = Vec::new();
+    let mut members_total: u32 = 0;
+    if include_member_indices {
+        for node in payload.nodes.iter_mut() {
+            node.member_offset = 0;
+            node.member_count = node.member_indices.len() as u32;
+        }
+    } else {
+        for node in payload.nodes.iter_mut() {
+            let offset = members_bytes.len() as u32;
+            for index in &node.member_indices {
+                members_bytes.extend_from_slice(&index.to_le_bytes());
+            }
+            node.member_offset = offset;
+            node.member_count = (members_bytes.len() as u32 - offset) / 4;
+            members_total += node.member_count;
+            node.member_indices = Vec::new();
+        }
+        if members_total > 0 {
+            payload.members_path = Some(METANODE_MEMBERS_FILE.to_string());
+            payload.members_total = Some(members_total);
+            payload.members_format = Some("u32le".to_string());
+        }
+    }
+
+    if !members_bytes.is_empty() {
+        let start = std::time::Instant::now();
+        fs_write(out_dir.join(METANODE_MEMBERS_FILE), &members_bytes)?;
+        tracing::info!(
+            target = "profile",
+            file = METANODE_MEMBERS_FILE,
+            write_secs = start.elapsed().as_secs_f64(),
+            bytes = members_bytes.len(),
+            indices = members_total,
+            "[profile] save_dashboard member index write"
+        );
+    }
+
     let communities = summarize_communities(modularity, &payload.nodes, &label_map);
 
     let metagraph_json = {
@@ -453,6 +524,8 @@ fn bucket_to_metanode(id: u32, bucket: PackageBucket) -> Metanode {
         x: 0.0,
         y: 0.0,
         member_indices: bucket.member_indices,
+        member_offset: 0,
+        member_count: 0,
         community_id,
     }
 }
@@ -498,6 +571,121 @@ mod tests {
         Node::new(NodeType::Module, name)
             .with_file_path(file)
             .with_property("kind".to_string(), "heading".to_string())
+    }
+
+    /// Above the threshold, membership goes out of line — and the offsets must address exactly what the
+    /// package owns.
+    ///
+    /// This is the data a district needs to open. It used to be dropped entirely above
+    /// `COMMUNITY_ONLY_THRESHOLD`, which is why the Architecture room could not expand a package: the engine
+    /// `expand_indices` has always been able to draw a member set, but nothing said which nodes belong to
+    /// which package. The sidecar is that answer, so these assertions are about arithmetic that has to line
+    /// up byte for byte rather than about a field existing.
+    #[test]
+    fn large_graphs_export_member_indices_out_of_line() {
+        let mut backend = MemoryBackend::new();
+        let mut uuid_to_col: HashMap<Uuid, u32> = HashMap::new();
+
+        // Two packages' worth of nodes, tagged with the columnar positions the payload would use.
+        let mut nodes = Vec::new();
+        for (n, path) in [
+            "crates/alpha/src/lib.rs",
+            "crates/alpha/src/util.rs",
+            "crates/beta/src/lib.rs",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let node = Node::new(NodeType::Function, format!("f{n}")).with_file_path(*path);
+            uuid_to_col.insert(node.id, n as u32);
+            nodes.push(node);
+        }
+        for node in nodes {
+            backend.insert_node(node).unwrap();
+        }
+
+        let dir = tempdir().unwrap();
+        let export = write_metagraph(
+            &backend,
+            Path::new("graph.snapshot.bin"),
+            dir.path(),
+            COMMUNITY_ONLY_THRESHOLD,
+            None,
+            &uuid_to_col,
+        )
+        .unwrap();
+
+        let meta = &export.meta;
+        assert!(
+            meta.community_only,
+            "this fixture must take the out-of-line path"
+        );
+        assert_eq!(
+            meta.members_path.as_deref(),
+            Some(METANODE_MEMBERS_FILE),
+            "the sidecar path must be declared"
+        );
+        assert_eq!(meta.members_format.as_deref(), Some("u32le"));
+
+        let total = meta.members_total.expect("members_total") as usize;
+        assert_eq!(
+            total,
+            meta.nodes
+                .iter()
+                .map(|n| n.member_count as usize)
+                .sum::<usize>(),
+            "the declared total must be the sum of the packages' runs"
+        );
+        assert_eq!(total, 3, "every function belongs to exactly one package");
+
+        let bytes = std::fs::read(dir.path().join(METANODE_MEMBERS_FILE)).expect("sidecar");
+        assert_eq!(bytes.len(), total * 4, "one u32 per member, no padding");
+
+        // No node may keep an inline copy above the threshold: two sources of truth is the bug this prevents.
+        assert!(
+            meta.nodes.iter().all(|n| n.member_indices.is_empty()),
+            "inline indices must be cleared when the sidecar carries them"
+        );
+
+        // The first package's run starts at byte 0. An elided zero here is indistinguishable from a missing
+        // field, and the client would fail to open exactly the largest district in the bundle.
+        let zero_addressed = meta
+            .nodes
+            .iter()
+            .find(|n| n.member_count > 0)
+            .expect("a package with members");
+        assert_eq!(
+            zero_addressed.member_offset, 0,
+            "the first run is at offset zero and must be serialized as such"
+        );
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(
+            json.contains("\"member_offset\": 0") || json.contains("\"member_offset\":0"),
+            "a zero offset must appear in the JSON, not be skipped"
+        );
+
+        let mut seen: Vec<u32> = Vec::new();
+        for node in &meta.nodes {
+            assert_eq!(
+                node.member_offset % 4,
+                0,
+                "offsets are byte offsets into a u32 stream"
+            );
+            assert_eq!(node.member_indices.len(), 0);
+            let start = node.member_offset as usize;
+            let end = start + node.member_count as usize * 4;
+            for chunk in bytes[start..end].chunks_exact(4) {
+                seen.push(u32::from_le_bytes(chunk.try_into().unwrap()));
+            }
+            // A run must not overlap the next package's run.
+            assert!(end <= bytes.len(), "run must stay inside the sidecar");
+        }
+        seen.sort_unstable();
+        assert_eq!(
+            seen,
+            vec![0, 1, 2],
+            "every member index appears exactly once"
+        );
     }
 
     #[test]

@@ -71,4 +71,26 @@ impl EngineContext {
             .map_err(|e| JsValue::from_str(&e))?;
         serde_json::to_string(&payload).map_err(|e| JsValue::from_str(&e.to_string()))
     }
+
+    /// Resolve a function (or other node) UUID to its columnar index.
+    ///
+    /// Returns `undefined` in JS when the UUID is absent from `graph_payload.bin`.
+    /// This is the join taint / CFG subjects need before `blastRadius`.
+    #[wasm_bindgen(js_name = indexOfUuid)]
+    pub fn index_of_uuid(&self, uuid: &str) -> Option<u32> {
+        let id = columnar::parse_uuid_bytes(uuid).ok()?;
+        self.view.index_of_uuid(&id)
+    }
+
+    /// Blast radius keyed by stable UUID (taint / Focus subjects), not columnar index.
+    #[wasm_bindgen(js_name = blastRadiusByUuid)]
+    pub fn blast_radius_by_uuid(&self, uuid: &str, max_depth: u32) -> Result<String, JsValue> {
+        let id = columnar::parse_uuid_bytes(uuid).map_err(|e| JsValue::from_str(&e))?;
+        let Some(index) = self.view.index_of_uuid(&id) else {
+            return Err(JsValue::from_str(&format!(
+                "no columnar node for UUID {uuid}"
+            )));
+        };
+        self.blast_radius(index, max_depth)
+    }
 }

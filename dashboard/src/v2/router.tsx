@@ -6,13 +6,15 @@ import {
   Outlet,
   type RouterHistory,
 } from "@tanstack/react-router";
-import { isLens, isRoom, parseFocus } from "./focus";
+import { isLens, isRoom, parseExplode, parseFocus, DEFAULT_ROOM } from "./focus";
 import { App } from "./App";
 
 /** Search params are the Focus's transport: a view state is a shareable link. */
 export interface ViewSearch {
   lens?: string;
   focus?: string;
+  /** The district whose level is open in Architecture — a level is a link, and a way back to it. */
+  explode?: number;
 }
 
 const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -20,8 +22,14 @@ const rootRoute = createRootRoute({ component: () => <Outlet /> });
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  beforeLoad: () => {
-    throw redirect({ to: "/$roomId", params: { roomId: "repo" }, replace: true });
+  beforeLoad: ({ search }) => {
+    // `search` rides along: a bare `/` carrying a Focus is still a link someone meant to share.
+    throw redirect({
+      to: "/$roomId",
+      params: { roomId: DEFAULT_ROOM },
+      search: search as Record<string, unknown>,
+      replace: true,
+    });
   },
 });
 
@@ -35,15 +43,23 @@ const roomRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "$roomId",
   component: App,
-  beforeLoad: ({ params }) => {
-    // An unknown room is normalised rather than rendered as a broken shell with a lying URL.
+  beforeLoad: ({ params, search }) => {
+    // An unknown room is normalised rather than rendered as a broken shell with a lying URL — and the view state
+    // comes with it. Dropping `search` here made `/nonsense?focus=…` a link to *no* subject: the room changed and
+    // the Focus silently went with it, which is the failure a URL-carrying design exists to prevent.
     if (!isRoom(params.roomId)) {
-      throw redirect({ to: "/$roomId", params: { roomId: "repo" }, replace: true });
+      throw redirect({
+        to: "/$roomId",
+        params: { roomId: DEFAULT_ROOM },
+        search: search as Record<string, unknown>,
+        replace: true,
+      });
     }
   },
   validateSearch: (search: Record<string, unknown>): ViewSearch => ({
     lens: isLens(search.lens) ? (search.lens as string) : undefined,
     focus: parseFocus(search.focus) ?? undefined,
+    explode: parseExplode(search.explode),
   }),
 });
 
