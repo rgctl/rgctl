@@ -1,7 +1,8 @@
 //! Automated Cross-Layer (Layers A–F) Tier-1 Parity Gate & Corpus Hotspot Audit.
 //!
 //! Enforces OpenSpec `enforce-tier1-maximum-ast-coverage` across all 24 Tier-1
-//! languages in [`rgctl_ast_coverage::bundled_specs`]:
+//! languages in [`rgctl_ast_coverage::bundled_specs`], while also validating
+//! the manifests and declared handlers of other bundled structural plugins:
 //! - **Layer A (Graph)**: `Symbol > 0` and `Relation > 0` in `{id}-ast-coverage.json`,
 //!   plus golden snippet symbol & relation extraction (`Calls`, `Uses`, `Defines`).
 //! - **Layer B (CFG & PDG)**: `profile.cfg_enabled` requires `CfgStatement >= 5` and
@@ -22,8 +23,8 @@ use rgctl_analysis::field_write_locals::{language_visit_fn, merge_local_types};
 use rgctl_analysis::language_profile::profile_for_language;
 use rgctl_analysis::taint_rules::TaintRuleSet;
 use rgctl_ast_coverage::{
-    AstCoverageTracker, bundled_specs, check_manifest, check_plugin_and_analysis_manifest_sync,
-    compute_semantic_coverage,
+    AstCoverageTracker, CoverageGrade, bundled_specs, check_manifest,
+    check_plugin_and_analysis_manifest_sync, compute_semantic_coverage,
 };
 use rgctl_languages::default_registry;
 use rgctl_plugin_api::{RelationType, SymbolType};
@@ -57,7 +58,14 @@ fn load_manifest_handlers(
 #[test]
 fn tier1_all_24_languages_pass_manifest_ratchet_and_three_way_sync() {
     let specs = bundled_specs();
-    assert_eq!(specs.len(), 24, "expected all 24 Tier-1 bundled specs");
+    assert_eq!(
+        specs
+            .iter()
+            .filter(|spec| spec.target_grade == CoverageGrade::APlus)
+            .count(),
+        24,
+        "expected all 24 Tier-1 bundled specs"
+    );
     let registry = default_registry();
     let mut failures = Vec::new();
 

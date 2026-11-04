@@ -48,6 +48,17 @@ impl Default for DiscoveryConfig {
     }
 }
 
+/// One eligible walk, including deferred possible unsuffixed template targets.
+#[derive(Debug, Default, Clone)]
+pub struct DiscoveryInventory {
+    /// Ordinary selected sources, extracted in the first worker wave.
+    pub files: Vec<PathBuf>,
+    /// Eligible targets. The bool preserves whether the ordinary route was selected.
+    pub template_candidates: Vec<(PathBuf, bool)>,
+    /// Standalone task-directory YAML, promoted only by a literal include.
+    pub ansible_candidates: Vec<(PathBuf, bool)>,
+}
+
 /// Discovers source and config files in a repository.
 pub struct FileDiscoverer {
     registry: Arc<LanguageRegistry>,
@@ -64,7 +75,12 @@ impl FileDiscoverer {
     }
 
     /// Create a discoverer with custom configuration.
-    pub fn with_config(registry: Arc<LanguageRegistry>, config: DiscoveryConfig) -> Self {
+    pub fn with_config(registry: Arc<LanguageRegistry>, mut config: DiscoveryConfig) -> Self {
+        if let Some(languages) = &mut config.languages {
+            for id in languages {
+                *id = rgctl_registry::canonical_language_id(id).to_owned();
+            }
+        }
         Self { registry, config }
     }
 
@@ -83,6 +99,26 @@ impl FileDiscoverer {
     /// Respects `.gitignore`, indexes dot-directories such as `.github/workflows/`, filters by
     /// supported extensions, and applies size/binary checks.
     pub fn discover(&self, root: &Path) -> Result<Vec<PathBuf>> {
+        let inventory = self.discover_inventory(root)?;
+        let mut files = inventory.files;
+        files.extend(
+            inventory
+                .template_candidates
+                .into_iter()
+                .filter_map(|(path, ordinary)| ordinary.then_some(path)),
+        );
+        files.extend(
+            inventory
+                .ansible_candidates
+                .into_iter()
+                .filter_map(|(path, ordinary)| ordinary.then_some(path)),
+        );
+        files.sort();
+        Ok(files)
+    }
+
+    /// Gather ordinary files and eligible template candidates in a single walk.
+    pub fn discover_inventory(&self, root: &Path) -> Result<DiscoveryInventory> {
         if !root.exists() {
             return Err(Error::NotFound(format!(
                 "Repository path does not exist: {}",
@@ -110,39 +146,74 @@ impl FileDiscoverer {
             .build();
 
         let mut files = Vec::new();
+        let mut candidates = Vec::new();
+        let mut ansible_candidates = Vec::new();
 
         for entry in walker.flatten() {
             let path = entry.path();
-            if !path.is_file() {
+            if !entry.file_type().is_some_and(|ty| ty.is_file()) {
                 continue;
             }
 
-            if !self.registry.can_process_file(path) {
+            self.registry.association(path)?;
+            let can_process = self.registry.can_process_file(path);
+            let selected = can_process
+                && self
+                    .config
+                    .languages
+                    .as_ref()
+                    .is_none_or(|languages| self.matches_language_filter(path, languages));
+            let wants_templates = self.registry.has_plugin("jinja")
+                && self
+                    .config
+                    .languages
+                    .as_ref()
+                    .is_none_or(|ids| ids.iter().any(|id| id == "jinja"));
+            let candidate = wants_templates
+                && self.registry.is_template_pool_path(path)
+                && !self
+                    .registry
+                    .get_plugin_for_file_path_only_for_discovery(path)
+                    .is_some_and(|id| id == "jinja");
+            let task_candidate = self.registry.is_standalone_task_pool_path(path)
+                && self
+                    .config
+                    .languages
+                    .as_ref()
+                    .is_none_or(|ids| ids.iter().any(|id| id == "ansible"));
+            if !selected && !candidate && !task_candidate {
                 continue;
             }
-
-            if self.is_too_large(path)? {
+            if self.is_too_large(path)? || self.is_binary(path)? {
                 continue;
             }
-
-            if let Some(ref languages) = self.config.languages
-                && !self.matches_language_filter(path, languages)
-            {
-                continue;
+            if task_candidate {
+                ansible_candidates.push((path.to_path_buf(), selected));
+            } else if candidate {
+                candidates.push((path.to_path_buf(), selected));
+            } else {
+                files.push(path.to_path_buf());
             }
-
-            if self.is_binary(path)? {
-                continue;
-            }
-
-            files.push(path.to_path_buf());
         }
 
         files.sort();
-        Ok(files)
+        candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        ansible_candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(DiscoveryInventory {
+            files,
+            template_candidates: candidates,
+            ansible_candidates,
+        })
     }
 
     fn matches_language_filter(&self, path: &Path, languages: &[String]) -> bool {
+        if self.registry.is_ansible_candidate(path)
+            && languages
+                .iter()
+                .any(|id| matches!(id.as_str(), "ansible" | "yaml"))
+        {
+            return true;
+        }
         if path.extension().and_then(|e| e.to_str()) == Some("m") {
             let wants_matlab = languages.iter().any(|l| l == "matlab");
             let wants_objc = languages.iter().any(|l| l == "objc");

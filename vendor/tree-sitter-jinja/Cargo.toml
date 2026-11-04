@@ -1,0 +1,23 @@
+[package]
+name = "tree-sitter-jinja"
+description = "Jinja grammar for tree-sitter"
+version = "0.13.0"
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["incremental", "parsing", "tree-sitter", "jinja"]
+categories = ["parsing", "text-editors"]
+repository = "https://github.com/cathaysia/tree-sitter-jinja"
+edition = "2021"
+autoexamples = false
+
+build = "bindings/rust/build.rs"
+include = ["bindings/rust/*", "grammar.js", "queries/*", "src/*"]
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter = "0.25"
+
+[build-dependencies]
+cc = "1.0.87"

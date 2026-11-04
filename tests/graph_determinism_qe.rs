@@ -30,7 +30,11 @@ fn copy_dir_all(src: &Path, dst: &Path) {
 }
 
 fn discover_files(root: &Path) -> Vec<PathBuf> {
-    let registry = Arc::new(rgctl_languages::default_registry());
+    let registry = Arc::new(
+        rgctl_languages::default_registry()
+            .for_repository(root)
+            .expect("routing"),
+    );
     let discoverer = FileDiscoverer::with_config(
         registry,
         DiscoveryConfig {
@@ -62,7 +66,11 @@ struct SnapSummary {
 }
 
 fn extract_summary(root: &Path, files: &[PathBuf], thread_count: Option<usize>) -> SnapSummary {
-    let registry = Arc::new(rgctl_languages::default_registry());
+    let registry = Arc::new(
+        rgctl_languages::default_registry()
+            .for_repository(root)
+            .expect("routing"),
+    );
     let extractor = Extractor::new(Arc::clone(&registry));
     let mut builder = GraphBuilder::new();
     let (_stats, tails) = stream_into_graph(
@@ -285,3 +293,12 @@ fn duplicate_fqn_never_fabricates_random_winner() {
         );
     }
 }
+
+ecommerce_perm_test!(
+    ecommerce_ansible_file_order_and_thread_determinism,
+    "ecommerce-ansible"
+);
+ecommerce_perm_test!(
+    ecommerce_jinja_file_order_and_thread_determinism,
+    "ecommerce-jinja"
+);

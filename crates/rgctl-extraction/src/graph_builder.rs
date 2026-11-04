@@ -23,9 +23,17 @@ struct LineSpan {
     id: Uuid,
 }
 
+mod template_resolution;
+pub use template_resolution::TemplateDependencies;
+
 /// Builds graph nodes and edges from extracted data.
 #[derive(Default)]
 pub struct GraphBuilder {
+    templates: template_resolution::TemplateIndex,
+    template_context_hash: Option<String>,
+    template_repository_root: Option<PathBuf>,
+    template_ansible_enabled: Option<bool>,
+    pending_templates: template_resolution::PendingNodes,
     symbol_index: HashMap<String, Uuid>,
     file_nodes: HashMap<String, Uuid>,
     /// Normalized path + component-boundary suffixes → file node id (O(1) lookup).
@@ -121,6 +129,17 @@ impl GraphBuilder {
         let mut builder = Self::new();
         builder.spill = Some(SegmentedSpill::create(spill_dir)?);
         Ok(builder)
+    }
+
+    /// Bind per-repository extraction provenance for safe sidecar recovery.
+    pub fn set_template_context(&mut self, registry: &rgctl_registry::LanguageRegistry) {
+        self.template_context_hash = Some(TemplateDependencies::settings(registry));
+        self.template_repository_root = registry.repository_root().map(Path::to_path_buf);
+        self.template_ansible_enabled = Some(
+            registry
+                .language_filter()
+                .is_none_or(|ids| ids.iter().any(|id| id == "ansible")),
+        );
     }
 
     /// When true, materialize `Symbol.fields` as `Variable` graph nodes (CPG / `--with-cfg`).
@@ -276,6 +295,16 @@ impl GraphBuilder {
         self.node_types.insert(node.id, node.node_type);
         self.record_line_span(&node);
         self.record_tracker_mapping(&node);
+        if node.get_property("source_references_json").is_some() {
+            if let Err(error) = self.pending_templates.push(node, self.spill.as_ref()) {
+                self.spill_error = Some(error.to_string());
+            }
+            return;
+        }
+        self.emit_node(node);
+    }
+
+    fn emit_node(&mut self, node: Node) {
         if let Some(spill) = self.spill.as_mut() {
             if let Err(e) = spill.append_node(&node) {
                 self.spill_error = Some(e.to_string());
@@ -328,6 +357,16 @@ impl GraphBuilder {
 
     /// Ensure a file node exists, optionally recording full-file content hash / blob ref.
     pub fn ensure_file_node_with_source(&mut self, path: &Path, source: Option<&[u8]>) -> Uuid {
+        self.ensure_file_node_with_language(path, source, None)
+    }
+
+    /// Ensure a file with final source-classified language.
+    pub fn ensure_file_node_with_language(
+        &mut self,
+        path: &Path,
+        source: Option<&[u8]>,
+        language: Option<&str>,
+    ) -> Uuid {
         let file_path = path.to_string_lossy().to_string();
         if let Some(id) = self.file_nodes.get(&file_path) {
             return *id;
@@ -349,6 +388,18 @@ impl GraphBuilder {
         let norm = normalize_file_key(&file_path);
         self.file_nodes.insert(file_path, id);
         register_file_lookup_keys(&mut self.file_path_lookup, &norm, id);
+        if let Some(language) = language {
+            node.properties.insert("language".into(), language.into());
+        }
+        if matches!(language, Some("ansible" | "jinja" | "yaml"))
+            && let Some(context) = &self.template_context_hash
+        {
+            node.properties
+                .insert("template_context_hash".into(), context.clone());
+        }
+        if let Some(language) = language {
+            self.index_template_file(path, id, language);
+        }
         self.commit_node(node);
         id
     }
@@ -536,6 +587,7 @@ impl GraphBuilder {
         self.index_symbol_resolution(&key, &node);
         self.index_type_method(symbol, id);
         self.index_import_binding(symbol);
+        self.index_template_symbol(&node);
         self.commit_node(node);
         self.add_edge(id, file_id, EdgeType::DefinedIn);
         self.add_edge(file_id, id, EdgeType::Contains);

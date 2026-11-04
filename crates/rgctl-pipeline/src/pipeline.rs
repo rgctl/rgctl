@@ -2,7 +2,7 @@
 //!
 //! Task 1.6.2: Parallel file parsing with rayon
 
-use crate::stream::{DEFAULT_STREAM_CHANNEL_CAPACITY, stream_into_graph};
+use crate::stream::{DEFAULT_STREAM_CHANNEL_CAPACITY, stream_inventory_into_graph};
 use indicatif::{ProgressBar, ProgressStyle};
 use rgctl_error::Result;
 use rgctl_extraction::discovery::{DiscoveryConfig, FileDiscoverer};
@@ -58,6 +58,8 @@ impl Default for PipelineConfig {
 /// Statistics from a pipeline run.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PipelineStats {
+    /// Whether the completed snapshot has no template or Ansible dependencies.
+    pub empty_automation: bool,
     /// Files discovered
     pub files_discovered: usize,
     /// Files successfully processed
@@ -70,7 +72,7 @@ pub struct PipelineStats {
     pub edges_created: usize,
     /// Total processing duration
     pub duration: Duration,
-    /// Wall time for parallel extract + sequential pass-1 (`stream_into_graph`)
+    /// Wall time for parallel extract + sequential pass-1 (`stream_inventory_into_graph`)
     pub extract_duration: Duration,
     /// Sum of `fs::read` across extract workers (may exceed [`Self::extract_duration`])
     pub extract_read_cpu: Duration,
@@ -137,11 +139,18 @@ impl ProcessingPipeline {
         snapshot_path: &Path,
         artifact_root: Option<&Path>,
     ) -> Result<(PipelineStats, String)> {
+        let registry = Arc::new(
+            self.registry
+                .for_repository(source_root)?
+                .with_language_filter(self.config.discovery.languages.clone()),
+        );
         let start = Instant::now();
         let discoverer =
-            FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
-        let files = discoverer.discover(source_root)?;
-        let files_discovered = files.len();
+            FileDiscoverer::with_config(Arc::clone(&registry), self.config.discovery.clone());
+        let inventory = discoverer.discover_inventory(source_root)?;
+        let files_discovered = inventory.files.len()
+            + inventory.template_candidates.len()
+            + inventory.ansible_candidates.len();
 
         let progress = self.make_progress(files_discovered);
         let store = artifact_root.unwrap_or(source_root);
@@ -158,7 +167,8 @@ impl ProcessingPipeline {
         } else {
             None
         };
-        let mut extractor = Extractor::new(Arc::clone(&self.registry));
+        let mut extractor = Extractor::new(Arc::clone(&registry))
+            .with_languages(self.config.discovery.languages.clone());
         if let Some(ref facts) = facts {
             extractor = extractor.with_facts_cache(Arc::clone(facts));
         }
@@ -170,17 +180,18 @@ impl ProcessingPipeline {
         }
         std::fs::create_dir_all(&spill_dir)?;
         let mut builder = GraphBuilder::with_spill(&spill_dir)?;
+        builder.set_template_context(&registry);
         builder.set_materialize_fields(self.config.materialize_fields);
         // Default discover: do not load/store CodeIndex bodies (multi-GB on linux).
         // Nodes still get `code_hash` via worker-precomputed prep / `hash_code`.
         builder.set_content_store(ContentStore::load(ContentStore::default_path(store))?);
 
         let progress_for_stream = progress.clone();
-        let (stream_stats, tails) = stream_into_graph(
+        let (stream_stats, tails) = stream_inventory_into_graph(
             self.config.thread_count,
             &extractor,
-            Arc::clone(&self.registry),
-            &files,
+            Arc::clone(&registry),
+            &inventory,
             self.config.stream_channel_capacity,
             &mut builder,
             move || {
@@ -214,9 +225,31 @@ impl ProcessingPipeline {
         let node_path_mapping = builder.take_tracker_mapping();
         let annotation_args = builder.take_annotation_args();
         let parked_relations = builder.take_parked_relations();
+        let mut template_dependencies = builder.take_template_dependencies(&registry);
+        template_dependencies.update_classifications(
+            stream_stats.excluded_classifications,
+            inventory
+                .files
+                .iter()
+                .cloned()
+                .chain(
+                    inventory
+                        .template_candidates
+                        .iter()
+                        .map(|(path, _)| path.clone()),
+                )
+                .chain(
+                    inventory
+                        .ansible_candidates
+                        .iter()
+                        .map(|(path, _)| path.clone()),
+                ),
+        );
         let spill_start = Instant::now();
         let finished = builder.finish_spill()?;
         let digest = write_columnar_from_spill(finished, snapshot_path)?;
+        let empty_automation = template_dependencies.is_empty();
+        template_dependencies.save(store, &digest)?;
         if !annotation_args.is_empty()
             && let Some(parent) = snapshot_path.parent()
         {
@@ -275,6 +308,7 @@ impl ProcessingPipeline {
 
         Ok((
             PipelineStats {
+                empty_automation,
                 files_discovered,
                 files_processed,
                 files_failed,
@@ -315,10 +349,17 @@ impl ProcessingPipeline {
 
     fn extract_repository(&self, root: &Path) -> Result<(Vec<Node>, Vec<Edge>, PipelineStats)> {
         let start = Instant::now();
+        let registry = Arc::new(
+            self.registry
+                .for_repository(root)?
+                .with_language_filter(self.config.discovery.languages.clone()),
+        );
         let discoverer =
-            FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
-        let files = discoverer.discover(root)?;
-        let files_discovered = files.len();
+            FileDiscoverer::with_config(Arc::clone(&registry), self.config.discovery.clone());
+        let inventory = discoverer.discover_inventory(root)?;
+        let files_discovered = inventory.files.len()
+            + inventory.template_candidates.len()
+            + inventory.ansible_candidates.len();
 
         let progress = self.make_progress(files_discovered);
         let facts = if self.config.facts_cache {
@@ -326,20 +367,22 @@ impl ProcessingPipeline {
         } else {
             None
         };
-        let mut extractor = Extractor::new(Arc::clone(&self.registry));
+        let mut extractor = Extractor::new(Arc::clone(&registry))
+            .with_languages(self.config.discovery.languages.clone());
         if let Some(ref facts) = facts {
             extractor = extractor.with_facts_cache(Arc::clone(facts));
         }
         let extract_start = Instant::now();
         let mut builder = GraphBuilder::new();
+        builder.set_template_context(&registry);
         builder.set_materialize_fields(self.config.materialize_fields);
         builder.set_content_store(ContentStore::load(ContentStore::default_path(root))?);
         let progress_for_stream = progress.clone();
-        let (stream_stats, tails) = stream_into_graph(
+        let (stream_stats, tails) = stream_inventory_into_graph(
             self.config.thread_count,
             &extractor,
-            Arc::clone(&self.registry),
-            &files,
+            Arc::clone(&registry),
+            &inventory,
             self.config.stream_channel_capacity,
             &mut builder,
             move || {
@@ -384,6 +427,7 @@ impl ProcessingPipeline {
             nodes,
             edges,
             PipelineStats {
+                empty_automation: false,
                 files_discovered,
                 files_processed,
                 files_failed,

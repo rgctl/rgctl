@@ -11,6 +11,7 @@ mod parser_pool;
 mod registrar;
 mod scope_stack;
 mod single_pass;
+mod source_reference;
 
 pub use ast_handlers::{AstHandlerTable, HandlerMask};
 pub use kind_dispatch::{KindDispatchOnce, KindDispatchTable, MAX_KIND_ID};
@@ -22,6 +23,7 @@ pub use single_pass::{
     dispatch_lookup_tracked, dispatch_table_from_manifest, handler_table_from_kinds,
     set_ast_coverage_hit_fn, track_ast_kind,
 };
+pub use source_reference::{SourceReference, SourceReferenceContext, SourceReferenceKind};
 
 pub use call_extraction::{
     C_CALL_KINDS, CPP_CALL_KINDS, CSHARP_CALL_KINDS, GO_CALL_KINDS, JS_CALL_KINDS,
@@ -237,6 +239,9 @@ pub struct ExtractAllResult {
     pub relations: Vec<Relation>,
     /// Out-of-line content blobs keyed by Blake3 hex (`body_ref` / `blob_ref`).
     pub content_blobs: HashMap<String, String>,
+    /// Static source references requiring exact repository/context resolution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_references: Vec<SourceReference>,
 }
 
 impl ExtractAllResult {
@@ -246,6 +251,7 @@ impl ExtractAllResult {
             symbols,
             relations,
             content_blobs: HashMap::new(),
+            source_references: Vec::new(),
         }
     }
 }
@@ -408,6 +414,34 @@ pub trait LanguagePlugin: Send + Sync {
         None
     }
 
+    /// Classify and extract a source candidate in one pooled parse. Declining lets
+    /// the caller retain the generic config route (not an extraction failure).
+    ///
+    /// This cheap, conservative probe runs before facts-cache lookup. Returning
+    /// false must mean that `extract_candidate` would decline the same input.
+    fn may_extract_candidate(&self, _file_path: &Path, _source: &[u8]) -> bool {
+        true
+    }
+
+    /// Classify and extract a source candidate after the optional cheap probe.
+    fn extract_candidate(
+        &self,
+        file_path: &Path,
+        source: &[u8],
+    ) -> Result<Option<ExtractAllResult>> {
+        self.extract_all(file_path, source).map(Some)
+    }
+
+    /// Extract with immutable repository syntax settings. Other plugins ignore them.
+    fn extract_with_syntax(
+        &self,
+        file_path: &Path,
+        source: &[u8],
+        _syntax: &JinjaSyntax,
+    ) -> Result<ExtractAllResult> {
+        self.extract_all(file_path, source)
+    }
+
     /// Extract symbols from source code
     ///
     /// # Arguments
@@ -446,6 +480,7 @@ pub trait LanguagePlugin: Send + Sync {
             symbols,
             relations,
             content_blobs: HashMap::new(),
+            source_references: Vec::new(),
         })
     }
 
@@ -854,3 +889,6 @@ mod tests {
         assert_eq!(metrics, deserialized);
     }
 }
+
+mod jinja_syntax;
+pub use jinja_syntax::JinjaSyntax;

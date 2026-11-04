@@ -118,6 +118,8 @@ fn is_container(nt: NodeType) -> bool {
             | NodeType::AnsiblePlaybook
             | NodeType::AnsiblePlay
             | NodeType::AnsibleRole
+            | NodeType::AnsibleTask
+            | NodeType::AnsibleHandler
     )
 }
 

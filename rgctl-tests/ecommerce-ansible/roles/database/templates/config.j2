@@ -1,0 +1,5 @@
+{% import 'helpers.jinja' as fmt %}
+service={{ fmt.dbLabel(service) }}
+port={{ http_port | default(8080) }}
+os={{ ansible_facts.os_family }}
+{% include ['missing.j2','tail.conf'] %}

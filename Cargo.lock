@@ -2597,6 +2597,7 @@ dependencies = [
  "tree-sitter-hcl",
  "tree-sitter-java",
  "tree-sitter-javascript",
+ "tree-sitter-jinja",
  "tree-sitter-kotlin-ng",
  "tree-sitter-lua",
  "tree-sitter-md",
@@ -2609,6 +2610,7 @@ dependencies = [
  "tree-sitter-sequel",
  "tree-sitter-swift",
  "tree-sitter-typescript",
+ "tree-sitter-yaml",
 ]
 
 [[package]]
@@ -2765,6 +2767,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tracing",
  "uuid",
 ]
 
@@ -2798,6 +2801,20 @@ dependencies = [
  "rgctl-registry",
  "tree-sitter",
  "tree-sitter-ada",
+]
+
+[[package]]
+name = "rgctl-lang-ansible"
+version = "0.4.25"
+dependencies = [
+ "rgctl-lang-jinja",
+ "rgctl-plugin-api",
+ "rgctl-registry",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tree-sitter",
+ "tree-sitter-yaml",
 ]
 
 [[package]]
@@ -3192,6 +3209,18 @@ dependencies = [
  "rgctl-registry",
  "serde_json",
  "tree-sitter",
+]
+
+[[package]]
+name = "rgctl-lang-jinja"
+version = "0.4.25"
+dependencies = [
+ "rgctl-plugin-api",
+ "rgctl-registry",
+ "serde",
+ "serde_json",
+ "tree-sitter",
+ "tree-sitter-jinja",
 ]
 
 [[package]]
@@ -3687,6 +3716,7 @@ dependencies = [
  "rgctl-ast-coverage",
  "rgctl-config-formats",
  "rgctl-lang-ada",
+ "rgctl-lang-ansible",
  "rgctl-lang-apex",
  "rgctl-lang-bash",
  "rgctl-lang-c",
@@ -3718,6 +3748,7 @@ dependencies = [
  "rgctl-lang-java",
  "rgctl-lang-javascript",
  "rgctl-lang-jcl",
+ "rgctl-lang-jinja",
  "rgctl-lang-julia",
  "rgctl-lang-kotlin",
  "rgctl-lang-lua",
@@ -3839,6 +3870,7 @@ dependencies = [
 name = "rgctl-registry"
 version = "0.4.25"
 dependencies = [
+ "globset",
  "rgctl-config-formats",
  "rgctl-error",
  "rgctl-graph",
@@ -3846,6 +3878,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
@@ -5010,6 +5043,14 @@ checksum = "68204f2abc0627a90bdf06e605f5c470aa26fdcb2081ea553a04bdad756693f5"
 dependencies = [
  "cc",
  "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-jinja"
+version = "0.13.0"
+dependencies = [
+ "cc",
+ "tree-sitter",
 ]
 
 [[package]]

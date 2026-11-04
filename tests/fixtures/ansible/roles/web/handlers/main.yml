@@ -1,0 +1,6 @@
+- name: restart service
+  ansible.builtin.service:
+    name: example
+    state: restarted
+  listen:
+    - refresh service

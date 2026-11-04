@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "language": "jinja",
+  "project": "ecommerce-jinja",
+  "graph": {
+    "severity": "required",
+    "min_functions": 6,
+    "exact_calls_edges": 3,
+    "forbidden_edges": [
+      {
+        "from": "correctnessLeaf",
+        "to": "correctnessRoot",
+        "edge_type": "Calls"
+      },
+      {
+        "from": "Render config",
+        "to": "webLabel",
+        "edge_type": "Calls"
+      }
+    ]
+  },
+  "symbols": {
+    "root": {
+      "match": {
+        "name": "correctnessRoot"
+      },
+      "unique": true,
+      "exact_callees": [
+        "correctnessMid"
+      ],
+      "exact_callers": []
+    },
+    "mid": {
+      "match": {
+        "name": "correctnessMid"
+      },
+      "unique": true,
+      "exact_callees": [
+        "correctnessLeaf"
+      ],
+      "exact_callers": [
+        "correctnessRoot"
+      ]
+    },
+    "leaf": {
+      "match": {
+        "name": "correctnessLeaf"
+      },
+      "unique": true,
+      "exact_callees": [],
+      "exact_callers": [
+        "correctnessMid"
+      ]
+    }
+  },
+  "invariants": {}
+}

@@ -1,0 +1,4 @@
+{% extends 'base.j2' %}
+{% import 'helpers.jinja' as fmt %}
+{% block title %}{{ fmt.heading(title) }}{% endblock %}
+{% for item in items %}{{ item.name }}{% endfor %}

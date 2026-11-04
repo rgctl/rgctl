@@ -942,3 +942,29 @@ import_kinds = []
 enable_complexity = false
 enable_type_inference = false
 tags_scm = "crates/rgctl-lang-matlab/queries/tags.scm"
+
+[languages.jinja]
+handler = "custom"
+plugin = "JinjaPlugin"
+module = "crate::languages::builtin::jinja"
+crate = "tree-sitter-jinja"
+extensions = ["j2", "jinja", "jinja2"]
+aliases = ["jinja", "jinja2", "j2"]
+function_kinds = []
+class_kinds = []
+import_kinds = []
+enable_complexity = false
+enable_type_inference = false
+
+[languages.ansible]
+handler = "custom"
+plugin = "AnsiblePlugin"
+module = "crate::languages::builtin::ansible"
+crate = "tree-sitter-yaml"
+extensions = []
+aliases = ["ansible"]
+function_kinds = []
+class_kinds = []
+import_kinds = []
+enable_complexity = false
+enable_type_inference = false

@@ -444,3 +444,86 @@ Tier-1 language `extract_all` migrated to `ScopeStack` + `KindDispatchTable` + `
 - `example/README.md` — fetch script and optional corpora
 - `docs/analysis-architecture.md` — discover pipeline and centrality gating
 - [`AGENTS.md`](../../AGENTS.md) — agent-facing cold-profile + Gate A/B summary (canonical for contributors)
+
+## Ansible/Jinja structural support — 2026-10-30 smoke measurements
+
+Gate A passed with a release binary on macOS arm64 (10 visible CPUs, 32 GiB RAM)
+using Linux commit `4dd16e31135ea8437a720222df34e8745f385d6d` on a
+case-sensitive APFS volume. The final-source cold discover reported 61.5 s wall,
+1,813,103 nodes, and 15.317 s `index_graph_build`; test elapsed was 63.81 s,
+below the 82.5 s limit. This is one run, not a new reference baseline.
+
+On 2026-11-03, after integrating onto upstream `c88773f1289bc2908454b76555e9a63a119f391c`,
+the same pinned corpus and case-sensitive volume passed Gate A with 60.6 s
+discover wall, 1,819,406 nodes, 15.370 s `index_graph_build`, and 62.88 s test
+elapsed. This single result is not a new reference baseline.
+
+On 2026-11-04, after the ingest review fixes, the same Linux revision on an
+isolated case-sensitive checkout passed Gate A with 63.1 s discover wall,
+1,819,406 nodes, 15.528 s `index_graph_build`, and 65.37 s test elapsed.
+This single run is not a new reference baseline.
+
+After merging upstream `7192a656b6151b4489eca3af4741d1ecb43211b6`, a fresh
+release build passed the same gate with 60.2 s discover wall, 1,819,406 nodes,
+14.925 s `index_graph_build`, and 62.41 s test elapsed.
+
+Pinned corpus: `ansible/ansible` **v2.19.0**, commit
+`82529e534dd3edd84aba03d86b337f88c58b9982`, sparse checkout of
+`test/integration/targets` (recipe in `example/README.md`). A NUL-delimited
+`git ls-tree -rz --name-only HEAD test/integration/targets` count gives 3,537
+tracked files, 1,779 YAML files (710 under `tasks/`), 72 standard Jinja-suffix
+files, and 93 files under `templates/`. NUL delimiting matters for Unicode and
+unusual upstream fixture filenames.
+
+The corpus uses nonstandard standalone test-role layouts. For these measurements,
+its local, untracked `rgctl.toml` contained:
+
+```toml
+[languages.ansible]
+include = [
+  "test/integration/targets/**/tasks/*.yml",
+  "test/integration/targets/**/tasks/*.yaml",
+  "test/integration/targets/**/handlers/*.yml",
+  "test/integration/targets/**/handlers/*.yaml",
+  "test/integration/targets/**/meta/main.yml",
+  "test/integration/targets/**/meta/main.yaml",
+]
+[languages.jinja]
+include = ["test/integration/targets/**/templates/**"]
+```
+
+Hardware: macOS arm64, 10 visible CPUs, 32 GiB RAM. Release profile: repository
+`opt-level=3`, fat LTO, one codegen unit. Each row is one run, with the corpus's
+`.rgctl/` removed immediately beforehand, executed **inside** `example/ansible`:
+
+```bash
+RUST_LOG=info,profile=info ../../target/release/rgctl -f json discover . -v -l ansible,jinja
+# Repeat cold with -l ansible, -l jinja, and joint selection plus:
+# --with-limits max-mem-mb=4096,threads=1
+```
+
+| Cold selection | Indexed files | `wall_secs` | Nodes | Functions | `index_graph_build` | Observed RSS MiB |
+|---|---:|---:|---:|---:|---:|---:|
+| `ansible,jinja` | 1,503 | 1.366 s | 25,353 | 106 | 0.184 s | 355 |
+| `ansible` | 1,400 | 1.331 s | 24,901 | 0 | 0.178 s | 329 |
+| `jinja` | 103 | 0.741 s | 451 | 106 | 0.011 s | 144 |
+| Joint, 4,096 MiB / 1 thread | 1,503 | 1.593 s | 25,353 | 106 | 0.189 s | 365 |
+
+A 2026-11-04 joint-selection smoke run on an isolated copy of the same pinned
+checkout and configuration indexed 1,503 files in 1.345 s, with 25,358 nodes,
+106 functions, 0.203 s `index_graph_build`, and 372 MiB observed peak RSS.
+Process elapsed was 1.374 s. On that same copy, the preceding PR head and the
+review fixes produced identical Ansible and Jinja symbol sets and identical
+node and edge counts. These single runs are not a performance baseline.
+
+Process elapsed times were 1.47 / 1.38 / 0.79 / 1.65 s respectively. RSS is
+the larger of the summary's sampled peak and ingest peak. Function counts include Jinja's
+synthetic render scopes and named macros/blocks; Ansible tasks are distinct
+`AnsibleTask` entities. Language-filtered generic configuration candidates are
+not counted as indexed files.
+
+These are **smoke measurements**, not a Gate B baseline: neither the Ansible
+source selection nor the Jinja template selection approaches ~10k relevant
+files. No +10% language-scale gate or scale-readiness claim is added from these
+numbers. A larger pinned corpus and repeated measurements on the reference
+machine remain necessary for a language-scale baseline.

@@ -68,3 +68,21 @@ The fetch script now pulls all large profiling fixtures in one go:
 Override paths with `RGCTL_LINUX_REPO`, `RGCTL_KAFKA_REPO`, `RGCTL_K8S_WEBSITE_REPO`, `RGCTL_MAGENTO2_REPO`, `RGCTL_RUST_REPO`, `RGCTL_HOME_ASSISTANT_REPO`, `RGCTL_DISCOURSE_REPO`, `RGCTL_VSCODE_REPO`, `RGCTL_NODE_REPO`, `RGCTL_ROSLYN_REPO`, `RGCTL_LLVM_REPO`, `RGCTL_KOTLIN_REPO`, `RGCTL_GROOVY_REPO`.
 
 **Cold profile:** gates remove `example/<repo>/.rgctl/` before discover and require `target/release/rgctl` (`cargo build --release --bin rgctl`). Do not profile against a warm or partial cache — numbers will be wrong.
+
+**Ansible/Jinja smoke corpus (pinned, below Gate B scale):**
+
+```bash
+git clone --depth 1 --filter=blob:none --sparse --branch v2.19.0 \
+  https://github.com/ansible/ansible.git example/ansible
+git -C example/ansible sparse-checkout set test/integration/targets
+git -C example/ansible rev-parse HEAD
+# 82529e534dd3edd84aba03d86b337f88c58b9982
+```
+
+At that revision the integration targets contain 3,537 tracked files: 1,779
+YAML files (710 under `tasks/`), 72 standard Jinja-suffix files, and 93 files
+under `templates/`. These are upstream fixtures, not ~10k relevant language
+sources. Use explicit associations for their nonstandard standalone task/handler
+layouts. They provide compatibility/smoke coverage; no Gate B scale baseline is
+claimed. Cold release measurements and the settings used are recorded in
+[profile.md](../docs/internal/profile.md).

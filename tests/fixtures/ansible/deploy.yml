@@ -1,0 +1,8 @@
+- name: Deploy web
+  hosts: web
+  roles:
+    - web
+  tasks:
+    - name: Report controller input
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}"

@@ -1,0 +1,2 @@
+hostname = {{ ansible_facts['hostname'] }}
+port = {{ service_port | ansible.builtin.default(8080) }}

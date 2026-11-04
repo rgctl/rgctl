@@ -239,7 +239,7 @@ def audit_tier1_languages() -> List[AstCoverageAudit]:
         depth_mode = inspect_depth_test_mode(lang_id)
 
         blockers: List[str] = []
-        is_dsl = lang_id in {"erb", "sql", "hcl", "markdown"}
+        is_dsl = lang_id in {"erb", "sql", "hcl", "markdown", "ansible", "jinja"}
         if GRADE_RANK[current_grade] < GRADE_RANK["A+"]:
             blockers.append(
                 f"Coverage grade is {current_grade} ({ratio*100:.1f}%, need +{needed_a_plus} active/wrapped kinds for A+)"

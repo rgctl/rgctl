@@ -1,0 +1,37 @@
+{
+  "grammars": [
+    {
+      "name": "jinja",
+      "camelcase": "Jinja",
+      "scope": "source.j2",
+      "path": ".",
+      "file-types": [
+        "j2",
+        "jinja",
+        "jinja2"
+      ]
+    }
+  ],
+  "metadata": {
+    "version": "0.13.0",
+    "license": "Apache-2.0",
+    "description": "jinja grammar for tree-sitter",
+    "authors": [
+      {
+        "name": "Loongtao Zhang",
+        "email": "loongtao.zhang@outlook.com"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/cathaysia/tree-sitter-jinja"
+    }
+  },
+  "bindings": {
+    "c": false,
+    "go": false,
+    "node": false,
+    "python": false,
+    "rust": true,
+    "swift": false
+  }
+}

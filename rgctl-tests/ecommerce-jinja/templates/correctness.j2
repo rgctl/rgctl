@@ -1,0 +1,3 @@
+{% macro correctnessLeaf() %}leaf{% endmacro %}
+{% macro correctnessMid() %}{{ correctnessLeaf() }}{% endmacro %}
+{% macro correctnessRoot() %}{{ correctnessMid() }}{% endmacro %}

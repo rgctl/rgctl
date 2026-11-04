@@ -1,0 +1,5 @@
+all:
+  children:
+    application:
+      hosts:
+        example: {ansible_host: 192.0.2.10}

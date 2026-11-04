@@ -198,7 +198,11 @@ pub(crate) fn run_full_analysis(
     mem_monitor.start_periodic_sampling(std::time::Duration::from_millis(250));
 
     let discovery_config = discovery.clone();
-    let registry = LanguageRegistry::new().into();
+    let registry = Arc::new(
+        LanguageRegistry::new()
+            .for_repository(root)?
+            .with_language_filter(discovery_config.languages.clone()),
+    );
     let pipeline = ProcessingPipeline::with_config(
         Arc::clone(&registry),
         PipelineConfig {
@@ -217,20 +221,90 @@ pub(crate) fn run_full_analysis(
 
     // Discover files (used for indexing and later for security/tracking)
     let discoverer = FileDiscoverer::with_config(Arc::clone(&registry), discovery_config.clone());
-    let files = discoverer.discover(root)?;
-
+    let inventory = discoverer.discover_inventory(root)?;
+    let mut files = inventory.files.clone();
     let snapshot_path = rgctl_graph::snapshot::MmappedGraphSnapshot::default_path(store);
     let mut file_tracker = FileTracker::load(store).unwrap_or_else(|_| FileTracker::new(store));
+    let empty_automation = if !rgctl_extraction::TemplateDependencies::path(store).is_file() {
+        file_tracker.empty_automation().cloned()
+    } else {
+        None
+    };
+    let dependencies = if snapshot_path.is_file() && empty_automation.is_none() {
+        let snapshot = rgctl_graph::snapshot::SnapshotNodeStore::open(&snapshot_path)?;
+        match rgctl_extraction::TemplateDependencies::load(store, snapshot.content_digest()?) {
+            Some(dependencies) => Some(dependencies),
+            None => {
+                let recovered = rgctl_incremental::recover_template_dependencies(
+                    &registry,
+                    store,
+                    &snapshot_path,
+                    &inventory.files,
+                    limits.as_ref().and_then(|limits| limits.threads),
+                )?;
+                file_tracker = FileTracker::load(store).unwrap_or_else(|_| FileTracker::new(store));
+                Some(recovered)
+            }
+        }
+    } else {
+        None
+    };
+    let known: std::collections::HashSet<_> = dependencies
+        .as_ref()
+        .map(|deps| deps.files().chain(deps.candidate_paths()).collect())
+        .unwrap_or_default();
+    files.extend(
+        inventory
+            .template_candidates
+            .iter()
+            .filter(|(path, ordinary)| *ordinary || known.contains(path.to_string_lossy().as_ref()))
+            .map(|(path, _)| path.clone()),
+    );
+    files.extend(
+        inventory
+            .ansible_candidates
+            .iter()
+            .filter(|(path, ordinary)| *ordinary || known.contains(path.to_string_lossy().as_ref()))
+            .map(|(path, _)| path.clone()),
+    );
+    files.sort();
+    files.dedup();
+
+    if let Some(dependencies) = &dependencies {
+        dependencies.filter_declined_candidates(&registry, &mut files);
+    }
     let file_changes = file_tracker.detect_changes(&files)?;
 
     // Index the repository (or reuse snapshot when sources are unchanged).
     // Lever 1: write columnar from GraphBuilder Vecs — never build MemoryBackend for discover.
     let index_start = Instant::now();
-    let graph_from_snapshot = !force_reindex && file_changes.is_empty() && snapshot_path.is_file();
+    let template_settings_match = dependencies
+        .as_ref()
+        .is_some_and(|deps| deps.settings_match(&registry))
+        || empty_automation.as_ref().is_some_and(|state| {
+            state.settings == rgctl_extraction::TemplateDependencies::settings(&registry)
+        });
+    let mut graph_from_snapshot = !force_reindex
+        && file_changes.is_empty()
+        && snapshot_path.is_file()
+        && template_settings_match;
     let mut cold_reused: Option<crate::analysis::ColdMetadataDb> = None;
-    let (mut index_stats, mut graph_digest) = if graph_from_snapshot {
-        let load_start = Instant::now();
+    let load_start = Instant::now();
+    let cold_candidate = if graph_from_snapshot {
         let cold = crate::analysis::ColdMetadataDb::open(&snapshot_path)?;
+        if let Some(state) = &empty_automation
+            && cold.store().content_digest()? != state.digest
+        {
+            graph_from_snapshot = false;
+            None
+        } else {
+            Some(cold)
+        }
+    } else {
+        None
+    };
+    let (mut index_stats, mut graph_digest) = if graph_from_snapshot {
+        let cold = cold_candidate.expect("snapshot candidate checked above");
         let digest = cold.store().content_digest()?.to_string();
         let load_elapsed = load_start.elapsed();
         if verbose {
@@ -1354,11 +1428,29 @@ pub(crate) fn run_full_analysis(
             }
             crate::incremental::group_sorted_node_paths(node_path_pairs)
         };
+        if !graph_from_snapshot {
+            // Workers decide the final route/filter. Include scheduled unsuffixed
+            // templates and omit declined YAML candidates from the tracker.
+            files = index_stats
+                .file_hashes
+                .keys()
+                .map(std::path::PathBuf::from)
+                .collect();
+            files.sort();
+        }
         file_tracker.index_files_with_mapping(
             &files,
             node_mapping,
             Some(&index_stats.file_hashes),
         )?;
+        if !graph_from_snapshot {
+            file_tracker.set_empty_automation(index_stats.empty_automation.then(|| {
+                rgctl_incremental::file_tracker::EmptyAutomationState {
+                    digest: graph_digest.clone(),
+                    settings: rgctl_extraction::TemplateDependencies::settings(&registry),
+                }
+            }));
+        }
         file_tracker.save()?;
     }
     profile.save_tracker.secs = secs(save_tracker_start.elapsed());

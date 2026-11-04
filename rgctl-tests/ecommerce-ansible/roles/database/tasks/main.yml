@@ -1,0 +1,9 @@
+- name: Render config
+  vars: {service: ecommerce}
+  template: {src: config.j2, dest: /etc/ecommerce.conf}
+  when: enabled
+  notify: reload service
+- name: Additional setup
+  include_tasks: extra.yml
+- name: Runtime include
+  include_tasks: '{{ chosen_tasks }}'

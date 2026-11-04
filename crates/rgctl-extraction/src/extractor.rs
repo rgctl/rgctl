@@ -11,7 +11,7 @@ use rgctl_plugin_api::{ConfigKey, Relation, Symbol, SymbolType};
 use rgctl_registry::LanguageRegistry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 /// Extracts symbols and relationships from a single file.
@@ -20,6 +20,10 @@ pub struct Extractor {
     registry: Arc<LanguageRegistry>,
     /// Optional content-addressed FileFacts cache (warm discover / update).
     facts: Option<Arc<FactsCache>>,
+    languages: Option<Vec<String>>,
+    template_targets: Arc<std::collections::HashSet<PathBuf>>,
+    ansible_targets: Arc<std::collections::HashSet<PathBuf>>,
+    template_options_bytes: Arc<OnceLock<std::result::Result<Vec<u8>, String>>>,
 }
 
 /// Precomputed pass-1 work for one symbol (filled on extract workers).
@@ -34,6 +38,12 @@ pub struct SymbolPass1Prep {
 /// Result of extracting a single file.
 #[derive(Debug, Default, Clone)]
 pub struct FileExtraction {
+    /// Final worker-classified language/config format.
+    pub language: Option<String>,
+    /// Candidate excluded by the final language filter; never an extraction failure.
+    pub excluded: bool,
+    /// Typed deferred references (no ASTs or source bodies).
+    pub source_references: Vec<rgctl_plugin_api::SourceReference>,
     /// Path to the source file
     pub path: PathBuf,
     /// BLAKE3 hex of `source` (computed once on the extract worker).
@@ -83,9 +93,38 @@ impl Extractor {
         Self {
             registry,
             facts: None,
+            languages: None,
+            template_targets: Arc::default(),
+            ansible_targets: Arc::default(),
+            template_options_bytes: Arc::default(),
         }
     }
 
+    /// Selected eligible targets from the same discovery walk.
+    pub fn with_template_targets(mut self, targets: std::collections::HashSet<PathBuf>) -> Self {
+        self.template_targets = Arc::new(targets);
+        self
+    }
+    /// Files selected by a literal task include within the eligible walk.
+    pub fn with_ansible_targets(mut self, targets: std::collections::HashSet<PathBuf>) -> Self {
+        self.ansible_targets = Arc::new(targets);
+        self
+    }
+    /// Apply filters only after source classification on the worker.
+    pub fn with_languages(mut self, mut languages: Option<Vec<String>>) -> Self {
+        if let Some(ids) = &mut languages {
+            for id in ids {
+                *id = rgctl_registry::canonical_language_id(id).to_owned();
+            }
+        }
+        self.languages = languages;
+        self
+    }
+    fn accepts(&self, language: &str) -> bool {
+        self.languages
+            .as_ref()
+            .is_none_or(|ids| ids.iter().any(|id| id == language))
+    }
     /// Attach a shared FileFacts cache used to skip Tree-Sitter on cache hits.
     pub fn with_facts_cache(mut self, facts: Arc<FactsCache>) -> Self {
         self.facts = Some(facts);
@@ -105,10 +144,11 @@ impl Extractor {
     ) -> Result<Vec<FileExtraction>> {
         let discoverer = FileDiscoverer::with_config(Arc::clone(&self.registry), discovery.clone());
         let files = discoverer.discover(root)?;
+        let extractor = self.clone().with_languages(discovery.languages.clone());
         Ok(files
             .iter()
-            .filter_map(|path| match self.extract_file(path) {
-                Ok(extraction) => Some(extraction),
+            .filter_map(|path| match extractor.extract_file(path) {
+                Ok(extraction) => (!extraction.excluded).then_some(extraction),
                 Err(err) => {
                     tracing::warn!("Failed to extract {}: {}", path.display(), err);
                     None
@@ -130,11 +170,56 @@ impl Extractor {
         // Single BLAKE3: hex for FileTracker, raw bytes for FactsKey.
         let digest = blake3::hash(&source);
         let file_hash = Some(digest.to_hex().to_string());
-        if let Ok(plugin) = self.registry.get_plugin_for_file_with_source(path, &source) {
+        let plugin = if self.ansible_targets.contains(path) {
+            self.registry.get_language_plugin("ansible")
+        } else if self.template_targets.contains(path) {
+            self.registry.get_language_plugin("jinja")
+        } else {
+            self.registry
+                .get_plugin_for_file_with_source(path, &source)
+                .ok()
+        }
+        .or_else(|| {
+            self.registry
+                .is_ansible_candidate(path)
+                .then(|| {
+                    self.registry
+                        .get_language_plugin("ansible")
+                        .filter(|plugin| plugin.may_extract_candidate(path, &source))
+                })
+                .flatten()
+        });
+        if let Some(plugin) = plugin {
+            let id = plugin.language_id();
+            let is_template = matches!(id, "ansible" | "jinja");
+            let mut key = facts_key_for_hash(plugin.as_ref(), *digest.as_bytes());
+            if is_template {
+                // Repository/path/profile salt is deliberately outside the global
+                // language-version memo. Identical role mains must not relocate facts.
+                let mut salt = blake3::Hasher::new();
+                salt.update(&key.manifest_hash);
+                if self.ansible_targets.contains(path) {
+                    salt.update(b"literal-task-target-v1");
+                }
+                salt.update(rgctl_graph::normalize_path_str(&path.to_string_lossy()).as_bytes());
+                if let Some(options) = self.registry.template_options() {
+                    let bytes = self.template_options_bytes.get_or_init(|| {
+                        serde_json::to_vec(options).map_err(|error| error.to_string())
+                    });
+                    salt.update(
+                        bytes
+                            .as_ref()
+                            .map_err(|error| Error::Other(error.clone()))?,
+                    );
+                }
+                key.manifest_hash = *salt.finalize().as_bytes();
+            }
             let path_str = path.to_string_lossy();
-            let extracted = if let Some(facts) = &self.facts {
-                let key = facts_key_for_hash(plugin.as_ref(), *digest.as_bytes());
-                let cached = facts.get(&key).and_then(|mut hit| {
+            let cached = self
+                .facts
+                .as_ref()
+                .and_then(|facts| facts.get(&key))
+                .and_then(|mut hit| {
                     let old_file = hit
                         .symbols
                         .first()
@@ -143,43 +228,96 @@ impl Extractor {
                     if let Some(old) = old_file
                         && old != path_str.as_ref()
                     {
-                        if Path::new(old).file_stem() != path.file_stem() {
+                        if is_template || Path::new(old).file_stem() != path.file_stem() {
                             return None;
                         }
                         let new_file = path_str.to_string();
-                        for sym in &mut hit.symbols {
-                            sym.location.file = new_file.clone();
+                        for symbol in &mut hit.symbols {
+                            symbol.location.file = new_file.clone();
                         }
-                        for rel in &mut hit.relations {
-                            rel.location.file = new_file.clone();
+                        for relation in &mut hit.relations {
+                            relation.location.file = new_file.clone();
                         }
                     }
                     Some(hit)
                 });
-                if let Some(cached) = cached {
-                    cached
-                } else {
-                    let fresh = plugin.extract_all(path, &source)?;
-                    // Encode once into Arc<[u8]> — do not retain decoded trees in the cache.
-                    facts.put(key, &fresh);
-                    fresh
-                }
+            let extracted = if let Some(hit) = cached {
+                Some(hit)
             } else {
-                plugin.extract_all(path, &source)?
+                let fresh = if id == "jinja" {
+                    let syntax = self
+                        .registry
+                        .template_options()
+                        .map(|options| &options.jinja.syntax)
+                        .cloned()
+                        .unwrap_or_default();
+                    Some(plugin.extract_with_syntax(path, &source, &syntax)?)
+                } else if id == "ansible"
+                    && self.registry.association(path)? != Some("ansible")
+                    && !self.ansible_targets.contains(path)
+                {
+                    plugin.extract_candidate(path, &source)?
+                } else {
+                    Some(plugin.extract_all(path, &source)?)
+                };
+                if let (Some(facts), Some(fresh)) = (&self.facts, &fresh) {
+                    facts.put(key, fresh);
+                }
+                fresh
             };
-            let config_usages = ConfigUsageDetector::detect(plugin.language_id(), &source, path);
-            let symbol_preps = prepare_symbol_pass1(&source, &extracted.symbols);
-            return Ok(FileExtraction {
-                path: path.to_path_buf(),
-                file_hash,
-                symbols: extracted.symbols,
-                symbol_preps,
-                relations: extracted.relations,
-                config_keys: Vec::new(),
-                config_usages,
-                source,
-                content_blobs: extracted.content_blobs,
-            });
+            if let Some(mut extracted) = extracted {
+                if !self.accepts(id) {
+                    return Ok(FileExtraction {
+                        path: path.to_path_buf(),
+                        file_hash,
+                        excluded: true,
+                        language: Some(id.to_owned()),
+                        ..FileExtraction::default()
+                    });
+                }
+                if is_template {
+                    let roots = self.registry.template_roots();
+                    let mut grouped: HashMap<&str, Vec<&rgctl_plugin_api::SourceReference>> =
+                        HashMap::new();
+                    for reference in &mut extracted.source_references {
+                        reference.context.template_roots = roots.clone();
+                    }
+                    for reference in &extracted.source_references {
+                        grouped
+                            .entry(&reference.source)
+                            .or_default()
+                            .push(reference);
+                    }
+                    for symbol in &mut extracted.symbols {
+                        if let Some(references) = symbol
+                            .qualified_name
+                            .as_deref()
+                            .and_then(|qn| grouped.get(qn))
+                        {
+                            symbol.metadata["source_references_json"] = serde_json::Value::String(
+                                serde_json::to_string(references)
+                                    .map_err(|e| Error::SerdeError(e.to_string()))?,
+                            );
+                        }
+                    }
+                }
+                let config_usages = ConfigUsageDetector::detect(id, &source, path);
+                let symbol_preps = prepare_symbol_pass1(&source, &extracted.symbols);
+                return Ok(FileExtraction {
+                    path: path.to_path_buf(),
+                    file_hash,
+                    language: Some(id.to_owned()),
+                    excluded: false,
+                    symbols: extracted.symbols,
+                    symbol_preps,
+                    relations: extracted.relations,
+                    source_references: extracted.source_references,
+                    config_keys: Vec::new(),
+                    config_usages,
+                    source,
+                    content_blobs: extracted.content_blobs,
+                });
+            }
         }
 
         // Manifests: Dependency extractors (section 3).
@@ -188,6 +326,9 @@ impl Extractor {
             let symbol_preps = prepare_symbol_pass1(&source, &symbols);
             return Ok(FileExtraction {
                 path: path.to_path_buf(),
+                language: None,
+                excluded: false,
+                source_references: Vec::new(),
                 file_hash,
                 symbols,
                 symbol_preps,
@@ -200,9 +341,21 @@ impl Extractor {
         }
 
         if let Ok(config_plugin) = self.registry.get_config_plugin_for_file(path) {
+            if !self.accepts(config_plugin.format_id()) {
+                return Ok(FileExtraction {
+                    path: path.to_path_buf(),
+                    file_hash,
+                    excluded: true,
+                    language: Some(config_plugin.format_id().to_owned()),
+                    ..FileExtraction::default()
+                });
+            }
             let config_keys = config_plugin.extract_config_keys(path, &source)?;
             return Ok(FileExtraction {
                 path: path.to_path_buf(),
+                language: Some(config_plugin.format_id().to_owned()),
+                excluded: false,
+                source_references: Vec::new(),
                 file_hash,
                 symbols: Vec::new(),
                 symbol_preps: Vec::new(),
@@ -237,10 +390,14 @@ impl Extractor {
         use std::time::Instant;
 
         let mut profile = Pass1Profile::default();
+        if extraction.excluded {
+            return Ok((ExtractionTail::default(), profile));
+        }
         builder.begin_file_batch(&extraction.path);
-        let file_id = builder.ensure_file_node_with_source(
+        let file_id = builder.ensure_file_node_with_language(
             &extraction.path,
             (!extraction.source.is_empty()).then_some(extraction.source.as_slice()),
+            extraction.language.as_deref(),
         );
         builder.merge_content_blobs(&extraction.content_blobs);
 
@@ -283,6 +440,7 @@ impl Extractor {
         extraction.symbols.clear();
         extraction.symbol_preps.clear();
         extraction.config_keys.clear();
+        extraction.source_references.clear();
         builder.end_file_batch();
 
         Ok((
@@ -356,6 +514,7 @@ impl Extractor {
                 profile.config_usage_resolution += config_usage_start.elapsed();
             }
         }
+        builder.resolve_template_references()?;
         builder.emit_mro_overrides();
         Ok(profile)
     }

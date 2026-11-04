@@ -1,0 +1,294 @@
+================
+include
+================
+
+{% include "muh.html" %}
+{% include helper %}
+{% include ["foo.html", "bar.html"] %}
+{% include ("foo.html", "bar.html") %}
+{% include ["foo.html", "bar.html", foo] %}
+{% include ("foo.html", "bar.html", foo) %}
+{% include "header" with context %}
+{% include "header" without context %}
+{% include ["missing", "missing2"] ignore missing %}
+{% include ["missing", "missing2"] ignore missing with context%}
+{% include ["missing", "missing2"] ignore missing without context%}
+
+----
+
+(source
+  (content)
+  (statement
+    (include_statement
+      (string_literal)))
+  (content)
+  (statement
+    (include_statement
+      (identifier)))
+  (content)
+  (statement
+    (include_statement
+      (list_literal
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal))))))
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal)))))))))
+  (content)
+  (statement
+    (include_statement
+      (tuple_literal
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal))))))
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal)))))))))
+  (content)
+  (statement
+    (include_statement
+      (list_literal
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal))))))
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal))))))
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (identifier))))))))
+  (content)
+  (statement
+    (include_statement
+      (tuple_literal
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal))))))
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal))))))
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (identifier))))))))
+  (content)
+  (statement
+    (include_statement
+      (string_literal)
+      (include_attribute
+        (attribute_context))))
+  (content)
+  (statement
+    (include_statement
+      (string_literal)
+      (include_attribute
+        (attribute_context))))
+  (content)
+  (statement
+    (include_statement
+      (list_literal
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal))))))
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal)))))))
+      (include_attribute
+        (attribute_ignore))))
+  (content)
+  (statement
+    (include_statement
+      (list_literal
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal))))))
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal)))))))
+      (include_attribute
+        (attribute_ignore))
+      (include_attribute
+        (attribute_context))))
+  (content)
+  (statement
+    (include_statement
+      (list_literal
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal))))))
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal)))))))
+      (include_attribute
+        (attribute_ignore))
+      (include_attribute
+        (attribute_context))))
+  (content))
+
+================
+complex
+================
+
+{% for item in seq recursive -%}
+    [{{ loop.previtem.a if loop.previtem is defined else 'x' }}.{{
+    item.a }}.{{ loop.nextitem.a if loop.nextitem is defined else 'x'
+    }}{% if item.b %}<{{ loop(item.b) }}>{% endif %}]
+{%- endfor %}
+
+----
+
+(source
+  (content)
+  (for_block
+    (for_statement
+      (in_expression
+        (identifier)
+        (binary_operator)
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (identifier)))))))
+    (content)
+    (render_expression
+      (expression
+        (expression
+          (expression
+            (binary_expression
+              (unary_expression
+                (primary_expression
+                  (identifier)))))
+          (identifier))
+        (identifier))
+      (ternary_expression
+        (expression
+          (binary_expression
+            (expression
+              (expression
+                (binary_expression
+                  (unary_expression
+                    (primary_expression
+                      (identifier)))))
+              (identifier))
+            (binary_operator)
+            (builtin_test)))
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal))))))))
+    (content)
+    (render_expression
+      (expression
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (identifier)))))
+        (identifier)))
+    (content)
+    (render_expression
+      (expression
+        (expression
+          (expression
+            (binary_expression
+              (unary_expression
+                (primary_expression
+                  (identifier)))))
+          (identifier))
+        (identifier))
+      (ternary_expression
+        (expression
+          (binary_expression
+            (expression
+              (expression
+                (binary_expression
+                  (unary_expression
+                    (primary_expression
+                      (identifier)))))
+              (identifier))
+            (binary_operator)
+            (builtin_test)))
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (literal
+                  (string_literal))))))))
+    (if_block
+      (if_statement
+        (expression
+          (expression
+            (binary_expression
+              (unary_expression
+                (primary_expression
+                  (identifier)))))
+          (identifier)))
+      (content)
+      (render_expression
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (function_call
+                  (identifier)
+                  (arg
+                    (expression
+                      (expression
+                        (binary_expression
+                          (unary_expression
+                            (primary_expression
+                              (identifier)))))
+                      (identifier)))))))))
+      (content)
+      (endif_statement))
+    (content)
+    (endfor_statement))
+  (content))

@@ -1,0 +1,310 @@
+=================
+trans
+=================
+
+{% trans %}Hello, {{ user }}!{% endtrans %}
+{% trans user=user.username %}Hello, {{ user }}!{% endtrans %}
+
+---
+
+(source
+  (content)
+  (trans_block
+    (trans_statement)
+    (content)
+    (render_expression
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier))))))
+    (content)
+    (endtrans_statement))
+  (content)
+  (trans_block
+    (trans_statement
+      (assignment_expression
+        (identifier)
+        (binary_operator)
+        (expression
+          (expression
+            (binary_expression
+              (unary_expression
+                (primary_expression
+                  (identifier)))))
+          (identifier))))
+    (content)
+    (render_expression
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier))))))
+    (content)
+    (endtrans_statement))
+  (content))
+
+==============
+block
+==============
+
+{% trans book_title=book.title, author=author.name %}
+This is {{ book_title }} by {{ author }}
+{% endtrans %}
+
+----
+
+(source
+  (content)
+  (trans_block
+    (trans_statement
+      (assignment_expression
+        (identifier)
+        (binary_operator)
+        (expression
+          (expression
+            (binary_expression
+              (unary_expression
+                (primary_expression
+                  (identifier)))))
+          (identifier)))
+      (assignment_expression
+        (identifier)
+        (binary_operator)
+        (expression
+          (expression
+            (binary_expression
+              (unary_expression
+                (primary_expression
+                  (identifier)))))
+          (identifier))))
+    (content)
+    (render_expression
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier))))))
+    (content)
+    (render_expression
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier))))))
+    (content)
+    (endtrans_statement))
+  (content))
+
+==================
+pluralize
+==================
+
+{% trans count=list|length %}
+There is {{ count }} {{ name }} object.
+{% pluralize %}
+There are {{ count }} {{ name }} objects.
+{% endtrans %}
+
+----
+
+(source
+  (content)
+  (trans_block
+    (trans_statement
+      (assignment_expression
+        (identifier)
+        (binary_operator)
+        (expression
+          (binary_expression
+            (expression
+              (binary_expression
+                (unary_expression
+                  (primary_expression
+                    (identifier)))))
+            (binary_operator)
+            (expression
+              (binary_expression
+                (unary_expression
+                  (primary_expression
+                    (identifier)))))))))
+    (content)
+    (render_expression
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier))))))
+    (content)
+    (render_expression
+      (expression
+        (binary_expression
+          (unary_expression
+            (primary_expression
+              (identifier))))))
+    (content)
+    (pluralize_block
+      (pluralize_statement)
+      (content)
+      (render_expression
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (identifier))))))
+      (content)
+      (render_expression
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (identifier))))))
+      (content))
+    (endtrans_statement))
+  (content))
+
+=================
+inline
+=================
+
+{{ _("Hello, World!") }}
+
+{{ _("Hello, %(user)s!")|format(user=user.username) }}
+
+----
+
+(source
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (inline_trans
+              (expression
+                (binary_expression
+                  (unary_expression
+                    (primary_expression
+                      (literal
+                        (string_literal))))))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (inline_trans
+                  (expression
+                    (binary_expression
+                      (unary_expression
+                        (primary_expression
+                          (literal
+                            (string_literal)))))))))))
+        (binary_operator)
+        (expression
+          (binary_expression
+            (unary_expression
+              (primary_expression
+                (function_call
+                  (identifier)
+                  (arg
+                    (identifier)
+                    (binary_operator)
+                    (expression
+                      (expression
+                        (binary_expression
+                          (unary_expression
+                            (primary_expression
+                              (identifier)))))
+                      (identifier)))))))))))
+  (content))
+
+=================
+gettext
+=================
+
+{{ gettext('Hello World!') }}
+{{ gettext('Hello %(name)s!', name='World') }}
+{{ ngettext('%(num)d apple', '%(num)d apples', apples|count) }}
+
+---------
+
+(source
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (function_call
+              (identifier)
+              (arg
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (string_literal)))))))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (function_call
+              (identifier)
+              (arg
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (string_literal)))))))
+              (arg
+                (identifier)
+                (binary_operator)
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (string_literal)))))))))))))
+  (content)
+  (render_expression
+    (expression
+      (binary_expression
+        (unary_expression
+          (primary_expression
+            (function_call
+              (identifier)
+              (arg
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (string_literal)))))))
+              (arg
+                (expression
+                  (binary_expression
+                    (unary_expression
+                      (primary_expression
+                        (literal
+                          (string_literal)))))))
+              (arg
+                (expression
+                  (binary_expression
+                    (expression
+                      (binary_expression
+                        (unary_expression
+                          (primary_expression
+                            (identifier)))))
+                    (binary_operator)
+                    (expression
+                      (binary_expression
+                        (unary_expression
+                          (primary_expression
+                            (identifier))))))))))))))
+  (content))

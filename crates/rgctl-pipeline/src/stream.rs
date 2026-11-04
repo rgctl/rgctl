@@ -39,6 +39,8 @@ pub struct StreamStats {
     pub extract_phases: ExtractPhaseTimings,
     /// Absolute path string → BLAKE3 hex from extract workers (feeds FileTracker).
     pub file_hashes: HashMap<String, String>,
+    /// Declined candidate path -> (worker content hash, final language). Not indexed.
+    pub excluded_classifications: std::collections::BTreeMap<String, (String, String)>,
 }
 
 /// Run parallel extractors into a bounded channel while the caller consumes on the main thread.
@@ -126,6 +128,17 @@ pub fn stream_into_graph(
     while let Ok(result) = rx.recv() {
         match result {
             Ok(mut extraction) => {
+                if extraction.excluded {
+                    if let (Some(hash), Some(language)) =
+                        (extraction.file_hash, extraction.language)
+                    {
+                        stats.excluded_classifications.insert(
+                            extraction.path.to_string_lossy().into_owned(),
+                            (hash, language),
+                        );
+                    }
+                    continue;
+                }
                 if let Some(hash) = extraction.file_hash.take() {
                     stats
                         .file_hashes
@@ -210,4 +223,122 @@ mod tests {
         assert!(stats.extract_phases.parse_cpu > Duration::ZERO);
         assert!(stats.extract_phases.pass1_wall > Duration::ZERO);
     }
+}
+
+/// Drain eligible literal targets through deduplicated worker waves, reusing the
+/// discovery inventory. Each file is read/extracted once and ASTs stay on workers.
+pub fn stream_inventory_into_graph(
+    thread_count: Option<usize>,
+    extractor: &Extractor,
+    registry: Arc<LanguageRegistry>,
+    inventory: &rgctl_extraction::discovery::DiscoveryInventory,
+    capacity: usize,
+    builder: &mut GraphBuilder,
+    on_file_done: impl Fn() + Send + Sync + 'static,
+) -> Result<(StreamStats, Vec<ExtractionTail>)> {
+    let (mut stats, mut tails) = stream_into_graph(
+        thread_count,
+        extractor,
+        Arc::clone(&registry),
+        &inventory.files,
+        capacity,
+        builder,
+        on_file_done,
+    )?;
+    let mut remaining: std::collections::BTreeMap<_, _> =
+        inventory.template_candidates.iter().cloned().collect();
+    let mut remaining_tasks: std::collections::BTreeMap<_, _> =
+        inventory.ansible_candidates.iter().cloned().collect();
+    loop {
+        let (wanted, wanted_tasks) = builder.automation_candidate_paths()?;
+        let selected: Vec<_> = remaining
+            .keys()
+            .filter(|path| {
+                wanted.contains(
+                    &rgctl_graph::normalize_path_str(&path.to_string_lossy()).into_owned(),
+                )
+            })
+            .cloned()
+            .collect();
+        let selected_tasks: Vec<_> = remaining_tasks
+            .keys()
+            .filter(|path| {
+                wanted_tasks.contains(
+                    &rgctl_graph::normalize_path_str(&path.to_string_lossy()).into_owned(),
+                )
+            })
+            .cloned()
+            .collect();
+        if selected.is_empty() && selected_tasks.is_empty() {
+            break;
+        }
+        for path in &selected {
+            remaining.remove(path);
+        }
+        if !selected.is_empty() {
+            let wave = extractor
+                .clone()
+                .with_template_targets(selected.iter().cloned().collect());
+            let (next, extra) = stream_into_graph(
+                thread_count,
+                &wave,
+                Arc::clone(&registry),
+                &selected,
+                capacity,
+                builder,
+                || {},
+            )?;
+            merge_stream_stats(&mut stats, next);
+            tails.extend(extra);
+        }
+        for path in &selected_tasks {
+            remaining_tasks.remove(path);
+        }
+        if !selected_tasks.is_empty() {
+            let wave = extractor
+                .clone()
+                .with_ansible_targets(selected_tasks.iter().cloned().collect());
+            let (next, extra) = stream_into_graph(
+                thread_count,
+                &wave,
+                Arc::clone(&registry),
+                &selected_tasks,
+                capacity,
+                builder,
+                || {},
+            )?;
+            merge_stream_stats(&mut stats, next);
+            tails.extend(extra);
+        }
+    }
+    let ordinary: Vec<_> = remaining
+        .into_iter()
+        .chain(remaining_tasks)
+        .filter_map(|(path, selected)| selected.then_some(path))
+        .collect();
+    if !ordinary.is_empty() {
+        let (next, extra) = stream_into_graph(
+            thread_count,
+            extractor,
+            registry,
+            &ordinary,
+            capacity,
+            builder,
+            || {},
+        )?;
+        merge_stream_stats(&mut stats, next);
+        tails.extend(extra);
+    }
+    Ok((stats, tails))
+}
+fn merge_stream_stats(stats: &mut StreamStats, next: StreamStats) {
+    stats.files_processed += next.files_processed;
+    stats.extraction_failures.extend(next.extraction_failures);
+    stats.file_hashes.extend(next.file_hashes);
+    stats
+        .excluded_classifications
+        .extend(next.excluded_classifications);
+    stats.extract_phases.read_cpu += next.extract_phases.read_cpu;
+    stats.extract_phases.parse_cpu += next.extract_phases.parse_cpu;
+    stats.extract_phases.pass1_wall += next.extract_phases.pass1_wall;
 }
