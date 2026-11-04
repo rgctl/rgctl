@@ -1,4 +1,4 @@
-//! `rgctl rules run` — post-index Kantra evaluation against the session snapshot.
+//! `rgctl rules` — Kantra evaluation and findings queries against the session.
 
 use super::OutputFormat;
 use super::context::CliContext;
@@ -10,22 +10,29 @@ use anyhow::{Context, Result, bail};
 use rgctl_graph::schema::{EdgeType, NodeType};
 use rgctl_graph::snapshot::SNAPSHOT_FILE;
 use rgctl_kantra::{
-    EvalContext, EvalEdge, EvalGraph, EvalNode, KantraEngine, KantraFileCache, ViolationResolver,
-    cache_dir, ruleset_hash,
+    EvalContext, EvalEdge, EvalGraph, EvalNode, KantraCatalog, KantraEngine, KantraFileCache,
+    KantraFindings, KantraViolation, ViolationResolver, cache_dir, rule_konveyor_sources,
+    rule_konveyor_targets, ruleset_hash,
 };
-use std::collections::HashSet;
+use serde_json::{Map, Value, json};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// `rgctl rules run <DIR>` (and related flags).
+/// `rgctl rules run [DIR] [--target] [--catalog]`.
+///
+/// When `DIR` and `--catalog` are omitted, evaluates the embedded Kantra catalog.
 pub fn run_rules(
     ctx: &CliContext,
-    rules_dir: PathBuf,
+    rules_dir: Option<PathBuf>,
     target: Option<String>,
     catalog: Option<PathBuf>,
 ) -> Result<()> {
-    if !rules_dir.is_dir() && catalog.is_none() {
-        bail!("rules path is not a directory: {}", rules_dir.display());
+    if let Some(ref dir) = rules_dir
+        && catalog.is_none()
+        && !dir.is_dir()
+    {
+        bail!("rules path is not a directory: {}", dir.display());
     }
     let store = &ctx.repo;
     let snapshot = rgctl_graph::paths::artifact_path(store, SNAPSHOT_FILE);
@@ -36,7 +43,7 @@ pub fn run_rules(
     let rules_opt = if catalog.is_some() {
         None
     } else {
-        Some(rules_dir.as_path())
+        rules_dir.as_deref()
     };
     let catalog_opt = catalog.as_deref();
 
@@ -81,18 +88,331 @@ pub fn run_rules(
     // Best-effort VIOLATES edges (snapshot rewrite).
     let _ = run_kantra_violates(store, &mut profile);
 
+    let all_refs: Vec<&KantraViolation> = findings.violations.iter().collect();
+    let summary = findings_summary_refs(&all_refs);
+    let per_rule = build_per_rule_summary(&all_refs);
+
     if ctx.format == OutputFormat::Json {
-        let v = serde_json::to_value(&findings)?;
-        ctx.emit_json_value(&v)?;
+        let compact_violations: Vec<Value> = all_refs
+            .iter()
+            .take(50)
+            .map(|v| compact_violation_json(v))
+            .collect();
+        let mut obj = Map::new();
+        obj.insert("schema_version".into(), json!(findings.schema_version));
+        obj.insert("command".into(), json!("rules_run"));
+        if let Some(ref cid) = findings.catalog_id {
+            obj.insert("catalog_id".into(), json!(cid));
+        }
+        obj.insert("ruleset".into(), json!(findings.ruleset));
+        if let Some(ref tf) = findings.target_filter {
+            obj.insert("target_filter".into(), json!(tf));
+        }
+        obj.insert("evaluated_rules".into(), json!(findings.evaluated_rules));
+        obj.insert(
+            "skipped_rules_count".into(),
+            json!(findings.skipped_rules.len()),
+        );
+        obj.insert(
+            "findings_path".into(),
+            Value::String(out_path.display().to_string()),
+        );
+        obj.insert("summary".into(), summary);
+        obj.insert("per_rule".into(), Value::Array(per_rule));
+        obj.insert(
+            "returned_violations".into(),
+            json!(compact_violations.len()),
+        );
+        obj.insert("violations".into(), Value::Array(compact_violations));
+        ctx.emit_json_value(&Value::Object(obj))?;
     } else {
         ctx.stdout_line(&format!(
-            "rules: {} violations, {} skipped → {}",
+            "rules: {} violations ({} rules, {} files), {} skipped → {}",
             findings.violations.len(),
+            summary
+                .get("unique_rules")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            summary
+                .get("unique_files")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
             findings.skipped_rules.len(),
             out_path.display()
         ))?;
     }
     Ok(())
+}
+
+/// `rgctl rules findings [--target] [--source] [--category] [--file] [--limit]`.
+pub fn run_findings(
+    ctx: &CliContext,
+    target: Option<String>,
+    source: Option<String>,
+    category: Option<String>,
+    file: Option<String>,
+    limit: Option<usize>,
+) -> Result<()> {
+    let path = rgctl_graph::paths::artifact_path(&ctx.repo, "kantra_findings.json");
+    if !path.exists() {
+        bail!(
+            "kantra findings not found at {} (run `rgctl discover --with-kantra` or `rgctl rules run` first)",
+            path.display()
+        );
+    }
+    let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    let findings = KantraFindings::from_json(&bytes).context("parse kantra_findings.json")?;
+
+    let target_filters = split_csv(target.as_deref());
+    let source_filters = split_csv(source.as_deref());
+    let category_lc = category.as_deref().map(|s| s.to_ascii_lowercase());
+    let file_substr = file.as_deref();
+
+    let mut filtered: Vec<&KantraViolation> = findings
+        .violations
+        .iter()
+        .filter(|v| {
+            if !target_filters.is_empty()
+                && !v
+                    .targets
+                    .iter()
+                    .any(|t| target_filters.iter().any(|f| f == t))
+            {
+                return false;
+            }
+            if !source_filters.is_empty()
+                && !v
+                    .sources
+                    .iter()
+                    .any(|s| source_filters.iter().any(|f| f == s))
+            {
+                return false;
+            }
+            if let Some(cat) = category_lc.as_deref() {
+                let Some(vc) = v.category.as_deref() else {
+                    return false;
+                };
+                if !vc.eq_ignore_ascii_case(cat) {
+                    return false;
+                }
+            }
+            if let Some(substr) = file_substr
+                && !v.file.contains(substr)
+            {
+                return false;
+            }
+            true
+        })
+        .collect();
+
+    // Compute full-match summary & per_rule BEFORE applying `--limit` truncation.
+    let total_matched = filtered.len();
+    let summary = findings_summary_refs(&filtered);
+    let per_rule = build_per_rule_summary(&filtered);
+
+    if let Some(n) = limit {
+        filtered.truncate(n);
+    }
+
+    if ctx.format == OutputFormat::Json {
+        let violations: Vec<Value> = filtered.iter().map(|v| compact_violation_json(v)).collect();
+        let mut obj = Map::new();
+        obj.insert("schema_version".into(), json!(1));
+        obj.insert("command".into(), json!("rules_findings"));
+        obj.insert("total_matched".into(), json!(total_matched));
+        obj.insert("returned".into(), json!(violations.len()));
+        if let Some(t) = target {
+            obj.insert("target_filter".into(), json!(t));
+        }
+        if let Some(s) = source {
+            obj.insert("source_filter".into(), json!(s));
+        }
+        if let Some(c) = category {
+            obj.insert("category_filter".into(), json!(c));
+        }
+        if let Some(f) = file {
+            obj.insert("file_filter".into(), json!(f));
+        }
+        obj.insert("summary".into(), summary);
+        obj.insert("per_rule".into(), Value::Array(per_rule));
+        obj.insert("violations".into(), Value::Array(violations));
+        ctx.emit_json_value(&Value::Object(obj))?;
+    } else {
+        ctx.stdout_line(&format!(
+            "rules findings: {} matched (showing {}), {} unique rules",
+            total_matched,
+            filtered.len(),
+            per_rule.len()
+        ))?;
+        for v in filtered.iter().take(20) {
+            ctx.stdout_line(&format!(
+                "  {}:{}  {}  {:?}",
+                v.file, v.line, v.rule_id, v.targets
+            ))?;
+        }
+        if filtered.len() > 20 {
+            ctx.stdout_line(&format!("  … {} more", filtered.len() - 20))?;
+        }
+    }
+    Ok(())
+}
+
+/// `rgctl rules targets` — list embedded catalog targets/sources (+ hit counts when findings exist).
+pub fn run_targets(ctx: &CliContext) -> Result<()> {
+    let catalog =
+        KantraCatalog::embedded().map_err(|e| anyhow::anyhow!("kantra embedded catalog: {e}"))?;
+
+    let mut target_rules: BTreeMap<String, usize> = BTreeMap::new();
+    let mut source_rules: BTreeMap<String, usize> = BTreeMap::new();
+    for rule in &catalog.rules {
+        for t in rule_konveyor_targets(rule) {
+            *target_rules.entry(t).or_default() += 1;
+        }
+        for s in rule_konveyor_sources(rule) {
+            *source_rules.entry(s).or_default() += 1;
+        }
+    }
+
+    let findings_path = rgctl_graph::paths::artifact_path(&ctx.repo, "kantra_findings.json");
+    let mut target_hits: BTreeMap<String, usize> = BTreeMap::new();
+    let mut source_hits: BTreeMap<String, usize> = BTreeMap::new();
+    let mut findings_present = false;
+    if findings_path.exists()
+        && let Ok(bytes) = fs::read(&findings_path)
+        && let Ok(findings) = KantraFindings::from_json(&bytes)
+    {
+        findings_present = true;
+        for v in &findings.violations {
+            for t in &v.targets {
+                *target_hits.entry(t.clone()).or_default() += 1;
+            }
+            for s in &v.sources {
+                *source_hits.entry(s.clone()).or_default() += 1;
+            }
+        }
+    }
+
+    let targets: Vec<Value> = target_rules
+        .iter()
+        .map(|(name, rules)| {
+            let mut obj = json!({
+                "name": name,
+                "rules": rules,
+            });
+            if findings_present {
+                obj.as_object_mut().unwrap().insert(
+                    "hits".into(),
+                    json!(target_hits.get(name).copied().unwrap_or(0)),
+                );
+            }
+            obj
+        })
+        .collect();
+    let sources: Vec<Value> = source_rules
+        .iter()
+        .map(|(name, rules)| {
+            let mut obj = json!({
+                "name": name,
+                "rules": rules,
+            });
+            if findings_present {
+                obj.as_object_mut().unwrap().insert(
+                    "hits".into(),
+                    json!(source_hits.get(name).copied().unwrap_or(0)),
+                );
+            }
+            obj
+        })
+        .collect();
+
+    if ctx.format == OutputFormat::Json {
+        ctx.emit_json_value(&json!({
+            "schema_version": 1,
+            "command": "rules_targets",
+            "catalog_id": catalog.catalog_id,
+            "findings_present": findings_present,
+            "targets": targets,
+            "sources": sources,
+        }))?;
+    } else {
+        ctx.stdout_line(&format!(
+            "kantra targets ({} catalog rules):",
+            catalog.rules.len()
+        ))?;
+        for t in &targets {
+            let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let rules = t.get("rules").and_then(|v| v.as_u64()).unwrap_or(0);
+            if let Some(hits) = t.get("hits").and_then(|v| v.as_u64()) {
+                ctx.stdout_line(&format!("  {name}: {rules} rules, {hits} hits"))?;
+            } else {
+                ctx.stdout_line(&format!("  {name}: {rules} rules"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn findings_summary_refs(violations: &[&KantraViolation]) -> Value {
+    let mut rules = HashSet::new();
+    let mut files = HashSet::new();
+    for v in violations {
+        rules.insert(v.rule_id.as_str());
+        files.insert(v.file.as_str());
+    }
+    json!({
+        "violations": violations.len(),
+        "unique_rules": rules.len(),
+        "unique_files": files.len(),
+    })
+}
+
+fn build_per_rule_summary(violations: &[&KantraViolation]) -> Vec<Value> {
+    let mut by_rule: BTreeMap<&str, (usize, &KantraViolation)> = BTreeMap::new();
+    for v in violations {
+        let entry = by_rule.entry(v.rule_id.as_str()).or_insert((0, *v));
+        entry.0 += 1;
+    }
+    by_rule
+        .into_iter()
+        .map(|(rule_id, (count, sample))| {
+            let mut m = Map::new();
+            m.insert("rule_id".into(), json!(rule_id));
+            m.insert("count".into(), json!(count));
+            if let Some(ref cat) = sample.category {
+                m.insert("category".into(), json!(cat));
+            }
+            if let Some(eff) = sample.effort {
+                m.insert("effort".into(), json!(eff));
+            }
+            if !sample.targets.is_empty() {
+                m.insert("targets".into(), json!(sample.targets));
+            }
+            if let Some(ref msg) = sample.message {
+                m.insert("message".into(), json!(msg));
+            }
+            Value::Object(m)
+        })
+        .collect()
+}
+
+fn compact_violation_json(v: &KantraViolation) -> Value {
+    let mut val = serde_json::to_value(v).unwrap_or(Value::Null);
+    if let Some(obj) = val.as_object_mut() {
+        // Rule message is already emitted once per rule in `per_rule[]` to save tokens.
+        obj.remove("message");
+    }
+    val
+}
+
+fn split_csv(raw: Option<&str>) -> Vec<String> {
+    raw.map(|s| {
+        s.split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 fn collect_source_files(repo: &Path) -> Result<Vec<PathBuf>> {

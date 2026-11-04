@@ -517,6 +517,14 @@ pub enum Commands {
 
         #[arg(long = "exclude-scope")]
         exclude_scope: bool,
+
+        /// Max buckets to return (after sorting / prefix filter)
+        #[arg(long = "limit", value_name = "N")]
+        limit: Option<usize>,
+
+        /// Keep only bucket keys that start with this prefix (e.g. `javax.`)
+        #[arg(long = "prefix", value_name = "STR")]
+        prefix: Option<String>,
     },
 
     /// Session graph status (snapshot presence, digest, node/edge counts, source staleness; no rediscover)
@@ -675,6 +683,10 @@ pub enum Commands {
         /// Restrict boundaries to kinds/methods (`REST_ENDPOINT`, `POST`, …); repeatable
         #[arg(long = "boundary", value_name = "KIND", action = clap::ArgAction::Append)]
         boundary: Vec<String>,
+
+        /// Compact summary (score, distance buckets, top files) instead of full impact nodes
+        #[arg(long = "summary")]
+        summary: bool,
     },
 
     /// Sink-first taint (`--sink` + `--source external`); requires `discover --with-cfg`
@@ -1095,11 +1107,11 @@ pub enum SecurityCommands {
 
 #[derive(Subcommand)]
 pub enum RulesCommands {
-    /// Evaluate a ruleset directory (or catalog) against the current session graph
+    /// Evaluate Kantra rules against the current session graph (embedded catalog when DIR omitted)
     Run {
-        /// Ruleset directory (`ruleset.yaml` + `*.yaml`), like `--kantra-rules`
+        /// Ruleset directory (`ruleset.yaml` + `*.yaml`); omit to use the embedded catalog
         #[arg(value_name = "DIR")]
-        rules_dir: std::path::PathBuf,
+        rules_dir: Option<std::path::PathBuf>,
 
         /// Filter by `konveyor.io/target` label
         #[arg(long = "target", value_name = "NAME")]
@@ -1109,6 +1121,30 @@ pub enum RulesCommands {
         #[arg(long = "catalog", value_name = "ROOT")]
         catalog: Option<std::path::PathBuf>,
     },
+    /// Query `.rgctl/kantra_findings.json` with optional target/source/category/file filters
+    Findings {
+        /// Filter by `konveyor.io/target` (comma-separated OR)
+        #[arg(long = "target", value_name = "NAME")]
+        target: Option<String>,
+
+        /// Filter by `konveyor.io/source` (comma-separated OR)
+        #[arg(long = "source", value_name = "NAME")]
+        source: Option<String>,
+
+        /// Filter by category (mandatory/optional/potential)
+        #[arg(long = "category", value_name = "CAT")]
+        category: Option<String>,
+
+        /// Substring match on violation file path
+        #[arg(long = "file", value_name = "SUBSTR")]
+        file: Option<String>,
+
+        /// Max violations to return
+        #[arg(long = "limit", value_name = "N")]
+        limit: Option<usize>,
+    },
+    /// List embedded catalog targets/sources (with hit counts when findings exist)
+    Targets,
 }
 
 #[derive(Subcommand)]
@@ -1382,6 +1418,10 @@ pub enum QueryCommands {
         scope_mode: Option<String>,
         #[arg(long = "exclude-scope")]
         exclude_scope: bool,
+        #[arg(long = "limit", value_name = "N")]
+        limit: Option<usize>,
+        #[arg(long = "prefix", value_name = "STR")]
+        prefix: Option<String>,
     },
 }
 
@@ -1803,6 +1843,7 @@ impl Cli {
                 line,
                 classify_boundary,
                 boundary,
+                summary,
             } => blast_radius::run(
                 &ctx,
                 blast_radius::BlastRadiusArgs {
@@ -1816,6 +1857,7 @@ impl Cli {
                     line,
                     classify_boundary,
                     boundary,
+                    summary,
                 },
             ),
             Commands::Taint {
@@ -1961,6 +2003,8 @@ impl Cli {
                 scope,
                 scope_mode,
                 exclude_scope,
+                limit,
+                prefix,
             } => structured_query::run_inventory(
                 &ctx,
                 by,
@@ -1976,6 +2020,8 @@ impl Cli {
                     package: None,
                     methods: None,
                 },
+                limit,
+                prefix,
             ),
             Commands::Status => session_status::run_status(&ctx),
             Commands::Watch { path: _ } => file_watch::run_watch_foreground(ctx.repo.clone())
@@ -2010,6 +2056,14 @@ impl Cli {
                     target,
                     catalog,
                 } => rules::run_rules(&ctx, rules_dir, target, catalog),
+                RulesCommands::Findings {
+                    target,
+                    source,
+                    category,
+                    file,
+                    limit,
+                } => rules::run_findings(&ctx, target, source, category, file, limit),
+                RulesCommands::Targets => rules::run_targets(&ctx),
             },
             Commands::Query { action } => match action {
                 QueryCommands::Find {
@@ -2150,6 +2204,8 @@ impl Cli {
                     scope,
                     scope_mode,
                     exclude_scope,
+                    limit,
+                    prefix,
                 } => structured_query::run_inventory(
                     &ctx,
                     by,
@@ -2165,6 +2221,8 @@ impl Cli {
                         package: None,
                         methods: None,
                     },
+                    limit,
+                    prefix,
                 ),
             },
             Commands::Inspect {

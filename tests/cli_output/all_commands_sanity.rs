@@ -231,6 +231,48 @@ fn test_all_cli_commands_json_schema_sanity() {
         ],
     );
 
+    // --- inventory --limit / --prefix ---
+    let inv = sandbox.run(&[
+        "-f",
+        "json",
+        "inventory",
+        "--by",
+        "import-prefix",
+        "--prefix",
+        "java",
+        "--limit",
+        "3",
+    ]);
+    assert_success(&inv, "inventory --limit/--prefix");
+    let inv_doc = sandbox.parse_stdout_json(&inv);
+    let counts = inv_doc["counts"].as_array().expect("counts");
+    assert!(counts.len() <= 3, "limit 3, got {}", counts.len());
+    for c in counts {
+        let key = c["key"].as_str().unwrap_or("");
+        assert!(
+            key.starts_with("java"),
+            "prefix filter failed for key {key}"
+        );
+    }
+
+    // --- blast-radius --summary ---
+    let blast_sum = sandbox.run(&[
+        "-f",
+        "json",
+        "blast-radius",
+        "OrderService::process",
+        "--summary",
+    ]);
+    assert_success(&blast_sum, "blast-radius --summary");
+    let sum_doc = sandbox.parse_stdout_json(&blast_sum);
+    assert_eq!(
+        sum_doc.get("command").and_then(|v| v.as_str()),
+        Some("blast_radius_summary")
+    );
+    assert!(sum_doc.get("score").is_some());
+    assert!(sum_doc.get("distance_buckets").is_some());
+    assert!(sum_doc.get("top_files").is_some());
+
     // --- blast-radius v2 ---
     let blast = sandbox.run(&["-f", "json", "blast-radius", "OrderService::process"]);
     assert_success(&blast, "blast-radius");

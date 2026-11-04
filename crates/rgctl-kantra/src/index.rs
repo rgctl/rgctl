@@ -99,10 +99,34 @@ fn build_rule_node(
 }
 
 fn apply_konveyor_labels(properties: &mut HashMap<String, String>, labels: &[String]) {
+    let mut targets = Vec::new();
+    let mut sources = Vec::new();
     for label in labels {
         if let Some((key, value)) = label.split_once('=') {
-            properties.insert(key.to_string(), value.to_string());
+            match key {
+                "konveyor.io/target" => {
+                    if !targets.iter().any(|t| t == value) {
+                        targets.push(value.to_string());
+                    }
+                    properties.insert(key.to_string(), value.to_string());
+                }
+                "konveyor.io/source" => {
+                    if !sources.iter().any(|s| s == value) {
+                        sources.push(value.to_string());
+                    }
+                    properties.insert(key.to_string(), value.to_string());
+                }
+                _ => {
+                    properties.insert(key.to_string(), value.to_string());
+                }
+            }
         }
+    }
+    if !targets.is_empty() {
+        properties.insert("targets".into(), targets.join(","));
+    }
+    if !sources.is_empty() {
+        properties.insert("sources".into(), sources.join(","));
     }
 }
 
@@ -172,5 +196,42 @@ mod tests {
         let rules = backend.find_nodes_by_type(NodeType::KantraRule).unwrap();
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].get_property("konveyor.io/target"), Some("quarkus"));
+        assert_eq!(rules[0].get_property("targets"), Some("quarkus"));
+    }
+
+    #[test]
+    fn preserves_multi_target_and_source_labels() {
+        let catalog = KantraCatalog {
+            catalog_id: "test@2".into(),
+            name: "fixture".into(),
+            description: None,
+            rules: vec![sample_rule(
+                "r2",
+                &[
+                    "konveyor.io/target=quarkus",
+                    "konveyor.io/target=jakarta-ee9+",
+                    "konveyor.io/source=java-ee",
+                    "konveyor.io/source=springboot",
+                ],
+            )],
+        };
+        let mut backend = MemoryBackend::new();
+        hydrate_catalog(&mut backend, &catalog).unwrap();
+        let rules = backend.find_nodes_by_type(NodeType::KantraRule).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].get_property("targets"),
+            Some("quarkus,jakarta-ee9+")
+        );
+        assert_eq!(rules[0].get_property("sources"), Some("java-ee,springboot"));
+        // Last label wins for singular konveyor.io/* keys (CSV is authoritative).
+        assert_eq!(
+            rules[0].get_property("konveyor.io/target"),
+            Some("jakarta-ee9+")
+        );
+        assert_eq!(
+            rules[0].get_property("konveyor.io/source"),
+            Some("springboot")
+        );
     }
 }

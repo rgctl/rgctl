@@ -41,9 +41,9 @@ vocab = "endpoint endpoints route routes http rest api handler spring jaxrs"
 id = "spring.jakarta.field_di"
 framework = "spring"
 kind = "FieldAnnotationInject"
-annotations = ["Autowired", "Inject", "Resource", "Value"]
+annotations = ["Autowired", "Inject", "Resource", "Value", "ConfigProperty"]
 tags = ["role:di-consumer"]
-vocab = "dependency injection inject autowired bean field spring jakarta"
+vocab = "dependency injection inject autowired bean field spring jakarta quarkus config"
 target_vocab = "dependency injection provider service injectable bean"
 
 [[rules]]
@@ -68,9 +68,9 @@ vocab = "reflection reflect dynamic class introspection invoke jvm"
 id = "jakarta.ee.di"
 framework = "jakarta-ee"
 kind = "FieldAnnotationInject"
-annotations = ["Inject", "EJB", "Resource", "PersistenceContext"]
+annotations = ["Inject", "EJB", "Resource", "PersistenceContext", "ConfigProperty"]
 tags = ["role:di-consumer"]
-vocab = "dependency injection inject ejb resource persistence jakarta ee cdi"
+vocab = "dependency injection inject ejb resource persistence jakarta ee cdi quarkus config"
 target_vocab = "dependency injection provider service injectable bean"
 
 [[rules]]

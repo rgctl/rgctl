@@ -1,31 +1,41 @@
 ---
 name: rgctl
 description: >-
-  Answer structural questions about a codebase using the rgctl CLI graph
-  (architecture, communities, call relationships, blast radius, data-flow
-  slices, CPG, semantic search, migration roadmap, CI gates). Use when the
-  user asks how code is connected, what calls what, impact of changing a
-  symbol, where data flows, migration planning/roadmap, repo
-  structure/hotspots, or when `.rgctl/` exists — treat natural-language
-  codebase questions as rgctl queries first.
+  Primary code-intelligence skill for any codebase question, investigation,
+  refactoring, or migration. Always acquire `.rgctl/` first (`rgctl discover .`
+  if missing), then prefer `rgctl -f json` (`find`, `callers`, `relations`,
+  `inventory`, `blast-radius`, `slice`) before reading source files or running
+  grep/find. Covers architecture, communities, call relationships, blast
+  radius, CPG/slices, semantic search, migration, and CI gates.
 rgctl-managed: true
 ---
 
 # rgctl
 
-Answer **structural** questions from a pre-built code knowledge graph instead of reading whole files into context. Spawn **`rgctl -f json`** subprocesses (or use foreground **`rgctl serve`** for repeated HTTP queries). Artifacts live at **`{repo}/.rgctl/`** after `discover`.
+Use **rgctl** as your primary code-intelligence engine for any codebase question, investigation, refactoring, or migration instead of reading whole files into context. Spawn **`rgctl -f json`** subprocesses (or use foreground **`rgctl serve`** for repeated HTTP queries). Artifacts live at **`{repo}/.rgctl/`** after `discover`.
+
+## Step 0: Acquire `.rgctl/` Data First (mandatory)
+
+On **any** code question, investigation, refactoring, or migration:
+
+1. Run `rgctl -f json status` (or check for `.rgctl/graph.snapshot.bin`).
+2. If the snapshot is missing → immediately run `cd "$REPO" && rgctl discover .` (do **not** use `-r REPO discover .` — the `.` ignores `-r`).
+3. Prefer `rgctl -f json` (`find`, `relations`, `callers`, `callees`, `inventory`, `blast-radius`, `slice`) **before** reading source files or falling back to `grep` / `rg` / `find`.
+4. For long-running migrations or multi-wave edits, keep the graph fresh with either:
+   - `rgctl serve --watch` (background debounced file watcher), or
+   - `rgctl update` between edit waves.
+
+Do **not** skip rgctl for “just a code edit” — use graph facts to choose edit order and verify afterward.
 
 ## When to Use This Skill
 
-Use rgctl when the user asks:
+Use rgctl for:
 - **Architecture questions** — "What calls X?", "Where is the checkout flow?", "What communities exist?"
 - **Impact analysis** — "What breaks if I change this function?"
 - **Data flow** — "Where does this variable flow?", "Trace this tainted input"
-- **Migration planning** — "Generate a migration roadmap" / "What should we extract first?"
+- **Migration / refactoring** — framework upgrades, API moves, Strangler-Fig extraction (see **`rgctl-migrate`**)
 - **Hotspots** — "What are the most central/risky functions?"
 - **Subsystem mapping** — "Which module owns feature X?"
-
-If `.rgctl/` exists, prefer rgctl queries over reading files.
 
 ## CLI for agents
 
@@ -44,6 +54,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 ## Agent Loop
 
 ```text
+0. ACQUIRE INDEX   → status → discover . if .rgctl/graph.snapshot.bin missing
 1. USER PROMPT     → natural language (not a CLI string)
 2. SUBPROCESS      → rgctl -f json <structured command>
 3. GRAPH FACTS     → parse schema_version + payload
@@ -58,15 +69,15 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 ## What to Do When Invoked
 
 1. **Help-only** — If user only wants help/command list → print workflow table below and **stop** (no discover, no queries)
-2. **Fast path (existing index)** — If `.rgctl/` exists **and** request is a structural question (not rebuild) → **do not re-run full discover**. Route via workflow table; use CLI `-f json`.
-   - **Staleness exception:** run `rgctl -f json status`. If `index_current` is `false`, run **`rgctl update`** once — works with or without `serve --watch` (under watch, update enqueues for the sole writer; do not stop serve). Do **not** loop full `discover` for dirty working trees.
+2. **Step 0** — Ensure `.rgctl/graph.snapshot.bin` exists (`rgctl -f json status` → `rgctl discover .` if missing)
+3. **Fast path (existing index)** — Do **not** re-run full discover for ordinary questions. Route via workflow table; use CLI `-f json`.
+   - **Staleness:** If `index_current` is `false`, run **`rgctl update`** once — works with or without `serve --watch` (under watch, update enqueues for the sole writer; do not stop serve). Do **not** loop full `discover` for dirty working trees.
    - **Exception — vuln / OSV / OpenVEX:** if reachability, sink-first taint, or `vuln analyze` is in scope and CFG was not built (`cpg status` / missing CFG archive), re-run `discover . --with-cfg` (add `--with-taint` for PDG-backed confidence) before P4–P6
-3. **No index** — Run `cd "$REPO" && rgctl discover .` or `rgctl -r "$REPO" discover` (do **not** use `-r REPO discover .` — the `.` ignores `-r`). Add flags only when needed; for vuln scans use `--with-cfg` (see vuln workflow)
 4. **Natural-language routing** — Map utterance with workflow table. Do not ask user to rephrase into CLI unless disambiguation required
 5. **Summarize** — Report key facts, not raw JSON dumps
-6. **Stop conditions** — Pure code-edit/debug with no structural need → do not force rgctl
+6. **Continuous sync** — Multi-wave edits → `rgctl serve --watch` or `rgctl update` between waves; verify with graph queries after edits
 
-**Relationship questions** (e.g., "relationship between X and Y"): resolve symbols → bounded `CALLS`/`DEPENDSON` traversal → answer in plain language (hops, shared neighbors, files). If no direct path but asymmetric dependency, fall back to `blast-radius` on each.
+**Relationship questions** (e.g., "relationship between X and Y"): resolve symbols → bounded `CALLS`/`DEPENDSON` traversal → answer in plain language (hops, shared neighbors, files). If no direct path but asymmetric dependency, fall back to `blast-radius --summary` on each.
 
 ## Workflow Families
 
@@ -102,20 +113,19 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 
 ### 1b. Migration roadmap (`--export-migration-hints`)
 
-**Primary deliverable for migration questions:** `.rgctl/migration_plan.json` — not ad-hoc rule dumps. Prefer slash command **`/rgctl:migrate`** (skill `rgctl-migrate`) for the full Strangler-Fig brief.
+**Prefer slash command `/rgctl:migrate`** (skill `rgctl-migrate`) for framework upgrades, API/package refactors, and Strangler-Fig extraction. Core probes without the migrate skill:
 
 | User Intent | CLI Command |
 |-------------|-------------|
-| **Migration roadmap / extraction brief** | **`/rgctl:migrate`** → skill `rgctl-migrate` |
-| Generate migration plan (CLI) | `discover . --export-migration-hints` (add `--with-harmonic` for ranking) |
-| Preset / order | `--migration-preset hybrid_default\|foundational_first\|dense_cluster\|risk_mitigation` · `--migration-order scheduled\|priority` |
-| Read plan | `.rgctl/migration_plan.json` **and** `discover -f json … --export-migration-hints` stdout (migration plan JSON; plain `discover -f json` without the flag is DiscoverResponse telemetry) |
-| Legacy / mainframe sources | add `-l cobol,pli,jcl` (also `apex,pascal,perl,ada,matlab` as needed) |
-| Dashboard view | `discover . --with-universe --export-migration-hints` then `serve --open` |
+| **Any migration / modernization** | **`/rgctl:migrate`** → skill `rgctl-migrate` |
+| Import census | `inventory --by import-prefix --limit 50` (optional `--prefix javax.`) |
+| Annotation surface | `find --annotation "@PersistenceContext,@Inject,@ConfigProperty" --show-attributes` |
+| Package / DI edges | `find --package <coords>` · `relations --edge injects` |
+| Wave ordering | `callers <sym> --depth 2` · `blast-radius <sym> --summary` |
+| Strangler-Fig plan | `discover . --export-migration-hints --with-harmonic` → `.rgctl/migration_plan.json` (`.steps[]`) |
+| Optional Kantra overlay | `discover . --with-kantra` then `rules findings --target quarkus` (or `rules run --target quarkus`) |
 
-**Supporting probes** (optional): `communities list` (`member_count > 1`) → `blast-radius` on boundary candidates. Bound `blast-radius` with `--depth 2`/`3` and filter `communities list` with `jq` (neither accepts `--limit`).
-
-**See:** Migration Planning Guide (product docs; not bundled in this skill pack), migrate workflow in [references/workflows.md](references/workflows.md)
+**See:** migrate skill + [references/workflows.md](references/workflows.md)
 
 ### 2. Query & Search
 
@@ -125,7 +135,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 |-------------|-------------|
 | Session / index freshness | `status` (`index_current`, dirty counts) |
 | Schema / counts (incl. zeros) | `inventory --by type` or `inventory --by edge` |
-| Import prefix census | `inventory --by import-prefix` |
+| Import prefix census | `inventory --by import-prefix [--prefix javax.] [--limit 50]` |
 | Count functions | `find --type function --count-only` |
 | Find by name/type | `find "User*" --type class --limit 50` |
 | Suffix scan (MDB / Remote) | `find '*MDB*' --type class` |
@@ -154,7 +164,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 
 | User Intent | CLI Command |
 |-------------|-------------|
-| Blast radius | `blast-radius <Symbol> --depth N` (prefer `--depth 2`/`3`; bound output with `jq`) |
+| Blast radius | `blast-radius <Symbol> --depth N` (prefer `--depth 2`/`3`; use `--summary` for compact score + top files) |
 | **Review a PR / branch** (report + verdict) | **`/rgctl:review`** → skill `rgctl-review` (writes `REVIEW_REPORT.md`) |
 | Review uncommitted local edits | `review paths --synthetic-head worktree` (via **`/rgctl:review`** Step 0a) |
 | Call paths before/after (CLI only) | `review paths --base-ref ORIGIN --head-ref HEAD` |
@@ -224,14 +234,14 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | "Bottlenecks / hotspots" | `metrics --pagerank` |
 | "Where is checkout flow?" | `semantic query "checkout flow" --limit 10` |
 | "How does this doc map to code?" | `discover . -l markdown,<lang>` → `find 'Heading*' --type module` → `relations … --edge references --direction out` |
-| "Impact if I change X" | `blast-radius X --depth 2` |
+| "Impact if I change X" | `blast-radius X --depth 2 --summary` |
 | "Are we affected by this CVE / OSV?" | **`/rgctl:vuln`** (or vuln workflow in references) |
 | "Validate against policy" | `check --policy-file policy.json` |
 | "Review my uncommitted changes" | **`/rgctl:review`** → `review paths --synthetic-head worktree` |
 | "How did call paths change on this PR?" | **`/rgctl:review`** or `review paths --base-ref origin/main --head-ref HEAD` |
 | "PR policy gate / new violations vs main" | `review check --policy-file …` (alias `pr-check`) |
 | "Who calls X" | `callers X --depth 2` (impact → `blast-radius X`) |
-| "javax imports / annotations" | `find "import javax*" --type import`; `relations --edge annotatedwith --from-type function --to-type annotation` |
+| "javax imports / annotations" | `find "import javax*" --type import`; `find --annotation "@Stateless,@Stateful,@Singleton,@PersistenceContext,@Inject,@EJB" --show-attributes` |
 | "Where is X mutated?" | `cpg mutations --type X --exclude-ctors` (needs `--with-cfg`) |
 | "Slice / data flow for this line" | `slice FILE --line N --variable V` (lazy; optional `--with-alias`) |
 | "Duplicate code / copy-pasted loop or snippet" | `clones --mode fragment --seed <fn\|FILE:LINES>` (or `--mode exact` / `--mode bloom`) |

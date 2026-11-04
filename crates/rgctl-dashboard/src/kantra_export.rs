@@ -384,6 +384,9 @@ mod tests {
                     message: Some("hit a".into()),
                     matched_by: "java.referenced".into(),
                     symbol: Some("javax.ejb.Stateless".into()),
+                    targets: vec!["quarkus".into()],
+                    sources: Vec::new(),
+                    effort: Some(1),
                     enrichment: Some(ViolationEnrichment {
                         blast_radius_score: Some(3.5),
                         ..Default::default()
@@ -397,6 +400,9 @@ mod tests {
                     message: Some("hit b".into()),
                     matched_by: "filecontent".into(),
                     symbol: None,
+                    targets: Vec::new(),
+                    sources: Vec::new(),
+                    effort: None,
                     enrichment: None,
                 },
             ],

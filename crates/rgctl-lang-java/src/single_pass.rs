@@ -308,6 +308,19 @@ pub fn extract_all_single_pass(
                         );
                         pushed_scope = true;
                     }
+                    "field_declaration" => {
+                        let owner_qn = ctx
+                            .scopes
+                            .current_type()
+                            .map(|f| f.qualified_prefix.clone());
+                        plugin.push_field_declaration_variables(
+                            node,
+                            source,
+                            &file_path_str,
+                            owner_qn.as_deref(),
+                            &mut ctx.symbols,
+                        );
+                    }
                     "import_declaration" => {
                         let text = node.utf8_text(source)?.trim().to_string();
                         ctx.symbols.push(Symbol {

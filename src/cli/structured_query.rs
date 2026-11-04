@@ -488,12 +488,24 @@ pub fn run_relations(
 }
 
 /// `rgctl inventory`
-pub fn run_inventory(ctx: &CliContext, by: String, shared: SharedQueryArgs) -> Result<()> {
+pub fn run_inventory(
+    ctx: &CliContext,
+    by: String,
+    shared: SharedQueryArgs,
+    limit: Option<usize>,
+    prefix: Option<String>,
+) -> Result<()> {
     let store = open_store(ctx)?;
     let dim = InventoryBy::parse(&by).map_err(|e| anyhow::anyhow!("{e}"))?;
     let filters = shared.into_filters(None)?;
     let q = StructuredQuery::new(store.as_ref());
-    let result = q.inventory(dim, &filters).map_err(|e| map_sq_err(ctx, e))?;
+    let mut result = q.inventory(dim, &filters).map_err(|e| map_sq_err(ctx, e))?;
+    if let Some(ref p) = prefix {
+        result.counts.retain(|c| c.key.starts_with(p.as_str()));
+    }
+    if let Some(n) = limit {
+        result.counts.truncate(n);
+    }
     if ctx.format == OutputFormat::Json {
         return emit_json(ctx, &result);
     }
