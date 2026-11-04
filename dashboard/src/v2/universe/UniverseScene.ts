@@ -75,6 +75,20 @@ const SINGLE = 0x67788c; // a package alone in its community — a finding, not 
  */
 const DOUBLE_CLICK_WINDOW_MS = 240;
 
+/**
+ * Which entry a ray that crossed several things should select.
+ *
+ * A namespace volume is a box drawn *around* the solids inside it, so its near face is always closer than the
+ * package being aimed at: `intersectObjects(...)[0]` therefore answered "the volume" for every click that landed on
+ * a package inside one, and those packages could not be selected at all. The rule is the plain one — solids first,
+ * in ray order; a volume only when nothing else was hit — because a volume is a label for a group, not an object
+ * anyone means to click when a real solid is behind it.
+ */
+export function nearestSolid(entries: HoverEntry[]): HoverEntry | null {
+  for (const entry of entries) if (entry.kind !== "volume") return entry;
+  return entries[0] ?? null;
+}
+
 export class UniverseScene {
   private readonly scene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
@@ -100,6 +114,7 @@ export class UniverseScene {
   private onExplodeRequest: (entry: HoverEntry | null) => void = () => {};
   private onMemberPick: (member: MemberEntry | null) => void = () => {};
   private onMemberOpenRequest: (member: MemberEntry | null) => void = () => {};
+  private onPress: () => void = () => {};
 
   constructor(container: HTMLElement) {
     this.reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -153,6 +168,17 @@ export class UniverseScene {
   /** A double-click on a member: go to its code. The join between the universe and the rest of the dashboard. */
   onMemberOpen(fn: (member: MemberEntry | null) => void): void {
     this.onMemberOpenRequest = fn;
+  }
+
+  /**
+   * Any press on the canvas, before it is interpreted.
+   *
+   * The room uses it to stop the drift: a model that keeps turning while you are trying to click a box is the
+   * difference between a map you can use and one that moves under the pointer. Reported rather than done here,
+   * because the drift is the room's toggle and one of them has to be the truth.
+   */
+  onPressChange(fn: () => void): void {
+    this.onPress = fn;
   }
 
   /**
@@ -1007,6 +1033,25 @@ export class UniverseScene {
     step();
   }
 
+  /**
+   * What the pointer is actually over.
+   *
+   * `intersectObjects(...)[0]` is the *nearest* hit, and a namespace volume is a box that contains the solids drawn
+   * inside it — so its near face is always nearer than the package you are aiming at, and every package inside a
+   * volume was unclickable while the shell around it took the press. Preferring the nearest solid and falling back
+   * to the shell only when nothing else is hit is the difference between "the volume is pickable" and "the volume
+   * is a wall".
+   */
+  private pickAt(): HoverEntry | null {
+    const hits = this.raycaster.intersectObjects(this.pickables.map((p) => p.mesh), false);
+    const entries: HoverEntry[] = [];
+    for (const hit of hits) {
+      const found = this.pickables.find((p) => p.mesh === hit.object);
+      if (found) entries.push(found.entry);
+    }
+    return nearestSolid(entries);
+  }
+
   private add(object: THREE.Object3D): void {
     this.world.add(object);
     object.traverse((child: THREE.Object3D) => {
@@ -1153,13 +1198,13 @@ export class UniverseScene {
         this.onHover(null);
         return;
       }
-      const hit = this.raycaster.intersectObjects(this.pickables.map((p) => p.mesh), false)[0];
-      const found = hit ? this.pickables.find((p) => p.mesh === hit.object) : undefined;
-      this.onHover(found?.entry ?? null);
+      this.onHover(this.pickAt());
     };
     const leave = () => this.onHover(null);
     const click = () => {
       this.raycaster.setFromCamera(this.pointer, this.camera);
+      // Before anything else: a press means "I am reading this", so the drift stops.
+      this.onPress();
       // Inside an open district, a click means "this member", not "the package behind it".
       const member = this.memberAt();
       if (member) {
@@ -1174,9 +1219,7 @@ export class UniverseScene {
       pressedEntry = null;
       this.onMemberPick(null);
       if (this.drill) return;
-      const hit = this.raycaster.intersectObjects(this.pickables.map((p) => p.mesh), false)[0];
-      const found = hit ? this.pickables.find((p) => p.mesh === hit.object) : undefined;
-      pressedEntry = found?.entry ?? null;
+      pressedEntry = this.pickAt();
       // Report, and mark. The flight waits one double-click window: a press that is half of a double-click
       // must not move the camera out from under the second press, which is what made "double-click to expand"
       // land on a neighbour or on empty space.
