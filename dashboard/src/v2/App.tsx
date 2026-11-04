@@ -8,6 +8,7 @@ import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
 import { MigrationRoom } from "./rooms/Migration";
 import { TaintRoom } from "./rooms/Taint";
+import { RulesRoom } from "./rooms/Rules";
 import { loadManifest, type FunctionEntry } from "./data";
 import { LENSES, ROOMS, keyOf, type LensId, type RoomId } from "./focus";
 import { useFocus } from "./useFocus";
@@ -76,7 +77,7 @@ export function App() {
         {/*
           One horizontal row of rooms, not a 208px column. The rail cost the full width of the left edge in every
           room, and the room that needs width most — the universe — paid it twice: 208px of sidebar plus a 300px
-          column. Seven labels fit on one line; the question a room answers stays visible for the room you are
+          column. Room labels wrap on one line; the question a room answers stays visible for the room you are
           in, which is the only one where it is still a question.
         */}
         <div className="flex shrink-0 flex-col gap-1 border-b border-white/8 bg-[#0e1116] px-3 py-1.5">
@@ -180,11 +181,13 @@ export function App() {
             )}
             {room === "migration" && <MigrationRoom />}
             {room === "taint" && <TaintRoom />}
+            {room === "rules" && <RulesRoom />}
             {room !== "repo" &&
               room !== "understand" &&
               room !== "architecture" &&
               room !== "migration" &&
-              room !== "taint" && <Placeholder room={room} />}
+              room !== "taint" &&
+              room !== "rules" && <Placeholder room={room} />}
           </div>
         </main>
       </div>

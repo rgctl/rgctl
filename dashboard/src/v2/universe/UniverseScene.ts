@@ -68,6 +68,16 @@ export interface HoverEntry {
   id?: number;
 }
 
+/**
+ * Prefer the first solid (package / bucket / community) in ray order; fall back to a volume only when
+ * nothing else was hit. Pure so picking has a unit test without a renderer.
+ */
+export function nearestSolid(entries: HoverEntry[]): HoverEntry | null {
+  if (entries.length === 0) return null;
+  const solid = entries.find((e) => e.kind !== "volume");
+  return solid ?? entries[0] ?? null;
+}
+
 const SINGLE = 0x67788c; // a package alone in its community — a finding, not a failure
 /**
  * How long a press waits before it flies the camera.

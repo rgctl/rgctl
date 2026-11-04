@@ -28,12 +28,19 @@ export function Panel({
   );
 }
 
-export function Chip({ children, tone = "zinc" }: { children: ReactNode; tone?: "zinc" | "amber" | "green" | "blue" }) {
+export function Chip({
+  children,
+  tone = "zinc",
+}: {
+  children: ReactNode;
+  tone?: "zinc" | "amber" | "green" | "blue" | "rose";
+}) {
   const tones = {
     zinc: "bg-white/6 text-zinc-400 border-white/10",
     amber: "bg-amber-500/10 text-amber-300 border-amber-500/25",
     green: "bg-emerald-500/10 text-emerald-300 border-emerald-500/25",
     blue: "bg-sky-500/10 text-sky-300 border-sky-500/25",
+    rose: "bg-rose-500/10 text-rose-300 border-rose-500/25",
   };
   return (
     <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] leading-none ${tones[tone]}`}>
