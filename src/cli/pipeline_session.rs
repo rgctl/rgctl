@@ -1,4 +1,4 @@
-//! Staged full pipeline: basic discover → CFG/dashboard/harmonic → semantic index.
+//! Staged full pipeline: basic discover → CFG/dashboard/harmonic/taint/kantra → semantic index.
 
 use super::args::OutputFormat;
 use super::context::CliContext;
@@ -25,7 +25,7 @@ pub struct FullPipelineArgs {
     pub languages: Option<String>,
     pub exclude: Option<String>,
     pub with_security: bool,
-    pub with_taint: bool,
+    /// Optional taint rule pack; deep stage always enables discover-time taint.
     pub taint_rules: Option<String>,
     pub scip: Option<String>,
     pub with_git: bool,
@@ -34,6 +34,10 @@ pub struct FullPipelineArgs {
     pub with_ast_skeleton: bool,
     pub write_json_graph: bool,
     pub export_migration_hints: bool,
+    pub kantra_rules: Option<String>,
+    pub kantra_catalog: Option<String>,
+    pub kantra_target: Option<String>,
+    pub kantra_index_only: bool,
     pub migration_preset: String,
     pub migration_order: String,
     pub artifact_root: Option<PathBuf>,
@@ -49,7 +53,6 @@ impl FullPipelineArgs {
             languages: args.languages.clone(),
             exclude: args.exclude.clone(),
             with_security: args.with_security,
-            with_taint: args.with_taint,
             taint_rules: args.taint_rules.clone(),
             scip: args.scip.clone(),
             with_git: args.with_git,
@@ -58,6 +61,10 @@ impl FullPipelineArgs {
             with_ast_skeleton: args.with_ast_skeleton,
             write_json_graph: args.write_json_graph,
             export_migration_hints: args.export_migration_hints,
+            kantra_rules: args.kantra_rules.clone(),
+            kantra_catalog: args.kantra_catalog.clone(),
+            kantra_target: args.kantra_target.clone(),
+            kantra_index_only: args.kantra_index_only,
             migration_preset: args.migration_preset.clone(),
             migration_order: args.migration_order.clone(),
             artifact_root: args.artifact_root.clone(),
@@ -70,7 +77,9 @@ impl FullPipelineArgs {
 pub fn print_plan() {
     info!("Full pipeline plan:");
     info!("  1. {STAGE_BASIC}  — index + analysis (queryable snapshot)");
-    info!("  2. {STAGE_DEEP}      — --with-cfg --with-universe --with-harmonic");
+    info!(
+        "  2. {STAGE_DEEP}      — --with-cfg --with-universe --with-harmonic --with-taint --with-kantra"
+    );
     info!("  3. {STAGE_SEMANTIC} — semantic index (vocab embedder)");
 }
 
@@ -287,7 +296,8 @@ fn analysis_opts<'a>(
         exclude: extras.exclude.clone(),
         with_security: extras.with_security,
         with_cfg,
-        with_taint: deep && extras.with_taint,
+        // Deep stage always enables discover-time taint (CFG already on).
+        with_taint: deep,
         taint_rules: extras.taint_rules.clone(),
         scip: extras.scip.clone(),
         with_git: extras.with_git,
@@ -298,11 +308,12 @@ fn analysis_opts<'a>(
         with_dashboard,
         export_migration_hints: deep && extras.export_migration_hints,
         with_harmonic,
-        with_kantra: false,
-        kantra_rules: None,
-        kantra_catalog: None,
-        kantra_target: None,
-        kantra_index_only: false,
+        // Deep stage always evaluates/indexes Kantra (overrides still apply).
+        with_kantra: deep,
+        kantra_rules: extras.kantra_rules.clone(),
+        kantra_catalog: extras.kantra_catalog.clone(),
+        kantra_target: extras.kantra_target.clone(),
+        kantra_index_only: extras.kantra_index_only,
         migration_preset: extras.migration_preset.as_str(),
         migration_order: extras.migration_order.as_str(),
         db_path: &ctx.db,
@@ -384,6 +395,16 @@ fn should_skip_deep(store: &Path) -> bool {
     if !crate::analysis::CfgPdgArchive::default_path(store).is_file() {
         return false;
     }
+    // Full deep profile always includes taint export + Kantra findings; require them so
+    // warm skips after upgrading from older --full (cfg/universe/harmonic only) re-run deep.
+    let taint_index = rgctl_graph::paths::artifact_path(store, "dashboard/taint_index.json");
+    if !taint_index.is_file() {
+        return false;
+    }
+    let kantra = rgctl_graph::paths::artifact_path(store, "kantra_findings.json");
+    if !kantra.is_file() {
+        return false;
+    }
     pipeline_status::read_digest_marker(store, HARMONIC_DIGEST_FILE).as_deref()
         == Some(digest.as_str())
 }
@@ -396,4 +417,90 @@ fn should_skip_semantic(store: &Path) -> bool {
         return false;
     };
     index.graph_digest.as_deref() == Some(digest.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::args::OutputFormat;
+    use crate::cli::context::CliContext;
+
+    fn sample_extras() -> FullPipelineArgs {
+        FullPipelineArgs {
+            languages: None,
+            exclude: None,
+            with_security: false,
+            taint_rules: None,
+            scip: None,
+            with_git: false,
+            git_since: "90.days".into(),
+            with_dfg_loops: false,
+            with_ast_skeleton: false,
+            write_json_graph: false,
+            export_migration_hints: false,
+            kantra_rules: None,
+            kantra_catalog: None,
+            kantra_target: Some("quarkus".into()),
+            kantra_index_only: false,
+            migration_preset: "hybrid".into(),
+            migration_order: "default".into(),
+            artifact_root: None,
+            limits: None,
+        }
+    }
+
+    #[test]
+    fn deep_opts_enable_taint_kantra_harmonic_without_extras_flags() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = CliContext::new(
+            Some(tmp.path().to_path_buf()),
+            None,
+            OutputFormat::Text,
+            None,
+            false,
+        );
+        let extras = sample_extras();
+        let opts = analysis_opts(&ctx, &extras, BasicOrDeep::Deep);
+        assert!(opts.with_cfg);
+        assert!(opts.with_dashboard);
+        assert!(opts.with_harmonic);
+        assert!(opts.with_taint);
+        assert!(opts.with_kantra);
+        assert_eq!(opts.kantra_target.as_deref(), Some("quarkus"));
+        assert!(!opts.with_security);
+        assert!(!opts.export_migration_hints);
+    }
+
+    #[test]
+    fn basic_opts_leave_taint_kantra_harmonic_off() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = CliContext::new(
+            Some(tmp.path().to_path_buf()),
+            None,
+            OutputFormat::Text,
+            None,
+            false,
+        );
+        let extras = sample_extras();
+        let opts = analysis_opts(
+            &ctx,
+            &extras,
+            BasicOrDeep::Basic {
+                force_reindex: false,
+            },
+        );
+        assert!(!opts.with_cfg);
+        assert!(!opts.with_dashboard);
+        assert!(!opts.with_harmonic);
+        assert!(!opts.with_taint);
+        assert!(!opts.with_kantra);
+    }
+
+    #[test]
+    fn print_plan_mentions_taint_and_kantra() {
+        // Smoke: keep the deep-stage string in sync with clap / docs.
+        let deep_line = "--with-cfg --with-universe --with-harmonic --with-taint --with-kantra";
+        assert!(deep_line.contains("--with-taint"));
+        assert!(deep_line.contains("--with-kantra"));
+    }
 }

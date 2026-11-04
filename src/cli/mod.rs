@@ -251,8 +251,9 @@ pub enum Commands {
         #[arg(long = "kantra-index-only", help_heading = "Pipeline features")]
         kantra_index_only: bool,
 
-        /// Staged full pipeline: basic discover (queryable snapshot), then CFG + dashboard +
-        /// harmonic, then semantic index. Prints a plan first; does not imply taint/security.
+        /// Staged full pipeline: basic discover (queryable snapshot), then CFG + Universe +
+        /// harmonic + taint + Kantra, then semantic index. Prints a plan first; does not imply
+        /// security, git, SCIP, or migration export.
         #[arg(long = "full", help_heading = "Session / limits")]
         full: bool,
 

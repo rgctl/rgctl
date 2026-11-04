@@ -155,8 +155,9 @@ mod session_root_tests {
 }
 
 pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
+    // `--full` always enables Kantra in the deep stage; still validate override exclusivity.
     super::kantra_discover::validate_kantra_flags(
-        args.with_kantra,
+        args.with_kantra || args.full,
         &args.kantra_rules,
         &args.kantra_catalog,
     )?;

@@ -237,7 +237,7 @@ Built-in registry includes **markdown** (`rgctl-lang-markdown`): `.md` and `.mdx
 
 ### Full pipeline (`--full`)
 
-`rgctl discover PATH --full` prints an execution plan, runs a **basic** discover (queryable snapshot), reports that the initial discover is complete, then continues in the same process with `--with-cfg --with-universe --with-harmonic`, then `semantic index`. Other terminals can run `find` / `inventory` after stage 1. Does **not** imply taint or secret scanning.
+`rgctl discover PATH --full` prints an execution plan, runs a **basic** discover (queryable snapshot), reports that the initial discover is complete, then continues in the same process with `--with-cfg --with-universe --with-harmonic --with-taint --with-kantra`, then `semantic index`. Other terminals can run `find` / `inventory` after stage 1. Does **not** imply secret scanning, git churn, SCIP, or migration roadmap export (pass those flags alongside `--full` when needed).
 
 ```bash
 rgctl discover . --full
@@ -407,11 +407,11 @@ Konveyor labels (`konveyor.io/target`, `konveyor.io/source`, …) are stored on 
 
 **Source builds:** full embedded catalog requires the git submodule — `git submodule update --init crates/rgctl-kantra/assets/rulesets` or `./scripts/init-kantra-rulesets.sh`. Without it, the build falls back to `tests/fixtures/kantra-rules/`. See [`crates/rgctl-kantra/README.md`](../crates/rgctl-kantra/README.md).
 
-**Further reading:** [Kantra integration — design & current state](design/kantra-integration-exploration.md) · [`rgctl-kantra` crate README](../crates/rgctl-kantra/README.md) · [JSON schema](json-api.md#kantra_findingsjson)
+**Further reading:** [Kantra Migration Rules guide](https://rgctl.io/docs/guides/kantra-migration-rules/) (metasfresh scale walkthrough) · [Kantra integration — design & current state](design/kantra-integration-exploration.md) · [`rgctl-kantra` crate README](../crates/rgctl-kantra/README.md) · [JSON schema](json-api.md#kantra_findingsjson)
 
 Does **not** require `--with-cfg`. Unsupported rule providers and invalid regex patterns are skipped with reasons in `skipped_rules`. After full eval, `violates` edges link each `KantraRule` to matched code nodes (`rgctl relations --edge violates --from-type kantrarule`).
 
-**Dashboard:** `discover --with-kantra --with-universe` exports `kantra_index.json` and per-file violation shards. Open **Migration Rules** in the dashboard (category + Konveyor target filters, syntax-highlighted snippets). See [Dashboard user guide — Migration Rules](dashboard-user-guide.md#migration-rules-kantra).
+**Dashboard:** `discover --with-kantra --with-universe` exports `kantra_index.json` and per-file violation shards. Open the Universe **Static rules** room (category + Konveyor target filters, syntax-highlighted snippets). The **Migration** room remains the strangler-fig schedule — it is not Kantra triage.
 
 ### Verbose logging and stage profiling
 
@@ -1256,7 +1256,7 @@ Migration hints (with `--export-migration-hints`) land under `.rgctl/migration_p
 
 | Command | Purpose |
 |---------|---------|
-| `discover` | Index repo, build `.rgctl/` artifacts (`--full` = staged CFG/dashboard/harmonic + semantic) |
+| `discover` | Index repo, build `.rgctl/` artifacts (`--full` = staged CFG/Universe/harmonic/taint/Kantra + semantic) |
 | `update` / `watch` / `merge` | Incremental patch; live watch; multi-repo park-and-resolve merge |
 | `find` / `callers` / `callees` / `relations` / `inventory` / `status` | Structured graph queries ([§6](#6-structured-graph-queries)); `query …` is a compatibility alias |
 | `communities` | List / refresh Fast-Leiden community labels |
@@ -1291,7 +1291,7 @@ Full taxonomy: [CLI command reference](https://rgctl.io/docs/guides/cli-command-
 | `--with-ast-skeleton` | Build AST skeleton archive for `cpg ast` |
 | `--with-harmonic` | Harmonic centrality (default off; needed for migration ranking) |
 | `--with-universe` | Universe dashboard bundle under `.rgctl/dashboard/` (default off; UI for `serve --open`) |
-| `--full` | Staged pipeline: basic discover, then CFG+dashboard+harmonic, then semantic index |
+| `--full` | Staged pipeline: basic discover, then CFG+Universe+harmonic+taint+Kantra, then semantic index |
 | `--export-migration-hints` | Migration roadmap JSON (alias `--export-migration-plan`) |
 | `--migration-preset` | Preset for migration hints (`hybrid`, `foundational`, …) |
 | `--migration-order` | `scheduled` (topological) or `priority` |

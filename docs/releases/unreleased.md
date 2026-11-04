@@ -4,6 +4,36 @@
 
 ## Highlights
 
+### Universe Static rules room (#171)
+
+Ports the v1 Kantra triage UI into Universe as a dedicated **Static rules** room (`rules`):
+
+- **Index-first load:** reads `kantra_index.json` / per-file shards on demand (no Focus required); category + Konveyor target filters, file search/pagination, violations table, rule detail, and source snippets.
+- **Missing vs stale vs empty:** uses session `/api/status` `kantra_findings` so a session with findings but no Universe Kantra bundle shows a stale re-export hint instead of an empty table.
+- **Serve status:** `PipelineStatus` exposes `kantra_findings` for the room bootstrap signal; `dist-v2` rebuilt; docs point at Static rules (not Migration Rules).
+
+### `--full` includes taint + Kantra (+ harmonic) (#172)
+
+`rgctl discover --full` deep stage now always enables `--with-taint` and `--with-kantra` alongside the existing CFG, Universe dashboard, and harmonic centrality passes, then runs semantic index. Secret scanning, git churn, SCIP, and migration roadmap export remain opt-in flags. Warm deep skips require `dashboard/taint_index.json` and `kantra_findings.json` so older `--full` artifacts re-run deep after upgrade. Dashboard export rewrites when `index.html` is missing even if the manifest fingerprint still matches (warm recovery after a deleted entrypoint).
+
+### Architecture room: stable outgoing coupling lines (#169)
+
+Stops flicker on segments leaving an open district by drawing them with fat screen-space lines instead of one-device-pixel `LineBasicMaterial` strokes (WebGL core profile ignores `linewidth`):
+
+- **`Line2` outgoing edges:** each coupling segment is a screen-space quad of real width so lines stay stable as the camera moves; fade is a per-vertex colour on one geometry (one draw call per level) instead of three materials per edge.
+- **Viewport-aware thickness:** material resolution is refreshed on every resize so width stays correct after window resize or on 2× displays.
+- **Size gate:** `BUDGET_KIB_V2` raised to **330 KiB** (+7.2 KiB gzipped for the Line2 path) to restore the previous headroom rather than spend it.
+
+### Architecture room UX: one surface, one mode (#168)
+
+Hardens what a click means inside Architecture district drill-down:
+
+- **Back arrow only while drilled in:** inside a district, level chrome is a single back arrow (no redundant Expand / lookup / instruction block over a scene already in view). Collapse is gone at the universe root (nothing is open there); Escape still works at both levels.
+- **Click selects; `</>` opens code:** a click marks the box and offers a **code reference** control beside the back arrow (replacing double-click-with-no-affordance). The control hides while the drawer is open; the drawer’s back arrow clears selection so glow, row highlight, and icon cannot outlive the panel.
+- **Picks go through namespace volumes:** `nearestSolid` prefers the first solid in ray order and falls back to the volume only when nothing else was hit, so solids inside an x-rayed group are selectable instead of always losing to the surrounding volume.
+- **Press pauses drift:** pointer press turns off room auto-rotate so the map does not move under the cursor while aiming.
+- **Tests:** `architectureRoom`, `architectureSceneWiring`, `levelRestore`, and `universePicking` cover the new mode/restore/picking behaviour; `dist-v2` rebuilt with the UX and Line2 changes.
+
 ### Agent skills & migration workflows (#170, #104, #105)
 
 Overhauls `rgctl` and `rgctl-migrate` skills (`.agent/skills/*`, `skills/*`, and `docs/agents/USER_AGENTS_TEMPLATE.md`) following the ScarfBench evaluation ([#170](https://github.com/rgctl/rgctl/issues/170)):
@@ -55,3 +85,12 @@ Enables running `rgctl discover . --with-kantra` (all targets in one pass) or po
   - Added native prefix filtering and result-count capping to `rgctl inventory` (e.g. `rgctl -f json inventory --by import-prefix --prefix javax. --limit 20`).
 - **`rgctl blast-radius <Symbol> --summary` (#105):**
   - Added compact `--summary` output returning `target`, `score`, `distance_buckets` (`direct`, `transitive`, `impact_zone_size`), `caller_depth_limit` (when `--depth` is set), up to 10 `direct_callers` (`fqn`, `file_path`), and top 10 impacted files (`top_files`).
+
+## PRs since v0.4.25
+
+| PR | Title | Merged |
+|----|-------|--------|
+| [#169](https://github.com/rgctl/rgctl/pull/169) | draw the level's outgoing coupling with fat lines, so it stops flicker | 2026-11-04 |
+| [#168](https://github.com/rgctl/rgctl/pull/168) | fix problems with UX (Architecture: back arrow, code reference, pick-through volumes) | 2026-11-04 |
+
+In progress on this branch (not yet on `main`): ScarfBench / Kantra / Java DI / CLI ergonomics tracked under [#170](https://github.com/rgctl/rgctl/issues/170) (and [#104](https://github.com/rgctl/rgctl/issues/104), [#105](https://github.com/rgctl/rgctl/issues/105)).

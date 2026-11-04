@@ -14,16 +14,19 @@ fn rgctl_bin() -> std::path::PathBuf {
 }
 
 fn discover(repo: &Path) {
-    let out = Command::new(rgctl_bin())
-        .args(["discover", ".", "-q", "--languages", "java"])
-        .current_dir(repo)
-        .output()
-        .expect("discover");
-    assert!(
-        out.status.success(),
-        "discover failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    static DISCOVERED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    DISCOVERED.get_or_init(|| {
+        let out = Command::new(rgctl_bin())
+            .args(["discover", ".", "--languages", "java"])
+            .current_dir(repo)
+            .output()
+            .expect("discover");
+        assert!(
+            out.status.success(),
+            "discover failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    });
 }
 
 /// Resolve a class by exact name, then list outgoing edges of the given type.

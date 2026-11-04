@@ -99,7 +99,7 @@ impl MemoryMonitor {
         }
     }
 
-    fn refresh_peaks(&self) -> Result<(u64, u64)> {
+    fn refresh_peaks(&self) -> Result<(u64, u64, u64)> {
         let mut system = self
             .system
             .lock()
@@ -109,8 +109,9 @@ impl MemoryMonitor {
         self.peak_memory.fetch_max(current, Ordering::Relaxed);
         self.phase_peak.fetch_max(current, Ordering::Relaxed);
         Ok((
-            self.peak_memory.load(Ordering::Relaxed),
-            self.phase_peak.load(Ordering::Relaxed),
+            current,
+            self.peak_memory.load(Ordering::Relaxed).max(current),
+            self.phase_peak.load(Ordering::Relaxed).max(current),
         ))
     }
 
@@ -119,15 +120,9 @@ impl MemoryMonitor {
     ///
     /// Absolute [`Self::peak_mb`] is unchanged — it remains the run-wide high-water mark.
     pub fn seal_phase(&self) -> Result<f64> {
-        let (_, phase) = self.refresh_peaks()?;
+        let (current, _, phase) = self.refresh_peaks()?;
         let phase_mb = (phase / 1024 / 1024) as f64;
         // Reset phase peak to current so analysis doesn't inherit ingest high-water.
-        let mut system = self
-            .system
-            .lock()
-            .map_err(|e| Error::GraphError(format!("MemoryMonitor system lock poisoned: {e}")))?;
-        system.refresh_pids_specifics(&[self.pid], ProcessRefreshKind::new().with_memory());
-        let current = Self::current_memory(&system, self.pid);
         self.phase_peak.store(current, Ordering::Relaxed);
         Ok(phase_mb)
     }
@@ -135,19 +130,13 @@ impl MemoryMonitor {
     /// Peak RSS in MB for the current (unsealed) phase.
     pub fn phase_peak_mb(&self) -> f64 {
         self.refresh_peaks()
-            .map(|(_, phase)| (phase / 1024 / 1024) as f64)
+            .map(|(_, _, phase)| (phase / 1024 / 1024) as f64)
             .unwrap_or(0.0)
     }
 
     /// Take a snapshot of current memory usage.
     pub fn snapshot(&self) -> Result<MemorySnapshot> {
-        let (peak, _) = self.refresh_peaks()?;
-        let mut system = self
-            .system
-            .lock()
-            .map_err(|e| Error::GraphError(format!("MemoryMonitor system lock poisoned: {e}")))?;
-        system.refresh_pids_specifics(&[self.pid], ProcessRefreshKind::new().with_memory());
-        let current = Self::current_memory(&system, self.pid);
+        let (current, peak, _) = self.refresh_peaks()?;
 
         Ok(MemorySnapshot {
             current_mb: (current / 1024 / 1024) as f64,
