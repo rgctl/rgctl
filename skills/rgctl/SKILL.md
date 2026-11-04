@@ -1,13 +1,12 @@
 ---
 name: rgctl
 description: >-
-  Answer structural questions about a codebase using the rgctl CLI graph
-  (architecture, communities, call relationships, blast radius, data-flow
-  slices, CPG, semantic search, migration roadmap, CI gates). Use when the
-  user asks how code is connected, what calls what, impact of changing a
-  symbol, where data flows, migration planning/roadmap, repo
-  structure/hotspots, or when `.rgctl/` exists — treat natural-language
-  codebase questions as rgctl queries first.
+  Map code structure with the rgctl CLI graph before multi-file framework or
+  API migrations, and answer structural questions (architecture, callers,
+  blast radius, data flow, migration roadmaps, hotspots, CI gates). Use when
+  asked to implement a migration or port an application, not only when asked
+  to plan one; also use for dependency and impact questions or when `.rgctl/`
+  exists.
 rgctl-managed: true
 ---
 
@@ -22,10 +21,24 @@ Use rgctl when the user asks:
 - **Impact analysis** — "What breaks if I change this function?"
 - **Data flow** — "Where does this variable flow?", "Trace this tainted input"
 - **Migration planning** — "Generate a migration roadmap" / "What should we extract first?"
+- **Migration implementation** — "Port this application to another framework" / "Migrate this API"; map imports, routes, injection, and callers before changing multiple files.
 - **Hotspots** — "What are the most central/risky functions?"
 - **Subsystem mapping** — "Which module owns feature X?"
 
 If `.rgctl/` exists, prefer rgctl queries over reading files.
+
+## Companion Skill Routing
+
+Load a companion skill only when the request matches its purpose and that skill is available. In Goose, call `load_skill(name="<skill>")` for the matching companion; other agents should use their equivalent skill loader. Keep this core skill for shared indexing and query guidance.
+
+| Request | Skill to load |
+|---------|---------------|
+| Review a PR, branch, or worktree diff; inspect changed call paths or PR policy | `rgctl-review` |
+| Triage a CVE/OSV advisory, exploitability, reachability, or OpenVEX status | `rgctl-vuln` |
+| Plan a Strangler-Fig extraction, service boundary, or migration roadmap | `rgctl-migrate` |
+| Implement a framework or API port | Stay with this core skill and use the framework migration workflow in §1c |
+
+If a matching companion is unavailable, use the relevant core workflow or references. Do not load every companion for a task that needs only one.
 
 ## CLI for agents
 
@@ -48,8 +61,9 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 2. SUBPROCESS      → rgctl -f json <structured command>
 3. GRAPH FACTS     → parse schema_version + payload
 4. LLM REASONING   → summarize using "what to report" guidelines
-5. ACTION & VERIFY → edit files in dependency wave order → `rgctl update` →
-                     verify (`find "import <old>*" --type import` total==0,
+5. ACTION & VERIFY → edit files in dependency wave order → build/runtime checks;
+                     if more graph analysis is needed after edits, run `rgctl update`
+                     before querying (e.g., `find "import <old>*" --type import`,
                      `callers <new_sym>`, `review paths --synthetic-head worktree`)
 ```
 
@@ -62,9 +76,10 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
    - **Staleness exception:** run `rgctl -f json status`. If `index_current` is `false`, run **`rgctl update`** once — works with or without `serve --watch` (under watch, update enqueues for the sole writer; do not stop serve). Do **not** loop full `discover` for dirty working trees.
    - **Exception — vuln / OSV / OpenVEX:** if reachability, sink-first taint, or `vuln analyze` is in scope and CFG was not built (`cpg status` / missing CFG archive), re-run `discover . --with-cfg` (add `--with-taint` for PDG-backed confidence) before P4–P6
 3. **No index** — Run `cd "$REPO" && rgctl discover .` or `rgctl -r "$REPO" discover` (do **not** use `-r REPO discover .` — the `.` ignores `-r`). Add flags only when needed; for vuln scans use `--with-cfg` (see vuln workflow)
-4. **Natural-language routing** — Map utterance with workflow table. Do not ask user to rephrase into CLI unless disambiguation required
-5. **Summarize** — Report key facts, not raw JSON dumps
-6. **Stop conditions** — Pure code-edit/debug with no structural need → do not force rgctl
+4. **Framework/API migration implementation** — Treat a multi-file framework port as structural work even when the requested deliverable is code. Before editing, build or refresh the index and use at least one relevant graph query to identify the migration surface (imports, routes, injection, or callers). Use those facts to choose what to change. If further graph analysis is needed after source edits, run `rgctl update` before the next query. See the framework migration workflow below.
+5. **Natural-language routing** — Map utterance with workflow table. Do not ask user to rephrase into CLI unless disambiguation required
+6. **Summarize** — Report key facts, not raw JSON dumps
+7. **Stop conditions** — Pure localized code-edit/debug with no structural need → do not force rgctl. A multi-file framework or API migration has structural need.
 
 **Relationship questions** (e.g., "relationship between X and Y"): resolve symbols → bounded `CALLS`/`DEPENDSON` traversal → answer in plain language (hops, shared neighbors, files). If no direct path but asymmetric dependency, fall back to `blast-radius` on each.
 
@@ -117,6 +132,14 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 
 **See:** Migration Planning Guide (product docs; not bundled in this skill pack), migrate workflow in [references/workflows.md](references/workflows.md)
 
+### 1c. Framework/API migration implementation
+
+Use this for a requested code migration or application port. It is distinct from the Strangler-Fig roadmap above; do not generate `migration_plan.json` solely because the word "migration" appears.
+
+1. In the repository root, run `rgctl discover .` if `.rgctl/` is absent. Otherwise run `rgctl -f json status` and `rgctl update` once if the index is stale.
+2. Before editing, query the graph for the migration surface. Start with `rgctl -f json inventory --by import-prefix`, then choose a relevant query such as `rgctl -f json find 'import <old>*' --type import`, `rgctl -f json relations --edge exposesroute`, `rgctl -f json relations --edge injects`, or `rgctl -f json callers <Symbol> --depth 1`. Use source inspection for behavior or configuration the graph does not cover.
+3. Use the graph findings to order edits, then run build and runtime checks. When edits change the source and another graph query is needed, run `rgctl update` first so that query uses the current code. Do not update or re-query solely to close out the task. If indexing or a query fails, report the error and proceed with source inspection.
+
 ### 2. Query & Search
 
 **Prefer structured verbs** (mmap; no Cypher). Parse `-f json` from **stdout** (`schema_version`); never `2>/dev/null`.
@@ -145,7 +168,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | Community census | `inventory --by community` |
 | Markdown heading → code | `find 'Checkout*' --type module`; `relations <MODULE_ID_OR_HEADING> --edge references --direction out` (use `.entities[0].id` from `find` when link nodes share the heading name) |
 
-**Migration:** prefer **`/rgctl:migrate`** or `--export-migration-hints` → `migration_plan.json` v2 `.steps[]`. Optional probes: `communities list` (filter via `jq`) / `blast-radius` (keep `--depth` small).
+**Migration roadmaps:** prefer **`/rgctl:migrate`** or `--export-migration-hints` → `migration_plan.json` v2 `.steps[]`. For framework/API implementation, use the graph workflow in §1c instead.
 
 **Complexity honesty:** exact name = hash index; prefix/`*mid*`/`--scope` may scan keys/columns until better indexes land. Module re-index is still a strong speed lever. Annotation **arguments** (e.g. `@Path("/x")`) need `--show-attributes` when `annotation_args.json` is present.
 **See:** [Command Encyclopedia](references/command-encyclopedia.md) (find/callers/relations/inventory/status), Semantic Search Guide (product docs; not bundled in this skill pack)
@@ -300,4 +323,4 @@ rgctl -r "$REPO" -f json <command> …
 rgctl install --skill --tools cursor,claude,codex,antigravity,agents
 ```
 
-Installs the single skill `rgctl` (with `references/`) for each selected adapter. Omitting `--tools` installs **cursor, claude, codex, agents, antigravity**; use `--tools all` for the full registry. See https://rgctl.io/docs/guides/agent-skill/ (product docs; not bundled in this skill pack). Scenario prose lives in `references/workflows.md`.
+Installs the core `rgctl` skill (with `references/`) and companion skills `rgctl-review`, `rgctl-vuln`, and `rgctl-migrate` for each selected adapter. Omitting `--tools` installs **cursor, claude, codex, agents, antigravity**; use `--tools all` for the full registry. See https://rgctl.io/docs/guides/agent-skill/ (product docs; not bundled in this skill pack). Scenario prose lives in `references/workflows.md`.
