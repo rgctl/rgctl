@@ -114,20 +114,25 @@ describe("the Architecture room", () => {
    * Naming a district comes before acting on one: the lookup sat *below* Expand/Collapse, so the control that
    * answers "which district?" was the one you found last, under a button that could not be used until you had.
    */
-  it("puts the district lookup above the controls that act on a district", async () => {
+  it("keeps one district selector, and puts the control that acts on it underneath", async () => {
     stubBundle({ "metagraph.json": metagraphJson, "communities.json": summaryJson });
     render(<ArchitectureRoom />);
-    // Two fields share the label (the overlay's lookup and the panel's filter), so the overlay's is the one
-    // inside the canvas wrapper — that is the ordering claim being tested.
-    await waitFor(() => expect(screen.getAllByLabelText("Find a district by name").length).toBeGreaterThan(0));
+    // Exactly one: the column is the selector. A lookup floating over the canvas was a second way to choose the
+    // same district, and the reader had to keep two of them in view while reading the map.
+    await waitFor(() => expect(screen.getAllByLabelText("Find a district by name")).toHaveLength(1));
 
-    const lookup = screen.getAllByLabelText("Find a district by name")[0];
+    const lookup = screen.getByLabelText("Find a district by name");
     const expand = screen.getByRole("button", { name: /Expand/ });
-    const collapse = screen.getByRole("button", { name: /Collapse/ });
-
-    // Node.DOCUMENT_POSITION_FOLLOWING means the second node comes after the first.
+    // Choose first, then act: the control is *below* the list it acts on, in the same column.
     expect(lookup.compareDocumentPosition(expand) & 4).toBeTruthy();
-    expect(lookup.compareDocumentPosition(collapse) & 4).toBeTruthy();
+    // And the district list is five rows plus a count, not twelve: the drawing is the thing being read.
+    const rows = [...document.querySelectorAll("li > button")].filter((b) =>
+      /\dm$/.test(b.textContent ?? ""),
+    );
+    expect(rows.length).toBeLessThanOrEqual(5);
+    // There is no Collapse control at the universe level any more: nothing is open, so there is nothing to close.
+    // Closing a level is the back arrow's job, and Escape.
+    expect(screen.queryByRole("button", { name: /Collapse/ })).toBeNull();
   });
 
   /**

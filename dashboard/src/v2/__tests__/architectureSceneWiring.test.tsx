@@ -21,6 +21,7 @@ import { installFetchStub } from "./fixture";
 
 /** The callbacks the room installed on the scene, as the scene would have received them. */
 const installed: {
+  press?: () => void;
   explode?: (entry: { kind: string; id?: number; title: string } | null) => void;
   memberOpen?: (member: unknown) => void;
   memberPick?: (member: unknown) => void;
@@ -46,6 +47,9 @@ vi.mock("../universe/UniverseScene", () => ({
     }
     onExplode(fn: (entry: { kind: string; id?: number; title: string } | null) => void) {
       installed.explode = fn;
+    }
+    onPressChange(fn: () => void) {
+      installed.press = fn;
     }
     attachPointer() {}
     setEdges() {}
@@ -94,7 +98,14 @@ function json(body: unknown): Response {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // Every field, not just the one a test used: a callback left over from the previous test's (now unmounted) room
+  // satisfies the next test's `waitFor` and quietly tests nothing — the same shape of defect as the `skip:` that
+  // reported success in `tests/http_serve.rs`.
+  installed.press = undefined;
   installed.explode = undefined;
+  installed.memberOpen = undefined;
+  installed.memberPick = undefined;
+  installed.pick = undefined;
 });
 
 describe("the scene's callbacks reach the room", () => {
@@ -123,6 +134,25 @@ describe("the scene's callbacks reach the room", () => {
       () => expect(screen.getByText(/carries no membership for this package/i)).toBeTruthy(),
       { timeout: 5000 },
     );
+  });
+
+  it("stops the drift on a press, and says so in its own control", async () => {
+    stubBundle();
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })}
+      >
+        <ArchitectureRoom />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(installed.press).toBeTypeOf("function"), { timeout: 5000 });
+    // The room opens with drift on; a press anywhere on the map ends it, and the toggle is the room's own claim
+    // about that state rather than a second opinion.
+    expect(screen.getByRole("button", { name: /drift on/i })).toBeTruthy();
+    await act(async () => {
+      installed.press?.();
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: /drift off/i })).toBeTruthy());
   });
 
   /**

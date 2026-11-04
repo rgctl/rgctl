@@ -19,10 +19,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Panel, Unavailable, Chip } from "../shell";
 import { channelReport, loadArchitecture, scalesFor } from "../architecture";
-import { expandMembers, MEMBER_EDGE_KINDS } from "../expandEngine";
+import { expandMembers } from "../expandEngine";
 import { loadMemberIndices } from "../metagraphMembers";
 import { loadFunctions, type FunctionEntry } from "../data";
 import { STALE_CHUNK_MESSAGE, isStaleChunkError } from "../staleChunk";
+import { shouldRestoreLevel } from "./levelRestore";
 import { SymbolReader } from "./SymbolReader";
 import type { ArchitectureState, ArchitectureView, Metagraph, PackageNode } from "../architectureTypes";
 import type { HoverEntry, MemberEntry, UniverseLayer, UniverseScene } from "../universe/UniverseScene";
@@ -147,6 +148,16 @@ export function ArchitectureRoom({
    * to the other rather than growing a second version of it.
    */
   const [symbol, setSymbol] = useState<FunctionEntry | null>(null);
+  /**
+   * The member the reader last clicked inside the level.
+   *
+   * One noun for three states: picked (marked in 3D), resolving, and failed all describe *this* member, and the
+   * "code reference" control is offered for it whenever the drawer is not already open on it.
+   */
+  const selectedMember: MemberEntry | null =
+    memberState.kind === "picked" || memberState.kind === "resolving" || memberState.kind === "failed"
+      ? memberState.member
+      : null;
   const [sceneFailed, setSceneFailed] = useState<{ reason: string; stale: boolean } | null>(null);
   /** False until the canvas exists — an effect that draws must wait for something to draw on. */
   const [sceneReady, setSceneReady] = useState(false);
@@ -185,6 +196,10 @@ export function ArchitectureRoom({
   const EXPLODE_MAX = 1500;
 
   const collapse = useCallback(() => {
+    // Recorded before the state changes: the reader is closing a level by hand, and the URL write that follows is
+    // asynchronous. Without this the restore effect sees `expanded === null` with a URL that still names the level
+    // and reopens it — the universe appears for a frame and then vanishes again.
+    justClosed.current = expandedId.current;
     sceneRef.current?.collapse();
     sceneRef.current?.highlightSolid(null);
     setExpanded(null);
@@ -261,6 +276,9 @@ export function ArchitectureRoom({
         return;
       }
       setExpandState({ kind: "loading", title: entry.title, phase: "members" });
+      // Marked here as well as in the URL path: this open is already handled, whatever the URL says while it loads.
+      attempted.current = entry.id;
+      justClosed.current = null;
       sceneRef.current?.collapse();
       setExpanded(null);
 
@@ -335,16 +353,34 @@ export function ArchitectureRoom({
    * link even where nothing can be drawn; `attempted` stops a failing link from retrying on every render.
    */
   const attempted = useRef<number | null>(null);
+  /** The level the reader closed by hand; the URL naming it is stale until the write lands. */
+  const justClosed = useRef<number | null>(null);
+  /** The open level's id, readable from `collapse` without making it depend on the level's state. */
+  const expandedId = useRef<number | null>(null);
+  useEffect(() => {
+    expandedId.current = expanded?.id ?? null;
+  }, [expanded]);
   useEffect(() => {
     if (explode === null || explode === undefined) {
       attempted.current = null;
+      // The URL has caught up with the close, so the next link to the same district is a fresh request.
+      justClosed.current = null;
       return;
     }
-    if (!view || expanded?.id === explode) return;
+    if (!view) return;
+    if (
+      !shouldRestoreLevel({
+        explode,
+        expandedId: expanded?.id ?? null,
+        attemptedId: attempted.current,
+        justClosedId: justClosed.current,
+      })
+    ) {
+      return;
+    }
     const pkg = view.packages.find((p) => p.id === explode);
     if (!pkg) {
       // Checked against the data, before the canvas: a stale link is a stale link even where nothing draws.
-      if (attempted.current === explode) return;
       attempted.current = explode;
       setExpandState({
         kind: "absent",
@@ -354,7 +390,7 @@ export function ArchitectureRoom({
       });
       return;
     }
-    if (!sceneReady || attempted.current === explode) return;
+    if (!sceneReady) return;
     attempted.current = explode;
     setLayer("packages");
     setSelected(selectionOf(pkg));
@@ -466,6 +502,9 @@ export function ArchitectureRoom({
         // A press in the scene marks and flies itself (behind the double-click window), so the room only keeps
         // the selection for its read-out and for Expand. Lists still go through `focusSolid`.
         created.onPickChange(setSelected);
+        // A press anywhere on the map stops the drift. Reported by the scene rather than inferred here, because a
+        // click on empty space is still a click, and the toggle has to keep telling the truth about it.
+        created.onPressChange(() => setDrift(false));
         created.onMemberPickChange((member) => pickMemberRef.current(member));
         created.onMemberOpen((member) => void openSymbolRef.current(member));
         created.onExplode((entry) => void expandRef.current(entry));
@@ -569,7 +608,13 @@ export function ArchitectureRoom({
           {symbol && (
             <SymbolDrawer
               entry={symbol}
-              onClose={() => setSymbol(null)}
+              onClose={() => {
+                // Leaving the panel leaves the selection too: the glow in the scene, the highlighted row and the
+                // "code reference" control all describe one selected member, and the drawer closed is none of them.
+                setSymbol(null);
+                setMemberState({ kind: "idle" });
+                sceneRef.current?.highlightMember(null);
+              }}
               onOpenInRoom={onOpenFocus ? () => onOpenFocus(symbol.function_id) : undefined}
             />
           )}
@@ -611,118 +656,22 @@ export function ArchitectureRoom({
               ))}
             </div>
           )}
-          {/* The controls are the discoverable half of the gesture: double-click works, but a gesture nobody
-              knows about is not an affordance. They are sized and weighted like real actions rather than
-              hints, because a 10px ghost button next to a 3D scene is invisible in practice. */}
-          <div className="absolute left-2 top-9 flex max-w-[calc(100%-330px)] flex-col gap-1.5">
-            <DistrictSearch packages={view!.packages} onPick={pickDistrict} />
-            <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
-                disabled={selected?.kind !== "package" || selected.id === undefined || expandState.kind === "loading"}
-                onClick={() => void expand(selected)}
-                title={
-                  selected?.kind === "package"
-                    ? `Open ${selected.title} — its members and the calls between them`
-                    : "Select a district first (click it in the scene), then expand"
-                }
-                className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium leading-none shadow-sm transition-colors ${
-                  selected?.kind === "package"
-                    ? "bg-sky-500 text-slate-950 hover:bg-sky-400"
-                    : "cursor-not-allowed border border-white/10 bg-white/[0.04] text-zinc-500"
-                }`}
-              >
-                <span aria-hidden>⤢</span>
-                <span>Expand{districtLabel(selected) ? `: ${districtLabel(selected)}` : " district"}</span>
-              </button>
-              <button
-                type="button"
-                disabled={!expanded}
-                onClick={collapse}
-                title="Close the district and restore the universe (Esc)"
-                className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium leading-none shadow-sm transition-colors ${
-                  expanded
-                    ? "bg-white/[0.14] text-zinc-100 ring-1 ring-white/25 hover:bg-white/[0.22]"
-                    : "cursor-not-allowed border border-white/10 bg-white/[0.04] text-zinc-500"
-                }`}
-              >
-                <span aria-hidden>⤡</span>
-                <span>Collapse</span>
-                <kbd className="ml-0.5 rounded border border-white/20 px-1 text-[9px] font-normal text-zinc-400">
-                  esc
-                </kbd>
-              </button>
-            </div>
-            {expandState.kind === "idle" && !expanded && (
-              <span className="text-[10px] leading-none text-zinc-500">
-                {selected?.kind === "package"
-                  ? "double-click a district, or select it and press Expand"
-                  : "click a district in the scene to select it"}
-              </span>
-            )}
-            {expandState.kind === "loading" && (
-              <ProgressPanel
-                title={expandState.title}
-                phase={expandState.phase}
-                loaded={expandState.loaded}
-                total={expandState.total}
-              />
-            )}
-            {expandState.kind === "absent" && (
-              <Chip tone="zinc">
-                {expandState.title}: {expandState.reason}
-              </Chip>
-            )}
-            {expandState.kind === "failed" && (
-              <Chip tone="zinc">
-                {expandState.title}: {expandState.reason}
-              </Chip>
-            )}
-            {/*
-              A member that cannot be opened is a typed absence like any other, and it lives beside the other ones
-              rather than in the level's read-out: trimming the read-out to what the level *is* took this message
-              with it, so a double-clicked member that resolves to nothing reported nothing at all.
-            */}
-            {memberState.kind === "resolving" && (
-              <Chip tone="zinc">resolving {memberState.member.name}…</Chip>
-            )}
-            {memberState.kind === "failed" && (
-              <Chip tone="zinc">
-                {memberState.member.name}: {memberState.reason}
-              </Chip>
-            )}
-            {expanded && (
-              <span className="text-[10px] leading-none text-zinc-500">
-                click a box for its name, double-click for its code
-              </span>
-            )}
-          </div>
-
-
           {/*
-            Top right, not top left: the left edge is where the reader is *doing* things (chips, lookup, Expand),
-            and this is a description of what is now on screen. Two lines came off it — the transition time, now
-            folded into the counts where it is one number instead of a sentence, and the clicked member's name and
-            absolute path, which the hover tooltip and the level's list already say.
+            The canvas carries the drawing and, inside a level, the way out. Everything that *chooses* what to draw
+            lives in the column beside it — the same list of districts, and the same list of members — because a
+            lookup field floating over a 3D scene was a second selector for the thing the column already indexes.
           */}
           {expanded && (
-            <div className="absolute right-2 top-2 flex max-w-[340px] flex-col gap-0.5 rounded-md border border-sky-500/30 bg-[#0a1420]/95 px-2 py-1.5">
-              <span className="text-[11px] font-medium leading-none text-sky-100">{expanded.title}</span>
-              <span className="text-[10px] leading-relaxed text-sky-200/80">
-                {expanded.drawn.toLocaleString()} of {expanded.members.toLocaleString()} members drawn
-                {expanded.truncated ? " (largest by member count; the rest are not drawn)" : ""} ·{" "}
-                {expanded.edges.toLocaleString()} member edges ({MEMBER_EDGE_KINDS})
-                {expanded.boundary > 0 ? ` · ${expanded.boundary} outgoing coupling edges fading outward` : ""} ·{" "}
-                {(expanded.ms / 1000).toFixed(1)} s
-              </span>
-              <span className="text-[10px] leading-relaxed text-zinc-500">
-                the universe is hidden while this level is open — Collapse or esc returns to it, same angle
-              </span>
-              {!expanded.measuredHeight && (
-                <span className="text-[10px] leading-relaxed text-amber-200/80">
-                  heights are constant — this bundle reports no per-member complexity
-                </span>
-              )}
+            <div className="absolute left-2 top-9 flex flex-col items-start gap-1.5">
+              <button
+                type="button"
+                onClick={collapse}
+                title="Back to the universe (esc)"
+                aria-label="Back to the universe"
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-sky-400/40 bg-[#0d2f3e] text-[15px] leading-none text-sky-100 shadow-sm transition-colors hover:border-sky-300/70 hover:bg-[#12455a] hover:text-white"
+              >
+                <span aria-hidden>←</span>
+              </button>
             </div>
           )}
 
@@ -748,6 +697,45 @@ export function ArchitectureRoom({
                 selectedIndex={memberState.kind === "picked" ? memberState.member.index : null}
                 onPick={(node) => pickMember(memberOf(node))}
                 onOpen={(node) => void openSymbol(memberOf(node))}
+                action={
+                  <>
+                    {/*
+                      The selection's own control, under the list that makes the selection. It is absent while the
+                      code is open, because the drawer carries the way back and two controls for one state is how a
+                      reader ends up in a mode they cannot identify.
+                    */}
+                    <button
+                      type="button"
+                      disabled={!selectedMember || Boolean(symbol)}
+                      onClick={() => selectedMember && void openSymbol(selectedMember)}
+                      title={
+                        selectedMember
+                          ? `Open ${selectedMember.name} — its source beside the level`
+                          : "Click a member in the level, or a row above"
+                      }
+                      className={`flex items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium leading-none transition-colors ${
+                        selectedMember && !symbol
+                          ? "border border-amber-300/40 bg-amber-300/15 text-amber-100 hover:border-amber-200/70 hover:bg-amber-300/25 hover:text-white"
+                          : "cursor-not-allowed border border-white/10 bg-white/[0.03] text-zinc-500"
+                      }`}
+                    >
+                      <span aria-hidden>{"</>"}</span>
+                      <span>
+                        {symbol ? "code open" : selectedMember ? `code: ${selectedMember.name}` : "code reference"}
+                      </span>
+                    </button>
+                    {memberState.kind === "resolving" && (
+                      <span className="text-[10px] leading-relaxed text-sky-200/80">
+                        resolving {memberState.member.name}…
+                      </span>
+                    )}
+                    {memberState.kind === "failed" && (
+                      <span className="text-[10px] leading-relaxed text-amber-200/80">
+                        {memberState.member.name}: {memberState.reason}
+                      </span>
+                    )}
+                  </>
+                }
               />
             ) : (
               <>
@@ -757,6 +745,50 @@ export function ArchitectureRoom({
                   // This branch only runs when no level is open, so nothing is marked as expanded.
                   expandedId={null}
                   onPick={pickDistrict}
+                  action={
+                    <>
+                      <button
+                        type="button"
+                        disabled={
+                          selected?.kind !== "package" ||
+                          selected.id === undefined ||
+                          expandState.kind === "loading"
+                        }
+                        onClick={() => void expand(selected)}
+                        title={
+                          selected?.kind === "package"
+                            ? `Open ${selected.title} — its members and the calls between them`
+                            : "Choose a district above, or click one in the scene"
+                        }
+                        className={`flex items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium leading-none shadow-sm transition-colors ${
+                          selected?.kind === "package"
+                            ? "bg-sky-500 text-slate-950 hover:bg-sky-400"
+                            : "cursor-not-allowed border border-white/10 bg-white/[0.03] text-zinc-500"
+                        }`}
+                      >
+                        <span aria-hidden>⤢</span>
+                        <span>Expand{districtLabel(selected) ? `: ${districtLabel(selected)}` : " district"}</span>
+                      </button>
+                      {expandState.kind === "loading" && (
+                        <ProgressPanel
+                          title={expandState.title}
+                          phase={expandState.phase}
+                          loaded={expandState.loaded}
+                          total={expandState.total}
+                        />
+                      )}
+                      {expandState.kind === "absent" && (
+                        <span className="text-[10px] leading-relaxed text-zinc-400">
+                          {expandState.title}: {expandState.reason}
+                        </span>
+                      )}
+                      {expandState.kind === "failed" && (
+                        <span className="text-[10px] leading-relaxed text-amber-200/80">
+                          {expandState.title}: {expandState.reason}
+                        </span>
+                      )}
+                    </>
+                  }
                 />
                 <Layers view={view!} />
                 <Namespaces view={view!} />
@@ -922,78 +954,6 @@ function Coverage({ view }: { view: ArchitectureView }) {
  * was when this was first added, leaving "how do I find the filter?" as a fair question. The control beside
  * Expand cannot be clipped, so the search lives in both places.
  */
-function DistrictSearch({
-  packages,
-  onPick,
-}: {
-  packages: PackageNode[];
-  onPick: (pkg: PackageNode) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const view = useMemo(
-    () => [...packages].sort((a, b) => b.size - a.size || a.label.localeCompare(b.label)),
-    [packages],
-  );
-  const [open, setOpen] = useState(false);
-  const needle = query.trim().toLowerCase();
-  const matches = needle
-    ? view.filter((p) => p.label.toLowerCase().includes(needle)).slice(0, 6)
-    : view.slice(0, 6);
-
-  const pick = (pkg: PackageNode) => {
-    onPick(pkg);
-    setQuery(pkg.label);
-    setOpen(false);
-  };
-
-  return (
-    <div className="relative w-72">
-      <label className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-zinc-500">
-        <span aria-hidden>⌕</span> find a district
-      </label>
-      <input
-        value={query}
-        onChange={(event) => {
-          setQuery(event.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && matches.length > 0) pick(matches[0]);
-          if (event.key === "Escape") setOpen(false);
-        }}
-        placeholder="type a prefix — rgctl, crates, dashboard…"
-        aria-label="Find a district by name"
-        className="w-full rounded-md border border-sky-500/40 bg-black/80 px-2 py-1.5 text-[11px] text-zinc-100 shadow-[0_0_0_1px_rgba(56,189,248,0.15)] placeholder:text-zinc-500 focus:border-sky-400 focus:outline-none"
-      />
-      {open && (
-        <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-white/15 bg-[#0b1017] shadow-lg">
-          {matches.length === 0 && (
-            <li className="px-2 py-1 text-[10px] leading-snug text-zinc-500">
-              no district label contains “{query.trim()}” — labels are directory paths, try `crates` or
-              `dashboard`
-            </li>
-          )}
-          {matches.map((pkg) => (
-            <li key={pkg.id}>
-              <button
-                type="button"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => pick(pkg)}
-                className="flex w-full items-baseline justify-between gap-2 px-2 py-1 text-left text-[11px] text-zinc-300 hover:bg-white/[0.08]"
-              >
-                <span className="truncate font-mono">{pkg.label}</span>
-                <span className="shrink-0 text-zinc-500">{pkg.size.toLocaleString()}m</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 /**
  * The symbol a level opened, read beside it.
  *
@@ -1033,13 +993,19 @@ function SymbolDrawer({
               open in Understand
             </button>
           )}
+          {/*
+            Back, not "close": the panel is a place the reader went, so leaving it is the same gesture as leaving a
+            level — and it clears the selection as well, so the marker in the scene and the icon in the controls go
+            with it. A state you cannot see is a state you will not get out of.
+          */}
           <button
             type="button"
             onClick={onClose}
-            title="Close this symbol"
-            className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:border-white/20 hover:text-zinc-200"
+            title="Back to the level"
+            aria-label="Back to the level"
+            className="flex h-6 w-6 items-center justify-center rounded border border-white/10 text-[12px] leading-none text-zinc-400 hover:border-white/20 hover:text-zinc-200"
           >
-            close
+            <span aria-hidden>←</span>
           </button>
         </span>
       </div>
@@ -1065,6 +1031,7 @@ function Members({
   selectedIndex,
   onPick,
   onOpen,
+  action,
 }: {
   district: string;
   nodes: MemberNode[];
@@ -1072,10 +1039,17 @@ function Members({
   selectedIndex: number | null;
   onPick: (node: MemberNode) => void;
   onOpen: (node: MemberNode) => void;
+  /** The control that acts on the selection, under the list. */
+  action?: ReactNode;
 }) {
   const [query, setQuery] = useState("");
-  /** Rows rendered at once. Stated when it binds, like every other ceiling in this room. */
-  const MAX_ROWS = 200;
+  /**
+   * Five rows, like the district list beside it: the level is the drawing and this is its index.
+   *
+   * The filter is what makes five enough — it searches every drawn member, not the five on screen — and the line
+   * underneath says how many are hidden rather than implying the list is the whole level.
+   */
+  const MAX_ROWS = 5;
   const sorted = useMemo(() => [...nodes].sort((a, b) => a.name.localeCompare(b.name)), [nodes]);
   const needle = query.trim().toLowerCase();
   const matched = needle ? sorted.filter((n) => n.name.toLowerCase().includes(needle)) : sorted;
@@ -1125,6 +1099,7 @@ function Members({
           narrow. The rest are drawn in the level.
         </p>
       )}
+      {action && <div className="mt-2 flex flex-col gap-1.5">{action}</div>}
     </Panel>
   );
 }
@@ -1144,11 +1119,14 @@ function Districts({
   selectedId,
   expandedId,
   onPick,
+  action,
 }: {
   view: ArchitectureView;
   selectedId: number | null;
   expandedId: number | null;
   onPick: (pkg: PackageNode) => void;
+  /** The control that acts on the selection, under the list. One column, one order: choose, then act. */
+  action?: ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const all = useMemo(
@@ -1157,7 +1135,9 @@ function Districts({
   );
   const needle = query.trim().toLowerCase();
   const matches = needle ? all.filter((p) => p.label.toLowerCase().includes(needle)) : all;
-  const shown = matches.slice(0, 12);
+  // Five, not twelve: the list is an index beside a drawing, and the drawing is the thing being read. Typing
+  // narrows it; the count underneath says how much is not shown rather than implying these five are all of it.
+  const shown = matches.slice(0, 5);
 
   return (
     <Panel title="Districts" subtitle={`${all.length} packages — click one to fly to it`}>
@@ -1202,6 +1182,7 @@ function Districts({
           {matches.length - shown.length} more match — keep typing to narrow.
         </p>
       )}
+      {action && <div className="mt-2 flex flex-col gap-1.5">{action}</div>}
     </Panel>
   );
 }
