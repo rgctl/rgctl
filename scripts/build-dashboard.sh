@@ -38,7 +38,11 @@ BUDGET_KIB_V1=345
 # What the gate does **not** weigh: it globs `assets/*.js` and `assets/*.css`, so the ~193 KiB wasm engine
 # (`assets/rgctl_wasm_bg-*.wasm`) is outside both budgets. If that engine ever needs a budget of its own, it
 # needs a new check rather than a raised constant here.
-BUDGET_KIB_V2=320
+# 330, not 320: the level's outgoing coupling is drawn with `Line2` (see `UniverseScene`'s
+# `LEVEL_EDGE_WIDTH_PX`), which costs 7.2 KiB gzipped — measured, 312.85 → 320.07 — because WebGL ignores
+# `LineBasicMaterial.linewidth`, so one-pixel lines cannot be thickened any other way. The old budget was 7.15 KiB
+# above the tree, so this restores the same headroom rather than spending it.
+BUDGET_KIB_V2=330
 
 echo "==> wasm-pack (rgctl-wasm)"
 WASM_JS="$DASH/wasm/rgctl_wasm.js"
