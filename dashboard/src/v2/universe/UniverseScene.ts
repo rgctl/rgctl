@@ -17,6 +17,9 @@
  */
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import {
   communityHueIndex,
   footprintScale,
@@ -74,6 +77,15 @@ const SINGLE = 0x67788c; // a package alone in its community — a finding, not 
  * waits on this except the camera.
  */
 const DOUBLE_CLICK_WINDOW_MS = 240;
+
+/**
+ * Width of the coupling lines that leave an open level, in device-independent pixels.
+ *
+ * One pixel is what `LineBasicMaterial` gives you on every platform that matters, and one pixel is what flickers:
+ * at this level's framing a segment can land between two pixel centres and blink as the camera moves. 2.5 is thick
+ * enough to hold a stable line and thin enough not to read as a beam.
+ */
+const LEVEL_EDGE_WIDTH_PX = 2.5;
 
 export class UniverseScene {
   private readonly scene = new THREE.Scene();
@@ -180,6 +192,10 @@ export class UniverseScene {
     // 2x display the canvas renders at twice the size of its container, is clipped by the panel's
     // `overflow: hidden`, and the model ends up parked in the bottom-right of the viewport.
     this.renderer.setSize(width, height);
+    // `Line2` widths are in screen pixels, so a resize has to tell the material what the screen is now — the
+    // drawing buffer, not the CSS box, because that is what the shader divides by on a 2x display.
+    this.renderer.getDrawingBufferSize(this.size);
+    this.levelLines?.resolution.set(this.size.x, this.size.y);
   }
 
   /** Rebuild the scene for a new view. Cheap enough (256 solids, 6,524 segments) to do on every toggle. */
@@ -654,37 +670,47 @@ export class UniverseScene {
       if (direction.lengthSq() < 1e-6) continue;
       boundary.push({ direction: direction.normalize(), weight: edge.weight });
     }
-    const perEdge: Array<[number, number]> = [];
-    for (const { direction, weight } of boundary) {
-      // Three segments each, dimmer with distance: the web continues past this level and thins out.
-      const steps: Array<[number, number, number]> = [
-        [spread, 0.5, 1.0],
-        [1.6, 0.26, 0.55],
-        [2.4, 0.1, 0.3],
-      ];
-      let previous = spread;
-      for (const [factor, opacity, taper] of steps) {
-        const next = spread * factor;
-        const a = direction.clone().multiplyScalar(previous);
-        const b = direction.clone().multiplyScalar(next);
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute(
-          "position",
-          new THREE.Float32BufferAttribute([a.x, 2, a.z, b.x, 2, b.z], 3),
-        );
-        group.add(
-          new THREE.LineSegments(
-            geo,
-            new THREE.LineBasicMaterial({
-              color: 0xffd89a,
-              transparent: true,
-              opacity,
-            }),
-          ),
-        );
-        perEdge.push([weight, taper]);
-        previous = next;
+    /**
+     * The coupling that leaves the level, drawn thin-but-thick enough to stop flickering.
+     *
+     * `LineBasicMaterial.linewidth` cannot do this: WebGL core profile ignores it and every line is one device
+     * pixel, so at the distance this level is framed from these segments land on sub-pixel positions and blink as
+     * the camera drifts. `Line2` draws them as screen-space quads of a real width, which is the fix — and the fade
+     * that used to need three separate materials (0.5, 0.26, 0.1) is now a per-vertex colour on one geometry, so
+     * the whole set is one draw call per level instead of three per edge.
+     */
+    if (boundary.length > 0) {
+      const positions: number[] = [];
+      const colours: number[] = [];
+      const tint = new THREE.Color(0xffd89a);
+      // Three steps out into the void, each fading: the web continues past this level and thins out.
+      const steps = [1, 1.6, 2.4];
+      const fades = [1, 0.55, 0.3];
+      for (const { direction } of boundary) {
+        for (let i = 0; i < steps.length - 1; i += 1) {
+          const a = direction.clone().multiplyScalar(spread * steps[i]);
+          const b = direction.clone().multiplyScalar(spread * steps[i + 1]);
+          positions.push(a.x, 2, a.z, b.x, 2, b.z);
+          // Vertex colours carry the fade, so one material covers every segment.
+          colours.push(tint.r, tint.g, tint.b, tint.r * fades[i + 1], tint.g * fades[i + 1], tint.b * fades[i + 1]);
+        }
       }
+      const geometry = new LineSegmentsGeometry();
+      geometry.setPositions(positions);
+      geometry.setColors(colours);
+      const material = new LineMaterial({
+        color: 0xffffff,
+        vertexColors: true,
+        linewidth: LEVEL_EDGE_WIDTH_PX,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+        worldUnits: false,
+      });
+      // Screen-space widths need the viewport, or every line is the wrong thickness after a resize.
+      material.resolution.set(this.size.x, this.size.y);
+      this.levelLines = material;
+      group.add(new LineSegments2(geometry, material));
     }
 
     this.scene.add(group);
@@ -741,6 +767,9 @@ export class UniverseScene {
     this.fog.far = cameraBefore.fogFar;
     this.camera.updateProjectionMatrix();
     this.controls.update();
+    // The level's line material dies with the level's group; drop the reference so a later resize cannot write a
+    // viewport into a disposed material.
+    this.levelLines = null;
     this.controls.autoRotate = cameraBefore.autoRotate;
     this.controls.autoRotateSpeed = cameraBefore.autoRotateSpeed;
     this.drill = null;
@@ -881,6 +910,10 @@ export class UniverseScene {
   }
 
   private memberOutline: THREE.Group | null = null;
+  /** The level's outgoing coupling material, kept so a resize can tell it the new viewport. */
+  private levelLines: LineMaterial | null = null;
+  /** Last known drawing-buffer size, in pixels. */
+  private readonly size = new THREE.Vector2(1, 1);
 
   /**
    * Each dimmed material's own look, so a deselect restores it instead of flattening it to opaque.
