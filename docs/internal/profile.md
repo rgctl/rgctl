@@ -458,6 +458,11 @@ the same pinned corpus and case-sensitive volume passed Gate A with 60.6 s
 discover wall, 1,819,406 nodes, 15.370 s `index_graph_build`, and 62.88 s test
 elapsed. This single result is not a new reference baseline.
 
+On 2026-11-04, after the ingest review fixes, the same Linux revision on an
+isolated case-sensitive checkout passed Gate A with 63.1 s discover wall,
+1,819,406 nodes, 15.528 s `index_graph_build`, and 65.37 s test elapsed.
+This single run is not a new reference baseline.
+
 Pinned corpus: `ansible/ansible` **v2.19.0**, commit
 `82529e534dd3edd84aba03d86b337f88c58b9982`, sparse checkout of
 `test/integration/targets` (recipe in `example/README.md`). A NUL-delimited
@@ -499,6 +504,13 @@ RUST_LOG=info,profile=info ../../target/release/rgctl -f json discover . -v -l a
 | `ansible` | 1,400 | 1.331 s | 24,901 | 0 | 0.178 s | 329 |
 | `jinja` | 103 | 0.741 s | 451 | 106 | 0.011 s | 144 |
 | Joint, 4,096 MiB / 1 thread | 1,503 | 1.593 s | 25,353 | 106 | 0.189 s | 365 |
+
+A 2026-11-04 joint-selection smoke run on an isolated copy of the same pinned
+checkout and configuration indexed 1,503 files in 1.345 s, with 25,358 nodes,
+106 functions, 0.203 s `index_graph_build`, and 372 MiB observed peak RSS.
+Process elapsed was 1.374 s. On that same copy, the preceding PR head and the
+review fixes produced identical Ansible and Jinja symbol sets and identical
+node and edge counts. These single runs are not a performance baseline.
 
 Process elapsed times were 1.47 / 1.38 / 0.79 / 1.65 s respectively. RSS is
 the larger of the summary's sampled peak and ingest peak. Function counts include Jinja's

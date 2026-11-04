@@ -8,6 +8,121 @@ use rgctl_graph::{
 };
 
 #[test]
+fn empty_automation_state_reuses_and_safely_invalidates_snapshots() {
+    use std::fs;
+    let repo = tempfile::TempDir::new().unwrap();
+    let root = repo.path();
+    fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(root.join("associated.html"), "<p>{{ person }}</p>\n").unwrap();
+    let sidecar = root.join(".rgctl/template-dependencies.bin");
+    let snapshot = root.join(".rgctl/graph.snapshot.bin");
+    let tracker = root.join(".rgctl/file_hashes.json");
+
+    cli(root, &["discover", "."]);
+    assert!(!sidecar.exists());
+    let original_modified = fs::metadata(&snapshot).unwrap().modified().unwrap();
+    let state = rgctl_incremental::FileTracker::load(root).unwrap();
+    assert!(state.empty_automation().is_some());
+    cli(root, &["discover", "."]);
+    assert_eq!(
+        original_modified,
+        fs::metadata(&snapshot).unwrap().modified().unwrap()
+    );
+
+    // A stale proof must not authorize reuse of a different graph snapshot.
+    let mut metadata: serde_json::Value =
+        serde_json::from_slice(&fs::read(&tracker).unwrap()).unwrap();
+    metadata["empty_automation"]["digest"] = "stale".into();
+    fs::write(&tracker, serde_json::to_vec(&metadata).unwrap()).unwrap();
+    cli(root, &["discover", "."]);
+    let state = rgctl_incremental::FileTracker::load(root).unwrap();
+    assert_eq!(
+        state.empty_automation().unwrap().digest,
+        SnapshotNodeStore::open(&snapshot)
+            .unwrap()
+            .content_digest()
+            .unwrap()
+    );
+
+    // A settings change must promote the file even though its bytes did not change.
+    fs::write(
+        root.join("rgctl.toml"),
+        "[languages.jinja]\ninclude=['associated.html']\n",
+    )
+    .unwrap();
+    cli(root, &["discover", "."]);
+    assert!(sidecar.is_file());
+    assert!(
+        cli(root, &["find", "person", "--exact", "--lang", "jinja"])["total"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        rgctl_incremental::FileTracker::load(root)
+            .unwrap()
+            .empty_automation()
+            .is_none()
+    );
+
+    fs::remove_file(root.join("rgctl.toml")).unwrap();
+    cli(root, &["discover", "."]);
+    assert!(!sidecar.exists());
+    assert!(
+        rgctl_incremental::FileTracker::load(root)
+            .unwrap()
+            .empty_automation()
+            .is_some()
+    );
+    assert_eq!(
+        cli(root, &["find", "person", "--exact", "--lang", "jinja"])["total"],
+        0
+    );
+}
+
+#[test]
+fn incremental_update_tracks_transition_to_and_from_empty_automation() {
+    use std::fs;
+    let repo = tempfile::TempDir::new().unwrap();
+    let root = repo.path();
+    let deploy = root.join("deploy.yml");
+    let sidecar = root.join(".rgctl/template-dependencies.bin");
+    fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(&deploy, "- hosts: all\n  tasks: []\n").unwrap();
+    cli(root, &["discover", "."]);
+    assert!(sidecar.is_file());
+
+    fs::remove_file(&deploy).unwrap();
+    cli(root, &["update", "--files", "deploy.yml"]);
+    assert!(!sidecar.exists());
+    assert!(
+        rgctl_incremental::FileTracker::load(root)
+            .unwrap()
+            .empty_automation()
+            .is_some()
+    );
+    cli(root, &["discover", "."]);
+    assert_eq!(
+        cli(root, &["find", "--type", "ansibleplaybook"])["total"],
+        0
+    );
+
+    fs::write(&deploy, "- hosts: all\n  tasks: []\n").unwrap();
+    cli(root, &["update", "--files", "deploy.yml"]);
+    assert!(sidecar.is_file());
+    assert!(
+        rgctl_incremental::FileTracker::load(root)
+            .unwrap()
+            .empty_automation()
+            .is_none()
+    );
+    assert_eq!(
+        cli(root, &["find", "--type", "ansibleplaybook"])["total"],
+        1
+    );
+}
+
+#[test]
 fn literal_task_files_role_entrypoints_and_template_lookups_survive_updates() {
     use std::fs;
     let repo = tempfile::TempDir::new().unwrap();

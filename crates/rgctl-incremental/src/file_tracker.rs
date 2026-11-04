@@ -12,6 +12,13 @@ use uuid::Uuid;
 /// Filename for persisted file hash metadata.
 pub const FILE_HASHES_FILE: &str = "file_hashes.json";
 
+/// Proof that a particular snapshot had no automation dependencies.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmptyAutomationState {
+    pub digest: String,
+    pub settings: String,
+}
+
 /// Persisted hash metadata for incremental indexing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileHashMetadata {
@@ -25,6 +32,10 @@ pub struct FileHashMetadata {
     pub files: HashMap<String, String>,
     /// Relative file path -> node IDs defined in that file
     pub node_mapping: HashMap<String, Vec<Uuid>>,
+    /// Allows empty automation indexes to be omitted without confusing them
+    /// with a missing or corrupt sidecar from an older snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_automation: Option<EmptyAutomationState>,
 }
 
 impl Default for FileHashMetadata {
@@ -35,6 +46,7 @@ impl Default for FileHashMetadata {
             last_commit: None,
             files: HashMap::new(),
             node_mapping: HashMap::new(),
+            empty_automation: None,
         }
     }
 }
@@ -47,6 +59,15 @@ pub struct FileTracker {
 }
 
 impl FileTracker {
+    /// Return the snapshot and settings for a known-empty automation index.
+    pub fn empty_automation(&self) -> Option<&EmptyAutomationState> {
+        self.metadata.empty_automation.as_ref()
+    }
+
+    /// Set or clear the known-empty automation index for the tracked snapshot.
+    pub fn set_empty_automation(&mut self, state: Option<EmptyAutomationState>) {
+        self.metadata.empty_automation = state;
+    }
     /// Create a tracker for a repository root.
     pub fn new(repo_root: impl AsRef<Path>) -> Self {
         Self {

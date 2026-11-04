@@ -250,8 +250,7 @@ pub fn stream_inventory_into_graph(
     let mut remaining_tasks: std::collections::BTreeMap<_, _> =
         inventory.ansible_candidates.iter().cloned().collect();
     loop {
-        let wanted = builder.template_candidate_paths()?;
-        let wanted_tasks = builder.ansible_candidate_paths()?;
+        let (wanted, wanted_tasks) = builder.automation_candidate_paths()?;
         let selected: Vec<_> = remaining
             .keys()
             .filter(|path| {

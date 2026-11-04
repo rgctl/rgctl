@@ -416,6 +416,14 @@ pub trait LanguagePlugin: Send + Sync {
 
     /// Classify and extract a source candidate in one pooled parse. Declining lets
     /// the caller retain the generic config route (not an extraction failure).
+    ///
+    /// This cheap, conservative probe runs before facts-cache lookup. Returning
+    /// false must mean that `extract_candidate` would decline the same input.
+    fn may_extract_candidate(&self, _file_path: &Path, _source: &[u8]) -> bool {
+        true
+    }
+
+    /// Classify and extract a source candidate after the optional cheap probe.
     fn extract_candidate(
         &self,
         file_path: &Path,

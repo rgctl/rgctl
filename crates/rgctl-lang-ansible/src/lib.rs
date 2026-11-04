@@ -57,6 +57,9 @@ impl LanguagePlugin for AnsiblePlugin {
     ) -> Result<Option<ExtractAllResult>> {
         extract::extract(file_path, source, false)
     }
+    fn may_extract_candidate(&self, file_path: &Path, source: &[u8]) -> bool {
+        extract::may_extract_candidate(file_path, source)
+    }
     fn language_id(&self) -> &str {
         "ansible"
     }

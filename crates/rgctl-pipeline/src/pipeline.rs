@@ -58,6 +58,8 @@ impl Default for PipelineConfig {
 /// Statistics from a pipeline run.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PipelineStats {
+    /// Whether the completed snapshot has no template or Ansible dependencies.
+    pub empty_automation: bool,
     /// Files discovered
     pub files_discovered: usize,
     /// Files successfully processed
@@ -246,6 +248,7 @@ impl ProcessingPipeline {
         let spill_start = Instant::now();
         let finished = builder.finish_spill()?;
         let digest = write_columnar_from_spill(finished, snapshot_path)?;
+        let empty_automation = template_dependencies.is_empty();
         template_dependencies.save(store, &digest)?;
         if !annotation_args.is_empty()
             && let Some(parent) = snapshot_path.parent()
@@ -305,6 +308,7 @@ impl ProcessingPipeline {
 
         Ok((
             PipelineStats {
+                empty_automation,
                 files_discovered,
                 files_processed,
                 files_failed,
@@ -423,6 +427,7 @@ impl ProcessingPipeline {
             nodes,
             edges,
             PipelineStats {
+                empty_automation: false,
                 files_discovered,
                 files_processed,
                 files_failed,

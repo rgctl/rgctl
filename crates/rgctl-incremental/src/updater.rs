@@ -249,6 +249,15 @@ impl IncrementalUpdater {
         if !snapshot.is_file() {
             return Ok(false);
         }
+        if !TemplateDependencies::path(root).is_file()
+            && let Some(state) = FileTracker::load(root)?.empty_automation()
+        {
+            let store = rgctl_graph::snapshot::SnapshotNodeStore::open(snapshot)?;
+            return Ok(
+                state.settings != TemplateDependencies::settings(&self.registry)
+                    || state.digest != store.content_digest()?,
+            );
+        }
         let store = rgctl_graph::snapshot::SnapshotNodeStore::open(snapshot)?;
         Ok(TemplateDependencies::load(root, store.content_digest()?)
             .is_some_and(|deps| !deps.settings_match(&self.registry)))
@@ -299,7 +308,24 @@ impl IncrementalUpdater {
         snapshot: &Path,
     ) -> Result<()> {
         let store = rgctl_graph::snapshot::SnapshotNodeStore::open(snapshot)?;
-        dependencies.save(root, store.content_digest()?)
+        let digest = store.content_digest()?;
+        dependencies.save(root, digest)?;
+        // Some synthesis paths have no tracker; do not create an incomplete one.
+        if root
+            .join(".rgctl")
+            .join(crate::file_tracker::FILE_HASHES_FILE)
+            .is_file()
+        {
+            let mut tracker = FileTracker::load(root)?;
+            tracker.set_empty_automation(dependencies.is_empty().then(|| {
+                crate::file_tracker::EmptyAutomationState {
+                    digest: digest.to_owned(),
+                    settings: TemplateDependencies::settings(&self.registry),
+                }
+            }));
+            tracker.save()?;
+        }
+        Ok(())
     }
 
     /// Update the graph for a repository, returning statistics.

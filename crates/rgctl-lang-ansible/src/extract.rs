@@ -1059,6 +1059,116 @@ impl<'a, 'source> Extract<'a, 'source> {
     }
 }
 
+/// Cheap conservative screening before cache lookup or a YAML parse. Block
+/// playbooks are top-level sequences. YAML permits arbitrary indentation in
+/// their mappings, so accept a matching key at any depth within the sequence.
+/// Flow-style and unusual tagged roots retain the broader probe.
+pub(crate) fn may_extract_candidate(path: &Path, source: &[u8]) -> bool {
+    if matches_path(path) {
+        return true;
+    }
+    if !path
+        .extension()
+        .is_some_and(|ext| ext == "yml" || ext == "yaml")
+    {
+        return false;
+    }
+    let broad_probe = || {
+        [b"hosts".as_slice(), b"import_playbook".as_slice()]
+            .iter()
+            .any(|needle| source.windows(needle.len()).any(|part| part == *needle))
+    };
+    fn key(line: &[u8]) -> bool {
+        let mut value = line.trim_ascii_start();
+        if let Some(rest) = value.strip_prefix(b"-")
+            && rest.first().is_none_or(u8::is_ascii_whitespace)
+        {
+            value = rest.trim_ascii_start();
+        }
+        if let Some(rest) = value.strip_prefix(b"?")
+            && rest.first().is_some_and(u8::is_ascii_whitespace)
+        {
+            value = rest.trim_ascii_start();
+        }
+        let quote = value
+            .first()
+            .copied()
+            .filter(|byte| matches!(byte, b'\'' | b'"'));
+        if quote.is_some() {
+            value = &value[1..];
+            // Escaped quoted keys can spell a recognized key without its raw
+            // byte spelling; let the YAML parser decide those rare cases.
+            if value.contains(&b'\\') {
+                return true;
+            }
+        }
+        for name in [
+            b"hosts".as_slice(),
+            b"import_playbook",
+            b"ansible.builtin.import_playbook",
+        ] {
+            if let Some(mut rest) = value.strip_prefix(name) {
+                if let Some(quote) = quote {
+                    if rest.first() != Some(&quote) {
+                        continue;
+                    }
+                    rest = &rest[1..];
+                }
+                if rest.trim_ascii_start().starts_with(b":") {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    let source = source.strip_prefix(b"\xef\xbb\xbf").unwrap_or(source);
+    let mut root_indent = None;
+    let mut root_seen = false;
+    for raw in source.split(|byte| *byte == b'\n') {
+        let indent = raw.iter().take_while(|byte| **byte == b' ').count();
+        let mut line = raw[indent..].trim_ascii_end();
+        if line.is_empty() || line.starts_with(b"#") || line.starts_with(b"%") {
+            continue;
+        }
+        if indent == 0
+            && line.starts_with(b"---")
+            && line.get(3).is_none_or(u8::is_ascii_whitespace)
+        {
+            root_indent = None;
+            root_seen = false;
+            line = line[3..].trim_ascii_start();
+            if line.is_empty() || line.starts_with(b"#") {
+                continue;
+            }
+        }
+        if !root_seen {
+            root_seen = true;
+            if line.starts_with(b"[") || line.starts_with(b"!") || line.starts_with(b"&") {
+                return broad_probe();
+            }
+            if line.starts_with(b"-") && line.get(1).is_none_or(u8::is_ascii_whitespace) {
+                root_indent = Some(indent);
+            }
+        }
+        if let Some(root) = root_indent
+            && indent >= root
+        {
+            if key(line) {
+                return true;
+            }
+            if line.starts_with(b"? ") {
+                return broad_probe();
+            }
+            let item = line.strip_prefix(b"-").unwrap_or(line).trim_ascii_start();
+            if indent == root && matches!(item.first(), Some(b'{' | b'[' | b'!' | b'&' | b'?')) {
+                return broad_probe();
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn extract(path: &Path, source: &[u8], force: bool) -> Result<Option<ExtractAllResult>> {
     if !force
         && path_kind(path).is_none()
@@ -1081,12 +1191,7 @@ pub(crate) fn extract(path: &Path, source: &[u8], force: bool) -> Result<Option<
     {
         return Ok(None);
     }
-    if !force
-        && path_kind(path).is_none()
-        && ![b"hosts".as_slice(), b"import_playbook".as_slice()]
-            .iter()
-            .any(|needle| source.windows(needle.len()).any(|part| part == *needle))
-    {
+    if !force && !may_extract_candidate(path, source) {
         return Ok(None);
     }
     let file = path.to_string_lossy().replace('\\', "/");

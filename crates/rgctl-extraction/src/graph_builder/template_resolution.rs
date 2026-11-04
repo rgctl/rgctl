@@ -40,9 +40,14 @@ pub(super) struct PendingNodes {
     memory: Vec<Node>,
     disk: Option<(PathBuf, BufWriter<File>)>,
     scratch: Vec<u8>,
+    contexts: Option<BTreeMap<String, BTreeSet<String>>>,
 }
 impl PendingNodes {
+    fn is_empty(&self) -> bool {
+        self.disk.is_none() && self.memory.is_empty()
+    }
     pub(super) fn push(&mut self, node: Node, spill: Option<&SegmentedSpill>) -> Result<()> {
+        self.contexts = None;
         if let Some(spill) = spill {
             if self.disk.is_none() {
                 let path = spill.dir().join("template-nodes.seg");
@@ -118,6 +123,7 @@ impl GraphBuilder {
         if !matches!(language, "ansible" | "jinja") {
             return;
         }
+        self.pending_templates.contexts = None;
         self.templates
             .files
             .insert(key(path), (id, language.to_owned()));
@@ -213,8 +219,23 @@ impl GraphBuilder {
 
     /// Finalize exact automation dependencies after all file workers have drained.
     pub fn resolve_template_references(&mut self) -> Result<()> {
+        if self.pending_templates.is_empty() && self.templates.roles.is_empty() {
+            return Ok(());
+        }
         let mut staged = std::mem::take(&mut self.pending_templates);
-        let contexts = self.template_contexts(&mut staged)?;
+        let contexts = if let Some(contexts) = staged.contexts.take() {
+            contexts
+        } else {
+            let mut includes = Vec::new();
+            staged.visit(|node| {
+                includes.extend(refs(&node)?.into_iter().filter(|reference| {
+                    matches!(reference.kind, Kind::TaskInclude | Kind::PlaybookInclude)
+                        && !reference.dynamic
+                }));
+                Ok(())
+            })?;
+            self.template_contexts(&includes)
+        };
         staged.visit(|mut node| {
             let mut references = refs(&node)?;
             for reference in &mut references {
@@ -300,8 +321,8 @@ impl GraphBuilder {
 
     fn template_contexts(
         &self,
-        staged: &mut PendingNodes,
-    ) -> Result<BTreeMap<String, BTreeSet<String>>> {
+        pending_references: &[SourceReference],
+    ) -> BTreeMap<String, BTreeSet<String>> {
         let mut contexts: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         // Compact include facts only, used to propagate known caller contexts.
         let mut includes: Vec<_> = self
@@ -315,16 +336,15 @@ impl GraphBuilder {
             })
             .cloned()
             .collect();
-        staged.visit(|node| {
-            for reference in refs(&node)? {
-                if matches!(reference.kind, Kind::TaskInclude | Kind::PlaybookInclude)
-                    && !reference.dynamic
-                {
-                    includes.push(reference);
-                }
-            }
-            Ok(())
-        })?;
+        includes.extend(
+            pending_references
+                .iter()
+                .filter(|reference| {
+                    matches!(reference.kind, Kind::TaskInclude | Kind::PlaybookInclude)
+                        && !reference.dynamic
+                })
+                .cloned(),
+        );
         // Monotone closure over caller paths; a cycle cannot invent a context.
         for _ in 0..=includes.len() {
             let mut changed = false;
@@ -348,50 +368,56 @@ impl GraphBuilder {
                 break;
             }
         }
-        Ok(contexts)
+        contexts
     }
 
-    /// Safe prospective paths, intersected with walk eligibility by the scheduler.
+    /// Collect both candidate classes in one staged-node pass. Only compact
+    /// reference records are retained; source bodies and ASTs stay on workers.
+    pub fn automation_candidate_paths(&mut self) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+        if self.pending_templates.is_empty() {
+            return Ok((BTreeSet::new(), BTreeSet::new()));
+        }
+        let mut staged = std::mem::take(&mut self.pending_templates);
+        let mut references = Vec::new();
+        staged.visit(|node| {
+            references.extend(
+                refs(&node)?
+                    .into_iter()
+                    .filter(|reference| !reference.dynamic),
+            );
+            Ok(())
+        })?;
+        let contexts = self.template_contexts(&references);
+        let mut templates = BTreeSet::new();
+        let mut tasks = BTreeSet::new();
+        for reference in &references {
+            if reference.kind == Kind::TaskInclude {
+                tasks.extend(self.reference_paths(reference, &contexts).0);
+            } else if matches!(
+                reference.kind,
+                Kind::TemplateRender
+                    | Kind::JinjaInclude
+                    | Kind::JinjaImport
+                    | Kind::JinjaExtends
+                    | Kind::MacroCall
+            ) {
+                templates.extend(self.reference_paths(reference, &contexts).0);
+            }
+        }
+        staged.contexts = Some(contexts);
+        self.pending_templates = staged;
+        Ok((templates, tasks))
+    }
+
+    /// Safe prospective template paths, intersected with walk eligibility.
     pub fn template_candidate_paths(&mut self) -> Result<BTreeSet<String>> {
-        let mut staged = std::mem::take(&mut self.pending_templates);
-        let contexts = self.template_contexts(&mut staged)?;
-        let mut paths = BTreeSet::new();
-        staged.visit(|node| {
-            for reference in refs(&node)? {
-                if !reference.dynamic
-                    && matches!(
-                        reference.kind,
-                        Kind::TemplateRender
-                            | Kind::JinjaInclude
-                            | Kind::JinjaImport
-                            | Kind::JinjaExtends
-                            | Kind::MacroCall
-                    )
-                {
-                    paths.extend(self.reference_paths(&reference, &contexts).0);
-                }
-            }
-            Ok(())
-        })?;
-        self.pending_templates = staged;
-        Ok(paths)
+        self.automation_candidate_paths()
+            .map(|(templates, _)| templates)
     }
 
-    /// Literal included task paths that can be promoted from the eligible walk.
+    /// Literal task paths that can be promoted from the eligible walk.
     pub fn ansible_candidate_paths(&mut self) -> Result<BTreeSet<String>> {
-        let mut staged = std::mem::take(&mut self.pending_templates);
-        let contexts = self.template_contexts(&mut staged)?;
-        let mut paths = BTreeSet::new();
-        staged.visit(|node| {
-            for reference in refs(&node)? {
-                if reference.kind == Kind::TaskInclude && !reference.dynamic {
-                    paths.extend(self.reference_paths(&reference, &contexts).0);
-                }
-            }
-            Ok(())
-        })?;
-        self.pending_templates = staged;
-        Ok(paths)
+        self.automation_candidate_paths().map(|(_, tasks)| tasks)
     }
 
     fn ansible_path(&self, root: &Path, target: &str) -> Option<String> {
@@ -809,6 +835,18 @@ pub struct TemplateDependencies {
     excluded_classifications: BTreeMap<String, (String, String)>,
 }
 impl TemplateDependencies {
+    /// Whether the index and its candidate classifications contain no state.
+    pub fn is_empty(&self) -> bool {
+        self.index.files.is_empty()
+            && self.index.roots.is_empty()
+            && self.index.syntax.is_empty()
+            && self.index.roles.is_empty()
+            && self.index.macros.is_empty()
+            && self.index.handlers.is_empty()
+            && self.index.references.is_empty()
+            && self.index.excluded_classifications.is_empty()
+            && self.excluded_classifications.is_empty()
+    }
     /// Repository artifact path.
     pub fn path(root: &Path) -> PathBuf {
         root.join(".rgctl/template-dependencies.bin")
@@ -906,8 +944,16 @@ impl TemplateDependencies {
     pub fn save(&mut self, root: &Path, digest: &str) -> Result<()> {
         self.version = 1;
         self.digest = digest.to_owned();
-        self.rebuild_reverse();
         let path = Self::path(root);
+        if self.is_empty() {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            return Ok(());
+        }
+        self.rebuild_reverse();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

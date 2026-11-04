@@ -390,6 +390,54 @@ fn conservative_candidates_keep_config_companions_even_with_play_shaped_values()
 }
 
 #[test]
+fn candidate_screen_keeps_playbooks_and_rejects_common_yaml_hosts() {
+    let plugin = AnsiblePlugin;
+    let path = Path::new("deploy.yml");
+    for source in [
+        "# hosts: comment\napiVersion: v1\nspec:\n  hosts:\n    - example.test\n",
+        "services:\n  api:\n    extra_hosts: [localhost]\n    allowed_hosts: [example]\n",
+        "# import_playbook: example.yml\nserver: localhost\n",
+    ] {
+        assert!(
+            !plugin.may_extract_candidate(path, source.as_bytes()),
+            "{source}"
+        );
+        assert!(
+            plugin
+                .extract_candidate(path, source.as_bytes())
+                .unwrap()
+                .is_none()
+        );
+    }
+    for source in [
+        "- hosts: all\n  tasks: []\n",
+        "-  name: deploy\n   hosts: all\n",
+        "---\n- name: deploy\n  hosts: all\n",
+        "- 'hosts': all\n",
+        "- ansible.builtin.import_playbook: nested.yml\n",
+        "[{hosts: all, tasks: []}]\n",
+        "settings: value\n---\n- hosts: all\n",
+        "- name: |\n    ---\n    multi-line\n  hosts: all\n",
+    ] {
+        assert!(
+            plugin.may_extract_candidate(path, source.as_bytes()),
+            "{source}"
+        );
+        assert!(
+            plugin
+                .extract_candidate(path, source.as_bytes())
+                .unwrap()
+                .is_some(),
+            "{source}"
+        );
+    }
+    assert!(plugin.may_extract_candidate(
+        Path::new("roles/web/tasks/main.yml"),
+        b"- debug: {msg: ok}\n"
+    ));
+}
+
+#[test]
 fn explicit_associations_accept_empty_task_lists_and_diagnose_invalid_roots() {
     let empty = extract("custom-entrypoint", "[]\n");
     assert!(

@@ -224,17 +224,27 @@ pub(crate) fn run_full_analysis(
     let inventory = discoverer.discover_inventory(root)?;
     let mut files = inventory.files.clone();
     let snapshot_path = rgctl_graph::snapshot::MmappedGraphSnapshot::default_path(store);
-    let dependencies = if snapshot_path.is_file() {
+    let mut file_tracker = FileTracker::load(store).unwrap_or_else(|_| FileTracker::new(store));
+    let empty_automation = if !rgctl_extraction::TemplateDependencies::path(store).is_file() {
+        file_tracker.empty_automation().cloned()
+    } else {
+        None
+    };
+    let dependencies = if snapshot_path.is_file() && empty_automation.is_none() {
         let snapshot = rgctl_graph::snapshot::SnapshotNodeStore::open(&snapshot_path)?;
         match rgctl_extraction::TemplateDependencies::load(store, snapshot.content_digest()?) {
             Some(dependencies) => Some(dependencies),
-            None => Some(rgctl_incremental::recover_template_dependencies(
-                &registry,
-                store,
-                &snapshot_path,
-                &inventory.files,
-                limits.as_ref().and_then(|limits| limits.threads),
-            )?),
+            None => {
+                let recovered = rgctl_incremental::recover_template_dependencies(
+                    &registry,
+                    store,
+                    &snapshot_path,
+                    &inventory.files,
+                    limits.as_ref().and_then(|limits| limits.threads),
+                )?;
+                file_tracker = FileTracker::load(store).unwrap_or_else(|_| FileTracker::new(store));
+                Some(recovered)
+            }
         }
     } else {
         None
@@ -260,8 +270,6 @@ pub(crate) fn run_full_analysis(
     files.sort();
     files.dedup();
 
-    let snapshot_path = rgctl_graph::snapshot::MmappedGraphSnapshot::default_path(store);
-    let mut file_tracker = FileTracker::load(store).unwrap_or_else(|_| FileTracker::new(store));
     if let Some(dependencies) = &dependencies {
         dependencies.filter_declined_candidates(&registry, &mut files);
     }
@@ -272,15 +280,31 @@ pub(crate) fn run_full_analysis(
     let index_start = Instant::now();
     let template_settings_match = dependencies
         .as_ref()
-        .is_some_and(|deps| deps.settings_match(&registry));
-    let graph_from_snapshot = !force_reindex
+        .is_some_and(|deps| deps.settings_match(&registry))
+        || empty_automation.as_ref().is_some_and(|state| {
+            state.settings == rgctl_extraction::TemplateDependencies::settings(&registry)
+        });
+    let mut graph_from_snapshot = !force_reindex
         && file_changes.is_empty()
         && snapshot_path.is_file()
         && template_settings_match;
     let mut cold_reused: Option<crate::analysis::ColdMetadataDb> = None;
-    let (mut index_stats, mut graph_digest) = if graph_from_snapshot {
-        let load_start = Instant::now();
+    let load_start = Instant::now();
+    let cold_candidate = if graph_from_snapshot {
         let cold = crate::analysis::ColdMetadataDb::open(&snapshot_path)?;
+        if let Some(state) = &empty_automation
+            && cold.store().content_digest()? != state.digest
+        {
+            graph_from_snapshot = false;
+            None
+        } else {
+            Some(cold)
+        }
+    } else {
+        None
+    };
+    let (mut index_stats, mut graph_digest) = if graph_from_snapshot {
+        let cold = cold_candidate.expect("snapshot candidate checked above");
         let digest = cold.store().content_digest()?.to_string();
         let load_elapsed = load_start.elapsed();
         if verbose {
@@ -1419,6 +1443,14 @@ pub(crate) fn run_full_analysis(
             node_mapping,
             Some(&index_stats.file_hashes),
         )?;
+        if !graph_from_snapshot {
+            file_tracker.set_empty_automation(index_stats.empty_automation.then(|| {
+                rgctl_incremental::file_tracker::EmptyAutomationState {
+                    digest: graph_digest.clone(),
+                    settings: rgctl_extraction::TemplateDependencies::settings(&registry),
+                }
+            }));
+        }
         file_tracker.save()?;
     }
     profile.save_tracker.secs = secs(save_tracker_start.elapsed());

@@ -11,7 +11,7 @@ use rgctl_plugin_api::{ConfigKey, Relation, Symbol, SymbolType};
 use rgctl_registry::LanguageRegistry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 /// Extracts symbols and relationships from a single file.
@@ -23,6 +23,7 @@ pub struct Extractor {
     languages: Option<Vec<String>>,
     template_targets: Arc<std::collections::HashSet<PathBuf>>,
     ansible_targets: Arc<std::collections::HashSet<PathBuf>>,
+    template_options_bytes: Arc<OnceLock<std::result::Result<Vec<u8>, String>>>,
 }
 
 /// Precomputed pass-1 work for one symbol (filled on extract workers).
@@ -95,6 +96,7 @@ impl Extractor {
             languages: None,
             template_targets: Arc::default(),
             ansible_targets: Arc::default(),
+            template_options_bytes: Arc::default(),
         }
     }
 
@@ -180,7 +182,11 @@ impl Extractor {
         .or_else(|| {
             self.registry
                 .is_ansible_candidate(path)
-                .then(|| self.registry.get_language_plugin("ansible"))
+                .then(|| {
+                    self.registry
+                        .get_language_plugin("ansible")
+                        .filter(|plugin| plugin.may_extract_candidate(path, &source))
+                })
                 .flatten()
         });
         if let Some(plugin) = plugin {
@@ -197,8 +203,13 @@ impl Extractor {
                 }
                 salt.update(rgctl_graph::normalize_path_str(&path.to_string_lossy()).as_bytes());
                 if let Some(options) = self.registry.template_options() {
+                    let bytes = self.template_options_bytes.get_or_init(|| {
+                        serde_json::to_vec(options).map_err(|error| error.to_string())
+                    });
                     salt.update(
-                        &serde_json::to_vec(options).map_err(|e| Error::Other(e.to_string()))?,
+                        bytes
+                            .as_ref()
+                            .map_err(|error| Error::Other(error.clone()))?,
                     );
                 }
                 key.manifest_hash = *salt.finalize().as_bytes();

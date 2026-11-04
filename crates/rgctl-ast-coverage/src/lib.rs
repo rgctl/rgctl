@@ -285,7 +285,7 @@ pub struct CoverageSpec {
     pub target_grade: CoverageGrade,
 }
 
-/// All Tier 1 (+ markdown) coverage specs shipped in-tree.
+/// Coverage specs shipped in-tree, including structural DSL plugins.
 pub fn bundled_specs() -> &'static [CoverageSpec] {
     &[
         CoverageSpec {
@@ -294,8 +294,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "jinja-ast-coverage.json",
             grammar_prefix: "tree-sitter-jinja@",
             language: || tree_sitter_jinja::language(),
-            min_handled_kinds: 22,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 47,
+            target_grade: CoverageGrade::A,
         },
         CoverageSpec {
             id: "ansible",
@@ -303,8 +303,8 @@ pub fn bundled_specs() -> &'static [CoverageSpec] {
             manifest_file: "ansible-ast-coverage.json",
             grammar_prefix: "tree-sitter-yaml@",
             language: || tree_sitter_yaml::LANGUAGE.into(),
-            min_handled_kinds: 14,
-            target_grade: CoverageGrade::C,
+            min_handled_kinds: 20,
+            target_grade: CoverageGrade::B,
         },
         CoverageSpec {
             id: "c",

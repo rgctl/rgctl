@@ -1,7 +1,7 @@
 //! Template invalidation uses compact candidate indexes, including absent paths.
 //! Recovery addresses relevant persisted records through FileTracker UUIDs; it
 //! does not hydrate or rescan a columnar snapshot and never parses a whole repo.
-use crate::file_tracker::{FileTracker, relative_path, resolve_path};
+use crate::file_tracker::{EmptyAutomationState, FileTracker, relative_path, resolve_path};
 use rgctl_error::Result;
 use rgctl_extraction::{GraphBuilder, TemplateDependencies};
 use rgctl_graph::backend::GraphBackend;
@@ -164,6 +164,15 @@ pub fn recover_template_dependencies(
         dependencies.update_classifications(classified, candidates.iter().cloned());
     }
     let store = SnapshotNodeStore::open(snapshot)?;
-    dependencies.save(root, store.content_digest()?)?;
+    let digest = store.content_digest()?;
+    dependencies.save(root, digest)?;
+    if dependencies.is_empty() && dependencies.settings_match(registry) {
+        let mut tracker = FileTracker::load(root)?;
+        tracker.set_empty_automation(Some(EmptyAutomationState {
+            digest: digest.to_owned(),
+            settings: TemplateDependencies::settings(registry),
+        }));
+        tracker.save()?;
+    }
     Ok(dependencies)
 }
