@@ -683,6 +683,24 @@ fn test_all_cli_commands_json_schema_sanity() {
         "second index pass should reuse embeddings: {stats:?}"
     );
 
+    // --- dead-code: JSON contract ---
+    let dead_code = sandbox.run(&["-f", "json", "dead-code"]);
+    assert_success(&dead_code, "dead-code");
+    let dead_code_doc = sandbox.parse_stdout_json(&dead_code);
+    assert_schema_version(&dead_code_doc, 1);
+    assert_keys_present(&dead_code_doc, &["summary", "findings"]);
+    let dc_summary = dead_code_doc.get("summary").expect("dead-code summary");
+    assert_keys_present(
+        dc_summary,
+        &[
+            "total_symbols",
+            "reachable_symbols",
+            "dead_symbols",
+            "entry_points",
+        ],
+    );
+    assert!(dead_code_doc["findings"].is_array());
+
     // --- blast-radius policy violation → exit 1, JSON still valid ---
     let strict_policy = sandbox.repo.join("strict_policy.json");
     fs::write(&strict_policy, r#"{"max_impact_nodes": 0}"#).expect("write policy");

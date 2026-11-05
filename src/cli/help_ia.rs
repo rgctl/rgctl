@@ -138,20 +138,31 @@ mod tests {
 
     #[test]
     fn grouped_help_contains_section_headers() {
-        let cmd = Cli::command();
-        let text = render_grouped_commands(&cmd);
-        for heading in [
-            "Lifecycle:",
-            "Query:",
-            "Analysis:",
-            "Security:",
-            "Policy:",
-            "Meta:",
-        ] {
-            assert!(text.contains(heading), "missing {heading} in:\n{text}");
+        // Cli::command() builds a large clap tree (~61 subcommands); run on a
+        // thread with an explicit 16 MiB stack so debug builds don't overflow.
+        let result = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let cmd = Cli::command();
+                let text = render_grouped_commands(&cmd);
+                for heading in [
+                    "Lifecycle:",
+                    "Query:",
+                    "Analysis:",
+                    "Security:",
+                    "Policy:",
+                    "Meta:",
+                ] {
+                    assert!(text.contains(heading), "missing {heading} in:\n{text}");
+                }
+                assert!(text.contains("discover"));
+                assert!(text.contains("find"));
+                assert!(text.contains("vuln"));
+            })
+            .expect("spawn thread")
+            .join();
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
         }
-        assert!(text.contains("discover"));
-        assert!(text.contains("find"));
-        assert!(text.contains("vuln"));
     }
 }

@@ -578,6 +578,10 @@ path = "tests/scale_perf_ci_gate.rs"
 name = "docs_guides_cli_fact_check"
 path = "tests/docs_guides_cli_fact_check.rs"
 
+[[test]]
+name = "dead_code"
+path = "tests/dead_code.rs"
+
 [[bench]]
 name = "parsing"
 harness = false
