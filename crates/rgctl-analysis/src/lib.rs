@@ -206,7 +206,8 @@ pub use macro_call_lookup::{
 pub use migration::{
     MIGRATION_GRAPH_SCHEMA_VERSION, MIGRATION_PLAN_SCHEMA_VERSION, MigrationCommunityEdge,
     MigrationCommunityNode, MigrationGraphPayload, MigrationOrderMode, MigrationPlanPayload,
-    MigrationPlanStep, MigrationWeights, build_migration_graph, compute_migration_plan,
+    MigrationPlanStep, MigrationWeights, PackageLabelCache, build_migration_graph,
+    compute_migration_plan, package_label,
 };
 pub use mro::{
     InheritanceGraph, MroIndex, MroPassStats, MroStrategy, annotate_call_edge, apply_mro_pass,

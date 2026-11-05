@@ -63,6 +63,12 @@ export interface Manifest {
     file_count?: number;
     rule_count?: number;
   };
+  /** How detail payloads are stored (archive vs per-file). */
+  capabilities?: {
+    slice_detail_archive?: boolean;
+  };
+  slice_record_index_path?: string | null;
+  slice_record_data_path?: string | null;
   /** Pipeline phases; the only honest source of "coverage" in the bundle today. */
   phases?: Record<string, string>;
 }

@@ -5,7 +5,6 @@
 
 use crate::slice_export::SLICE_DETAIL_DIR;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
 
 pub const DATAFLOW_INDEX_FILE: &str = "dataflow_index.json";
@@ -71,13 +70,13 @@ pub fn export_dataflow_index(
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    fs::write(path, json).map_err(|e| e.to_string())
+    crate::export_util::write_json_compact(path, value)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     #[test]

@@ -1,22 +1,33 @@
-//! In-memory inputs for dashboard export (avoids reloading `analysis_results.bin`).
+//! In-memory inputs for dashboard export (avoids reloading analysis / kantra artifacts).
 
 use rgctl_analysis::AnalysisResults;
+use rgctl_kantra::KantraFindings;
 
-/// Optional in-memory analysis passed from discover (falls back to disk load when absent).
+/// Optional in-memory inputs passed from discover (falls back to disk load when absent).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DashboardExportContext<'a> {
     pub analysis: Option<&'a AnalysisResults>,
+    pub kantra_findings: Option<&'a KantraFindings>,
 }
 
 impl<'a> DashboardExportContext<'a> {
     pub fn new(analysis: Option<&'a AnalysisResults>) -> Self {
-        Self { analysis }
+        Self {
+            analysis,
+            kantra_findings: None,
+        }
     }
 
     pub fn with_analysis(analysis: &'a AnalysisResults) -> Self {
         Self {
             analysis: Some(analysis),
+            kantra_findings: None,
         }
+    }
+
+    pub fn with_kantra_findings(mut self, findings: &'a KantraFindings) -> Self {
+        self.kantra_findings = Some(findings);
+        self
     }
 }
 

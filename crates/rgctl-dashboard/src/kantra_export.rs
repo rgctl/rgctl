@@ -1,19 +1,16 @@
 //! Kantra migration-rule violations for the dashboard bundle.
 
 use crate::export_util::write_json_compact;
-use crate::source_catalog::{
-    SOURCE_INDEX_FILE, SourceFileEntry, ensure_source_file, write_source_index,
-};
+use crate::source_catalog::{SourceCatalog, build_source_catalog, write_source_index};
 use rayon::prelude::*;
 use rgctl_kantra::{
     KantraCatalog, KantraFindings, KantraLink, KantraViolation, SkippedRule, rule_konveyor_sources,
     rule_konveyor_targets,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 pub const KANTRA_INDEX_FILE: &str = "kantra_index.json";
 pub const KANTRA_DETAIL_DIR: &str = "kantra";
@@ -79,13 +76,25 @@ pub struct KantraRuleEntry {
     pub effort: Option<u32>,
 }
 
+/// Owned file shard shape (deserialize for tests / external readers).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct KantraFileBundle {
     pub schema_version: u32,
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,
     pub violations: Vec<KantraViolation>,
+}
+
+/// Borrowed file shard written without cloning [`KantraViolation`] payloads.
+#[derive(Serialize)]
+struct KantraFileBundleView<'a> {
+    schema_version: u32,
+    path: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_id: Option<&'a str>,
+    violations: Vec<&'a KantraViolation>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -126,16 +135,44 @@ impl KantraExportSummary {
     }
 }
 
+#[allow(dead_code)] // Public convenience wrapper; production path uses `_with_inputs`.
 pub fn export_kantra_bundle(
     repo_root: &Path,
     out_dir: &Path,
 ) -> Result<KantraExportSummary, String> {
-    let findings_path = rgctl_graph::paths::artifact_path(repo_root, "kantra_findings.json");
-    if !findings_path.is_file() {
-        return Ok(KantraExportSummary::default());
-    }
-    let bytes = fs::read(&findings_path).map_err(|e| e.to_string())?;
-    let findings = KantraFindings::from_json(&bytes).map_err(|e| e.to_string())?;
+    export_kantra_bundle_with_inputs(repo_root, out_dir, None, None)
+}
+
+/// Export kantra artifacts, optionally reusing in-memory findings and a shared source catalog.
+pub fn export_kantra_bundle_with_inputs(
+    repo_root: &Path,
+    out_dir: &Path,
+    findings: Option<&KantraFindings>,
+    source_catalog: Option<&mut SourceCatalog>,
+) -> Result<KantraExportSummary, String> {
+    let owned_findings;
+    let findings = match findings {
+        Some(f) => f,
+        None => {
+            let findings_path =
+                rgctl_graph::paths::artifact_path(repo_root, "kantra_findings.json");
+            if !findings_path.is_file() {
+                return Ok(KantraExportSummary::default());
+            }
+            let bytes = fs::read(&findings_path).map_err(|e| e.to_string())?;
+            owned_findings = KantraFindings::from_json(&bytes).map_err(|e| e.to_string())?;
+            &owned_findings
+        }
+    };
+    export_kantra_from_findings(repo_root, out_dir, findings, source_catalog)
+}
+
+fn export_kantra_from_findings(
+    repo_root: &Path,
+    out_dir: &Path,
+    findings: &KantraFindings,
+    source_catalog: Option<&mut SourceCatalog>,
+) -> Result<KantraExportSummary, String> {
     let rule_meta = load_rule_metadata_map(findings.catalog_id.as_deref());
 
     let detail_root = out_dir.join(KANTRA_DETAIL_DIR);
@@ -144,38 +181,42 @@ pub fn export_kantra_bundle(
     }
     let files_dir = detail_root.join("files");
     fs::create_dir_all(&files_dir).map_err(|e| e.to_string())?;
-    let source_cache = Mutex::new(HashMap::<String, SourceFileEntry>::new());
-    let mut new_sources: Vec<SourceFileEntry> = Vec::new();
 
     let mut by_category = HashMap::new();
     let mut by_target: HashMap<String, usize> = HashMap::new();
     let mut by_source: HashMap<String, usize> = HashMap::new();
-    let mut by_file: HashMap<String, Vec<KantraViolation>> = HashMap::new();
+    // relative path → (absolute path, violation indices)
+    let mut by_file: HashMap<String, (String, Vec<usize>)> = HashMap::new();
     let mut by_rule: HashMap<String, RuleAgg> = HashMap::new();
 
-    for v in &findings.violations {
+    for (idx, v) in findings.violations.iter().enumerate() {
         let cat = v.category.as_deref().unwrap_or("uncategorized");
         *by_category.entry(cat.to_string()).or_insert(0) += 1;
         let meta = rule_meta.get(&v.rule_id);
-        let targets = if !v.targets.is_empty() {
-            v.targets.clone()
+        let targets: &[String] = if !v.targets.is_empty() {
+            &v.targets
         } else {
-            meta.map(|m| m.targets.clone()).unwrap_or_default()
+            meta.map(|m| m.targets.as_slice()).unwrap_or(&[])
         };
-        let sources = if !v.sources.is_empty() {
-            v.sources.clone()
+        let sources: &[String] = if !v.sources.is_empty() {
+            &v.sources
         } else {
-            meta.map(|m| m.sources.clone()).unwrap_or_default()
+            meta.map(|m| m.sources.as_slice()).unwrap_or(&[])
         };
-        for target in &targets {
+        for target in targets {
             *by_target.entry(target.clone()).or_insert(0) += 1;
         }
-        for source in &sources {
+        for source in sources {
             *by_source.entry(source.clone()).or_insert(0) += 1;
         }
 
         let rel = relativize_path(repo_root, &v.file);
-        by_file.entry(rel).or_default().push(v.clone());
+        let abs = absolute_source_path(repo_root, &v.file);
+        by_file
+            .entry(rel)
+            .or_insert_with(|| (abs, Vec::new()))
+            .1
+            .push(idx);
 
         let entry = by_rule.entry(v.rule_id.clone()).or_insert_with(|| RuleAgg {
             count: 0,
@@ -183,8 +224,8 @@ pub fn export_kantra_bundle(
             message: v.message.clone(),
             description: meta.and_then(|m| m.description.clone()),
             links: meta.map(|m| m.links.clone()).unwrap_or_default(),
-            targets: targets.clone(),
-            sources: sources.clone(),
+            targets: targets.to_vec(),
+            sources: sources.to_vec(),
             effort: v.effort.or_else(|| meta.and_then(|m| m.effort)),
         });
         entry.count += 1;
@@ -198,35 +239,44 @@ pub fn export_kantra_bundle(
             entry.effort = v.effort.or_else(|| meta.and_then(|m| m.effort));
         }
         if entry.targets.is_empty() {
-            entry.targets = targets;
+            entry.targets = targets.to_vec();
         }
         if entry.sources.is_empty() {
-            entry.sources = sources;
+            entry.sources = sources.to_vec();
         }
     }
 
-    let file_entries: Vec<(KantraFileEntry, Vec<KantraViolation>)> = by_file
+    let mut local_catalog = SourceCatalog::default();
+    let catalog = source_catalog.unwrap_or(&mut local_catalog);
+    ensure_kantra_sources(out_dir, catalog, &by_file)?;
+
+    let file_entries: Vec<(KantraFileEntry, Vec<usize>)> = by_file
         .into_iter()
-        .map(|(path, mut violations)| {
-            violations.sort_by(|a, b| (a.line, &a.rule_id).cmp(&(b.line, &b.rule_id)));
+        .map(|(path, (abs, mut indices))| {
+            indices.sort_by(|&a, &b| {
+                let va = &findings.violations[a];
+                let vb = &findings.violations[b];
+                (va.line, &va.rule_id).cmp(&(vb.line, &vb.rule_id))
+            });
             let id = file_id(&path);
             let mut categories = HashMap::new();
             let mut target_categories: HashMap<String, HashMap<String, usize>> = HashMap::new();
             let mut max_blast = 0.0_f64;
-            for v in &violations {
+            for &vi in &indices {
+                let v = &findings.violations[vi];
                 let cat = v.category.as_deref().unwrap_or("uncategorized").to_string();
                 *categories.entry(cat.clone()).or_insert(0) += 1;
-                let targets = if !v.targets.is_empty() {
-                    v.targets.clone()
+                let targets: &[String] = if !v.targets.is_empty() {
+                    &v.targets
                 } else {
                     rule_meta
                         .get(&v.rule_id)
-                        .map(|m| m.targets.clone())
-                        .unwrap_or_default()
+                        .map(|m| m.targets.as_slice())
+                        .unwrap_or(&[])
                 };
                 for target in targets {
                     target_categories
-                        .entry(target)
+                        .entry(target.clone())
                         .or_default()
                         .entry(cat.clone())
                         .and_modify(|n| *n += 1)
@@ -236,40 +286,31 @@ pub fn export_kantra_bundle(
                     max_blast = max_blast.max(b);
                 }
             }
-            let abs_path = repo_root.join(&path);
-            let source_id = abs_path
-                .to_str()
-                .and_then(|abs| ensure_source_file(out_dir, abs, &source_cache))
-                .map(|entry| {
-                    new_sources.push(entry.clone());
-                    entry.source_id
-                });
+            let source_id = catalog.get(&abs).map(|e| e.source_id.clone());
             let entry = KantraFileEntry {
                 id: id.clone(),
                 path,
-                count: violations.len(),
+                count: indices.len(),
                 categories,
                 target_categories,
                 max_blast,
                 source_id,
             };
-            (entry, violations)
+            (entry, indices)
         })
         .collect();
 
-    merge_source_index(out_dir, &new_sources)?;
-
-    file_entries
-        .par_iter()
-        .try_for_each(|(entry, violations)| {
-            let bundle = KantraFileBundle {
-                schema_version: 1,
-                path: entry.path.clone(),
-                source_id: entry.source_id.clone(),
-                violations: violations.clone(),
-            };
-            write_json_compact(&files_dir.join(format!("{}.json", entry.id)), &bundle)
-        })?;
+    file_entries.par_iter().try_for_each(|(entry, indices)| {
+        let violations: Vec<&KantraViolation> =
+            indices.iter().map(|&i| &findings.violations[i]).collect();
+        let bundle = KantraFileBundleView {
+            schema_version: 1,
+            path: &entry.path,
+            source_id: entry.source_id.as_deref(),
+            violations,
+        };
+        write_json_compact(&files_dir.join(format!("{}.json", entry.id)), &bundle)
+    })?;
 
     let mut files: Vec<KantraFileEntry> = file_entries.into_iter().map(|(e, _)| e).collect();
     files.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.path.cmp(&b.path)));
@@ -347,6 +388,30 @@ pub fn export_kantra_bundle(
     })
 }
 
+fn ensure_kantra_sources(
+    out_dir: &Path,
+    catalog: &mut SourceCatalog,
+    by_file: &HashMap<String, (String, Vec<usize>)>,
+) -> Result<(), String> {
+    let mut missing = Vec::new();
+    let mut seen = HashSet::new();
+    for (abs, _) in by_file.values() {
+        if !seen.insert(abs.clone()) {
+            continue;
+        }
+        if catalog.get(abs).is_none() {
+            missing.push(abs.clone());
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let extra = build_source_catalog(out_dir, &missing)?;
+    catalog.merge_from(&extra);
+    write_source_index(out_dir, &catalog.entries())?;
+    Ok(())
+}
+
 fn file_id(path: &str) -> String {
     blake3::hash(path.as_bytes()).to_hex()[..16].to_string()
 }
@@ -411,32 +476,13 @@ fn relativize_path(repo_root: &Path, file: &str) -> String {
         .into_owned()
 }
 
-fn merge_source_index(out_dir: &Path, new_entries: &[SourceFileEntry]) -> Result<(), String> {
-    if new_entries.is_empty() {
-        return Ok(());
-    }
-    let path = out_dir.join(SOURCE_INDEX_FILE);
-    let mut by_path: HashMap<String, SourceFileEntry> = if path.is_file() {
-        let bytes = fs::read(&path).map_err(|e| e.to_string())?;
-        serde_json::from_slice::<crate::source_catalog::SourceIndexPayload>(&bytes)
-            .map(|payload| {
-                payload
-                    .files
-                    .into_iter()
-                    .map(|entry| (entry.file_path.clone(), entry))
-                    .collect()
-            })
-            .unwrap_or_default()
+fn absolute_source_path(repo_root: &Path, file: &str) -> String {
+    let p = PathBuf::from(file);
+    if p.is_absolute() {
+        p.to_string_lossy().into_owned()
     } else {
-        HashMap::new()
-    };
-    for entry in new_entries {
-        by_path
-            .entry(entry.file_path.clone())
-            .or_insert_with(|| entry.clone());
+        repo_root.join(p).to_string_lossy().into_owned()
     }
-    let merged: Vec<SourceFileEntry> = by_path.into_values().collect();
-    write_source_index(out_dir, &merged)
 }
 
 #[cfg(test)]
@@ -445,15 +491,8 @@ mod tests {
     use rgctl_kantra::ViolationEnrichment;
     use tempfile::TempDir;
 
-    #[test]
-    fn export_writes_index_and_file_shards() {
-        let tmp = TempDir::new().unwrap();
-        let repo = tmp.path().join("repo");
-        let src = repo.join("src/Foo.java");
-        fs::create_dir_all(src.parent().unwrap()).unwrap();
-        fs::write(&src, "class Foo {}\n").unwrap();
-
-        let findings = KantraFindings {
+    fn sample_findings(src: &Path) -> KantraFindings {
+        KantraFindings {
             schema_version: 2,
             command: "kantra_findings".into(),
             catalog_id: Some("fixture@test".into()),
@@ -501,7 +540,18 @@ mod tests {
             }],
             cache_hits: 1,
             cache_misses: 0,
-        };
+        }
+    }
+
+    #[test]
+    fn export_writes_index_and_file_shards() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        let src = repo.join("src/Foo.java");
+        fs::create_dir_all(src.parent().unwrap()).unwrap();
+        fs::write(&src, "class Foo {}\n").unwrap();
+
+        let findings = sample_findings(&src);
         let rgctl = repo.join(".rgctl");
         fs::create_dir_all(&rgctl).unwrap();
         fs::write(
@@ -558,6 +608,29 @@ mod tests {
                 .join(format!("{}.txt", shard.source_id.unwrap()))
                 .is_file()
         );
+        assert!(out.join(crate::source_catalog::SOURCE_INDEX_FILE).is_file());
+    }
+
+    #[test]
+    fn export_reuses_in_memory_findings_and_catalog() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        let src = repo.join("src/Foo.java");
+        fs::create_dir_all(src.parent().unwrap()).unwrap();
+        fs::write(&src, "class Foo {}\n").unwrap();
+        let findings = sample_findings(&src);
+        let out = tmp.path().join("dashboard");
+        fs::create_dir_all(&out).unwrap();
+
+        let mut catalog = SourceCatalog::default();
+        let summary =
+            export_kantra_bundle_with_inputs(&repo, &out, Some(&findings), Some(&mut catalog))
+                .unwrap();
+        assert!(summary.available);
+        assert_eq!(summary.violation_count, 2);
+        assert!(!catalog.is_empty());
+        // No disk findings file — export must not require it when findings are passed in.
+        assert!(!repo.join(".rgctl/kantra_findings.json").is_file());
     }
 
     #[test]

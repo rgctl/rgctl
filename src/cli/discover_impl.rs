@@ -688,13 +688,14 @@ pub(crate) fn run_full_analysis(
     let kantra_catalog_path =
         with_kantra.then(|| kantra_catalog.as_ref().map(std::path::PathBuf::from));
     let mut kantra_eval_graph = None;
+    let mut kantra_findings_in_mem: Option<rgctl_kantra::KantraFindings> = None;
     if with_kantra && !kantra_index_only {
         if petgraph_view.is_none() {
             petgraph_view = Some(PetGraphView::from_snapshot_store(cold.store())?);
         }
         let view = petgraph_view.as_ref().expect("petgraph view for kantra");
         let kantra_start = Instant::now();
-        let (_findings, graph) = super::kantra_discover::run_kantra_stage(
+        let (findings, graph) = super::kantra_discover::run_kantra_stage(
             root,
             store,
             kantra_rules_path.as_ref().and_then(|p| p.as_deref()),
@@ -705,6 +706,7 @@ pub(crate) fn run_full_analysis(
             view,
             &mut profile,
         )?;
+        kantra_findings_in_mem = Some(findings);
         kantra_eval_graph = Some(graph);
         if human_output {
             info!(
@@ -1085,7 +1087,7 @@ pub(crate) fn run_full_analysis(
             && !kantra_index_only
             && let Some(ref graph) = kantra_eval_graph
         {
-            super::kantra_discover::run_kantra_enrich(
+            let enriched = super::kantra_discover::run_kantra_enrich(
                 store,
                 &cold,
                 &analysis_results,
@@ -1093,6 +1095,7 @@ pub(crate) fn run_full_analysis(
                 graph,
                 &mut profile,
             )?;
+            kantra_findings_in_mem = Some(enriched);
         }
 
         build_time = blast_start.elapsed();
@@ -1392,8 +1395,10 @@ pub(crate) fn run_full_analysis(
     // Graph mmap snapshot was written early (before topology/analysis) to avoid
     // co-residency of PreparedGraphSnapshot with the live backend (#33).
 
+    // Only hydrate MemoryBackend when `-o <json>` needs a full CodeGraph serialize.
+    // Dashboard / migration read hot columns from MmappedGraphSnapshot (zero-copy).
     let mut hydrated: Option<rgctl_graph::code_graph::CodeGraph> = None;
-    let need_hydrate = write_json_graph || with_dashboard || export_migration_hints;
+    let need_hydrate = write_json_graph;
     if need_hydrate {
         hydrated = Some(rgctl_graph::code_graph::CodeGraph::open_snapshot(
             &snapshot_path,
@@ -1413,18 +1418,34 @@ pub(crate) fn run_full_analysis(
         }
     }
 
+    let mmap_for_export = if with_dashboard || export_migration_hints {
+        Some(rgctl_graph::snapshot::MmappedGraphSnapshot::open(
+            &snapshot_path,
+        )?)
+    } else {
+        None
+    };
+
     // Export static dashboard bundle only when requested (#31).
     let save_dashboard_start = Instant::now();
     let dashboard_dir = rgctl_graph::paths::artifact_path(store, "dashboard");
     let mut written_artifacts = DiscoverArtifacts::default();
     if with_dashboard {
         rgctl_dashboard::set_bundle_override(Some(rgctl_dashboard::BundleVersion::V2));
-        let graph = hydrated.as_ref().expect("hydrated for dashboard");
+        let snap = mmap_for_export.as_ref().expect("mmap for dashboard");
+        // Pass in-memory KantraFindings when `--with-kantra` ran in this invocation; otherwise
+        // `export_kantra_bundle_with_inputs` lazily loads `.rgctl/kantra_findings.json` on a
+        // fingerprint cache miss inside its parallel Rayon branch.
+        let mut dashboard_ctx =
+            rgctl_dashboard::DashboardExportContext::with_analysis(&analysis_results);
+        if let Some(ref findings) = kantra_findings_in_mem {
+            dashboard_ctx = dashboard_ctx.with_kantra_findings(findings);
+        }
         match rgctl_dashboard::export_dashboard_bundle_if_changed_with_context(
-            graph.backend(),
+            rgctl_graph::GraphSource::mmap(snap),
             store,
             &snapshot_path,
-            rgctl_dashboard::DashboardExportContext::with_analysis(&analysis_results),
+            dashboard_ctx,
         ) {
             Ok(true) => {
                 written_artifacts.dashboard_dir =
@@ -1461,9 +1482,9 @@ pub(crate) fn run_full_analysis(
             .output
             .clone()
             .unwrap_or_else(|| rgctl_graph::paths::artifact_path(store, "migration_plan.json"));
-        let graph = hydrated.as_ref().expect("hydrated for migration");
+        let snap = mmap_for_export.as_ref().expect("mmap for migration");
         match rgctl_dashboard::write_migration_plan_from_repo(
-            graph.backend(),
+            rgctl_graph::GraphSource::mmap(snap),
             store,
             &plan_path,
             migration_preset,

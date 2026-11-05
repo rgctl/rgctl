@@ -5,12 +5,11 @@
 //! Kahn topological scheduling with priority tie-breaking.
 
 use crate::results::AnalysisResults;
-use rgctl_graph::backend::MemoryBackend;
+use rgctl_graph::graph_source::GraphSource;
 use rgctl_graph::schema::{EdgeType, NodeType};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use uuid::Uuid;
 
 /// JSON schema version for [`MigrationGraphPayload`].
 ///
@@ -230,7 +229,55 @@ struct MacroAgg {
 ///   shared subdirectory names.
 /// - Anchors non-`src/` paths at workspace/repo markers and never emits leading dots or
 ///   host filesystem prefixes (`/Users/...`, `/home/...`).
+///
+/// When `file_path` is already `/`-normalized (no backslashes), this avoids intermediate
+/// `String` / `Vec` allocations beyond the returned label.
 pub fn package_label(file_path: &str) -> String {
+    let trimmed = file_path.trim();
+    if trimmed.is_empty() {
+        return "root".into();
+    }
+    if trimmed.as_bytes().contains(&b'\\') {
+        let norm = trimmed.replace('\\', "/");
+        return package_label_normalized(&norm);
+    }
+    package_label_normalized(trimmed)
+}
+
+/// Cache of [`package_label`] results keyed by columnar `file_path_off` (mmap) or path string
+/// (in-memory graphs where `file_path_off` is always 0).
+#[derive(Debug, Default)]
+pub struct PackageLabelCache {
+    by_off: HashMap<u32, String>,
+    by_path: HashMap<String, String>,
+}
+
+impl PackageLabelCache {
+    /// Return a cached package label for `(file_path_off, file_path)`.
+    pub fn get(&mut self, file_path_off: u32, file_path: &str) -> &str {
+        if file_path_off != 0 {
+            return self
+                .by_off
+                .entry(file_path_off)
+                .or_insert_with(|| package_label(file_path));
+        }
+        if !self.by_path.contains_key(file_path) {
+            let label = package_label(file_path);
+            self.by_path.insert(file_path.to_string(), label);
+        }
+        self.by_path
+            .get(file_path)
+            .map(|s| s.as_str())
+            .unwrap_or("root")
+    }
+
+    /// Owned clone of the cached label (for HashMap keys / bucket inserts).
+    pub fn get_owned(&mut self, file_path_off: u32, file_path: &str) -> String {
+        self.get(file_path_off, file_path).to_string()
+    }
+}
+
+fn package_label_normalized(norm: &str) -> String {
     const JVM_MARKERS: &[&str] = &[
         "/src/main/java/",
         "/src/test/java/",
@@ -273,7 +320,6 @@ pub fn package_label(file_path: &str) -> String {
         "Users", "home", "var", "tmp", "opt", "private", "etc", "usr", "Volumes", "mnt",
     ];
 
-    let norm = file_path.trim().replace('\\', "/");
     if norm.is_empty() {
         return "root".into();
     }
@@ -291,7 +337,14 @@ pub fn package_label(file_path: &str) -> String {
         return "root".into();
     }
 
-    let slash_path = format!("/{clean}");
+    // Prefer borrowing when `norm` is already `/{clean}` (absolute Unix path).
+    let slash_owned;
+    let slash_path: &str = if norm.starts_with('/') && norm.trim_start_matches('/') == clean {
+        norm
+    } else {
+        slash_owned = format!("/{clean}");
+        slash_owned.as_str()
+    };
 
     // 1. Innermost JVM / Kotlin / Scala source root
     let mut best_jvm_end: Option<usize> = None;
@@ -304,126 +357,239 @@ pub fn package_label(file_path: &str) -> String {
         }
     }
     if let Some(end) = best_jvm_end {
-        let after = &slash_path[end..];
-        let segs: Vec<&str> = std::path::Path::new(after)
-            .parent()
-            .map(|p| {
-                p.to_str()
-                    .unwrap_or("")
-                    .split('/')
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !segs.is_empty() {
-            return segs.join(".");
+        let parent = str_parent(&slash_path[end..]);
+        if parent.is_empty() {
+            return "default".into();
         }
-        return "default".into();
+        return join_dot_segments(parent);
     }
 
     // 2. Innermost `/src/` directory with crate / package qualification
     if let Some(idx) = slash_path.rfind("/src/") {
         let prefix = &slash_path[..idx];
         let after = &slash_path[idx + 5..];
-        let prefix_segs: Vec<&str> = prefix.split('/').filter(|s| !s.is_empty()).collect();
-        let sub_segs: Vec<&str> = std::path::Path::new(after)
-            .parent()
-            .map(|p| {
-                p.to_str()
-                    .unwrap_or("")
-                    .split('/')
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let sub_parent = str_parent(after);
+        let owner = owner_from_src_prefix(prefix, is_abs, WORKSPACE_CONTAINERS, SUBPROJECT_DIRS);
 
-        let owner: Option<&str> = if let Some(c_idx) = prefix_segs
-            .iter()
-            .rposition(|s| WORKSPACE_CONTAINERS.contains(s))
-        {
-            prefix_segs.get(c_idx + 1).copied()
-        } else if let Some(&last) = prefix_segs.last() {
-            if SUBPROJECT_DIRS.contains(&last) || !is_abs {
-                Some(last)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        return match (owner, sub_segs.is_empty()) {
+        return match (owner, sub_parent.is_empty()) {
             (Some(pkg), true) => pkg.to_string(),
-            (Some(pkg), false) => format!("{pkg}.{}", sub_segs.join(".")),
+            (Some(pkg), false) => {
+                let mut out = String::with_capacity(pkg.len() + 1 + sub_parent.len());
+                out.push_str(pkg);
+                out.push('.');
+                push_dot_segments(&mut out, sub_parent);
+                out
+            }
             (None, true) => "src".into(),
-            (None, false) => format!("src.{}", sub_segs.join(".")),
+            (None, false) => {
+                let mut out = String::with_capacity(4 + sub_parent.len());
+                out.push_str("src.");
+                push_dot_segments(&mut out, sub_parent);
+                out
+            }
         };
     }
 
     // 3. Non-`src/` path resolution
-    let parent_segs: Vec<&str> = std::path::Path::new(clean)
-        .parent()
-        .map(|p| {
-            p.to_str()
-                .unwrap_or("")
-                .split('/')
-                .filter(|s| !s.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    if parent_segs.is_empty() {
+    let parent = str_parent(clean);
+    if parent.is_empty() {
         return "root".into();
     }
 
-    if let Some(c_idx) = parent_segs
-        .iter()
-        .rposition(|s| WORKSPACE_CONTAINERS.contains(s))
-        && c_idx + 1 < parent_segs.len()
-    {
-        return parent_segs[c_idx + 1..].join(".");
+    if let Some(rest) = after_innermost_container(parent, WORKSPACE_CONTAINERS) {
+        return join_dot_segments(rest);
     }
 
-    if let Some(a_idx) = parent_segs.iter().rposition(|s| REPO_ANCHORS.contains(s)) {
-        return parent_segs[a_idx..].join(".");
+    if let Some(from_anchor) = from_innermost_anchor(parent, REPO_ANCHORS) {
+        return join_dot_segments(from_anchor);
     }
 
     if !is_abs {
-        return parent_segs.join(".");
+        return join_dot_segments(parent);
     }
 
-    let filtered: Vec<&str> = parent_segs
-        .into_iter()
-        .filter(|s| !OS_ROOT_SEGMENTS.contains(s))
-        .collect();
-    if filtered.is_empty() {
+    // Last two non-OS-root segments (small path → stack buffer, else fall back to Vec).
+    let mut buf: [&str; 32] = [""; 32];
+    let mut n = 0usize;
+    for seg in parent.split('/').filter(|s| !s.is_empty()) {
+        if OS_ROOT_SEGMENTS.contains(&seg) {
+            continue;
+        }
+        if n < buf.len() {
+            buf[n] = seg;
+            n += 1;
+        } else {
+            // Rare deep paths: collect and take last two.
+            let filtered: Vec<&str> = parent
+                .split('/')
+                .filter(|s| !s.is_empty() && !OS_ROOT_SEGMENTS.contains(s))
+                .collect();
+            if filtered.is_empty() {
+                return "root".into();
+            }
+            let start = filtered.len().saturating_sub(2);
+            return filtered[start..].join(".");
+        }
+    }
+    if n == 0 {
         return "root".into();
     }
-    let start = filtered.len().saturating_sub(2);
-    filtered[start..].join(".")
+    let start = n.saturating_sub(2);
+    buf[start..n].join(".")
+}
+
+fn str_parent(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(i) => &path[..i],
+        None => "",
+    }
+}
+
+fn join_dot_segments(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    push_dot_segments(&mut out, path);
+    out
+}
+
+fn push_dot_segments(out: &mut String, path: &str) {
+    let mut first = true;
+    for seg in path.split('/').filter(|s| !s.is_empty()) {
+        if !first {
+            out.push('.');
+        }
+        out.push_str(seg);
+        first = false;
+    }
+}
+
+fn innermost_after_container<'a>(prefix: &'a str, containers: &[&str]) -> Option<&'a str> {
+    let mut best: Option<&str> = None;
+    let mut expect_pkg = false;
+    for seg in prefix.split('/').filter(|s| !s.is_empty()) {
+        if containers.contains(&seg) {
+            expect_pkg = true;
+            continue;
+        }
+        if expect_pkg {
+            best = Some(seg);
+            expect_pkg = false;
+        }
+    }
+    best
+}
+
+fn owner_from_src_prefix<'a>(
+    prefix: &'a str,
+    is_abs: bool,
+    containers: &[&str],
+    subprojects: &[&str],
+) -> Option<&'a str> {
+    if let Some(pkg) = innermost_after_container(prefix, containers) {
+        return Some(pkg);
+    }
+    let last = prefix.split('/').rfind(|s| !s.is_empty())?;
+    if subprojects.contains(&last) || !is_abs {
+        Some(last)
+    } else {
+        None
+    }
+}
+
+fn after_innermost_container<'a>(parent: &'a str, containers: &[&str]) -> Option<&'a str> {
+    let mut last_container_end: Option<usize> = None;
+    let mut offset = 0usize;
+    for seg in parent.split('/') {
+        if seg.is_empty() {
+            if offset < parent.len() {
+                offset += 1;
+            }
+            continue;
+        }
+        let end = offset + seg.len();
+        if containers.contains(&seg) {
+            last_container_end = Some(end);
+        }
+        offset = end + 1;
+    }
+    let end = last_container_end?;
+    if end >= parent.len() {
+        return None;
+    }
+    let rest = parent[end..].trim_start_matches('/');
+    if rest.is_empty() { None } else { Some(rest) }
+}
+
+fn from_innermost_anchor<'a>(parent: &'a str, anchors: &[&str]) -> Option<&'a str> {
+    let mut best_start: Option<usize> = None;
+    let mut offset = 0usize;
+    for seg in parent.split('/') {
+        if seg.is_empty() {
+            if offset < parent.len() {
+                offset += 1;
+            }
+            continue;
+        }
+        let start = offset;
+        let end = start + seg.len();
+        if anchors.contains(&seg) {
+            best_start = Some(start);
+        }
+        offset = end + 1;
+    }
+    best_start.map(|s| &parent[s..])
 }
 
 /// Build the package-level migration macro graph from indexed analysis results.
-pub fn build_migration_graph(
-    backend: &MemoryBackend,
+///
+/// Accepts [`GraphSource`] (or anything convertible: `&MemoryBackend`, `&MmappedGraphSnapshot`)
+/// so discover can pass an mmap snapshot without hydrating a `MemoryBackend`.
+///
+/// Package labels are cached per unique `file_path_off` / path; edge aggregation uses a dense
+/// `node_to_pkg: Vec<u32>` indexed by [`HotNodeRef::idx`].
+pub fn build_migration_graph<'a>(
+    graph: impl Into<GraphSource<'a>>,
     results: &AnalysisResults,
 ) -> Option<MigrationGraphPayload> {
+    let graph = graph.into();
+    let (payload, _) = build_migration_graph_with_index(graph, results)?;
+    Some(payload)
+}
+
+/// Like [`build_migration_graph`], also returning the dense `node_to_pkg` table (`u32::MAX` =
+/// unmapped) for reuse by dashboard metagraph sharing.
+pub fn build_migration_graph_with_index<'a>(
+    graph: GraphSource<'a>,
+    results: &AnalysisResults,
+) -> Option<(MigrationGraphPayload, Vec<u32>)> {
     let community_table = results.community.as_ref();
     let centrality = results.centrality.as_ref();
     let blast = results.blast_radius.as_ref();
     let modularity = community_table.map(|c| c.modularity).unwrap_or(0.0);
 
+    let node_count = graph.node_count();
     let mut agg: HashMap<String, MacroAgg> = HashMap::new();
-    let mut uuid_to_pkg: HashMap<Uuid, usize> = HashMap::new();
+    let mut label_cache = PackageLabelCache::default();
+    // Temporary: store label key id per node during the first pass (avoids a second label compute).
+    let mut node_label_key: Vec<u32> = vec![u32::MAX; node_count];
+    let mut label_keys: HashMap<String, u32> = HashMap::new();
+    let mut key_labels: Vec<String> = Vec::new();
 
-    let _ = backend.for_each_node(|n| {
+    let _ = graph.for_each_hot_node(|n| {
         if !matches!(n.node_type, NodeType::Function) {
             return;
         }
         let Some(compact_id) = results.get_compact_id(n.id) else {
             return;
         };
-        let label = package_label(n.file_path.as_deref().unwrap_or(""));
+        let label = label_cache.get_owned(n.file_path_off, n.file_path);
+        let key = *label_keys.entry(label.clone()).or_insert_with(|| {
+            let id = key_labels.len() as u32;
+            key_labels.push(label.clone());
+            id
+        });
+        if (n.idx as usize) < node_label_key.len() {
+            node_label_key[n.idx as usize] = key;
+        }
         let entry = agg.entry(label.clone()).or_insert_with(|| MacroAgg {
             label,
             ..Default::default()
@@ -497,33 +663,42 @@ pub fn build_migration_graph(
         communities.push(macro_to_node(id, merged));
     }
 
-    let _ = backend.for_each_node(|n| {
-        if !matches!(n.node_type, NodeType::Function) {
-            return;
+    let other_id = label_to_id.get("(other)").copied();
+    let mut key_to_pkg: Vec<u32> = vec![u32::MAX; key_labels.len()];
+    for (i, label) in key_labels.iter().enumerate() {
+        let pkg = label_to_id.get(label).copied().or(other_id).unwrap_or(0) as u32;
+        key_to_pkg[i] = pkg;
+    }
+
+    let mut node_to_pkg: Vec<u32> = vec![u32::MAX; node_count];
+    for (idx, key) in node_label_key.into_iter().enumerate() {
+        if key == u32::MAX {
+            continue;
         }
-        let label = package_label(n.file_path.as_deref().unwrap_or(""));
-        let pkg_id = *label_to_id
-            .get(&label)
-            .or_else(|| label_to_id.get("(other)"))
-            .unwrap_or(&0);
-        uuid_to_pkg.insert(n.id, pkg_id);
-    });
+        node_to_pkg[idx] = key_to_pkg[key as usize];
+    }
 
     let mut edge_weights: HashMap<(usize, usize), u32> = HashMap::new();
-    let _ = backend.for_each_edge(|e| {
+    let _ = graph.for_each_hot_edge(|e| {
         if e.edge_type != EdgeType::Calls {
             return;
         }
-        let Some(&from_p) = uuid_to_pkg.get(&e.from) else {
-            return;
-        };
-        let Some(&to_p) = uuid_to_pkg.get(&e.to) else {
-            return;
-        };
-        if from_p == to_p {
+        if e.from_idx == u32::MAX || e.to_idx == u32::MAX {
             return;
         }
-        *edge_weights.entry((from_p, to_p)).or_insert(0) += 1;
+        let from_i = e.from_idx as usize;
+        let to_i = e.to_idx as usize;
+        if from_i >= node_to_pkg.len() || to_i >= node_to_pkg.len() {
+            return;
+        }
+        let from_p = node_to_pkg[from_i];
+        let to_p = node_to_pkg[to_i];
+        if from_p == u32::MAX || to_p == u32::MAX || from_p == to_p {
+            return;
+        }
+        *edge_weights
+            .entry((from_p as usize, to_p as usize))
+            .or_insert(0) += 1;
     });
 
     let edges: Vec<MigrationCommunityEdge> = edge_weights
@@ -536,13 +711,16 @@ pub fn build_migration_graph(
         })
         .collect();
 
-    Some(MigrationGraphPayload {
-        schema_version: MIGRATION_GRAPH_SCHEMA_VERSION,
-        mode: "package_macro".into(),
-        modularity,
-        communities,
-        edges,
-    })
+    Some((
+        MigrationGraphPayload {
+            schema_version: MIGRATION_GRAPH_SCHEMA_VERSION,
+            mode: "package_macro".into(),
+            modularity,
+            communities,
+            edges,
+        },
+        node_to_pkg,
+    ))
 }
 
 fn macro_to_node(id: usize, bucket: MacroAgg) -> MigrationCommunityNode {

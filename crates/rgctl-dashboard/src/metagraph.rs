@@ -1,10 +1,16 @@
 //! Package-level metagraph for Phase 2 community / macro visualization.
 
 use crate::communities::{COMMUNITIES_FILE, CommunitiesPayload, summarize_communities};
+use crate::export_util::write_json_compact;
 use rgctl_analysis::AnalysisResults;
 use rgctl_analysis::community::CommunityDetector;
 use rgctl_analysis::graph_utils::PetGraphView;
-use rgctl_graph::backend::{GraphBackend, MemoryBackend};
+use rgctl_analysis::migration::{
+    MAX_MIGRATION_MACRO_NODES, MIGRATION_GRAPH_SCHEMA_VERSION, MigrationCommunityEdge,
+    MigrationCommunityNode, MigrationGraphPayload, PackageLabelCache,
+};
+use rgctl_graph::backend::MemoryBackend;
+use rgctl_graph::graph_source::{GraphSource, HotNodeRef};
 use rgctl_graph::schema::{EdgeType, NodeType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -81,6 +87,18 @@ pub struct MetagraphExport {
     pub communities: CommunitiesPayload,
 }
 
+/// Shared package/community aggregation from a single node+edge scan.
+///
+/// Produced by [`write_metagraph`] and reused by migration export so discover does not
+/// re-walk the graph for `build_migration_graph`.
+#[derive(Debug, Clone)]
+pub struct PackageAggregation {
+    /// Dense node-index → metagraph package id (`u32::MAX` = unmapped).
+    pub node_to_pkg: Vec<u32>,
+    /// Precomputed migration macro graph when analysis results were available.
+    pub migration: Option<MigrationGraphPayload>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metaedge {
     pub source: u32,
@@ -104,6 +122,17 @@ struct PackageBucket {
     file_community_votes: HashMap<usize, u32>,
 }
 
+#[derive(Default)]
+struct MigBucket {
+    label: String,
+    member_count: u32,
+    pagerank_sum: f64,
+    harmonic_sum: f64,
+    betweenness_sum: f64,
+    max_blast: f64,
+    community_votes: HashMap<usize, u32>,
+}
+
 fn bucket_member_count(bucket: &PackageBucket) -> u32 {
     bucket.functions + bucket.classes + bucket.modules + bucket.files
 }
@@ -120,17 +149,33 @@ fn is_generated_bundle_path(file_path: &str) -> bool {
 }
 
 /// Node types included in package metagraph buckets (code + doc structure).
-fn is_metagraph_member(node: &rgctl_graph::schema::Node) -> bool {
-    if let Some(fp) = node.file_path.as_deref() {
-        if is_generated_bundle_path(fp) {
-            return false;
-        }
+fn is_metagraph_member_hot(node: &HotNodeRef<'_>) -> bool {
+    if !node.file_path.is_empty() && is_generated_bundle_path(node.file_path) {
+        return false;
     }
     match node.node_type {
         NodeType::Function | NodeType::Class | NodeType::File => true,
-        NodeType::Module => module_kind_allowed(node.properties.get("kind").map(|s| s.as_str())),
+        NodeType::Module => module_kind_allowed(node.module_kind),
         _ => false,
     }
+}
+
+#[cfg(test)]
+fn is_metagraph_member(node: &rgctl_graph::schema::Node) -> bool {
+    let hot = HotNodeRef {
+        idx: 0,
+        id: node.id,
+        node_type: node.node_type,
+        name: node.name.as_str(),
+        file_path: node.file_path.as_deref().unwrap_or(""),
+        file_path_off: 0,
+        line_number: node.start_line.unwrap_or(0),
+        end_line: node.end_line,
+        community_id: None,
+        module_kind: node.properties.get("kind").map(|s| s.as_str()),
+        cyclomatic: None,
+    };
+    is_metagraph_member_hot(&hot)
 }
 
 /// Doc `:Module` kinds we bucket; code package modules have no `kind` property.
@@ -148,16 +193,28 @@ fn metagraph_edge_kind(edge_type: EdgeType) -> Option<&'static str> {
 }
 
 /// Build package metagraph from indexed graph and write JSON beside the dashboard bundle.
+///
+/// Also returns [`PackageAggregation`] so migration export can reuse the same node/edge scan
+/// (dense `node_to_pkg` + optional precomputed [`MigrationGraphPayload`]).
 pub fn write_metagraph(
-    backend: &MemoryBackend,
+    graph: GraphSource<'_>,
     _snapshot_path: &Path,
     out_dir: &Path,
     source_node_count: u64,
     analysis: Option<&AnalysisResults>,
     uuid_to_col: &HashMap<Uuid, u32>,
-) -> Result<MetagraphExport, String> {
-    let mut uuid_to_pkg: HashMap<Uuid, u32> = HashMap::new();
+) -> Result<(MetagraphExport, PackageAggregation), String> {
+    let node_count = graph.node_count();
     let mut packages: HashMap<String, PackageBucket> = HashMap::new();
+    let mut mig_packages: HashMap<String, MigBucket> = HashMap::new();
+    let mut label_cache = PackageLabelCache::default();
+    // Label-key id per node for metagraph members / migration functions (filled in first pass).
+    let mut meta_label_key: Vec<u32> = vec![u32::MAX; node_count];
+    let mut mig_label_key: Vec<u32> = vec![u32::MAX; node_count];
+    let mut meta_keys: HashMap<String, u32> = HashMap::new();
+    let mut meta_key_labels: Vec<String> = Vec::new();
+    let mut mig_keys: HashMap<String, u32> = HashMap::new();
+    let mut mig_key_labels: Vec<String> = Vec::new();
     let include_member_indices = source_node_count < COMMUNITY_ONLY_THRESHOLD;
 
     let (modularity, detected_communities) = if analysis.is_some() {
@@ -168,7 +225,7 @@ pub fn write_metagraph(
                 .unwrap_or(0.0),
             None,
         )
-    } else {
+    } else if let Some(backend) = graph.as_memory() {
         let start = std::time::Instant::now();
         let (assignments, modularity) = detect_node_communities(backend)?;
         tracing::info!(
@@ -177,13 +234,77 @@ pub fn write_metagraph(
             "[profile] write_metagraph community_detect"
         );
         (modularity, Some(assignments))
+    } else {
+        // Mmap-only path without analysis: skip PetGraph community detect (needs MemoryBackend).
+        (0.0, None)
     };
 
-    let _ = backend.for_each_node(|n| {
-        if !is_metagraph_member(n) {
+    let community_table = analysis.and_then(|a| a.community.as_ref());
+    let centrality = analysis.and_then(|a| a.centrality.as_ref());
+    let blast = analysis.and_then(|a| a.blast_radius.as_ref());
+    let mig_modularity = community_table.map(|c| c.modularity).unwrap_or(0.0);
+
+    let _ = graph.for_each_hot_node(|n| {
+        let idx = n.idx as usize;
+        let label = label_cache.get_owned(n.file_path_off, n.file_path);
+
+        // Migration: Function nodes with compact ids (same criteria as build_migration_graph).
+        if matches!(n.node_type, NodeType::Function) {
+            if let Some(results) = analysis {
+                if let Some(compact_id) = results.get_compact_id(n.id) {
+                    let key = *mig_keys.entry(label.clone()).or_insert_with(|| {
+                        let id = mig_key_labels.len() as u32;
+                        mig_key_labels.push(label.clone());
+                        id
+                    });
+                    if idx < mig_label_key.len() {
+                        mig_label_key[idx] = key;
+                    }
+                    let entry = mig_packages
+                        .entry(label.clone())
+                        .or_insert_with(|| MigBucket {
+                            label: label.clone(),
+                            ..Default::default()
+                        });
+                    entry.member_count += 1;
+                    if let Some(c) = centrality {
+                        let ci = compact_id as usize;
+                        if ci < c.pagerank.len() {
+                            entry.pagerank_sum += c.pagerank[ci] as f64;
+                        }
+                        if ci < c.harmonic.len() {
+                            entry.harmonic_sum += c.harmonic[ci] as f64;
+                        }
+                        if ci < c.betweenness.len() {
+                            entry.betweenness_sum += c.betweenness[ci] as f64;
+                        }
+                    }
+                    if let Some(b) = blast {
+                        let bi = compact_id as usize;
+                        if bi < b.scores.len() {
+                            entry.max_blast = entry.max_blast.max(b.scores[bi] as f64);
+                        }
+                    }
+                    if let Some(table) = community_table {
+                        if let Some(cid) = table.get(compact_id) {
+                            *entry.community_votes.entry(cid).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if !is_metagraph_member_hot(&n) {
             return;
         }
-        let label = package_label(n.file_path.as_deref().unwrap_or(""));
+        let key = *meta_keys.entry(label.clone()).or_insert_with(|| {
+            let id = meta_key_labels.len() as u32;
+            meta_key_labels.push(label.clone());
+            id
+        });
+        if idx < meta_label_key.len() {
+            meta_label_key[idx] = key;
+        }
         let bucket = packages
             .entry(label.clone())
             .or_insert_with(|| PackageBucket {
@@ -214,17 +335,14 @@ pub fn write_metagraph(
             NodeType::File => bucket.files += 1,
             _ => {}
         }
-        if let Some(c) = n
-            .properties
-            .get("cyclomatic")
-            .and_then(|v| v.parse::<f64>().ok())
-        {
+        if let Some(c) = n.cyclomatic {
             bucket.complexity_sum += c;
             bucket.complexity_count += 1;
         }
-        // Collected unconditionally: above the threshold these go to the sidecar instead of the JSON, which
-        // is a serialization choice, not a reason to throw the data away during the walk.
-        if let Some(col_idx) = uuid_to_col.get(&n.id) {
+        // Prefer dense columnar idx; fall back to uuid_to_col for legacy callers.
+        if n.idx != u32::MAX {
+            bucket.member_indices.push(n.idx);
+        } else if let Some(col_idx) = uuid_to_col.get(&n.id) {
             bucket.member_indices.push(*col_idx);
         }
     });
@@ -301,33 +419,97 @@ pub fn write_metagraph(
         metanodes.push(bucket_to_metanode(id, merged));
     }
 
-    let _ = backend.for_each_node(|n| {
-        if !is_metagraph_member(n) {
-            return;
+    let other_id = label_to_id.get("(other)").copied();
+    let mut key_to_pkg: Vec<u32> = vec![u32::MAX; meta_key_labels.len()];
+    for (i, label) in meta_key_labels.iter().enumerate() {
+        key_to_pkg[i] = label_to_id.get(label).copied().or(other_id).unwrap_or(0);
+    }
+    let mut node_to_pkg: Vec<u32> = vec![u32::MAX; node_count];
+    for (idx, key) in meta_label_key.iter().enumerate() {
+        if *key != u32::MAX {
+            node_to_pkg[idx] = key_to_pkg[*key as usize];
         }
-        let label = package_label(n.file_path.as_deref().unwrap_or(""));
-        let pkg_id = *label_to_id
-            .get(&label)
-            .or_else(|| label_to_id.get("(other)"))
-            .unwrap_or(&0);
-        uuid_to_pkg.insert(n.id, pkg_id);
-    });
+    }
+
+    // Rank migration packages (shared first pass) when analysis was present.
+    let (mig_node_to_pkg, mig_label_to_id, mig_communities) = if !mig_packages.is_empty() {
+        let mut ranked: Vec<_> = mig_packages.into_values().collect();
+        ranked.sort_by_key(|b| std::cmp::Reverse(b.member_count));
+        let tail = if ranked.len() > MAX_MIGRATION_MACRO_NODES {
+            ranked.split_off(MAX_MIGRATION_MACRO_NODES - 1)
+        } else {
+            vec![]
+        };
+        let mut communities: Vec<MigrationCommunityNode> = Vec::new();
+        let mut label_to_id: HashMap<String, usize> = HashMap::new();
+        for (idx, bucket) in ranked.into_iter().enumerate() {
+            label_to_id.insert(bucket.label.clone(), idx);
+            communities.push(mig_bucket_to_node(idx, bucket));
+        }
+        if !tail.is_empty() {
+            let id = communities.len();
+            let mut merged = MigBucket {
+                label: "(other)".into(),
+                ..Default::default()
+            };
+            for b in tail {
+                merged.member_count += b.member_count;
+                merged.pagerank_sum += b.pagerank_sum;
+                merged.harmonic_sum += b.harmonic_sum;
+                merged.betweenness_sum += b.betweenness_sum;
+                merged.max_blast = merged.max_blast.max(b.max_blast);
+                for (cid, votes) in b.community_votes {
+                    *merged.community_votes.entry(cid).or_insert(0) += votes;
+                }
+            }
+            label_to_id.insert(merged.label.clone(), id);
+            communities.push(mig_bucket_to_node(id, merged));
+        }
+        let other = label_to_id.get("(other)").copied();
+        let mut key_to_pkg: Vec<u32> = vec![u32::MAX; mig_key_labels.len()];
+        for (i, label) in mig_key_labels.iter().enumerate() {
+            key_to_pkg[i] = label_to_id.get(label).copied().or(other).unwrap_or(0) as u32;
+        }
+        let mut node_to_mig: Vec<u32> = vec![u32::MAX; node_count];
+        for (idx, key) in mig_label_key.iter().enumerate() {
+            if *key != u32::MAX {
+                node_to_mig[idx] = key_to_pkg[*key as usize];
+            }
+        }
+        (Some(node_to_mig), Some(label_to_id), Some(communities))
+    } else {
+        (None, None, None)
+    };
 
     let mut edge_weights: HashMap<(u32, u32, &'static str), u32> = HashMap::new();
-    let _ = backend.for_each_edge(|e| {
-        let Some(kind) = metagraph_edge_kind(e.edge_type) else {
-            return;
-        };
-        let Some(&from) = uuid_to_pkg.get(&e.from) else {
-            return;
-        };
-        let Some(&to) = uuid_to_pkg.get(&e.to) else {
-            return;
-        };
-        if from == to {
-            return;
+    let mut mig_edge_weights: HashMap<(usize, usize), u32> = HashMap::new();
+    let _ = graph.for_each_hot_edge_with_index(Some(uuid_to_col), |e| {
+        if e.from_idx != u32::MAX && e.to_idx != u32::MAX {
+            let fi = e.from_idx as usize;
+            let ti = e.to_idx as usize;
+            if let Some(kind) = metagraph_edge_kind(e.edge_type) {
+                if fi < node_to_pkg.len() && ti < node_to_pkg.len() {
+                    let from = node_to_pkg[fi];
+                    let to = node_to_pkg[ti];
+                    if from != u32::MAX && to != u32::MAX && from != to {
+                        *edge_weights.entry((from, to, kind)).or_insert(0) += 1;
+                    }
+                }
+            }
+            if e.edge_type == EdgeType::Calls {
+                if let Some(ref node_to_mig) = mig_node_to_pkg {
+                    if fi < node_to_mig.len() && ti < node_to_mig.len() {
+                        let from_p = node_to_mig[fi];
+                        let to_p = node_to_mig[ti];
+                        if from_p != u32::MAX && to_p != u32::MAX && from_p != to_p {
+                            *mig_edge_weights
+                                .entry((from_p as usize, to_p as usize))
+                                .or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
         }
-        *edge_weights.entry((from, to, kind)).or_insert(0) += 1;
     });
 
     let edges: Vec<Metaedge> = edge_weights
@@ -339,6 +521,28 @@ pub fn write_metagraph(
             kind: kind.into(),
         })
         .collect();
+
+    let migration = match (mig_communities, mig_label_to_id) {
+        (Some(communities), Some(_)) => {
+            let edges: Vec<MigrationCommunityEdge> = mig_edge_weights
+                .into_iter()
+                .map(|((source, target), weight)| MigrationCommunityEdge {
+                    source,
+                    target,
+                    weight,
+                    kind: "calls".into(),
+                })
+                .collect();
+            Some(MigrationGraphPayload {
+                schema_version: MIGRATION_GRAPH_SCHEMA_VERSION,
+                mode: "package_macro".into(),
+                modularity: mig_modularity,
+                communities,
+                edges,
+            })
+        }
+        _ => None,
+    };
 
     layout_circle(&mut metanodes);
 
@@ -367,13 +571,18 @@ pub fn write_metagraph(
             .unwrap_or_default();
         if map.is_empty() {
             if let Some(a) = analysis {
-                let ctx = rgctl_analysis::CommunityQueryContext::from_analysis(a, |uuid| {
-                    backend.get_node(uuid).ok().flatten().map(|n| {
+                let mut name_path: HashMap<Uuid, (String, Option<String>)> = HashMap::new();
+                let _ = graph.for_each_hot_node(|n| {
+                    name_path.insert(
+                        n.id,
                         (
                             n.name.to_string(),
-                            n.file_path.as_ref().map(|s| s.to_string()),
-                        )
-                    })
+                            (!n.file_path.is_empty()).then(|| n.file_path.to_string()),
+                        ),
+                    );
+                });
+                let ctx = rgctl_analysis::CommunityQueryContext::from_analysis(a, |uuid| {
+                    name_path.get(&uuid).cloned()
                 });
                 map = ctx
                     .communities
@@ -427,57 +636,62 @@ pub fn write_metagraph(
 
     let communities = summarize_communities(modularity, &payload.nodes, &label_map);
 
-    let metagraph_json = {
+    {
         let start = std::time::Instant::now();
-        let json = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+        write_json_compact(&out_dir.join(METAGRAPH_FILE), &payload)?;
         tracing::info!(
             target: "profile",
             file = METAGRAPH_FILE,
-            serialize_secs = start.elapsed().as_secs_f64(),
-            json_bytes = json.len(),
+            write_secs = start.elapsed().as_secs_f64(),
             member_index_total = payload
                 .nodes
                 .iter()
                 .map(|n| n.member_indices.len())
                 .sum::<usize>(),
-            "[profile] save_dashboard json serialize"
+            "[profile] save_dashboard json write"
         );
-        json
-    };
-    let write_start = std::time::Instant::now();
-    fs_write(out_dir.join(METAGRAPH_FILE), metagraph_json.as_bytes())?;
-    tracing::info!(
-        target: "profile",
-        file = METAGRAPH_FILE,
-        write_secs = write_start.elapsed().as_secs_f64(),
-        "[profile] save_dashboard json write"
-    );
+    }
 
-    let communities_json = {
+    {
         let start = std::time::Instant::now();
-        let json = serde_json::to_string_pretty(&communities).map_err(|e| e.to_string())?;
+        write_json_compact(&out_dir.join(COMMUNITIES_FILE), &communities)?;
         tracing::info!(
             target: "profile",
             file = COMMUNITIES_FILE,
-            serialize_secs = start.elapsed().as_secs_f64(),
-            json_bytes = json.len(),
-            "[profile] save_dashboard json serialize"
+            write_secs = start.elapsed().as_secs_f64(),
+            "[profile] save_dashboard json write"
         );
-        json
-    };
-    let write_start = std::time::Instant::now();
-    fs_write(out_dir.join(COMMUNITIES_FILE), communities_json.as_bytes())?;
-    tracing::info!(
-        target: "profile",
-        file = COMMUNITIES_FILE,
-        write_secs = write_start.elapsed().as_secs_f64(),
-        "[profile] save_dashboard json write"
-    );
+    }
 
-    Ok(MetagraphExport {
-        meta: payload,
-        communities,
-    })
+    Ok((
+        MetagraphExport {
+            meta: payload,
+            communities,
+        },
+        PackageAggregation {
+            node_to_pkg,
+            migration,
+        },
+    ))
+}
+
+fn mig_bucket_to_node(id: usize, bucket: MigBucket) -> MigrationCommunityNode {
+    let count = bucket.member_count.max(1) as f64;
+    let community_id = bucket
+        .community_votes
+        .into_iter()
+        .max_by_key(|(_, votes)| *votes)
+        .map(|(cid, _)| cid);
+    MigrationCommunityNode {
+        id,
+        label: bucket.label,
+        member_count: bucket.member_count,
+        avg_pagerank: bucket.pagerank_sum / count,
+        avg_harmonic: bucket.harmonic_sum / count,
+        avg_betweenness: bucket.betweenness_sum / count,
+        max_blast: bucket.max_blast,
+        community_id,
+    }
 }
 
 fn community_id_for_node(
@@ -552,6 +766,7 @@ fn layout_circle(nodes: &mut [Metanode]) {
 }
 
 /// Derive a stable package / module label from a source file path.
+#[allow(dead_code)] // Re-export for dashboard tests / callers; hot path uses analysis directly.
 pub fn package_label(file_path: &str) -> String {
     rgctl_analysis::migration::package_label(file_path)
 }
@@ -563,6 +778,7 @@ fn fs_write(path: std::path::PathBuf, bytes: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rgctl_graph::backend::GraphBackend;
     use rgctl_graph::schema::{Edge, Node};
     use std::collections::HashMap;
     use tempfile::tempdir;
@@ -605,8 +821,8 @@ mod tests {
         }
 
         let dir = tempdir().unwrap();
-        let export = write_metagraph(
-            &backend,
+        let (export, _agg) = write_metagraph(
+            GraphSource::memory(&backend),
             Path::new("graph.snapshot.bin"),
             dir.path(),
             COMMUNITY_ONLY_THRESHOLD,
@@ -729,8 +945,8 @@ mod tests {
             .unwrap();
 
         let dir = tempdir().unwrap();
-        let export = write_metagraph(
-            &backend,
+        let (export, _agg) = write_metagraph(
+            GraphSource::memory(&backend),
             Path::new("graph.snapshot.bin"),
             dir.path(),
             5,
