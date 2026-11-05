@@ -27,8 +27,7 @@ case "${arch}" in
     ;;
 esac
 
-# Cargo-dist / release assets are typically: rgctl-<version>-<target>.tar.gz
-# Prefer a matching target triple; fall back to name patterns with OS/arch.
+# Release assets are named: rgctl-<version>-<target>.tar.gz.
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "error: required command not found: $1" >&2
@@ -38,6 +37,30 @@ need_cmd() {
 need_cmd curl
 need_cmd tar
 need_cmd mktemp
+need_cmd grep
+
+libc_tag=""
+if [ "${os_tag}" = "Linux" ]; then
+  if [ -f /etc/alpine-release ] || \
+    { command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; }; then
+    libc_tag="musl"
+  else
+    libc_tag="gnu"
+  fi
+fi
+
+case "${os_tag}-${arch_tag}-${libc_tag}" in
+  Darwin-aarch64-) target="aarch64-apple-darwin" ;;
+  Darwin-x86_64-) target="x86_64-apple-darwin" ;;
+  Linux-aarch64-gnu) target="aarch64-unknown-linux-gnu" ;;
+  Linux-aarch64-musl) target="aarch64-unknown-linux-musl" ;;
+  Linux-x86_64-gnu) target="x86_64-unknown-linux-gnu" ;;
+  Linux-x86_64-musl) target="x86_64-unknown-linux-musl" ;;
+  *)
+    echo "error: could not determine a release target for ${os_tag}/${arch_tag}" >&2
+    exit 1
+    ;;
+esac
 
 json="$(curl -fsSL -H "Accept: application/vnd.github+json" "${API}")"
 # Extract browser_download_url lines (portable-ish without jq).
@@ -50,31 +73,14 @@ fi
 pick=""
 for u in ${urls}; do
   case "${u}" in
-    *"${os_tag}"*"${arch_tag}"*|*"${arch_tag}"*"${os_tag}"*|*"$(echo "${os_tag}" | tr '[:upper:]' '[:lower:]')"*"${arch_tag}"*)
+    *"${target}"*)
       pick="${u}"
       break
       ;;
   esac
 done
-# Apple Silicon often tagged aarch64-apple-darwin; x86_64-apple-darwin / x86_64-unknown-linux-gnu
 if [ -z "${pick}" ]; then
-  case "${os_tag}-${arch_tag}" in
-    Darwin-aarch64) needle="aarch64-apple-darwin" ;;
-    Darwin-x86_64) needle="x86_64-apple-darwin" ;;
-    Linux-aarch64) needle="aarch64-unknown-linux-gnu" ;;
-    Linux-x86_64) needle="x86_64-unknown-linux-gnu" ;;
-    *) needle="" ;;
-  esac
-  if [ -n "${needle}" ]; then
-    for u in ${urls}; do
-      case "${u}" in
-        *"${needle}"*) pick="${u}"; break ;;
-      esac
-    done
-  fi
-fi
-if [ -z "${pick}" ]; then
-  echo "error: no matching .tar.gz asset for ${os_tag}/${arch_tag}" >&2
+  echo "error: no matching .tar.gz asset for ${target}" >&2
   echo "available:" >&2
   printf '%s\n' "${urls}" >&2
   exit 1

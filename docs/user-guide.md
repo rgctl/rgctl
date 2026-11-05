@@ -64,8 +64,12 @@ Pre-built binaries are published on the project **Releases** page:
    |----------|-------------------|
    | macOS (Apple Silicon) | `rgctl-*-aarch64-apple-darwin.tar.gz` |
    | macOS (Intel) | `rgctl-*-x86_64-apple-darwin.tar.gz` |
-   | Linux (x86_64) | `rgctl-*-x86_64-unknown-linux-gnu.tar.gz` |
-   | Windows | `rgctl-*-x86_64-pc-windows-msvc.zip` |
+   | Linux GNU (x86_64) | `rgctl-*-x86_64-unknown-linux-gnu.tar.gz` |
+   | Linux GNU (ARM64) | `rgctl-*-aarch64-unknown-linux-gnu.tar.gz` |
+   | Alpine / musl (x86_64) | `rgctl-*-x86_64-unknown-linux-musl.tar.gz` |
+   | Alpine / musl (ARM64) | `rgctl-*-aarch64-unknown-linux-musl.tar.gz` |
+   | Windows (x86_64) | `rgctl-*-x86_64-pc-windows-msvc.zip` |
+   | Windows (ARM64) | `rgctl-*-aarch64-pc-windows-msvc.zip` |
 
 3. Extract the archive. You should get a single `rgctl` executable (plus `rgctl.exe` on Windows).
 
