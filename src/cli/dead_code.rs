@@ -35,7 +35,7 @@ pub fn run(ctx: &CliContext, args: DeadCodeArgs) -> Result<()> {
             let f_conf = format!("{:?}", f.confidence).to_lowercase();
             keep.iter().any(|k| k == &f_conf)
         });
-        report.dead_symbols = report.findings.len();
+        report.summary.dead_symbols = report.findings.len();
     }
 
     if let Some(limit) = args.limit {

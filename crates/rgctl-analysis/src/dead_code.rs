@@ -7,7 +7,7 @@ use rgctl_error::Result;
 use rgctl_graph::SnapshotNodeStore;
 use rgctl_graph::schema::{EdgeType, Node, NodeType};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use uuid::Uuid;
 
 /// JSON output schema version for dead-code reports.
@@ -27,17 +27,37 @@ const REFERENCE_EDGE_TYPES: &[EdgeType] = &[
     EdgeType::Modifies,
 ];
 
-const ANALYZABLE_NODE_TYPES: &[NodeType] = &[
-    NodeType::Function,
-    NodeType::Class,
-    NodeType::Struct,
-    NodeType::Enum,
-    NodeType::Interface,
-    NodeType::Variable,
-    NodeType::Module,
-    NodeType::Import,
-    NodeType::TypeAlias,
+/// Edge types traversed during BFS reachability (includes Contains so that
+/// entry-point classes propagate reachability to their methods).
+const BFS_EDGE_TYPES: &[EdgeType] = &[
+    EdgeType::Calls,
+    EdgeType::Uses,
+    EdgeType::References,
+    EdgeType::Instantiates,
+    EdgeType::Extends,
+    EdgeType::Implements,
+    EdgeType::Overrides,
+    EdgeType::Injects,
+    EdgeType::AnnotatedWith,
+    EdgeType::ExposesRoute,
+    EdgeType::Modifies,
+    EdgeType::Contains,
 ];
+
+fn is_analyzable_type(nt: NodeType) -> bool {
+    matches!(
+        nt,
+        NodeType::Function
+            | NodeType::Class
+            | NodeType::Struct
+            | NodeType::Enum
+            | NodeType::Interface
+            | NodeType::Variable
+            | NodeType::Module
+            | NodeType::Import
+            | NodeType::TypeAlias
+    )
+}
 
 /// Confidence tier for a dead-code finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,11 +114,9 @@ pub struct DeadCodeFinding {
     pub node_id: Uuid,
 }
 
-/// Machine-readable dead-code analysis report.
+/// Summary statistics for a dead-code report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeadCodeReport {
-    /// Output schema version.
-    pub schema_version: u32,
+pub struct DeadCodeSummary {
     /// Total analyzable symbols in the graph.
     pub total_symbols: usize,
     /// Symbols reachable from entry points.
@@ -107,6 +125,15 @@ pub struct DeadCodeReport {
     pub dead_symbols: usize,
     /// Number of identified entry points.
     pub entry_points: usize,
+}
+
+/// Machine-readable dead-code analysis report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadCodeReport {
+    /// Output schema version.
+    pub schema_version: u32,
+    /// Summary statistics.
+    pub summary: DeadCodeSummary,
     /// Ordered findings (high confidence first).
     pub findings: Vec<DeadCodeFinding>,
 }
@@ -153,54 +180,63 @@ impl<'a> DeadCodeAnalyzer<'a> {
 
     /// Run the dead-code analysis and return a report.
     pub fn analyze(&self) -> Result<DeadCodeReport> {
-        let mut analyzable_ids: HashSet<Uuid> = HashSet::new();
-        let mut root_ids: HashSet<Uuid> = HashSet::new();
+        let n = self.view.node_count();
+        let mut analyzable = vec![false; n];
+        let mut root_indices: Vec<NodeIndex> = Vec::new();
 
-        let route_sources = self.collect_route_source_indices();
+        let framework_entry_indices = self.collect_framework_entry_indices();
 
-        for &nt in ANALYZABLE_NODE_TYPES {
-            self.store.for_each_node_of_type(nt, |node| {
-                let id = node.id;
-                let name = node.name.as_str();
-                let file_path = node.file_path.as_ref().map(|p| p.as_str());
+        // Single pass: collect analyzable nodes and roots.
+        self.store.for_each_node_seq(|node| {
+            if !is_analyzable_type(node.node_type) {
+                return;
+            }
 
-                if self.should_exclude(name, file_path) {
-                    return;
-                }
+            let name = node.name.as_str();
+            let file_path = node.file_path.as_ref().map(|p| p.as_str());
 
-                let role =
-                    classify_node_role(name, file_path, node.labels.iter().any(|l| l == "stub"));
+            if self.should_exclude(name, file_path) {
+                return;
+            }
 
-                if role == NodeRole::ExternalIntrinsic {
-                    return;
-                }
-                if !self.include_tests && role == NodeRole::Test {
-                    return;
-                }
+            let role = classify_node_role(name, file_path, node.labels.iter().any(|l| l == "stub"));
 
-                analyzable_ids.insert(id);
+            if role == NodeRole::ExternalIntrinsic {
+                return;
+            }
+            if !self.include_tests && role == NodeRole::Test {
+                return;
+            }
 
-                if self.is_entry_point(node, &route_sources) {
-                    root_ids.insert(id);
-                }
-            })?;
-        }
+            let Some(idx) = self.view.get_index(node.id) else {
+                return;
+            };
 
-        let total_symbols = analyzable_ids.len();
-        let entry_point_count = root_ids.len();
+            analyzable[idx.index()] = true;
 
-        let reachable = self.bfs_reachable(&root_ids);
+            if self.is_entry_point(node, idx, &framework_entry_indices) {
+                root_indices.push(idx);
+            }
+        })?;
 
-        let reachable_symbols = analyzable_ids.intersection(&reachable).count();
+        let total_symbols = analyzable.iter().filter(|&&a| a).count();
+        let entry_point_count = root_indices.len();
+
+        let reachable = self.bfs_reachable(&root_indices);
+
+        let reachable_symbols = (0..n).filter(|&i| analyzable[i] && reachable[i]).count();
 
         let mut findings: Vec<DeadCodeFinding> = Vec::new();
-        for &id in &analyzable_ids {
-            if reachable.contains(&id) {
+        for (i, &is_analyzable) in analyzable.iter().enumerate() {
+            if !is_analyzable || reachable[i] {
                 continue;
             }
-            if let Ok(Some(node)) = self.store.get_node(id) {
-                if let Some(finding) = self.classify_finding(&node) {
-                    findings.push(finding);
+            let idx = NodeIndex::new(i);
+            if let Some(uid) = self.view.get_uuid(idx) {
+                if let Ok(Some(node)) = self.store.get_node(uid) {
+                    if let Some(finding) = self.classify_finding(&node, idx) {
+                        findings.push(finding);
+                    }
                 }
             }
         }
@@ -214,15 +250,22 @@ impl<'a> DeadCodeAnalyzer<'a> {
 
         Ok(DeadCodeReport {
             schema_version: DEAD_CODE_SCHEMA_VERSION,
-            total_symbols,
-            reachable_symbols,
-            dead_symbols: findings.len(),
-            entry_points: entry_point_count,
+            summary: DeadCodeSummary {
+                total_symbols,
+                reachable_symbols,
+                dead_symbols: findings.len(),
+                entry_points: entry_point_count,
+            },
             findings,
         })
     }
 
-    fn is_entry_point(&self, node: &Node, route_source_indices: &HashSet<NodeIndex>) -> bool {
+    fn is_entry_point(
+        &self,
+        node: &Node,
+        idx: NodeIndex,
+        framework_entry_indices: &[bool],
+    ) -> bool {
         if self.is_configured_entry_point(node) {
             return true;
         }
@@ -232,31 +275,52 @@ impl<'a> DeadCodeAnalyzer<'a> {
             return true;
         }
 
-        if let Some(idx) = self.view.get_index(node.id) {
-            if route_source_indices.contains(&idx) {
-                return true;
-            }
-        }
-
-        if self.has_framework_entry_annotation(node.id) {
+        if self
+            .view
+            .outgoing_filtered(idx, &[EdgeType::ExposesRoute])
+            .next()
+            .is_some()
+        {
             return true;
         }
 
-        if self.is_public_api_root(node) {
+        if idx.index() < framework_entry_indices.len() && framework_entry_indices[idx.index()] {
             return true;
         }
 
         false
     }
 
-    fn collect_route_source_indices(&self) -> HashSet<NodeIndex> {
-        let mut sources = HashSet::new();
-        let _ = self.view.for_each_edge(|from, _to, edge_type| {
-            if edge_type == EdgeType::ExposesRoute {
-                sources.insert(from);
+    /// Pre-collect which NodeIndices are framework entry points by scanning
+    /// Annotation nodes once, then walking their incoming AnnotatedWith edges.
+    fn collect_framework_entry_indices(&self) -> Vec<bool> {
+        let n = self.view.node_count();
+        let mut is_entry = vec![false; n];
+
+        let mut annotation_indices: Vec<NodeIndex> = Vec::new();
+        for (idx, uid) in self.view.index_uuid_iter() {
+            if let Ok(Some(node)) = self.store.get_node(uid) {
+                if node.node_type == NodeType::Annotation {
+                    let ann_name = node.name.as_str().to_lowercase();
+                    if is_framework_annotation(&ann_name) {
+                        annotation_indices.push(idx);
+                    }
+                }
             }
-        });
-        sources
+        }
+
+        for ann_idx in &annotation_indices {
+            for neighbor in self
+                .view
+                .incoming_filtered(*ann_idx, &[EdgeType::AnnotatedWith])
+            {
+                if neighbor.index() < n {
+                    is_entry[neighbor.index()] = true;
+                }
+            }
+        }
+
+        is_entry
     }
 
     fn is_configured_entry_point(&self, node: &Node) -> bool {
@@ -279,78 +343,24 @@ impl<'a> DeadCodeAnalyzer<'a> {
         })
     }
 
-    fn has_framework_entry_annotation(&self, id: Uuid) -> bool {
-        let Some(idx) = self.view.get_index(id) else {
-            return false;
-        };
-        for neighbor in self.view.outgoing_filtered(idx, &[EdgeType::AnnotatedWith]) {
-            if let Some(uid) = self.view.get_uuid(neighbor) {
-                if let Ok(Some(ann)) = self.store.get_node(uid) {
-                    let ann_name = ann.name.as_str().to_lowercase();
-                    if ann_name.contains("endpoint")
-                        || ann_name.contains("controller")
-                        || ann_name.contains("service")
-                        || ann_name.contains("component")
-                        || ann_name.contains("bean")
-                        || ann_name.contains("inject")
-                        || ann_name.contains("requestmapping")
-                        || ann_name.contains("getmapping")
-                        || ann_name.contains("postmapping")
-                        || ann_name.contains("putmapping")
-                        || ann_name.contains("deletemapping")
-                        || ann_name.contains("restcontroller")
-                        || ann_name.contains("springbootapplication")
-                        || ann_name.contains("test")
-                        || ann_name.contains("export")
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
-    }
+    fn bfs_reachable(&self, root_indices: &[NodeIndex]) -> Vec<bool> {
+        let n = self.view.node_count();
+        let mut visited = vec![false; n];
+        let mut queue = VecDeque::with_capacity(root_indices.len());
 
-    fn is_public_api_root(&self, node: &Node) -> bool {
-        if node.node_type == NodeType::Import {
-            return false;
-        }
-        let vis = node.properties.get("visibility");
-        match vis {
-            Some(v) if v == "public" || v == "pub" => {
-                let has_inbound_ref = self
-                    .view
-                    .get_index(node.id)
-                    .map(|idx| {
-                        self.view
-                            .incoming_filtered(idx, REFERENCE_EDGE_TYPES)
-                            .next()
-                            .is_some()
-                    })
-                    .unwrap_or(false);
-                !has_inbound_ref
-            }
-            _ => false,
-        }
-    }
-
-    fn bfs_reachable(&self, roots: &HashSet<Uuid>) -> HashSet<Uuid> {
-        let mut visited = HashSet::new();
-        let mut queue = VecDeque::new();
-
-        for &root_id in roots {
-            if let Some(idx) = self.view.get_index(root_id) {
-                visited.insert(root_id);
-                queue.push_back(idx);
+        for &root in root_indices {
+            if !visited[root.index()] {
+                visited[root.index()] = true;
+                queue.push_back(root);
             }
         }
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in self.view.outgoing_filtered(current, REFERENCE_EDGE_TYPES) {
-                if let Some(uid) = self.view.get_uuid(neighbor) {
-                    if visited.insert(uid) {
-                        queue.push_back(neighbor);
-                    }
+            for neighbor in self.view.outgoing_filtered(current, BFS_EDGE_TYPES) {
+                let ni = neighbor.index();
+                if !visited[ni] {
+                    visited[ni] = true;
+                    queue.push_back(neighbor);
                 }
             }
         }
@@ -359,9 +369,7 @@ impl<'a> DeadCodeAnalyzer<'a> {
     }
 
     /// Classify an unreachable node into a finding using CSR for inbound-edge checks.
-    fn classify_finding(&self, node: &Node) -> Option<DeadCodeFinding> {
-        let idx = self.view.get_index(node.id)?;
-
+    fn classify_finding(&self, node: &Node, idx: NodeIndex) -> Option<DeadCodeFinding> {
         let has_non_structural_inbound = self
             .view
             .incoming_filtered(idx, REFERENCE_EDGE_TYPES)
@@ -372,30 +380,24 @@ impl<'a> DeadCodeAnalyzer<'a> {
             return None;
         }
 
-        let has_any_inbound = self
-            .view
-            .incoming_filtered(idx, &[EdgeType::Contains, EdgeType::DefinedIn])
-            .next()
-            .is_some();
-
         let (kind, confidence, reason) = match node.node_type {
             NodeType::Import => {
-                let outgoing_uses = self
+                let has_outbound_ref = self
                     .view
                     .outgoing_filtered(
                         idx,
-                        &[EdgeType::Calls, EdgeType::Uses, EdgeType::References],
+                        &[EdgeType::Uses, EdgeType::References, EdgeType::Calls],
                     )
-                    .count();
-                if !has_non_structural_inbound && (!has_any_inbound || outgoing_uses == 0) {
-                    (
-                        DeadCodeKind::UnusedImport,
-                        DeadCodeConfidence::High,
-                        "Import has no references from other symbols".to_string(),
-                    )
-                } else {
+                    .next()
+                    .is_some();
+                if !has_outbound_ref {
                     return None;
                 }
+                (
+                    DeadCodeKind::UnusedImport,
+                    DeadCodeConfidence::High,
+                    "Import resolves to an internal symbol but has no references".to_string(),
+                )
             }
             NodeType::Function => {
                 let vis = node.properties.get("visibility");
@@ -475,6 +477,24 @@ impl<'a> DeadCodeAnalyzer<'a> {
     }
 }
 
+fn is_framework_annotation(name: &str) -> bool {
+    name.contains("endpoint")
+        || name.contains("controller")
+        || name.contains("service")
+        || name.contains("component")
+        || name.contains("bean")
+        || name.contains("inject")
+        || name.contains("requestmapping")
+        || name.contains("getmapping")
+        || name.contains("postmapping")
+        || name.contains("putmapping")
+        || name.contains("deletemapping")
+        || name.contains("restcontroller")
+        || name.contains("springbootapplication")
+        || name.contains("test")
+        || name.contains("export")
+}
+
 fn confidence_order(c: &DeadCodeConfidence) -> u8 {
     match c {
         DeadCodeConfidence::High => 0,
@@ -502,11 +522,6 @@ mod tests {
     use rgctl_graph::schema::{Edge, Node};
 
     fn temp_snapshot(backend: &MemoryBackend) -> (SnapshotNodeStore, std::path::PathBuf) {
-        // `write_columnar_from_backend` (not `PreparedGraphSnapshot::write_to_path`) so node
-        // rows are written sorted by id: `SnapshotNodeStore::get_node` binary-searches the
-        // node column, and `write_to_path` currently emits `from_backend` HashMap order
-        // (unsorted), which makes lookups miss nodes nondeterministically. Tracked in a
-        // separate issue; once `write_columnar_to_path` sorts internally this can revert.
         let path = std::env::temp_dir().join(format!("dc_{}.bin", Uuid::new_v4()));
         rgctl_graph::write_columnar_from_backend(backend, &path).unwrap();
         let store = SnapshotNodeStore::open(&path).unwrap();
@@ -555,32 +570,6 @@ mod tests {
     }
 
     #[test]
-    fn detects_unused_import() {
-        let backend = build_test_backend();
-        let (store, path) = temp_snapshot(&backend);
-
-        let report = DeadCodeAnalyzer::new(&store).unwrap().analyze().unwrap();
-
-        let unused_imports: Vec<_> = report
-            .findings
-            .iter()
-            .filter(|f| f.kind == DeadCodeKind::UnusedImport)
-            .collect();
-        assert!(
-            !unused_imports.is_empty(),
-            "should detect at least one unused import"
-        );
-        assert!(
-            unused_imports
-                .iter()
-                .any(|f| f.symbol_name.contains("HashMap")),
-            "should detect unused HashMap import"
-        );
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
     fn detects_unreferenced_function() {
         let backend = build_test_backend();
         let (store, path) = temp_snapshot(&backend);
@@ -620,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn public_symbol_is_entry_point_root() {
+    fn unreferenced_public_fn_reported_as_low_confidence() {
         let mut backend = MemoryBackend::new();
         let public_fn = Node::new(NodeType::Function, "api_handler")
             .with_file_path("src/api.rs")
@@ -631,12 +620,79 @@ mod tests {
         let (store, path) = temp_snapshot(&backend);
 
         let report = DeadCodeAnalyzer::new(&store).unwrap().analyze().unwrap();
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.symbol_name == "api_handler");
+        assert!(
+            finding.is_some(),
+            "unreferenced public function should be reported as dead code"
+        );
+        assert_eq!(
+            finding.unwrap().confidence,
+            DeadCodeConfidence::Low,
+            "unreferenced public function should have Low confidence"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn external_import_not_flagged() {
+        let mut backend = MemoryBackend::new();
+        let main_fn = Node::new(NodeType::Function, "main").with_file_path("src/main.rs");
+        let ext_import =
+            Node::new(NodeType::Import, "std::collections::HashMap").with_file_path("src/main.rs");
+        backend.insert_node(main_fn).unwrap();
+        backend.insert_node(ext_import).unwrap();
+
+        let (store, path) = temp_snapshot(&backend);
+
+        let report = DeadCodeAnalyzer::new(&store).unwrap().analyze().unwrap();
         assert!(
             !report
                 .findings
                 .iter()
-                .any(|f| f.symbol_name == "api_handler"),
-            "public symbol with no inbound refs is an entry-point root, not dead code"
+                .any(|f| f.kind == DeadCodeKind::UnusedImport),
+            "external imports without Imports edges should not be flagged"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn entry_point_class_methods_reachable_via_contains() {
+        let mut backend = MemoryBackend::new();
+        let class = Node::new(NodeType::Class, "MyController")
+            .with_file_path("src/controller.rs")
+            .with_property("visibility".to_string(), "pub".to_string());
+        let annotation = Node::new(NodeType::Annotation, "RestController");
+        let method =
+            Node::new(NodeType::Function, "handle_request").with_file_path("src/controller.rs");
+
+        let class_id = class.id;
+        let ann_id = annotation.id;
+        let method_id = method.id;
+
+        backend.insert_node(class).unwrap();
+        backend.insert_node(annotation).unwrap();
+        backend.insert_node(method).unwrap();
+        backend
+            .insert_edge(Edge::new(class_id, ann_id, EdgeType::AnnotatedWith))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(class_id, method_id, EdgeType::Contains))
+            .unwrap();
+
+        let (store, path) = temp_snapshot(&backend);
+
+        let report = DeadCodeAnalyzer::new(&store).unwrap().analyze().unwrap();
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.symbol_name == "handle_request"),
+            "methods on entry-point classes should be reachable via Contains"
         );
 
         let _ = std::fs::remove_file(&path);

@@ -3,16 +3,11 @@
 use rgctl::analysis::dead_code::{
     DeadCodeAnalyzer, DeadCodeConfidence, DeadCodeKind, DeadCodeReport,
 };
+use rgctl::graph::SnapshotNodeStore;
 use rgctl::graph::backend::{GraphBackend, MemoryBackend};
 use rgctl::graph::schema::{Edge, EdgeType, Node, NodeType};
-use rgctl::graph::{SnapshotNodeStore, write_columnar_from_backend};
 
 fn snapshot_from_backend(backend: &MemoryBackend) -> (SnapshotNodeStore, std::path::PathBuf) {
-    // `write_columnar_from_backend` (not `PreparedGraphSnapshot::write_to_path`) so node
-    // rows are written sorted by id: `SnapshotNodeStore::get_node` binary-searches the
-    // node column, and `write_to_path` currently emits `from_backend` HashMap order
-    // (unsorted), which makes lookups miss nodes nondeterministically. Tracked in a
-    // separate issue; once `write_columnar_to_path` sorts internally this can revert.
     let path = std::env::temp_dir().join(format!("dc_integ_{}.bin", uuid::Uuid::new_v4()));
     rgctl::graph::write_columnar_from_backend(backend, &path).unwrap();
     let store = SnapshotNodeStore::open(&path).unwrap();
@@ -27,20 +22,34 @@ fn analyze(backend: &MemoryBackend) -> (DeadCodeReport, std::path::PathBuf) {
 }
 
 #[test]
-fn unused_import_detected() {
+fn unused_import_with_internal_target_detected() {
     let mut backend = MemoryBackend::new();
     let main_fn = Node::new(NodeType::Function, "main").with_file_path("src/main.rs");
+    let target_mod = Node::new(NodeType::Module, "used_module").with_file_path("src/used.rs");
     let used_imp = Node::new(NodeType::Import, "used_module").with_file_path("src/main.rs");
-    let unused_imp = Node::new(NodeType::Import, "unused_module").with_file_path("src/main.rs");
+    let unused_imp = Node::new(NodeType::Import, "unused_internal").with_file_path("src/main.rs");
+    let unused_target =
+        Node::new(NodeType::Module, "unused_internal").with_file_path("src/unused.rs");
 
     let main_id = main_fn.id;
     let used_imp_id = used_imp.id;
+    let target_mod_id = target_mod.id;
+    let unused_imp_id = unused_imp.id;
+    let unused_target_id = unused_target.id;
 
     backend.insert_node(main_fn).unwrap();
+    backend.insert_node(target_mod).unwrap();
     backend.insert_node(used_imp).unwrap();
     backend.insert_node(unused_imp).unwrap();
+    backend.insert_node(unused_target).unwrap();
     backend
         .insert_edge(Edge::new(main_id, used_imp_id, EdgeType::Uses))
+        .unwrap();
+    backend
+        .insert_edge(Edge::new(used_imp_id, target_mod_id, EdgeType::Uses))
+        .unwrap();
+    backend
+        .insert_edge(Edge::new(unused_imp_id, unused_target_id, EdgeType::Uses))
         .unwrap();
 
     let (report, path) = analyze(&backend);
@@ -50,12 +59,37 @@ fn unused_import_detected() {
         .iter()
         .filter(|f| f.kind == DeadCodeKind::UnusedImport)
         .collect();
-    assert!(!unused.is_empty());
-    assert!(unused.iter().any(|f| f.symbol_name == "unused_module"));
+    assert!(
+        unused.iter().any(|f| f.symbol_name == "unused_internal"),
+        "import with internal target but no references should be flagged"
+    );
     assert!(
         unused
             .iter()
             .all(|f| f.confidence == DeadCodeConfidence::High)
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn external_import_not_flagged() {
+    let mut backend = MemoryBackend::new();
+    let main_fn = Node::new(NodeType::Function, "main").with_file_path("src/main.rs");
+    let ext_import =
+        Node::new(NodeType::Import, "std::collections::HashMap").with_file_path("src/main.rs");
+
+    backend.insert_node(main_fn).unwrap();
+    backend.insert_node(ext_import).unwrap();
+
+    let (report, path) = analyze(&backend);
+
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.kind == DeadCodeKind::UnusedImport),
+        "external imports without Imports edges should not be flagged"
     );
 
     let _ = std::fs::remove_file(&path);
@@ -93,18 +127,52 @@ fn unreferenced_function_detected() {
 }
 
 #[test]
-fn public_barrel_export_treated_as_entry_point() {
+fn unreferenced_public_fn_reported_as_low_confidence() {
     let mut backend = MemoryBackend::new();
     let public_fn = Node::new(NodeType::Function, "exported_api")
         .with_file_path("src/api.rs")
         .with_property("visibility".to_string(), "pub".to_string());
-    let callee = Node::new(NodeType::Function, "internal_helper").with_file_path("src/api.rs");
-
-    let pub_id = public_fn.id;
-    let callee_id = callee.id;
 
     backend.insert_node(public_fn).unwrap();
-    backend.insert_node(callee).unwrap();
+
+    let (report, path) = analyze(&backend);
+
+    let finding = report
+        .findings
+        .iter()
+        .find(|f| f.symbol_name == "exported_api");
+    assert!(
+        finding.is_some(),
+        "unreferenced public function should be reported"
+    );
+    assert_eq!(
+        finding.unwrap().confidence,
+        DeadCodeConfidence::Low,
+        "unreferenced public function should have Low confidence"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn public_fn_callees_still_reachable() {
+    let mut backend = MemoryBackend::new();
+    let public_fn = Node::new(NodeType::Function, "exported_api")
+        .with_file_path("src/api.rs")
+        .with_property("visibility".to_string(), "pub".to_string());
+    let callee_fn = Node::new(NodeType::Function, "called_from_pub").with_file_path("src/api.rs");
+
+    let main_fn = Node::new(NodeType::Function, "main").with_file_path("src/main.rs");
+    let main_id = main_fn.id;
+    let pub_id = public_fn.id;
+    let callee_id = callee_fn.id;
+
+    backend.insert_node(main_fn).unwrap();
+    backend.insert_node(public_fn).unwrap();
+    backend.insert_node(callee_fn).unwrap();
+    backend
+        .insert_edge(Edge::new(main_id, pub_id, EdgeType::Calls))
+        .unwrap();
     backend
         .insert_edge(Edge::new(pub_id, callee_id, EdgeType::Calls))
         .unwrap();
@@ -116,14 +184,51 @@ fn public_barrel_export_treated_as_entry_point() {
             .findings
             .iter()
             .any(|f| f.symbol_name == "exported_api"),
-        "public API without inbound refs should be treated as entry point"
+        "public fn called from main should be reachable"
     );
     assert!(
         !report
             .findings
             .iter()
-            .any(|f| f.symbol_name == "internal_helper"),
-        "helper called from entry point should be reachable"
+            .any(|f| f.symbol_name == "called_from_pub"),
+        "callee of reachable public fn should be reachable"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn entry_point_class_methods_reachable_via_contains() {
+    let mut backend = MemoryBackend::new();
+    let class = Node::new(NodeType::Class, "MyController")
+        .with_file_path("src/controller.rs")
+        .with_property("visibility".to_string(), "pub".to_string());
+    let annotation = Node::new(NodeType::Annotation, "RestController");
+    let method =
+        Node::new(NodeType::Function, "handle_request").with_file_path("src/controller.rs");
+
+    let class_id = class.id;
+    let ann_id = annotation.id;
+    let method_id = method.id;
+
+    backend.insert_node(class).unwrap();
+    backend.insert_node(annotation).unwrap();
+    backend.insert_node(method).unwrap();
+    backend
+        .insert_edge(Edge::new(class_id, ann_id, EdgeType::AnnotatedWith))
+        .unwrap();
+    backend
+        .insert_edge(Edge::new(class_id, method_id, EdgeType::Contains))
+        .unwrap();
+
+    let (report, path) = analyze(&backend);
+
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.symbol_name == "handle_request"),
+        "methods on entry-point classes should be reachable via Contains"
     );
 
     let _ = std::fs::remove_file(&path);
@@ -223,6 +328,8 @@ fn machine_readable_json_output() {
 
     let json = serde_json::to_value(&report).unwrap();
     assert_eq!(json["schema_version"], 1);
+    assert!(json["summary"]["total_symbols"].is_number());
+    assert!(json["summary"]["dead_symbols"].is_number());
     assert!(json["findings"].is_array());
 
     let findings = json["findings"].as_array().unwrap();

@@ -7,10 +7,10 @@ pub fn report_to_json(report: &DeadCodeReport) -> serde_json::Value {
     json!({
         "schema_version": report.schema_version,
         "summary": {
-            "total_symbols": report.total_symbols,
-            "reachable_symbols": report.reachable_symbols,
-            "dead_symbols": report.dead_symbols,
-            "entry_points": report.entry_points,
+            "total_symbols": report.summary.total_symbols,
+            "reachable_symbols": report.summary.reachable_symbols,
+            "dead_symbols": report.summary.dead_symbols,
+            "entry_points": report.summary.entry_points,
         },
         "findings": report.findings.iter().map(finding_to_json).collect::<Vec<_>>(),
     })
@@ -36,7 +36,10 @@ pub fn emit_text(report: &DeadCodeReport) -> String {
 
     out.push_str(&format!(
         "Dead-code analysis: {} total symbols, {} reachable, {} dead ({} entry points)\n\n",
-        report.total_symbols, report.reachable_symbols, report.dead_symbols, report.entry_points,
+        report.summary.total_symbols,
+        report.summary.reachable_symbols,
+        report.summary.dead_symbols,
+        report.summary.entry_points,
     ));
 
     if report.findings.is_empty() {
