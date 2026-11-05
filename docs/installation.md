@@ -12,13 +12,14 @@ Everything you need to install rgctl (`rgctl`), choose the right operating mode,
 2. [Install rgctl](#install-rgctl)
 3. [Add to PATH](#add-to-path)
 4. [Verify the installation](#verify-the-installation)
-5. [Choose your operating mode](#choose-your-operating-mode)
-6. [Install the agent pack](#install-the-agent-pack)
-7. [Optional: semantic search setup](#optional-semantic-search-setup)
-8. [Upgrading](#upgrading)
-9. [Uninstalling](#uninstalling)
-10. [Troubleshooting](#troubleshooting)
-11. [Next steps](#next-steps)
+5. [Shell completions](#shell-completions)
+6. [Choose your operating mode](#choose-your-operating-mode)
+7. [Install the agent pack](#install-the-agent-pack)
+8. [Optional: semantic search setup](#optional-semantic-search-setup)
+9. [Upgrading](#upgrading)
+10. [Uninstalling](#uninstalling)
+11. [Troubleshooting](#troubleshooting)
+12. [Next steps](#next-steps)
 
 ---
 
@@ -173,6 +174,31 @@ rgctl find --type function --limit 5
 ```
 
 If both commands produce output without errors, the installation is working.
+
+---
+
+## Shell completions
+
+`rgctl completions <shell>` prints a completion script for `bash`, `zsh`, `fish`, `elvish` or `powershell` (subcommands, flags, and enum values such as `--format`). It needs no repository or cache. Regenerate the script after upgrading rgctl.
+
+```bash
+# bash (needs the bash-completion package)
+mkdir -p ~/.local/share/bash-completion/completions
+rgctl completions bash > ~/.local/share/bash-completion/completions/rgctl
+
+# zsh: any directory on $fpath, before compinit runs
+mkdir -p ~/.zfunc
+rgctl completions zsh > ~/.zfunc/_rgctl
+# in ~/.zshrc: fpath=(~/.zfunc $fpath); autoload -Uz compinit && compinit
+
+# fish
+rgctl completions fish > ~/.config/fish/completions/rgctl.fish
+```
+
+```powershell
+# PowerShell: add to $PROFILE
+rgctl completions powershell | Out-String | Invoke-Expression
+```
 
 ---
 

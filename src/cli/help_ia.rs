@@ -50,7 +50,7 @@ const GROUPS: &[(&str, &[&str])] = &[
     ),
     ("Security", &["vuln", "deps", "security"]),
     ("Policy", &["check", "review", "pr-check", "rules"]),
-    ("Meta", &["export", "install", "help"]),
+    ("Meta", &["export", "install", "completions", "help"]),
 ];
 
 /// Build the root `Command` with visually grouped subcommand help.
