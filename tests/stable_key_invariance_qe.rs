@@ -114,8 +114,14 @@ const LANGS: &[LangCase] = &[
     },
 ];
 
+fn shared_registry() -> Arc<rgctl_registry::LanguageRegistry> {
+    static REGISTRY: std::sync::OnceLock<Arc<rgctl_registry::LanguageRegistry>> =
+        std::sync::OnceLock::new();
+    Arc::clone(REGISTRY.get_or_init(|| Arc::new(rgctl_languages::default_registry())))
+}
+
 fn write_snapshot(root: &Path, out: &Path) {
-    let registry = Arc::new(rgctl_languages::default_registry());
+    let registry = shared_registry();
     let files = FileDiscoverer::with_config(Arc::clone(&registry), DiscoveryConfig::default())
         .discover(root)
         .expect("discover");

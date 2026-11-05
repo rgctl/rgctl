@@ -29,8 +29,14 @@ fn copy_dir_all(src: &Path, dst: &Path) {
     }
 }
 
+fn shared_registry() -> Arc<rgctl_registry::LanguageRegistry> {
+    static REGISTRY: std::sync::OnceLock<Arc<rgctl_registry::LanguageRegistry>> =
+        std::sync::OnceLock::new();
+    Arc::clone(REGISTRY.get_or_init(|| Arc::new(rgctl_languages::default_registry())))
+}
+
 fn discover_files(root: &Path) -> Vec<PathBuf> {
-    let registry = Arc::new(rgctl_languages::default_registry());
+    let registry = shared_registry();
     let discoverer = FileDiscoverer::with_config(
         registry,
         DiscoveryConfig {
@@ -62,7 +68,7 @@ struct SnapSummary {
 }
 
 fn extract_summary(root: &Path, files: &[PathBuf], thread_count: Option<usize>) -> SnapSummary {
-    let registry = Arc::new(rgctl_languages::default_registry());
+    let registry = shared_registry();
     let extractor = Extractor::new(Arc::clone(&registry));
     let mut builder = GraphBuilder::new();
     let (_stats, tails) = stream_into_graph(

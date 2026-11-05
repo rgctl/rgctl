@@ -8,9 +8,13 @@ license = "MIT OR Apache-2.0"
 
 [lib]
 proc-macro = true
+test = false
 
 [dependencies]
 rgctl-plugin-api = { path = "../crates/rgctl-plugin-api" }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
+
+[lints.clippy]
+collapsible_if = "allow"

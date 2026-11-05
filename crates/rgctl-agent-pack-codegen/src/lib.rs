@@ -80,7 +80,16 @@ struct RootManifest {
 /// Generate the full agent pack under `out_dir`.
 pub fn generate(pack_root: &Path, out_dir: &Path, rgctl_version: &str) -> Result<(), String> {
     if out_dir.exists() {
-        fs::remove_dir_all(out_dir).map_err(|e| e.to_string())?;
+        for attempt in 0..3 {
+            match fs::remove_dir_all(out_dir) {
+                Ok(()) => break,
+                Err(_) if !out_dir.exists() => break,
+                Err(_) if attempt < 2 => {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
     }
     fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
 
