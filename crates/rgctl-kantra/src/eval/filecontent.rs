@@ -25,6 +25,7 @@ pub fn eval_filecontent(
 ) -> Result<Vec<KantraViolation>, regex::Error> {
     let re = Regex::new(pattern)?;
     let glob = file_pattern.map(Pattern::new).transpose().ok().flatten();
+    let file_re = file_pattern.and_then(|fp| Regex::new(fp).ok());
 
     let violations: Vec<KantraViolation> = files
         .par_iter()
@@ -37,10 +38,12 @@ pub fn eval_filecontent(
             if skip_files.contains(&rel) {
                 return Vec::new();
             }
-            if let Some(ref g) = glob
-                && !g.matches(&rel)
-            {
-                return Vec::new();
+            if file_pattern.is_some() {
+                let glob_ok = glob.as_ref().is_some_and(|g| g.matches(&rel));
+                let re_ok = file_re.as_ref().is_some_and(|r| r.is_match(&rel));
+                if !glob_ok && !re_ok {
+                    return Vec::new();
+                }
             }
             let content = match sources.get(&rel).or_else(|| sources.get(file.to_str()?)) {
                 Some(c) => c.as_str(),

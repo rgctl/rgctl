@@ -293,6 +293,17 @@ fn predicate_matches(
         });
         return local_ok && ns_ok;
     }
+    if let Some((child_expr, want_raw)) = pred.split_once('=')
+        && !child_expr.contains('(')
+    {
+        let child_local = local_name_of_step(child_expr.trim());
+        let want = unquote(want_raw.trim());
+        return node.children().any(|c| {
+            c.is_element()
+                && c.tag_name().name() == child_local
+                && c.text().map(str::trim) == Some(want.as_str())
+        });
+    }
     false
 }
 

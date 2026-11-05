@@ -128,13 +128,29 @@ impl WhenClause {
                     return WhenClause::Or(items.iter().map(WhenClause::from_value).collect());
                 }
                 if let Some(not) = map.get(Value::from("not")) {
+                    if let Value::Bool(is_negated) = not {
+                        let mut rest = map.clone();
+                        rest.remove(Value::from("not"));
+                        let inner = WhenClause::from_value(&Value::Mapping(rest));
+                        return if *is_negated {
+                            WhenClause::Not(Box::new(inner))
+                        } else {
+                            inner
+                        };
+                    }
                     return WhenClause::Not(Box::new(WhenClause::from_value(not)));
+                }
+                if let Some(cond) = map.get(Value::from("condition")) {
+                    return WhenClause::from_value(cond);
                 }
                 for (key, val) in map {
                     let provider = match key.as_str() {
                         Some(s) => s,
                         None => continue,
                     };
+                    if matches!(provider, "as" | "from" | "ignore") {
+                        continue;
+                    }
                     return parse_provider(provider, val);
                 }
                 WhenClause::Unsupported {
@@ -266,14 +282,18 @@ fn parse_provider(provider: &str, val: &Value) -> WhenClause {
                 .or_else(|| string_field(val, "pattern"))
                 .unwrap_or_default(),
             file_pattern: string_field(val, "filePattern")
-                .or_else(|| string_field(val, "filepattern")),
+                .or_else(|| string_field(val, "filepattern"))
+                .or_else(|| first_seq_string_field(val, "filepaths"))
+                .or_else(|| first_seq_string_field(val, "filePaths")),
         },
         "builtin.json" => WhenClause::BuiltinJson {
             jsonpath: string_field(val, "jsonpath")
                 .or_else(|| string_field(val, "pattern"))
                 .unwrap_or_default(),
             file_pattern: string_field(val, "filePattern")
-                .or_else(|| string_field(val, "filepattern")),
+                .or_else(|| string_field(val, "filepattern"))
+                .or_else(|| first_seq_string_field(val, "filepaths"))
+                .or_else(|| first_seq_string_field(val, "filePaths")),
         },
         other => WhenClause::Unsupported {
             provider: other.to_string(),
@@ -290,6 +310,15 @@ fn pattern_fields(val: &Value) -> (String, Option<String>) {
 
 fn string_field(val: &Value, key: &str) -> Option<String> {
     val.get(key).and_then(|v| v.as_str()).map(str::to_string)
+}
+
+fn first_seq_string_field(val: &Value, key: &str) -> Option<String> {
+    val.get(key)
+        .and_then(|v| v.as_sequence())
+        .and_then(|seq| seq.first())
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.contains("{{"))
+        .map(str::to_string)
 }
 
 fn tags_field(val: &Value) -> Vec<String> {

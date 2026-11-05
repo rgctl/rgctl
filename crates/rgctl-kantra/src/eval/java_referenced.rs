@@ -175,6 +175,9 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
         }
         "INHERITANCE" | "IMPLEMENTS_TYPE" => {
             for edge in edges {
+                if !is_code_file(Some(&edge.file_path)) {
+                    continue;
+                }
                 let edge_ok = if loc == "IMPLEMENTS_TYPE" {
                     edge.edge_type == "IMPLEMENTS"
                 } else {
@@ -206,7 +209,7 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
         }
         "ANNOTATION" => {
             for edge in edges {
-                if edge.edge_type != "ANNOTATED_WITH" {
+                if edge.edge_type != "ANNOTATED_WITH" || !is_code_file(Some(&edge.file_path)) {
                     continue;
                 }
                 let ann_match = type_matches_with_wildcards(
@@ -282,7 +285,7 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                 }
             }
             for edge in edges {
-                if edge.edge_type != "INSTANTIATES" {
+                if edge.edge_type != "INSTANTIATES" || !is_code_file(Some(&edge.file_path)) {
                     continue;
                 }
                 if matched_in_file.contains(&(edge.file_path.as_str(), edge.to_name.as_str()))
@@ -330,7 +333,7 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                 }
             }
             for edge in edges {
-                if edge.edge_type != "CALLS" {
+                if edge.edge_type != "CALLS" || !is_code_file(Some(&edge.file_path)) {
                     continue;
                 }
                 if matched_in_file.contains(&(edge.file_path.as_str(), edge.to_name.as_str()))
@@ -416,6 +419,7 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
             }
         }
         "VARIABLE_DECLARATION" | "METHOD_PARAMETER" => {
+            let mut matched_lines: HashSet<(String, usize)> = HashSet::new();
             for node in nodes {
                 if !is_code_file(node.file_path.as_deref()) {
                     continue;
@@ -434,6 +438,9 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                             .iter()
                             .any(|t| type_matches_with_wildcards(re, t, file, type_ctx))
                     {
+                        if let Some(f) = file {
+                            matched_lines.insert((f.to_string(), node.start_line.unwrap_or(1)));
+                        }
                         push_node_hit(&mut out, rule_id, node, loc);
                     }
                 } else if node.node_type == "Function"
@@ -442,7 +449,32 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                         .iter()
                         .any(|t| type_matches_with_wildcards(re, t, file, type_ctx))
                 {
+                    if let Some(f) = file {
+                        matched_lines.insert((f.to_string(), node.start_line.unwrap_or(1)));
+                    }
                     push_node_hit(&mut out, rule_id, node, loc);
+                }
+            }
+            if loc == "VARIABLE_DECLARATION" {
+                for (path, content) in sources {
+                    if !is_code_file(Some(path)) {
+                        continue;
+                    }
+                    let canon_file = type_ctx.resolve_file_key(path);
+                    for (i, line) in content.lines().enumerate() {
+                        let line_no = i + 1;
+                        if matched_lines.contains(&(canon_file.clone(), line_no)) {
+                            continue;
+                        }
+                        if line_looks_like_local_var_decl(line, re, &canon_file, type_ctx) {
+                            out.push(violation_high(
+                                rule_id,
+                                "java.referenced",
+                                &MatchSite::new(canon_file.clone(), line_no),
+                                loc,
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -481,6 +513,77 @@ fn type_matches_with_wildcards(
     pkgs.iter().any(|pkg| {
         type_ctx.can_expand_wildcard(file, raw_type, pkg) && re.is_match(&format!("{pkg}.{simple}"))
     })
+}
+
+fn line_looks_like_local_var_decl(
+    line: &str,
+    re: &Regex,
+    file: &str,
+    type_ctx: &FileTypeContext,
+) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with("//")
+        || trimmed.starts_with('*')
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with("import ")
+        || trimmed.starts_with("package ")
+    {
+        return false;
+    }
+    let mut rest = trimmed;
+    for kw in ["final ", "var "] {
+        if let Some(r) = rest.strip_prefix(kw) {
+            rest = r.trim_start();
+        }
+    }
+    // Extract leading Java type token (`pkg.Type<...>[]` or `Type`).
+    let type_end = rest
+        .find(|c: char| {
+            !(c.is_alphanumeric() || matches!(c, '_' | '$' | '.' | '<' | '>' | '[' | ']'))
+        })
+        .unwrap_or(0);
+    if type_end == 0 {
+        return false;
+    }
+    let raw_type = &rest[..type_end];
+    let after_type = rest[type_end..].trim_start();
+    // Next token must be a lower-case local variable identifier followed by `=`, `;`, or `:`.
+    let var_end = after_type
+        .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+        .unwrap_or(after_type.len());
+    if var_end == 0 {
+        return false;
+    }
+    let var_name = &after_type[..var_end];
+    if !var_name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase())
+    {
+        return false;
+    }
+    let after_var = after_type[var_end..].trim_start();
+    if !(after_var.starts_with('=') || after_var.starts_with(';') || after_var.starts_with(':')) {
+        return false;
+    }
+    let base_type = raw_type
+        .split('<')
+        .next()
+        .unwrap_or(raw_type)
+        .trim_end_matches("[]");
+    let resolved = if base_type.contains('.') {
+        base_type.to_string()
+    } else if let Some(imp) = type_ctx
+        .explicit_imports
+        .get(file)
+        .and_then(|m| m.get(base_type))
+    {
+        imp.clone()
+    } else {
+        base_type.to_string()
+    };
+    type_matches_with_wildcards(re, &resolved, Some(file), type_ctx)
 }
 
 #[derive(Default)]
@@ -547,13 +650,15 @@ impl FileTypeContext {
                     }
                 }
                 "Class" | "Interface" | "Enum" | "Annotation" => {
-                    if let Some(qn) = node.qualified_name.as_deref() {
+                    if let Some(file) = node.file_path.as_deref()
+                        && is_code_file(Some(file))
+                        && let Some(qn) = node.qualified_name.as_deref()
+                    {
                         ctx.repo_fqns.insert(qn.to_string());
-                        if let Some(file) = node.file_path.as_ref()
-                            && !ctx.file_packages.contains_key(file)
+                        if !ctx.file_packages.contains_key(file)
                             && let Some((pkg, _)) = qn.rsplit_once('.')
                         {
-                            ctx.file_packages.insert(file.clone(), pkg.to_string());
+                            ctx.file_packages.insert(file.to_string(), pkg.to_string());
                         }
                     }
                 }
@@ -561,6 +666,27 @@ impl FileTypeContext {
             }
         }
         ctx
+    }
+
+    fn resolve_file_key(&self, path: &str) -> String {
+        if self.file_packages.contains_key(path)
+            || self.explicit_imports.contains_key(path)
+            || self.wildcards.contains_key(path)
+        {
+            return path.to_string();
+        }
+        let suffix = format!("/{}", path.trim_start_matches('/'));
+        for k in self
+            .file_packages
+            .keys()
+            .chain(self.explicit_imports.keys())
+            .chain(self.wildcards.keys())
+        {
+            if k.ends_with(&suffix) {
+                return k.clone();
+            }
+        }
+        path.to_string()
     }
 
     fn is_same_package_or_repo_type(&self, file: Option<&str>, qn: &str) -> bool {
@@ -901,8 +1027,12 @@ fn filecontent_fallback(
 }
 
 fn is_code_file(path: Option<&str>) -> bool {
-    path.map(|p| CODE_EXTENSIONS.iter().any(|ext| p.ends_with(ext)))
-        .unwrap_or(false)
+    path.map(|p| {
+        CODE_EXTENSIONS.iter().any(|ext| p.ends_with(ext))
+            && !p.contains("/src/test/")
+            && !p.starts_with("src/test/")
+    })
+    .unwrap_or(false)
 }
 
 #[cfg(test)]

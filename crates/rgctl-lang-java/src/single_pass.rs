@@ -347,13 +347,16 @@ pub fn extract_all_single_pass(
                 }
 
                 if JAVA_CALL_KINDS.contains(&kind) {
-                    if let Some(frame) = ctx.scopes.current_function() {
-                        if let Some(idx) = frame.symbol_idx {
-                            pending_calls.push(PendingCall {
-                                node,
-                                from_symbol_idx: idx,
-                            });
-                        }
+                    if let Some(idx) = ctx
+                        .scopes
+                        .current_function()
+                        .or_else(|| ctx.scopes.current_type())
+                        .and_then(|frame| frame.symbol_idx)
+                    {
+                        pending_calls.push(PendingCall {
+                            node,
+                            from_symbol_idx: idx,
+                        });
                     }
                 }
 

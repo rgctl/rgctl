@@ -423,6 +423,7 @@ impl GraphBuilder {
             &symbol.location.file,
             &symbol.name,
             symbol.qualified_name.as_deref(),
+            symbol.location.start_line,
         );
         // C `#include` paths are per-translation-unit; dedupe globally by path string
         // so kernel-scale repos do not materialize one Import node per occurrence.
@@ -541,6 +542,20 @@ impl GraphBuilder {
                     node = node.with_property(k.clone(), s);
                 }
             }
+        }
+
+        if self.symbol_files.contains_key(&node.id) {
+            let disambig_qn = format!(
+                "{}@{}",
+                symbol.qualified_name.as_deref().unwrap_or(&symbol.name),
+                symbol.location.start_line
+            );
+            node.id = rgctl_graph::stable_key::deterministic_node_id(
+                node.file_path.as_deref(),
+                node.name.as_ref(),
+                node.node_type,
+                Some(&disambig_qn),
+            );
         }
 
         let id = node.id;
@@ -663,7 +678,12 @@ impl GraphBuilder {
             .unwrap_or_else(|| symbol.name.clone());
         for field in &symbol.fields {
             let field_qn = format!("{owner_qn}.{}", field.name);
-            let key = symbol_key(&symbol.location.file, &field.name, Some(field_qn.as_str()));
+            let key = symbol_key(
+                &symbol.location.file,
+                &field.name,
+                Some(field_qn.as_str()),
+                0,
+            );
             if self.symbol_index.contains_key(&key) {
                 continue;
             }
@@ -707,6 +727,7 @@ impl GraphBuilder {
             &symbol.location.file,
             &symbol.name,
             symbol.qualified_name.as_deref(),
+            symbol.location.start_line,
         );
         if let Some(id) = self.symbol_index.get(&key)
             && let Some(node) = self.nodes.iter_mut().find(|n| n.id == *id)
@@ -1313,7 +1334,7 @@ impl GraphBuilder {
         }
 
         const STUB_FILE: &str = "<external>";
-        let key = symbol_key(STUB_FILE, simple, Some(qn.as_str()));
+        let key = symbol_key(STUB_FILE, simple, Some(qn.as_str()), 0);
         if let Some(&id) = self.symbol_index.get(&key) {
             self.external_stub_ids.insert(id);
             return id;
@@ -1896,8 +1917,11 @@ pub enum ConfigUsageKind {
     ConfigKey,
 }
 
-fn symbol_key(file: &str, name: &str, qualified: Option<&str>) -> String {
-    format!("{file}::{}", qualified.unwrap_or(name))
+fn symbol_key(file: &str, name: &str, qualified: Option<&str>, start_line: usize) -> String {
+    match qualified {
+        Some(qn) if qn.ends_with(".<init>") => format!("{file}::{qn}::{start_line}"),
+        _ => format!("{file}::{}", qualified.unwrap_or(name)),
+    }
 }
 
 /// Return the sole candidate UUID, or `None` when zero or multiple distinct IDs.

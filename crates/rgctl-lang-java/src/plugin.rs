@@ -104,6 +104,9 @@ impl ExtractCtx {
         if let Some(fqn) = self.imports.get(&base) {
             return Some(fqn.clone());
         }
+        if is_java_lang_simple_type(&base) {
+            return Some(format!("java.lang.{base}"));
+        }
         if same_file_types.contains(&base) {
             return Some(self.qualify_type(&base));
         }
@@ -228,6 +231,76 @@ fn strip_java_type_sugar(raw: &str) -> String {
         .trim_end_matches("...")
         .trim()
         .to_string()
+}
+
+fn is_java_lang_simple_type(simple: &str) -> bool {
+    matches!(
+        simple,
+        "Object"
+            | "String"
+            | "StringBuilder"
+            | "StringBuffer"
+            | "CharSequence"
+            | "Appendable"
+            | "Class"
+            | "ClassLoader"
+            | "System"
+            | "Runtime"
+            | "Process"
+            | "ProcessBuilder"
+            | "Thread"
+            | "ThreadLocal"
+            | "InheritableThreadLocal"
+            | "Runnable"
+            | "Throwable"
+            | "Exception"
+            | "RuntimeException"
+            | "Error"
+            | "AssertionError"
+            | "OutOfMemoryError"
+            | "StackOverflowError"
+            | "NullPointerException"
+            | "IllegalArgumentException"
+            | "IllegalStateException"
+            | "UnsupportedOperationException"
+            | "IndexOutOfBoundsException"
+            | "ArithmeticException"
+            | "ClassCastException"
+            | "ClassNotFoundException"
+            | "NoSuchMethodException"
+            | "NoSuchFieldException"
+            | "InstantiationException"
+            | "IllegalAccessException"
+            | "InterruptedException"
+            | "SecurityException"
+            | "SecurityManager"
+            | "Number"
+            | "Integer"
+            | "Long"
+            | "Double"
+            | "Float"
+            | "Boolean"
+            | "Byte"
+            | "Short"
+            | "Character"
+            | "Void"
+            | "Math"
+            | "StrictMath"
+            | "Package"
+            | "Module"
+            | "StackTraceElement"
+            | "Comparable"
+            | "Iterable"
+            | "AutoCloseable"
+            | "Cloneable"
+            | "Override"
+            | "Deprecated"
+            | "SuppressWarnings"
+            | "FunctionalInterface"
+            | "SafeVarargs"
+            | "Enum"
+            | "Record"
+    )
 }
 
 fn source_location(node: Node, file_path: &str) -> SourceLocation {
@@ -612,6 +685,10 @@ impl JavaPlugin {
                 "static_initializer" => {
                     let owner = self.find_containing_type_name(parent, source, ctx)?;
                     return Some(format!("{}.<clinit>", ctx.qualify_type(&owner)));
+                }
+                "field_declaration" => {
+                    let owner = self.find_containing_type_name(parent, source, ctx)?;
+                    return Some(ctx.qualify_type(&owner));
                 }
                 _ => {}
             }
@@ -2854,10 +2931,13 @@ impl JavaPlugin {
                         ctx.resolve_type_fqn(o, same_file_types)
                             .or_else(|| Some(o.clone()))
                     });
-                    let to_type_hint = owner_fqn
+                    let to_type_hint = owner_raw
                         .as_ref()
-                        .map(|o| strip_java_type_sugar(o))
-                        .or(owner_raw.clone());
+                        .map(|o| {
+                            let base = strip_java_type_sugar(o);
+                            base.rsplit('.').next().unwrap_or(&base).to_string()
+                        })
+                        .or_else(|| owner_fqn.as_ref().map(|o| strip_java_type_sugar(o)));
                     let to_qualified_hint =
                         owner_fqn.as_ref().map(|o| format!("{o}.{method_name}"));
                     relations.push(Relation {
@@ -3558,6 +3638,13 @@ impl JavaPlugin {
             return (Some(simple), Some(format!("{fqn}.{callee}")));
         }
 
+        if object.kind() == "class_literal" {
+            return (
+                Some("java.lang.Class".to_string()),
+                Some(format!("java.lang.Class.{callee}")),
+            );
+        }
+
         if object.kind() == "method_invocation"
             && let Some((simple, fqn)) = self.resolve_chained_invocation_return_type(
                 object,
@@ -3905,9 +3992,10 @@ impl JavaPlugin {
 
                 for field_child in child.children(&mut field_cursor) {
                     // Extract the type
-                    if field_child.kind() == "type_identifier"
-                        || field_child.kind() == "generic_type"
-                    {
+                    if matches!(
+                        field_child.kind(),
+                        "type_identifier" | "generic_type" | "scoped_type_identifier"
+                    ) {
                         type_name = field_child.utf8_text(source).ok().map(|s| {
                             // Remove generics if present (e.g., "List<String>" → "List")
                             s.split('<').next().unwrap_or(s).to_string()
@@ -3966,7 +4054,10 @@ impl JavaPlugin {
 
                 let mut local_cursor = node.walk();
                 for child in node.children(&mut local_cursor) {
-                    if child.kind() == "type_identifier" || child.kind() == "generic_type" {
+                    if matches!(
+                        child.kind(),
+                        "type_identifier" | "generic_type" | "scoped_type_identifier"
+                    ) {
                         type_name = child
                             .utf8_text(source)
                             .ok()
