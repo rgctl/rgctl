@@ -12,6 +12,7 @@
 
 ## Must-follow rules
 
+- **No git commit or git push without explicit permission:** You are **NOT** allowed to commit code (`git commit`) or push code (`git push`) until the user explicitly asks you to commit or push. Prepare changes in the working tree and wait for the user's explicit instruction before committing or pushing.
 - **Async vs CPU:** Discover/serve use `tokio`. Do **not** run heavy CPU (parse, graph analytics, CFG) on the async executor — use `spawn_blocking` / Rayon where the pipeline already does.
 - **Parallel ingest:** Per-file plugin extraction runs on the discover worker pool. Do not replace with a serial whole-repo walk when parallel ingest exists.
 - **Streaming commits:** Emit symbols/relations file-by-file; avoid unbounded `Vec<Relation>` / whole-repo ASTs before commit (`rgctl-extraction` spill patterns).

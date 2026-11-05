@@ -156,6 +156,21 @@ if updated != text:
 PY
 fi
 
+# Keep dashboard/wasm/package.json in sync when present.
+if [[ -f dashboard/wasm/package.json ]]; then
+  python3 - "$prev" "$new" <<'PY'
+import sys
+from pathlib import Path
+prev, new = sys.argv[1], sys.argv[2]
+path = Path("dashboard/wasm/package.json")
+text = path.read_text()
+updated = text.replace(f'"version": "{prev}"', f'"version": "{new}"')
+if updated != text:
+    path.write_text(updated)
+    print(f"updated dashboard/wasm/package.json version {prev} -> {new}")
+PY
+fi
+
 # Scaffold docs/releases/vX.Y.Z.md if missing.
 NOTES_FILE="docs/releases/v${new}.md"
 if [[ ! -f "$NOTES_FILE" ]]; then
