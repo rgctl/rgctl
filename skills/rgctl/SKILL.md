@@ -1,23 +1,21 @@
 ---
 name: rgctl
 description: >-
-  Answer structural questions about a codebase using the rgctl CLI graph
-  (architecture, communities, call relationships, blast radius, data-flow
-  slices, CPG, semantic search, migration roadmap, CI gates). Use when the
-  user asks how code is connected, what calls what, impact of changing a
-  symbol, where data flows, migration planning/roadmap, repo
-  structure/hotspots, or when `.rgctl/` exists — treat natural-language
-  codebase questions as rgctl queries first.
+  Navigate indexed code with rgctl: locate definitions, imports, annotations,
+  and the files to inspect; follow calls and assess change impact. Use during
+  implementation, debugging, or analysis when you need code locations or
+  relationships, including lookups needed to carry out an edit.
 rgctl-managed: true
 ---
 
 # rgctl
 
-Answer **structural** questions from a pre-built code knowledge graph instead of reading whole files into context. Spawn **`rgctl -f json`** subprocesses (or use foreground **`rgctl serve`** for repeated HTTP queries). Artifacts live at **`{repo}/.rgctl/`** after `discover`.
+Use the code graph for code navigation during implementation as well as structural analysis. When you need the location of a symbol, import, or annotation, a targeted `find` query can return the source locations to inspect directly. Use source text search for literal content or facts outside the graph. Spawn **`rgctl -f json`** subprocesses (or use foreground **`rgctl serve`** for repeated HTTP queries). Artifacts live at **`{repo}/.rgctl/`** after `discover`.
 
 ## When to Use This Skill
 
-Use rgctl when the user asks:
+Use rgctl when your next coding decision needs:
+- **Code locations** — definitions, imports, annotations, or a worklist of matching source files to inspect before editing
 - **Architecture questions** — "What calls X?", "Where is the checkout flow?", "What communities exist?"
 - **Impact analysis** — "What breaks if I change this function?"
 - **Data flow** — "Where does this variable flow?", "Trace this tainted input"
@@ -58,13 +56,13 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 ## What to Do When Invoked
 
 1. **Help-only** — If user only wants help/command list → print workflow table below and **stop** (no discover, no queries)
-2. **Fast path (existing index)** — If `.rgctl/` exists **and** request is a structural question (not rebuild) → **do not re-run full discover**. Route via workflow table; use CLI `-f json`.
+2. **Fast path (existing index)** — If `.rgctl/` exists **and** request needs code locations or structural relationships (not rebuild) → **do not re-run full discover**. Route via workflow table; use CLI `-f json`.
    - **Staleness exception:** run `rgctl -f json status`. If `index_current` is `false`, run **`rgctl update`** once — works with or without `serve --watch` (under watch, update enqueues for the sole writer; do not stop serve). Do **not** loop full `discover` for dirty working trees.
    - **Exception — vuln / OSV / OpenVEX:** if reachability, sink-first taint, or `vuln analyze` is in scope and CFG was not built (`cpg status` / missing CFG archive), re-run `discover . --with-cfg` (add `--with-taint` for PDG-backed confidence) before P4–P6
 3. **No index** — Run `cd "$REPO" && rgctl discover .` or `rgctl -r "$REPO" discover` (do **not** use `-r REPO discover .` — the `.` ignores `-r`). Add flags only when needed; for vuln scans use `--with-cfg` (see vuln workflow)
 4. **Natural-language routing** — Map utterance with workflow table. Do not ask user to rephrase into CLI unless disambiguation required
 5. **Summarize** — Report key facts, not raw JSON dumps
-6. **Stop conditions** — Pure code-edit/debug with no structural need → do not force rgctl
+6. **No lookup needed** — If the task already supplies the exact code location and no relationship needs inspection, work at that location. Otherwise choose a targeted query for the code location or relationship you need, then inspect the returned source. A separate architecture-analysis request is not required.
 
 **Relationship questions** (e.g., "relationship between X and Y"): resolve symbols → bounded `CALLS`/`DEPENDSON` traversal → answer in plain language (hops, shared neighbors, files). If no direct path but asymmetric dependency, fall back to `blast-radius` on each.
 
