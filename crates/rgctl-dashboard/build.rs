@@ -3,7 +3,11 @@
 use std::path::Path;
 
 fn main() {
-    let dist = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dashboard/dist");
+    let dist = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("crates/rgctl-dashboard must live under crates/")
+        .join("dashboard/dist");
     println!(
         "cargo:rerun-if-changed={}",
         dist.join("index.html").display()

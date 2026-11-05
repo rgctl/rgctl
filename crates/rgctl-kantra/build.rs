@@ -87,10 +87,14 @@ fn main() {
 
     let embedded_root = manifest_dir.join("assets/rulesets/stable/java");
     let rulesets_root = manifest_dir.join("assets/rulesets");
-    let fixture_root = manifest_dir
-        .join("../../tests/fixtures/kantra-rules")
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .expect("crates/rgctl-kantra must live under crates/");
+    let fixture_root = repo_root
+        .join("tests/fixtures/kantra-rules")
         .canonicalize()
-        .unwrap_or_else(|_| manifest_dir.join("../../tests/fixtures/kantra-rules"));
+        .unwrap_or_else(|_| repo_root.join("tests/fixtures/kantra-rules"));
 
     let (source_label, source_roots, rulesets_rev) = if embedded_root.is_dir() {
         println!("cargo:rerun-if-changed={}", embedded_root.display());
@@ -100,10 +104,10 @@ fn main() {
         }
         let rev = rulesets_git_sha(&rulesets_root);
         if let Some(ref sha) = rev {
-            println!(
-                "cargo:rerun-if-changed={}",
-                rulesets_root.join(".git").display()
-            );
+            let dot_git = rulesets_root.join(".git");
+            if dot_git.exists() {
+                println!("cargo:rerun-if-changed={}", dot_git.display());
+            }
             write_rulesets_source(&out_dir, sha);
         }
         ("stable-java", dirs, rev)

@@ -27,6 +27,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   # Fail the build on grammar ↔ *-ast-coverage.json drift (rgctl-languages build.rs).
   RGCTL_AST_COVERAGE_STRICT: "1"
   FEATURES: ${{ github.event_name == 'workflow_dispatch' && inputs.features || '' }}
@@ -49,8 +52,8 @@ jobs:
             - Add `ci` to run Format & Clippy + Unit & Core Integration Tests
           EOF
 
-  dco:
-    name: DCO sign-off
+  commit-policy:
+    name: DCO sign-off & no AI commit trailers
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -60,32 +63,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check PR commits for DCO Signed-off-by trailer
+      - name: Check PR commits for DCO sign-off and no AI trailers
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           python3 scripts/check-no-ai-commit-trailers.py \
-            --dco-only \
-            --range "${BASE_SHA}..${HEAD_SHA}"
-
-  no-ai-commit-trailers:
-    name: no AI commit trailers
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check PR commits for AI agent trailers
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          python3 scripts/check-no-ai-commit-trailers.py \
+            --require-dco \
             --range "${BASE_SHA}..${HEAD_SHA}"
 
   fmt-and-clippy:
@@ -96,12 +80,10 @@ jobs:
        (contains(github.event.pull_request.labels.*.name, 'ci') ||
         contains(github.event.pull_request.labels.*.name, 'ci:lint')))
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          lfs: true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -111,22 +93,7 @@ jobs:
       - name: Cache cargo
         uses: swatinem/rust-cache@v2
         with:
-          shared-key: ci-${{ env.FEATURES }}
+          shared-key: ci-lint-${{ env.FEATURES }}
 
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
-
-      - name: cargo check --locked --bin rgctl
-        run: cargo check --locked --bin rgctl
-
-      - name: cargo clippy (workspace lib & bins)
-        run: cargo clippy --features "${{ env.FEATURES }}" --lib --bins -- -D warnings
-
-      - name: cargo clippy (rgctl-analysis)
-        run: cargo clippy -p rgctl-analysis --features "${{ env.FEATURES }}" -- -D warnings
-
-      - name: cargo clippy (rgctl-graph, rgctl-core)
-        run: cargo clippy -p rgctl-graph -p rgctl-core --features "${{ env.FEATURES }}" -- -D warnings
-
-      - name: Compile all unit & integration tests
-        run: cargo test --features "${{ env.FEATURES }}" --workspace --lib --bins --tests --no-run
+      - name: Run Tier 1 preflight (fmt + clippy + check --tests)
+        run: ./scripts/preflight-pr.sh --lint --features "${{ env.FEATURES }}"
