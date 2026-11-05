@@ -1,22 +1,20 @@
 ---
 name: rgctl
 description: >-
-  Primary code-intelligence skill for any codebase question, investigation,
-  refactoring, or migration. Always acquire `.rgctl/` first (`rgctl discover .`
-  if missing), then prefer `rgctl -f json` (`find`, `callers`, `relations`,
-  `inventory`, `blast-radius`, `slice`) before reading source files or running
-  grep/find. Covers architecture, communities, call relationships, blast
-  radius, CPG/slices, semantic search, migration, and CI gates.
+  Navigate indexed code with rgctl: locate definitions, imports, annotations,
+  and the files to inspect; follow calls and assess change impact. Use during
+  implementation, debugging, or analysis when you need code locations or
+  relationships, including lookups needed to carry out an edit.
 rgctl-managed: true
 ---
 
 # rgctl
 
-Use **rgctl** as your primary code-intelligence engine for any codebase question, investigation, refactoring, or migration instead of reading whole files into context. Spawn **`rgctl -f json`** subprocesses (or use foreground **`rgctl serve`** for repeated HTTP queries). Artifacts live at **`{repo}/.rgctl/`** after `discover`.
+Use the code graph for code navigation during implementation as well as structural analysis. When you need the location of a symbol, import, or annotation, a targeted `find` query can return the source locations to inspect directly. Use source text search for literal content or facts outside the graph. Spawn **`rgctl -f json`** subprocesses (or use foreground **`rgctl serve`** for repeated HTTP queries). Artifacts live at **`{repo}/.rgctl/`** after `discover`.
 
 ## Step 0: Acquire `.rgctl/` Data First (mandatory)
 
-On **any** code question, investigation, refactoring, or migration:
+When the task needs a code lookup or relationship query:
 
 1. Run `rgctl -f json status` (or check for `.rgctl/graph.snapshot.bin`).
 2. If the snapshot is missing → immediately run `cd "$REPO" && rgctl discover .` (do **not** use `-r REPO discover .` — the `.` ignores `-r`).
@@ -25,11 +23,12 @@ On **any** code question, investigation, refactoring, or migration:
    - `rgctl serve --watch` (background debounced file watcher), or
    - `rgctl update` between edit waves.
 
-Do **not** skip rgctl for “just a code edit” — use graph facts to choose edit order and verify afterward.
+Use graph facts to choose edit order and verify afterward when the task needs code navigation or relationship analysis.
 
 ## When to Use This Skill
 
-Use rgctl for:
+Use rgctl when your next coding decision needs:
+- **Code locations** — definitions, imports, annotations, or a worklist of matching source files to inspect before editing
 - **Architecture questions** — "What calls X?", "Where is the checkout flow?", "What communities exist?"
 - **Impact analysis** — "What breaks if I change this function?"
 - **Data flow** — "Where does this variable flow?", "Trace this tainted input"
@@ -69,13 +68,14 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 ## What to Do When Invoked
 
 1. **Help-only** — If user only wants help/command list → print workflow table below and **stop** (no discover, no queries)
-2. **Step 0** — Ensure `.rgctl/graph.snapshot.bin` exists (`rgctl -f json status` → `rgctl discover .` if missing)
-3. **Fast path (existing index)** — Do **not** re-run full discover for ordinary questions. Route via workflow table; use CLI `-f json`.
+2. **No lookup needed** — If the task supplies the exact code location and no relationship needs inspection, work at that location. Otherwise choose a targeted query, then inspect the returned source.
+3. **Step 0** — Ensure `.rgctl/graph.snapshot.bin` exists (`rgctl -f json status` → `rgctl discover .` if missing)
+4. **Fast path (existing index)** — Do **not** re-run full discover for ordinary questions. Route via workflow table; use CLI `-f json`.
    - **Staleness:** If `index_current` is `false`, run **`rgctl update`** once — works with or without `serve --watch` (under watch, update enqueues for the sole writer; do not stop serve). Do **not** loop full `discover` for dirty working trees.
    - **Vuln / OSV / OpenVEX / SARIF:** route to **`/rgctl:vuln`** (`vuln fetch`, `vuln scan`, `vuln analyze`); lazy per-call-site CFG/PDG runs automatically on plain snapshots (use `--with-cfg` / `--full` only for standalone `taint --sink`).
-4. **Natural-language routing** — Map utterance with workflow table. Do not ask user to rephrase into CLI unless disambiguation required
-5. **Summarize** — Report key facts, not raw JSON dumps
-6. **Continuous sync** — Multi-wave edits → `rgctl serve --watch` or `rgctl update` between waves; verify with graph queries after edits
+5. **Natural-language routing** — Map utterance with workflow table. Do not ask user to rephrase into CLI unless disambiguation required
+6. **Summarize** — Report key facts, not raw JSON dumps
+7. **Continuous sync** — Multi-wave edits → `rgctl serve --watch` or `rgctl update` between waves; verify with graph queries after edits
 
 **Relationship questions** (e.g., "relationship between X and Y"): resolve symbols → bounded `CALLS`/`DEPENDSON` traversal → answer in plain language (hops, shared neighbors, files). If no direct path but asymmetric dependency, fall back to `blast-radius --summary` on each.
 
