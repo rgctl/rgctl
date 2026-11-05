@@ -185,7 +185,7 @@ Commands are organized into six groups (`rgctl --help`). Full flag tables: **[CL
 | **Analysis** | Natural-language search over functions or docs | `semantic` (`index`, `query`) |
 | **Security** | OSV advisories, lockfile deps, sink-first & on-demand taint | `vuln`, `deps`, `security`, `taint` |
 | **Policy** | PR call-path deltas, composed review & CI blast-radius gates | `review paths`, `review check` (`pr-check` alias), `review export`, `check`, `rules` |
-| **Meta** | Snapshot export, agent pack install, help | `export`, `install`, `help` |
+| **Meta** | Snapshot export, agent pack install, shell completions, help | `export`, `install`, `completions`, `help` |
 
 Highlights: single-pass `KindDispatchTable` + `ScopeStack` AST engine, content-addressed `FileFacts` cache + `rgctl watch`, cross-language C3 MRO (`relations -e overrides`), framework route & DI extraction (`ExposesRoute`, `Injects`), Konveyor Kantra rules (`discover --with-kantra`) & migration roadmaps (`--export-migration-hints`), SCIP overlay (`discover --scip`), git co-change (`discover --with-git` → `metrics --churn` / `relations -e cochangeswith`), park-and-resolve multi-repo merge (`rgctl merge`), Fast-Leiden + $\mu+4\sigma$ hub stripping, pull-based CSR FastPageRank with `NodeRole` filtering, lazy v3 `cfg_pdg.bin` slicing, Type-3/4 fragment clones, and the Universe spatial architecture dashboard (`discover --with-universe` → `rgctl serve --open`).
 

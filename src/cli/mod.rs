@@ -8,6 +8,7 @@ mod check;
 pub mod check_output;
 mod clones;
 mod communities;
+mod completions;
 mod context;
 mod cpg;
 mod diff;
@@ -1018,6 +1019,14 @@ pub enum Commands {
         force: bool,
     },
 
+    /// Print a shell completion script (bash, zsh, fish, elvish, powershell)
+    #[command(display_order = 62)]
+    Completions {
+        /// Shell to generate the completion script for
+        #[arg(value_name = "SHELL", value_enum)]
+        shell: clap_complete::Shell,
+    },
+
     /// OSV vulnerability triage / analyze
     #[command(display_order = 40)]
     Vuln {
@@ -1677,6 +1686,11 @@ pub enum CpgCommands {
 
 impl Cli {
     pub fn run(self) -> anyhow::Result<()> {
+        // Completion scripts go to stdout verbatim: no session, logging, or wall-time banner.
+        if let Commands::Completions { shell } = self.command {
+            return completions::run(shell, self.output.as_deref());
+        }
+
         let wall_start = Instant::now();
         let command_label = command_label_for(&self.command);
         let long_running = matches!(
@@ -2687,6 +2701,7 @@ impl Cli {
                     depth,
                 } => vuln_deps::run_sink_taint(&ctx, sink, source, depth),
             },
+            Commands::Completions { .. } => unreachable!("completions return before session setup"),
             Commands::Diff { base, head } => diff::run(&ctx, diff::DiffArgs { base, head }),
             Commands::Merge { repos, output_dir } => {
                 merge::run(&ctx, merge::MergeArgs { repos, output_dir })
@@ -2787,6 +2802,7 @@ fn command_label_for(command: &Commands) -> &'static str {
         Commands::PrCheck { .. } => "pr-check",
         Commands::Export { .. } => "export",
         Commands::Install { .. } => "install",
+        Commands::Completions { .. } => "completions",
         Commands::Vuln { action } => match action {
             VulnCommands::Triage { .. } => "vuln triage",
             VulnCommands::Analyze { .. } => "vuln analyze",

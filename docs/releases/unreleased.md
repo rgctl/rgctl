@@ -4,4 +4,4 @@
 
 ## Highlights
 
-_(none yet)_
+- `rgctl completions <bash|zsh|fish|elvish|powershell>` prints a shell completion script generated from the CLI definition; no repo or cache needed. Setup: [Installation → Shell completions](../installation.md#shell-completions).
