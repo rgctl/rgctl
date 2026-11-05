@@ -3523,7 +3523,7 @@ impl JavaPlugin {
                 .and_then(|qn| qn.rsplit('.').nth(1).map(|s| s.to_string()))
         });
 
-        let Some(object) = call.child_by_field_name("object") else {
+        let Some(mut object) = call.child_by_field_name("object") else {
             // Bare call: static import member, else enclosing type.
             if let Some(owner) = extract_ctx.static_imports.get(callee) {
                 let simple = strip_java_type_sugar(owner);
@@ -3535,6 +3535,41 @@ impl JavaPlugin {
                 .or_else(|| owner_simple.as_ref().map(|o| format!("{o}.{callee}")));
             return (owner_simple.or(owner_fqn), qh);
         };
+
+        while object.kind() == "parenthesized_expression" {
+            if let Some(inner) = object.named_child(0) {
+                object = inner;
+            } else {
+                break;
+            }
+        }
+
+        if matches!(
+            object.kind(),
+            "cast_expression" | "object_creation_expression"
+        ) && let Some(type_node) = object.child_by_field_name("type")
+            && let Ok(raw_ty) = type_node.utf8_text(source).map(str::trim)
+            && !raw_ty.is_empty()
+        {
+            let fqn = extract_ctx
+                .resolve_type_fqn(raw_ty, same_file_types)
+                .unwrap_or_else(|| strip_java_type_sugar(raw_ty));
+            let simple = strip_java_type_sugar(&fqn);
+            return (Some(simple), Some(format!("{fqn}.{callee}")));
+        }
+
+        if object.kind() == "method_invocation"
+            && let Some((simple, fqn)) = self.resolve_chained_invocation_return_type(
+                object,
+                source,
+                extract_ctx,
+                symbols,
+                from_fn,
+                same_file_types,
+            )
+        {
+            return (Some(simple), Some(format!("{fqn}.{callee}")));
+        }
 
         let Ok(obj_text) = object.utf8_text(source).map(str::trim) else {
             return (None, None);
@@ -3648,6 +3683,145 @@ impl JavaPlugin {
         }
 
         (None, None)
+    }
+
+    /// Infer the return type `(simple_type, fqn_type)` of an inner `method_invocation`
+    /// used as the receiver of a chained call (e.g. `req.getSession().setAttribute(...)`).
+    fn resolve_chained_invocation_return_type(
+        &self,
+        inner_call: Node,
+        source: &[u8],
+        extract_ctx: &ExtractCtx,
+        symbols: &[Symbol],
+        from_fn: &Symbol,
+        same_file_types: &HashSet<String>,
+    ) -> Option<(String, String)> {
+        let name_node = inner_call.child_by_field_name("name")?;
+        let inner_callee = name_node.utf8_text(source).ok()?.trim();
+        if inner_callee.is_empty() {
+            return None;
+        }
+
+        let (inner_recv_simple, inner_recv_qn) = self.resolve_call_receiver(
+            inner_call,
+            source,
+            extract_ctx,
+            symbols,
+            from_fn,
+            inner_callee,
+            same_file_types,
+        );
+
+        let inner_owner_fqn = inner_recv_qn
+            .as_deref()
+            .and_then(|qn| qn.rsplit_once('.').map(|(o, _)| o));
+
+        if let Some(rt) = symbols
+            .iter()
+            .find(|s| s.symbol_type == SymbolType::Function && s.name == inner_callee)
+            .and_then(|s| s.return_type.as_deref())
+            .filter(|rt| !rt.is_empty() && *rt != "void")
+        {
+            let fqn = extract_ctx
+                .resolve_type_fqn(rt, same_file_types)
+                .unwrap_or_else(|| strip_java_type_sugar(rt));
+            let simple = strip_java_type_sugar(&fqn);
+            return Some((simple, fqn));
+        }
+
+        let ee_prefix = inner_owner_fqn
+            .and_then(|o| {
+                if o.starts_with("jakarta.") {
+                    Some("jakarta")
+                } else if o.starts_with("javax.") {
+                    Some("javax")
+                } else {
+                    None
+                }
+            })
+            .unwrap_or("javax");
+
+        let raw_return = match (inner_recv_simple.as_deref(), inner_callee) {
+            (Some("HttpServletRequest"), "getSession") | (_, "getSession")
+                if inner_owner_fqn.is_none_or(|o| o.contains("servlet")) =>
+            {
+                if extract_ctx.imports.contains_key("HttpSession") {
+                    "HttpSession".to_string()
+                } else {
+                    format!("{ee_prefix}.servlet.http.HttpSession")
+                }
+            }
+            (
+                Some("HttpServletRequest" | "ServletRequest" | "HttpSession" | "ServletConfig"),
+                "getServletContext",
+            ) => {
+                if extract_ctx.imports.contains_key("ServletContext") {
+                    "ServletContext".to_string()
+                } else {
+                    format!("{ee_prefix}.servlet.ServletContext")
+                }
+            }
+            (
+                Some("EJBContext" | "SessionContext" | "MessageDrivenContext" | "EntityContext"),
+                "getUserTransaction",
+            )
+            | (_, "getUserTransaction") => {
+                if extract_ctx.imports.contains_key("UserTransaction") {
+                    "UserTransaction".to_string()
+                } else {
+                    format!("{ee_prefix}.transaction.UserTransaction")
+                }
+            }
+            (Some("EntityManager"), "getTransaction") => {
+                if extract_ctx.imports.contains_key("EntityTransaction") {
+                    "EntityTransaction".to_string()
+                } else {
+                    format!("{ee_prefix}.persistence.EntityTransaction")
+                }
+            }
+            (Some("EntityManager"), "createQuery" | "createNamedQuery" | "createNativeQuery") => {
+                if extract_ctx.imports.contains_key("Query") {
+                    "Query".to_string()
+                } else {
+                    format!("{ee_prefix}.persistence.Query")
+                }
+            }
+            (Some("EntityManagerFactory"), "createEntityManager") => {
+                if extract_ctx.imports.contains_key("EntityManager") {
+                    "EntityManager".to_string()
+                } else {
+                    format!("{ee_prefix}.persistence.EntityManager")
+                }
+            }
+            (Some("Persistence"), "createEntityManagerFactory") => {
+                if extract_ctx.imports.contains_key("EntityManagerFactory") {
+                    "EntityManagerFactory".to_string()
+                } else {
+                    format!("{ee_prefix}.persistence.EntityManagerFactory")
+                }
+            }
+            (Some("DataSource" | "DriverManager"), "getConnection") => {
+                "java.sql.Connection".to_string()
+            }
+            (Some("Connection"), "createStatement") => "java.sql.Statement".to_string(),
+            (Some("Connection"), "prepareStatement") => "java.sql.PreparedStatement".to_string(),
+            (Some("Connection"), "prepareCall") => "java.sql.CallableStatement".to_string(),
+            (Some("Statement" | "PreparedStatement" | "CallableStatement"), "executeQuery") => {
+                "java.sql.ResultSet".to_string()
+            }
+            (Some("Runtime"), "getRuntime") => "java.lang.Runtime".to_string(),
+            (Some("URL"), "openConnection") => "java.net.URLConnection".to_string(),
+            (Some("URL"), "openStream") => "java.io.InputStream".to_string(),
+            (Some("Path"), "toFile") => "java.io.File".to_string(),
+            (Some("File"), "toPath") => "java.nio.file.Path".to_string(),
+            _ => return None,
+        };
+
+        let fqn = extract_ctx
+            .resolve_type_fqn(&raw_return, same_file_types)
+            .unwrap_or(raw_return);
+        let simple = strip_java_type_sugar(&fqn);
+        Some((simple, fqn))
     }
 
     /// Best-effort attempt to infer the target class for a method call.
@@ -5120,6 +5294,45 @@ class Service {
                             .unwrap_or(false))
             }),
             "expected Calls toward builder()"
+        );
+    }
+
+    #[test]
+    fn test_chained_call_and_cast_receiver_resolution_jr3() {
+        let source = br#"
+package com.acme.web;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.transaction.UserTransaction;
+
+public class TradeServlet {
+    public void handle(HttpServletRequest req, javax.naming.Context ctx) throws Exception {
+        req.getSession().setAttribute("uid", "42");
+        ((UserTransaction) ctx.lookup("java:comp/UserTransaction")).begin();
+    }
+}
+"#;
+        let plugin = JavaPlugin::new().unwrap();
+        let result = plugin
+            .extract_all(Path::new("TradeServlet.java"), source)
+            .unwrap();
+        assert!(
+            result.relations.iter().any(|r| {
+                matches!(r.relation_type, RelationType::Calls)
+                    && r.to_qualified_hint.as_deref()
+                        == Some("javax.servlet.http.HttpSession.setAttribute")
+            }),
+            "expected chained req.getSession().setAttribute to resolve to javax.servlet.http.HttpSession.setAttribute, got {:?}",
+            result.relations
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                matches!(r.relation_type, RelationType::Calls)
+                    && r.to_qualified_hint.as_deref()
+                        == Some("javax.transaction.UserTransaction.begin")
+            }),
+            "expected cast ((UserTransaction) ...).begin() to resolve to javax.transaction.UserTransaction.begin, got {:?}",
+            result.relations
         );
     }
 }

@@ -112,23 +112,20 @@ fn coordinate_variants(coord: &str) -> Vec<String> {
     }
     if bare.contains(':') {
         out.push(bare.replace(':', "."));
-    } else if let Some((group, artifact)) = split_dot_coordinate(bare) {
-        out.push(format!("{group}:{artifact}"));
+    } else {
+        for (idx, ch) in bare.char_indices() {
+            if ch == '.' {
+                let group = &bare[..idx];
+                let artifact = &bare[idx + 1..];
+                if !group.is_empty() && !artifact.is_empty() {
+                    out.push(format!("{group}:{artifact}"));
+                }
+            }
+        }
     }
     out.sort();
     out.dedup();
     out
-}
-
-fn split_dot_coordinate(coord: &str) -> Option<(&str, &str)> {
-    // Heuristic: last segment after the final `.` is artifactId when it contains `-`
-    // or when there are ≥2 dots (group.artifact). Prefer last-dot split for Kantra
-    // `org.jboss.bom.eap-runtime-artifacts` → `org.jboss.bom` + `eap-runtime-artifacts`.
-    let (group, artifact) = coord.rsplit_once('.')?;
-    if group.is_empty() || artifact.is_empty() {
-        return None;
-    }
-    Some((group, artifact))
 }
 
 /// Inclusive version bounds matching Konveyor semantics (numeric segment compare).
@@ -271,5 +268,32 @@ mod tests {
             &nodes,
         );
         assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn matches_artifact_id_containing_dots() {
+        let nodes = vec![dep("jakarta.ws.rs:jakarta.ws.rs-api", Some("3.1.0"))];
+        let v = eval_dependency(
+            "r1",
+            "maven",
+            "jakarta.ws.rs.jakarta.ws.rs-api",
+            None,
+            None,
+            None,
+            &nodes,
+        );
+        assert_eq!(v.len(), 1);
+
+        let dot_nodes = vec![dep("jakarta.ws.rs.jakarta.ws.rs-api", Some("3.1.0"))];
+        let v2 = eval_dependency(
+            "r2",
+            "maven",
+            "",
+            Some("jakarta.ws.rs:jakarta.ws.rs-api"),
+            None,
+            None,
+            &dot_nodes,
+        );
+        assert_eq!(v2.len(), 1);
     }
 }

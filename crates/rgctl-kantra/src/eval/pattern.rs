@@ -23,11 +23,13 @@ pub fn normalize_kantra_glob(pattern: &str) -> String {
     let mut out = String::with_capacity(pattern.len() + 8);
     let mut i = 0;
     let mut in_class = false;
+    let mut prev_was_unescaped_dot = false;
     while i < chars.len() {
         let c = chars[i];
         match c {
             '\\' => {
                 out.push('\\');
+                prev_was_unescaped_dot = false;
                 if i + 1 < chars.len() {
                     out.push(chars[i + 1]);
                     i += 2;
@@ -37,28 +39,33 @@ pub fn normalize_kantra_glob(pattern: &str) -> String {
             }
             '[' if !in_class => {
                 in_class = true;
+                prev_was_unescaped_dot = false;
                 out.push('[');
                 i += 1;
             }
             ']' if in_class => {
                 in_class = false;
+                prev_was_unescaped_dot = false;
                 out.push(']');
                 i += 1;
             }
             '*' if !in_class => {
-                let preceded_by_dot_or_escape = out
-                    .chars()
-                    .next_back()
-                    .is_some_and(|prev| prev == '.' || prev == '\\');
-                if preceded_by_dot_or_escape {
+                if prev_was_unescaped_dot {
                     out.push('*');
                 } else {
                     out.push_str(".*");
                 }
+                prev_was_unescaped_dot = false;
+                i += 1;
+            }
+            '.' => {
+                out.push('.');
+                prev_was_unescaped_dot = !in_class;
                 i += 1;
             }
             _ => {
                 out.push(c);
+                prev_was_unescaped_dot = false;
                 i += 1;
             }
         }
@@ -98,6 +105,7 @@ mod tests {
     fn preserves_dot_star_and_escaped_star() {
         assert_eq!(normalize_kantra_glob(".*"), ".*");
         assert_eq!(normalize_kantra_glob(r"\*"), r"\*");
+        assert_eq!(normalize_kantra_glob(r"javax\.ejb\.*"), r"javax\.ejb\..*");
         assert_eq!(
             normalize_kantra_glob("java.util.(Formatter|Scanner)*"),
             "java.util.(Formatter|Scanner).*"

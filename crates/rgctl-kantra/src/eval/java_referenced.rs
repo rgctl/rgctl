@@ -30,13 +30,13 @@ pub fn eval_java_referenced(
         Some(p) if !p.is_empty() => Some(compile_kantra_pattern(p)?),
         _ => None,
     };
-    let wildcards = wildcard_imports(input.nodes);
+    let type_ctx = FileTypeContext::from_nodes(input.nodes);
     let ctx = LocationCtx {
         rule_id,
         re: &re,
         annotated_re: annotated_re.as_ref(),
         input,
-        wildcards: &wildcards,
+        type_ctx: &type_ctx,
     };
 
     let locs: Vec<&str> = match location {
@@ -77,7 +77,7 @@ struct LocationCtx<'a> {
     re: &'a Regex,
     annotated_re: Option<&'a Regex>,
     input: &'a JavaReferencedInput<'a>,
-    wildcards: &'a HashMap<String, Vec<String>>,
+    type_ctx: &'a FileTypeContext,
 }
 
 fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation>, regex::Error> {
@@ -86,7 +86,7 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
         re,
         annotated_re,
         input,
-        wildcards,
+        type_ctx,
     } = ctx;
     let nodes = input.nodes;
     let edges = input.edges;
@@ -128,54 +128,71 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                 if !is_code_file(node.file_path.as_deref()) {
                     continue;
                 }
-                let candidates: Vec<&str> = match node.node_type.as_str() {
-                    "Import" => vec![node.name.as_str()],
-                    "Class" | "Interface" | "Enum" => {
-                        let mut v = vec![node.name.as_str()];
-                        if let Some(qn) = node.qualified_name.as_deref() {
-                            v.push(qn);
+                let file = node.file_path.as_deref();
+                match node.node_type.as_str() {
+                    "Import" => {
+                        if re.is_match(&node.name)
+                            || node
+                                .qualified_name
+                                .as_deref()
+                                .is_some_and(|qn| re.is_match(qn))
+                        {
+                            push_node_hit(&mut out, rule_id, node, "PACKAGE");
                         }
-                        v
                     }
-                    _ => continue,
-                };
-                if candidates.iter().any(|c| re.is_match(c)) {
-                    push_node_hit(&mut out, rule_id, node, "PACKAGE");
+                    "Variable" | "Function" | "Class" | "Interface" | "Enum" => {
+                        let referenced_types = node
+                            .field_type_fqns
+                            .iter()
+                            .map(String::as_str)
+                            .chain(node.return_type_fqn.as_deref())
+                            .chain(node.param_type_fqns.iter().map(String::as_str))
+                            .chain(node.throws.iter().map(String::as_str))
+                            .chain(node.annotations.iter().map(String::as_str));
+                        if referenced_types.into_iter().any(|t| {
+                            t.contains('.')
+                                && !type_ctx.is_same_package_or_repo_type(file, t)
+                                && re.is_match(t)
+                        }) {
+                            push_node_hit(&mut out, rule_id, node, "PACKAGE");
+                        }
+                    }
+                    _ => {}
                 }
             }
             for site in call_sites {
                 if !is_code_file(Some(&site.file_path)) {
                     continue;
                 }
-                if site
-                    .to_qualified_hint
-                    .as_deref()
-                    .is_some_and(|qn| re.is_match(qn))
-                {
+                if site.to_qualified_hint.as_deref().is_some_and(|qn| {
+                    qn.contains('.')
+                        && !type_ctx.is_same_package_or_repo_type(Some(&site.file_path), qn)
+                        && re.is_match(qn)
+                }) {
                     push_call_site_hit(&mut out, rule_id, site, "PACKAGE");
                 }
             }
         }
         "INHERITANCE" | "IMPLEMENTS_TYPE" => {
-            let want = if loc == "INHERITANCE" {
-                "EXTENDS"
-            } else {
-                "IMPLEMENTS"
-            };
             for edge in edges {
-                if edge.edge_type != want {
+                let edge_ok = if loc == "IMPLEMENTS_TYPE" {
+                    edge.edge_type == "IMPLEMENTS"
+                } else {
+                    edge.edge_type == "EXTENDS" || edge.edge_type == "IMPLEMENTS"
+                };
+                if !edge_ok {
                     continue;
                 }
                 if type_matches_with_wildcards(
                     re,
                     &edge.to_qualified,
                     Some(&edge.file_path),
-                    wildcards,
+                    type_ctx,
                 ) || type_matches_with_wildcards(
                     re,
                     &edge.to_name,
                     Some(&edge.file_path),
-                    wildcards,
+                    type_ctx,
                 ) {
                     out.push(violation_high(
                         rule_id,
@@ -196,12 +213,12 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                     re,
                     &edge.to_qualified,
                     Some(&edge.file_path),
-                    wildcards,
+                    type_ctx,
                 ) || type_matches_with_wildcards(
                     re,
                     &edge.to_name,
                     Some(&edge.file_path),
-                    wildcards,
+                    type_ctx,
                 );
                 if !ann_match {
                     continue;
@@ -211,12 +228,12 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                         are,
                         &edge.to_qualified,
                         Some(&edge.file_path),
-                        wildcards,
+                        type_ctx,
                     ) || type_matches_with_wildcards(
                         are,
                         &edge.to_name,
                         Some(&edge.file_path),
-                        wildcards,
+                        type_ctx,
                     ) || are.is_match(&edge.from_qualified)
                         || are.is_match(&edge.from_name))
                 {
@@ -253,7 +270,7 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                 if site.relation_type != "Instantiates" || !is_code_file(Some(&site.file_path)) {
                     continue;
                 }
-                if call_site_candidates(site, wildcards)
+                if call_site_candidates(site, type_ctx)
                     .iter()
                     .any(|c| re.is_match(c))
                 {
@@ -278,12 +295,12 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                     re,
                     &edge.to_qualified,
                     Some(&edge.file_path),
-                    wildcards,
+                    type_ctx,
                 ) || type_matches_with_wildcards(
                     re,
                     &edge.to_name,
                     Some(&edge.file_path),
-                    wildcards,
+                    type_ctx,
                 ) {
                     out.push(violation_high(
                         rule_id,
@@ -301,7 +318,7 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                 if site.relation_type != "Calls" || !is_code_file(Some(&site.file_path)) {
                     continue;
                 }
-                if call_site_candidates(site, wildcards)
+                if call_site_candidates(site, type_ctx)
                     .iter()
                     .any(|c| re.is_match(c))
                 {
@@ -357,7 +374,7 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                         || node
                             .field_type_fqns
                             .iter()
-                            .any(|t| type_matches_with_wildcards(re, t, file, wildcards))
+                            .any(|t| type_matches_with_wildcards(re, t, file, type_ctx))
                     {
                         push_node_hit(&mut out, rule_id, node, loc);
                     }
@@ -365,7 +382,7 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                     && node
                         .field_type_fqns
                         .iter()
-                        .any(|t| type_matches_with_wildcards(re, t, file, wildcards))
+                        .any(|t| type_matches_with_wildcards(re, t, file, type_ctx))
                 {
                     push_node_hit(&mut out, rule_id, node, loc);
                 }
@@ -377,7 +394,7 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                     continue;
                 }
                 if node.return_type_fqn.as_deref().is_some_and(|t| {
-                    type_matches_with_wildcards(re, t, node.file_path.as_deref(), wildcards)
+                    type_matches_with_wildcards(re, t, node.file_path.as_deref(), type_ctx)
                 }) {
                     push_node_hit(&mut out, rule_id, node, "RETURN_TYPE");
                 }
@@ -392,7 +409,7 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                 if node
                     .throws
                     .iter()
-                    .any(|t| type_matches_with_wildcards(re, t, file, wildcards))
+                    .any(|t| type_matches_with_wildcards(re, t, file, type_ctx))
                 {
                     push_node_hit(&mut out, rule_id, node, "THROWS_METHOD_DECLARATION");
                 }
@@ -411,11 +428,11 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                         || node
                             .param_type_fqns
                             .iter()
-                            .any(|t| type_matches_with_wildcards(re, t, file, wildcards))
+                            .any(|t| type_matches_with_wildcards(re, t, file, type_ctx))
                         || node
                             .field_type_fqns
                             .iter()
-                            .any(|t| type_matches_with_wildcards(re, t, file, wildcards))
+                            .any(|t| type_matches_with_wildcards(re, t, file, type_ctx))
                     {
                         push_node_hit(&mut out, rule_id, node, loc);
                     }
@@ -423,7 +440,7 @@ fn eval_location(ctx: &LocationCtx<'_>, loc: &str) -> Result<Vec<KantraViolation
                     && node
                         .param_type_fqns
                         .iter()
-                        .any(|t| type_matches_with_wildcards(re, t, file, wildcards))
+                        .any(|t| type_matches_with_wildcards(re, t, file, type_ctx))
                 {
                     push_node_hit(&mut out, rule_id, node, loc);
                 }
@@ -441,7 +458,7 @@ fn type_matches_with_wildcards(
     re: &Regex,
     raw_type: &str,
     file: Option<&str>,
-    wildcards: &HashMap<String, Vec<String>>,
+    type_ctx: &FileTypeContext,
 ) -> bool {
     if re.is_match(raw_type) {
         return true;
@@ -449,42 +466,315 @@ fn type_matches_with_wildcards(
     let Some(file) = file else {
         return false;
     };
-    let Some(pkgs) = wildcards.get(file) else {
+    let simple = raw_type.rsplit('.').next().unwrap_or(raw_type);
+    if is_java_lang_type(simple)
+        && !type_ctx
+            .explicit_imports
+            .get(file)
+            .is_some_and(|m| m.contains_key(simple))
+    {
+        return re.is_match(&format!("java.lang.{simple}"));
+    }
+    let Some(pkgs) = type_ctx.wildcards.get(file) else {
         return false;
     };
-    let simple = raw_type.rsplit('.').next().unwrap_or(raw_type);
-    pkgs.iter()
-        .any(|pkg| re.is_match(&format!("{pkg}.{simple}")))
+    pkgs.iter().any(|pkg| {
+        type_ctx.can_expand_wildcard(file, raw_type, pkg) && re.is_match(&format!("{pkg}.{simple}"))
+    })
 }
 
-fn wildcard_imports(nodes: &[EvalNode]) -> HashMap<String, Vec<String>> {
-    let mut map: HashMap<String, Vec<String>> = HashMap::new();
-    for node in nodes {
-        if node.node_type != "Import" {
-            continue;
-        }
-        let Some(file) = node.file_path.as_ref() else {
-            continue;
-        };
-        let mut name = node.name.trim().trim_end_matches(';').trim();
-        for prefix in ["import static ", "import "] {
-            if let Some(rest) = name.strip_prefix(prefix) {
-                name = rest.trim();
-                break;
+#[derive(Default)]
+struct FileTypeContext {
+    wildcards: HashMap<String, Vec<String>>,
+    static_wildcards: HashMap<String, Vec<String>>,
+    explicit_imports: HashMap<String, HashMap<String, String>>,
+    file_packages: HashMap<String, String>,
+    repo_fqns: HashSet<String>,
+}
+
+impl FileTypeContext {
+    fn from_nodes(nodes: &[EvalNode]) -> Self {
+        let mut ctx = Self::default();
+        for node in nodes {
+            match node.node_type.as_str() {
+                "Import" => {
+                    let Some(file) = node.file_path.as_ref() else {
+                        continue;
+                    };
+                    let mut raw = node.name.trim().trim_end_matches(';').trim();
+                    let is_static = if let Some(rest) = raw.strip_prefix("import static ") {
+                        raw = rest.trim();
+                        true
+                    } else {
+                        if let Some(rest) = raw.strip_prefix("import ") {
+                            raw = rest.trim();
+                        }
+                        false
+                    };
+                    if let Some(pkg) = raw.strip_suffix(".*") {
+                        let pkg = pkg.trim().to_string();
+                        if is_static {
+                            ctx.static_wildcards
+                                .entry(file.clone())
+                                .or_default()
+                                .push(pkg);
+                        } else {
+                            ctx.wildcards.entry(file.clone()).or_default().push(pkg);
+                        }
+                    } else if !is_static
+                        && let Some((_, simple)) = raw.rsplit_once('.')
+                        && !simple.is_empty()
+                    {
+                        ctx.explicit_imports
+                            .entry(file.clone())
+                            .or_default()
+                            .insert(simple.to_string(), raw.to_string());
+                    }
+                }
+                "Module" => {
+                    if let Some(file) = node.file_path.as_ref() {
+                        let pkg = node
+                            .qualified_name
+                            .as_deref()
+                            .unwrap_or(&node.name)
+                            .trim()
+                            .trim_start_matches("package ")
+                            .trim_end_matches(';')
+                            .trim();
+                        if !pkg.is_empty() {
+                            ctx.file_packages.insert(file.clone(), pkg.to_string());
+                        }
+                    }
+                }
+                "Class" | "Interface" | "Enum" | "Annotation" => {
+                    if let Some(qn) = node.qualified_name.as_deref() {
+                        ctx.repo_fqns.insert(qn.to_string());
+                        if let Some(file) = node.file_path.as_ref()
+                            && !ctx.file_packages.contains_key(file)
+                            && let Some((pkg, _)) = qn.rsplit_once('.')
+                        {
+                            ctx.file_packages.insert(file.clone(), pkg.to_string());
+                        }
+                    }
+                }
+                _ => {}
             }
         }
-        if let Some(pkg) = name.strip_suffix(".*") {
-            map.entry(file.clone()).or_default().push(pkg.to_string());
-        }
+        ctx
     }
-    map
+
+    fn is_same_package_or_repo_type(&self, file: Option<&str>, qn: &str) -> bool {
+        if self.repo_fqns.contains(qn) {
+            return true;
+        }
+        if let Some(file) = file
+            && let Some(file_pkg) = self.file_packages.get(file)
+            && let Some((pkg, _)) = qn.rsplit_once('.')
+            && pkg == file_pkg
+        {
+            return true;
+        }
+        false
+    }
+
+    fn can_expand_wildcard(&self, file: &str, raw_type: &str, wildcard_pkg: &str) -> bool {
+        let simple = raw_type.rsplit('.').next().unwrap_or(raw_type);
+        if simple.is_empty()
+            || !simple
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_uppercase())
+        {
+            return false;
+        }
+        if let Some(by_file) = self.explicit_imports.get(file)
+            && let Some(imported_fqn) = by_file.get(simple)
+        {
+            return imported_fqn
+                .rsplit_once('.')
+                .is_some_and(|(pkg, _)| pkg == wildcard_pkg);
+        }
+        if is_java_lang_type(simple) {
+            return wildcard_pkg == "java.lang";
+        }
+        if self.repo_fqns.contains(raw_type) {
+            return false;
+        }
+        if let Some(file_pkg) = self.file_packages.get(file)
+            && self.repo_fqns.contains(&format!("{file_pkg}.{simple}"))
+        {
+            return false;
+        }
+        if let Some((pkg, _)) = raw_type.rsplit_once('.') {
+            if pkg == wildcard_pkg {
+                return true;
+            }
+            let is_tentative_file_pkg = match self.file_packages.get(file) {
+                Some(fp) => pkg == fp,
+                None => {
+                    !pkg.starts_with("java.")
+                        && !pkg.starts_with("javax.")
+                        && !pkg.starts_with("jakarta.")
+                }
+            };
+            if !is_tentative_file_pkg {
+                return false;
+            }
+        }
+        if let Some(jdk_pkg) = known_jdk_package(simple) {
+            return wildcard_pkg == jdk_pkg;
+        }
+        true
+    }
 }
 
-fn call_site_candidates(
-    site: &EvalCallSite,
-    wildcards: &HashMap<String, Vec<String>>,
-) -> Vec<String> {
+fn is_java_lang_type(simple: &str) -> bool {
+    matches!(
+        simple,
+        "Object"
+            | "String"
+            | "StringBuilder"
+            | "StringBuffer"
+            | "CharSequence"
+            | "Appendable"
+            | "Class"
+            | "ClassLoader"
+            | "System"
+            | "Runtime"
+            | "Process"
+            | "ProcessBuilder"
+            | "Thread"
+            | "ThreadLocal"
+            | "InheritableThreadLocal"
+            | "Runnable"
+            | "Throwable"
+            | "Exception"
+            | "RuntimeException"
+            | "Error"
+            | "AssertionError"
+            | "OutOfMemoryError"
+            | "StackOverflowError"
+            | "NullPointerException"
+            | "IllegalArgumentException"
+            | "IllegalStateException"
+            | "UnsupportedOperationException"
+            | "IndexOutOfBoundsException"
+            | "ArithmeticException"
+            | "ClassCastException"
+            | "ClassNotFoundException"
+            | "NoSuchMethodException"
+            | "NoSuchFieldException"
+            | "InstantiationException"
+            | "IllegalAccessException"
+            | "InterruptedException"
+            | "SecurityException"
+            | "SecurityManager"
+            | "Number"
+            | "Integer"
+            | "Long"
+            | "Double"
+            | "Float"
+            | "Boolean"
+            | "Byte"
+            | "Short"
+            | "Character"
+            | "Void"
+            | "Math"
+            | "StrictMath"
+            | "Package"
+            | "Module"
+            | "StackTraceElement"
+            | "Comparable"
+            | "Iterable"
+            | "AutoCloseable"
+            | "Cloneable"
+            | "Override"
+            | "Deprecated"
+            | "SuppressWarnings"
+            | "FunctionalInterface"
+            | "SafeVarargs"
+            | "Enum"
+            | "Record"
+    )
+}
+
+fn known_jdk_package(simple: &str) -> Option<&'static str> {
+    match simple {
+        "BigDecimal" | "BigInteger" | "MathContext" | "RoundingMode" => Some("java.math"),
+        "ArrayList" | "LinkedList" | "HashMap" | "TreeMap" | "HashSet" | "TreeSet"
+        | "LinkedHashMap" | "LinkedHashSet" | "Vector" | "Hashtable" | "Properties" | "Stack"
+        | "ArrayDeque" | "PriorityQueue" | "Scanner" | "Formatter" | "Calendar"
+        | "GregorianCalendar" | "TimeZone" | "Locale" | "Random" | "UUID" | "Optional"
+        | "StringTokenizer" | "BitSet" | "Currency" | "Timer" | "TimerTask" | "Collections"
+        | "Arrays" | "Objects" | "Comparator" | "Iterator" | "ListIterator" | "Enumeration"
+        | "Collection" | "List" | "Set" | "SortedSet" | "NavigableSet" | "Map" | "SortedMap"
+        | "NavigableMap" | "Queue" | "Deque" => Some("java.util"),
+        "File"
+        | "FileInputStream"
+        | "FileOutputStream"
+        | "FileReader"
+        | "FileWriter"
+        | "RandomAccessFile"
+        | "PrintWriter"
+        | "PrintStream"
+        | "BufferedReader"
+        | "BufferedWriter"
+        | "BufferedInputStream"
+        | "BufferedOutputStream"
+        | "InputStreamReader"
+        | "OutputStreamWriter"
+        | "ByteArrayInputStream"
+        | "ByteArrayOutputStream"
+        | "DataInputStream"
+        | "DataOutputStream"
+        | "ObjectInputStream"
+        | "ObjectOutputStream"
+        | "CharArrayReader"
+        | "CharArrayWriter"
+        | "StringReader"
+        | "StringWriter"
+        | "InputStream"
+        | "OutputStream"
+        | "Reader"
+        | "Writer"
+        | "Serializable"
+        | "Externalizable"
+        | "Closeable"
+        | "Flushable"
+        | "IOException"
+        | "FileNotFoundException"
+        | "EOFException"
+        | "UnsupportedEncodingException"
+        | "UncheckedIOException" => Some("java.io"),
+        "DriverManager" | "PreparedStatement" | "CallableStatement" | "ResultSet"
+        | "ResultSetMetaData" | "DatabaseMetaData" | "SQLException" | "Timestamp" | "Time"
+        | "Blob" | "Clob" => Some("java.sql"),
+        "DataSource" | "ConnectionPoolDataSource" | "XADataSource" | "RowSet" => Some("javax.sql"),
+        "URL"
+        | "URI"
+        | "Socket"
+        | "ServerSocket"
+        | "DatagramSocket"
+        | "DatagramPacket"
+        | "InetAddress"
+        | "InetSocketAddress"
+        | "URLConnection"
+        | "HttpURLConnection"
+        | "URLClassLoader"
+        | "URLEncoder"
+        | "URLDecoder"
+        | "MalformedURLException"
+        | "UnknownHostException"
+        | "SocketException"
+        | "ConnectException" => Some("java.net"),
+        "InitialContext" | "NamingException" | "NamingEnumeration" => Some("javax.naming"),
+        _ => None,
+    }
+}
+
+fn call_site_candidates(site: &EvalCallSite, type_ctx: &FileTypeContext) -> Vec<String> {
     let mut out = Vec::new();
+    let is_ctor = site.relation_type == "Instantiates";
     let callee_name = site.to_name.rsplit('.').next().unwrap_or(&site.to_name);
     out.push(site.to_name.clone());
     if callee_name != site.to_name {
@@ -493,13 +783,27 @@ fn call_site_candidates(
     if let Some(qn) = &site.to_qualified_hint {
         out.push(qn.clone());
     }
+    let raw_for_ctor = site.to_qualified_hint.as_deref().unwrap_or(&site.to_name);
+    if is_ctor && is_java_lang_type(callee_name) {
+        out.push(format!("java.lang.{callee_name}"));
+    }
     if let Some(module) = &site.import_module_hint {
-        out.push(format!("{module}.{}", site.to_name));
-        out.push(format!("{module}.{callee_name}"));
-        if let Some(hint) = &site.to_type_hint {
+        let module = module.strip_suffix(".*").unwrap_or(module);
+        if is_ctor {
+            if module.ends_with(&format!(".{callee_name}")) {
+                out.push(module.to_string());
+            } else if type_ctx.can_expand_wildcard(&site.file_path, raw_for_ctor, module) {
+                out.push(format!("{module}.{callee_name}"));
+            }
+        } else if let Some(hint) = &site.to_type_hint {
             let simple_hint = hint.rsplit('.').next().unwrap_or(hint);
-            out.push(format!("{module}.{simple_hint}.{callee_name}"));
-            out.push(format!("{module}.{simple_hint}"));
+            if module.ends_with(&format!(".{simple_hint}")) {
+                out.push(format!("{module}.{callee_name}"));
+                out.push(module.to_string());
+            } else if type_ctx.can_expand_wildcard(&site.file_path, hint, module) {
+                out.push(format!("{module}.{simple_hint}.{callee_name}"));
+                out.push(format!("{module}.{simple_hint}"));
+            }
         }
     }
     if let Some(hint) = &site.to_type_hint {
@@ -508,16 +812,34 @@ fn call_site_candidates(
         out.push(format!("{simple_hint}.{callee_name}"));
         out.push(hint.clone());
         out.push(simple_hint.to_string());
-        if let Some(pkgs) = wildcards.get(&site.file_path) {
+        if is_java_lang_type(simple_hint) {
+            out.push(format!("java.lang.{simple_hint}.{callee_name}"));
+            out.push(format!("java.lang.{simple_hint}"));
+        }
+        if let Some(pkgs) = type_ctx.wildcards.get(&site.file_path) {
             for pkg in pkgs {
-                out.push(format!("{pkg}.{simple_hint}.{callee_name}"));
-                out.push(format!("{pkg}.{simple_hint}"));
+                if type_ctx.can_expand_wildcard(&site.file_path, hint, pkg) {
+                    if !is_ctor {
+                        out.push(format!("{pkg}.{simple_hint}.{callee_name}"));
+                    }
+                    out.push(format!("{pkg}.{simple_hint}"));
+                }
             }
         }
     }
-    if let Some(pkgs) = wildcards.get(&site.file_path) {
-        for pkg in pkgs {
-            out.push(format!("{pkg}.{callee_name}"));
+    if is_ctor {
+        if let Some(pkgs) = type_ctx.wildcards.get(&site.file_path) {
+            for pkg in pkgs {
+                if type_ctx.can_expand_wildcard(&site.file_path, raw_for_ctor, pkg) {
+                    out.push(format!("{pkg}.{callee_name}"));
+                }
+            }
+        }
+    } else if site.to_type_hint.is_none()
+        && let Some(owners) = type_ctx.static_wildcards.get(&site.file_path)
+    {
+        for owner in owners {
+            out.push(format!("{owner}.{callee_name}"));
         }
     }
     out
@@ -972,6 +1294,174 @@ mod tests {
         assert!(
             hits.is_empty(),
             "subclass name must not match IMPLEMENTS_TYPE pattern"
+        );
+    }
+
+    #[test]
+    fn wildcard_import_does_not_cross_match_unrelated_constructors_or_methods_jr2() {
+        let nodes = vec![
+            EvalNode {
+                node_type: "Module".into(),
+                name: "com.acme.trade".into(),
+                qualified_name: Some("com.acme.trade".into()),
+                file_path: Some("TradeDirect.java".into()),
+                start_line: Some(1),
+                ..Default::default()
+            },
+            import_node("TradeDirect.java", 2, "import java.io.*;"),
+            import_node("TradeDirect.java", 3, "import java.math.BigDecimal;"),
+            EvalNode {
+                node_type: "Class".into(),
+                name: "OrderDataBean".into(),
+                qualified_name: Some("com.acme.trade.OrderDataBean".into()),
+                file_path: Some("OrderDataBean.java".into()),
+                start_line: Some(1),
+                ..Default::default()
+            },
+        ];
+        let call_sites = vec![
+            EvalCallSite {
+                caller_id: Uuid::new_v4(),
+                file_path: "TradeDirect.java".into(),
+                line: 20,
+                relation_type: "Instantiates".into(),
+                to_name: "BigDecimal".into(),
+                to_qualified_hint: Some("java.math.BigDecimal".into()),
+                to_type_hint: Some("BigDecimal".into()),
+                import_module_hint: Some("java.io".into()),
+            },
+            EvalCallSite {
+                caller_id: Uuid::new_v4(),
+                file_path: "TradeDirect.java".into(),
+                line: 21,
+                relation_type: "Instantiates".into(),
+                to_name: "ArrayList".into(),
+                to_qualified_hint: Some("com.acme.trade.ArrayList".into()),
+                to_type_hint: Some("ArrayList".into()),
+                import_module_hint: Some("java.io".into()),
+            },
+            EvalCallSite {
+                caller_id: Uuid::new_v4(),
+                file_path: "TradeDirect.java".into(),
+                line: 22,
+                relation_type: "Instantiates".into(),
+                to_name: "String".into(),
+                to_qualified_hint: Some("com.acme.trade.String".into()),
+                to_type_hint: Some("String".into()),
+                import_module_hint: Some("java.io".into()),
+            },
+            EvalCallSite {
+                caller_id: Uuid::new_v4(),
+                file_path: "TradeDirect.java".into(),
+                line: 23,
+                relation_type: "Instantiates".into(),
+                to_name: "OrderDataBean".into(),
+                to_qualified_hint: Some("com.acme.trade.OrderDataBean".into()),
+                to_type_hint: Some("OrderDataBean".into()),
+                import_module_hint: Some("java.io".into()),
+            },
+            EvalCallSite {
+                caller_id: Uuid::new_v4(),
+                file_path: "TradeDirect.java".into(),
+                line: 24,
+                relation_type: "Instantiates".into(),
+                to_name: "FileWriter".into(),
+                to_qualified_hint: Some("com.acme.trade.FileWriter".into()),
+                to_type_hint: Some("FileWriter".into()),
+                import_module_hint: Some("java.io".into()),
+            },
+            EvalCallSite {
+                caller_id: Uuid::new_v4(),
+                file_path: "TradeDirect.java".into(),
+                line: 25,
+                relation_type: "Calls".into(),
+                to_name: "add".into(),
+                to_qualified_hint: None,
+                to_type_hint: None,
+                import_module_hint: Some("java.io".into()),
+            },
+        ];
+
+        let ctor_hits = eval_java_referenced(
+            "local-storage-00001",
+            "java.io.*",
+            Some("CONSTRUCTOR_CALL"),
+            None,
+            &JavaReferencedInput {
+                nodes: &nodes,
+                edges: &[],
+                call_sites: &call_sites,
+                sources: &SourceCache::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(ctor_hits.len(), 1, "only FileWriter should match java.io.*");
+        assert_eq!(ctor_hits[0].line, 24);
+
+        let method_hits = eval_java_referenced(
+            "io-method",
+            "java.io.*",
+            Some("METHOD_CALL"),
+            None,
+            &JavaReferencedInput {
+                nodes: &nodes,
+                edges: &[],
+                call_sites: &call_sites,
+                sources: &SourceCache::new(),
+            },
+        )
+        .unwrap();
+        assert!(
+            method_hits.is_empty(),
+            "unqualified method call must not be qualified with wildcard package import"
+        );
+    }
+
+    #[test]
+    fn package_location_does_not_match_own_package_or_class_declaration_jr7() {
+        let nodes = vec![
+            EvalNode {
+                node_type: "Module".into(),
+                name: "org.jboss.seam.example.booking".into(),
+                qualified_name: Some("org.jboss.seam.example.booking".into()),
+                file_path: Some("BookingAction.java".into()),
+                start_line: Some(1),
+                ..Default::default()
+            },
+            EvalNode {
+                node_type: "Class".into(),
+                name: "BookingAction".into(),
+                qualified_name: Some("org.jboss.seam.example.booking.BookingAction".into()),
+                file_path: Some("BookingAction.java".into()),
+                start_line: Some(5),
+                field_type_fqns: vec!["org.jboss.seam.example.booking.Hotel".into()],
+                ..Default::default()
+            },
+            EvalNode {
+                node_type: "Class".into(),
+                name: "Hotel".into(),
+                qualified_name: Some("org.jboss.seam.example.booking.Hotel".into()),
+                file_path: Some("Hotel.java".into()),
+                start_line: Some(3),
+                ..Default::default()
+            },
+        ];
+        let hits = eval_java_referenced(
+            "generic-catchall-00700",
+            "org.(jboss|jbpm).*",
+            Some("PACKAGE"),
+            None,
+            &JavaReferencedInput {
+                nodes: &nodes,
+                edges: &[],
+                call_sites: &[],
+                sources: &SourceCache::new(),
+            },
+        )
+        .unwrap();
+        assert!(
+            hits.is_empty(),
+            "own package/class declarations must not trigger PACKAGE reference rules"
         );
     }
 }

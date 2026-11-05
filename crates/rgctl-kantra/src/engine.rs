@@ -199,24 +199,34 @@ impl KantraEngine {
             String,
             (String, Vec<crate::findings::KantraViolation>),
         > = HashMap::new();
+        let any_has_tags = self
+            .classified
+            .iter()
+            .filter(|c| {
+                c.support != RuleSupport::Unsupported
+                    && !self.ruleset.doc.rules[c.rule_index].is_tag_only()
+            })
+            .any(|c| clause_uses_has_tags(&c.clause));
+        let mut active_tag_sites: HashMap<String, Vec<MatchSite>> = HashMap::new();
 
         for item in &self.classified {
             let rule = &self.ruleset.doc.rules[item.rule_index];
-            if rule.is_tag_only() {
+            let is_tag_only = rule.is_tag_only();
+            if is_tag_only {
                 findings.skipped_rules.push(SkippedRule {
                     rule_id: rule.rule_id.clone(),
                     reason: "tag-only rule (no category or effort)".into(),
                 });
-                continue;
-            }
-            if item.support == RuleSupport::Unsupported {
+                if !any_has_tags {
+                    continue;
+                }
+            } else if item.support == RuleSupport::Unsupported {
                 findings.skipped_rules.push(SkippedRule {
                     rule_id: rule.rule_id.clone(),
                     reason: item.reason.clone().unwrap_or_else(|| "unsupported".into()),
                 });
                 continue;
-            }
-            if item.support == RuleSupport::Partial {
+            } else if item.support == RuleSupport::Partial {
                 findings.skipped_rules.push(SkippedRule {
                     rule_id: rule.rule_id.clone(),
                     reason: item.reason.clone().unwrap_or_else(|| "partial".into()),
@@ -227,11 +237,15 @@ impl KantraEngine {
             let mut violations = match if is_composite(&item.clause) {
                 let compose_start = Instant::now();
                 let mut leaf_sites = Vec::new();
-                if let Err(e) = collect_leaf_sites(&item.clause, &mut leaf_sites, rule, ctx) {
-                    findings.skipped_rules.push(SkippedRule {
-                        rule_id: rule.rule_id.clone(),
-                        reason: e.to_string(),
-                    });
+                if let Err(e) =
+                    collect_leaf_sites(&item.clause, &mut leaf_sites, rule, ctx, &active_tag_sites)
+                {
+                    if !is_tag_only {
+                        findings.skipped_rules.push(SkippedRule {
+                            rule_id: rule.rule_id.clone(),
+                            reason: e.to_string(),
+                        });
+                    }
                     continue;
                 }
                 let mut idx = 0;
@@ -239,17 +253,43 @@ impl KantraEngine {
                 timings.compose_secs += compose_start.elapsed().as_secs_f64();
                 Ok(out)
             } else {
-                eval_leaf(&item.clause, rule, ctx)
+                eval_leaf(&item.clause, rule, ctx, &active_tag_sites)
             } {
                 Ok(v) => v,
                 Err(e) => {
-                    findings.skipped_rules.push(SkippedRule {
-                        rule_id: rule.rule_id.clone(),
-                        reason: e.to_string(),
-                    });
+                    if !is_tag_only {
+                        findings.skipped_rules.push(SkippedRule {
+                            rule_id: rule.rule_id.clone(),
+                            reason: e.to_string(),
+                        });
+                    }
                     continue;
                 }
             };
+            if any_has_tags && !rule.tag.is_empty() && !violations.is_empty() {
+                for raw_tag in &rule.tag {
+                    let clean_tag = raw_tag
+                        .split_once('=')
+                        .map(|(_, v)| v.trim())
+                        .unwrap_or(raw_tag.trim());
+                    for tag_key in [raw_tag.trim(), clean_tag] {
+                        if tag_key.is_empty() {
+                            continue;
+                        }
+                        let entry = active_tag_sites.entry(tag_key.to_string()).or_default();
+                        for v in &violations {
+                            let mut site = MatchSite::new(v.file.clone(), v.line);
+                            if let Some(sym) = &v.symbol {
+                                site = site.with_symbol(sym.clone());
+                            }
+                            entry.push(site);
+                        }
+                    }
+                }
+            }
+            if is_tag_only {
+                continue;
+            }
             enrich_violations(&mut violations, rule);
             for v in &violations {
                 if v.matched_by == "builtin.filecontent" {
@@ -328,6 +368,15 @@ fn clause_needs_call_sites(clause: &WhenClause) -> bool {
     }
 }
 
+fn clause_uses_has_tags(clause: &WhenClause) -> bool {
+    match clause {
+        WhenClause::HasTags { .. } => true,
+        WhenClause::And(items) | WhenClause::Or(items) => items.iter().any(clause_uses_has_tags),
+        WhenClause::Not(inner) => clause_uses_has_tags(inner),
+        _ => false,
+    }
+}
+
 fn enrich_violations(
     violations: &mut [crate::findings::KantraViolation],
     rule: &crate::schema::KantraRule,
@@ -357,6 +406,7 @@ fn eval_leaf(
     clause: &WhenClause,
     rule: &crate::schema::KantraRule,
     ctx: &EvalContext<'_>,
+    active_tag_sites: &HashMap<String, Vec<MatchSite>>,
 ) -> Result<Vec<crate::findings::KantraViolation>> {
     match clause {
         WhenClause::FileContent {
@@ -374,7 +424,12 @@ fn eval_leaf(
         .map_err(crate::error::KantraError::from),
         WhenClause::File { pattern } => eval_file(&rule.rule_id, pattern, ctx.repo_root, ctx.files)
             .map_err(|e| crate::error::KantraError::msg(e.to_string())),
-        WhenClause::HasTags { tags } => Ok(eval_has_tags(&rule.rule_id, tags, &ctx.graph.nodes)),
+        WhenClause::HasTags { tags } => Ok(eval_has_tags(
+            &rule.rule_id,
+            tags,
+            &ctx.graph.nodes,
+            active_tag_sites,
+        )),
         WhenClause::GoReferenced { pattern } => {
             eval_go_referenced(&rule.rule_id, pattern, &ctx.graph.nodes)
                 .map_err(crate::error::KantraError::from)
@@ -456,16 +511,19 @@ fn collect_leaf_sites(
     leaf_sites: &mut Vec<Vec<MatchSite>>,
     rule: &crate::schema::KantraRule,
     ctx: &EvalContext<'_>,
+    active_tag_sites: &HashMap<String, Vec<MatchSite>>,
 ) -> Result<()> {
     match clause {
         WhenClause::And(items) | WhenClause::Or(items) => {
             for item in items {
-                collect_leaf_sites(item, leaf_sites, rule, ctx)?;
+                collect_leaf_sites(item, leaf_sites, rule, ctx, active_tag_sites)?;
             }
         }
-        WhenClause::Not(inner) => collect_leaf_sites(inner, leaf_sites, rule, ctx)?,
+        WhenClause::Not(inner) => {
+            collect_leaf_sites(inner, leaf_sites, rule, ctx, active_tag_sites)?
+        }
         leaf => {
-            let hits = eval_leaf(leaf, rule, ctx)?;
+            let hits = eval_leaf(leaf, rule, ctx, active_tag_sites)?;
             leaf_sites.push(
                 hits.iter()
                     .map(|v| MatchSite::new(&v.file, v.line))
@@ -515,5 +573,60 @@ mod tests {
         let (findings, _) = engine.evaluate(&mut ctx).unwrap();
         assert!(!findings.violations.is_empty());
         assert_eq!(findings.violations[0].rule_id, "r1");
+    }
+
+    #[test]
+    fn tag_only_rule_feeds_downstream_has_tags_without_emitting_own_violation() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("ruleset.yaml"), "name: t\n").unwrap();
+        fs::write(
+            dir.path().join("rules.yaml"),
+            r#"
+- ruleID: seam-java-00000
+  tag:
+  - Seam API
+  when:
+    builtin.filecontent:
+      pattern: org\.jboss\.seam
+- ruleID: seam-Dependent-00001
+  message: Seam API usage detected
+  category: mandatory
+  effort: 1
+  when:
+    builtin.hasTags:
+    - Seam API
+"#,
+        )
+        .unwrap();
+
+        let mut sources = SourceCache::new();
+        sources.insert(
+            "Booking.java".into(),
+            Arc::new("import org.jboss.seam.annotations.Name;\n".into()),
+        );
+        let files = vec![dir.path().join("Booking.java")];
+        let (engine, _) = KantraEngine::load(dir.path()).unwrap();
+        let mut ctx = EvalContext {
+            repo_root: dir.path(),
+            files: &files,
+            sources: &sources,
+            graph: &EvalGraph::default(),
+            cache: None,
+            cached_files: HashSet::new(),
+        };
+        let (findings, _) = engine.evaluate(&mut ctx).unwrap();
+        assert_eq!(
+            findings.violations.len(),
+            1,
+            "only the downstream hasTags rule should emit a violation"
+        );
+        assert_eq!(findings.violations[0].rule_id, "seam-Dependent-00001");
+        assert_eq!(findings.violations[0].file, "Booking.java");
+        assert!(
+            findings
+                .skipped_rules
+                .iter()
+                .any(|s| s.rule_id == "seam-java-00000")
+        );
     }
 }
