@@ -1,7 +1,33 @@
-# Unreleased (post v0.4.26)
+# Unreleased (v0.4.27 / post v0.4.26)
 
 <!-- Add bullets here during development; move to docs/releases/v0.4.x.md at tag time. -->
 
 ## Highlights
 
-_(none yet)_
+### Kantra `java.referenced` AST & call-site precision — JR1–JR7 (#177, #178)
+
+- **JR1 — Transitive `INHERITANCE` & external ancestors:** Iterative BFS over `EXTENDS` / `IMPLEMENTS` edges plus `extends_fqn` / `implements_fqns` seeds matches classes implementing or extending a target type across multi-hop hierarchies.
+- **JR2 — `FIELD`, `VARIABLE_DECLARATION`, `RETURN_TYPE`, `METHOD`, `THROWS`, `TYPE`:** Import-aware FQN enrichment (`return_type_fqn`, `param_type_fqns`, `throws_fqns`, `field_type_fqn:<name>`) across class fields, method signatures, `throws` clauses, and method-local variable declarations.
+- **JR3 — `PACKAGE` prefix matching & call sites:** Matches `import` prefixes, `type_references`, and `to_qualified_hint` call sites without cross-package simple-name false positives.
+- **JR4 — `CONSTRUCTOR_CALL` (`new Type(...)`):** Java `object_creation_expression` emits `RelationType::Instantiates` with exact `call_site_line`/`column`, deduplicating stub-node edges.
+- **JR5 — `METHOD_CALL` receiver & wildcard import resolution:** Intra-procedural receiver-type map (fields, parameters, local variables) combined with file-level wildcard import (`import pkg.*;`) expansion in `call_site_candidates`.
+- **JR6 — Structured `annotated` (`elements` & `type`):** Extracts structured annotation attributes (`@Target(name = "val")`) and evaluates element key/value regex filters.
+- **JR7 — Call-site line precision (`parked_relations.bin`) & confidence:** Persists external/unresolved `Calls` and `Instantiates` relations to `.rgctl/parked_relations.bin` so `CONSTRUCTOR_CALL` and `METHOD_CALL` report exact call-site lines rather than enclosing method headers; tags violations with `confidence` (`"high"` AST/graph/call-site vs `"low"` lexical fallback) and `matched_location`.
+
+### Konveyor rules engine: `java.dependency`, `builtin.xml` XPath, `RBKC` v2 & duplicate `ruleID` merge (#178)
+
+- **`java.dependency` / `go.dependency`:** Evaluates Maven/semver version bounds (`lowerbound`, `upperbound`, `nameregex`) and includes `pom.xml` / `build.gradle` manifests when `--languages java` is active.
+- **`builtin.xml` XPath & `builtin.json`:** Supports multi-axis XPath expressions (`//tag[@attr='v']`, `text()`, `local-name()`, namespace-prefix stripping) and collects `WEB-INF/*.xml` descriptors during `discover --with-kantra`.
+- **`RBKC` v2 catalog & duplicate `ruleID` union:** Preserves `description`, `links[]` (`title`, `url`), and `tag[]` in the compiled catalog (`RBKC` v2); soft-merges duplicate `ruleID`s across multi-target rulesets; suppresses tag-only rules (`is_tag_only()`) from incident counts and records them in `skipped_rules`.
+
+### Universe Static rules room & Kantra bundle enrichment (#179)
+
+- **Filters & header controls:** Adds **Source** technology filter (`konveyor.io/source`), **High confidence only** toggle, and a clickable **`{N} skipped`** header chip that expands the skipped-rules table (`Rule` / `Reason`).
+- **Violations table:** Adds per-row **Effort**, **Confidence** (`high` / `low` chip), and **Blast** (`blast_radius_score`) columns alongside `Rule`, `Line`, `Category`, and `Symbol`.
+- **Violation detail panel:** Shows rule `description`, `message`, `effort`, `targets`, `sources` chips, clickable external documentation `links[]`, `matched_location` in the subtitle (`line N · CONSTRUCTOR_CALL`), and graph enrichment metrics (`blast radius`, `impact zone`, `community`, `pagerank`).
+
+### Cold-discover performance & CI / pre-flight speed (#174, #175, #177)
+
+- **Lazy Tier-2 tree-sitter query compilation:** `QueryLanguagePlugin` validates capture names at construction and compiles tree-sitter `.scm` queries lazily via `OnceLock` on first `extract_all`, eliminating ~300 ms CPU and ~119 MB RSS of eager compilation across unused Tier-2 grammars.
+- **Indexed `build_eval_graph` & gated call-site loading:** Replaces $2 \times |E|$ `ColdMetadataDb::get_node()` bincode deserializations with an $O(1)$ `Uuid -> usize` index lookup and gates `CALLS`/`INSTANTIATES` + `parked_relations.bin` loading on `engine.needs_call_sites()`.
+- **Pre-flight & CI disk/time overhaul (#174, #175):** Parallel test execution in `scripts/preflight-pr.sh`, unified `rgctl-plugin-api` crate features to eliminate duplicate 380-crate compiles in CI, normalized `build.rs` `rerun-if-changed` paths, automatic post-run artifact cleanup, and direct CI workflow delegation to `preflight-pr.sh`.
