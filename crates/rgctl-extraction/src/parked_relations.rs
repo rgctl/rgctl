@@ -54,6 +54,19 @@ pub fn save_parked_relations(path: &Path, records: &[ParkedRelationRecord]) -> R
     Ok(())
 }
 
+/// Load parked relations from `{rgctl_dir}/parked_relations.bin` (or `{repo}/.rgctl/parked_relations.bin`), or empty if missing.
+pub fn read_parked_relations(rgctl_dir: &Path) -> Result<Vec<ParkedRelationRecord>> {
+    let direct = rgctl_dir.join(PARKED_RELATIONS_FILE);
+    if direct.is_file() {
+        return load_parked_relations(&direct);
+    }
+    let nested = rgctl_dir.join(".rgctl").join(PARKED_RELATIONS_FILE);
+    if nested.is_file() {
+        return load_parked_relations(&nested);
+    }
+    Ok(Vec::new())
+}
+
 /// Load parked relations written by [`save_parked_relations`].
 pub fn load_parked_relations(path: &Path) -> Result<Vec<ParkedRelationRecord>> {
     let mut file = File::open(path)?;

@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// Lightweight graph node for Kantra evaluation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EvalNode {
     pub id: Option<uuid::Uuid>,
     pub node_type: String,
@@ -30,6 +30,12 @@ pub struct EvalNode {
     pub file_path: Option<String>,
     pub start_line: Option<usize>,
     pub labels: Vec<String>,
+    pub return_type_fqn: Option<String>,
+    pub field_type_fqns: Vec<String>,
+    pub param_type_fqns: Vec<String>,
+    pub throws: Vec<String>,
+    pub annotations: Vec<String>,
+    pub version: Option<String>,
 }
 
 /// Inheritance / annotation edge for Java referenced rules.
@@ -44,11 +50,26 @@ pub struct EvalEdge {
     pub line: usize,
 }
 
+/// Parked or graph-backed call / instantiation site for `java.referenced`.
+#[derive(Debug, Clone)]
+pub struct EvalCallSite {
+    pub caller_id: uuid::Uuid,
+    pub file_path: String,
+    pub line: usize,
+    /// `"Calls"` or `"Instantiates"`.
+    pub relation_type: String,
+    pub to_name: String,
+    pub to_qualified_hint: Option<String>,
+    pub to_type_hint: Option<String>,
+    pub import_module_hint: Option<String>,
+}
+
 /// Graph inputs for evaluation.
 #[derive(Debug, Clone, Default)]
 pub struct EvalGraph {
     pub nodes: Vec<EvalNode>,
     pub edges: Vec<EvalEdge>,
+    pub call_sites: Vec<EvalCallSite>,
 }
 
 /// Discover evaluation context.
@@ -134,6 +155,22 @@ impl KantraEngine {
         &self.ruleset.doc.name
     }
 
+    /// True when any supported rule uses `builtin.xml` or `builtin.json`.
+    pub fn needs_xml_or_json_files(&self) -> bool {
+        self.classified
+            .iter()
+            .filter(|c| c.support != RuleSupport::Unsupported)
+            .any(|c| clause_needs_xml_or_json(&c.clause))
+    }
+
+    /// True when any supported rule evaluates `java.referenced` call/instantiation sites.
+    pub fn needs_call_sites(&self) -> bool {
+        self.classified
+            .iter()
+            .filter(|c| c.support != RuleSupport::Unsupported)
+            .any(|c| clause_needs_call_sites(&c.clause))
+    }
+
     /// Evaluate all supported rules.
     pub fn evaluate(
         &self,
@@ -165,6 +202,13 @@ impl KantraEngine {
 
         for item in &self.classified {
             let rule = &self.ruleset.doc.rules[item.rule_index];
+            if rule.is_tag_only() {
+                findings.skipped_rules.push(SkippedRule {
+                    rule_id: rule.rule_id.clone(),
+                    reason: "tag-only rule (no category or effort)".into(),
+                });
+                continue;
+            }
             if item.support == RuleSupport::Unsupported {
                 findings.skipped_rules.push(SkippedRule {
                     rule_id: rule.rule_id.clone(),
@@ -261,6 +305,29 @@ fn is_composite(clause: &WhenClause) -> bool {
     )
 }
 
+fn clause_needs_xml_or_json(clause: &WhenClause) -> bool {
+    match clause {
+        WhenClause::BuiltinXml { .. } | WhenClause::BuiltinJson { .. } => true,
+        WhenClause::And(items) | WhenClause::Or(items) => {
+            items.iter().any(clause_needs_xml_or_json)
+        }
+        WhenClause::Not(inner) => clause_needs_xml_or_json(inner),
+        _ => false,
+    }
+}
+
+fn clause_needs_call_sites(clause: &WhenClause) -> bool {
+    match clause {
+        WhenClause::JavaReferenced { location, .. } => matches!(
+            location.as_deref(),
+            None | Some("METHOD_CALL" | "CONSTRUCTOR_CALL" | "PACKAGE" | "TYPE")
+        ),
+        WhenClause::And(items) | WhenClause::Or(items) => items.iter().any(clause_needs_call_sites),
+        WhenClause::Not(inner) => clause_needs_call_sites(inner),
+        _ => false,
+    }
+}
+
 fn enrich_violations(
     violations: &mut [crate::findings::KantraViolation],
     rule: &crate::schema::KantraRule,
@@ -315,15 +382,18 @@ fn eval_leaf(
         WhenClause::JavaReferenced {
             pattern,
             location,
-            annotated_pattern: _,
+            annotated_pattern,
         } => eval_java_referenced(
             &rule.rule_id,
             pattern,
             location.as_deref(),
-            &ctx.graph.nodes,
-            &ctx.graph.edges,
-            ctx.repo_root,
-            ctx.sources,
+            annotated_pattern.as_deref(),
+            &crate::eval::java_referenced::JavaReferencedInput {
+                nodes: &ctx.graph.nodes,
+                edges: &ctx.graph.edges,
+                call_sites: &ctx.graph.call_sites,
+                sources: ctx.sources,
+            },
         )
         .map_err(crate::error::KantraError::from),
         WhenClause::JavaDependency {

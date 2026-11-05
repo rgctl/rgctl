@@ -132,6 +132,35 @@ describe("the Static rules room", () => {
     fireEvent.click(ruleCells[0]!);
     await waitFor(() => expect(screen.getByTestId("rules-violation-detail")).toBeTruthy());
     expect(screen.getByText(/Direct JDBC/)).toBeTruthy();
+    expect(screen.getByTestId("rules-description")).toBeTruthy();
+    expect(screen.getByTestId("rules-effort").textContent).toContain("3");
+    expect(screen.getByTestId("rules-sources")).toBeTruthy();
+    expect(screen.getByTestId("rules-links")).toBeTruthy();
+    expect(screen.getByTestId("rules-enrichment")).toBeTruthy();
+  });
+
+  it("shows skipped rules when the skipped chip is activated", async () => {
+    stubBundle(readyRoutes);
+    renderAt("/rules");
+    await waitFor(() => expect(screen.getByTestId("rules-skipped-chip")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("rules-skipped-chip"));
+    await waitFor(() => expect(screen.getByTestId("rules-skipped-list")).toBeTruthy());
+    expect(screen.getByText("seam-java-00000")).toBeTruthy();
+  });
+
+  it("hides low-confidence violations when high-confidence only is on", async () => {
+    stubBundle(readyRoutes);
+    renderAt("/rules");
+    await waitFor(() => expect(screen.getByTestId("rules-room")).toBeTruthy());
+    fireEvent.click(screen.getByText(/Demo\.java/));
+    await waitFor(() => expect(screen.getByTestId("rules-violations")).toBeTruthy());
+    expect(screen.getAllByText("jdbc-to-quarkus-00001").length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(screen.getByTestId("rules-high-confidence"));
+    await waitFor(() => {
+      // One high-confidence row remains in the table (plus maybe detail).
+      const rows = screen.getByTestId("rules-violations").querySelectorAll("tbody tr");
+      expect(rows.length).toBe(1);
+    });
   });
 
   it("narrows the file list when only mandatory is selected", async () => {

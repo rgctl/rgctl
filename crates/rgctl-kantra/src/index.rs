@@ -77,6 +77,17 @@ fn build_rule_node(
     node.qualified_name = Some(rule.rule_id.clone().into());
     node.properties
         .insert("rule_id".into(), rule.rule_id.clone());
+    if let Some(desc) = &rule.description {
+        node.properties.insert("description".into(), desc.clone());
+    }
+    if !rule.links.is_empty() {
+        if let Ok(links_json) = serde_json::to_string(&rule.links) {
+            node.properties.insert("links".into(), links_json);
+        }
+    }
+    if !rule.tag.is_empty() {
+        node.properties.insert("tag".into(), rule.tag.join(","));
+    }
     if let Some(cat) = &rule.category {
         node.properties.insert("category".into(), cat.clone());
     }
@@ -175,21 +186,29 @@ mod tests {
         KantraRule {
             rule_id: id.into(),
             description: None,
+            links: Vec::new(),
             category: Some("mandatory".into()),
             effort: None,
             message: None,
             labels: labels.iter().map(|s| (*s).to_string()).collect(),
+            tag: Vec::new(),
             when: serde_yaml::from_str("builtin.filecontent:\n  pattern: x\n").unwrap(),
         }
     }
 
     #[test]
     fn hydrates_ruleset_and_rules() {
+        let mut rule = sample_rule("r1", &["konveyor.io/target=quarkus"]);
+        rule.description = Some("migrate to quarkus".into());
+        rule.links = vec![crate::schema::KantraLink {
+            title: Some("Guide".into()),
+            url: "https://example.com/guide".into(),
+        }];
         let catalog = KantraCatalog {
             catalog_id: "test@1".into(),
             name: "fixture".into(),
             description: None,
-            rules: vec![sample_rule("r1", &["konveyor.io/target=quarkus"])],
+            rules: vec![rule],
         };
         let mut backend = MemoryBackend::new();
         hydrate_catalog(&mut backend, &catalog).unwrap();
@@ -197,6 +216,12 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].get_property("konveyor.io/target"), Some("quarkus"));
         assert_eq!(rules[0].get_property("targets"), Some("quarkus"));
+        assert_eq!(
+            rules[0].get_property("description"),
+            Some("migrate to quarkus")
+        );
+        let links = rules[0].get_property("links").unwrap();
+        assert!(links.contains("https://example.com/guide"));
     }
 
     #[test]

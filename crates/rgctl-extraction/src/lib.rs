@@ -21,5 +21,5 @@ pub use merge::{
 };
 pub use parked_relations::{
     PARKED_RELATIONS_FILE, PARKED_RELATIONS_MAGIC, PARKED_RELATIONS_VERSION, ParkedRelationRecord,
-    load_parked_relations, save_parked_relations,
+    load_parked_relations, read_parked_relations, save_parked_relations,
 };

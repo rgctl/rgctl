@@ -20,6 +20,7 @@
     { "target": "quarkus", "violation_count": 2 },
     { "target": "openjdk17+", "violation_count": 1 }
   ],
+  "available_sources": ["java-ee", "springboot"],
   "files": [
     {
       "id": "fileaaa111111111",
@@ -50,15 +51,24 @@
       "count": 2,
       "category": "optional",
       "message": "Direct JDBC usage detected.",
-      "targets": ["quarkus"]
+      "description": "Replace JDBC with Quarkus datasource APIs.",
+      "links": [
+        { "title": "Quarkus JDBC guide", "url": "https://example.com/quarkus-jdbc" }
+      ],
+      "targets": ["quarkus"],
+      "sources": ["java-ee"],
+      "effort": 3
     },
     {
       "rule_id": "applet-api-00000",
       "count": 1,
       "category": "mandatory",
       "message": "Applet API deprecated.",
-      "targets": ["openjdk17+", "openjdk"]
+      "targets": ["openjdk17+", "openjdk"],
+      "effort": 5
     }
   ],
-  "skipped_rules": []
+  "skipped_rules": [
+    { "rule_id": "seam-java-00000", "reason": "tag-only rule (no category or effort)" }
+  ]
 }

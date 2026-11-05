@@ -128,22 +128,25 @@ Coverage is driven by `classify.rs` and the `WhenClause` variants in `schema.rs`
 | `builtin.file` | graph `File` nodes / file list | **Full** | Glob match on paths |
 | `builtin.hasTags` | node `labels[]` | **Full** | |
 | `go.referenced` | `Import` nodes (`qualified_name`) | **Full** | Pattern match on Go import path |
-| `java.referenced` `IMPORT` | `Import` nodes | **Full** | Regex on import name |
+| `java.referenced` `IMPORT` | `Import` nodes | **Full** | Boundary-anchored Kantra glob→regex on import name |
 | `java.referenced` `TYPE`/`CLASS` | `Class`/`Interface`/`Enum` nodes | **Full** | Match `qualified_name` or `name` |
-| `java.referenced` `PACKAGE` | `Import` nodes + source fallback | **Full** | Import match + filecontent fallback |
-| `java.referenced` `INHERITANCE`/`IMPLEMENTS_TYPE` | `EXTENDS`/`IMPLEMENTS` edges + source fallback | **Full** | Uses import-FQN stubs (Phase 0 external-stub edges) |
-| `java.referenced` `ANNOTATION` | `ANNOTATED_WITH` edges + `Annotation` nodes | **Full** | Match annotation name/qualified_name |
-| `java.referenced` `annotated.pattern` | — | **Unsupported** | Parsed into `WhenClause::JavaReferenced.annotated_pattern` but ignored by `eval_leaf` (`annotated_pattern: _`); only the top-level `pattern`/`location` are matched |
-| `java.referenced` (other locations: `METHOD`, `METHOD_CALL`, `FIELD`, `RETURN_TYPE`, …) | source cache | **Partial** | Falls back to filecontent regex over Java sources — no location-precise match |
-| `java.dependency` / `go.dependency` | `Dependency` nodes from manifest extraction | **Full** | `name`/`nameregex` + `lowerbound`/`upperbound` version range; manifests parsed by `rgctl-extraction/src/manifests/` (maven, gradle, go.mod, npm, cargo) |
-| `builtin.xml` (xpath) | on-demand XML reparse | **Partial** | Minimal XPath subset: `//tag`, `//tag[@attr='val']`, `/root/...` — not full XPath |
+| `java.referenced` `PACKAGE` | Imports, external types, call-site hints | **Full** | Graph/call-site only (no comment grep) |
+| `java.referenced` `INHERITANCE`/`IMPLEMENTS_TYPE` | `EXTENDS`/`IMPLEMENTS` edges | **Full** | Uses import-FQN stubs (Phase 0 external-stub edges) |
+| `java.referenced` `ANNOTATION` | `ANNOTATED_WITH` edges + `Annotation` nodes | **Full** | Match annotation name/qualified_name; `annotated.pattern` applied when present |
+| `java.referenced` `annotated.pattern` | Annotation edges/nodes | **Partial** | Supported for `ANNOTATION`; `annotated.elements` remains unsupported |
+| `java.referenced` `CONSTRUCTOR_CALL` / `METHOD_CALL` | `.rgctl/parked_relations.bin` + Instantiates/Calls edges | **Full** | Exact 1-based call-site line; `confidence: high` |
+| `java.referenced` `METHOD` / `FIELD` / `RETURN_TYPE` / `THROWS` / `VARIABLE` | Function/Variable nodes + FQN properties | **Full** | Symbol metadata (`return_type_fqn`, `throws`, `param_type_fqn:*`, …) |
+| `java.dependency` / `go.dependency` | `Dependency` nodes from manifest extraction | **Full** | Colon↔dot coordinate normalize + `lowerbound`/`upperbound`; static POM/manifest scope only (no remote Maven resolution) |
+| `builtin.xml` (xpath) | on-demand XML reparse | **Partial** | `/a/b`, `//tag`, `|`, `prefix:local`, `[@attr]`, `local-name()`/`namespace-uri()`; unsupported XPath → `skipped_rules` |
 | `builtin.json` (jsonpath) | on-demand JSON reparse | **Partial** | Minimal path subset |
 | `and:` / `or:` / `not:` | composed over per-leaf match sites | **Full** | `eval_compose` in `engine.rs` |
 | `java.referenced` with `annotated.elements` | — | **Unsupported** | Listed in `UNSUPPORTED_PROVIDERS`; no structured per-element decomposition (edge `metadata["arguments"]` is an opaque string) |
 | Cross-condition chaining (`as:` / `from:`) | — | **Unsupported** | No inter-condition variable passing |
 | Custom variable interpolation in messages | — | **Unsupported** | Formatting concern, low priority |
 
-Note on fallbacks: the `java.referenced` `PACKAGE`/`INHERITANCE`/unknown-location paths and `builtin.filecontent` share a line-scan over the source cache, so a rule that cannot be matched precisely still produces file+line hits rather than silently returning nothing.
+Note on confidence: graph/call-site hits set `confidence: "high"` and `matched_location`. Only residual unknown locations still use a lexical line-scan (`confidence: "low"`). Tag-only Konveyor rules (`tag:` without `category`/`effort`) are recorded in `skipped_rules` and never emit incident violations.
+
+**JR1 boundary:** in-repo inheritance and import-resolved FQNs are covered. Transitive third-party JAR superclass hierarchies (Eclipse JDT LS classpath resolution) remain out of scope without `--scip` or bytecode enrichment.
 
 ### 5.2 Coverage of real-world rulesets
 
@@ -258,7 +261,7 @@ Kantra tells you *what* is wrong. The graph tells you *how much it matters*.
 
 1. **No structured annotation-element matching** — `annotated: { elements: [...] }` is unsupported; the raw `metadata["arguments"]` string can only be regex-grepped via a filecontent rule. The `annotated.pattern` form is parsed but currently ignored (see §5.1).
 2. **Minimal XML/JSON path support** — `builtin.xml`/`builtin.json` handle a small XPath/JSON-path subset, not the full spec.
-3. **Location-imprecise `java.referenced`** — `METHOD`/`METHOD_CALL`/`FIELD`/`RETURN_TYPE`/etc. fall back to filecontent regex rather than AST-precise matching.
+3. **JR1 classpath inheritance** — third-party JAR supertypes still require SCIP/bytecode enrichment; in-repo + import-resolved FQNs are covered via parked call sites.
 4. **No cross-condition chaining** (`as:`/`from:`) and **no custom variable interpolation**.
 5. **No taint/CWE correlation** — enrichment is community/centrality/blast-radius only; `rgctl-kantra` does not consume CFG/PDG/taint output (see §8 future work).
 

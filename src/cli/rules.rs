@@ -10,9 +10,9 @@ use anyhow::{Context, Result, bail};
 use rgctl_graph::schema::{EdgeType, NodeType};
 use rgctl_graph::snapshot::SNAPSHOT_FILE;
 use rgctl_kantra::{
-    EvalContext, EvalEdge, EvalGraph, EvalNode, KantraCatalog, KantraEngine, KantraFileCache,
-    KantraFindings, KantraViolation, ViolationResolver, cache_dir, rule_konveyor_sources,
-    rule_konveyor_targets, ruleset_hash,
+    EvalCallSite, EvalContext, EvalEdge, EvalGraph, EvalNode, KantraCatalog, KantraEngine,
+    KantraFileCache, KantraFindings, KantraViolation, ViolationResolver, cache_dir,
+    rule_konveyor_sources, rule_konveyor_targets, ruleset_hash,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashSet};
@@ -56,7 +56,8 @@ pub fn run_rules(
 
     let files = collect_source_files(&ctx.repo)?;
     let sources = preload_discovered_sources(&ctx.repo, &files, None);
-    let graph = build_eval_graph_from_snapshot(&snapshot)?;
+    let rgctl_dir = rgctl_graph::paths::artifact_dir(&ctx.repo);
+    let graph = build_eval_graph_from_snapshot(&snapshot, &rgctl_dir)?;
     let rs_hash = ruleset_hash(
         engine.catalog_id().unwrap_or("unknown"),
         catalog.rules.len(),
@@ -430,10 +431,17 @@ fn collect_source_files(repo: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-fn build_eval_graph_from_snapshot(snapshot: &Path) -> Result<EvalGraph> {
+fn build_eval_graph_from_snapshot(snapshot: &Path, rgctl_dir: &Path) -> Result<EvalGraph> {
     let store = rgctl_graph::SnapshotNodeStore::open(snapshot)?;
-    let mut graph = EvalGraph::default();
-    for id in store.all_node_ids() {
+    let all_ids = store.all_node_ids();
+    let mut graph = EvalGraph {
+        nodes: Vec::with_capacity(all_ids.len()),
+        edges: Vec::new(),
+        call_sites: Vec::new(),
+    };
+    let mut node_idx: std::collections::HashMap<uuid::Uuid, usize> =
+        std::collections::HashMap::with_capacity(all_ids.len());
+    for id in all_ids {
         let Some(node) = store.get_node(id)? else {
             continue;
         };
@@ -447,18 +455,14 @@ fn build_eval_graph_from_snapshot(snapshot: &Path) -> Result<EvalGraph> {
                 | NodeType::Function
                 | NodeType::Module
                 | NodeType::File
+                | NodeType::Variable
+                | NodeType::Dependency
         ) {
             continue;
         }
-        graph.nodes.push(EvalNode {
-            id: Some(node.id),
-            node_type: format!("{:?}", node.node_type),
-            name: node.name.to_string(),
-            qualified_name: node.qualified_name.as_ref().map(|s| s.to_string()),
-            file_path: node.file_path.as_ref().map(|s| s.to_string()),
-            start_line: node.start_line,
-            labels: node.labels.clone(),
-        });
+        let idx = graph.nodes.len();
+        graph.nodes.push(node_to_eval_from_snapshot(&node));
+        node_idx.insert(id, idx);
     }
     store.for_each_edge(|from, to, et| {
         let edge_name = match et {
@@ -467,36 +471,132 @@ fn build_eval_graph_from_snapshot(snapshot: &Path) -> Result<EvalGraph> {
             EdgeType::AnnotatedWith => "ANNOTATED_WITH",
             EdgeType::ExposesRoute => "EXPOSES_ROUTE",
             EdgeType::Injects => "INJECTS",
+            EdgeType::Calls => "CALLS",
+            EdgeType::Instantiates => "INSTANTIATES",
             _ => return Ok(()),
         };
-        let Some(from_node) = store.get_node(from)? else {
+        let (from_name, from_qualified, file_path, line) = if let Some(&i) = node_idx.get(&from) {
+            let n = &graph.nodes[i];
+            (
+                n.name.clone(),
+                n.qualified_name.clone().unwrap_or_else(|| n.name.clone()),
+                n.file_path.clone().unwrap_or_default(),
+                n.start_line.unwrap_or(1),
+            )
+        } else if let Some(from_node) = store.get_node(from)? {
+            (
+                from_node.name.to_string(),
+                from_node
+                    .qualified_name
+                    .as_ref()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| from_node.name.to_string()),
+                from_node
+                    .file_path
+                    .as_ref()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+                from_node.start_line.unwrap_or(1),
+            )
+        } else {
             return Ok(());
         };
-        let Some(to_node) = store.get_node(to)? else {
+        let (to_name, to_qualified) = if let Some(&i) = node_idx.get(&to) {
+            let n = &graph.nodes[i];
+            (
+                n.name.clone(),
+                n.qualified_name.clone().unwrap_or_else(|| n.name.clone()),
+            )
+        } else if let Some(to_node) = store.get_node(to)? {
+            (
+                to_node.name.to_string(),
+                to_node
+                    .qualified_name
+                    .as_ref()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| to_node.name.to_string()),
+            )
+        } else {
             return Ok(());
         };
         graph.edges.push(EvalEdge {
             edge_type: edge_name.to_string(),
-            from_name: from_node.name.to_string(),
-            from_qualified: from_node
-                .qualified_name
-                .as_ref()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| from_node.name.to_string()),
-            to_name: to_node.name.to_string(),
-            to_qualified: to_node
-                .qualified_name
-                .as_ref()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| to_node.name.to_string()),
-            file_path: from_node
-                .file_path
-                .as_ref()
-                .map(|s| s.to_string())
-                .unwrap_or_default(),
-            line: from_node.start_line.unwrap_or(1),
+            from_name,
+            from_qualified,
+            to_name,
+            to_qualified,
+            file_path,
+            line,
         });
         Ok(())
     })?;
+    if let Ok(parked) = rgctl_extraction::read_parked_relations(rgctl_dir) {
+        for rec in parked {
+            let relation_type = match rec.relation_type {
+                rgctl_plugin_api::RelationType::Calls => "Calls",
+                rgctl_plugin_api::RelationType::Instantiates => "Instantiates",
+                _ => continue,
+            };
+            graph.call_sites.push(EvalCallSite {
+                caller_id: rec.from_node_id,
+                file_path: rec.from_file,
+                line: rec.call_site_line as usize,
+                relation_type: relation_type.into(),
+                to_name: rec.to_name,
+                to_qualified_hint: rec.to_qualified_hint,
+                to_type_hint: rec.to_type_hint,
+                import_module_hint: rec.import_module_hint,
+            });
+        }
+    }
     Ok(graph)
+}
+
+fn node_to_eval_from_snapshot(node: &rgctl_graph::schema::Node) -> EvalNode {
+    let props = &node.properties;
+    let mut param_type_fqns = Vec::new();
+    let mut field_type_fqns = Vec::new();
+    let mut annotations = Vec::new();
+    for (k, v) in props {
+        if k.starts_with("param_type_fqn:") {
+            param_type_fqns.push(v.clone());
+        } else if k == "field_type_fqns" || k.starts_with("field_type_fqn") || k == "field_type" {
+            field_type_fqns.push(v.clone());
+        } else if k == "annotations" || k.starts_with("annotation:") {
+            annotations.push(v.clone());
+        }
+    }
+    if node.node_type == NodeType::Variable {
+        if let Some(rt_fqn) = props.get("return_type_fqn") {
+            field_type_fqns.push(rt_fqn.clone());
+        }
+        if let Some(rt) = node.return_type.as_ref() {
+            field_type_fqns.push(rt.to_string());
+        }
+    }
+    let mut throws: Vec<String> = Vec::new();
+    for key in ["throws_fqns", "throws"] {
+        if let Some(s) = props.get(key) {
+            for item in s.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+                if !throws.iter().any(|existing| existing == item) {
+                    throws.push(item.to_string());
+                }
+            }
+        }
+    }
+    EvalNode {
+        id: Some(node.id),
+        node_type: format!("{:?}", node.node_type),
+        name: node.name.to_string(),
+        qualified_name: node.qualified_name.as_ref().map(|s| s.to_string()),
+        file_path: node.file_path.as_ref().map(|s| s.to_string()),
+        start_line: node.start_line,
+        labels: node.labels.clone(),
+        return_type_fqn: props.get("return_type_fqn").cloned(),
+        field_type_fqns,
+        param_type_fqns,
+        throws,
+        annotations,
+        version: props.get("version").cloned(),
+    }
 }

@@ -11,7 +11,17 @@
       "message": "Direct JDBC usage detected.",
       "matched_by": "java.referenced",
       "symbol": "java.sql.Connection",
-      "targets": ["quarkus"]
+      "targets": ["quarkus"],
+      "sources": ["java-ee"],
+      "effort": 3,
+      "confidence": "high",
+      "matched_location": "IMPORT",
+      "enrichment": {
+        "blast_radius_score": 1.5,
+        "impact_zone_size": 4,
+        "community_id": 2,
+        "pagerank": 0.0123
+      }
     },
     {
       "rule_id": "jdbc-to-quarkus-00001",
@@ -19,7 +29,11 @@
       "file": "src/main/java/Demo.java",
       "line": 20,
       "matched_by": "java.referenced",
-      "targets": ["quarkus"]
+      "targets": ["quarkus"],
+      "sources": ["java-ee"],
+      "effort": 3,
+      "confidence": "low",
+      "matched_location": "FALLBACK"
     }
   ]
 }

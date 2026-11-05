@@ -1,26 +1,29 @@
 //! Tier-2 language plugin driven by a precompiled `tags.scm` query.
 
 use crate::config::LanguageConfig;
-use crate::queries::{CaptureIndex, compile_tags_query, extract_with_query};
+use crate::queries::{
+    CaptureIndex, capture_role, compile_tags_query, extract_capture_names, extract_with_query,
+    validate_tags_captures,
+};
 use crate::regex_extract::{extract_regex_symbols, merge_symbols};
 use rgctl_plugin_api::Result;
 use rgctl_plugin_api::*;
 use rgctl_plugin_helpers::ComplexityCalculator;
 use std::path::Path;
+use std::sync::OnceLock;
 use tree_sitter::{Node, Query, Tree};
 
 type GrammarFn = fn() -> tree_sitter::Language;
 
 /// Generic tags.scm query plugin (`handler = "queries"`).
 ///
-/// Compiles the embedded `tags.scm` once at construction and reuses it for every
-/// file. Capture vocabulary is validated against the Tier-2 allow-list (see
-/// [`crate::queries::validate_tags_captures`]).
+/// Validates the embedded `tags.scm` capture vocabulary at construction and
+/// compiles the tree-sitter [`Query`] lazily on first file extraction so
+/// `default_registry()` does not pay ~300ms compiling 38 unused Tier-2 grammars.
 pub struct QueryLanguagePlugin {
     config: &'static LanguageConfig,
     grammar: GrammarFn,
-    query: Query,
-    capture_index: CaptureIndex,
+    compiled: OnceLock<(Query, CaptureIndex)>,
 }
 
 impl QueryLanguagePlugin {
@@ -32,15 +35,45 @@ impl QueryLanguagePlugin {
                 config.id
             ))
         })?;
-        let language = grammar();
-        let query = compile_tags_query(config.id, &language, tags)?;
-        let capture_index = CaptureIndex::from_query(&query)?;
+        let capture_issues = validate_tags_captures(config.id, tags);
+        if !capture_issues.is_empty() {
+            return Err(Error::PluginError(capture_issues.join("; ")));
+        }
+        for name in extract_capture_names(tags) {
+            if name.starts_with('_') {
+                continue;
+            }
+            if capture_role(&name).is_none() {
+                return Err(Error::PluginError(format!(
+                    "{}: capture '@{name}' is allow-listed but has no Symbol/Relation mapping",
+                    config.id
+                )));
+            }
+        }
         Ok(Self {
             config,
             grammar,
-            query,
-            capture_index,
+            compiled: OnceLock::new(),
         })
+    }
+
+    fn compiled(&self) -> Result<&(Query, CaptureIndex)> {
+        if let Some(c) = self.compiled.get() {
+            return Ok(c);
+        }
+        let tags = self.config.tags_scm.ok_or_else(|| {
+            Error::PluginError(format!(
+                "language '{}': handler=queries requires LanguageConfig.tags_scm",
+                self.config.id
+            ))
+        })?;
+        let language = (self.grammar)();
+        let query = compile_tags_query(self.config.id, &language, tags)?;
+        let capture_index = CaptureIndex::from_query(&query)?;
+        let _ = self.compiled.set((query, capture_index));
+        self.compiled
+            .get()
+            .ok_or_else(|| Error::PluginError("failed to initialize compiled query".into()))
     }
 
     fn parse(&self, source: &[u8], file_path: &Path) -> Result<Tree> {
@@ -54,14 +87,15 @@ impl QueryLanguagePlugin {
     }
 
     fn extract_all_inner(&self, file_path: &Path, source: &[u8]) -> Result<ExtractAllResult> {
+        let (query, capture_index) = self.compiled()?;
         let tree = self.parse(source, file_path)?;
         let mut result = extract_with_query(
             self.config.id,
             file_path,
             source,
             &tree,
-            &self.query,
-            &self.capture_index,
+            query,
+            capture_index,
         )?;
         if let Some(patterns) = self.config.regex_patterns {
             let supplemental = extract_regex_symbols(file_path, source, patterns, "queries+regex")?;

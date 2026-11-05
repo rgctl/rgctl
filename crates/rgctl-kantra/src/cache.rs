@@ -128,6 +128,8 @@ mod tests {
             targets: Vec::new(),
             sources: Vec::new(),
             effort: None,
+            confidence: None,
+            matched_location: None,
             enrichment: None,
         }];
         cache.put("a.java".into(), "abc".into(), v.clone());

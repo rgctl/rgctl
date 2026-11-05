@@ -131,6 +131,18 @@ export function RulesRoom() {
             {view.index.target_filter && (
               <Chip tone="blue">target: {view.index.target_filter}</Chip>
             )}
+            {(view.index.skipped_rules?.length ?? 0) > 0 && (
+              <button
+                type="button"
+                data-testid="rules-skipped-chip"
+                onClick={() => room.setShowSkipped(!room.showSkipped)}
+                className="rounded-full"
+              >
+                <Chip tone="amber">
+                  {view.index.skipped_rules!.length} skipped
+                </Chip>
+              </button>
+            )}
           </div>
         }
       >
@@ -151,6 +163,75 @@ export function RulesRoom() {
             onSelect={room.setTargetFilter}
             violationCount={view.index.violation_count}
           />
+        )}
+        {(view.index.available_sources?.length ?? 0) > 0 && (
+          <div className="mb-2 flex flex-wrap items-center gap-2" data-testid="rules-source-filter">
+            <span className="text-[10px] uppercase tracking-wide text-zinc-500">Source</span>
+            <select
+              aria-label="Filter by source technology"
+              className="rounded border border-white/10 bg-black/20 px-2 py-0.5 text-[11px] text-zinc-200"
+              value={room.sourceFilter ?? ""}
+              onChange={(e) =>
+                room.setSourceFilter(e.target.value ? e.target.value : null)
+              }
+            >
+              <option value="">All sources</option>
+              {view.index.available_sources!.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+            <label className="flex cursor-pointer items-center gap-1 text-[11px] text-zinc-300">
+              <input
+                type="checkbox"
+                checked={room.highConfidenceOnly}
+                onChange={(e) => room.setHighConfidenceOnly(e.target.checked)}
+                className="accent-sky-500"
+                data-testid="rules-high-confidence"
+              />
+              High confidence only
+            </label>
+          </div>
+        )}
+        {!(view.index.available_sources?.length) && (
+          <div className="mb-2">
+            <label className="flex cursor-pointer items-center gap-1 text-[11px] text-zinc-300">
+              <input
+                type="checkbox"
+                checked={room.highConfidenceOnly}
+                onChange={(e) => room.setHighConfidenceOnly(e.target.checked)}
+                className="accent-sky-500"
+                data-testid="rules-high-confidence"
+              />
+              High confidence only
+            </label>
+          </div>
+        )}
+        {room.showSkipped && (view.index.skipped_rules?.length ?? 0) > 0 && (
+          <div
+            className="mb-2 max-h-40 overflow-auto rounded border border-white/10 bg-black/20 p-2"
+            data-testid="rules-skipped-list"
+          >
+            <table className="w-full text-left text-[11px]">
+              <thead className="text-[10px] uppercase tracking-wide text-zinc-500">
+                <tr>
+                  <th className="px-1 py-1">Rule</th>
+                  <th className="px-1 py-1">Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {view.index.skipped_rules!.map((s) => (
+                  <tr key={s.rule_id} className="border-t border-white/5">
+                    <td className="px-1 py-1 font-mono text-[10px] text-zinc-200">
+                      {s.rule_id}
+                    </td>
+                    <td className="px-1 py-1 text-zinc-400">{s.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Panel>
 
@@ -243,13 +324,21 @@ export function RulesRoom() {
                           <th className="px-1 py-1">Rule</th>
                           <th className="px-1 py-1">Line</th>
                           <th className="px-1 py-1">Category</th>
-                          <th className="px-1 py-1">Matcher</th>
+                          <th className="px-1 py-1">Effort</th>
+                          <th className="px-1 py-1">Confidence</th>
+                          <th className="px-1 py-1">Blast</th>
                           <th className="px-1 py-1">Symbol</th>
                         </tr>
                       </thead>
                       <tbody>
                         {view.filteredViolations.map(({ violation, key }) => {
                           const active = key === view.selectedViolationKey;
+                          const ruleMeta = view.index.rules.find(
+                            (r) => r.rule_id === violation.rule_id,
+                          );
+                          const effort = violation.effort ?? ruleMeta?.effort ?? null;
+                          const blast =
+                            violation.enrichment?.blast_radius_score ?? null;
                           return (
                             <tr
                               key={key}
@@ -267,7 +356,21 @@ export function RulesRoom() {
                                   {normalizeCategory(violation.category)}
                                 </Chip>
                               </td>
-                              <td className="px-1 py-1 text-zinc-500">{violation.matched_by}</td>
+                              <td className="px-1 py-1 tabular-nums text-zinc-400">
+                                {effort != null ? effort : "—"}
+                              </td>
+                              <td className="px-1 py-1">
+                                {violation.confidence === "low" ? (
+                                  <Chip tone="amber">low</Chip>
+                                ) : violation.confidence === "high" ? (
+                                  <Chip tone="blue">high</Chip>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
+                              <td className="px-1 py-1 tabular-nums text-zinc-400">
+                                {blast != null ? blast.toFixed(1) : "—"}
+                              </td>
                               <td className="px-1 py-1 text-zinc-400">
                                 {violation.symbol ? (
                                   <code className="text-[10px]">{violation.symbol}</code>
@@ -416,22 +519,100 @@ function ViolationDetail({
   filePath: string;
 }) {
   const message = rule?.message ?? violation.message ?? null;
+  const description = rule?.description ?? null;
   const targets = (violation.targets?.length ? violation.targets : rule?.targets) ?? [];
+  const sources = (violation.sources?.length ? violation.sources : rule?.sources) ?? [];
+  const links = rule?.links ?? [];
+  const effort = violation.effort ?? rule?.effort ?? null;
+  const enrichment = violation.enrichment;
   const lang = languageFor(filePath);
 
   return (
     <div data-testid="rules-violation-detail">
     <Panel
       title={violation.rule_id}
-      subtitle={`line ${violation.line}`}
-      right={<Chip tone={categoryTone(violation.category)}>{normalizeCategory(violation.category)}</Chip>}
+      subtitle={`line ${violation.line}${violation.matched_location ? ` · ${violation.matched_location}` : ""}`}
+      right={
+        <div className="flex flex-wrap gap-1">
+          <Chip tone={categoryTone(violation.category)}>
+            {normalizeCategory(violation.category)}
+          </Chip>
+          {violation.confidence === "low" && <Chip tone="amber">low confidence</Chip>}
+          {violation.confidence === "high" && <Chip tone="blue">high confidence</Chip>}
+        </div>
+      }
     >
-      {message && <p className="mb-2 whitespace-pre-wrap text-[11px] text-zinc-300">{message}</p>}
-      {targets.length > 0 && (
-        <p className="mb-2 text-[10px] text-zinc-500">
-          targets: {targets.join(", ")}
-          {violation.effort != null ? ` · effort ${violation.effort}` : ""}
+      {description && (
+        <p className="mb-2 whitespace-pre-wrap text-[11px] text-zinc-400" data-testid="rules-description">
+          {description}
         </p>
+      )}
+      {message && <p className="mb-2 whitespace-pre-wrap text-[11px] text-zinc-300">{message}</p>}
+      {effort != null && (
+        <p className="mb-2 text-[10px] text-zinc-500" data-testid="rules-effort">
+          effort: {effort}
+        </p>
+      )}
+      {targets.length > 0 && (
+        <p className="mb-2 text-[10px] text-zinc-500">targets: {targets.join(", ")}</p>
+      )}
+      {sources.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1" data-testid="rules-sources">
+          {sources.map((s) => (
+            <Chip key={s} tone="zinc">
+              {s}
+            </Chip>
+          ))}
+        </div>
+      )}
+      {links.length > 0 && (
+        <ul className="mb-2 space-y-1" data-testid="rules-links">
+          {links.map((link) => (
+            <li key={link.url}>
+              <a
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] text-sky-400 underline"
+              >
+                {link.title || link.url}
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+      {enrichment && (
+        <dl
+          className="mb-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-zinc-500"
+          data-testid="rules-enrichment"
+        >
+          {enrichment.blast_radius_score != null && (
+            <>
+              <dt>blast radius</dt>
+              <dd className="tabular-nums text-zinc-300">
+                {enrichment.blast_radius_score.toFixed(2)}
+              </dd>
+            </>
+          )}
+          {enrichment.impact_zone_size != null && (
+            <>
+              <dt>impact zone</dt>
+              <dd className="tabular-nums text-zinc-300">{enrichment.impact_zone_size}</dd>
+            </>
+          )}
+          {enrichment.community_id != null && (
+            <>
+              <dt>community</dt>
+              <dd className="tabular-nums text-zinc-300">{enrichment.community_id}</dd>
+            </>
+          )}
+          {enrichment.pagerank != null && (
+            <>
+              <dt>pagerank</dt>
+              <dd className="tabular-nums text-zinc-300">{enrichment.pagerank.toFixed(4)}</dd>
+            </>
+          )}
+        </dl>
       )}
       {sourceLoading && <p className="text-[11px] text-zinc-500">Loading source…</p>}
       {!sourceLoading && !snippet && (

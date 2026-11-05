@@ -60,6 +60,12 @@ export interface UseStaticRulesRoom {
   setAllCategories: (on: boolean) => void;
   targetFilter: string | null;
   setTargetFilter: (t: string | null) => void;
+  sourceFilter: string | null;
+  setSourceFilter: (s: string | null) => void;
+  highConfidenceOnly: boolean;
+  setHighConfidenceOnly: (on: boolean) => void;
+  showSkipped: boolean;
+  setShowSkipped: (on: boolean) => void;
   targetSearch: string;
   setTargetSearch: (s: string) => void;
   fileSearch: string;
@@ -83,6 +89,9 @@ export function useStaticRulesRoom(): UseStaticRulesRoom {
     () => new Set(ALL_KANTRA_CATEGORIES),
   );
   const [targetFilter, setTargetFilter] = useState<string | null>(null);
+  const [sourceFilter, setSourceFilter] = useState<string | null>(null);
+  const [highConfidenceOnly, setHighConfidenceOnly] = useState(false);
+  const [showSkipped, setShowSkipped] = useState(false);
   const [targetSearch, setTargetSearch] = useState("");
   const [fileSearch, setFileSearch] = useState("");
   const [filePage, setFilePage] = useState(0);
@@ -184,9 +193,18 @@ export function useStaticRulesRoom(): UseStaticRulesRoom {
           rulesById.get(violation.rule_id),
           categoryFilters,
           targetFilter,
+          sourceFilter,
+          highConfidenceOnly,
         ),
       );
-  }, [fileBundle, rulesById, categoryFilters, targetFilter]);
+  }, [
+    fileBundle,
+    rulesById,
+    categoryFilters,
+    targetFilter,
+    sourceFilter,
+    highConfidenceOnly,
+  ]);
 
   const selectedViolation =
     filteredViolations.find((v) => v.key === selectedViolationKey)?.violation ?? null;
@@ -257,6 +275,12 @@ export function useStaticRulesRoom(): UseStaticRulesRoom {
     },
     targetFilter,
     setTargetFilter,
+    sourceFilter,
+    setSourceFilter,
+    highConfidenceOnly,
+    setHighConfidenceOnly,
+    showSkipped,
+    setShowSkipped,
     targetSearch,
     setTargetSearch,
     fileSearch,

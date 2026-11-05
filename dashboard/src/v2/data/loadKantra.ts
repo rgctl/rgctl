@@ -48,12 +48,26 @@ export interface KantraFileEntry {
   source_id?: string | null;
 }
 
+export interface KantraLink {
+  title?: string | null;
+  url: string;
+}
+
+export interface KantraSkippedRule {
+  rule_id: string;
+  reason: string;
+}
+
 export interface KantraRuleEntry {
   rule_id: string;
   count: number;
   category?: string | null;
   message?: string | null;
+  description?: string | null;
+  links?: KantraLink[];
   targets?: string[];
+  sources?: string[];
+  effort?: number | null;
 }
 
 export interface KantraViolation {
@@ -67,9 +81,13 @@ export interface KantraViolation {
   targets?: string[];
   sources?: string[];
   effort?: number | null;
+  confidence?: string | null;
+  matched_location?: string | null;
   enrichment?: {
     blast_radius_score?: number | null;
     impact_zone_size?: number | null;
+    community_id?: number | null;
+    pagerank?: number | null;
   } | null;
 }
 
@@ -93,8 +111,10 @@ export interface KantraIndexPayload {
   file_count: number;
   rule_count: number;
   available_targets?: KantraTargetEntry[];
+  available_sources?: string[];
   files: KantraFileEntry[];
   rules: KantraRuleEntry[];
+  skipped_rules?: KantraSkippedRule[];
 }
 
 export type KantraIndexLoad =
@@ -150,8 +170,17 @@ export function violationMatchesFilters(
   rule: KantraRuleEntry | undefined,
   categories: ReadonlySet<KantraFilterCategory>,
   targetFilter: string | null,
+  sourceFilter: string | null = null,
+  highConfidenceOnly = false,
 ): boolean {
   if (!categories.has(normalizeCategory(violation.category))) return false;
+  if (highConfidenceOnly && violation.confidence === "low") return false;
+  if (sourceFilter) {
+    const sources = violation.sources?.length
+      ? violation.sources
+      : (rule?.sources ?? []);
+    if (!sources.includes(sourceFilter)) return false;
+  }
   if (!targetFilter) return true;
   const fromViolation = violation.targets ?? [];
   if (fromViolation.includes(targetFilter)) return true;

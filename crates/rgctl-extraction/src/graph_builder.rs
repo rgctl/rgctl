@@ -518,6 +518,16 @@ impl GraphBuilder {
                 if k == rgctl_plugin_api::COMPLEXITY_META_KEY {
                     continue;
                 }
+                if k == "field_type_fqns"
+                    && let serde_json::Value::Object(map) = v
+                {
+                    for (fk, fv) in map {
+                        if let serde_json::Value::String(fqn) = fv {
+                            node = node.with_property(format!("field_type_fqn:{fk}"), fqn.clone());
+                        }
+                    }
+                    continue;
+                }
                 let prop_val = match v {
                     serde_json::Value::String(s) => Some(s.clone()),
                     serde_json::Value::Bool(b) => Some(b.to_string()),
@@ -582,9 +592,13 @@ impl GraphBuilder {
             .entry(symbol.location.file.clone())
             .or_default();
 
+        let trimmed_sym_name = symbol.name.trim_start();
+        let is_single_symbol_import_syntax = trimmed_sym_name.starts_with("import ")
+            || trimmed_sym_name.starts_with("using ")
+            || trimmed_sym_name.starts_with("use ");
         if let Some(binding) = explicit_binding {
             by_file.insert(binding, module.clone());
-        } else {
+        } else if !is_single_symbol_import_syntax {
             by_file.insert("*".to_string(), module.clone());
         }
 
@@ -2032,6 +2046,7 @@ fn is_parkable_relation(relation_type: RelationType) -> bool {
     matches!(
         relation_type,
         RelationType::Calls
+            | RelationType::Instantiates
             | RelationType::Uses
             | RelationType::Extends
             | RelationType::Implements
@@ -2584,6 +2599,14 @@ mod tests {
                 .iter()
                 .any(|e| { e.edge_type == EdgeType::Instantiates && e.to == stub.id })
         );
+        let parked = builder.take_parked_relations();
+        let rec = parked
+            .iter()
+            .find(|r| r.relation_type == RelationType::Instantiates)
+            .expect("Instantiates parked for external stub");
+        assert_eq!(rec.call_site_line, 2);
+        assert_eq!(rec.to_qualified_hint.as_deref(), Some("java.lang.String"));
+        assert_eq!(rec.to_name, "String");
     }
 
     #[test]

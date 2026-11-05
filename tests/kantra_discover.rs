@@ -611,3 +611,315 @@ fn rules_run_target_findings_and_targets_cli() {
         Some(true)
     );
 }
+
+#[test]
+fn kantra_jr2_to_jr7_and_deps_xml_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let rules = dir.path().join("rules");
+    std::fs::create_dir_all(repo.join("src/main/java/com/acme")).unwrap();
+    std::fs::create_dir_all(repo.join("src/main/webapp/WEB-INF")).unwrap();
+    std::fs::create_dir_all(&rules).unwrap();
+
+    // Maven pom.xml for java.dependency (colon vs dot + version bounds)
+    std::fs::write(
+        repo.join("pom.xml"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>demo</artifactId>
+  <version>1.0.0</version>
+  <dependencies>
+    <dependency>
+      <groupId>org.jboss.bom</groupId>
+      <artifactId>eap-runtime-artifacts</artifactId>
+      <version>7.4.0.Final</version>
+    </dependency>
+  </dependencies>
+</project>
+"#,
+    )
+    .unwrap();
+
+    // XML descriptor for builtin.xml (rooted path + union)
+    std::fs::write(
+        repo.join("src/main/webapp/WEB-INF/jboss-web.xml"),
+        r#"<?xml version="1.0"?>
+<jboss-web>
+  <context-root>/demo</context-root>
+</jboss-web>
+"#,
+    )
+    .unwrap();
+
+    // Java file exercising JR2, JR3, JR4, JR5, JR6, JR7, FIELD_DECLARATION, RETURN_TYPE, THROWS, VARIABLE_DECLARATION
+    std::fs::write(
+        repo.join("src/main/java/com/acme/LegacyService.java"),
+        r#"package com.acme;
+
+import java.util.*;
+import java.util.List;
+import java.util.Scanner;
+import java.net.URL;
+import java.net.URLClassLoader;
+import javax.servlet.http.*;
+import javax.persistence.EntityManager;
+import javax.persistence.Query;
+import javax.persistence.PersistenceException;
+import org.jboss.ejb3.annotation.SecurityDomain;
+
+// Comment mentioning java.net.URL and org.jboss.ejb3 should never match
+public class LegacyService {
+    private EntityManager em;
+
+    public Query handle(HttpSession session, EntityManager paramEm) throws PersistenceException {
+        session.setAttribute("user", "alice");
+        try {
+            URL endpoint = new URL("https://example.com");
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        rules.join("ruleset.yaml"),
+        "name: koncur-jr-suite\nlabels:\n  - konveyor.io/target=quarkus\n  - konveyor.io/source=java-ee\n",
+    )
+    .unwrap();
+    std::fs::write(
+        rules.join("rules.yaml"),
+        r#"
+- ruleID: jr2-ctor-url
+  category: mandatory
+  effort: 1
+  message: URL constructor call
+  when:
+    java.referenced:
+      location: CONSTRUCTOR_CALL
+      pattern: java.net.URL*
+
+- ruleID: jr2-pkg-ejb3
+  category: mandatory
+  effort: 1
+  message: EJB3 package reference
+  when:
+    java.referenced:
+      location: PACKAGE
+      pattern: org.jboss.ejb3*
+
+- ruleID: jr3-session-setattr
+  category: mandatory
+  effort: 3
+  message: HttpSession.setAttribute call
+  when:
+    java.referenced:
+      location: METHOD_CALL
+      pattern: javax.servlet.http.HttpSession.setAttribute*
+
+- ruleID: jr5-bare-classloader
+  category: potential
+  effort: 1
+  message: Bare ClassLoader should not match URLClassLoader
+  when:
+    java.referenced:
+      location: IMPORT
+      pattern: ClassLoader
+
+- ruleID: jr6-formatter-scanner
+  category: potential
+  effort: 1
+  message: Scanner or Formatter import
+  when:
+    java.referenced:
+      location: IMPORT
+      pattern: java.util.(Formatter|Scanner)*
+
+- ruleID: jr6-leading-star-em-field
+  category: mandatory
+  effort: 2
+  message: Leading wildcard EntityManager field
+  when:
+    java.referenced:
+      location: FIELD_DECLARATION
+      pattern: "*EntityManager"
+
+- ruleID: jr-return-type-query
+  category: mandatory
+  effort: 1
+  message: Query return type
+  when:
+    java.referenced:
+      location: RETURN_TYPE
+      pattern: javax.persistence.Query*
+
+- ruleID: jr-throws-persistence
+  category: mandatory
+  effort: 1
+  message: Throws PersistenceException
+  when:
+    java.referenced:
+      location: THROWS_METHOD_DECLARATION
+      pattern: javax.persistence.PersistenceException*
+
+- ruleID: jr-param-var-decl
+  category: mandatory
+  effort: 1
+  message: Parameter EntityManager
+  when:
+    java.referenced:
+      location: VARIABLE_DECLARATION
+      pattern: javax.persistence.EntityManager*
+
+- ruleID: jr7-tag-only-seam
+  description: Tag-only rule must not emit violations
+  tag:
+    - Seam
+  when:
+    java.referenced:
+      location: IMPORT
+      pattern: java.util.*
+
+- ruleID: dep-dot-coord
+  category: mandatory
+  effort: 1
+  message: BOM dependency matched with dot coordinate and bounds
+  when:
+    java.dependency:
+      name: org.jboss.bom.eap-runtime-artifacts
+      lowerbound: "7.0"
+      upperbound: "8.0"
+
+- ruleID: xml-rooted-union
+  category: mandatory
+  effort: 1
+  message: jboss-web context-root
+  when:
+    builtin.xml:
+      xpath: /jboss-web/context-root | //class-loading
+
+- ruleID: xml-unsupported-position
+  category: mandatory
+  effort: 1
+  message: Unsupported XPath
+  when:
+    builtin.xml:
+      xpath: //foo[position()=1]
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(rgctl_bin())
+        .args([
+            "discover",
+            ".",
+            "--languages",
+            "java",
+            "--with-kantra",
+            "--kantra-rules",
+            rules.to_str().unwrap(),
+        ])
+        .current_dir(&repo)
+        .output()
+        .expect("discover");
+    assert!(
+        out.status.success(),
+        "discover failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let findings_path = repo.join(".rgctl/kantra_findings.json");
+    let doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&findings_path).unwrap()).unwrap();
+    let violations = doc.get("violations").and_then(|v| v.as_array()).unwrap();
+    let skipped = doc.get("skipped_rules").and_then(|v| v.as_array()).unwrap();
+
+    let by_rule = |id: &str| -> Vec<&serde_json::Value> {
+        violations
+            .iter()
+            .filter(|v| v.get("rule_id").and_then(|r| r.as_str()) == Some(id))
+            .collect()
+    };
+
+    // JR2 + JR4: CONSTRUCTOR_CALL hits exact `new URL(...)` line (21), single hit, high confidence.
+    let ctor_hits = by_rule("jr2-ctor-url");
+    assert_eq!(
+        ctor_hits.len(),
+        1,
+        "expected 1 CONSTRUCTOR_CALL hit, got {ctor_hits:?}"
+    );
+    assert_eq!(ctor_hits[0].get("line").and_then(|l| l.as_u64()), Some(21));
+    assert_eq!(
+        ctor_hits[0].get("confidence").and_then(|c| c.as_str()),
+        Some("high")
+    );
+
+    // JR2: PACKAGE matches import line (12), not comment (14).
+    let pkg_hits = by_rule("jr2-pkg-ejb3");
+    assert_eq!(
+        pkg_hits.len(),
+        1,
+        "expected 1 PACKAGE hit, got {pkg_hits:?}"
+    );
+    assert_eq!(pkg_hits[0].get("line").and_then(|l| l.as_u64()), Some(12));
+
+    // JR3 + JR4: METHOD_CALL on wildcard-imported HttpSession parameter hits exact line (19).
+    let call_hits = by_rule("jr3-session-setattr");
+    assert_eq!(
+        call_hits.len(),
+        1,
+        "expected 1 METHOD_CALL hit, got {call_hits:?}"
+    );
+    assert_eq!(call_hits[0].get("line").and_then(|l| l.as_u64()), Some(19));
+
+    // JR5: Bare `ClassLoader` must NOT match `import java.net.URLClassLoader;`
+    assert!(
+        by_rule("jr5-bare-classloader").is_empty(),
+        "ClassLoader must not substring-match URLClassLoader"
+    );
+
+    // JR6: `java.util.(Formatter|Scanner)*` matches only `import java.util.Scanner;` (line 5),
+    // NOT `import java.util.*;` (line 3) or `import java.util.List;` (line 4).
+    let jr6_hits = by_rule("jr6-formatter-scanner");
+    assert_eq!(
+        jr6_hits.len(),
+        1,
+        "expected 1 Scanner hit, got {jr6_hits:?}"
+    );
+    assert_eq!(jr6_hits[0].get("line").and_then(|l| l.as_u64()), Some(5));
+
+    // JR6 leading `*EntityManager` + FIELD_DECLARATION:
+    assert_eq!(by_rule("jr6-leading-star-em-field").len(), 1);
+    // RETURN_TYPE, THROWS_METHOD_DECLARATION, VARIABLE_DECLARATION:
+    assert_eq!(by_rule("jr-return-type-query").len(), 1);
+    assert_eq!(by_rule("jr-throws-persistence").len(), 1);
+    assert_eq!(by_rule("jr-param-var-decl").len(), 1);
+
+    // JR7: Tag-only rule must not appear in violations, and must be in skipped_rules.
+    assert!(by_rule("jr7-tag-only-seam").is_empty());
+    assert!(
+        skipped.iter().any(|s| {
+            s.get("rule_id").and_then(|r| r.as_str()) == Some("jr7-tag-only-seam")
+                && s.get("reason")
+                    .and_then(|r| r.as_str())
+                    .is_some_and(|r| r.contains("tag-only"))
+        }),
+        "expected jr7-tag-only-seam in skipped_rules"
+    );
+
+    // #178: java.dependency dot coordinate + version bounds
+    assert_eq!(by_rule("dep-dot-coord").len(), 1);
+
+    // #178: builtin.xml rooted union + unsupported XPath skip
+    assert_eq!(by_rule("xml-rooted-union").len(), 1);
+    assert!(
+        skipped.iter().any(|s| {
+            s.get("rule_id").and_then(|r| r.as_str()) == Some("xml-unsupported-position")
+        }),
+        "expected xml-unsupported-position in skipped_rules"
+    );
+}

@@ -6,7 +6,8 @@ use crate::source_catalog::{
 };
 use rayon::prelude::*;
 use rgctl_kantra::{
-    KantraCatalog, KantraFindings, KantraViolation, SkippedRule, rule_konveyor_targets,
+    KantraCatalog, KantraFindings, KantraLink, KantraViolation, SkippedRule, rule_konveyor_sources,
+    rule_konveyor_targets,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -34,6 +35,8 @@ pub struct KantraIndexPayload {
     pub rule_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub available_targets: Vec<KantraTargetEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available_sources: Vec<String>,
     pub files: Vec<KantraFileEntry>,
     pub rules: Vec<KantraRuleEntry>,
     pub skipped_rules: Vec<SkippedRule>,
@@ -64,8 +67,16 @@ pub struct KantraRuleEntry {
     pub count: usize,
     pub category: Option<String>,
     pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<KantraLink>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,7 +136,7 @@ pub fn export_kantra_bundle(
     }
     let bytes = fs::read(&findings_path).map_err(|e| e.to_string())?;
     let findings = KantraFindings::from_json(&bytes).map_err(|e| e.to_string())?;
-    let rule_targets = load_rule_targets_map(findings.catalog_id.as_deref());
+    let rule_meta = load_rule_metadata_map(findings.catalog_id.as_deref());
 
     let detail_root = out_dir.join(KANTRA_DETAIL_DIR);
     if detail_root.exists() {
@@ -138,29 +149,59 @@ pub fn export_kantra_bundle(
 
     let mut by_category = HashMap::new();
     let mut by_target: HashMap<String, usize> = HashMap::new();
+    let mut by_source: HashMap<String, usize> = HashMap::new();
     let mut by_file: HashMap<String, Vec<KantraViolation>> = HashMap::new();
-    let mut by_rule: HashMap<String, (usize, Option<String>, Option<String>)> = HashMap::new();
+    let mut by_rule: HashMap<String, RuleAgg> = HashMap::new();
 
     for v in &findings.violations {
         let cat = v.category.as_deref().unwrap_or("uncategorized");
         *by_category.entry(cat.to_string()).or_insert(0) += 1;
-        for target in targets_for_rule(&rule_targets, &v.rule_id) {
-            *by_target.entry(target).or_insert(0) += 1;
+        let meta = rule_meta.get(&v.rule_id);
+        let targets = if !v.targets.is_empty() {
+            v.targets.clone()
+        } else {
+            meta.map(|m| m.targets.clone()).unwrap_or_default()
+        };
+        let sources = if !v.sources.is_empty() {
+            v.sources.clone()
+        } else {
+            meta.map(|m| m.sources.clone()).unwrap_or_default()
+        };
+        for target in &targets {
+            *by_target.entry(target.clone()).or_insert(0) += 1;
+        }
+        for source in &sources {
+            *by_source.entry(source.clone()).or_insert(0) += 1;
         }
 
         let rel = relativize_path(repo_root, &v.file);
         by_file.entry(rel).or_default().push(v.clone());
 
-        let entry =
-            by_rule
-                .entry(v.rule_id.clone())
-                .or_insert((0, v.category.clone(), v.message.clone()));
-        entry.0 += 1;
-        if entry.1.is_none() {
-            entry.1 = v.category.clone();
+        let entry = by_rule.entry(v.rule_id.clone()).or_insert_with(|| RuleAgg {
+            count: 0,
+            category: v.category.clone(),
+            message: v.message.clone(),
+            description: meta.and_then(|m| m.description.clone()),
+            links: meta.map(|m| m.links.clone()).unwrap_or_default(),
+            targets: targets.clone(),
+            sources: sources.clone(),
+            effort: v.effort.or_else(|| meta.and_then(|m| m.effort)),
+        });
+        entry.count += 1;
+        if entry.category.is_none() {
+            entry.category = v.category.clone();
         }
-        if entry.2.is_none() {
-            entry.2 = v.message.clone();
+        if entry.message.is_none() {
+            entry.message = v.message.clone();
+        }
+        if entry.effort.is_none() {
+            entry.effort = v.effort.or_else(|| meta.and_then(|m| m.effort));
+        }
+        if entry.targets.is_empty() {
+            entry.targets = targets;
+        }
+        if entry.sources.is_empty() {
+            entry.sources = sources;
         }
     }
 
@@ -175,7 +216,15 @@ pub fn export_kantra_bundle(
             for v in &violations {
                 let cat = v.category.as_deref().unwrap_or("uncategorized").to_string();
                 *categories.entry(cat.clone()).or_insert(0) += 1;
-                for target in targets_for_rule(&rule_targets, &v.rule_id) {
+                let targets = if !v.targets.is_empty() {
+                    v.targets.clone()
+                } else {
+                    rule_meta
+                        .get(&v.rule_id)
+                        .map(|m| m.targets.clone())
+                        .unwrap_or_default()
+                };
+                for target in targets {
                     target_categories
                         .entry(target)
                         .or_default()
@@ -227,12 +276,16 @@ pub fn export_kantra_bundle(
 
     let mut rules: Vec<KantraRuleEntry> = by_rule
         .into_iter()
-        .map(|(rule_id, (count, category, message))| KantraRuleEntry {
-            targets: targets_for_rule(&rule_targets, &rule_id),
+        .map(|(rule_id, agg)| KantraRuleEntry {
             rule_id,
-            count,
-            category,
-            message,
+            count: agg.count,
+            category: agg.category,
+            message: agg.message,
+            description: agg.description,
+            links: agg.links,
+            targets: agg.targets,
+            sources: agg.sources,
+            effort: agg.effort,
         })
         .collect();
     rules.sort_by(|a, b| {
@@ -254,6 +307,9 @@ pub fn export_kantra_bundle(
             .then_with(|| a.target.cmp(&b.target))
     });
 
+    let mut available_sources: Vec<String> = by_source.into_keys().collect();
+    available_sources.sort();
+
     let index = KantraIndexPayload {
         schema_version: 1,
         available: true,
@@ -269,6 +325,7 @@ pub fn export_kantra_bundle(
         file_count: files.len(),
         rule_count: rules.len(),
         available_targets,
+        available_sources,
         files,
         rules,
         skipped_rules: findings.skipped_rules.clone(),
@@ -294,28 +351,56 @@ fn file_id(path: &str) -> String {
     blake3::hash(path.as_bytes()).to_hex()[..16].to_string()
 }
 
-fn load_rule_targets_map(catalog_id: Option<&str>) -> HashMap<String, Vec<String>> {
+#[derive(Debug, Clone, Default)]
+struct RuleAgg {
+    count: usize,
+    category: Option<String>,
+    message: Option<String>,
+    description: Option<String>,
+    links: Vec<KantraLink>,
+    targets: Vec<String>,
+    sources: Vec<String>,
+    effort: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RuleMetadata {
+    description: Option<String>,
+    links: Vec<KantraLink>,
+    targets: Vec<String>,
+    sources: Vec<String>,
+    effort: Option<u32>,
+}
+
+fn load_rule_metadata_map(catalog_id: Option<&str>) -> HashMap<String, RuleMetadata> {
     let Ok(catalog) = KantraCatalog::embedded() else {
         return HashMap::new();
     };
-    if let Some(expected) = catalog_id {
-        if expected != catalog.catalog_id {
-            tracing::warn!(
-                expected = expected,
-                embedded = %catalog.catalog_id,
-                "kantra export: findings catalog_id differs from embedded catalog; rule targets may be incomplete"
-            );
-        }
+    if let Some(expected) = catalog_id
+        && expected != catalog.catalog_id
+    {
+        tracing::warn!(
+            expected = expected,
+            embedded = %catalog.catalog_id,
+            "kantra export: findings catalog_id differs from embedded catalog; rule metadata may be incomplete"
+        );
     }
     catalog
         .rules
         .iter()
-        .map(|rule| (rule.rule_id.clone(), rule_konveyor_targets(rule)))
+        .map(|rule| {
+            (
+                rule.rule_id.clone(),
+                RuleMetadata {
+                    description: rule.description.clone(),
+                    links: rule.links.clone(),
+                    targets: rule_konveyor_targets(rule),
+                    sources: rule_konveyor_sources(rule),
+                    effort: rule.effort,
+                },
+            )
+        })
         .collect()
-}
-
-fn targets_for_rule(rule_targets: &HashMap<String, Vec<String>>, rule_id: &str) -> Vec<String> {
-    rule_targets.get(rule_id).cloned().unwrap_or_default()
 }
 
 fn relativize_path(repo_root: &Path, file: &str) -> String {
@@ -387,6 +472,8 @@ mod tests {
                     targets: vec!["quarkus".into()],
                     sources: Vec::new(),
                     effort: Some(1),
+                    confidence: None,
+                    matched_location: None,
                     enrichment: Some(ViolationEnrichment {
                         blast_radius_score: Some(3.5),
                         ..Default::default()
@@ -403,6 +490,8 @@ mod tests {
                     targets: Vec::new(),
                     sources: Vec::new(),
                     effort: None,
+                    confidence: None,
+                    matched_location: None,
                     enrichment: None,
                 },
             ],
@@ -436,7 +525,21 @@ mod tests {
         assert_eq!(index.files[0].count, 2);
         assert_eq!(index.rules.len(), 2);
         assert_eq!(index.skipped_rules.len(), 1);
-        assert!(index.available_targets.is_empty());
+        assert_eq!(
+            index
+                .available_targets
+                .iter()
+                .map(|t| t.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["quarkus"]
+        );
+        let rule_a = index
+            .rules
+            .iter()
+            .find(|r| r.rule_id == "rule-a")
+            .expect("rule-a");
+        assert_eq!(rule_a.effort, Some(1));
+        assert_eq!(rule_a.targets, vec!["quarkus"]);
 
         let shard: KantraFileBundle = serde_json::from_slice(
             &fs::read(

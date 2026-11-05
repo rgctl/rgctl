@@ -403,15 +403,17 @@ rgctl -f json find --type kantrarule --limit 10 | jq '.returned'
 rgctl discover . --with-kantra --kantra-target quarkus
 ```
 
-Konveyor labels (`konveyor.io/target`, `konveyor.io/source`, …) are stored on rule nodes; filter eval with `--kantra-target` and inspect violations in `kantra_findings.json`.
+Konveyor labels (`konveyor.io/target`, `konveyor.io/source`, …) are stored on rule nodes; filter eval with `--kantra-target` and inspect violations in `kantra_findings.json`. Violations carry `confidence` (`high` for AST/graph/call-site hits, `low` for residual lexical fallback), `matched_location`, and rule metadata (`effort`, `sources`, `targets`). Catalog rules also retain `description`, `links`, and `tag`; tag-only rules never emit incidents.
+
+`java.referenced` evaluates constructors/method calls via `.rgctl/parked_relations.bin` (exact call-site lines). `java.dependency` matches static POM/manifest coordinates (`groupId:artifactId` ↔ `groupId.artifactId`) with version bounds — it does not resolve a remote Maven classpath. Transitive JAR inheritance (JR1) still needs `--scip` or bytecode enrichment.
 
 **Source builds:** full embedded catalog requires the git submodule — `git submodule update --init crates/rgctl-kantra/assets/rulesets` or `./scripts/init-kantra-rulesets.sh`. Without it, the build falls back to `tests/fixtures/kantra-rules/`. See [`crates/rgctl-kantra/README.md`](../crates/rgctl-kantra/README.md).
 
 **Further reading:** [Kantra Migration Rules guide](https://rgctl.io/docs/guides/kantra-migration-rules/) (metasfresh scale walkthrough) · [Kantra integration — design & current state](design/kantra-integration-exploration.md) · [`rgctl-kantra` crate README](../crates/rgctl-kantra/README.md) · [JSON schema](json-api.md#kantra_findingsjson)
 
-Does **not** require `--with-cfg`. Unsupported rule providers and invalid regex patterns are skipped with reasons in `skipped_rules`. After full eval, `violates` edges link each `KantraRule` to matched code nodes (`rgctl relations --edge violates --from-type kantrarule`).
+Does **not** require `--with-cfg`. Unsupported rule providers, invalid regex patterns, unsupported XPath, and tag-only rules are skipped with reasons in `skipped_rules`. After full eval, `violates` edges link each `KantraRule` to matched code nodes (`rgctl relations --edge violates --from-type kantrarule`).
 
-**Dashboard:** `discover --with-kantra --with-universe` exports `kantra_index.json` and per-file violation shards. Open the Universe **Static rules** room (category + Konveyor target filters, syntax-highlighted snippets). The **Migration** room remains the strangler-fig schedule — it is not Kantra triage.
+**Dashboard:** `discover --with-kantra --with-universe` exports `kantra_index.json` and per-file violation shards. Open the Universe **Static rules** room (category + source/target filters, skipped-rules chip, confidence/effort/blast columns, enrichment in detail). The **Migration** room remains the strangler-fig schedule — it is not Kantra triage.
 
 ### Verbose logging and stage profiling
 

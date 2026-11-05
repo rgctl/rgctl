@@ -2,15 +2,16 @@
 
 use crate::error::{KantraError, Result};
 use crate::loader::KantraRuleset;
-use crate::schema::{KantraRule, KantraRulesetDoc};
+use crate::schema::{KantraLink, KantraRule, KantraRulesetDoc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Magic bytes for embedded catalog files (`RBKC`).
 pub const RBKC_MAGIC: &[u8; 4] = b"RBKC";
 
 /// Current on-disk catalog format version.
-pub const RBKC_VERSION: u32 = 1;
+pub const RBKC_VERSION: u32 = 2;
 
 /// Compiled rules catalog (build-time YAML → runtime blob).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -28,6 +29,8 @@ struct StoredRule {
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
+    links: Vec<KantraLink>,
+    #[serde(default)]
     category: Option<String>,
     #[serde(default)]
     effort: Option<u32>,
@@ -35,6 +38,8 @@ struct StoredRule {
     message: Option<String>,
     #[serde(default)]
     labels: Vec<String>,
+    #[serde(default)]
+    tag: Vec<String>,
     when_yaml: String,
 }
 
@@ -45,10 +50,12 @@ impl StoredRule {
         Ok(Self {
             rule_id: rule.rule_id.clone(),
             description: rule.description.clone(),
+            links: rule.links.clone(),
             category: rule.category.clone(),
             effort: rule.effort,
             message: rule.message.clone(),
             labels: rule.labels.clone(),
+            tag: rule.tag.clone(),
             when_yaml,
         })
     }
@@ -59,10 +66,12 @@ impl StoredRule {
         Ok(KantraRule {
             rule_id: self.rule_id,
             description: self.description,
+            links: self.links,
             category: self.category,
             effort: self.effort,
             message: self.message,
             labels: self.labels,
+            tag: self.tag,
             when,
         })
     }
@@ -94,9 +103,10 @@ impl KantraCatalog {
     }
 
     /// Load rules from a ruleset directory tree (dev override for `--kantra-catalog`).
+    ///
+    /// Duplicate `ruleID`s across subdirectories soft-merge labels/tags/metadata
+    /// rather than hard-erroring (Konveyor multi-target trees share rule IDs).
     pub fn load_tree(root: impl AsRef<std::path::Path>) -> Result<Self> {
-        use std::collections::HashSet;
-
         let root = root.as_ref();
         let dirs = collect_ruleset_dirs(root);
         if dirs.is_empty() {
@@ -105,22 +115,26 @@ impl KantraCatalog {
                 root.display()
             )));
         }
-        let mut rules = Vec::new();
-        let mut seen = HashSet::new();
+        let mut by_id: HashMap<String, KantraRule> = HashMap::new();
+        let mut order: Vec<String> = Vec::new();
         let mut names = Vec::new();
         for dir in dirs {
             let rs = KantraRuleset::load(&dir)?;
             names.push(rs.doc.name.clone());
             for rule in rs.doc.rules {
-                if !seen.insert(rule.rule_id.clone()) {
-                    return Err(KantraError::msg(format!(
-                        "duplicate ruleID {} in catalog tree",
-                        rule.rule_id
-                    )));
+                match by_id.get_mut(&rule.rule_id) {
+                    Some(existing) => soft_merge_rule(existing, &rule),
+                    None => {
+                        order.push(rule.rule_id.clone());
+                        by_id.insert(rule.rule_id.clone(), rule);
+                    }
                 }
-                rules.push(rule);
             }
         }
+        let rules = order
+            .into_iter()
+            .filter_map(|id| by_id.remove(&id))
+            .collect();
         let name = if names.len() == 1 {
             names[0].clone()
         } else {
@@ -230,6 +244,33 @@ pub fn merge_ruleset_labels(ruleset_labels: &[String], rule: &mut KantraRule) {
     rule.labels = merged;
 }
 
+/// Soft-merge a duplicate `ruleID` occurrence onto an existing rule entry.
+fn soft_merge_rule(existing: &mut KantraRule, incoming: &KantraRule) {
+    merge_ruleset_labels(&incoming.labels, existing);
+    for tag in &incoming.tag {
+        if !existing.tag.iter().any(|t| t == tag) {
+            existing.tag.push(tag.clone());
+        }
+    }
+    if existing.description.is_none() {
+        existing.description = incoming.description.clone();
+    }
+    for link in &incoming.links {
+        if !existing.links.iter().any(|l| l.url == link.url) {
+            existing.links.push(link.clone());
+        }
+    }
+    if existing.category.is_none() {
+        existing.category = incoming.category.clone();
+    }
+    if existing.effort.is_none() {
+        existing.effort = incoming.effort;
+    }
+    if existing.message.is_none() {
+        existing.message = incoming.message.clone();
+    }
+}
+
 /// Whether a rule carries `konveyor.io/target=<target>`.
 pub fn rule_matches_target(rule: &KantraRule, target: &str) -> bool {
     let needle = format!("konveyor.io/target={target}");
@@ -288,25 +329,74 @@ mod tests {
         KantraRule {
             rule_id: id.into(),
             description: None,
+            links: Vec::new(),
             category: None,
             effort: None,
             message: None,
             labels: labels.iter().map(|s| (*s).to_string()).collect(),
+            tag: Vec::new(),
             when: serde_yaml::from_str("builtin.filecontent:\n  pattern: x\n").unwrap(),
         }
     }
 
     #[test]
     fn round_trip_rbkc_bytes() {
+        let mut rule = sample_rule("r1", &[]);
+        rule.description = Some("desc".into());
+        rule.tag = vec!["Seam".into()];
+        rule.links = vec![KantraLink {
+            title: Some("Docs".into()),
+            url: "https://example.com".into(),
+        }];
         let catalog = KantraCatalog {
             catalog_id: "test@abc".into(),
             name: "test".into(),
             description: None,
-            rules: vec![sample_rule("r1", &[])],
+            rules: vec![rule],
         };
         let bytes = catalog.to_bytes().unwrap();
         let loaded = KantraCatalog::from_bytes(&bytes).unwrap();
         assert_eq!(loaded, catalog);
+        assert_eq!(loaded.rules[0].description.as_deref(), Some("desc"));
+        assert_eq!(loaded.rules[0].tag, vec!["Seam"]);
+        assert_eq!(loaded.rules[0].links[0].url, "https://example.com");
+    }
+
+    #[test]
+    fn load_tree_soft_merges_duplicate_rule_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for (subdir, target) in [("t1", "quarkus"), ("t2", "jakarta-ee9+")] {
+            let dir = root.join(subdir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("ruleset.yaml"),
+                format!("name: {subdir}\nlabels:\n  - konveyor.io/target={target}\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                dir.join("rules.yaml"),
+                r#"
+- ruleID: shared-00001
+  description: shared rule
+  tag:
+    - Shared
+  when:
+    builtin.filecontent:
+      pattern: foo
+"#,
+            )
+            .unwrap();
+        }
+        let catalog = KantraCatalog::load_tree(root).unwrap();
+        assert_eq!(catalog.rules.len(), 1);
+        let rule = &catalog.rules[0];
+        assert_eq!(rule.rule_id, "shared-00001");
+        let targets = rule_konveyor_targets(rule);
+        assert!(targets.contains(&"quarkus".to_string()));
+        assert!(targets.contains(&"jakarta-ee9+".to_string()));
+        assert_eq!(rule.tag, vec!["Shared"]);
+        assert_eq!(rule.description.as_deref(), Some("shared rule"));
     }
 
     #[test]

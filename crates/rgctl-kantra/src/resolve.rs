@@ -118,7 +118,7 @@ mod tests {
             qualified_name: Some(name.to_string()),
             file_path: Some(file.to_string()),
             start_line: Some(line),
-            labels: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -143,6 +143,8 @@ mod tests {
             targets: Vec::new(),
             sources: Vec::new(),
             effort: None,
+            confidence: None,
+            matched_location: None,
             enrichment: None,
         };
         assert_eq!(resolver.resolve(&violation), Some(import_id));
@@ -164,6 +166,8 @@ mod tests {
             targets: Vec::new(),
             sources: Vec::new(),
             effort: None,
+            confidence: None,
+            matched_location: None,
             enrichment: None,
         };
         assert_eq!(resolver.resolve(&violation), Some(file_id));

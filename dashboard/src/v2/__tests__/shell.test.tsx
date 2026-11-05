@@ -145,7 +145,7 @@ describe("the shell has no tab strip", () => {
 
     const nav = document.querySelector('nav[aria-label="Rooms"]');
     expect(nav).toBeTruthy();
-    expect(nav!.querySelectorAll("button")).toHaveLength(7);
+    expect(nav!.querySelectorAll("button")).toHaveLength(8);
   });
 });
 

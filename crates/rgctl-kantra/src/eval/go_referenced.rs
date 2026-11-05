@@ -1,9 +1,8 @@
 //! `go.referenced` evaluation.
 
 use crate::engine::EvalNode;
-use crate::eval::{MatchSite, violation};
+use crate::eval::{MatchSite, compile_kantra_pattern, violation};
 use crate::findings::KantraViolation;
-use regex::Regex;
 
 const CODE_EXTENSIONS: &[&str] = &[".go"];
 
@@ -13,7 +12,7 @@ pub fn eval_go_referenced(
     pattern: &str,
     nodes: &[EvalNode],
 ) -> Result<Vec<KantraViolation>, regex::Error> {
-    let re = Regex::new(pattern)?;
+    let re = compile_kantra_pattern(pattern)?;
     let mut out = Vec::new();
     for node in nodes {
         if node.node_type != "Import" {

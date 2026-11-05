@@ -419,6 +419,25 @@ impl JavaPlugin {
                     sym.metadata[key] = serde_json::Value::String(fqn);
                 }
             }
+            if let Some(throws_str) = sym
+                .metadata
+                .get("throws")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+            {
+                let resolved: Vec<String> = throws_str
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(|t| {
+                        ctx.resolve_type_fqn(t, same_file_types)
+                            .unwrap_or_else(|| t.to_string())
+                    })
+                    .collect();
+                if !resolved.is_empty() {
+                    sym.metadata["throws_fqns"] = serde_json::Value::String(resolved.join(", "));
+                }
+            }
         }
     }
 

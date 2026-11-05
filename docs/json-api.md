@@ -1037,6 +1037,11 @@ Incremental filecontent results are cached under `.rgctl/kantra_cache/` (content
       "message": "…",
       "matched_by": "java.referenced",
       "symbol": "org.springframework.stereotype.Service",
+      "targets": ["quarkus"],
+      "sources": ["java-ee"],
+      "effort": 3,
+      "confidence": "high",
+      "matched_location": "ANNOTATION",
       "enrichment": {
         "node_id": "550e8400-e29b-41d4-a716-446655440000",
         "community_id": 12,
@@ -1049,7 +1054,11 @@ Incremental filecontent results are cached under `.rgctl/kantra_cache/` (content
   "skipped_rules": [
     {
       "rule_id": "some-xml-rule",
-      "reason": "unsupported: builtin.xml"
+      "reason": "unsupported xpath expression: //foo[position()=1]"
+    },
+    {
+      "rule_id": "seam-java-00000",
+      "reason": "tag-only rule (no category or effort)"
     }
   ],
   "cache_hits": 120,
@@ -1067,15 +1076,21 @@ Incremental filecontent results are cached under `.rgctl/kantra_cache/` (content
 | `evaluated_rules` | number | Rules in catalog before per-rule skip |
 | `violations` | array | Matches with `rule_id`, `file`, `line`, `matched_by` (`filecontent`, `java.referenced`, …) |
 | `violations[].symbol` | string? | Import or symbol name when resolved by referenced rules |
+| `violations[].targets` / `sources` | string[] | Konveyor technology labels copied from the rule |
+| `violations[].effort` | number? | Rule effort when present |
+| `violations[].confidence` | `"high"` \| `"low"`? | `"high"` for AST/graph/call-site hits; `"low"` for residual lexical fallback |
+| `violations[].matched_location` | string? | Location kind that produced the hit (`IMPORT`, `METHOD_CALL`, `CONSTRUCTOR_CALL`, …) |
 | `violations[].enrichment` | object? | Graph linkage + metrics (after blast engine build) |
 | `violations[].enrichment.node_id` | string? | UUID of matched graph node (used for `VIOLATES` edges) |
 | `violations[].enrichment.community_id` | number? | Fast-Leiden community id |
 | `violations[].enrichment.pagerank` | number? | PageRank centrality |
 | `violations[].enrichment.blast_radius_score` | number? | Blast-radius score for the node |
 | `violations[].enrichment.impact_zone_size` | number? | Transitive impact zone size |
-| `skipped_rules` | array | Unsupported providers, invalid regex, or eval errors (`rule_id`, `reason`) |
+| `skipped_rules` | array | Unsupported providers, invalid regex, tag-only rules, unsupported XPath, or eval errors (`rule_id`, `reason`) |
 | `cache_hits` | number? | Per-file cache hits (`builtin.filecontent` warmup); omitted when zero |
 | `cache_misses` | number? | Stale cache entries re-evaluated; omitted when zero |
+
+Catalog rules also retain `description`, `links` (`[{title,url}]`), and `tag` in the compiled RBKC catalog and on `KantraRule` graph nodes. Tag-only rules (`tag` present, no `category`/`effort`) never emit incident violations.
 
 Query violation edges: `rgctl -f json relations --edge violates --from-type kantrarule --limit 20`.
 

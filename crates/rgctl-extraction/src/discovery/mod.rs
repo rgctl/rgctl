@@ -151,6 +151,32 @@ impl FileDiscoverer {
             }
         }
 
+        if self.registry.is_manifest_file(path) {
+            let basename = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            return match basename.as_str() {
+                "pom.xml" | "build.gradle" | "build.gradle.kts" => languages
+                    .iter()
+                    .any(|l| matches!(l.as_str(), "java" | "kotlin" | "groovy" | "xml")),
+                "cargo.toml" => languages
+                    .iter()
+                    .any(|l| matches!(l.as_str(), "rust" | "toml")),
+                "go.mod" => languages
+                    .iter()
+                    .any(|l| matches!(l.as_str(), "go" | "golang")),
+                "package.json" => languages.iter().any(|l| {
+                    matches!(
+                        l.as_str(),
+                        "javascript" | "typescript" | "tsx" | "jsx" | "json"
+                    )
+                }),
+                _ => false,
+            };
+        }
+
         if let Ok(plugin) = self.registry.get_plugin_for_file(path) {
             return languages.iter().any(|l| l == plugin.language_id());
         }

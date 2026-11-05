@@ -12,6 +12,18 @@ pub struct KantraRulesetDoc {
     pub rules: Vec<KantraRule>,
 }
 
+/// External reference link on a Kantra rule (`links:` YAML).
+///
+/// Konveyor rulesets use either `url:` or `link:` for the href (`alias` for YAML;
+/// bincode uses positional `Serialize`/`Deserialize` field order).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KantraLink {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(alias = "link")]
+    pub url: String,
+}
+
 /// One Kantra rule from YAML.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KantraRule {
@@ -20,6 +32,8 @@ pub struct KantraRule {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub links: Vec<KantraLink>,
+    #[serde(default)]
     pub category: Option<String>,
     #[serde(default)]
     pub effort: Option<u32>,
@@ -27,7 +41,17 @@ pub struct KantraRule {
     pub message: Option<String>,
     #[serde(default)]
     pub labels: Vec<String>,
+    /// Konveyor technology-discovery tags (`tag:`). Tag-only rules are non-incident.
+    #[serde(default)]
+    pub tag: Vec<String>,
     pub when: Value,
+}
+
+impl KantraRule {
+    /// Konveyor tag-only rules emit technology tags, not migration incidents.
+    pub fn is_tag_only(&self) -> bool {
+        !self.tag.is_empty() && self.category.is_none() && self.effort.is_none()
+    }
 }
 
 /// Support level for a rule after classification.
@@ -345,5 +369,46 @@ and:
         let val: Value = serde_yaml::from_str(yaml).unwrap();
         let clause = WhenClause::from_value(&val);
         assert!(matches!(clause, WhenClause::And(items) if items.len() == 2));
+    }
+
+    #[test]
+    fn deserializes_tag_description_and_links() {
+        let yaml = r#"
+- ruleID: seam-java-00000
+  description: Detects Seam usage
+  tag:
+    - Seam
+  links:
+    - title: Docs
+      url: https://example.com/seam
+  when:
+    java.referenced:
+      pattern: org.jboss.seam*
+"#;
+        let rules: Vec<KantraRule> = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(rules.len(), 1);
+        let rule = &rules[0];
+        assert_eq!(rule.description.as_deref(), Some("Detects Seam usage"));
+        assert_eq!(rule.tag, vec!["Seam"]);
+        assert_eq!(rule.links.len(), 1);
+        assert_eq!(rule.links[0].title.as_deref(), Some("Docs"));
+        assert_eq!(rule.links[0].url, "https://example.com/seam");
+        assert!(rule.is_tag_only());
+    }
+
+    #[test]
+    fn hybrid_tag_and_effort_is_not_tag_only() {
+        let yaml = r#"
+- ruleID: hybrid-00001
+  tag:
+    - EJB
+  effort: 3
+  category: mandatory
+  when:
+    java.referenced:
+      pattern: javax.ejb*
+"#;
+        let rules: Vec<KantraRule> = serde_yaml::from_str(yaml).unwrap();
+        assert!(!rules[0].is_tag_only());
     }
 }

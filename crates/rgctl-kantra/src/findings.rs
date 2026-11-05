@@ -38,6 +38,12 @@ pub struct KantraViolation {
     pub sources: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<u32>,
+    /// `"high"` for AST/graph/call-site hits; `"low"` for lexical fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+    /// Location kind that produced the hit (e.g. `CONSTRUCTOR_CALL`, `METHOD_CALL`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_location: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enrichment: Option<ViolationEnrichment>,
 }
@@ -135,6 +141,7 @@ mod tests {
         KantraRule {
             rule_id: "r1".into(),
             description: None,
+            links: Vec::new(),
             category: Some("mandatory".into()),
             effort: Some(3),
             message: Some("migrate me".into()),
@@ -143,6 +150,7 @@ mod tests {
                 "konveyor.io/target=jakarta-ee9+".into(),
                 "konveyor.io/source=java-ee".into(),
             ],
+            tag: Vec::new(),
             when: serde_yaml::from_str("builtin.filecontent:\n  pattern: x\n").unwrap(),
         }
     }
@@ -161,6 +169,8 @@ mod tests {
             targets: Vec::new(),
             sources: Vec::new(),
             effort: None,
+            confidence: None,
+            matched_location: None,
             enrichment: None,
         });
         findings.enrich_from_rule(&sample_rule(), 0);

@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 use serde_yaml::Value;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const MAGIC: &[u8; 4] = b"RBKC";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 #[derive(Debug, Deserialize)]
 struct RulesetMeta {
@@ -23,11 +23,21 @@ struct RulesetMeta {
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
+struct BuildLink {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(alias = "link")]
+    url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 struct BuildRule {
     #[serde(rename = "ruleID")]
     rule_id: String,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    links: Vec<BuildLink>,
     #[serde(default)]
     category: Option<String>,
     #[serde(default)]
@@ -36,6 +46,8 @@ struct BuildRule {
     message: Option<String>,
     #[serde(default)]
     labels: Vec<String>,
+    #[serde(default)]
+    tag: Vec<String>,
     when: Value,
 }
 
@@ -45,6 +57,8 @@ struct StoredRule {
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
+    links: Vec<BuildLink>,
+    #[serde(default)]
     category: Option<String>,
     #[serde(default)]
     effort: Option<u32>,
@@ -52,6 +66,8 @@ struct StoredRule {
     message: Option<String>,
     #[serde(default)]
     labels: Vec<String>,
+    #[serde(default)]
+    tag: Vec<String>,
     when_yaml: String,
 }
 
@@ -62,10 +78,12 @@ impl StoredRule {
         Ok(Self {
             rule_id: rule.rule_id.clone(),
             description: rule.description.clone(),
+            links: rule.links.clone(),
             category: rule.category.clone(),
             effort: rule.effort,
             message: rule.message.clone(),
             labels: rule.labels.clone(),
+            tag: rule.tag.clone(),
             when_yaml,
         })
     }
@@ -120,26 +138,29 @@ fn main() {
         ("fixture", vec![fixture_root], None)
     };
 
-    let mut rules = Vec::new();
-    let mut seen_ids = HashSet::new();
-    let mut duplicates_skipped = 0usize;
+    let mut by_id: HashMap<String, BuildRule> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    let mut duplicates_merged = 0usize;
     let mut names = Vec::new();
     let mut descriptions = Vec::new();
 
     for root in &source_roots {
-        match load_ruleset_dir(root, &mut seen_ids, &mut duplicates_skipped) {
-            Ok((meta, mut batch)) => {
+        match load_ruleset_dir(root, &mut by_id, &mut order, &mut duplicates_merged) {
+            Ok(meta) => {
                 names.push(meta.name);
                 if let Some(desc) = meta.description {
                     descriptions.push(desc);
                 }
-                rules.append(&mut batch);
             }
             Err(err) => {
                 panic!("kantra catalog build failed for {}: {err}", root.display());
             }
         }
     }
+    let rules: Vec<BuildRule> = order
+        .into_iter()
+        .filter_map(|id| by_id.remove(&id))
+        .collect();
 
     let catalog_id = match rulesets_rev {
         Some(sha) => format!("{source_label}@{sha}"),
@@ -179,9 +200,9 @@ fn main() {
         "cargo:rustc-env=RGCTL_KANTRA_CATALOG={}",
         out_path.display()
     );
-    if duplicates_skipped > 0 {
+    if duplicates_merged > 0 {
         println!(
-            "kantra catalog: skipped {duplicates_skipped} duplicate ruleIDs from upstream rulesets"
+            "kantra catalog: soft-merged {duplicates_merged} duplicate ruleIDs from upstream rulesets"
         );
     }
     println!(
@@ -244,16 +265,16 @@ fn collect_ruleset_dirs(root: &Path) -> Vec<PathBuf> {
 
 fn load_ruleset_dir(
     dir: &Path,
-    seen_ids: &mut HashSet<String>,
-    duplicates_skipped: &mut usize,
-) -> Result<(RulesetMeta, Vec<BuildRule>), String> {
+    by_id: &mut HashMap<String, BuildRule>,
+    order: &mut Vec<String>,
+    duplicates_merged: &mut usize,
+) -> Result<RulesetMeta, String> {
     let meta_path = dir.join("ruleset.yaml");
     let meta_text =
         fs::read_to_string(&meta_path).map_err(|e| format!("{}: {e}", meta_path.display()))?;
     let meta: RulesetMeta =
         serde_yaml::from_str(&meta_text).map_err(|e| format!("{}: {e}", meta_path.display()))?;
 
-    let mut rules = Vec::new();
     for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
@@ -268,14 +289,19 @@ fn load_ruleset_dir(
             serde_yaml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
         for rule in &mut batch {
             merge_ruleset_labels(&meta.labels, rule);
-            if !seen_ids.insert(rule.rule_id.clone()) {
-                *duplicates_skipped += 1;
-                continue;
+            match by_id.get_mut(&rule.rule_id) {
+                Some(existing) => {
+                    soft_merge_build_rule(existing, rule);
+                    *duplicates_merged += 1;
+                }
+                None => {
+                    order.push(rule.rule_id.clone());
+                    by_id.insert(rule.rule_id.clone(), rule.clone());
+                }
             }
-            rules.push(rule.clone());
         }
     }
-    Ok((meta, rules))
+    Ok(meta)
 }
 
 fn merge_ruleset_labels(ruleset_labels: &[String], rule: &mut BuildRule) {
@@ -283,5 +309,31 @@ fn merge_ruleset_labels(ruleset_labels: &[String], rule: &mut BuildRule) {
         if !rule.labels.iter().any(|l| l == label) {
             rule.labels.push(label.clone());
         }
+    }
+}
+
+fn soft_merge_build_rule(existing: &mut BuildRule, incoming: &BuildRule) {
+    merge_ruleset_labels(&incoming.labels, existing);
+    for tag in &incoming.tag {
+        if !existing.tag.iter().any(|t| t == tag) {
+            existing.tag.push(tag.clone());
+        }
+    }
+    if existing.description.is_none() {
+        existing.description = incoming.description.clone();
+    }
+    for link in &incoming.links {
+        if !existing.links.iter().any(|l| l.url == link.url) {
+            existing.links.push(link.clone());
+        }
+    }
+    if existing.category.is_none() {
+        existing.category = incoming.category.clone();
+    }
+    if existing.effort.is_none() {
+        existing.effort = incoming.effort;
+    }
+    if existing.message.is_none() {
+        existing.message = incoming.message.clone();
     }
 }
