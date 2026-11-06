@@ -27,7 +27,7 @@ Everything you need to install rgctl (`rgctl`), choose the right operating mode,
 
 | Requirement | Notes |
 |-------------|-------|
-| **OS** | macOS (Apple Silicon or Intel), Linux (x86_64), Windows (x86_64) |
+| **OS** | macOS (Apple Silicon or Intel), Linux (x86_64 or ARM64), Windows (x86_64 or ARM64) |
 | **Rust 1.85+** | Only for building from source ([rustup.rs](https://rustup.rs/)). Pre-built binaries need no Rust toolchain. |
 | **Git** | For cloning the repository (source builds) |
 | **Git LFS** | Optional. Only required if you use `semantic index --embedder code-daemon` (~206 MB ONNX weights). The default `vocab` embedder needs no LFS. |
@@ -59,10 +59,14 @@ Pre-built binaries are published on the project **Releases** page:
    |----------|------------|
    | macOS (Apple Silicon) | `rgctl-*-aarch64-apple-darwin.tar.gz` |
    | macOS (Intel) | `rgctl-*-x86_64-apple-darwin.tar.gz` |
-   | Linux (x86_64) | `rgctl-*-x86_64-unknown-linux-gnu.tar.gz` |
-   | Windows | `rgctl-*-x86_64-pc-windows-msvc.zip` |
+   | Linux GNU (x86_64) | `rgctl-*-x86_64-unknown-linux-gnu.tar.gz` |
+   | Linux GNU (ARM64) | `rgctl-*-aarch64-unknown-linux-gnu.tar.gz` |
+   | Alpine / musl (x86_64) | `rgctl-*-x86_64-unknown-linux-musl.tar.gz` |
+   | Alpine / musl (ARM64) | `rgctl-*-aarch64-unknown-linux-musl.tar.gz` |
+   | Windows (x86_64) | `rgctl-*-x86_64-pc-windows-msvc.zip` |
+   | Windows (ARM64) | `rgctl-*-aarch64-pc-windows-msvc.zip` |
 
-   **Linux glibc note:** the `x86_64-unknown-linux-gnu` release is linked against a relatively new glibc (CI runner). It may **not** run on older LTS hosts such as **Ubuntu 22.04**. If `./rgctl` fails with `GLIBC_… not found`, build from source on that host (see Option C), or track a future musl/manylinux asset.
+   **Linux glibc note:** the GNU releases are linked against a relatively new glibc (CI runner). They may **not** run on older LTS hosts such as **Ubuntu 22.04**. If `./rgctl` fails with `GLIBC_… not found`, use the matching musl asset. It supports normal rgctl use. Build from source (see Option C) if you need the optional `semantic index --embedder code-daemon` mode.
 
 3. Extract the archive:
 
@@ -407,7 +411,7 @@ Start with the default mode (no extra flags). Add `--with-cfg`, `--with-taint`, 
 - Update Rust: `rustup update`
 - Clean build: `cargo clean && cargo build --release --bin rgctl`
 - ONNX / `ort-sys` link errors: `cargo build --release --bin rgctl --no-default-features` (disables default `semantic-onnx`; default `vocab` semantic search still works)
-- Linux binary from GitHub Releases fails with missing `GLIBC_*`: the gnu release needs a newer glibc than Ubuntu 22.04; build from source on the target host (musl/manylinux assets are a tracked follow-up)
+- Linux binary from GitHub Releases fails with missing `GLIBC_*`: download the matching `*-unknown-linux-musl` asset, or build from source on the target host.
 
 ---
 
