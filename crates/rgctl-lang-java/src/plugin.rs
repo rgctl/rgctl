@@ -240,6 +240,27 @@ fn source_location(node: Node, file_path: &str) -> SourceLocation {
     }
 }
 
+/// Reuse the current parser's token positions; translate byte columns once on extraction workers.
+fn source_name_range(node: Node, source: &[u8]) -> Option<serde_json::Value> {
+    let start = node.start_position();
+    let end = node.end_position();
+    let first =
+        std::str::from_utf8(&source[node.start_byte() - start.column..node.start_byte()]).ok()?;
+    let last = std::str::from_utf8(&source[node.end_byte() - end.column..node.end_byte()]).ok()?;
+    Some(serde_json::json!({
+        "start_line": start.row, "start_character": first.encode_utf16().count(),
+        "end_line": end.row, "end_character": last.encode_utf16().count(),
+    }))
+}
+
+fn apply_name_range(node: Node, source: &[u8], metadata: &mut serde_json::Value) {
+    if let Some(name) = node.child_by_field_name("name")
+        && let Some(range) = source_name_range(name, source)
+    {
+        metadata["source_name_range"] = range;
+    }
+}
+
 fn first_line_text(node: Node, source: &[u8]) -> Result<String> {
     Ok(node
         .utf8_text(source)?
@@ -469,6 +490,7 @@ impl JavaPlugin {
     /// Populate `type_params` / `throws` / `receiver_type` metadata keys on an
     /// existing metadata object for a method/constructor-shaped node.
     fn apply_callable_metadata(&self, node: Node, source: &[u8], metadata: &mut serde_json::Value) {
+        apply_name_range(node, source, metadata);
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
@@ -913,8 +935,14 @@ impl JavaPlugin {
     // Symbol extraction: types (class/interface/enum/annotation/record)
     // ---------------------------------------------------------------
 
-    fn extract_class_fields(&self, class_node: Node, source: &[u8]) -> Result<Vec<Field>> {
+    fn extract_class_fields(
+        &self,
+        class_node: Node,
+        source: &[u8],
+        metadata: &mut serde_json::Value,
+    ) -> Result<Vec<Field>> {
         let mut fields = Vec::new();
+        let mut ranges = serde_json::Map::new();
         let mut cursor = class_node.walk();
         let body = class_node
             .children(&mut cursor)
@@ -947,6 +975,9 @@ impl JavaPlugin {
                     && let Some(name_node) = field_child.child_by_field_name("name")
                 {
                     let name = name_node.utf8_text(source)?.to_string();
+                    if let Some(range) = source_name_range(name_node, source) {
+                        ranges.insert(name.clone(), range);
+                    }
                     fields.push(Field {
                         name,
                         field_type: field_type.clone(),
@@ -954,6 +985,9 @@ impl JavaPlugin {
                     });
                 }
             }
+        }
+        if !ranges.is_empty() {
+            metadata["field_name_ranges"] = serde_json::Value::Object(ranges);
         }
         Ok(fields)
     }
@@ -1075,8 +1109,10 @@ impl JavaPlugin {
 
         let modifiers = self.collect_keyword_modifiers(node, source);
 
+        let mut metadata = serde_json::json!({ "language": "java" });
+        apply_name_range(node, source, &mut metadata);
         let fields = match symbol_type {
-            SymbolType::Class => self.extract_class_fields(node, source)?,
+            SymbolType::Class => self.extract_class_fields(node, source, &mut metadata)?,
             SymbolType::Enum => self.extract_enum_fields(node, source)?,
             SymbolType::Interface | SymbolType::Annotation => {
                 self.extract_interface_constants(node, source)?
@@ -1086,7 +1122,6 @@ impl JavaPlugin {
 
         let qualified_name = Some(self.type_node_qualified_name(node, source, ctx));
 
-        let mut metadata = serde_json::json!({ "language": "java" });
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
@@ -5101,6 +5136,32 @@ class Service {
                             .unwrap_or(false))
             }),
             "expected Calls toward builder()"
+        );
+    }
+    #[test]
+    fn indexed_name_ranges_skip_annotations_and_use_utf16() {
+        let symbols = symbols_of(
+            "package p;\n@Deprecated\nclass Example {\n int field;\n /* 😀 */ void run() {}\n}\n"
+                .as_bytes(),
+            "Example.java",
+        );
+        let class = symbols.iter().find(|s| s.name == "Example").expect("class");
+        assert_eq!(
+            class.location.start_line, 2,
+            "full declaration span remains unchanged"
+        );
+        assert_eq!(
+            class.metadata["source_name_range"],
+            serde_json::json!({"start_line":2,"start_character":6,"end_line":2,"end_character":13})
+        );
+        assert_eq!(
+            class.metadata["field_name_ranges"]["field"]["start_line"],
+            3
+        );
+        let method = symbols.iter().find(|s| s.name == "run").expect("method");
+        assert_eq!(
+            method.metadata["source_name_range"],
+            serde_json::json!({"start_line":4,"start_character":15,"end_line":4,"end_character":18})
         );
     }
 }

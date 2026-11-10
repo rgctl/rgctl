@@ -52,6 +52,7 @@ impl SharedQueryArgs {
             annotation_names: None,
             show_attributes: false,
             annotation_arg_index: None,
+            include_ranges: false,
         })
     }
 }
