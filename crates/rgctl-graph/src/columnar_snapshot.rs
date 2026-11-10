@@ -1387,8 +1387,7 @@ pub(crate) fn node_type_to_u16(t: NodeType) -> u16 {
         NodeType::PuppetVariable => 33,
         NodeType::PuppetFact => 34,
         NodeType::Annotation => 35,
-        NodeType::KantraRuleset => 36,
-        NodeType::KantraRule => 37,
+        // 36/37 were KantraRuleset/KantraRule (retired); do not reuse.
         NodeType::PuppetNode => 38,
     }
 }
@@ -1431,8 +1430,12 @@ pub(crate) fn node_type_from_u16(v: u16) -> Result<NodeType> {
         33 => NodeType::PuppetVariable,
         34 => NodeType::PuppetFact,
         35 => NodeType::Annotation,
-        36 => NodeType::KantraRuleset,
-        37 => NodeType::KantraRule,
+        // Retired KantraRuleset (36) / KantraRule (37) — reserved slots; PuppetNode stays 38.
+        36 | 37 => {
+            return Err(Error::SerdeError(format!(
+                "retired node type code {v} (former KantraRuleset/KantraRule)"
+            )));
+        }
         38 => NodeType::PuppetNode,
         _ => return Err(Error::SerdeError(format!("unknown node type code {v}"))),
     })
@@ -2008,6 +2011,11 @@ mod tests {
         assert_eq!(edge_type_to_u8(EdgeType::Injects), 33);
         assert_eq!(edge_type_to_u8(EdgeType::CoChangesWith), 47);
         assert_eq!(node_type_to_u16(NodeType::Annotation), 35);
+        assert_eq!(node_type_to_u16(NodeType::PuppetNode), 38);
+        assert!(node_type_from_u16(36).is_err());
+        assert!(node_type_from_u16(37).is_err());
+        assert!(edge_type_from_u8(30).is_err());
+        assert_eq!(edge_type_to_u8(EdgeType::Overrides), 31);
     }
 
     #[test]

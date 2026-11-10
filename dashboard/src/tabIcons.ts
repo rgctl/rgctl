@@ -18,5 +18,4 @@ export const DASHBOARD_TABS: TabDef[] = [
   { id: "slice", label: "Program Slicing", icon: "bi-scissors" },
   { id: "blast", label: "Blast Radius", icon: "bi-radioactive" },
   { id: "migration", label: "Migration", icon: "bi-signpost-split" },
-  { id: "kantra", label: "Migration Rules", icon: "bi-shield-exclamation" },
 ];

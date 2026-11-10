@@ -144,7 +144,7 @@ fn discover_full_json_is_one_object_with_plan() {
 }
 
 #[test]
-fn discover_full_includes_taint_and_kantra() {
+fn discover_full_includes_taint() {
     let (_tmp, repo) = materialize();
     let repo_s = repo.to_str().unwrap();
     let output = run_in(
@@ -159,21 +159,20 @@ fn discover_full_includes_taint_and_kantra() {
             "java,rust",
         ],
     );
-    assert_ok(&output, "discover --full with taint+kantra");
+    assert_ok(&output, "discover --full with taint");
     let taint = repo.join(".rgctl/dashboard/taint_index.json");
     assert!(
         taint.is_file(),
         "deep stage must export dashboard/taint_index.json"
     );
-    let kantra = repo.join(".rgctl/kantra_findings.json");
     assert!(
-        kantra.is_file(),
-        "deep stage must write kantra_findings.json"
+        !repo.join(".rgctl/kantra_findings.json").is_file(),
+        "Kantra findings must not be written after Kantra removal"
     );
 }
 
 #[test]
-fn discover_help_full_mentions_taint_and_kantra() {
+fn discover_help_full_mentions_taint_not_kantra() {
     let output = Command::new(rgctl_bin())
         .args(["discover", "--help"])
         .output()
@@ -181,8 +180,12 @@ fn discover_help_full_mentions_taint_and_kantra() {
     assert_ok(&output, "discover --help");
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(
-        text.contains("taint") && text.contains("Kantra"),
-        "--full help should mention taint and Kantra:\n{text}"
+        text.contains("taint"),
+        "--full help should mention taint:\n{text}"
+    );
+    assert!(
+        !text.to_lowercase().contains("kantra"),
+        "discover help must not mention Kantra:\n{text}"
     );
 }
 

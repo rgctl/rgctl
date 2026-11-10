@@ -74,7 +74,6 @@ Upgrading from an old daemon install: copy `~/.rgctl/cache/{name}/.rgctl/` into 
 | Natural-language function search | `rgctl semantic index` then `rgctl -f json semantic query "checkout flow" --limit 10` |
 | Community semantic search | `rgctl -f json semantic query "checkout" --scope community --limit 10` |
 | Impact before editing | `rgctl -f json blast-radius <Symbol> [--depth N] [--summary]` |
-| Kantra findings (optional) | `rgctl discover . --with-kantra` then `rules findings --target quarkus` / `rules targets` |
 | Architectural hotspots | `rgctl -f json metrics --pagerank` |
 | Doc headings / cross-links | `discover` indexes `.md` / `.mdx` by default; use `find` / `relations` on Module/REFERENCES — see [markdown-context.md](../markdown-context.md) |
 | Obsidian vault from docs | `rgctl -r "$REPO" discover -l markdown` then `export --export-format obsidian --export-output "$REPO/vault" --query all` — see [markdown-context.md](../markdown-context.md#obsidian-vault-export) |

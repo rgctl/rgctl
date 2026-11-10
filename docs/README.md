@@ -25,7 +25,7 @@ Agent-first docs: index once, query with `-f json`, deepen in the User Guide whe
 
 **Upgrading from v0.4.9:** no breaking changes — PHP is additive (`discover -l php`). Ruby is additive (`discover -l ruby`).
 
-**Upgrading from v0.4.8:** [v0.4.9 release notes](releases/v0.4.9.md) (daemon/MCP removed; Kantra; in-repo `.rgctl/` only).
+**Upgrading from v0.4.8:** [v0.4.9 release notes](releases/v0.4.9.md) (daemon/MCP removed; in-repo `.rgctl/` only).
 
 ## Secondary
 

@@ -11,7 +11,6 @@ mod export_context;
 mod export_util;
 mod function_meta;
 mod function_metrics_export;
-mod kantra_export;
 mod manifest;
 mod metagraph;
 mod migration_export;
@@ -29,10 +28,9 @@ pub use bundle::{
 pub use communities::{COMMUNITIES_FILE, COMMUNITIES_SCHEMA_VERSION, CommunitiesPayload};
 pub use dataflow_export::{DATAFLOW_INDEX_FILE, DataflowExportSummary};
 pub use export_context::DashboardExportContext;
-pub use kantra_export::{KANTRA_INDEX_FILE, KantraExportSummary};
 pub use manifest::{
-    AnalysisSection, DashboardManifest, KantraSection, MANIFEST_SCHEMA_VERSION, MetricsSection,
-    SemanticSection, ViewSection,
+    AnalysisSection, DashboardManifest, MANIFEST_SCHEMA_VERSION, MetricsSection, SemanticSection,
+    ViewSection,
 };
 pub use metagraph::{COMMUNITY_ONLY_THRESHOLD, METAGRAPH_FILE, MetagraphExport, MetagraphPayload};
 pub use migration_export::{
@@ -48,7 +46,6 @@ use blast_export::{export_blast_bundle, load_columnar_uuid_indices};
 use bundle::{extract_static_assets, inject_manifest_bootstrap};
 use dataflow_export::export_dataflow_index;
 use function_metrics_export::export_function_metrics;
-use kantra_export::export_kantra_bundle;
 use manifest::DashboardManifest as Manifest;
 use metagraph::write_metagraph;
 use mutations_export::export_mutations_index;
@@ -225,10 +222,7 @@ fn export_dashboard_bundle_inner(
         })?;
     }
     let semantic_summary = semantic_section(repo_root);
-    let kantra_summary = profile_stage("export_kantra", || {
-        export_kantra_bundle(repo_root, &out_dir)
-    })?;
-    let mut manifest = Manifest::with_phases(
+    let manifest = Manifest::with_phases(
         node_count,
         edge_count,
         digest,
@@ -244,7 +238,6 @@ fn export_dashboard_bundle_inner(
         &sidecars.migration,
         semantic_summary,
     );
-    manifest.kantra = kantra_summary.manifest_section();
     let (manifest_json, manifest_serialize_secs) = profile_stage("manifest_serialize", || {
         let start = std::time::Instant::now();
         let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;

@@ -131,11 +131,8 @@ Help groups commands as Lifecycle · Query · Analysis · Security · Policy · 
 
 ```bash
 rgctl -f json discover PATH [-l LANGS] [-e PATTERNS] [--with-cfg] [--with-taint] \
-  [--with-git] [--git-since 90.days] [--scip PATH.scip] \
-  [--with-kantra] [--kantra-target NAME] [--full]
+  [--with-git] [--git-since 90.days] [--scip PATH.scip] [--full]
 ```
-
-Kantra flags (`--with-kantra`, `--kantra-rules`, `--kantra-catalog`, `--kantra-target`, `--kantra-index-only`) do not change stdout JSON shape; they add `.rgctl/kantra_findings.json` and `KantraRule` nodes in `graph.snapshot.bin`. See [`kantra_findings.json`](#kantra_findingsjson).
 
 ### TypeScript shape
 
@@ -295,8 +292,6 @@ interface SessionStatus {
   digest?: string;
   nodes?: number;
   edges?: number;
-  kantra_findings: boolean;
-  kantra_findings_path?: string;
   /** Present when status is `ok`: sources match file_hashes.json */
   index_current?: boolean;
   dirty_files?: number;
@@ -372,7 +367,6 @@ rgctl -f json callers clearCart | jq '.callers[].name'
 rgctl -f json relations clearCart --edge calls --direction in | jq '.edges[].source.name'
 rgctl -f json inventory --by community | jq '.counts[:5]'
 rgctl -f json communities list | jq '.communities[:5]'
-rgctl -f json find --type kantrarule --limit 5 | jq '.entities[].name'
 ```
 
 ---
@@ -943,7 +937,6 @@ These files are written under `.rgctl/` (and copied into `.rgctl/dashboard/` for
 | `dashboard/taint/{uuid}.json` | 1 | Per-function taint flows |
 | `dashboard/slice/{uuid}.json` | 1 | Per-function source + PDG bundle |
 | `dashboard/cfg/{uuid}.json` | 1 | Per-function CFG preview |
-| `kantra_findings.json` | 2 | Kantra violations + enrichment + skipped rules (`discover --with-kantra`) |
 | `file_hashes.json` | — | Incremental discover state |
 | `content_store.bin` | — | Blake3-keyed blob store for truncated markdown bodies / large files (`body_ref`, `blob_ref`) |
 
@@ -1013,73 +1006,6 @@ These files are written under `.rgctl/` (and copied into `.rgctl/dashboard/` for
   "path_statements": ["...", "...", "..."]
 }
 ```
-
-### `kantra_findings.json`
-
-Written by `discover --with-kantra` (eval + enrich stages). Rule nodes are indexed into `graph.snapshot.bin` (`KantraRuleset`, `KantraRule`); `VIOLATES` edges link rules to resolved code nodes after enrich.
-
-Incremental filecontent results are cached under `.rgctl/kantra_cache/` (content-hash keyed; invalidated on ruleset change).
-
-```json
-{
-  "schema_version": 2,
-  "command": "kantra_findings",
-  "catalog_id": "stable-java@022bbd34b34eca53d04b6cb2b97b27e47fef479b",
-  "ruleset": "embedded-stable-java",
-  "target_filter": "quarkus",
-  "evaluated_rules": 2656,
-  "violations": [
-    {
-      "rule_id": "springboot-00001",
-      "category": "mandatory",
-      "file": "src/main/java/com/example/Foo.java",
-      "line": 12,
-      "message": "…",
-      "matched_by": "java.referenced",
-      "symbol": "org.springframework.stereotype.Service",
-      "enrichment": {
-        "node_id": "550e8400-e29b-41d4-a716-446655440000",
-        "community_id": 12,
-        "pagerank": 0.0042,
-        "blast_radius_score": 18.5,
-        "impact_zone_size": 47
-      }
-    }
-  ],
-  "skipped_rules": [
-    {
-      "rule_id": "some-xml-rule",
-      "reason": "unsupported: builtin.xml"
-    }
-  ],
-  "cache_hits": 120,
-  "cache_misses": 3
-}
-```
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `schema_version` | `2` | Artifact version |
-| `command` | `"kantra_findings"` | Discriminator |
-| `catalog_id` | string? | Embedded: `stable-java@<rulesets-git-sha>`; fixture: `fixture@<hash>`; override paths use `dir@…` / tree id |
-| `ruleset` | string | Display name from catalog |
-| `target_filter` | string? | Set when `--kantra-target` is active |
-| `evaluated_rules` | number | Rules in catalog before per-rule skip |
-| `violations` | array | Matches with `rule_id`, `file`, `line`, `matched_by` (`filecontent`, `java.referenced`, …) |
-| `violations[].symbol` | string? | Import or symbol name when resolved by referenced rules |
-| `violations[].enrichment` | object? | Graph linkage + metrics (after blast engine build) |
-| `violations[].enrichment.node_id` | string? | UUID of matched graph node (used for `VIOLATES` edges) |
-| `violations[].enrichment.community_id` | number? | Fast-Leiden community id |
-| `violations[].enrichment.pagerank` | number? | PageRank centrality |
-| `violations[].enrichment.blast_radius_score` | number? | Blast-radius score for the node |
-| `violations[].enrichment.impact_zone_size` | number? | Transitive impact zone size |
-| `skipped_rules` | array | Unsupported providers, invalid regex, or eval errors (`rule_id`, `reason`) |
-| `cache_hits` | number? | Per-file cache hits (`builtin.filecontent` warmup); omitted when zero |
-| `cache_misses` | number? | Stale cache entries re-evaluated; omitted when zero |
-
-Query violation edges: `rgctl -f json relations --edge violates --from-type kantrarule --limit 20`.
-
-Fixture override (`--kantra-rules`) omits full Konveyor `catalog_id` unless the ruleset was compiled from the submodule.
 
 Binary artifacts (`graph.snapshot.bin`, `graph_payload.bin`, `blast_engine.snapshot.bin`) use internal columnar formats — use CLI JSON or `export --export-format json` for portable graph access.
 

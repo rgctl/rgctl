@@ -435,8 +435,6 @@ fn parse_node_type_name(name: &str) -> Result<NodeType> {
         "puppetvariable" => Ok(NodeType::PuppetVariable),
         "puppetfact" => Ok(NodeType::PuppetFact),
         "puppetnode" | "puppetnodes" => Ok(NodeType::PuppetNode),
-        "kantraruleset" | "kantra_ruleset" => Ok(NodeType::KantraRuleset),
-        "kantrarule" | "kantra_rule" => Ok(NodeType::KantraRule),
         _ => Err(Error::InvalidQuery(format!("unknown node type: {name}"))),
     }
 }
@@ -456,7 +454,6 @@ fn parse_edge_type_name(name: &str) -> Result<EdgeType> {
         "DEPENDSON" => Ok(EdgeType::DependsOn),
         "ANNOTATEDWITH" | "ANNOTATED_WITH" => Ok(EdgeType::AnnotatedWith),
         "PERMITS" => Ok(EdgeType::Permits),
-        "VIOLATES" => Ok(EdgeType::Violates),
         "DEPENDSONMODULE" | "DEPENDS_ON_MODULE" => Ok(EdgeType::DependsOnModule),
         "INCLUDESCLASS" | "INCLUDES_CLASS" => Ok(EdgeType::IncludesClass),
         "INHERITSCLASS" | "INHERITS_CLASS" => Ok(EdgeType::InheritsClass),
@@ -502,8 +499,7 @@ mod tests {
 
     #[test]
     fn test_parse_backtick_property_name() {
-        let q = parse("MATCH (r:KantraRule) WHERE r.`konveyor.io/target` = 'quarkus' RETURN r")
-            .unwrap();
+        let q = parse("MATCH (f:Function) WHERE f.`some.dotted.prop` = 'value' RETURN f").unwrap();
         assert_eq!(q.where_clause.as_ref().unwrap().predicates.len(), 1);
         match &q.where_clause.as_ref().unwrap().predicates[0] {
             Predicate::Equals {
@@ -511,9 +507,9 @@ mod tests {
                 property,
                 value,
             } => {
-                assert_eq!(variable, "r");
-                assert_eq!(property, "konveyor.io/target");
-                assert_eq!(value, "quarkus");
+                assert_eq!(variable, "f");
+                assert_eq!(property, "some.dotted.prop");
+                assert_eq!(value, "value");
             }
             other => panic!("unexpected predicate: {other:?}"),
         }

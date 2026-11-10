@@ -64,7 +64,6 @@ Capability designs for contributors: [design/](design/README.md).
 | `--with-taint` | Discover-time taint (with CFG) |
 | `--with-git` | Git churn hotspots + `CoChangesWith` edges (`metrics --churn`) |
 | `--scip PATH` | SCIP overlay — upgrades ambiguous calls (`resolution = "scip"`) |
-| `--with-kantra` | Konveyor Kantra rule eval (Java-oriented; `VIOLATES` edges) |
 | `--full` | Full pipeline (large corpora / Gate B style runs) |
 | `--with-universe` / `--export-migration-hints` | Opt-in universe UI bundle / migration JSON (`--with-dashboard` was removed and is rejected) |
 
@@ -97,7 +96,6 @@ Step-by-step how-tos: **[Guides](https://rgctl.io/docs/guides/)**. Full CLI walk
 | **check / review check** | CI blast-radius policy; temporal PR gate (`pr-check` = alias of `review check`) |
 | **diff** | Compare two columnar snapshots (digest + `diff_snapshots`) |
 | **migration hints** | Package roadmap JSON (`--export-migration-hints`) |
-| **Kantra** | Migration-rule findings during discover (`--with-kantra`) |
 | **MRO / Overrides** | Cross-language method resolution → `Overrides` edges; polymorphic call retarget |
 | **install** | Bundle agent skills / optional policy into IDEs |
 | **serve** | Foreground HTTP dashboard + semantic HTTP API for one repository |

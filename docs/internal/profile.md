@@ -68,7 +68,6 @@ cargo test --release --test cold_profile_gates -- --ignored --nocapture --test-t
 | `kafka_cold_discover_within_baseline` | `example/kafka` | default | env `RGCTL_KAFKA_COLD_BASELINE_SECS` (default **12 s**; 2026-10-21 ~9.6 s) |
 | `k8s_website_markdown_cold_discover_within_baseline` | `example/k8s-website` | `-l markdown` | **9 s** (2026-10-21; ~7.7 s) |
 | `ecommerce_java_inheritance_cold_discover_within_baseline` | `rgctl-tests/ecommerce-java` | default | **0.36 s** wall; **0.013 s** `index_graph_build` |
-| `ecommerce_java_kantra_cold_discover_within_baseline` | `rgctl-tests/ecommerce-java` | `--with-kantra --kantra-rules <fixture>` | env `RGCTL_ECOMMERCE_JAVA_KANTRA_*` (fixture catalog; fast CI path) |
 | `rust_cold_discover_within_baseline` | `example/rust` | `-l rust` | **25 s** (2026-10-21; ~23.5 s) |
 | `llvm_cpp_cold_discover_within_baseline` | `example/llvm-project/clang` | `-l cpp` | **12 s** (2026-10-21; ~9.7 s) |
 | `roslyn_csharp_cold_discover_within_baseline` | `example/roslyn/src` | `-l csharp` | **22 s** (2026-11-03 post-98% AST; ~20.2 s process) |
@@ -162,19 +161,6 @@ document metasfresh sampling; Gate A (linux cold discover) is N/A unless the def
 Default discover does **not** attach a body-storing `CodeIndex` (avoids multi-GB `code_index.json` / RAM). Nodes still receive `code_hash` from worker-precomputed prep.
 
 Harmonic runs only when `--with-harmonic` or **`discover --full`** (deep stage). Default linux discover skips harmonic and dashboard export.
-
-### Kantra stages (`--with-kantra`)
-
-| Stage | When | Notes |
-|-------|------|-------|
-| `kantra_load` | Eval | Catalog decode / engine setup |
-| `kantra_eval` | Eval | Total eval wall (includes sub-stages below) |
-| `kantra_filecontent` | Eval | `builtin.filecontent` / `builtin.file` |
-| `kantra_referenced` | Eval | `go.referenced` / `java.referenced` |
-| `kantra_compose` | Eval | `and` / `or` / `not` composition |
-| `kantra_index` | After analysis persist | Rewrites `graph.snapshot.bin` with `KantraRule` nodes (runs after all cold mmap use) |
-
-Cold gate `ecommerce_java_kantra_cold_discover_within_baseline` uses `--kantra-rules tests/fixtures/kantra-rules` (small fixture, stable timing). Embedded-catalog discover on the same corpus is heavier (~2.6k rules); profile manually when bumping the rulesets submodule pin.
 
 Algorithm detail (sampled betweenness, HyperBall, adaptive gating): [analysis-architecture.md](../analysis-architecture.md), [harmonic-centrality.md](../harmonic-centrality.md), [graph-metrics-design.md](../design/graph-metrics-design.md).
 
@@ -409,7 +395,6 @@ Performance engineering pass: markdown parse pool, relation-resolution scratch b
 | `kotlin_cold_discover_within_baseline` | **8.5–12.1 s** | 178,896 / 64,383 | under 12.1 s when warm | pass (retry) |
 | `groovy_cold_discover_within_baseline` | **4.5–5.8 s** | 67,697 / 16,552 | process elapsed ~6.05 s vs 5.5×1.10 | pass (retry) |
 | `ecommerce_java_inheritance_cold_discover_within_baseline` | **0.353 s** (`index_graph_build` 0.0075 s) | 1,349 | under 0.36×1.10 (0.396 s) | pass |
-| `ecommerce_java_kantra_cold_discover_within_baseline` | **0.325 s** (`kantra_eval` 0.0040 s) | 1,349 | under 0.40×1.10 (0.440 s) | pass |
 | `columnar_zero_cold_touch_gate` (PageRank/Leiden + hot name/type scan + `filter_function_impact`) | — | 2k synthetic | `cold_ext == 0` | pass |
 
 > Note: Gate assertions use **process elapsed** (not only `[profile] wall_secs`). Near-budget corpora (discourse / kotlin / groovy) can flake under desktop load even when discover wall is fine — re-run before changing baselines. `MemoryMonitor` single-PID refresh (`refresh_pids_specifics`) and `park_timeout`/`unpark` eliminated ~425 ms of startup/shutdown overhead on small fixtures like `ecommerce-java`. This machine’s `example/linux` produced fewer nodes than the 2026-10-21 ~2.7M reference; wall stayed well under Gate A.

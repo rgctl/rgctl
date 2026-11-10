@@ -24,7 +24,7 @@ fi
 echo "==> discover + dashboard bundle ($REPO)"
 rgctl -r "$REPO" discover -l java -e target \
   --with-cfg --with-security --with-taint --with-dashboard --with-harmonic \
-  --with-kantra --export-migration-hints
+  --export-migration-hints
 
 echo "==> semantic index (vocab)"
 rgctl -r "$REPO" semantic index --embedder vocab --dimensions 256

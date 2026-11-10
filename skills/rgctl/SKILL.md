@@ -123,7 +123,6 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | Package / DI edges | `find --package <coords>` · `relations --edge injects` |
 | Wave ordering | `callers <sym> --depth 2` · `blast-radius <sym> --summary` |
 | Strangler-Fig plan | `discover . --export-migration-hints --with-harmonic` → `.rgctl/migration_plan.json` (`.steps[]`) |
-| Optional Kantra overlay | `discover . --with-kantra` then `rules findings --target quarkus` (or `rules run --target quarkus`) |
 
 **See:** migrate skill + [references/workflows.md](references/workflows.md)
 
@@ -209,14 +208,12 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 
 `slice` / `cpg flows` do **not** need upfront `--with-cfg`. Prefer `discover --with-cfg` for `cpg mutations`, sink-first `taint`, and batch `inspect`. Disambiguate overloaded symbols with `--file` / `--class` / `--line` on `inspect`, `cpg function|calls|ast|pdg`, and `blast-radius`.
 
-### 5b. Diff & Konveyor rules
+### 5b. Diff & merge
 
 | User Intent | CLI Command |
 |-------------|-------------|
 | Snapshot / graph diff | `diff --base <A> --head <B>` (or prepared refs; see encyclopedia) |
 | Multi-repo merge | `merge <REPOS>... --output-dir <DIR>` |
-| Kantra / migration rules during discover | `discover . --with-kantra` |
-| List / query installed rules | `rules` (and related subcommands) |
 
 ### 6. Export & Visualization
 

@@ -52,11 +52,6 @@ pub(crate) struct AnalysisOptions<'a> {
     pub with_dashboard: bool,
     pub export_migration_hints: bool,
     pub with_harmonic: bool,
-    pub with_kantra: bool,
-    pub kantra_rules: Option<String>,
-    pub kantra_catalog: Option<String>,
-    pub kantra_target: Option<String>,
-    pub kantra_index_only: bool,
     pub migration_preset: &'a str,
     pub migration_order: &'a str,
     pub db_path: &'a Path,
@@ -106,11 +101,6 @@ pub(crate) fn run_full_analysis(
         with_dashboard,
         export_migration_hints,
         with_harmonic,
-        with_kantra,
-        kantra_rules,
-        kantra_catalog,
-        kantra_target,
-        kantra_index_only,
         migration_preset,
         migration_order,
         db_path,
@@ -685,39 +675,6 @@ pub(crate) fn run_full_analysis(
         petgraph_view = Some(view);
     }
 
-    // Kantra rule evaluation (opt-in with --with-kantra). Index runs later after all
-    // `cold` mmap use — rewriting `graph.snapshot.bin` while ColdMetadataDb is open corrupts reads.
-    let kantra_rules_path =
-        with_kantra.then(|| kantra_rules.as_ref().map(std::path::PathBuf::from));
-    let kantra_catalog_path =
-        with_kantra.then(|| kantra_catalog.as_ref().map(std::path::PathBuf::from));
-    let mut kantra_eval_graph = None;
-    if with_kantra && !kantra_index_only {
-        if petgraph_view.is_none() {
-            petgraph_view = Some(PetGraphView::from_snapshot_store(cold.store())?);
-        }
-        let view = petgraph_view.as_ref().expect("petgraph view for kantra");
-        let kantra_start = Instant::now();
-        let (_findings, graph) = super::kantra_discover::run_kantra_stage(
-            root,
-            store,
-            kantra_rules_path.as_ref().and_then(|p| p.as_deref()),
-            kantra_catalog_path.as_ref().and_then(|p| p.as_deref()),
-            kantra_target.as_deref(),
-            &files,
-            &cold,
-            view,
-            &mut profile,
-        )?;
-        kantra_eval_graph = Some(graph);
-        if human_output {
-            info!(
-                "[✓] Kantra evaluation complete ({:.1}s)",
-                kantra_start.elapsed().as_secs_f64()
-            );
-        }
-    }
-
     // Security analysis (opt-in with --with-security)
     if with_security {
         let security_start = Instant::now();
@@ -1085,20 +1042,6 @@ pub(crate) fn run_full_analysis(
         drop(view);
         debug!("{}", mem_monitor.report());
 
-        if with_kantra
-            && !kantra_index_only
-            && let Some(ref graph) = kantra_eval_graph
-        {
-            super::kantra_discover::run_kantra_enrich(
-                store,
-                &cold,
-                &analysis_results,
-                &engine,
-                graph,
-                &mut profile,
-            )?;
-        }
-
         build_time = blast_start.elapsed();
         let engine_stats = engine.stats();
 
@@ -1369,29 +1312,7 @@ pub(crate) fn run_full_analysis(
     }
     profile.save_tracker.secs = secs(save_tracker_start.elapsed());
 
-    // Release the snapshot mmap before Kantra rewrites `graph.snapshot.bin`.
-    // In-place truncate of a mapped file can SIGBUS or yield garbage length reads.
     drop(cold);
-
-    if with_kantra {
-        super::kantra_discover::run_kantra_index(
-            store,
-            kantra_rules_path.as_ref().and_then(|p| p.as_deref()),
-            kantra_catalog_path.as_ref().and_then(|p| p.as_deref()),
-            &mut profile,
-        )?;
-        let mut violates_count = 0usize;
-        if !kantra_index_only {
-            violates_count = super::kantra_discover::run_kantra_violates(store, &mut profile)?;
-        }
-        if human_output {
-            if kantra_index_only {
-                info!("[✓] Kantra rules indexed into graph (eval skipped)");
-            } else {
-                info!("[✓] Kantra rules indexed into graph ({violates_count} VIOLATES edges)");
-            }
-        }
-    }
 
     // Graph mmap snapshot was written early (before topology/analysis) to avoid
     // co-residency of PreparedGraphSnapshot with the live backend (#33).
@@ -1527,13 +1448,6 @@ pub(crate) fn run_full_analysis(
     profile.peak_rss_mb = snapshot.peak_mb;
     if verbose {
         profile.record();
-    }
-
-    if with_kantra {
-        let findings = rgctl_graph::paths::artifact_path(store, "kantra_findings.json");
-        if findings.is_file() {
-            written_artifacts.kantra_findings = Some(findings.to_string_lossy().into_owned());
-        }
     }
 
     if json_output && emit_cli_summary {

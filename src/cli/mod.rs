@@ -27,7 +27,6 @@ mod inspect;
 pub mod inspect_output;
 mod install;
 pub mod install_output;
-mod kantra_discover;
 mod markup;
 mod merge;
 mod metrics;
@@ -39,7 +38,6 @@ mod pr_check;
 mod pr_check_output;
 mod review;
 mod review_export;
-mod rules;
 mod semantic;
 mod semantic_api;
 pub mod semantic_output;
@@ -261,40 +259,8 @@ pub enum Commands {
         #[arg(long = "with-harmonic", help_heading = "Migration")]
         with_harmonic: bool,
 
-        /// Evaluate Konveyor Kantra rules natively during discover (embedded catalog by default).
-        #[arg(long = "with-kantra", help_heading = "Pipeline features")]
-        with_kantra: bool,
-
-        /// Override embedded catalog with a Kantra rules directory (`ruleset.yaml` + `*.yaml`).
-        #[arg(
-            long = "kantra-rules",
-            value_name = "DIR",
-            help_heading = "Pipeline features"
-        )]
-        kantra_rules: Option<String>,
-
-        /// Override embedded catalog with a ruleset tree (walks for `ruleset.yaml` dirs).
-        #[arg(
-            long = "kantra-catalog",
-            value_name = "ROOT",
-            help_heading = "Pipeline features"
-        )]
-        kantra_catalog: Option<String>,
-
-        /// Evaluate only rules labeled `konveyor.io/target=<NAME>`.
-        #[arg(
-            long = "kantra-target",
-            value_name = "NAME",
-            help_heading = "Pipeline features"
-        )]
-        kantra_target: Option<String>,
-
-        /// Index Kantra rules into the graph without running violation eval.
-        #[arg(long = "kantra-index-only", help_heading = "Pipeline features")]
-        kantra_index_only: bool,
-
         /// Staged full pipeline: basic discover (queryable snapshot), then CFG + Universe +
-        /// harmonic + taint + Kantra, then semantic index. Prints a plan first; does not imply
+        /// harmonic + taint, then semantic index. Prints a plan first; does not imply
         /// security, git, SCIP, or migration export.
         #[arg(long = "full", help_heading = "Session / limits")]
         full: bool,
@@ -645,13 +611,6 @@ pub enum Commands {
             env = "RGCTL_UPDATE_WAIT_TIMEOUT_SECS"
         )]
         wait_timeout: u64,
-    },
-
-    /// Evaluate Konveyor-shaped rules against the session (Kantra engine)
-    #[command(display_order = 53)]
-    Rules {
-        #[command(subcommand)]
-        action: RulesCommands,
     },
 
     /// Alias namespace for structured query verbs (`query find`, `query callers`, …)
@@ -1161,48 +1120,6 @@ pub enum SecurityCommands {
         #[arg(long = "depth", default_value_t = 8)]
         depth: usize,
     },
-}
-
-#[derive(Subcommand)]
-pub enum RulesCommands {
-    /// Evaluate Kantra rules against the current session graph (embedded catalog when DIR omitted)
-    Run {
-        /// Ruleset directory (`ruleset.yaml` + `*.yaml`); omit to use the embedded catalog
-        #[arg(value_name = "DIR")]
-        rules_dir: Option<std::path::PathBuf>,
-
-        /// Filter by `konveyor.io/target` label
-        #[arg(long = "target", value_name = "NAME")]
-        target: Option<String>,
-
-        /// Override with a rulesets tree (mutually exclusive with DIR as single ruleset when set)
-        #[arg(long = "catalog", value_name = "ROOT")]
-        catalog: Option<std::path::PathBuf>,
-    },
-    /// Query `.rgctl/kantra_findings.json` with optional target/source/category/file filters
-    Findings {
-        /// Filter by `konveyor.io/target` (comma-separated OR)
-        #[arg(long = "target", value_name = "NAME")]
-        target: Option<String>,
-
-        /// Filter by `konveyor.io/source` (comma-separated OR)
-        #[arg(long = "source", value_name = "NAME")]
-        source: Option<String>,
-
-        /// Filter by category (mandatory/optional/potential)
-        #[arg(long = "category", value_name = "CAT")]
-        category: Option<String>,
-
-        /// Substring match on violation file path
-        #[arg(long = "file", value_name = "SUBSTR")]
-        file: Option<String>,
-
-        /// Max violations to return
-        #[arg(long = "limit", value_name = "N")]
-        limit: Option<usize>,
-    },
-    /// List embedded catalog targets/sources (with hit counts when findings exist)
-    Targets,
 }
 
 #[derive(Subcommand)]
@@ -1793,11 +1710,6 @@ impl Cli {
                 with_universe,
                 export_migration_hints,
                 with_harmonic,
-                with_kantra,
-                kantra_rules,
-                kantra_catalog,
-                kantra_target,
-                kantra_index_only,
                 mut full,
                 with_limits,
                 migration_preset,
@@ -1846,11 +1758,6 @@ impl Cli {
                         with_universe,
                         export_migration_hints,
                         with_harmonic,
-                        with_kantra,
-                        kantra_rules,
-                        kantra_catalog,
-                        kantra_target,
-                        kantra_index_only,
                         full,
                         with_limits,
                         migration_preset,
@@ -2147,21 +2054,6 @@ impl Cli {
                     wait_timeout_secs: wait_timeout,
                 },
             ),
-            Commands::Rules { action } => match action {
-                RulesCommands::Run {
-                    rules_dir,
-                    target,
-                    catalog,
-                } => rules::run_rules(&ctx, rules_dir, target, catalog),
-                RulesCommands::Findings {
-                    target,
-                    source,
-                    category,
-                    file,
-                    limit,
-                } => rules::run_findings(&ctx, target, source, category, file, limit),
-                RulesCommands::Targets => rules::run_targets(&ctx),
-            },
             Commands::Query { action } => match action {
                 QueryCommands::Find {
                     pattern,
@@ -2842,7 +2734,6 @@ fn command_label_for(command: &Commands) -> &'static str {
         Commands::Status => "status",
         Commands::Watch { .. } => "watch",
         Commands::Update { .. } => "update",
-        Commands::Rules { .. } => "rules",
         Commands::Query { action } => match action {
             QueryCommands::Find { .. } => "query find",
             QueryCommands::Callers { .. } => "query callers",

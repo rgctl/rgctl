@@ -40,16 +40,6 @@ pub struct DiscoverArgs {
     pub export_migration_hints: bool,
     /// Compute harmonic centrality (HyperBall on large graphs). Default off.
     pub with_harmonic: bool,
-    /// Native Kantra rule evaluation during discover.
-    pub with_kantra: bool,
-    /// Override embedded catalog with a single ruleset directory.
-    pub kantra_rules: Option<String>,
-    /// Override embedded catalog with a ruleset tree (`ruleset.yaml` dirs).
-    pub kantra_catalog: Option<String>,
-    /// Evaluate only rules with `konveyor.io/target=<name>`.
-    pub kantra_target: Option<String>,
-    /// Hydrate Kantra rule nodes only; skip violation eval.
-    pub kantra_index_only: bool,
     /// Staged full pipeline (`--full`).
     pub full: bool,
     /// Resource limits (`--with-limits SPEC` / `RGCTL_WITH_LIMITS`).
@@ -157,12 +147,6 @@ mod session_root_tests {
 }
 
 pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
-    // `--full` always enables Kantra in the deep stage; still validate override exclusivity.
-    super::kantra_discover::validate_kantra_flags(
-        args.with_kantra || args.full,
-        &args.kantra_rules,
-        &args.kantra_catalog,
-    )?;
     let limits = super::discover_limits::DiscoverLimits::from_cli(args.with_limits.as_deref())?;
     let path = resolve_session_root(ctx, args.path.as_deref());
 
@@ -206,11 +190,6 @@ pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
             with_dashboard: args.with_universe,
             export_migration_hints: args.export_migration_hints,
             with_harmonic: args.with_harmonic,
-            with_kantra: args.with_kantra,
-            kantra_rules: args.kantra_rules.clone(),
-            kantra_catalog: args.kantra_catalog.clone(),
-            kantra_target: args.kantra_target.clone(),
-            kantra_index_only: args.kantra_index_only,
             migration_preset: &args.migration_preset,
             migration_order: &args.migration_order,
             db_path: &ctx.db,

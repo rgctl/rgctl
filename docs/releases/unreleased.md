@@ -48,3 +48,9 @@ rgctl writeback patch --plan mutations.json --output ./patched -f json
 ### Shell completions
 
 - `rgctl completions <bash|zsh|fish|elvish|powershell>` prints a shell completion script generated from the CLI definition; no repo or cache needed. Setup: [Installation → Shell completions](../installation.md#shell-completions).
+
+## Breaking changes
+
+| Changed | Migration |
+|---------|-----------|
+| Removed Konveyor Kantra integration (`rgctl rules`, `discover --with-kantra` / `--kantra-*`, `.rgctl/kantra_findings.json`, `.rgctl/dashboard/kantra_index.json`, `NodeType::KantraRule` / `KantraRuleset`, `EdgeType::Violates`, and the Dashboard Static Rules tab/room) ([#177](https://github.com/rgctl/rgctl/issues/177)) | Use `rgctl find --annotation`, `rgctl relations`, `rgctl discover --export-migration-hints` (`migration_plan.json`), and `rgctl writeback` for framework migration discovery and execution |

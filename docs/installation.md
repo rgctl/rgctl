@@ -109,15 +109,6 @@ cargo build --release --bin rgctl --no-default-features
 git lfs pull   # ~206 MB; skip if using the default vocab embedder
 ```
 
-**Optional Konveyor rulesets submodule** (only for `--with-kantra` embedded catalog from source; release binaries already include the compiled catalog):
-
-```bash
-git submodule update --init crates/rgctl-kantra/assets/rulesets
-# or: ./scripts/init-kantra-rulesets.sh
-```
-
-Without the submodule, `cargo build` still succeeds using the in-repo fixture ruleset. See [`crates/rgctl-kantra/README.md`](../crates/rgctl-kantra/README.md).
-
 ---
 
 ## Add to PATH

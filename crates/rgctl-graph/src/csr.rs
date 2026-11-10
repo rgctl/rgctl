@@ -43,7 +43,7 @@ pub fn edge_type_to_u8(t: EdgeType) -> u8 {
         EdgeType::UsesFact => 27,
         EdgeType::AnnotatedWith => 28,
         EdgeType::Permits => 29,
-        EdgeType::Violates => 30,
+        // 30 was EdgeType::Violates (Kantra); reserved retired slot — do not reuse.
         EdgeType::Overrides => 31,
         EdgeType::ExposesRoute => 32,
         EdgeType::Injects => 33,
@@ -85,7 +85,12 @@ pub fn edge_type_from_u8(v: u8) -> Result<EdgeType> {
         27 => EdgeType::UsesFact,
         28 => EdgeType::AnnotatedWith,
         29 => EdgeType::Permits,
-        30 => EdgeType::Violates,
+        // Retired Violates (Kantra) — reserved slot; Overrides stays 31.
+        30 => {
+            return Err(Error::SerdeError(format!(
+                "retired edge type code {v} (former Violates)"
+            )));
+        }
         31 => EdgeType::Overrides,
         32 => EdgeType::ExposesRoute,
         33 => EdgeType::Injects,

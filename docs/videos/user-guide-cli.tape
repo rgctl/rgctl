@@ -37,10 +37,10 @@ Type "clear"
 Enter
 Show
 
-# --- Scene 1: Discover (Graph + CFG/PDG + Kantra + Migration Plan) ---
-Type "# 1. Index codebase: AST + mmap graph + CFG/PDG + Kantra + migration plan"
+# --- Scene 1: Discover (Graph + CFG/PDG + Migration Plan) ---
+Type "# 1. Index codebase: AST + mmap graph + CFG/PDG + migration plan"
 Enter
-Type "rgctl discover . -l java -e target --with-cfg --with-kantra --export-migration-hints"
+Type "rgctl discover . -l java -e target --with-cfg --export-migration-hints"
 Enter
 Sleep 3.5s
 
@@ -130,12 +130,9 @@ Type "clear"
 Enter
 Show
 
-# --- Scene 7: Kantra Migration Rules, Policy Gates, PR Review & Agent Skills ---
-Type "# 7. Kantra violations, CI policy gates, PR call-path deltas & AI agent skills"
+# --- Scene 7: Policy Gates, PR Review & Agent Skills ---
+Type "# 7. CI policy gates, PR call-path deltas & AI agent skills"
 Enter
-Type `rgctl -f json relations --edge violates --from-type kantrarule --limit 3 | jq '.edges | map({rule: .source.name, target: .target.name})'`
-Enter
-Sleep 2s
 Type "rgctl check --policy-file ../rgctl-policy.json"
 Enter
 Sleep 1.5s

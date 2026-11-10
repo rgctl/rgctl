@@ -59,8 +59,6 @@ pub const ALL_NODE_TYPES: &[NodeType] = &[
     NodeType::PuppetVariable,
     NodeType::PuppetFact,
     NodeType::PuppetNode,
-    NodeType::KantraRuleset,
-    NodeType::KantraRule,
 ];
 
 /// All [`EdgeType`] variants except [`EdgeType::Unknown`] for inventory zeros.
@@ -95,7 +93,6 @@ pub const ALL_EDGE_TYPES: &[EdgeType] = &[
     EdgeType::UsesFact,
     EdgeType::AnnotatedWith,
     EdgeType::Permits,
-    EdgeType::Violates,
     EdgeType::Overrides,
     EdgeType::ExposesRoute,
     EdgeType::Injects,

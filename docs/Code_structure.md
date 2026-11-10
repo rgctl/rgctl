@@ -271,7 +271,6 @@ Alphabetical list of workspace crates **excluding** individual `rgctl-lang-*` pl
 | **rgctl-ast-coverage** | `crates/rgctl-ast-coverage` | Grammar ↔ coverage-manifest drift (`RGCTL_AST_COVERAGE_STRICT` / `_TRACK`). |
 | **rgctl-dashboard** | `crates/rgctl-dashboard` | Static dashboard bundle generation. |
 | **rgctl-gql** | `crates/rgctl-gql` | Graph query language (`rgctl gql`). |
-| **rgctl-kantra** | `crates/rgctl-kantra` | Konveyor Kantra rule eval + embedded catalog. |
 | **rgctl-languages** | `crates/rgctl-languages` | Registers language plugins from the workspace catalog (`languages.toml`). |
 | **rgctl-config-formats** | `crates/rgctl-config-formats` | Config file plugins (YAML, JSON, TOML, properties). |
 | **rgctl-lang-markdown** | `crates/rgctl-lang-markdown` | Markdown context graph (headings, links, frontmatter). |

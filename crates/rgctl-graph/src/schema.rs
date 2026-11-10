@@ -243,10 +243,6 @@ pub enum NodeType {
     PuppetFact,
     /// Puppet node definition (`node { ... }`)
     PuppetNode,
-    /// Konveyor Kantra ruleset container (discover `--with-kantra`)
-    KantraRuleset,
-    /// Konveyor Kantra migration rule
-    KantraRule,
 }
 
 /// Edge types representing relationships between nodes
@@ -312,8 +308,6 @@ pub enum EdgeType {
     AnnotatedWith,
     /// Sealed type permits another type
     Permits,
-    /// Kantra rule violation on a code graph node
-    Violates,
     /// Subtype method overrides an ancestor method (`Child.m` → `Ancestor.m`)
     Overrides,
     /// Handler or controller exposes an HTTP/RPC route endpoint
@@ -809,10 +803,8 @@ mod tests {
             NodeType::PuppetVariable,
             NodeType::PuppetFact,
             NodeType::PuppetNode,
-            NodeType::KantraRuleset,
-            NodeType::KantraRule,
         ];
-        assert_eq!(types.len(), 39);
+        assert_eq!(types.len(), 37);
     }
 
     #[test]
@@ -848,14 +840,13 @@ mod tests {
             EdgeType::UsesFact,
             EdgeType::AnnotatedWith,
             EdgeType::Permits,
-            EdgeType::Violates,
             EdgeType::Overrides,
             EdgeType::ExposesRoute,
             EdgeType::Injects,
             EdgeType::CoChangesWith,
             EdgeType::Unknown,
         ];
-        assert_eq!(types.len(), 36);
+        assert_eq!(types.len(), 35);
     }
 
     #[test]

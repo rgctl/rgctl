@@ -152,8 +152,6 @@ fn node_type_name(node_type: NodeType) -> &'static str {
         NodeType::PuppetVariable => "PuppetVariable",
         NodeType::PuppetFact => "PuppetFact",
         NodeType::PuppetNode => "PuppetNode",
-        NodeType::KantraRuleset => "KantraRuleset",
-        NodeType::KantraRule => "KantraRule",
     }
 }
 

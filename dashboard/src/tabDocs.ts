@@ -8,8 +8,7 @@ export type TabId =
   | "guide"
   | "slice"
   | "blast"
-  | "migration"
-  | "kantra";
+  | "migration";
 
 export interface TabDocContent {
   title: string;
@@ -185,22 +184,6 @@ export const TAB_DOCS: Record<TabId, TabDocContent> = {
       "Adjust roadmap sort, strategy preset, and α/β/γ weight sliders at the top.",
       "Review the package graph for dependencies and relative priority by node size.",
       "Browse the paginated packages table for scheduled step, rank, and metrics.",
-    ],
-  },
-  kantra: {
-    title: "Migration rules",
-    goal: "Browse Konveyor Kantra rule violations — which files match migration rules and why.",
-    description:
-      "Dataflow-style layout: files in the left sidebar (with category tags), violations table in the main panel, and a code snippet + rule detail when you select a row. Category checkboxes above the table filter both the file list and violations.",
-    benefits: [
-      "See every catalog rule violation without parsing JSON by hand",
-      "Category tags highlight mandatory vs potential work per file",
-      "Line-level source context with the applied rule message",
-    ],
-    usage: [
-      "Run `rgctl discover . --with-kantra` (optionally `--kantra-target quarkus`).",
-      "Filter by mandatory / potential / optional / uncategorized above the table.",
-      "Select a file in the sidebar, then click a violation row to inspect code and rule text.",
     ],
   },
 };
