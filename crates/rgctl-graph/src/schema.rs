@@ -524,12 +524,27 @@ impl Node {
         if self.file_path.is_none() {
             return;
         }
-        self.id = crate::stable_key::deterministic_node_id(
+        self.id = crate::stable_key::deterministic_node_id_with_discriminator(
             self.file_path.as_deref(),
             self.name.as_ref(),
             self.node_type,
             self.qualified_name.as_deref(),
+            self.identity_discriminator(),
         );
+    }
+
+    /// Language-supplied declaration identity, separate from the display signature.
+    pub fn identity_discriminator(&self) -> Option<&str> {
+        self.get_property("callable_identity")
+            .filter(|value| !value.is_empty())
+    }
+
+    /// Set canonical declaration identity and refresh the node UUID.
+    pub fn with_identity_discriminator(mut self, discriminator: impl Into<String>) -> Self {
+        self.properties
+            .insert("callable_identity".into(), discriminator.into());
+        self.refresh_deterministic_id();
+        self
     }
 
     /// Set the function signature.

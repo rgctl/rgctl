@@ -150,11 +150,12 @@ pub fn stable_key_from_facets_with_discriminator(
 
 /// Stable key facets from a materialized [`Node`] (same contract as [`stable_key_from_row`]).
 pub fn stable_key_from_node(node: &crate::schema::Node) -> StableNodeKey {
-    stable_key_from_facets(
+    stable_key_from_facets_with_discriminator(
         node.file_path.as_deref(),
         node.name.as_ref(),
         node.node_type,
         node.qualified_name.as_deref(),
+        node.identity_discriminator(),
     )
 }
 
@@ -173,7 +174,13 @@ pub fn stable_key_from_row(col: &ColumnarGraphMmap, idx: usize) -> Result<Stable
     )?;
     let node_type = crate::columnar_snapshot::node_type_from_u16(row.node_type)?;
     let qn = col.node_qualified_name_str(idx)?;
-    Ok(stable_key_from_facets(file_path, name, node_type, qn))
+    Ok(stable_key_from_facets_with_discriminator(
+        file_path,
+        name,
+        node_type,
+        qn,
+        col.node_identity_discriminator_str(idx)?,
+    ))
 }
 
 /// Repo-relative path used for PR scope filtering (file path or file-node name).

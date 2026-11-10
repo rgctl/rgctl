@@ -6,7 +6,7 @@ use rgctl_graph::backend::MemoryBackend;
 use rgctl_graph::paths::{ARTIFACT_DIR_NAME, artifact_dir};
 use rgctl_graph::schema::{Edge, EdgeType, Node, NodeType};
 use rgctl_graph::snapshot::{MmappedGraphSnapshot, SNAPSHOT_FILE};
-use rgctl_graph::stable_key::deterministic_node_id;
+use rgctl_graph::stable_key::deterministic_node_id_with_discriminator;
 use rgctl_graph::write_columnar_from_backend;
 use rgctl_plugin_api::RelationType;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -238,11 +238,12 @@ fn namespace_node(mut node: Node, repo_name: &str) -> (Uuid, Node) {
         node.file_path = Some(namespaced.into());
     }
     if node.file_path.is_some() {
-        node.id = deterministic_node_id(
+        node.id = deterministic_node_id_with_discriminator(
             node.file_path.as_deref(),
             node.name.as_ref(),
             node.node_type,
             node.qualified_name.as_deref(),
+            node.identity_discriminator(),
         );
     }
     (old_id, node)

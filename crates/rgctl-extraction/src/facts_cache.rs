@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 pub const FACTS_CACHE_REL: &str = "cache/facts.bin";
 
 const MAGIC: &[u8; 8] = b"RGCTLFCT";
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 
 /// Content-addressed key for one cached extraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

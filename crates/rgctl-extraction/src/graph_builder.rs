@@ -424,6 +424,15 @@ impl GraphBuilder {
             &symbol.name,
             symbol.qualified_name.as_deref(),
         );
+        if let Some(discriminator) = symbol
+            .metadata
+            .get("identity_discriminator")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+        {
+            key.push('\u{1f}');
+            key.push_str(discriminator);
+        }
         // C `#include` paths are per-translation-unit; dedupe globally by path string
         // so kernel-scale repos do not materialize one Import node per occurrence.
         if symbol.symbol_type == SymbolType::Import
@@ -553,6 +562,14 @@ impl GraphBuilder {
             }
         }
 
+        if let Some(discriminator) = symbol
+            .metadata
+            .get("identity_discriminator")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+        {
+            node = node.with_identity_discriminator(discriminator);
+        }
         let id = node.id;
         self.symbol_index.insert(key.clone(), id);
         self.symbol_files.insert(id, symbol.location.file.clone());
@@ -730,11 +747,20 @@ impl GraphBuilder {
         if self.spill.is_some() {
             return;
         }
-        let key = symbol_key(
+        let mut key = symbol_key(
             &symbol.location.file,
             &symbol.name,
             symbol.qualified_name.as_deref(),
         );
+        if let Some(discriminator) = symbol
+            .metadata
+            .get("identity_discriminator")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+        {
+            key.push('\u{1f}');
+            key.push_str(discriminator);
+        }
         if let Some(id) = self.symbol_index.get(&key)
             && let Some(node) = self.nodes.iter_mut().find(|n| n.id == *id)
         {
@@ -826,6 +852,22 @@ impl GraphBuilder {
         id
     }
 
+    /// Resolve only the supplied canonical identity. Do not fall back to a
+    /// different overload if the exact identity is absent or ambiguous.
+    fn resolve_callable_identity(
+        &self,
+        name: &str,
+        file: &str,
+        discriminator: &str,
+    ) -> Option<Uuid> {
+        let key = format!("{file}::{name}\u{1f}{discriminator}");
+        self.symbol_index.get(&key).copied().or_else(|| {
+            self.symbols_by_suffix
+                .get(&key[file.len() + 2..])
+                .and_then(|ids| unique_resolved(ids))
+        })
+    }
+
     /// Add a relation between symbols when endpoints resolve.
     ///
     /// For allowlisted relation kinds, missing endpoints become deduplicated
@@ -873,28 +915,65 @@ impl GraphBuilder {
             }
         }
 
-        let mut from_id =
-            self.resolve_symbol_tracked(&relation.from, &relation.location.file, None, None);
-        if from_id.is_none() {
+        let exact_from = relation
+            .metadata
+            .get("from_identity_discriminator")
+            .and_then(|v| v.as_str());
+        let mut from_id = if let Some(identity) = exact_from {
+            self.resolve_callable_identity(&relation.from, &relation.location.file, identity)
+        } else {
+            self.resolve_symbol_tracked(&relation.from, &relation.location.file, None, None)
+        };
+        if from_id.is_none() && exact_from.is_none() {
             from_id = self
                 .symbols_by_qualified
                 .get(&relation.from)
                 .and_then(|ids| unique_resolved(ids));
         }
-        if from_id.is_none() {
+        if from_id.is_none() && exact_from.is_none() {
             from_id = self.lookup_file_node(&relation.from, &relation.location.file);
         }
 
         let (to_type_hint, to_qualified_hint) = self.enrich_go_type_hints(relation);
 
-        let mut to_id = self.resolve_symbol_tracked(
-            &relation.to,
-            &relation.location.file,
-            to_qualified_hint
-                .as_deref()
-                .or(relation.to_qualified_hint.as_deref()),
-            to_type_hint.as_deref().or(relation.to_type_hint.as_deref()),
-        );
+        let java_call = relation.relation_type == RelationType::Calls
+            && relation.metadata.get("language").and_then(|v| v.as_str()) == Some("java");
+        let target = to_qualified_hint
+            .as_deref()
+            .or(relation.to_qualified_hint.as_deref())
+            .unwrap_or(&relation.to);
+        let explicit_to = relation
+            .metadata
+            .get("to_identity_discriminator")
+            .and_then(|v| v.as_str());
+        let argument_to = relation
+            .metadata
+            .get("argument_identity_discriminator")
+            .and_then(|v| v.as_str());
+        let exact_to = explicit_to.or(argument_to);
+        let exact_id = exact_to.and_then(|identity| {
+            self.resolve_callable_identity(target, &relation.location.file, identity)
+        });
+        let ambiguous_java = java_call
+            && self
+                .symbols_by_qualified
+                .get(target)
+                .or_else(|| self.symbols_by_suffix.get(target))
+                .is_some_and(|ids| unique_resolved(ids).is_none());
+        let mut to_id = if exact_id.is_some() {
+            exact_id
+        } else if explicit_to.is_some() || ambiguous_java {
+            None
+        } else {
+            self.resolve_symbol_tracked(
+                &relation.to,
+                &relation.location.file,
+                to_qualified_hint
+                    .as_deref()
+                    .or(relation.to_qualified_hint.as_deref()),
+                to_type_hint.as_deref().or(relation.to_type_hint.as_deref()),
+            )
+        };
         if to_id.is_none() {
             if let Some(id) = self.lookup_file_node(&relation.to, &relation.location.file) {
                 to_id = Some(id);
@@ -2494,6 +2573,122 @@ mod tests {
             metadata: serde_json::json!({}),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn java_overloaded_callers_and_literal_targets_are_independent() {
+        let registry = std::sync::Arc::new(rgctl_languages::default_registry());
+        let extractor = crate::Extractor::new(registry);
+        let source = br#"package demo;
+class Library {
+ static int intHelper() { return 1; }
+ static int stringHelper() { return 2; }
+ static int quote(int value) { return intHelper(); }
+ static int quote(String value) { return stringHelper(); }
+ static int runInt() { return quote(7); }
+ static int runString() { return quote("hello"); }
+}"#;
+        let extraction = extractor
+            .extract_file_with_source(Path::new("Library.java"), source.to_vec())
+            .unwrap();
+        let mut builder = GraphBuilder::new();
+        extractor
+            .populate_graph(&[extraction], &mut builder)
+            .unwrap();
+        let (nodes, edges) = builder.into_graph();
+        let find = |name: &str, identity: Option<&str>| {
+            nodes
+                .iter()
+                .find(|n| {
+                    n.name == name && identity.is_none_or(|i| n.identity_discriminator() == Some(i))
+                })
+                .unwrap()
+                .id
+        };
+        let calls = |from, to| {
+            edges
+                .iter()
+                .any(|e| e.from == from && e.to == to && e.edge_type == EdgeType::Calls)
+        };
+        let int = find("quote", Some("(int)"));
+        let string = find("quote", Some("(String)"));
+        assert!(calls(int, find("intHelper", None)));
+        assert!(calls(string, find("stringHelper", None)));
+        assert!(!calls(int, find("stringHelper", None)));
+        assert!(calls(find("runInt", None), int));
+        assert!(!calls(find("runInt", None), string));
+        assert!(calls(find("runString", None), string));
+    }
+
+    #[test]
+    fn java_overloads_survive_snapshots_body_changes_line_shifts_and_removal() {
+        use crate::Extractor;
+        use rgctl_graph::{
+            SnapshotNodeStore, stable_key_from_node, stable_key_from_row,
+            write_columnar_from_nodes_edges,
+        };
+        let registry = std::sync::Arc::new(rgctl_languages::default_registry());
+        let extractor = Extractor::new(registry);
+        let baseline = include_bytes!(
+            "../../../tests/fixtures/tier1_identity_dependencies/java/dependencies/library/baseline/demo/Library.java"
+        );
+        let candidate = include_bytes!(
+            "../../../tests/fixtures/tier1_identity_dependencies/java/dependencies/library/candidate/demo/Library.java"
+        );
+        let build = |source: &[u8]| {
+            let extraction = extractor
+                .extract_file_with_source(Path::new("Library.java"), source.to_vec())
+                .unwrap();
+            let mut builder = GraphBuilder::new();
+            extractor
+                .populate_graph(&[extraction], &mut builder)
+                .unwrap();
+            let (nodes, edges) = builder.into_graph();
+            let temporary = tempfile::tempdir().unwrap();
+            let path = temporary.path().join("graph.snapshot.bin");
+            write_columnar_from_nodes_edges(nodes.clone(), edges, &path).unwrap();
+            let store = SnapshotNodeStore::open(&path).unwrap();
+            let col = store.columnar().unwrap();
+            for index in 0..col.node_count() {
+                let node = col.materialize_node_at(index).unwrap();
+                assert_eq!(
+                    stable_key_from_row(col, index).unwrap(),
+                    stable_key_from_node(&node)
+                );
+            }
+            nodes
+                .into_iter()
+                .filter(|node| node.name == "quote")
+                .map(|node| {
+                    let restored = store.get_node(node.id).unwrap().unwrap();
+                    assert_eq!(
+                        restored.identity_discriminator(),
+                        node.identity_discriminator()
+                    );
+                    (
+                        node.identity_discriminator().unwrap().to_owned(),
+                        (node.id, node.code_hash.clone()),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let before = build(baseline);
+        let after = build(candidate);
+        assert_eq!(before.len(), 2);
+        assert_eq!(after.len(), 2);
+        assert_ne!(before["(int)"].0, before["(String)"].0);
+        assert_eq!(before["(int)"], after["(int)"]);
+        assert_eq!(before["(String)"].0, after["(String)"].0);
+        assert_ne!(before["(String)"].1, after["(String)"].1);
+        let shifted = format!("\n\n{}", std::str::from_utf8(baseline).unwrap());
+        assert_eq!(before, build(shifted.as_bytes()));
+        let removed = std::str::from_utf8(baseline).unwrap().replace(
+            "    public static int quote(String value) {\n        return value.length();\n    }\n",
+            "",
+        );
+        let remaining = build(removed.as_bytes());
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining["(int)"], before["(int)"]);
     }
 
     #[test]

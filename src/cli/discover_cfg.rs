@@ -699,14 +699,29 @@ fn compute_function_cfg(
 
     let build_start = stage.map(|_| Instant::now());
     let bytes = source.as_bytes();
-    let mut cfg_data = parsed
-        .and_then(|p| match (func_node.start_line, func_node.end_line) {
-            (Some(start), Some(end)) => p
-                .build_cfg_for_node_span(language, bytes, &func_node.name, start, end)
-                .ok(),
-            _ => p.build_cfg(language, bytes, &func_node.name).ok(),
-        })
-        .or_else(|| build_cfg_for_function(language, source, &func_node.name).ok())?;
+    let exact_bytes = func_node
+        .get_property("source_start_byte")
+        .and_then(|s| s.parse::<usize>().ok())
+        .zip(
+            func_node
+                .get_property("source_end_byte")
+                .and_then(|s| s.parse::<usize>().ok()),
+        );
+    let mut cfg_data = if let Some(p) = parsed {
+        if let Some((start, end)) = exact_bytes {
+            p.build_cfg_for_byte_range(language, bytes, &func_node.name, start, end)
+                .ok()?
+        } else {
+            match (func_node.start_line, func_node.end_line) {
+                (Some(start), Some(end)) => p
+                    .build_cfg_for_node_span(language, bytes, &func_node.name, start, end)
+                    .ok()?,
+                _ => p.build_cfg(language, bytes, &func_node.name).ok()?,
+            }
+        }
+    } else {
+        build_cfg_for_function(language, source, &func_node.name).ok()?
+    };
     if let (Some(stage), Some(start)) = (stage, build_start) {
         stage
             .build_cfg_ns

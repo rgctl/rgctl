@@ -50,7 +50,7 @@ pub struct InheritanceGraph {
     pub type_ids: Vec<Uuid>,
     /// Uuid → dense id.
     pub id_of: HashMap<Uuid, u32>,
-    /// Simple / qualified name → dense id (last write wins for duplicates).
+    /// Unique simple / qualified name → dense id; ambiguous names are excluded.
     pub name_of: HashMap<SharedStr, u32>,
     /// Direct bases in declaration order: `(base_dense_id, is_interface)`.
     pub bases: Vec<SmallVec<[(u32, bool); 4]>>,
@@ -65,6 +65,7 @@ impl InheritanceGraph {
         let mut id_of = HashMap::new();
         let mut name_of: HashMap<SharedStr, u32> = HashMap::new();
         let mut is_interface = Vec::new();
+        let mut ambiguous_names = HashSet::new();
 
         for &nt in &[
             NodeType::Class,
@@ -77,9 +78,16 @@ impl InheritanceGraph {
             for node in backend.find_nodes_by_type(nt)? {
                 let dense = type_ids.len() as u32;
                 id_of.insert(node.id, dense);
-                name_of.insert(node.name.clone(), dense);
-                if let Some(qn) = node.qualified_name.as_ref() {
-                    name_of.insert(qn.clone(), dense);
+                for name in std::iter::once(&node.name).chain(node.qualified_name.as_ref()) {
+                    if ambiguous_names.contains(name) {
+                        continue;
+                    }
+                    if name_of.get(name).is_some_and(|&previous| previous != dense) {
+                        name_of.remove(name);
+                        ambiguous_names.insert(name.clone());
+                    } else {
+                        name_of.insert(name.clone(), dense);
+                    }
                 }
                 type_ids.push(node.id);
                 is_interface.push(matches!(
@@ -140,7 +148,9 @@ pub struct MroIndex {
     /// `mro[t]` = linearization of type `t` (includes `t` at index 0).
     pub mro: Vec<SmallVec<[u32; 8]>>,
     /// Methods defined on each type: `method_name → function Uuid`.
-    pub methods: Vec<HashMap<String, Uuid>>,
+    pub methods: Vec<HashMap<String, Vec<Uuid>>>,
+    /// Canonical parameter identity used to avoid inventing overrides between overloads.
+    pub method_identities: HashMap<Uuid, Option<String>>,
 }
 
 impl MroIndex {
@@ -157,6 +167,7 @@ impl MroIndex {
             graph,
             mro,
             methods: vec![HashMap::new(); n],
+            method_identities: HashMap::new(),
         })
     }
 
@@ -169,7 +180,10 @@ impl MroIndex {
             {
                 self.methods[tid as usize]
                     .entry(method.to_string())
-                    .or_insert(node.id);
+                    .or_default()
+                    .push(node.id);
+                self.method_identities
+                    .insert(node.id, node.identity_discriminator().map(str::to_owned));
             }
         }
         Ok(())
@@ -179,8 +193,11 @@ impl MroIndex {
     pub fn resolve_method(&self, recv_type: u32, method: &str) -> Option<Uuid> {
         let chain = self.mro.get(recv_type as usize)?;
         for &tid in chain {
-            if let Some(&id) = self.methods.get(tid as usize)?.get(method) {
-                return Some(id);
+            if let Some(ids) = self.methods.get(tid as usize)?.get(method) {
+                return match ids.as_slice() {
+                    [id] => Some(*id),
+                    _ => None,
+                };
             }
         }
         None
@@ -196,20 +213,36 @@ impl MroIndex {
     pub fn overrides_edges(&self) -> Vec<Edge> {
         let mut out = Vec::new();
         for (tid, methods) in self.methods.iter().enumerate() {
-            let chain = &self.mro[tid];
-            if chain.len() < 2 {
-                continue;
-            }
-            for (name, &child_fn) in methods {
-                for &ancestor in chain.iter().skip(1) {
-                    if let Some(&anc_fn) = self.methods[ancestor as usize].get(name) {
-                        if anc_fn != child_fn {
-                            out.push(
-                                Edge::new(child_fn, anc_fn, EdgeType::Overrides)
-                                    .with_property("method".into(), name.clone()),
-                            );
+            for (name, children) in methods {
+                for &child in children {
+                    let identity = self
+                        .method_identities
+                        .get(&child)
+                        .and_then(|i| i.as_deref());
+                    for &ancestor in self.mro[tid].iter().skip(1) {
+                        let Some(candidates) = self.methods[ancestor as usize].get(name) else {
+                            continue;
+                        };
+                        let matches: Vec<_> = candidates
+                            .iter()
+                            .copied()
+                            .filter(|id| {
+                                let parent =
+                                    self.method_identities.get(id).and_then(|i| i.as_deref());
+                                identity == parent
+                                    && (identity.is_some()
+                                        || candidates.len() == 1 && children.len() == 1)
+                            })
+                            .collect();
+                        if let [parent] = matches.as_slice() {
+                            if child != *parent {
+                                out.push(
+                                    Edge::new(child, *parent, EdgeType::Overrides)
+                                        .with_property("method".into(), name.clone()),
+                                );
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
             }
@@ -471,6 +504,14 @@ fn retarget_calls_via_mro(backend: &mut MemoryBackend, index: &MroIndex) -> Resu
         if edge.edge_type != EdgeType::Calls {
             continue;
         }
+        // A canonical target is already resolved. A name-only MRO pass must not
+        // replace it with another overload on a subtype.
+        if backend
+            .with_node(edge.to, |node| node.identity_discriminator().is_some())?
+            .unwrap_or(false)
+        {
+            continue;
+        }
         let Some(type_name) = edge
             .properties
             .get("to_type_hint")
@@ -563,6 +604,37 @@ mod tests {
             ])
             .unwrap();
         (backend, a_id, b_id, c_id, d_id)
+    }
+
+    #[test]
+    fn overloaded_methods_are_not_first_match_and_overrides_match_identity() {
+        let mut backend = MemoryBackend::new();
+        let base = type_node("Base", NodeType::Class).with_file_path("Base.java");
+        let child = type_node("Child", NodeType::Class).with_file_path("Child.java");
+        let ids = (base.id, child.id);
+        let int = fn_node("Base", "quote")
+            .with_file_path("Base.java")
+            .with_identity_discriminator("(int)");
+        let string = fn_node("Base", "quote")
+            .with_file_path("Base.java")
+            .with_identity_discriminator("(String)");
+        let override_string = fn_node("Child", "quote")
+            .with_file_path("Child.java")
+            .with_identity_discriminator("(String)");
+        let methods = (int.id, string.id, override_string.id);
+        for node in [base, child, int, string, override_string] {
+            backend.insert_node(node).unwrap();
+        }
+        backend
+            .insert_edges_batch(vec![Edge::new(ids.1, ids.0, EdgeType::Extends)])
+            .unwrap();
+        let graph = InheritanceGraph::from_backend(&backend).unwrap();
+        let mut index = MroIndex::build(graph, MroStrategy::ClassOverInterface).unwrap();
+        index.index_methods_from_backend(&backend).unwrap();
+        assert_eq!(index.resolve_method_by_type_name("Base", "quote"), None);
+        let edges = index.overrides_edges();
+        assert_eq!(edges.len(), 1);
+        assert_eq!((edges[0].from, edges[0].to), (methods.2, methods.1));
     }
 
     #[test]

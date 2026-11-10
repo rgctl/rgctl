@@ -333,8 +333,6 @@ pub struct ParsedSourceFile {
     locations: HashMap<String, FunctionLocation>,
     /// All locations for a bare name (overloads).
     locations_by_name: HashMap<String, Vec<FunctionLocation>>,
-    /// Exact span key `(start_line, end_line, name)` → location.
-    locations_by_span: HashMap<(usize, usize, String), FunctionLocation>,
 }
 
 impl ParsedSourceFile {
@@ -345,7 +343,6 @@ impl ParsedSourceFile {
             tree,
             locations: index.by_name_first,
             locations_by_name: index.by_name,
-            locations_by_span: index.by_span,
         })
     }
 
@@ -367,6 +364,15 @@ impl ParsedSourceFile {
         source: &[u8],
         function_name: &str,
     ) -> Result<ControlFlowGraph> {
+        if self
+            .locations_by_name
+            .get(function_name)
+            .is_some_and(|locations| locations.len() > 1)
+        {
+            return Err(Error::NotFound(format!(
+                "ambiguous function '{function_name}': exact source span required"
+            )));
+        }
         if let Some(loc) = self.locations.get(function_name)
             && let Some(func_node) =
                 seek_function_node(&self.tree, language, loc.start_byte, loc.end_byte)?
@@ -400,23 +406,12 @@ impl ParsedSourceFile {
         start_line: usize,
         end_line: usize,
     ) -> Option<Node<'_>> {
-        let key = (start_line, end_line, function_name.to_string());
-        if let Some(loc) = self.locations_by_span.get(&key) {
-            // Language is not threaded here; callers that need kind validation use
-            // [`seek_function_node`] / [`build_cfg_for_byte_range`] directly.
-            if let Some(func_node) = self
-                .tree
-                .root_node()
-                .named_descendant_for_byte_range(loc.start_byte, loc.end_byte)
-            {
-                return Some(func_node);
-            }
-        }
-        if let Some(locs) = self.locations_by_name.get(function_name)
-            && let Some(loc) = locs
-                .iter()
-                .find(|l| l.start_line == start_line)
-                .or_else(|| locs.first())
+        let locations = self.locations_by_name.get(function_name)?;
+        let mut matching = locations
+            .iter()
+            .filter(|loc| loc.start_line == start_line && loc.end_line == end_line);
+        if let Some(loc) = matching.next()
+            && matching.next().is_none()
         {
             return self
                 .tree
@@ -8949,5 +8944,39 @@ END;
             "sql function should produce CFG, got {}",
             cfg.blocks.len()
         );
+    }
+    #[test]
+    fn same_line_java_overloads_require_exact_byte_ranges() {
+        let first = "int quote(int value) { if (value > 0) { return 1; } return 0; }";
+        let second = "int quote(String value) { return 2; }";
+        let source = format!("class Library {{ {first} {second} }}");
+        let parsed = ParsedSourceFile::parse("java", source.as_bytes()).unwrap();
+        assert!(parsed.function_node_for_span("quote", 1, 1).is_none());
+        assert!(
+            parsed
+                .build_cfg("java", source.as_bytes(), "quote")
+                .is_err()
+        );
+        let first_start = source.find(first).unwrap();
+        let second_start = source.find(second).unwrap();
+        let branching = parsed
+            .build_cfg_for_byte_range(
+                "java",
+                source.as_bytes(),
+                "quote",
+                first_start,
+                first_start + first.len(),
+            )
+            .unwrap();
+        let straight = parsed
+            .build_cfg_for_byte_range(
+                "java",
+                source.as_bytes(),
+                "quote",
+                second_start,
+                second_start + second.len(),
+            )
+            .unwrap();
+        assert!(branching.blocks.len() > straight.blocks.len());
     }
 }

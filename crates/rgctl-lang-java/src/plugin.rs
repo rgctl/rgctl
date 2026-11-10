@@ -683,6 +683,8 @@ impl JavaPlugin {
     ) -> Result<()> {
         metadata["identity_discriminator"] = self.callable_discriminator(node, source)?.into();
         apply_name_range(node, source, metadata);
+        metadata["source_start_byte"] = node.start_byte().into();
+        metadata["source_end_byte"] = node.end_byte().into();
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
@@ -816,20 +818,51 @@ impl JavaPlugin {
         None
     }
 
+    fn enclosing_callable_discriminator(
+        &self,
+        node: Node,
+        source: &[u8],
+    ) -> Result<Option<String>> {
+        let mut current = node;
+        while let Some(parent) = current.parent() {
+            if matches!(
+                parent.kind(),
+                "method_declaration"
+                    | "constructor_declaration"
+                    | "compact_constructor_declaration"
+            ) {
+                return self.callable_discriminator(parent, source).map(Some);
+            }
+            current = parent;
+        }
+        Ok(None)
+    }
+
     /// Stable pre-order index for a `lambda_expression`, scoped to its
     /// nearest enclosing callable (or enclosing type, for field/static
     /// initializer lambdas). Called identically from the symbol pass and the
     /// relations pass (each with a fresh `ExtractCtx`/counter) so both agree
     /// on `N` for `Owner.$lambda$N`, since both walk the tree in the same
     /// document order.
-    fn lambda_index(&self, node: Node, source: &[u8], ctx: &ExtractCtx) -> (Option<String>, usize) {
+    fn lambda_index(
+        &self,
+        node: Node,
+        source: &[u8],
+        ctx: &ExtractCtx,
+    ) -> Result<(Option<String>, usize)> {
         let owner = self
             .find_containing_callable_qn(node, source, ctx)
             .or_else(|| {
                 self.find_containing_type_name(node, source, ctx)
                     .map(|o| ctx.qualify_type(&o))
             });
-        let key = owner.clone().unwrap_or_else(|| "<unknown>".to_string());
+        let key = format!(
+            "{}\u{1f}{}",
+            owner.as_deref().unwrap_or("<unknown>"),
+            self.enclosing_callable_discriminator(node, source)?
+                .as_deref()
+                .unwrap_or("")
+        );
         let idx = {
             let mut counters = ctx.lambda_counters.borrow_mut();
             let counter = counters.entry(key).or_insert(0);
@@ -837,7 +870,7 @@ impl JavaPlugin {
             *counter += 1;
             current
         };
-        (owner, idx)
+        Ok((owner, idx))
     }
 
     // ---------------------------------------------------------------
@@ -977,7 +1010,8 @@ impl JavaPlugin {
             location: source_location(node, file_path),
             signature: Some(first_line_text(node, source)?),
             return_type: None,
-            parameters: vec![],
+            parameters: self
+                .extract_parameters(self.find_enclosing_type_node(node).unwrap_or(node), source)?,
             fields: vec![],
             modifiers,
             documentation: None,
@@ -985,6 +1019,8 @@ impl JavaPlugin {
                 "language": "java",
                 "is_constructor": true,
                 "is_compact_constructor": true,
+                "source_start_byte": node.start_byte(),
+                "source_end_byte": node.end_byte(),
                 "identity_discriminator": self.callable_discriminator(node, source)?,
             }),
             ..Default::default()
@@ -1881,7 +1917,7 @@ impl JavaPlugin {
         file_path: &str,
         ctx: &ExtractCtx,
     ) -> Result<Symbol> {
-        let (owner, idx) = self.lambda_index(node, source, ctx);
+        let (owner, idx) = self.lambda_index(node, source, ctx)?;
         let name = format!("$lambda${idx}");
         let qualified_name = owner.map(|o| format!("{o}.{name}"));
 
@@ -1896,7 +1932,11 @@ impl JavaPlugin {
             fields: vec![],
             modifiers: vec![],
             documentation: None,
-            metadata: serde_json::json!({ "language": "java", "is_lambda": true }),
+            metadata: serde_json::json!({
+                "language": "java", "is_lambda": true,
+                "identity_discriminator": self.enclosing_callable_discriminator(node, source)?,
+                "source_start_byte": node.start_byte(), "source_end_byte": node.end_byte(),
+            }),
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
@@ -2418,6 +2458,7 @@ impl LanguagePlugin for JavaPlugin {
             &mut sym_copy,
             &mut relations,
         );
+        self.annotate_relation_identities(symbols, &mut relations);
         Ok(relations)
     }
 
@@ -3404,7 +3445,7 @@ impl JavaPlugin {
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         if node.kind() == "lambda_expression" {
-            let (owner, idx) = self.lambda_index(node, source, ctx);
+            let (owner, idx) = self.lambda_index(node, source, ctx)?;
             if let Some(from) = owner {
                 let to = format!("{from}.$lambda${idx}");
                 relations.push(Relation {
@@ -3412,7 +3453,11 @@ impl JavaPlugin {
                     to,
                     relation_type: RelationType::Calls,
                     location: source_location(node, &file_path.to_string_lossy()),
-                    metadata: serde_json::json!({ "language": "java", "is_lambda_call": true }),
+                    metadata: serde_json::json!({
+                        "language": "java", "is_lambda_call": true,
+                        "from_identity_discriminator": self.enclosing_callable_discriminator(node, source)?,
+                        "to_identity_discriminator": self.enclosing_callable_discriminator(node, source)?,
+                    }),
                     to_qualified_hint: None,
                     to_type_hint: None,
                     ..Default::default()
@@ -3775,6 +3820,9 @@ impl JavaPlugin {
                     s.name == callee
                         && s.symbol_type == SymbolType::Function
                         && s.location.file == file_path.to_string_lossy()
+                        && to_qualified_hint
+                            .as_deref()
+                            .is_none_or(|hint| s.qualified_name.as_deref() == Some(hint))
                 })
                 .collect();
             let local_target = match same_file_matches.as_slice() {
@@ -3787,16 +3835,127 @@ impl JavaPlugin {
                     .unwrap_or_else(|| callee.to_string()),
             };
 
+            let mut metadata = serde_json::json!({ "language": "java" });
+            if let Some(identity) = from_fn
+                .metadata
+                .get("identity_discriminator")
+                .and_then(|v| v.as_str())
+            {
+                metadata["from_identity_discriminator"] = identity.into();
+            }
+            if let Some(identity) = self.argument_identity(node, source, from_fn) {
+                metadata["argument_identity_discriminator"] = identity.into();
+            }
             relations.push(Relation {
                 from,
                 to: local_target,
                 relation_type: RelationType::Calls,
                 location: source_location(node, &file_path.to_string_lossy()),
-                metadata: serde_json::json!({ "language": "java" }),
+                metadata,
                 to_qualified_hint,
                 to_type_hint,
                 ..Default::default()
             });
+        }
+    }
+
+    /// Known expression types only; unknown expressions remain unresolved rather
+    /// than being treated as proof of a particular overload.
+    fn argument_identity(&self, call: Node, source: &[u8], from: &Symbol) -> Option<String> {
+        let arguments = call.child_by_field_name("arguments")?;
+        let mut cursor = arguments.walk();
+        let mut types = Vec::new();
+        for argument in arguments.named_children(&mut cursor) {
+            let text = argument.utf8_text(source).ok()?;
+            let ty = match argument.kind() {
+                "line_comment" | "block_comment" => continue,
+                "string_literal" => "String".to_string(),
+                "character_literal" => "char".to_string(),
+                "true" | "false" => "boolean".to_string(),
+                "decimal_integer_literal"
+                | "hex_integer_literal"
+                | "octal_integer_literal"
+                | "binary_integer_literal" => if text.ends_with(['l', 'L']) {
+                    "long"
+                } else {
+                    "int"
+                }
+                .to_string(),
+                "decimal_floating_point_literal" | "hex_floating_point_literal" => {
+                    if text.ends_with(['f', 'F']) {
+                        "float"
+                    } else {
+                        "double"
+                    }
+                    .to_string()
+                }
+                "identifier" => from
+                    .parameters
+                    .iter()
+                    .find(|p| p.name == text)
+                    .and_then(|p| p.param_type.clone())
+                    .or_else(|| self.find_local_variable_type(call, text, source))?,
+                "object_creation_expression" => argument
+                    .child_by_field_name("type")?
+                    .utf8_text(source)
+                    .ok()?
+                    .to_string(),
+                _ => return None,
+            };
+            types.push(
+                ty.chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect::<String>(),
+            );
+        }
+        Some(format!("({})", types.join(",")))
+    }
+
+    /// Attach exact source identities to all callable-owned relations, including
+    /// annotations and constructor relations emitted outside the deferred call pass.
+    pub(crate) fn annotate_relation_identities(
+        &self,
+        symbols: &[Symbol],
+        relations: &mut [Relation],
+    ) {
+        let mut by_name: HashMap<&str, Vec<&Symbol>> = HashMap::new();
+        for symbol in symbols
+            .iter()
+            .filter(|s| s.symbol_type == SymbolType::Function)
+        {
+            by_name
+                .entry(symbol.qualified_name.as_deref().unwrap_or(&symbol.name))
+                .or_default()
+                .push(symbol);
+        }
+        for relation in relations {
+            if relation
+                .metadata
+                .get("from_identity_discriminator")
+                .and_then(|v| v.as_str())
+                .is_some()
+            {
+                continue;
+            }
+            let Some(candidates) = by_name.get(relation.from.as_str()) else {
+                continue;
+            };
+            let mut matching = candidates.iter().filter(|s| {
+                s.location.file == relation.location.file
+                    && (s.location.start_line, s.location.start_column)
+                        <= (relation.location.start_line, relation.location.start_column)
+                    && (s.location.end_line, s.location.end_column)
+                        >= (relation.location.end_line, relation.location.end_column)
+            });
+            if let Some(symbol) = matching.next()
+                && matching.next().is_none()
+                && let Some(identity) = symbol
+                    .metadata
+                    .get("identity_discriminator")
+                    .and_then(|v| v.as_str())
+            {
+                relation.metadata["from_identity_discriminator"] = identity.into();
+            }
         }
     }
 
@@ -4144,6 +4303,26 @@ mod tests {
         plugin
             .extract_relations(Path::new(file), source, &symbols)
             .unwrap()
+    }
+
+    #[test]
+    fn lambda_identity_is_scoped_to_the_owning_overload() {
+        let symbols = symbols_of(
+            br#"class Library {
+            Runnable quote(int value) { return () -> intHelper(); }
+            Runnable quote(String value) { return () -> stringHelper(); }
+        }"#,
+            "Library.java",
+        );
+        let lambdas: Vec<_> = symbols
+            .iter()
+            .filter(|s| s.metadata["is_lambda"] == true)
+            .collect();
+        assert_eq!(lambdas.len(), 2);
+        assert_eq!(lambdas[0].name, "$lambda$0");
+        assert_eq!(lambdas[1].name, "$lambda$0");
+        assert_eq!(lambdas[0].metadata["identity_discriminator"], "(int)");
+        assert_eq!(lambdas[1].metadata["identity_discriminator"], "(String)");
     }
 
     #[test]
