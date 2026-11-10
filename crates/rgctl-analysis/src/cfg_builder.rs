@@ -357,7 +357,7 @@ impl ParsedSourceFile {
             || self.locations_by_name.contains_key(function_name)
     }
 
-    /// Build CFG for a named function using the cached parse tree (first match by name).
+    /// Build CFG for a uniquely named function using the cached parse tree.
     pub fn build_cfg(
         &self,
         language: &str,
@@ -747,23 +747,44 @@ fn find_function_by_name<'a>(
     if let Some(pos) = name.rfind("$lambda$")
         && let Ok(idx) = name[pos + "$lambda$".len()..].parse::<usize>()
     {
+        if language == "java" {
+            let mut stack = vec![node];
+            let mut count = 0;
+            while let Some(current) = stack.pop() {
+                if current.kind() == "lambda_expression" {
+                    count += 1;
+                }
+                let mut cursor = current.walk();
+                stack.extend(current.named_children(&mut cursor));
+            }
+            if count > 1 {
+                return None;
+            }
+        }
         return find_java_lambda_expression(node, idx);
     }
 
     let mut stack = vec![node];
+    let mut found = None;
     while let Some(node) = stack.pop() {
         if function_kinds.contains(&node.kind())
             && let Some(func_name) = callable_name_for_cfg(node, source, language)
             && func_name == name
         {
-            return Some(node);
+            if language != "java" {
+                return Some(node);
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some(node);
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             stack.push(child);
         }
     }
-    None
+    found
 }
 
 /// Nth direct `block` child of a Java `class_body` (instance initializer).
@@ -8978,5 +8999,16 @@ END;
             )
             .unwrap();
         assert!(branching.blocks.len() > straight.blocks.len());
+    }
+    #[test]
+    fn java_name_only_cfg_refuses_overloads() {
+        assert!(
+            build_cfg_for_function(
+                "java",
+                "class A { int quote(int x) {return x;} int quote(String x) {return 2;} }",
+                "quote"
+            )
+            .is_err()
+        );
     }
 }

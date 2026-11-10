@@ -528,31 +528,63 @@ pub fn ensure_cfg_pdg_for_source(opts: EnsureCfgPdgOpts<'_>) -> Result<CfgPdgRec
 
     let file_key = opts.file_path.unwrap_or("");
     let code_hash = hash_code(opts.source);
-    let function_id = opts
-        .function_id
-        .unwrap_or_else(|| stable_record_uuid(file_key, opts.function_name, &code_hash));
+    let java = opts.language == "java";
+    let mut prepared_cfg = if java && opts.function_id.is_none() && opts.start_byte.is_none() {
+        Some(build_cfg_for_function(
+            opts.language,
+            opts.source,
+            opts.function_name,
+        )?)
+    } else {
+        None
+    };
+    let function_id = opts.function_id.unwrap_or_else(|| {
+        if java {
+            stable_record_uuid(
+                file_key,
+                &format!(
+                    "{}:{:?}:{:?}",
+                    opts.function_name, opts.start_byte, opts.end_byte
+                ),
+                &code_hash,
+            )
+        } else {
+            stable_record_uuid(file_key, opts.function_name, &code_hash)
+        }
+    });
 
     let archive_path = CfgPdgArchive::default_path(opts.repo_root);
     if archive_path.is_file()
         && let Ok(view) = CfgPdgArchiveMmap::open(&archive_path)
     {
         if let Ok(Some(record)) = view.load_record(function_id) {
-            return Ok(record);
+            if !java || record.code_hash == code_hash {
+                return Ok(record);
+            }
         }
         // Discover `--with-cfg` keys by graph node Uuid; on-demand path uses a
         // stable content hash. Fall back to (file, name, hash) match.
-        if let Some(record) =
-            find_record_by_stable_key(&view, file_key, opts.function_name, &code_hash)
+        if !java
+            && let Some(record) =
+                find_record_by_stable_key(&view, file_key, opts.function_name, &code_hash)
         {
             return Ok(record);
         }
     }
 
-    let cfg = match (opts.start_byte, opts.end_byte) {
-        (Some(start), Some(end)) => {
-            build_cfg_for_byte_range(opts.language, opts.source, opts.function_name, start, end)?
+    let cfg = if let Some(cfg) = prepared_cfg.take() {
+        cfg
+    } else {
+        match (opts.start_byte, opts.end_byte) {
+            (Some(start), Some(end)) => build_cfg_for_byte_range(
+                opts.language,
+                opts.source,
+                opts.function_name,
+                start,
+                end,
+            )?,
+            _ => build_cfg_for_function(opts.language, opts.source, opts.function_name)?,
         }
-        _ => build_cfg_for_function(opts.language, opts.source, opts.function_name)?,
     };
     let pdg = ProgramDependenceGraph::build(&cfg, opts.source.as_bytes())?;
     let record = CfgPdgRecord {

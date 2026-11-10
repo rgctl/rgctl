@@ -511,6 +511,7 @@ fn process_file_group(
 fn sync_storage_function_ids(storage: &AnalysisStorage, functions: &[Node]) -> usize {
     let refs: Vec<FunctionIdSyncEntry<'_>> = functions
         .iter()
+        .filter(|func| func.identity_discriminator().is_none())
         .filter_map(|func| {
             Some(FunctionIdSyncEntry {
                 function_id: func.id,
@@ -658,6 +659,9 @@ fn try_remap_cached(
     code_hash: &str,
     cache: &CfgIncrementalCache,
 ) -> Option<CfgFunctionWork> {
+    if func_node.identity_discriminator().is_some() {
+        return None;
+    }
     let key = stable_function_key(file_path, &func_node.name, code_hash);
     let entry = cache.index.get(&key)?;
     if entry.code_hash != code_hash || entry.function_id == func_node.id {
@@ -957,7 +961,7 @@ fn try_full_incremental_shortcut(
         eligible += 1;
         let key = stable_function_key(file_path, &func.name, code_hash);
         let entry = cache.index.get(&key)?;
-        if *code_hash != entry.code_hash {
+        if *code_hash != entry.code_hash || entry.function_id != func.id {
             return None;
         }
         matched += 1;
@@ -978,4 +982,37 @@ fn try_full_incremental_shortcut(
         archive_unchanged: true,
         ..CfgAnalysisBatchResult::default()
     })
+}
+
+#[cfg(test)]
+mod overload_cache_tests {
+    use super::*;
+    #[test]
+    fn identical_name_and_body_cache_cannot_remap_another_overload() {
+        let first = Node::new(rgctl_graph::schema::NodeType::Function, "quote")
+            .with_file_path("Library.java")
+            .with_identity_discriminator("(int)")
+            .with_code_hash("same");
+        let second = Node::new(rgctl_graph::schema::NodeType::Function, "quote")
+            .with_file_path("Library.java")
+            .with_identity_discriminator("(String)")
+            .with_code_hash("same");
+        let key = stable_function_key("Library.java", "quote", "same");
+        let cache = CfgIncrementalCache {
+            index: std::collections::HashMap::from([(
+                key.clone(),
+                AnalysisIndexEntry {
+                    stable_key: key,
+                    function_id: first.id,
+                    code_hash: "same".into(),
+                    flow_count: 0,
+                    vulnerable_count: 0,
+                },
+            )]),
+        };
+        assert!(try_fast_cache_hit(&first, "Library.java", "same", &cache).is_some());
+        assert!(try_fast_cache_hit(&second, "Library.java", "same", &cache).is_none());
+        assert!(try_remap_cached(&second, "Library.java", "same", &cache).is_none());
+        assert!(try_full_incremental_shortcut(&[first, second], &cache).is_none());
+    }
 }
