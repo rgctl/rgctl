@@ -129,6 +129,7 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("while_statement", HandlerMask::CFG_STMT),
     ("yield_each_statement", HandlerMask::CFG_STMT),
     ("yield_statement", HandlerMask::CFG_STMT),
+    ("superclass", HandlerMask::RELATION),
 ];
 
 const DART_CALL_KINDS: &[&str] = &[
@@ -187,23 +188,29 @@ fn push_type_symbol(
         Some(o) => format!("{o}.{name}"),
         None => name.clone(),
     };
-    ctx.symbols.push(Symbol {
-        name: name.clone(),
-        symbol_type,
-        qualified_name: Some(qn.clone()),
-        location: node_to_location(node, file_path),
-        signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-        return_type: None,
-        parameters: vec![],
-        fields: vec![],
-        modifiers: vec![],
-        documentation: None,
-        metadata: serde_json::json!({
-            "language": "dart",
-            "kind": kind_meta,
-        }),
-        ..Default::default()
-    });
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            Symbol {
+                name: name.clone(),
+                symbol_type,
+                qualified_name: Some(qn.clone()),
+                location: node_to_location(node, file_path),
+                signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+                return_type: None,
+                parameters: vec![],
+                fields: vec![],
+                modifiers: vec![],
+                documentation: None,
+                metadata: serde_json::json!({
+                    "language": "dart",
+                    "kind": kind_meta,
+                }),
+                ..Default::default()
+            },
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Dart,
+        ));
     ctx.enter_scope(
         scope_kind,
         Some(name),
@@ -232,23 +239,29 @@ fn push_function(
         None => name.clone(),
     };
     let loc = ((node.end_position().row - node.start_position().row) + 1).max(1) as u32;
-    ctx.symbols.push(Symbol {
-        name: name.clone(),
-        symbol_type: SymbolType::Function,
-        qualified_name: Some(qn.clone()),
-        location: node_to_location(node, file_path),
-        signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-        return_type: None,
-        parameters: vec![],
-        fields: vec![],
-        modifiers: vec![],
-        documentation: None,
-        metadata: serde_json::json!({
-            "language": "dart",
-            "kind": kind_meta,
-        }),
-        ..Default::default()
-    });
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            Symbol {
+                name: name.clone(),
+                symbol_type: SymbolType::Function,
+                qualified_name: Some(qn.clone()),
+                location: node_to_location(node, file_path),
+                signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+                return_type: None,
+                parameters: vec![],
+                fields: vec![],
+                modifiers: vec![],
+                documentation: None,
+                metadata: serde_json::json!({
+                    "language": "dart",
+                    "kind": kind_meta,
+                }),
+                ..Default::default()
+            },
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Dart,
+        ));
     ctx.enter_scope(
         ScopeKind::Function,
         Some(name),
@@ -342,6 +355,22 @@ pub fn extract_all_single_pass(
                 let mut pushed_scope = false;
 
                 match kind {
+                    "superclass" => {
+                        if let (Some(owner), Some(parent)) =
+                            (ctx.scopes.current_type(), node.child_by_field_name("type"))
+                        {
+                            let parent = parent.utf8_text(source)?.to_string();
+                            relations.push(Relation {
+                                from: owner.qualified_prefix.clone(),
+                                to: rgctl_plugin_helpers::simple_type_name(&parent),
+                                relation_type: RelationType::Extends,
+                                location: node_to_location(node, &file_path_str),
+                                metadata: serde_json::json!({"language":"dart"}),
+                                to_qualified_hint: Some(parent),
+                                to_type_hint: None,
+                            });
+                        }
+                    }
                     "class_declaration" => {
                         pushed_scope = push_type_symbol(
                             &mut ctx,
@@ -658,6 +687,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -670,7 +700,20 @@ pub fn extract_all_single_pass(
             "dart",
             &mut relations,
         );
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Dart,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Dart,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

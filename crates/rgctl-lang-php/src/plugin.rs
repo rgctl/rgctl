@@ -234,6 +234,12 @@ impl PhpPlugin {
             node,
             node.child_by_field_name("name"),
         );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Php,
+        );
         Ok(Some(symbol))
     }
 
@@ -297,6 +303,12 @@ impl PhpPlugin {
             node,
             node.child_by_field_name("name"),
         );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Php,
+        );
         Ok(Some(symbol))
     }
 
@@ -333,6 +345,12 @@ impl PhpPlugin {
             ..Default::default()
         };
         rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, None);
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Php,
+        );
         Ok(Some(symbol))
     }
 

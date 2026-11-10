@@ -465,6 +465,7 @@ pub fn extract_all_single_pass(
 
     // Flush calls with the complete symbol list (forward-reference safe).
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -477,12 +478,25 @@ pub fn extract_all_single_pass(
             "rust",
             &mut relations,
         );
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Rust,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
 
     rgctl_plugin_helpers::apply_framework_catalog(
         "rust",
         source,
         Some(root),
+        &mut ctx.symbols,
+        &mut relations,
+    );
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Rust,
         &mut ctx.symbols,
         &mut relations,
     );

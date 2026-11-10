@@ -130,6 +130,12 @@ impl GoPlugin {
             node,
             node.child_by_field_name("name"),
         );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Go,
+        );
         Ok(symbol)
     }
 
@@ -459,6 +465,12 @@ impl GoPlugin {
                         &mut symbol,
                         child,
                         child.child_by_field_name("name"),
+                    );
+                    symbol = rgctl_plugin_helpers::callable_identity::symbol(
+                        symbol,
+                        interface_type,
+                        source,
+                        rgctl_plugin_helpers::callable_identity::Policy::Go,
                     );
                     methods.push(symbol);
                 }

@@ -369,6 +369,12 @@ impl KotlinPlugin {
             ctor_node,
             ctor_node.child_by_field_name("name"),
         );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            ctor_node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Kotlin,
+        );
         symbols.push(symbol);
         // Attach primary-ctor fields onto the class symbol if we already emitted it —
         // handled when emitting the class by merging class_parameters.
@@ -445,6 +451,12 @@ impl KotlinPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Kotlin,
+        );
         symbols.push(symbol);
 
         let mut c2 = node.walk();
@@ -513,6 +525,12 @@ impl KotlinPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Kotlin,
+        );
         Some(symbol)
     }
 
@@ -556,6 +574,12 @@ impl KotlinPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Kotlin,
+        );
         Some(symbol)
     }
 
@@ -633,6 +657,12 @@ impl KotlinPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Kotlin,
+        );
         Some(symbol)
     }
 

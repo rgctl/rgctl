@@ -153,6 +153,12 @@ impl CSharpPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, Some(name_node));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Csharp,
+        );
         Ok(symbol)
     }
 
@@ -197,6 +203,12 @@ impl CSharpPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Csharp,
+        );
         Ok(symbol)
     }
 
@@ -232,6 +244,12 @@ impl CSharpPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Csharp,
+        );
         Ok(symbol)
     }
 
@@ -324,6 +342,12 @@ impl CSharpPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Csharp,
+        );
         Ok(symbol)
     }
 
@@ -528,6 +552,12 @@ impl CSharpPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Csharp,
+        );
         Ok(symbol)
     }
 

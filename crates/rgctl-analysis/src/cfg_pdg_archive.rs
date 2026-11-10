@@ -528,8 +528,7 @@ pub fn ensure_cfg_pdg_for_source(opts: EnsureCfgPdgOpts<'_>) -> Result<CfgPdgRec
 
     let file_key = opts.file_path.unwrap_or("");
     let code_hash = hash_code(opts.source);
-    let java = opts.language == "java";
-    let mut prepared_cfg = if java && opts.function_id.is_none() && opts.start_byte.is_none() {
+    let mut prepared_cfg = if opts.function_id.is_none() && opts.start_byte.is_none() {
         Some(build_cfg_for_function(
             opts.language,
             opts.source,
@@ -539,18 +538,14 @@ pub fn ensure_cfg_pdg_for_source(opts: EnsureCfgPdgOpts<'_>) -> Result<CfgPdgRec
         None
     };
     let function_id = opts.function_id.unwrap_or_else(|| {
-        if java {
-            stable_record_uuid(
-                file_key,
-                &format!(
-                    "{}:{:?}:{:?}",
-                    opts.function_name, opts.start_byte, opts.end_byte
-                ),
-                &code_hash,
-            )
-        } else {
-            stable_record_uuid(file_key, opts.function_name, &code_hash)
-        }
+        stable_record_uuid(
+            file_key,
+            &format!(
+                "{}:{:?}:{:?}",
+                opts.function_name, opts.start_byte, opts.end_byte
+            ),
+            &code_hash,
+        )
     });
 
     let archive_path = CfgPdgArchive::default_path(opts.repo_root);
@@ -558,13 +553,14 @@ pub fn ensure_cfg_pdg_for_source(opts: EnsureCfgPdgOpts<'_>) -> Result<CfgPdgRec
         && let Ok(view) = CfgPdgArchiveMmap::open(&archive_path)
     {
         if let Ok(Some(record)) = view.load_record(function_id) {
-            if !java || record.code_hash == code_hash {
+            if record.code_hash == code_hash {
                 return Ok(record);
             }
         }
         // Discover `--with-cfg` keys by graph node Uuid; on-demand path uses a
         // stable content hash. Fall back to (file, name, hash) match.
-        if !java
+        if opts.function_id.is_none()
+            && opts.start_byte.is_none()
             && let Some(record) =
                 find_record_by_stable_key(&view, file_key, opts.function_name, &code_hash)
         {

@@ -221,7 +221,8 @@ pub(crate) fn run_full_analysis(
     // Lever 1: write columnar from GraphBuilder Vecs — never build MemoryBackend for discover.
     let index_start = Instant::now();
     let lossless_ready = !lossless || rgctl_graph::open_lossless_sidecars(store).is_ok();
-    let graph_from_snapshot = !force_reindex
+    let graph_from_snapshot = rgctl_extraction::callable_resolution::semantics_current(store)
+        && !force_reindex
         && file_changes.is_empty()
         && snapshot_path.is_file()
         && lossless_ready

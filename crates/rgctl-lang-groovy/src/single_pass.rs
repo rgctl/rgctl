@@ -237,6 +237,12 @@ pub fn extract_all_single_pass(
                                 node,
                                 node.child_by_field_name("name"),
                             );
+                            symbol = rgctl_plugin_helpers::callable_identity::symbol(
+                                symbol,
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+                            );
                             ctx.symbols.push(symbol);
                             ctx.enter_scope(
                                 scope_kind,
@@ -479,6 +485,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -491,10 +498,23 @@ pub fn extract_all_single_pass(
             "groovy",
             &mut relations,
         );
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
 
     // Extends / implements / AnnotatedWith / field_access / array / class_literal / module.
     plugin.append_type_and_annotation_relations(root, source, file_path, &mut relations)?;
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

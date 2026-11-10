@@ -78,23 +78,30 @@ fn push_function_symbol(
     node: Node,
     name: String,
     file_path: &str,
+    source: &[u8],
 ) -> bool {
     let loc = ((node.end_position().row - node.start_position().row) + 1).max(1) as u32;
     let qn = name.clone();
-    ctx.symbols.push(Symbol {
-        name: name.clone(),
-        symbol_type: SymbolType::Function,
-        qualified_name: Some(qn.clone()),
-        location: node_to_location(node, file_path),
-        signature: None,
-        return_type: None,
-        parameters: vec![],
-        fields: vec![],
-        modifiers: vec![],
-        documentation: None,
-        metadata: serde_json::json!({ "language": "lua" }),
-        ..Default::default()
-    });
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            Symbol {
+                name: name.clone(),
+                symbol_type: SymbolType::Function,
+                qualified_name: Some(qn.clone()),
+                location: node_to_location(node, file_path),
+                signature: None,
+                return_type: None,
+                parameters: vec![],
+                fields: vec![],
+                modifiers: vec![],
+                documentation: None,
+                metadata: serde_json::json!({ "language": "lua" }),
+                ..Default::default()
+            },
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Lua,
+        ));
     ctx.enter_scope(
         ScopeKind::Function,
         Some(name),
@@ -234,13 +241,13 @@ pub fn extract_all_single_pass(
                     "function_declaration" => {
                         if let Some(name) = lua_function_decl_name(node, source) {
                             pushed_scope =
-                                push_function_symbol(&mut ctx, node, name, &file_path_str);
+                                push_function_symbol(&mut ctx, node, name, &file_path_str, source);
                         }
                     }
                     "assignment_statement" => {
                         if let Some(name) = assignment_function_name(node, source) {
                             pushed_scope =
-                                push_function_symbol(&mut ctx, node, name, &file_path_str);
+                                push_function_symbol(&mut ctx, node, name, &file_path_str, source);
                         }
                     }
                     "function_definition" => {
@@ -308,6 +315,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -320,7 +328,20 @@ pub fn extract_all_single_pass(
             "lua",
             &mut relations,
         );
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Lua,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Lua,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

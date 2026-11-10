@@ -92,6 +92,12 @@ impl CPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, function_name_node(node));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::C,
+        );
         Ok(Some(symbol))
     }
 

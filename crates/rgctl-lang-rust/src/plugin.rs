@@ -158,6 +158,12 @@ impl RustPlugin {
             node,
             node.child_by_field_name("name"),
         );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Rust,
+        );
         Ok(symbol)
     }
 

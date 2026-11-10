@@ -81,6 +81,10 @@ pub struct GraphBuilder {
     mro_cache: HashMap<String, Vec<String>>,
     /// Unresolved / external-stub relations parked for cross-repo merge.
     parked_relations: Vec<ParkedRelationRecord>,
+    declaration_ids: FxHashSet<Uuid>,
+    callable_parameters: HashMap<Uuid, String>,
+    unresolved_calls: usize,
+    callable_resolution_samples: Vec<Relation>,
     /// `file_path → (imported_symbol_or_alias → module_source_path)` from Import symbols.
     file_imports_index: FxHashMap<String, FxHashMap<String, String>>,
     /// External stub node UUIDs (`O(1)` membership test in `park_relation_if_needed`).
@@ -571,6 +575,18 @@ impl GraphBuilder {
             node = node.with_identity_discriminator(discriminator);
         }
         let id = node.id;
+        if symbol.metadata["callable_role"] == "declaration" {
+            self.declaration_ids.insert(id);
+        }
+        if symbol.metadata["callable_role"] == "implementation"
+            && symbol.metadata["superseded_definition"] != true
+            && let Some(parameters) = symbol
+                .metadata
+                .get("parameter_identity")
+                .and_then(|v| v.as_str())
+        {
+            self.callable_parameters.insert(id, parameters.to_owned());
+        }
         self.symbol_index.insert(key.clone(), id);
         self.symbol_files.insert(id, symbol.location.file.clone());
         self.index_symbol_resolution(&key, &node);
@@ -826,7 +842,9 @@ impl GraphBuilder {
             if unique_resolved(ids).is_some() {
                 continue;
             }
-            if let Some(id) = single_c_preferred_impl(ids, &self.symbol_files) {
+            if let Some(id) =
+                single_c_preferred_impl(ids, &self.symbol_files, &self.declaration_ids)
+            {
                 self.c_preferred_impl.insert(suffix.clone(), id);
             }
         }
@@ -860,11 +878,63 @@ impl GraphBuilder {
         file: &str,
         discriminator: &str,
     ) -> Option<Uuid> {
-        let key = format!("{file}::{name}\u{1f}{discriminator}");
+        let key = if discriminator.is_empty() {
+            format!("{file}::{name}")
+        } else {
+            format!("{file}::{name}\u{1f}{discriminator}")
+        };
         self.symbol_index.get(&key).copied().or_else(|| {
             self.symbols_by_suffix
                 .get(&key[file.len() + 2..])
                 .and_then(|ids| unique_resolved(ids))
+        })
+    }
+
+    // Argument tuples are evidence, not canonical identities: qualifiers,
+    // generic arity and implementation roles may distinguish the same tuple.
+    fn resolve_argument_identity(
+        &self,
+        name: &str,
+        file: &str,
+        arguments: &str,
+    ) -> Option<Option<Uuid>> {
+        let candidates = self
+            .symbols_by_qualified
+            .get(name)
+            .or_else(|| self.symbols_by_suffix.get(name))?;
+        let mut known = false;
+        let mut global = None;
+        let mut local = None;
+        let mut global_ambiguous = false;
+        let mut local_ambiguous = false;
+        for id in candidates {
+            if let Some(parameters) = self.callable_parameters.get(id) {
+                known = true;
+                if parameters != arguments {
+                    continue;
+                }
+                if global.is_some_and(|old| old != *id) {
+                    global_ambiguous = true;
+                } else {
+                    global = Some(*id);
+                }
+                if self.symbol_files.get(id).is_some_and(|path| path == file) {
+                    if local.is_some_and(|old| old != *id) {
+                        local_ambiguous = true;
+                    } else {
+                        local = Some(*id);
+                    }
+                }
+            }
+        }
+        known.then_some(if local_ambiguous {
+            None
+        } else if local.is_some() {
+            local
+        } else if global_ambiguous {
+            None
+        } else {
+            global
         })
     }
 
@@ -887,7 +957,8 @@ impl GraphBuilder {
         {
             let can_resolve = self.symbols_by_suffix.get(&relation.to).is_some_and(|ids| {
                 unique_resolved(ids).is_some()
-                    || single_c_preferred_impl(ids, &self.symbol_files).is_some()
+                    || single_c_preferred_impl(ids, &self.symbol_files, &self.declaration_ids)
+                        .is_some()
             });
             if !can_resolve {
                 let mut from_id = self.resolve_symbol_tracked(
@@ -950,11 +1021,28 @@ impl GraphBuilder {
             .metadata
             .get("argument_identity_discriminator")
             .and_then(|v| v.as_str());
-        let exact_to = explicit_to.or(argument_to);
-        let exact_id = exact_to.and_then(|identity| {
+        let unresolved_generic =
+            relation.metadata.get("explicit_generic_arity").is_some() && explicit_to.is_none();
+        let exact_id = if unresolved_generic {
+            None
+        } else if let Some(identity) = explicit_to {
             self.resolve_callable_identity(target, &relation.location.file, identity)
-        });
-        let ambiguous_java = java_call
+        } else if let Some(arguments) = argument_to {
+            self.resolve_argument_identity(target, &relation.location.file, arguments)
+                .unwrap_or_else(|| {
+                    self.resolve_callable_identity(target, &relation.location.file, arguments)
+                })
+        } else {
+            None
+        };
+        let signature_call = java_call
+            || relation.relation_type == RelationType::Calls
+                && relation
+                    .metadata
+                    .get("exact_callable_resolution")
+                    .and_then(|v| v.as_bool())
+                    == Some(true);
+        let ambiguous_java = signature_call
             && self
                 .symbols_by_qualified
                 .get(target)
@@ -962,7 +1050,8 @@ impl GraphBuilder {
                 .is_some_and(|ids| unique_resolved(ids).is_none());
         let mut to_id = if exact_id.is_some() {
             exact_id
-        } else if explicit_to.is_some() || ambiguous_java {
+        } else if explicit_to.is_some() || ambiguous_java || signature_call && argument_to.is_some()
+        {
             None
         } else {
             self.resolve_symbol_tracked(
@@ -1029,6 +1118,16 @@ impl GraphBuilder {
                     .clone()
                     .or_else(|| relation.to_qualified_hint.clone()),
             );
+        }
+
+        if signature_call && (from_id.is_none() || to_id.is_none()) {
+            self.unresolved_calls += 1;
+            if self.callable_resolution_samples.len() < crate::callable_resolution::DIAGNOSTIC_LIMIT
+            {
+                let mut sample = relation.clone();
+                sample.metadata["resolution_reason"]="No unique canonical callable matched the available source evidence; no name-only overload fallback was applied".into();
+                self.callable_resolution_samples.push(sample);
+            }
         }
 
         if let (Some(from), Some(to)) = (from_id, to_id) {
@@ -1472,6 +1571,27 @@ impl GraphBuilder {
         let import_module_hint =
             self.lookup_import_module_hint(file_path, &relation.to, to_type_hint.as_deref());
 
+        let identity = relation
+            .metadata
+            .get("to_identity_discriminator")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+            .or_else(|| {
+                relation
+                    .metadata
+                    .get("argument_identity_discriminator")
+                    .and_then(|v| v.as_str())
+                    .map(|arguments| format!("args:{arguments}"))
+            });
+        let to_qualified_hint = identity
+            .map(|identity| {
+                format!(
+                    "{}\u{1f}{identity}",
+                    to_qualified_hint.as_deref().unwrap_or(&relation.to)
+                )
+            })
+            .or(to_qualified_hint);
+
         self.parked_relations.push(ParkedRelationRecord {
             from_node_id: from_id,
             from_qualified_name: relation.from.clone(),
@@ -1520,7 +1640,36 @@ impl GraphBuilder {
         by_file.get("*").cloned()
     }
 
-    /// Drain parked relations accumulated during graph build.
+    /// Bounded diagnostic evidence for missing or ambiguous canonical calls.
+    pub fn take_callable_resolution_report(
+        &mut self,
+    ) -> crate::callable_resolution::CallableResolutionReport {
+        let unresolved_calls = std::mem::take(&mut self.unresolved_calls);
+        let mut samples = std::mem::take(&mut self.callable_resolution_samples);
+        samples.sort_by(|a, b| {
+            (
+                &a.location.file,
+                a.location.start_line,
+                a.location.start_column,
+                &a.from,
+                &a.to,
+            )
+                .cmp(&(
+                    &b.location.file,
+                    b.location.start_line,
+                    b.location.start_column,
+                    &b.from,
+                    &b.to,
+                ))
+        });
+        crate::callable_resolution::CallableResolutionReport {
+            schema_version: 1,
+            unresolved_calls,
+            samples_truncated: unresolved_calls > samples.len(),
+            samples,
+        }
+    }
+
     pub fn take_parked_relations(&mut self) -> Vec<ParkedRelationRecord> {
         std::mem::take(&mut self.parked_relations)
     }
@@ -1810,8 +1959,9 @@ impl GraphBuilder {
                 Some(*id)
             } else {
                 let resolved = self.symbols_by_suffix.get(name).and_then(|ids| {
-                    unique_resolved(ids)
-                        .or_else(|| single_c_preferred_impl(ids, &self.symbol_files))
+                    unique_resolved(ids).or_else(|| {
+                        single_c_preferred_impl(ids, &self.symbol_files, &self.declaration_ids)
+                    })
                 });
                 if let Some(id) = resolved {
                     self.suffix_resolve_cache.insert(name.to_string(), id);
@@ -2032,12 +2182,17 @@ fn unique_method_id(ms: &[(String, Uuid)], method: &str) -> Option<Uuid> {
 }
 
 /// When a C symbol appears in both `.h` and `.c`, prefer the sole `.c` definition.
-fn single_c_preferred_impl(ids: &[Uuid], symbol_files: &HashMap<Uuid, String>) -> Option<Uuid> {
+fn single_c_preferred_impl(
+    ids: &[Uuid],
+    symbol_files: &HashMap<Uuid, String>,
+    declarations: &FxHashSet<Uuid>,
+) -> Option<Uuid> {
     let mut c_impl = None;
     for id in ids {
-        if symbol_files
-            .get(id)
-            .is_some_and(|path| path.ends_with(".c"))
+        if !declarations.contains(id)
+            && symbol_files
+                .get(id)
+                .is_some_and(|path| path.ends_with(".c"))
         {
             if c_impl.is_some() {
                 return None;

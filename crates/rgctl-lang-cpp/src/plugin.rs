@@ -73,6 +73,12 @@ impl CppPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, function_name_node(node));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Cpp,
+        );
         Ok(Some(symbol))
     }
 
@@ -113,6 +119,12 @@ impl CppPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Cpp,
+        );
         Ok(symbol)
     }
 

@@ -1,5 +1,6 @@
 //! Code discovery and extraction
 
+pub mod callable_resolution;
 pub mod discovery;
 
 pub mod extractor;

@@ -89,6 +89,14 @@ fn def_function_name(node: Node, source: &[u8]) -> Option<String> {
     let mut c = args.walk();
     for ch in args.children(&mut c) {
         match ch.kind() {
+            "binary_operator" => {
+                if let Some(head) = ch
+                    .child_by_field_name("left")
+                    .and_then(|n| call_head(n, source))
+                {
+                    return Some(head.to_owned());
+                }
+            }
             "call" => {
                 if let Some(head) = call_head(ch, source) {
                     return Some(head.to_string());
@@ -242,26 +250,32 @@ pub fn extract_all_single_pass(
                                 let loc = ((node.end_position().row - node.start_position().row)
                                     + 1)
                                 .max(1) as u32;
-                                ctx.symbols.push(Symbol {
-                                    name: name.clone(),
-                                    symbol_type: SymbolType::Function,
-                                    qualified_name: Some(qn.clone()),
-                                    location: node_to_location(node, &file_path_str),
-                                    signature: node
-                                        .utf8_text(source)
-                                        .ok()
-                                        .map(|s| s.trim().to_string()),
-                                    return_type: None,
-                                    parameters: vec![],
-                                    fields: vec![],
-                                    modifiers: vec![],
-                                    documentation: None,
-                                    metadata: serde_json::json!({
-                                        "language": "elixir",
-                                        "kind": head,
-                                    }),
-                                    ..Default::default()
-                                });
+                                ctx.symbols
+                                    .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                        Symbol {
+                                            name: name.clone(),
+                                            symbol_type: SymbolType::Function,
+                                            qualified_name: Some(qn.clone()),
+                                            location: node_to_location(node, &file_path_str),
+                                            signature: node
+                                                .utf8_text(source)
+                                                .ok()
+                                                .map(|s| s.trim().to_string()),
+                                            return_type: None,
+                                            parameters: vec![],
+                                            fields: vec![],
+                                            modifiers: vec![],
+                                            documentation: None,
+                                            metadata: serde_json::json!({
+                                                "language": "elixir",
+                                                "kind": head,
+                                            }),
+                                            ..Default::default()
+                                        },
+                                        node,
+                                        source,
+                                        rgctl_plugin_helpers::callable_identity::Policy::Elixir,
+                                    ));
                                 ctx.enter_scope(
                                     ScopeKind::Function,
                                     Some(name),
@@ -336,23 +350,29 @@ pub fn extract_all_single_pass(
                         let qn = name.clone();
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
-                        ctx.symbols.push(Symbol {
-                            name: name.clone(),
-                            symbol_type: SymbolType::Function,
-                            qualified_name: Some(qn.clone()),
-                            location: node_to_location(node, &file_path_str),
-                            signature: None,
-                            return_type: None,
-                            parameters: vec![],
-                            fields: vec![],
-                            modifiers: vec![],
-                            documentation: None,
-                            metadata: serde_json::json!({
-                                "language": "elixir",
-                                "kind": "anonymous_function",
-                            }),
-                            ..Default::default()
-                        });
+                        ctx.symbols
+                            .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                Symbol {
+                                    name: name.clone(),
+                                    symbol_type: SymbolType::Function,
+                                    qualified_name: Some(qn.clone()),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: None,
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "elixir",
+                                        "kind": "anonymous_function",
+                                    }),
+                                    ..Default::default()
+                                },
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Elixir,
+                            ));
                         ctx.enter_scope(
                             ScopeKind::Lambda,
                             Some(name),
@@ -479,6 +499,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -509,7 +530,20 @@ pub fn extract_all_single_pass(
             to_type_hint: None,
             ..Default::default()
         });
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Elixir,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Elixir,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

@@ -137,24 +137,31 @@ fn push_named_symbol(
     symbol_type: SymbolType,
     file_path: &str,
     kind_label: &str,
+    source: &[u8],
 ) {
-    ctx.symbols.push(Symbol {
-        name: name.clone(),
-        symbol_type,
-        qualified_name: Some(name),
-        location: node_to_location(node, file_path),
-        signature: None,
-        return_type: None,
-        parameters: vec![],
-        fields: vec![],
-        modifiers: vec![],
-        documentation: None,
-        metadata: serde_json::json!({
-            "language": "sql",
-            "kind": kind_label,
-        }),
-        ..Default::default()
-    });
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            Symbol {
+                name: name.clone(),
+                symbol_type,
+                qualified_name: Some(name),
+                location: node_to_location(node, file_path),
+                signature: None,
+                return_type: None,
+                parameters: vec![],
+                fields: vec![],
+                modifiers: vec![],
+                documentation: None,
+                metadata: serde_json::json!({
+                    "language": "sql",
+                    "kind": kind_label,
+                }),
+                ..Default::default()
+            },
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Sql,
+        ));
 }
 
 fn symbol_type_for_ddl(kind: &str) -> SymbolType {
@@ -353,6 +360,7 @@ pub fn extract_all_single_pass(
                                 symbol_type_for_ddl(kind),
                                 &file_path_str,
                                 kind,
+                                source,
                             );
                         }
                     }
@@ -368,6 +376,7 @@ pub fn extract_all_single_pass(
                                 SymbolType::Function,
                                 &file_path_str,
                                 "create_function",
+                                source,
                             );
                             ctx.enter_scope(
                                 ScopeKind::Function,
@@ -452,6 +461,12 @@ pub fn extract_all_single_pass(
             }
         }
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Sql,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

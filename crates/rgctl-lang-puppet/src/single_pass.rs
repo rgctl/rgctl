@@ -206,5 +206,11 @@ pub fn extract_all_single_pass(
     }
 
     plugin.maybe_module_from_metadata(file_path, &mut ctx.symbols, &mut relations);
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Puppet,
+        &mut ctx.symbols,
+        &mut relations,
+    );
+
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

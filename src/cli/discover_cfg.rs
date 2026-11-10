@@ -511,7 +511,13 @@ fn process_file_group(
 fn sync_storage_function_ids(storage: &AnalysisStorage, functions: &[Node]) -> usize {
     let refs: Vec<FunctionIdSyncEntry<'_>> = functions
         .iter()
-        .filter(|func| func.identity_discriminator().is_none())
+        .filter(|func| {
+            func.identity_discriminator().is_none()
+                && func
+                    .qualified_name
+                    .as_deref()
+                    .is_none_or(|name| name == func.name.as_str())
+        })
         .filter_map(|func| {
             Some(FunctionIdSyncEntry {
                 function_id: func.id,
@@ -659,7 +665,12 @@ fn try_remap_cached(
     code_hash: &str,
     cache: &CfgIncrementalCache,
 ) -> Option<CfgFunctionWork> {
-    if func_node.identity_discriminator().is_some() {
+    if func_node.identity_discriminator().is_some()
+        || func_node
+            .qualified_name
+            .as_deref()
+            .is_some_and(|name| name != func_node.name.as_str())
+    {
         return None;
     }
     let key = stable_function_key(file_path, &func_node.name, code_hash);

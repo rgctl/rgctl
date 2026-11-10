@@ -1,5 +1,6 @@
 //! Generic extraction helpers for language plugins
 
+pub mod callable_identity;
 pub mod complexity;
 pub mod ecmascript;
 pub mod framework;

@@ -537,6 +537,22 @@ fn symbol_body_from_source<'a>(
     line_offsets: &[usize],
     symbol: &Symbol,
 ) -> Option<&'a str> {
+    if let (Some(start), Some(end)) = (
+        symbol
+            .metadata
+            .get("source_start_byte")
+            .and_then(|v| v.as_u64()),
+        symbol
+            .metadata
+            .get("source_end_byte")
+            .and_then(|v| v.as_u64()),
+    ) {
+        return std::str::from_utf8(
+            source.get(usize::try_from(start).ok()?..usize::try_from(end).ok()?)?,
+        )
+        .ok()
+        .filter(|body| !body.is_empty());
+    }
     let start = symbol.location.start_line.saturating_sub(1);
     let end_line = symbol.location.end_line.max(symbol.location.start_line);
     if start >= line_offsets.len() {

@@ -143,23 +143,29 @@ fn push_type_symbol(
         Some(o) => format!("{o}.{name}"),
         None => name.clone(),
     };
-    ctx.symbols.push(Symbol {
-        name: name.clone(),
-        symbol_type,
-        qualified_name: Some(qn.clone()),
-        location: node_to_location(node, file_path),
-        signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-        return_type: None,
-        parameters: vec![],
-        fields: vec![],
-        modifiers: vec![],
-        documentation: None,
-        metadata: serde_json::json!({
-            "language": "scala",
-            "kind": kind_meta,
-        }),
-        ..Default::default()
-    });
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            Symbol {
+                name: name.clone(),
+                symbol_type,
+                qualified_name: Some(qn.clone()),
+                location: node_to_location(node, file_path),
+                signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+                return_type: None,
+                parameters: vec![],
+                fields: vec![],
+                modifiers: vec![],
+                documentation: None,
+                metadata: serde_json::json!({
+                    "language": "scala",
+                    "kind": kind_meta,
+                }),
+                ..Default::default()
+            },
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Scala,
+        ));
     ctx.enter_scope(
         scope_kind,
         Some(name),
@@ -190,23 +196,29 @@ fn push_named_symbol(
         Some(o) => format!("{o}.{name}"),
         None => name.clone(),
     };
-    ctx.symbols.push(Symbol {
-        name,
-        symbol_type,
-        qualified_name: Some(qn),
-        location: node_to_location(node, file_path),
-        signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-        return_type: None,
-        parameters: vec![],
-        fields: vec![],
-        modifiers: vec![],
-        documentation: None,
-        metadata: serde_json::json!({
-            "language": "scala",
-            "kind": kind_meta,
-        }),
-        ..Default::default()
-    });
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            Symbol {
+                name,
+                symbol_type,
+                qualified_name: Some(qn),
+                location: node_to_location(node, file_path),
+                signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+                return_type: None,
+                parameters: vec![],
+                fields: vec![],
+                modifiers: vec![],
+                documentation: None,
+                metadata: serde_json::json!({
+                    "language": "scala",
+                    "kind": kind_meta,
+                }),
+                ..Default::default()
+            },
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Scala,
+        ));
 }
 
 /// Single iterative DFS: symbols + deferred calls + complexity.
@@ -338,26 +350,32 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            ctx.symbols.push(Symbol {
-                                name: name.clone(),
-                                symbol_type: SymbolType::Function,
-                                qualified_name: Some(qn.clone()),
-                                location: node_to_location(node, &file_path_str),
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.trim().to_string()),
-                                return_type: None,
-                                parameters: vec![],
-                                fields: vec![],
-                                modifiers: vec![],
-                                documentation: None,
-                                metadata: serde_json::json!({
-                                    "language": "scala",
-                                    "kind": "given",
-                                }),
-                                ..Default::default()
-                            });
+                            ctx.symbols
+                                .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                    Symbol {
+                                        name: name.clone(),
+                                        symbol_type: SymbolType::Function,
+                                        qualified_name: Some(qn.clone()),
+                                        location: node_to_location(node, &file_path_str),
+                                        signature: node
+                                            .utf8_text(source)
+                                            .ok()
+                                            .map(|s| s.trim().to_string()),
+                                        return_type: None,
+                                        parameters: vec![],
+                                        fields: vec![],
+                                        modifiers: vec![],
+                                        documentation: None,
+                                        metadata: serde_json::json!({
+                                            "language": "scala",
+                                            "kind": "given",
+                                        }),
+                                        ..Default::default()
+                                    },
+                                    node,
+                                    source,
+                                    rgctl_plugin_helpers::callable_identity::Policy::Scala,
+                                ));
                             ctx.enter_scope(
                                 ScopeKind::Function,
                                 Some(name),
@@ -371,26 +389,32 @@ pub fn extract_all_single_pass(
                             // Anonymous given — still enter a function-like scope for calls.
                             let name = format!("given${}", ctx.symbols.len());
                             let qn = name.clone();
-                            ctx.symbols.push(Symbol {
-                                name: name.clone(),
-                                symbol_type: SymbolType::Function,
-                                qualified_name: Some(qn.clone()),
-                                location: node_to_location(node, &file_path_str),
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.trim().to_string()),
-                                return_type: None,
-                                parameters: vec![],
-                                fields: vec![],
-                                modifiers: vec![],
-                                documentation: None,
-                                metadata: serde_json::json!({
-                                    "language": "scala",
-                                    "kind": "given",
-                                }),
-                                ..Default::default()
-                            });
+                            ctx.symbols
+                                .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                    Symbol {
+                                        name: name.clone(),
+                                        symbol_type: SymbolType::Function,
+                                        qualified_name: Some(qn.clone()),
+                                        location: node_to_location(node, &file_path_str),
+                                        signature: node
+                                            .utf8_text(source)
+                                            .ok()
+                                            .map(|s| s.trim().to_string()),
+                                        return_type: None,
+                                        parameters: vec![],
+                                        fields: vec![],
+                                        modifiers: vec![],
+                                        documentation: None,
+                                        metadata: serde_json::json!({
+                                            "language": "scala",
+                                            "kind": "given",
+                                        }),
+                                        ..Default::default()
+                                    },
+                                    node,
+                                    source,
+                                    rgctl_plugin_helpers::callable_identity::Policy::Scala,
+                                ));
                             ctx.enter_scope(
                                 ScopeKind::Function,
                                 Some(name),
@@ -424,30 +448,36 @@ pub fn extract_all_single_pass(
                             };
                             let loc = ((node.end_position().row - node.start_position().row) + 1)
                                 .max(1) as u32;
-                            ctx.symbols.push(Symbol {
-                                name: name.clone(),
-                                symbol_type: SymbolType::Function,
-                                qualified_name: Some(qn.clone()),
-                                location: node_to_location(node, &file_path_str),
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.trim().to_string()),
-                                return_type: None,
-                                parameters: vec![],
-                                fields: vec![],
-                                modifiers: vec![],
-                                documentation: None,
-                                metadata: serde_json::json!({
-                                    "language": "scala",
-                                    "kind": if kind == "function_declaration" {
-                                        "function_decl"
-                                    } else {
-                                        "function"
+                            ctx.symbols
+                                .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                    Symbol {
+                                        name: name.clone(),
+                                        symbol_type: SymbolType::Function,
+                                        qualified_name: Some(qn.clone()),
+                                        location: node_to_location(node, &file_path_str),
+                                        signature: node
+                                            .utf8_text(source)
+                                            .ok()
+                                            .map(|s| s.trim().to_string()),
+                                        return_type: None,
+                                        parameters: vec![],
+                                        fields: vec![],
+                                        modifiers: vec![],
+                                        documentation: None,
+                                        metadata: serde_json::json!({
+                                            "language": "scala",
+                                            "kind": if kind == "function_declaration" {
+                                                "function_decl"
+                                            } else {
+                                                "function"
+                                            },
+                                        }),
+                                        ..Default::default()
                                     },
-                                }),
-                                ..Default::default()
-                            });
+                                    node,
+                                    source,
+                                    rgctl_plugin_helpers::callable_identity::Policy::Scala,
+                                ));
                             ctx.enter_scope(
                                 ScopeKind::Function,
                                 Some(name),
@@ -481,23 +511,32 @@ pub fn extract_all_single_pass(
                         };
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
-                        ctx.symbols.push(Symbol {
-                            name: name.clone(),
-                            symbol_type: SymbolType::Function,
-                            qualified_name: Some(qn.clone()),
-                            location: node_to_location(node, &file_path_str),
-                            signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-                            return_type: None,
-                            parameters: vec![],
-                            fields: vec![],
-                            modifiers: vec![],
-                            documentation: None,
-                            metadata: serde_json::json!({
-                                "language": "scala",
-                                "kind": "lambda",
-                            }),
-                            ..Default::default()
-                        });
+                        ctx.symbols
+                            .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                Symbol {
+                                    name: name.clone(),
+                                    symbol_type: SymbolType::Function,
+                                    qualified_name: Some(qn.clone()),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: node
+                                        .utf8_text(source)
+                                        .ok()
+                                        .map(|s| s.trim().to_string()),
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "scala",
+                                        "kind": "lambda",
+                                    }),
+                                    ..Default::default()
+                                },
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Scala,
+                            ));
                         ctx.enter_scope(
                             ScopeKind::Function,
                             Some(name),
@@ -567,7 +606,11 @@ pub fn extract_all_single_pass(
                     "extends_clause" | "derives_clause" => {
                         if let Some(from_type) = ctx.scopes.current_type() {
                             let from = from_type.qualified_prefix.clone();
-                            if let Some(base) = extract_name_from_node(node, source).ok().flatten()
+                            if let Some(base) = node
+                                .child_by_field_name("type")
+                                .and_then(|n| n.utf8_text(source).ok())
+                                .map(str::to_owned)
+                                .or_else(|| extract_name_from_node(node, source).ok().flatten())
                             {
                                 let rel_ty = if kind == "derives_clause" {
                                     RelationType::Implements
@@ -711,6 +754,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -723,7 +767,20 @@ pub fn extract_all_single_pass(
             "scala",
             &mut relations,
         );
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Scala,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Scala,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

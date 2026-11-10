@@ -6,10 +6,16 @@
 
 use rgctl_error::Result;
 use rgctl_graph::backend::MemoryBackend;
-use rgctl_graph::schema::{Edge, EdgeType, NodeType, SharedStr};
+use rgctl_graph::schema::{Edge, EdgeType, Node, NodeType, SharedStr};
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+fn dispatch_identity(node: &Node) -> Option<&str> {
+    node.get_property("override_identity")
+        .or_else(|| node.identity_discriminator())
+        .filter(|s| !s.is_empty())
+}
 
 /// Language-specific MRO strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -151,6 +157,10 @@ pub struct MroIndex {
     pub methods: Vec<HashMap<String, Vec<Uuid>>>,
     /// Canonical parameter identity used to avoid inventing overrides between overloads.
     pub method_identities: HashMap<Uuid, Option<String>>,
+    /// Trait implementations can override only their declared trait owner.
+    pub override_owners: HashMap<Uuid, String>,
+    /// One runtime implementation may satisfy several TypeScript overload declarations.
+    pub signature_families: HashSet<Uuid>,
 }
 
 impl MroIndex {
@@ -168,12 +178,47 @@ impl MroIndex {
             mro,
             methods: vec![HashMap::new(); n],
             method_identities: HashMap::new(),
+            override_owners: HashMap::new(),
+            signature_families: HashSet::new(),
         })
     }
 
     /// Index Function nodes onto owning types via qualified-name prefix.
     pub fn index_methods_from_backend(&mut self, backend: &MemoryBackend) -> Result<()> {
-        for node in backend.find_nodes_by_type(NodeType::Function)? {
+        let nodes = backend.find_nodes_by_type(NodeType::Function)?;
+        let implemented: HashSet<_> = nodes
+            .iter()
+            .filter(|n| {
+                n.get_property("callable_role") != Some("declaration")
+                    && n.get_property("superseded_definition") != Some("true")
+            })
+            .filter_map(|n| {
+                split_owner_method(n.qualified_name.as_deref(), &n.name)
+                    .map(|(owner, method)| (owner, method, dispatch_identity(n)))
+            })
+            .collect();
+        for node in &nodes {
+            if node.get_property("callable_role") == Some("declaration")
+                && split_owner_method(node.qualified_name.as_deref(), &node.name).is_some_and(
+                    |(owner, method)| {
+                        implemented.contains(&(owner, method, dispatch_identity(node)))
+                    },
+                )
+            {
+                continue;
+            }
+            if node.get_property("language") == Some("typescript") {
+                self.signature_families.insert(node.id);
+            }
+            if node
+                .get_property("superseded_definition")
+                .is_some_and(|role| role == "true")
+            {
+                continue;
+            }
+            if let Some(owner) = node.get_property("override_owner") {
+                self.override_owners.insert(node.id, owner.to_owned());
+            }
             if let Some((owner, method)) =
                 split_owner_method(node.qualified_name.as_deref(), &node.name)
                 && let Some(&tid) = self.graph.name_of.get(owner)
@@ -183,7 +228,7 @@ impl MroIndex {
                     .or_default()
                     .push(node.id);
                 self.method_identities
-                    .insert(node.id, node.identity_discriminator().map(str::to_owned));
+                    .insert(node.id, dispatch_identity(node).map(str::to_owned));
             }
         }
         Ok(())
@@ -220,6 +265,11 @@ impl MroIndex {
                         .get(&child)
                         .and_then(|i| i.as_deref());
                     for &ancestor in self.mro[tid].iter().skip(1) {
+                        if self.override_owners.get(&child).is_some_and(|owner| {
+                            self.graph.name_of.get(owner.as_str()) != Some(&ancestor)
+                        }) {
+                            continue;
+                        }
                         let Some(candidates) = self.methods[ancestor as usize].get(name) else {
                             continue;
                         };
@@ -231,15 +281,25 @@ impl MroIndex {
                                     self.method_identities.get(id).and_then(|i| i.as_deref());
                                 identity == parent
                                     && (identity.is_some()
-                                        || candidates.len() == 1 && children.len() == 1)
+                                        || candidates.len() == 1 && children.len() == 1
+                                        || self.signature_families.contains(&child)
+                                            && self.signature_families.contains(id))
                             })
                             .collect();
-                        if let [parent] = matches.as_slice() {
-                            if child != *parent {
-                                out.push(
-                                    Edge::new(child, *parent, EdgeType::Overrides)
-                                        .with_property("method".into(), name.clone()),
-                                );
+                        if matches.len() == 1
+                            || !matches.is_empty()
+                                && self.signature_families.contains(&child)
+                                && matches
+                                    .iter()
+                                    .all(|id| self.signature_families.contains(id))
+                        {
+                            for parent in matches {
+                                if child != parent {
+                                    out.push(
+                                        Edge::new(child, parent, EdgeType::Overrides)
+                                            .with_property("method".into(), name.clone()),
+                                    );
+                                }
                             }
                             break;
                         }

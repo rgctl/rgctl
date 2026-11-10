@@ -771,9 +771,6 @@ fn find_function_by_name<'a>(
             && let Some(func_name) = callable_name_for_cfg(node, source, language)
             && func_name == name
         {
-            if language != "java" {
-                return Some(node);
-            }
             if found.is_some() {
                 return None;
             }
@@ -8999,6 +8996,32 @@ END;
             )
             .unwrap();
         assert!(branching.blocks.len() > straight.blocks.len());
+    }
+    #[test]
+    fn tier1_name_only_cfg_refuses_same_named_methods() {
+        for (language, source) in [
+            (
+                "cpp",
+                "class A { int quote(int x) {return x;} int quote(double x) {return 2;} };",
+            ),
+            (
+                "csharp",
+                "class A { int quote(int x) {return x;} int quote(string x) {return 2;} }",
+            ),
+            (
+                "typescript",
+                "class A { quote(x:number){return x;} } class B { quote(x:string){return 2;} }",
+            ),
+            (
+                "python",
+                "class A:\n def quote(self, x):\n  return x\nclass B:\n def quote(self, x):\n  return 2\n",
+            ),
+        ] {
+            assert!(
+                build_cfg_for_function(language, source, "quote").is_err(),
+                "{language}: name-only lookup picked an arbitrary body"
+            );
+        }
     }
     #[test]
     fn java_name_only_cfg_refuses_overloads() {

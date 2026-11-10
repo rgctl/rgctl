@@ -229,6 +229,12 @@ impl RubyPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut sym, node, node.child_by_field_name("name"));
+        sym = rgctl_plugin_helpers::callable_identity::symbol(
+            sym,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Ruby,
+        );
         Ok(sym)
     }
 

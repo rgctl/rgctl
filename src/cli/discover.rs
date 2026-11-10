@@ -155,7 +155,12 @@ pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
     }
 
     if let Some(files) = &args.files {
-        return run_files_update(ctx, &path, files.clone(), &args);
+        if rgctl_extraction::callable_resolution::semantics_current(Path::new(&path)) {
+            return run_files_update(ctx, &path, files.clone(), &args);
+        }
+        tracing::info!(
+            "Extraction semantics changed; rebuilding source identities before incremental updates"
+        );
     }
 
     if args.with_universe {

@@ -70,6 +70,12 @@ pub fn extract_name_from_node(node: Node, source: &[u8]) -> Result<Option<String
         }
     }
 
+    if let Some(signature) = node.child_by_field_name("signature")
+        && let Some(name) = extract_name_from_node(signature, source)?
+    {
+        return Ok(Some(name));
+    }
+
     for field in ["name", "lhs", "pattern"] {
         if let Some(field_node) = node.child_by_field_name(field)
             && let Some(name) = extract_name_from_node(field_node, source)?
