@@ -189,6 +189,7 @@ pub fn extract_all_single_pass(
                                 "language": "hcl",
                                 "block_type": block_type,
                             }),
+                            ..Default::default()
                         });
                         // Treat blocks as function-like hosts so nested calls/conditionals attach.
                         ctx.enter_scope(
@@ -281,6 +282,7 @@ pub fn extract_all_single_pass(
                     metadata: serde_json::json!({ "language": "hcl" }),
                     to_qualified_hint: None,
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
         }

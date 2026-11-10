@@ -7,6 +7,7 @@ use crate::plugin::{
 };
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -361,7 +362,7 @@ pub fn extract_all_single_pass(
                     }
                     "preproc_include" | "preprocessor_include" => {
                         let path = include_path_from_node(node, source)?;
-                        ctx.symbols.push(Symbol {
+                        let mut symbol = Symbol {
                             name: path.clone(),
                             symbol_type: SymbolType::Import,
                             qualified_name: None,
@@ -376,7 +377,10 @@ pub fn extract_all_single_pass(
                                 "language": "c",
                                 "kind": "include",
                             }),
-                        });
+                            ..Default::default()
+                        };
+                        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                        ctx.symbols.push(symbol);
                     }
                     _ => {}
                 }

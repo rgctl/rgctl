@@ -3,6 +3,7 @@
 use crate::plugin::KotlinPlugin;
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -390,15 +391,15 @@ pub fn extract_all_single_pass(
                     }
                     "type_alias" => {
                         // Grammar: `typealias` keyword, then `identifier` name, then aliased type.
-                        let mut name = None;
+                        let mut name_node = None;
                         let mut aliased = None;
                         let mut c = node.walk();
                         for ch in node.children(&mut c) {
                             match ch.kind() {
                                 "identifier" | "simple_identifier" | "type_identifier"
-                                    if name.is_none() =>
+                                    if name_node.is_none() =>
                                 {
-                                    name = ch.utf8_text(source).ok().map(|s| s.trim().to_string());
+                                    name_node = Some(ch);
                                 }
                                 "user_type" | "nullable_type" | "function_type" => {
                                     aliased =
@@ -407,37 +408,47 @@ pub fn extract_all_single_pass(
                                 _ => {}
                             }
                         }
-                        if let Some(name) = name {
-                            ctx.symbols.push(Symbol {
-                                name: name.clone(),
-                                symbol_type: SymbolType::TypeAlias,
-                                qualified_name: Some(
-                                    package
-                                        .as_ref()
-                                        .map(|p| format!("{p}.{name}"))
-                                        .unwrap_or(name),
-                                ),
-                                location: SourceLocation {
-                                    file: file_path_str.to_string(),
-                                    start_line: node.start_position().row + 1,
-                                    end_line: node.end_position().row + 1,
-                                    start_column: node.start_position().column,
-                                    end_column: node.end_position().column,
-                                },
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.trim().to_string()),
-                                return_type: aliased,
-                                parameters: vec![],
-                                fields: vec![],
-                                modifiers: vec![],
-                                documentation: None,
-                                metadata: serde_json::json!({
-                                    "language": "kotlin",
-                                    "kind": "type_alias",
-                                }),
-                            });
+                        if let Some(name_node) = name_node {
+                            let name = name_node
+                                .utf8_text(source)
+                                .ok()
+                                .map(|s| s.trim().to_string())
+                                .unwrap_or_default();
+                            if !name.is_empty() {
+                                let mut symbol = Symbol {
+                                    name: name.clone(),
+                                    symbol_type: SymbolType::TypeAlias,
+                                    qualified_name: Some(
+                                        package
+                                            .as_ref()
+                                            .map(|p| format!("{p}.{name}"))
+                                            .unwrap_or(name),
+                                    ),
+                                    location: SourceLocation {
+                                        file: file_path_str.to_string(),
+                                        start_line: node.start_position().row + 1,
+                                        end_line: node.end_position().row + 1,
+                                        start_column: node.start_position().column,
+                                        end_column: node.end_position().column,
+                                    },
+                                    signature: node
+                                        .utf8_text(source)
+                                        .ok()
+                                        .map(|s| s.trim().to_string()),
+                                    return_type: aliased,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "kotlin",
+                                        "kind": "type_alias",
+                                    }),
+                                    ..Default::default()
+                                };
+                                record_symbol_spans(&mut symbol, node, Some(name_node));
+                                ctx.symbols.push(symbol);
+                            }
                         }
                     }
                     _ => {}

@@ -3,6 +3,7 @@
 use crate::plugin::{RUBY_COMPLEXITY_BRANCH_KINDS, RUBY_FUNCTION_KINDS, RubyPlugin};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -203,6 +204,7 @@ pub fn extract_all_single_pass(
                                     }),
                                     to_qualified_hint: Some(old_name),
                                     to_type_hint: None,
+                                    ..Default::default()
                                 });
                             }
                         }
@@ -235,6 +237,7 @@ pub fn extract_all_single_pass(
                                     }),
                                     to_qualified_hint: Some(base),
                                     to_type_hint: None,
+                                    ..Default::default()
                                 });
                             }
                         }
@@ -322,7 +325,7 @@ pub fn extract_all_single_pass(
                         if let Some(callee) = ruby_call_callee(node, source) {
                             if matches!(callee.as_str(), "require" | "require_relative") {
                                 if let Some(path) = plugin.require_path_arg(node, source) {
-                                    ctx.symbols.push(Symbol {
+                                    let mut sym = Symbol {
                                         name: path.clone(),
                                         symbol_type: SymbolType::Import,
                                         qualified_name: Some(path),
@@ -337,7 +340,10 @@ pub fn extract_all_single_pass(
                                             "language": "ruby",
                                             "kind": callee,
                                         }),
-                                    });
+                                        ..Default::default()
+                                    };
+                                    record_symbol_spans(&mut sym, node, None);
+                                    ctx.symbols.push(sym);
                                 }
                             }
                         }
@@ -349,7 +355,7 @@ pub fn extract_all_single_pass(
                             Some(o) => format!("{o}.{name}"),
                             None => name.clone(),
                         };
-                        ctx.symbols.push(Symbol {
+                        let mut sym = Symbol {
                             name,
                             symbol_type: SymbolType::Function,
                             qualified_name: Some(qn.clone()),
@@ -364,7 +370,10 @@ pub fn extract_all_single_pass(
                                 "language": "ruby",
                                 "kind": "lambda",
                             }),
-                        });
+                            ..Default::default()
+                        };
+                        record_symbol_spans(&mut sym, node, None);
+                        ctx.symbols.push(sym);
                         let params = 0u32;
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;

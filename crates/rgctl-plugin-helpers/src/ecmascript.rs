@@ -162,7 +162,7 @@ pub fn extract_cjs_require_symbols(
                     "module_system": "cjs",
                 });
                 meta["module"] = serde_json::Value::String(module.clone());
-                symbols.push(Symbol {
+                let mut symbol = Symbol {
                     name: module,
                     symbol_type: SymbolType::Import,
                     qualified_name: None,
@@ -174,7 +174,10 @@ pub fn extract_cjs_require_symbols(
                     modifiers: vec![],
                     documentation: None,
                     metadata: meta,
-                });
+                    ..Default::default()
+                };
+                crate::spans::record_symbol_spans(&mut symbol, node, None);
+                symbols.push(symbol);
             }
         }
 
@@ -305,7 +308,7 @@ fn import_symbol(
     if let Some(local) = local {
         meta["local"] = serde_json::Value::String(local.to_string());
     }
-    Symbol {
+    let mut symbol = Symbol {
         name: name.to_string(),
         symbol_type: SymbolType::Import,
         qualified_name: None,
@@ -317,7 +320,10 @@ fn import_symbol(
         modifiers: vec![],
         documentation: None,
         metadata: meta,
-    }
+        ..Default::default()
+    };
+    crate::spans::record_symbol_spans(&mut symbol, node, None);
+    symbol
 }
 
 fn import_specifier_local_name(spec: Node, source: &[u8]) -> String {
@@ -570,6 +576,7 @@ fn push_relation(
         metadata: serde_json::json!({ "language": language }),
         to_qualified_hint: None,
         to_type_hint: None,
+        ..Default::default()
     });
 }
 

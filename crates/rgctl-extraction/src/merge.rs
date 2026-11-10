@@ -974,6 +974,7 @@ mod tests {
                 modifiers: vec![],
                 documentation: None,
                 metadata: json!({}),
+                ..Default::default()
             },
             b_fid,
         );
@@ -1002,6 +1003,7 @@ mod tests {
                 modifiers: vec![],
                 documentation: None,
                 metadata: json!({}),
+                ..Default::default()
             },
             a_fid,
         );
@@ -1027,6 +1029,7 @@ mod tests {
                 modifiers: vec![],
                 documentation: None,
                 metadata: json!({}),
+                ..Default::default()
             },
             gw_fid,
         );
@@ -1043,6 +1046,7 @@ mod tests {
                 modifiers: vec![],
                 documentation: None,
                 metadata: json!({}),
+                ..Default::default()
             },
             gw_fid,
         );
@@ -1056,6 +1060,7 @@ mod tests {
                 metadata: json!({}),
                 to_qualified_hint: None,
                 to_type_hint: Some("UserService".into()),
+                ..Default::default()
             })
             .unwrap();
 

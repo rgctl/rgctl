@@ -32,6 +32,7 @@ pub struct FullPipelineArgs {
     pub git_since: String,
     pub with_dfg_loops: bool,
     pub with_ast_skeleton: bool,
+    pub lossless: bool,
     pub write_json_graph: bool,
     pub export_migration_hints: bool,
     pub kantra_rules: Option<String>,
@@ -59,6 +60,7 @@ impl FullPipelineArgs {
             git_since: args.git_since.clone(),
             with_dfg_loops: args.with_dfg_loops,
             with_ast_skeleton: args.with_ast_skeleton,
+            lossless: args.lossless,
             write_json_graph: args.write_json_graph,
             export_migration_hints: args.export_migration_hints,
             kantra_rules: args.kantra_rules.clone(),
@@ -323,6 +325,8 @@ fn analysis_opts<'a>(
         artifact_root: extras.artifact_root.as_deref(),
         limits: extras.limits.clone(),
         reuse_basic_analytics: deep,
+        lossless: extras.lossless
+            || std::env::var_os("RGCTL_LOSSLESS").is_some_and(|v| v != "0" && v != "false"),
     }
 }
 
@@ -436,6 +440,7 @@ mod tests {
             git_since: "90.days".into(),
             with_dfg_loops: false,
             with_ast_skeleton: false,
+            lossless: false,
             write_json_graph: false,
             export_migration_hints: false,
             kantra_rules: None,

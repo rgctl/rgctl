@@ -2,6 +2,7 @@
 
 use crate::single_pass::{c_ast_handlers, extract_all_single_pass};
 use rgctl_plugin_api::*;
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::path::Path;
 use tree_sitter::Node;
 
@@ -76,7 +77,7 @@ impl CPlugin {
 
         let parameters = extract_parameters(node, source)?;
 
-        Ok(Some(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Function,
             qualified_name: Some(file_qualified_name(file_path, &name)),
@@ -88,7 +89,10 @@ impl CPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "c" }),
-        }))
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, function_name_node(node));
+        Ok(Some(symbol))
     }
 
     /// F1: struct fields from `field_declaration` in `field_declaration_list`.
@@ -119,7 +123,7 @@ impl CPlugin {
             }
         }
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Struct,
             qualified_name: Some(file_qualified_name(file_path, &name)),
@@ -131,7 +135,10 @@ impl CPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     pub(crate) fn extract_enum(
@@ -169,7 +176,7 @@ impl CPlugin {
             }
         }
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Enum,
             qualified_name: Some(file_qualified_name(file_path, &name)),
@@ -181,7 +188,10 @@ impl CPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     fn symbols_from_tree(
@@ -294,7 +304,7 @@ impl CPlugin {
                 }
                 "preproc_include" | "preprocessor_include" => {
                     let path = include_path_from_node(node, source)?;
-                    symbols.push(Symbol {
+                    let mut symbol = Symbol {
                         name: path.clone(),
                         symbol_type: SymbolType::Import,
                         qualified_name: None,
@@ -309,7 +319,10 @@ impl CPlugin {
                             "language": "c",
                             "kind": "include",
                         }),
-                    });
+                        ..Default::default()
+                    };
+                    record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                    symbols.push(symbol);
                 }
                 _ => {}
             }
@@ -471,8 +484,8 @@ pub(crate) fn extract_struct_fields(struct_node: Node, source: &[u8]) -> Result<
     Ok(fields)
 }
 
-/// Iterative declarator name parser to avoid deep nested recursion stack frames.
-fn name_from_declarator(root: Node, source: &[u8]) -> Option<String> {
+/// Identifier / type / field node nested under a C declarator chain.
+fn name_node_from_declarator(root: Node) -> Option<Node> {
     const MAX_DEPTH: usize = 512;
     let mut stack = vec![(root, 0usize)];
 
@@ -483,9 +496,7 @@ fn name_from_declarator(root: Node, source: &[u8]) -> Option<String> {
 
         match node.kind() {
             "identifier" | "type_identifier" | "field_identifier" => {
-                if let Ok(text) = node.utf8_text(source) {
-                    return Some(text.to_string());
-                }
+                return Some(node);
             }
             "function_declarator"
             | "pointer_declarator"
@@ -515,6 +526,20 @@ fn name_from_declarator(root: Node, source: &[u8]) -> Option<String> {
         }
     }
     None
+}
+
+fn name_from_declarator(root: Node, source: &[u8]) -> Option<String> {
+    name_node_from_declarator(root).and_then(|n| n.utf8_text(source).ok().map(str::to_string))
+}
+
+fn function_name_node(node: Node) -> Option<Node> {
+    match node.kind() {
+        "function_definition" | "declaration" => {
+            let decl = node.child_by_field_name("declarator")?;
+            name_node_from_declarator(decl)
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn struct_name(node: Node, source: &[u8]) -> Option<String> {
@@ -621,6 +646,7 @@ mod tests {
             metadata: serde_json::json!({}),
             to_qualified_hint: None,
             to_type_hint: None,
+            ..Default::default()
         };
         let before = builder.edge_count();
         builder.add_relation(&rel).unwrap();

@@ -519,6 +519,7 @@ fn make_symbol(
         modifiers: vec![],
         documentation: None,
         metadata,
+        ..Default::default()
     }
 }
 
@@ -543,5 +544,6 @@ fn make_call(
         metadata,
         to_qualified_hint: None,
         to_type_hint: None,
+        ..Default::default()
     }
 }

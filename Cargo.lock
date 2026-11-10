@@ -2755,6 +2755,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "uuid",
+ "zstd",
 ]
 
 [[package]]
@@ -3276,6 +3277,7 @@ dependencies = [
  "pretty_assertions",
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
+ "rgctl-plugin-helpers",
  "rgctl-registry",
  "serde_json",
  "serde_yaml",

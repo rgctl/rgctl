@@ -611,6 +611,7 @@ fn make_symbol(
         modifiers: vec![],
         documentation: None,
         metadata,
+        ..Default::default()
     }
 }
 
@@ -636,5 +637,6 @@ fn make_rel(
         metadata,
         to_qualified_hint: None,
         to_type_hint: None,
+        ..Default::default()
     }
 }

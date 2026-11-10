@@ -5,6 +5,7 @@
 use crate::single_pass::{extract_all_single_pass, kotlin_ast_handlers};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::path::Path;
 use tree_sitter::Node;
 
@@ -342,7 +343,7 @@ impl KotlinPlugin {
                 });
             }
         }
-        symbols.push(Symbol {
+        let mut symbol = Symbol {
             name: type_simple.clone(),
             symbol_type: SymbolType::Function,
             qualified_name: Some(format!("{type_qn}.<init>")),
@@ -361,7 +362,14 @@ impl KotlinPlugin {
                 "is_constructor": true,
                 "primary": is_primary,
             }),
-        });
+            ..Default::default()
+        };
+        record_symbol_spans(
+            &mut symbol,
+            ctor_node,
+            ctor_node.child_by_field_name("name"),
+        );
+        symbols.push(symbol);
         // Attach primary-ctor fields onto the class symbol if we already emitted it —
         // handled when emitting the class by merging class_parameters.
         let _ = fields;
@@ -416,7 +424,7 @@ impl KotlinPlugin {
             }
         }
 
-        symbols.push(Symbol {
+        let mut symbol = Symbol {
             name: simple.clone(),
             symbol_type,
             qualified_name: Some(qn.clone()),
@@ -434,7 +442,10 @@ impl KotlinPlugin {
                 "language": "kotlin",
                 "kind": kind_meta,
             }),
-        });
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbols.push(symbol);
 
         let mut c2 = node.walk();
         for child in node.children(&mut c2) {
@@ -484,7 +495,7 @@ impl KotlinPlugin {
             .and_then(|n| n.utf8_text(source).ok())
             .map(|s| s.trim().to_string());
         let parameters = self.extract_parameters(node, source);
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qn),
@@ -499,7 +510,10 @@ impl KotlinPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "kotlin" }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Some(symbol)
     }
 
     /// Synthetic function symbol for `lambda_literal` / `anonymous_function`.
@@ -520,7 +534,7 @@ impl KotlinPlugin {
             Self::qualify(package, &format!("{}.{}", type_path.join("."), name))
         };
         let parameters = self.extract_parameters(node, source);
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qn),
@@ -539,7 +553,10 @@ impl KotlinPlugin {
                 "is_lambda": kind_tag == "lambda",
                 "is_anonymous_function": kind_tag == "anon_fn",
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Some(symbol)
     }
 
     /// Anonymous `object : Type { ... }` literal.
@@ -558,7 +575,7 @@ impl KotlinPlugin {
         } else {
             Self::qualify(package, &format!("{}.{}", type_path.join("."), name))
         };
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Class,
             qualified_name: Some(qn),
@@ -576,7 +593,10 @@ impl KotlinPlugin {
                 "language": "kotlin",
                 "is_object_literal": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Some(symbol)
     }
 
     /// Class `init { ... }` block.
@@ -595,7 +615,7 @@ impl KotlinPlugin {
         } else {
             Self::qualify(package, &format!("{}.{}", type_path.join("."), name))
         };
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qn),
@@ -610,7 +630,10 @@ impl KotlinPlugin {
                 "language": "kotlin",
                 "is_initializer": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Some(symbol)
     }
 
     /// `@Ann` / `@file:Ann` → `AnnotatedWith` from nearest enclosing symbol.
@@ -645,6 +668,7 @@ impl KotlinPlugin {
             metadata: serde_json::json!({ "language": "kotlin" }),
             to_qualified_hint: Some(ann.to_string()),
             to_type_hint: None,
+            ..Default::default()
         });
     }
 
@@ -687,6 +711,7 @@ impl KotlinPlugin {
             }),
             to_qualified_hint: Some(to.to_string()),
             to_type_hint: None,
+            ..Default::default()
         });
     }
 
@@ -707,7 +732,7 @@ impl KotlinPlugin {
             return;
         }
         let simple = imported.rsplit('.').next().unwrap_or(imported).to_string();
-        symbols.push(Symbol {
+        let mut symbol = Symbol {
             name: simple,
             symbol_type: SymbolType::Import,
             qualified_name: Some(imported.to_string()),
@@ -719,7 +744,10 @@ impl KotlinPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "kotlin" }),
-        });
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbols.push(symbol);
     }
 
     fn symbols_from_tree(
@@ -876,6 +904,7 @@ impl KotlinPlugin {
             metadata: serde_json::json!({ "language": "kotlin" }),
             to_qualified_hint: Some(to_name.to_string()),
             to_type_hint: None,
+            ..Default::default()
         });
     }
 

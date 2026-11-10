@@ -145,6 +145,18 @@ pub struct EntityRow {
     /// Definition line
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
+    /// Declaration start byte (Red-Green), when known
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_byte: Option<u32>,
+    /// Declaration exclusive end byte, when known
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_byte: Option<u32>,
+    /// Identifier token start byte, when known
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_start_byte: Option<u32>,
+    /// Identifier token exclusive end byte, when known
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_end_byte: Option<u32>,
     /// Node UUID (string)
     pub id: String,
     /// Annotation argument text when `--show-attributes` and args are indexed
@@ -295,12 +307,35 @@ impl<'a> StructuredQuery<'a> {
     }
 
     fn project(node: &Node) -> EntityRow {
+        let (name_start_byte, name_end_byte) = match (node.start_byte, node.name_rel_offset) {
+            (Some(start), Some(rel)) => {
+                let ns = start.saturating_add(u32::from(rel));
+                let len = node
+                    .name_token_len
+                    .map(u32::from)
+                    .unwrap_or_else(|| node.name.len() as u32);
+                (Some(ns), Some(ns.saturating_add(len)))
+            }
+            (Some(start), None) => {
+                if let Some((rel, len)) = node.name_span_overflow {
+                    let ns = start.saturating_add(rel);
+                    (Some(ns), Some(ns.saturating_add(len)))
+                } else {
+                    (None, None)
+                }
+            }
+            _ => (None, None),
+        };
         EntityRow {
             name: node.name.to_string(),
             qualified_name: node.qualified_name.as_ref().map(|s| s.to_string()),
             node_type: node_type_cli(node.node_type),
             file: node.file_path.as_ref().map(|s| s.to_string()),
             line: node.start_line,
+            start_byte: node.start_byte,
+            end_byte: node.end_byte,
+            name_start_byte,
+            name_end_byte,
             id: node.id.to_string(),
             attributes: None,
         }

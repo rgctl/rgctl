@@ -136,7 +136,7 @@ impl JavaScriptPlugin {
             )
         };
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -161,7 +161,14 @@ impl JavaScriptPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     fn extract_parameters(&self, params_node: Node, source: &[u8]) -> Result<Vec<Parameter>> {
@@ -227,7 +234,7 @@ impl JavaScriptPlugin {
 
         let name = name.unwrap_or_else(|| "AnonymousClass".to_string());
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Class,
             qualified_name: None,
@@ -245,7 +252,14 @@ impl JavaScriptPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "javascript" }),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     fn extract_class_fields(&self, class_body: Node, source: &[u8]) -> Result<Vec<Field>> {
@@ -354,7 +368,7 @@ impl JavaScriptPlugin {
         if !text.starts_with("export") {
             return None;
         }
-        Some(Symbol {
+        let mut symbol = Symbol {
             name: text,
             symbol_type: SymbolType::Import,
             qualified_name: None,
@@ -369,7 +383,10 @@ impl JavaScriptPlugin {
                 "language": "javascript",
                 "direction": "export",
             }),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, None);
+        Some(symbol)
     }
 
     fn emit_symbol_for_node(
@@ -498,6 +515,7 @@ impl JavaScriptPlugin {
                             metadata: meta,
                             to_qualified_hint: None,
                             to_type_hint: None,
+                            ..Default::default()
                         });
                     }
                 }
@@ -583,6 +601,7 @@ impl JavaScriptPlugin {
             metadata: meta,
             to_qualified_hint: None,
             to_type_hint: None,
+            ..Default::default()
         });
     }
 
@@ -652,6 +671,7 @@ impl JavaScriptPlugin {
                                 metadata: serde_json::json!({ "language": "javascript" }),
                                 to_qualified_hint: Some(target),
                                 to_type_hint: None,
+                                ..Default::default()
                             });
                         }
                     }
@@ -853,6 +873,7 @@ impl JavaScriptPlugin {
                     metadata: meta,
                     to_qualified_hint: None,
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
         }
@@ -902,6 +923,7 @@ impl JavaScriptPlugin {
             metadata: meta,
             to_qualified_hint,
             to_type_hint: module_path,
+            ..Default::default()
         });
     }
 }

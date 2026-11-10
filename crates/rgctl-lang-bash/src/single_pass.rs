@@ -204,6 +204,7 @@ fn flush_bash_call(
         metadata: serde_json::json!({ "language": "bash" }),
         to_qualified_hint: None,
         to_type_hint: None,
+        ..Default::default()
     });
 }
 
@@ -290,6 +291,7 @@ pub fn extract_all_single_pass(
                             modifiers: vec![],
                             documentation: None,
                             metadata: serde_json::json!({ "language": "bash" }),
+                            ..Default::default()
                         });
                         ctx.enter_scope(
                             ScopeKind::Function,
@@ -324,6 +326,7 @@ pub fn extract_all_single_pass(
                                 "language": "bash",
                                 "kind": "declaration_command"
                             }),
+                            ..Default::default()
                         });
                     }
                 }

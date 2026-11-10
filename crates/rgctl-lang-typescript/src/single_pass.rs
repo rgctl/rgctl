@@ -304,6 +304,7 @@ pub fn extract_all_single_pass(
                                         metadata: serde_json::json!({ "language": "typescript" }),
                                         to_qualified_hint: Some(target),
                                         to_type_hint: None,
+                                        ..Default::default()
                                     });
                                 }
                             }
@@ -403,6 +404,7 @@ pub fn extract_all_single_pass(
                                     metadata: serde_json::json!({ "language": "typescript" }),
                                     to_qualified_hint: Some(target),
                                     to_type_hint: None,
+                                    ..Default::default()
                                 });
                             }
                         }

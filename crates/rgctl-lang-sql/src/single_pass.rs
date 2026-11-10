@@ -153,6 +153,7 @@ fn push_named_symbol(
             "language": "sql",
             "kind": kind_label,
         }),
+        ..Default::default()
     });
 }
 
@@ -197,6 +198,7 @@ fn push_table_ref_call(
                     }),
                     to_qualified_hint: None,
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
         }
@@ -221,6 +223,7 @@ fn push_table_ref_call(
                         }),
                         to_qualified_hint: None,
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -256,6 +259,7 @@ fn push_invocation_call(
         }),
         to_qualified_hint: None,
         to_type_hint: None,
+        ..Default::default()
     });
 }
 

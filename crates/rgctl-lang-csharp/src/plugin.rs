@@ -2,6 +2,7 @@
 
 use crate::single_pass::{csharp_ast_handlers, extract_all_single_pass};
 use rgctl_plugin_api::*;
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::collections::HashMap;
 use std::path::Path;
 use tree_sitter::{Node, Parser};
@@ -118,16 +119,15 @@ impl CSharpPlugin {
         file_path: &str,
         ctx: &ExtractCtx,
     ) -> Result<Symbol> {
-        let name = node
+        let name_node = node
             .child_by_field_name("name")
             .or_else(|| find_child_kind(node, "identifier"))
-            .and_then(|n| n.utf8_text(source).ok())
-            .map(str::to_string)
             .ok_or_else(|| Error::ParseError {
                 file: file_path.into(),
                 line: node.start_position().row + 1,
                 message: "Method missing name".to_string(),
             })?;
+        let name = name_node.utf8_text(source)?.to_string();
 
         let type_qn = self
             .find_containing_type_name(node, source)
@@ -138,7 +138,7 @@ impl CSharpPlugin {
         let modifiers = modifier_texts(node, source);
         let parameters = self.extract_parameters(node, source)?;
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -150,7 +150,10 @@ impl CSharpPlugin {
             modifiers,
             documentation: None,
             metadata: serde_json::json!({ "language": "csharp" }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        Ok(symbol)
     }
 
     pub(crate) fn extract_constructor(
@@ -176,7 +179,7 @@ impl CSharpPlugin {
         let parameters = self.extract_parameters(node, source)?;
         let qualified_name = format!("{type_qn}.<init>");
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: type_name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qualified_name),
@@ -191,7 +194,10 @@ impl CSharpPlugin {
                 "language": "csharp",
                 "is_constructor": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     pub(crate) fn extract_delegate(
@@ -208,7 +214,7 @@ impl CSharpPlugin {
         })?;
         let parameters = self.extract_parameters(node, source)?;
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Function,
             qualified_name: Some(ctx.qualify(&name)),
@@ -223,7 +229,10 @@ impl CSharpPlugin {
                 "language": "csharp",
                 "is_delegate": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     /// Lightweight Symbol for indexers / operators / destructors / accessors / lambdas.
@@ -297,7 +306,7 @@ impl CSharpPlugin {
             .or_else(|| Some(ctx.qualify(&name)));
         let parameters = self.extract_parameters(node, source).unwrap_or_default();
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -312,7 +321,10 @@ impl CSharpPlugin {
                 "language": "csharp",
                 "ast_kind": kind,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     fn extract_parameters(&self, node: Node, source: &[u8]) -> Result<Vec<Parameter>> {
@@ -501,7 +513,7 @@ impl CSharpPlugin {
             }
         }
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type,
             qualified_name: Some(ctx.qualify(&name)),
@@ -513,7 +525,10 @@ impl CSharpPlugin {
             modifiers: modifier_texts(node, source),
             documentation: None,
             metadata: meta,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     fn symbols_from_tree(
@@ -647,7 +662,7 @@ impl CSharpPlugin {
             "using_directive" => {
                 let text = node.utf8_text(source)?.trim().to_string();
                 ctx.register_using(&text);
-                symbols.push(Symbol {
+                let mut symbol = Symbol {
                     name: text.clone(),
                     symbol_type: SymbolType::Import,
                     qualified_name: None,
@@ -659,7 +674,10 @@ impl CSharpPlugin {
                     modifiers: vec![],
                     documentation: None,
                     metadata: serde_json::json!({ "language": "csharp" }),
-                });
+                    ..Default::default()
+                };
+                record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                symbols.push(symbol);
             }
             _ => {}
         }
@@ -781,6 +799,7 @@ impl CSharpPlugin {
                             metadata: serde_json::json!({ "language": "csharp" }),
                             to_qualified_hint,
                             to_type_hint,
+                            ..Default::default()
                         });
                     }
                 }
@@ -1009,6 +1028,7 @@ impl CSharpPlugin {
                         metadata: meta,
                         to_qualified_hint: None,
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -1074,6 +1094,7 @@ impl CSharpPlugin {
                                 }),
                                 to_qualified_hint: Some(scoped),
                                 to_type_hint: None,
+                                ..Default::default()
                             });
                         }
                     } else if matches!(
@@ -1099,6 +1120,7 @@ impl CSharpPlugin {
                             }),
                             to_qualified_hint: Some(ctx.qualify(&simple)),
                             to_type_hint: None,
+                            ..Default::default()
                         });
                     }
                 }
@@ -1137,6 +1159,7 @@ impl CSharpPlugin {
                         }),
                         to_qualified_hint: None,
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -1599,6 +1622,7 @@ fn relation(
         metadata: serde_json::json!({ "language": "csharp" }),
         to_qualified_hint: None,
         to_type_hint: None,
+        ..Default::default()
     }
 }
 

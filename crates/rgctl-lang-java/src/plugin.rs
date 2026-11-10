@@ -9,7 +9,7 @@
 use crate::single_pass::{extract_all_single_pass, java_ast_handlers};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::ComplexityCalculator;
+use rgctl_plugin_helpers::{ComplexityCalculator, record_symbol_spans};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -364,6 +364,7 @@ impl JavaPlugin {
             metadata,
             to_qualified_hint: fqn,
             to_type_hint: None,
+            ..Default::default()
         });
     }
 
@@ -657,7 +658,7 @@ impl JavaPlugin {
         let mut metadata = serde_json::json!({ "language": "java" });
         self.apply_callable_metadata(node, source, &mut metadata);
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -669,7 +670,10 @@ impl JavaPlugin {
             modifiers,
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        Ok(symbol)
     }
 
     pub(crate) fn extract_constructor(
@@ -706,7 +710,7 @@ impl JavaPlugin {
         });
         self.apply_callable_metadata(node, source, &mut metadata);
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qualified_name),
@@ -718,7 +722,10 @@ impl JavaPlugin {
             modifiers,
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        Ok(symbol)
     }
 
     /// `compact_constructor_declaration` (records): `record Point(int x, int y) { public Point { ... } }`.
@@ -749,7 +756,7 @@ impl JavaPlugin {
         let modifiers = self.collect_keyword_modifiers(node, source);
         let qualified_name = format!("{}.<init>", ctx.qualify_type(&owner));
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qualified_name),
@@ -765,7 +772,10 @@ impl JavaPlugin {
                 "is_constructor": true,
                 "is_compact_constructor": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        Ok(symbol)
     }
 
     pub(crate) fn extract_static_initializer(
@@ -778,7 +788,7 @@ impl JavaPlugin {
         let owner = self.find_containing_type_name(node, source, ctx);
         let qualified_name = owner.map(|o| format!("{}.<clinit>", ctx.qualify_type(&o)));
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: "<clinit>".to_string(),
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -793,7 +803,10 @@ impl JavaPlugin {
                 "language": "java",
                 "is_static_initializer": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     /// Instance initializer block: a bare `block` that is a direct child of a
@@ -819,7 +832,7 @@ impl JavaPlugin {
         let name = format!("<initblock>{idx}");
         let qualified_name = owner_qn.map(|o| format!("{o}.{name}"));
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -834,7 +847,10 @@ impl JavaPlugin {
                 "language": "java",
                 "is_instance_initializer": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     /// Extract parameters from `formal_parameters`, handling both
@@ -1091,7 +1107,7 @@ impl JavaPlugin {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type,
             qualified_name,
@@ -1103,7 +1119,10 @@ impl JavaPlugin {
             modifiers,
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        Ok(symbol)
     }
 
     /// Walk type declarations and synthesize Lombok-generated members into `symbols`.
@@ -1380,7 +1399,7 @@ impl JavaPlugin {
             if field_getter {
                 let gname = Self::lombok_getter_name(&f.name, f.field_type.as_deref());
                 if !declared.contains(&gname) {
-                    synthetics.push(Symbol {
+                    let symbol = Symbol {
                         name: gname.clone(),
                         symbol_type: SymbolType::Function,
                         qualified_name: Some(format!("{owner_qn}.{gname}")),
@@ -1399,13 +1418,15 @@ impl JavaPlugin {
                             "language": "java",
                             "lombok_synthesized": true,
                         }),
-                    });
+                        ..Default::default()
+                    };
+                    synthetics.push(symbol);
                 }
             }
             if field_setter {
                 let sname = Self::lombok_setter_name(&f.name);
                 if !declared.contains(&sname) {
-                    synthetics.push(Symbol {
+                    let symbol = Symbol {
                         name: sname.clone(),
                         symbol_type: SymbolType::Function,
                         qualified_name: Some(format!("{owner_qn}.{sname}")),
@@ -1429,13 +1450,15 @@ impl JavaPlugin {
                             "language": "java",
                             "lombok_synthesized": true,
                         }),
-                    });
+                        ..Default::default()
+                    };
+                    synthetics.push(symbol);
                 }
             }
         }
 
         if wants_builder && !declared.contains("builder") {
-            synthetics.push(Symbol {
+            let symbol = Symbol {
                 name: "builder".into(),
                 symbol_type: SymbolType::Function,
                 qualified_name: Some(format!("{owner_qn}.builder")),
@@ -1450,14 +1473,16 @@ impl JavaPlugin {
                     "language": "java",
                     "lombok_synthesized": true,
                 }),
-            });
+                ..Default::default()
+            };
+            synthetics.push(symbol);
         }
 
         let push_ctor = |params: Vec<Parameter>, synthetics: &mut Vec<Symbol>| {
             if has_explicit_ctor || declared.contains(&owner_simple) {
                 return;
             }
-            synthetics.push(Symbol {
+            let symbol = Symbol {
                 name: owner_simple.clone(),
                 symbol_type: SymbolType::Function,
                 qualified_name: Some(format!("{owner_qn}.<init>")),
@@ -1473,7 +1498,9 @@ impl JavaPlugin {
                     "is_constructor": true,
                     "lombok_synthesized": true,
                 }),
-            });
+                ..Default::default()
+            };
+            synthetics.push(symbol);
         };
 
         if wants_no_ctor && !has_explicit_ctor {
@@ -1546,7 +1573,7 @@ impl JavaPlugin {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Class,
             qualified_name,
@@ -1558,7 +1585,10 @@ impl JavaPlugin {
             modifiers,
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        Ok(symbol)
     }
 
     /// `annotation_type_element_declaration` (`String value() default "";`)
@@ -1596,7 +1626,7 @@ impl JavaPlugin {
             metadata["default_value"] = serde_json::Value::String(default_value.to_string());
         }
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -1608,7 +1638,10 @@ impl JavaPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        Ok(symbol)
     }
 
     /// `lambda_expression` becomes a synthetic Function under the nearest
@@ -1624,7 +1657,7 @@ impl JavaPlugin {
         let name = format!("$lambda${idx}");
         let qualified_name = owner.map(|o| format!("{o}.{name}"));
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -1636,7 +1669,10 @@ impl JavaPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java", "is_lambda": true }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     pub(crate) fn extract_package_symbol(
@@ -1646,14 +1682,15 @@ impl JavaPlugin {
         file_path: &str,
     ) -> Result<Symbol> {
         let mut cursor = node.walk();
-        let name = node
+        let name_node = node
             .children(&mut cursor)
-            .find(|c| c.kind() == "identifier" || c.kind() == "scoped_identifier")
+            .find(|c| c.kind() == "identifier" || c.kind() == "scoped_identifier");
+        let name = name_node
             .and_then(|n| n.utf8_text(source).ok())
             .unwrap_or("")
             .to_string();
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Module,
             qualified_name: Some(name),
@@ -1665,7 +1702,10 @@ impl JavaPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java", "java_kind": "package" }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, name_node);
+        Ok(symbol)
     }
 
     /// `module-info.java`'s `module_declaration`. Directives (`requires`,
@@ -1738,7 +1778,7 @@ impl JavaPlugin {
             }
         }
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Module,
             qualified_name: Some(name),
@@ -1758,7 +1798,10 @@ impl JavaPlugin {
                 "uses": uses,
                 "provides": provides,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     fn symbols_from_tree(
@@ -1890,7 +1933,7 @@ impl JavaPlugin {
             if let Some(o) = owner_qn.filter(|o| !o.is_empty()) {
                 metadata["member_of"] = serde_json::Value::String(o.to_string());
             }
-            symbols.push(Symbol {
+            let mut symbol = Symbol {
                 name: name.to_string(),
                 symbol_type: SymbolType::Variable,
                 qualified_name: Some(qn),
@@ -1902,7 +1945,10 @@ impl JavaPlugin {
                 modifiers: kw.clone(),
                 documentation: None,
                 metadata,
-            });
+                ..Default::default()
+            };
+            record_symbol_spans(&mut symbol, node, Some(name_node));
+            symbols.push(symbol);
         }
     }
 
@@ -2061,7 +2107,7 @@ impl JavaPlugin {
             }
             "import_declaration" => {
                 let text = node.utf8_text(source)?.trim().to_string();
-                symbols.push(Symbol {
+                let mut symbol = Symbol {
                     name: text.clone(),
                     symbol_type: SymbolType::Import,
                     qualified_name: None,
@@ -2079,7 +2125,10 @@ impl JavaPlugin {
                     modifiers: vec![],
                     documentation: None,
                     metadata: serde_json::json!({ "language": "java" }),
-                });
+                    ..Default::default()
+                };
+                record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                symbols.push(symbol);
             }
             _ => {}
         }
@@ -2337,6 +2386,7 @@ impl JavaPlugin {
                         metadata: serde_json::json!({ "language": "java" }),
                         to_qualified_hint,
                         to_type_hint,
+                        ..Default::default()
                     });
                 }
             }
@@ -2397,6 +2447,7 @@ impl JavaPlugin {
                                 .resolve_type_fqn(&parent_class, same_file_types)
                                 .or_else(|| ctx.import_qualified_hint(&parent_class)),
                             to_type_hint: None,
+                            ..Default::default()
                         });
                     }
                 }
@@ -2435,6 +2486,7 @@ impl JavaPlugin {
                                         .resolve_type_fqn(&interface_name, same_file_types)
                                         .or_else(|| ctx.import_qualified_hint(&interface_name)),
                                     to_type_hint: None,
+                                    ..Default::default()
                                 });
                             }
                         }
@@ -2465,6 +2517,7 @@ impl JavaPlugin {
                                 .resolve_type_fqn(&interface_name, same_file_types)
                                 .or_else(|| ctx.import_qualified_hint(&interface_name)),
                             to_type_hint: None,
+                            ..Default::default()
                         });
                     }
                 }
@@ -2520,6 +2573,7 @@ impl JavaPlugin {
                                     .resolve_type_fqn(&name, same_file_types)
                                     .or_else(|| ctx.import_qualified_hint(&name)),
                                 to_type_hint: None,
+                                ..Default::default()
                             });
                         }
                     }
@@ -2607,6 +2661,7 @@ impl JavaPlugin {
                         metadata: serde_json::json!({ "language": "java" }),
                         to_qualified_hint: ctx.resolve_type_fqn(&name, same_file_types),
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -2788,6 +2843,7 @@ impl JavaPlugin {
                     metadata: serde_json::json!({ "language": "java" }),
                     to_qualified_hint: fqn,
                     to_type_hint: Some(last_segment.to_string()),
+                    ..Default::default()
                 });
             }
         }
@@ -2849,7 +2905,7 @@ impl JavaPlugin {
                             metadata: serde_json::json!({ "language": "java", "method_reference": true }),
                             to_qualified_hint,
                             to_type_hint,
-                        });
+                         ..Default::default() });
                 }
             }
         }
@@ -2921,6 +2977,7 @@ impl JavaPlugin {
                 }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             });
         }
 
@@ -2993,6 +3050,7 @@ impl JavaPlugin {
                     metadata: serde_json::json!({ "language": "java" }),
                     to_qualified_hint,
                     to_type_hint,
+                    ..Default::default()
                 });
             }
         }
@@ -3032,6 +3090,7 @@ impl JavaPlugin {
                     metadata: serde_json::json!({ "language": "java", "array": true }),
                     to_qualified_hint: fqn,
                     to_type_hint: Some(last.to_string()),
+                    ..Default::default()
                 });
             }
         }
@@ -3070,6 +3129,7 @@ impl JavaPlugin {
                     metadata: serde_json::json!({ "language": "java", "class_literal": true }),
                     to_qualified_hint: fqn,
                     to_type_hint: Some(last.to_string()),
+                    ..Default::default()
                 });
             }
         }
@@ -3105,6 +3165,7 @@ impl JavaPlugin {
                     metadata: serde_json::json!({ "language": "java", "is_lambda_call": true }),
                     to_qualified_hint: None,
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
         }
@@ -3155,6 +3216,7 @@ impl JavaPlugin {
                     metadata: serde_json::json!({ "language": "java", "throws": true }),
                     to_qualified_hint: fqn,
                     to_type_hint: Some(simple.to_string()),
+                    ..Default::default()
                 });
             }
         }
@@ -3231,6 +3293,7 @@ impl JavaPlugin {
                         metadata: serde_json::json!({ "language": "java", "jpms": "requires" }),
                         to_qualified_hint: Some(m.to_string()),
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -3248,6 +3311,7 @@ impl JavaPlugin {
                         metadata: serde_json::json!({ "language": "java", "jpms": "uses" }),
                         to_qualified_hint: Some(t.to_string()),
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -3276,6 +3340,7 @@ impl JavaPlugin {
                         metadata: serde_json::json!({ "language": "java", "jpms": kind }),
                         to_qualified_hint: Some(text.to_string()),
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -3292,7 +3357,7 @@ impl JavaPlugin {
                         metadata: serde_json::json!({ "language": "java", "jpms": directive.kind() }),
                         to_qualified_hint: Some(p.to_string()),
                         to_type_hint: None,
-                    });
+                     ..Default::default() });
                 }
             }
             _ => {}
@@ -3330,6 +3395,7 @@ impl JavaPlugin {
                     metadata: serde_json::json!({ "language": "java", "fqn": fqn }),
                     to_qualified_hint: Some(fqn.to_string()),
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
         }
@@ -3477,6 +3543,7 @@ impl JavaPlugin {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint,
                 to_type_hint,
+                ..Default::default()
             });
         }
     }

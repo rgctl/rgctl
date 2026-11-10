@@ -215,7 +215,7 @@ impl PhpPlugin {
             .map(str::to_string);
         let qualified_name = qualify(namespace, &name);
         let metadata = php_metadata(node, source);
-        Ok(Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qualified_name),
@@ -227,7 +227,14 @@ impl PhpPlugin {
             modifiers: visibility_modifiers(node, source),
             documentation: None,
             metadata,
-        }))
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(Some(symbol))
     }
 
     pub(crate) fn extract_method(
@@ -271,7 +278,7 @@ impl PhpPlugin {
             metadata["is_constructor"] = serde_json::json!(true);
         }
 
-        Ok(Some(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -283,7 +290,14 @@ impl PhpPlugin {
             modifiers: visibility_modifiers(node, source),
             documentation: None,
             metadata,
-        }))
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(Some(symbol))
     }
 
     pub(crate) fn extract_anonymous_function(
@@ -304,7 +318,7 @@ impl PhpPlugin {
             .child_by_field_name("return_type")
             .and_then(|n| n.utf8_text(source).ok())
             .map(str::to_string);
-        Ok(Some(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Function,
             qualified_name: Some(qualify(namespace, &name)),
@@ -316,7 +330,10 @@ impl PhpPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "php", "is_anonymous": true }),
-        }))
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, None);
+        Ok(Some(symbol))
     }
 
     pub(crate) fn extract_class(
@@ -332,7 +349,7 @@ impl PhpPlugin {
             message: "Class missing name".to_string(),
         })?;
         let fields = self.extract_type_fields(node, source)?;
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Class,
             qualified_name: Some(qualify(namespace, &name)),
@@ -344,7 +361,14 @@ impl PhpPlugin {
             modifiers: visibility_modifiers(node, source),
             documentation: None,
             metadata: php_metadata(node, source),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     pub(crate) fn extract_interface(
@@ -359,7 +383,7 @@ impl PhpPlugin {
             line: node.start_position().row + 1,
             message: "Interface missing name".to_string(),
         })?;
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Interface,
             qualified_name: Some(qualify(namespace, &name)),
@@ -371,7 +395,14 @@ impl PhpPlugin {
             modifiers: visibility_modifiers(node, source),
             documentation: None,
             metadata: serde_json::json!({ "language": "php" }),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     pub(crate) fn extract_trait(
@@ -386,7 +417,7 @@ impl PhpPlugin {
             line: node.start_position().row + 1,
             message: "Trait missing name".to_string(),
         })?;
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Class,
             qualified_name: Some(qualify(namespace, &name)),
@@ -398,7 +429,14 @@ impl PhpPlugin {
             modifiers: visibility_modifiers(node, source),
             documentation: None,
             metadata: serde_json::json!({ "language": "php", "is_trait": true }),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     pub(crate) fn extract_enum(
@@ -413,7 +451,7 @@ impl PhpPlugin {
             line: node.start_position().row + 1,
             message: "Enum missing name".to_string(),
         })?;
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Enum,
             qualified_name: Some(qualify(namespace, &name)),
@@ -425,7 +463,14 @@ impl PhpPlugin {
             modifiers: visibility_modifiers(node, source),
             documentation: None,
             metadata: serde_json::json!({ "language": "php" }),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     fn extract_type_fields(&self, type_node: Node, source: &[u8]) -> Result<Vec<Field>> {
@@ -736,7 +781,23 @@ impl PhpPlugin {
         let mut symbols = Vec::new();
         for (name, _) in self.extract_const_elements(node, source)? {
             let qn = qualify(namespace, &name);
-            symbols.push(Symbol {
+            let name_node = {
+                let mut found = None;
+                let mut cursor = node.walk();
+                for elem in node.children(&mut cursor) {
+                    if elem.kind() != "const_element" {
+                        continue;
+                    }
+                    if let Some(n) = elem.children(&mut elem.walk()).find(|c| c.kind() == "name") {
+                        if n.utf8_text(source).ok() == Some(name.as_str()) {
+                            found = Some(n);
+                            break;
+                        }
+                    }
+                }
+                found
+            };
+            let mut symbol = Symbol {
                 name: name.clone(),
                 symbol_type: SymbolType::Variable,
                 qualified_name: Some(qn),
@@ -751,7 +812,10 @@ impl PhpPlugin {
                     "language": "php",
                     "kind": "const_declaration",
                 }),
-            });
+                ..Default::default()
+            };
+            rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, name_node);
+            symbols.push(symbol);
         }
         Ok(symbols)
     }
@@ -857,6 +921,7 @@ impl PhpPlugin {
                     }),
                     to_qualified_hint: None,
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
             "object_creation_expression" => {
@@ -871,6 +936,7 @@ impl PhpPlugin {
                     metadata: serde_json::json!({ "language": "php" }),
                     to_qualified_hint: None,
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
             "member_access_expression"
@@ -891,6 +957,7 @@ impl PhpPlugin {
                     }),
                     to_qualified_hint: None,
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
             "attribute" => {
@@ -905,6 +972,7 @@ impl PhpPlugin {
                         metadata: serde_json::json!({ "language": "php" }),
                         to_qualified_hint: None,
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -941,6 +1009,7 @@ impl PhpPlugin {
                     }),
                     to_qualified_hint: None,
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
             _ => {}
@@ -1147,6 +1216,7 @@ fn relation(
         metadata: serde_json::json!({}),
         to_qualified_hint: None,
         to_type_hint: None,
+        ..Default::default()
     }
 }
 
@@ -1280,7 +1350,7 @@ fn push_import_symbol(
     let Some((local, qualified)) = clause_import_names(clause, source, prefix) else {
         return;
     };
-    symbols.push(Symbol {
+    let mut symbol = Symbol {
         name: local,
         symbol_type: SymbolType::Import,
         qualified_name: Some(qualified),
@@ -1292,7 +1362,14 @@ fn push_import_symbol(
         modifiers: vec![],
         documentation: None,
         metadata: serde_json::json!({ "language": "php", "kind": "import" }),
-    });
+        ..Default::default()
+    };
+    rgctl_plugin_helpers::record_symbol_spans(
+        &mut symbol,
+        clause,
+        clause.child_by_field_name("alias"),
+    );
+    symbols.push(symbol);
 }
 
 fn clause_import_names(
@@ -1385,7 +1462,7 @@ fn walk_anonymous_classes(
             let qualified = owner
                 .map(|o| format!("{o}.{anon_name}"))
                 .unwrap_or_else(|| qualify(namespace, &anon_name));
-            symbols.push(Symbol {
+            let mut symbol = Symbol {
                 name: anon_name.clone(),
                 symbol_type: SymbolType::Class,
                 qualified_name: Some(qualified.clone()),
@@ -1401,7 +1478,10 @@ fn walk_anonymous_classes(
                     "is_anonymous": true,
                     "owner": owner,
                 }),
-            });
+                ..Default::default()
+            };
+            rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, None);
+            symbols.push(symbol);
             if let Some(body) = node
                 .child_by_field_name("body")
                 .or_else(|| find_child_kind(node, "declaration_list"))
@@ -1529,6 +1609,7 @@ pub(crate) fn push_php_call_relation(
         metadata: meta,
         to_qualified_hint,
         to_type_hint: None,
+        ..Default::default()
     });
 }
 

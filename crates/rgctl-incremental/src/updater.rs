@@ -210,7 +210,7 @@ impl IncrementalUpdater {
         }
         std::fs::create_dir_all(&spill_dir)?;
         let mut builder = GraphBuilder::with_spill(&spill_dir)?;
-        let (_stream_stats, tails) = stream_into_graph(
+        let (_stream_stats, tails, _lossless_sidecars) = stream_into_graph(
             self.config.thread_count,
             &extractor,
             Arc::clone(&self.registry),
@@ -405,7 +405,7 @@ impl IncrementalUpdater {
         }
         std::fs::create_dir_all(&spill_dir)?;
         let mut builder = GraphBuilder::with_spill(&spill_dir)?;
-        let (_stream_stats, tails) = stream_into_graph(
+        let (_stream_stats, tails, _lossless_sidecars) = stream_into_graph(
             self.config.thread_count,
             &extractor,
             Arc::clone(&self.registry),
@@ -538,7 +538,7 @@ impl IncrementalUpdater {
         let extractor =
             Extractor::new(Arc::clone(&self.registry)).with_facts_cache(Arc::clone(&facts));
         let mut builder = GraphBuilder::new();
-        let (stream_stats, tails) = stream_into_graph(
+        let (stream_stats, tails, _lossless_sidecars) = stream_into_graph(
             self.config.thread_count,
             &extractor,
             Arc::clone(&self.registry),

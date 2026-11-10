@@ -72,6 +72,8 @@ pub(crate) struct AnalysisOptions<'a> {
     pub limits: Option<DiscoverLimits>,
     /// Reuse Stage 1 analytics artifacts when `graph_from_snapshot` (STAGE_DEEP).
     pub reuse_basic_analytics: bool,
+    /// Persist RGCS/RGCT lossless sidecars (`--lossless` / `RGCTL_LOSSLESS=1`).
+    pub lossless: bool,
 }
 
 /// Result of one `run_full_analysis` pass.
@@ -118,6 +120,7 @@ pub(crate) fn run_full_analysis(
         artifact_root,
         limits,
         reuse_basic_analytics,
+        lossless,
     } = opts;
 
     let verbose = ctx.verbose;
@@ -211,6 +214,7 @@ pub(crate) fn run_full_analysis(
                 .as_ref()
                 .and_then(|l| l.stream_channel_capacity())
                 .unwrap_or_else(|| PipelineConfig::default().stream_channel_capacity),
+            lossless,
             ..PipelineConfig::default()
         },
     );

@@ -1343,3 +1343,80 @@ fn linux_cold_diff_within_baseline() {
     );
     assert_within_baseline("linux cold diff", elapsed, baseline);
 }
+
+/// Opt-in lossless discover + writeback verify throughput (does not alter Gate A).
+///
+/// Default Gate A (`linux_cold_discover_within_baseline`) remains the non-`--lossless`
+/// discover path; this gate only measures the opt-in sidecar path on a small fixture.
+const TIER1_LOSSLESS_WRITEBACK_BASELINE_SECS: f64 = 8.0;
+
+#[test]
+#[ignore = "manual: tier1 lossless writeback roundtrip perf (discover --lossless + writeback verify)"]
+fn tier1_lossless_writeback_roundtrip_perf() {
+    let repo = ecommerce_java_repo_path();
+    if !repo.is_dir() {
+        eprintln!("skip: ecommerce-java not at {}", repo.display());
+        return;
+    }
+    let baseline = std::env::var("RGCTL_TIER1_LOSSLESS_WRITEBACK_BASELINE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(TIER1_LOSSLESS_WRITEBACK_BASELINE_SECS);
+
+    let bin = rgctl_bin();
+    assert!(
+        bin.is_file(),
+        "rgctl binary not found at {} — run cargo build --release --bin rgctl",
+        bin.display()
+    );
+
+    let _ = std::fs::remove_dir_all(repo.join(".rgctl"));
+    let start = Instant::now();
+    let discover = Command::new(&bin)
+        .current_dir(&repo)
+        .env("RUST_LOG", "info,profile=info")
+        .args(["discover", ".", "--lossless"])
+        .output()
+        .expect("spawn discover --lossless");
+    let discover_elapsed = start.elapsed();
+    assert!(
+        discover.status.success(),
+        "discover --lossless failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&discover.stdout),
+        String::from_utf8_lossy(&discover.stderr)
+    );
+
+    let verify_start = Instant::now();
+    let verify = Command::new(&bin)
+        .current_dir(&repo)
+        .args(["writeback", "verify", "-f", "json"])
+        .output()
+        .expect("spawn writeback verify");
+    let verify_elapsed = verify_start.elapsed();
+    assert!(
+        verify.status.success(),
+        "writeback verify failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&verify.stdout),
+        String::from_utf8_lossy(&verify.stderr)
+    );
+
+    let total = discover_elapsed + verify_elapsed;
+    eprintln!(
+        "tier1 lossless writeback: discover={:.3}s verify={:.3}s total={:.3}s (baseline {:.1}s); Gate A path unchanged (opt-in --lossless only)",
+        discover_elapsed.as_secs_f64(),
+        verify_elapsed.as_secs_f64(),
+        total.as_secs_f64(),
+        baseline
+    );
+    assert_within_baseline("tier1 lossless writeback roundtrip", total, baseline);
+
+    // Content store + CST must exist after --lossless; default discover does not require them.
+    assert!(
+        repo.join(".rgctl/content_store.bin").is_file(),
+        "expected RGCS content_store.bin after --lossless"
+    );
+    assert!(
+        repo.join(".rgctl/cst.archive.bin").is_file(),
+        "expected RGCT cst.archive.bin after --lossless"
+    );
+}

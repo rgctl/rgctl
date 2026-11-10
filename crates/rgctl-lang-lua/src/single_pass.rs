@@ -93,6 +93,7 @@ fn push_function_symbol(
         modifiers: vec![],
         documentation: None,
         metadata: serde_json::json!({ "language": "lua" }),
+        ..Default::default()
     });
     ctx.enter_scope(
         ScopeKind::Function,

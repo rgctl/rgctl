@@ -57,6 +57,7 @@ Internals and contribution bars — not the default agent reading path.
 | [Integration test matrix](internal/integration-tests.md) | Tier A/B/C — in-repo artifacts, HTTP serve, CLI subprocess · golden CLI: `tests/cli_output/` |
 | [HTTP server and dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/) | Serve / dashboard UI |
 | [Migration planner design](design/migration-planner-design.md) · [Migration algorithms](migration-algorithms.md) | Migration internals |
+| [Lossless write-back architecture](design/lossless-writeback-architecture.md) | Red-Green spans, RGCS/RGCT sidecars, piece-table `writeback` |
 | [Releasing](releasing.md) | Versioned binaries |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Dev setup |
 

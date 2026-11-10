@@ -158,6 +158,7 @@ fn push_type_symbol(
             "language": "scala",
             "kind": kind_meta,
         }),
+        ..Default::default()
     });
     ctx.enter_scope(
         scope_kind,
@@ -204,6 +205,7 @@ fn push_named_symbol(
             "language": "scala",
             "kind": kind_meta,
         }),
+        ..Default::default()
     });
 }
 
@@ -354,6 +356,7 @@ pub fn extract_all_single_pass(
                                     "language": "scala",
                                     "kind": "given",
                                 }),
+                                ..Default::default()
                             });
                             ctx.enter_scope(
                                 ScopeKind::Function,
@@ -386,6 +389,7 @@ pub fn extract_all_single_pass(
                                     "language": "scala",
                                     "kind": "given",
                                 }),
+                                ..Default::default()
                             });
                             ctx.enter_scope(
                                 ScopeKind::Function,
@@ -442,6 +446,7 @@ pub fn extract_all_single_pass(
                                         "function"
                                     },
                                 }),
+                                ..Default::default()
                             });
                             ctx.enter_scope(
                                 ScopeKind::Function,
@@ -491,6 +496,7 @@ pub fn extract_all_single_pass(
                                 "language": "scala",
                                 "kind": "lambda",
                             }),
+                            ..Default::default()
                         });
                         ctx.enter_scope(
                             ScopeKind::Function,
@@ -554,6 +560,7 @@ pub fn extract_all_single_pass(
                                     "language": "scala",
                                     "kind": keyword,
                                 }),
+                                ..Default::default()
                             });
                         }
                     }
@@ -578,6 +585,7 @@ pub fn extract_all_single_pass(
                                     }),
                                     to_qualified_hint: Some(base),
                                     to_type_hint: None,
+                                    ..Default::default()
                                 });
                             }
                         }
@@ -605,6 +613,7 @@ pub fn extract_all_single_pass(
                                     }),
                                     to_qualified_hint: Some(ann),
                                     to_type_hint: None,
+                                    ..Default::default()
                                 });
                             }
                         }

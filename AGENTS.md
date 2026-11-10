@@ -158,6 +158,7 @@ Baselines and notes: [docs/internal/profile.md](docs/internal/profile.md#snapsho
 | Doc | Why |
 |-----|-----|
 | [docs/analysis-architecture.md](docs/analysis-architecture.md) | Graph tiers, spill, CSR |
+| [docs/design/lossless-writeback-architecture.md](docs/design/lossless-writeback-architecture.md) | Red-Green `NodeRow` spans, RGCS/RGCT, `rgctl writeback` |
 | [docs/design/blast-radius-design.md](docs/design/blast-radius-design.md) | Reachability / SCC |
 | [docs/internal/profile.md](docs/internal/profile.md) | Cold profile deep dive |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, tests, PR norms |

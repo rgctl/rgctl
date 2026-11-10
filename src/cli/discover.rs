@@ -64,6 +64,8 @@ pub struct DiscoverArgs {
     pub files: Option<Vec<String>>,
     /// Reverse call-dependency hops for `--files` updates.
     pub cascade_depth: usize,
+    /// Persist lossless content store + Green-CST (`--lossless` / `RGCTL_LOSSLESS=1`).
+    pub lossless: bool,
 }
 
 /// Choose the session `--repo` base before joining a relative positional `PATH`.
@@ -218,6 +220,8 @@ pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
             artifact_root: args.artifact_root.as_deref(),
             limits,
             reuse_basic_analytics: false,
+            lossless: args.lossless
+                || std::env::var_os("RGCTL_LOSSLESS").is_some_and(|v| v != "0" && v != "false"),
         },
     )?;
     Ok(())

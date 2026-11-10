@@ -287,6 +287,7 @@ fn push_named_symbol(
             "language": "swift",
             "kind": kind_meta,
         }),
+        ..Default::default()
     });
     if let Some(scope_kind) = enter {
         let is_fn = scope_kind.is_function_like();
@@ -449,6 +450,7 @@ pub fn extract_all_single_pass(
                                 "language": "swift",
                                 "kind": meta,
                             }),
+                            ..Default::default()
                         });
                         ctx.enter_scope(
                             ScopeKind::Function,
@@ -492,6 +494,7 @@ pub fn extract_all_single_pass(
                                     "language": "swift",
                                     "kind": "property",
                                 }),
+                                ..Default::default()
                             });
                         }
                     }
@@ -541,6 +544,7 @@ pub fn extract_all_single_pass(
                                     "language": "swift",
                                     "kind": "enum_entry",
                                 }),
+                                ..Default::default()
                             });
                         }
                     }
@@ -576,6 +580,7 @@ pub fn extract_all_single_pass(
                                 "language": "swift",
                                 "kind": "protocol_function",
                             }),
+                            ..Default::default()
                         });
                     }
                     "protocol_property_declaration" => {
@@ -609,6 +614,7 @@ pub fn extract_all_single_pass(
                                     "language": "swift",
                                     "kind": "protocol_property",
                                 }),
+                                ..Default::default()
                             });
                         }
                     }
@@ -645,6 +651,7 @@ pub fn extract_all_single_pass(
                                 "language": "swift",
                                 "kind": "lambda",
                             }),
+                            ..Default::default()
                         });
                         ctx.enter_scope(
                             ScopeKind::Function,
@@ -677,6 +684,7 @@ pub fn extract_all_single_pass(
                                     "language": "swift",
                                     "kind": "import",
                                 }),
+                                ..Default::default()
                             });
                         }
                     }
@@ -812,6 +820,7 @@ pub fn extract_all_single_pass(
             metadata: serde_json::json!({ "language": "swift" }),
             to_qualified_hint: Some(callee),
             to_type_hint: None,
+            ..Default::default()
         });
     }
 

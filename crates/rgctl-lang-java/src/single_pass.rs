@@ -3,6 +3,7 @@
 use crate::plugin::{BRANCH_KINDS, ExtractCtx, JAVA_CALL_KINDS, JavaPlugin};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -323,7 +324,7 @@ pub fn extract_all_single_pass(
                     }
                     "import_declaration" => {
                         let text = node.utf8_text(source)?.trim().to_string();
-                        ctx.symbols.push(Symbol {
+                        let mut symbol = Symbol {
                             name: text.clone(),
                             symbol_type: SymbolType::Import,
                             qualified_name: None,
@@ -341,7 +342,10 @@ pub fn extract_all_single_pass(
                             modifiers: vec![],
                             documentation: None,
                             metadata: serde_json::json!({ "language": "java" }),
-                        });
+                            ..Default::default()
+                        };
+                        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                        ctx.symbols.push(symbol);
                     }
                     _ => {}
                 }

@@ -180,6 +180,7 @@ fn emit_decorators_for_node(
             metadata: meta,
             to_qualified_hint: None,
             to_type_hint: None,
+            ..Default::default()
         });
     }
 }
@@ -486,6 +487,7 @@ pub fn extract_all_single_pass(
                 metadata: serde_json::json!({ "language": "python" }),
                 to_qualified_hint: Some(target),
                 to_type_hint: None,
+                ..Default::default()
             });
         }
     }

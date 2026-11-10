@@ -312,6 +312,7 @@ blake3 = "1"
 xxhash-rust = "0.8"
 anyhow = "1"
 thiserror = "1"
+walkdir = { workspace = true }
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -557,6 +558,18 @@ path = "tests/graph_determinism_qe.rs"
 [[test]]
 name = "stable_key_invariance_qe"
 path = "tests/stable_key_invariance_qe.rs"
+
+[[test]]
+name = "snapshot_diff_invariance"
+path = "tests/snapshot_diff_invariance.rs"
+
+[[test]]
+name = "writeback_roundtrip_tier1"
+path = "tests/writeback_roundtrip_tier1.rs"
+
+[[test]]
+name = "writeback_patch_integration"
+path = "tests/writeback_patch_integration.rs"
 
 [[test]]
 name = "e2e_workflow_equivalence"

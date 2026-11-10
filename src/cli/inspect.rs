@@ -44,7 +44,11 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
             }
             match ctx.format {
                 OutputFormat::Json => {
-                    let response = inspect_cfg_json(display_name, &cfg, prune);
+                    let response = inspect_cfg_json(display_name, &cfg, prune).with_symbol_spans(
+                        node.start_byte,
+                        node.end_byte,
+                        node.name_byte_span(),
+                    );
                     ctx.emit_json_value(&serde_json::to_value(&response)?)?;
                 }
                 OutputFormat::Mermaid => {
@@ -74,7 +78,8 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
                 PdgEdgeLayer::Control => (0, pdg.control_deps.len()),
             };
             if ctx.format == OutputFormat::Json {
-                let response = inspect_pdg_json(display_name, &pdg, def_use, data, control);
+                let response = inspect_pdg_json(display_name, &pdg, def_use, data, control)
+                    .with_symbol_spans(node.start_byte, node.end_byte, node.name_byte_span());
                 ctx.emit_json_value(&serde_json::to_value(&response)?)?;
             } else {
                 println!(
@@ -89,7 +94,8 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
         }
         InspectLayer::Dom { frontiers } => {
             if ctx.format == OutputFormat::Json {
-                let response = inspect_dom_json(display_name, &cfg, &dom, frontiers);
+                let response = inspect_dom_json(display_name, &cfg, &dom, frontiers)
+                    .with_symbol_spans(node.start_byte, node.end_byte, node.name_byte_span());
                 ctx.emit_json_value(&serde_json::to_value(&response)?)?;
             } else if ctx.format == OutputFormat::Mermaid {
                 ctx.emit(&dom_to_mermaid(&dom))?;

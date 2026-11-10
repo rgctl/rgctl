@@ -51,6 +51,7 @@ mod structured_query;
 mod temporal_prep;
 pub mod update;
 mod vuln_deps;
+mod writeback;
 
 pub use args::{OutputFormat, SymbolTargetArgs};
 pub use help_ia::root_command;
@@ -105,6 +106,41 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Commands,
+}
+
+#[derive(Subcommand)]
+pub enum WritebackAction {
+    /// Round-trip verify reconstructed Tier-1 files against the source tree
+    Verify {
+        #[arg(short = 'l', long = "languages")]
+        languages: Option<String>,
+        #[arg(long = "strict")]
+        strict: bool,
+    },
+    /// Materialize reconstructed sources into an output directory
+    Export {
+        #[arg(long = "output", short = 'o', value_name = "DIR")]
+        output: std::path::PathBuf,
+        #[arg(short = 'l', long = "languages")]
+        languages: Option<String>,
+        #[arg(long = "file", value_name = "GLOB")]
+        file: Option<String>,
+    },
+    /// Surgical span patch / rename using the piece-table splicer
+    Patch {
+        #[arg(long = "rename", value_name = "OLD=NEW")]
+        rename: Option<String>,
+        #[arg(long = "plan", value_name = "PATH")]
+        plan: Option<std::path::PathBuf>,
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long = "output", short = 'o', value_name = "DIR")]
+        output: Option<std::path::PathBuf>,
+        #[arg(long = "in-place")]
+        in_place: bool,
+        #[arg(long = "force")]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -194,6 +230,11 @@ pub enum Commands {
         /// Write coarse AST skeleton archive under `.rgctl/analysis/` (implies CFG).
         #[arg(long = "with-ast-skeleton", help_heading = "Pipeline features")]
         with_ast_skeleton: bool,
+
+        /// Persist lossless source frames + Green-CST (`.rgctl/content_store.bin` RGCS v2,
+        /// `.rgctl/cst.archive.bin`). Also `RGCTL_LOSSLESS=1`. Off by default.
+        #[arg(long = "lossless", help_heading = "Pipeline features")]
+        lossless: bool,
 
         /// Write legacy JSON graph files (`graph.db` / `graph.json`); default is snapshot-only.
         #[arg(long = "write-json-graph", help_heading = "Session / limits")]
@@ -310,6 +351,13 @@ pub enum Commands {
         /// export, and leave `serve` on the "Dashboard is being prepared" page.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
         extra: Vec<String>,
+    },
+
+    /// Lossless reconstruct / verify / patch Tier-1 sources from `.rgctl/` sidecars
+    #[command(display_order = 2)]
+    Writeback {
+        #[command(subcommand)]
+        action: WritebackAction,
     },
 
     /// Experimental graph query language — prefer `find` / `callers` / `relations` / `inventory` for common queries
@@ -1740,6 +1788,7 @@ impl Cli {
                 git_since,
                 with_dfg_loops,
                 with_ast_skeleton,
+                lossless,
                 write_json_graph,
                 with_universe,
                 export_migration_hints,
@@ -1792,6 +1841,7 @@ impl Cli {
                         git_since,
                         with_dfg_loops,
                         with_ast_skeleton,
+                        lossless,
                         write_json_graph,
                         with_universe,
                         export_migration_hints,
@@ -1810,6 +1860,38 @@ impl Cli {
                         cascade_depth,
                     },
                 )
+            }
+            Commands::Writeback { action } => {
+                let subcommand = match action {
+                    WritebackAction::Verify { languages, strict } => {
+                        writeback::WritebackSubcommand::Verify { languages, strict }
+                    }
+                    WritebackAction::Export {
+                        output,
+                        languages,
+                        file,
+                    } => writeback::WritebackSubcommand::Export {
+                        output,
+                        languages,
+                        file_glob: file,
+                    },
+                    WritebackAction::Patch {
+                        rename,
+                        plan,
+                        dry_run,
+                        output,
+                        in_place,
+                        force,
+                    } => writeback::WritebackSubcommand::Patch {
+                        rename,
+                        plan,
+                        dry_run,
+                        output,
+                        in_place,
+                        force,
+                    },
+                };
+                writeback::run(&ctx, writeback::WritebackArgs { subcommand })
             }
             Commands::Gql {
                 query,
@@ -2750,6 +2832,7 @@ impl Cli {
 fn command_label_for(command: &Commands) -> &'static str {
     match command {
         Commands::Discover { .. } => "discover",
+        Commands::Writeback { .. } => "writeback",
         Commands::Gql { .. } => "gql",
         Commands::Find { .. } => "find",
         Commands::Callers { .. } => "callers",

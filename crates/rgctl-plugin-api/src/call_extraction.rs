@@ -403,6 +403,7 @@ pub fn push_call_relation_from(
         _ => to_qualified_hint.clone().unwrap_or_else(|| callee.clone()),
     };
 
+    let (call_site_start_byte, call_site_byte_len) = call_site_span(node);
     relations.push(Relation {
         from,
         to: local_target,
@@ -417,7 +418,21 @@ pub fn push_call_relation_from(
         metadata: meta,
         to_qualified_hint,
         to_type_hint,
+        call_site_start_byte,
+        call_site_byte_len,
     });
+}
+
+/// Best-effort identifier span for a call expression / invocation node.
+fn call_site_span(node: Node) -> (Option<u32>, Option<u16>) {
+    let name = node
+        .child_by_field_name("name")
+        .or_else(|| node.child_by_field_name("function"))
+        .or_else(|| node.child_by_field_name("method"))
+        .unwrap_or(node);
+    let start = name.start_byte() as u32;
+    let len = name.end_byte().saturating_sub(name.start_byte());
+    (Some(start), u16::try_from(len).ok())
 }
 
 /// Last child bound to a multi-valued tree-sitter field (e.g. C++ `qualified_identifier::name`).

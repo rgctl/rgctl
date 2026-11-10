@@ -92,6 +92,7 @@ fn push_relation(
         metadata: extra,
         to_qualified_hint: None,
         to_type_hint: None,
+        ..Default::default()
     });
 }
 
@@ -122,7 +123,7 @@ pub fn extract_use_symbols(node: Node, source: &[u8], file_path: &str) -> Vec<Sy
                 }
             }
             "use_wildcard" => {
-                out.push(Symbol {
+                let mut symbol = Symbol {
                     name: "*".to_string(),
                     symbol_type: SymbolType::Import,
                     qualified_name: Some("*".to_string()),
@@ -138,7 +139,10 @@ pub fn extract_use_symbols(node: Node, source: &[u8], file_path: &str) -> Vec<Sy
                         "module_path": "*",
                         "is_glob": true,
                     }),
-                });
+                    ..Default::default()
+                };
+                rgctl_plugin_helpers::record_symbol_spans(&mut symbol, n, None);
+                out.push(symbol);
             }
             "identifier" | "type_identifier" | "scoped_identifier" | "scoped_type_identifier"
                 if n.parent().is_some_and(|p| {
@@ -184,7 +188,17 @@ fn import_symbol(
     node: Node,
     file_path: &str,
 ) -> Symbol {
-    Symbol {
+    let name_node = node.child_by_field_name("alias").or_else(|| {
+        if matches!(
+            node.kind(),
+            "identifier" | "type_identifier" | "scoped_identifier" | "scoped_type_identifier"
+        ) {
+            Some(node)
+        } else {
+            None
+        }
+    });
+    let mut symbol = Symbol {
         name: binding.to_string(),
         symbol_type: SymbolType::Import,
         qualified_name: Some(module_path.to_string()),
@@ -200,7 +214,10 @@ fn import_symbol(
             "module_path": module_path,
             "import_alias": alias,
         }),
-    }
+        ..Default::default()
+    };
+    rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, name_node);
+    symbol
 }
 
 pub fn extract_mod_symbol(node: Node, source: &[u8], file_path: &str) -> Option<Symbol> {
@@ -208,7 +225,7 @@ pub fn extract_mod_symbol(node: Node, source: &[u8], file_path: &str) -> Option<
         .child_by_field_name("name")
         .and_then(|n| n.utf8_text(source).ok())
         .map(str::to_string)?;
-    Some(Symbol {
+    let mut symbol = Symbol {
         name: name.clone(),
         symbol_type: SymbolType::Module,
         qualified_name: Some(name),
@@ -220,7 +237,10 @@ pub fn extract_mod_symbol(node: Node, source: &[u8], file_path: &str) -> Option<
         modifiers: vec![],
         documentation: None,
         metadata: serde_json::json!({ "language": "rust", "mod_declaration": true }),
-    })
+        ..Default::default()
+    };
+    rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+    Some(symbol)
 }
 
 pub fn extract_trait_symbols(
@@ -230,21 +250,22 @@ pub fn extract_trait_symbols(
     module_prefix: Option<&str>,
 ) -> Vec<Symbol> {
     let mut out = Vec::new();
-    let trait_name = node
-        .child(0)
-        .filter(|c| c.kind() == "type_identifier")
+    let name_node = node
+        .child_by_field_name("name")
+        .or_else(|| node.child(0).filter(|c| c.kind() == "type_identifier"))
         .or_else(|| {
             let mut c = node.walk();
             node.children(&mut c)
                 .find(|ch| ch.kind() == "type_identifier")
-        })
+        });
+    let trait_name = name_node
         .and_then(|n| n.utf8_text(source).ok())
         .map(str::to_string);
     let Some(trait_name) = trait_name else {
         return out;
     };
     let qn = qualify_with_module(module_prefix, &trait_name);
-    out.push(Symbol {
+    let mut symbol = Symbol {
         name: trait_name.clone(),
         symbol_type: SymbolType::Interface,
         qualified_name: Some(qn.clone()),
@@ -256,7 +277,10 @@ pub fn extract_trait_symbols(
         modifiers: vec![],
         documentation: None,
         metadata: serde_json::json!({ "language": "rust", "is_trait": true }),
-    });
+        ..Default::default()
+    };
+    rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, name_node);
+    out.push(symbol);
 
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
@@ -297,7 +321,7 @@ pub fn extract_type_item(node: Node, source: &[u8], file_path: &str) -> Option<S
     if let Some(ref ty) = aliased {
         meta["aliased_type"] = serde_json::Value::String(ty.clone());
     }
-    Some(Symbol {
+    let mut symbol = Symbol {
         name,
         symbol_type: SymbolType::TypeAlias,
         qualified_name: Some(qn),
@@ -309,7 +333,10 @@ pub fn extract_type_item(node: Node, source: &[u8], file_path: &str) -> Option<S
         modifiers: vec![],
         documentation: None,
         metadata: meta,
-    })
+        ..Default::default()
+    };
+    rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+    Some(symbol)
 }
 
 /// `macro_rules! name { ... }` → [`SymbolType::Macro`].
@@ -320,7 +347,7 @@ pub fn extract_macro_definition(node: Node, source: &[u8], file_path: &str) -> O
         .map(str::to_string)?;
     let module_prefix = module_prefix_from_path(Path::new(file_path));
     let qn = qualify_with_module(module_prefix.as_deref(), &name);
-    Some(Symbol {
+    let mut symbol = Symbol {
         name,
         symbol_type: SymbolType::Macro,
         qualified_name: Some(qn),
@@ -332,7 +359,10 @@ pub fn extract_macro_definition(node: Node, source: &[u8], file_path: &str) -> O
         modifiers: vec![],
         documentation: None,
         metadata: serde_json::json!({ "language": "rust", "kind": "macro_definition" }),
-    })
+        ..Default::default()
+    };
+    rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+    Some(symbol)
 }
 
 /// `extern crate foo;` / `extern crate foo as bar;` → Import symbol.
@@ -362,7 +392,7 @@ pub fn extract_extern_crate(node: Node, source: &[u8], file_path: &str) -> Optio
     if let Some(a) = alias {
         meta["alias"] = serde_json::Value::String(a);
     }
-    Some(Symbol {
+    let mut symbol = Symbol {
         name: binding.clone(),
         symbol_type: SymbolType::Import,
         qualified_name: Some(binding),
@@ -374,7 +404,10 @@ pub fn extract_extern_crate(node: Node, source: &[u8], file_path: &str) -> Optio
         modifiers: vec![],
         documentation: None,
         metadata: meta,
-    })
+        ..Default::default()
+    };
+    rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+    Some(symbol)
 }
 
 /// Trait / impl associated type (`type Item;`).
@@ -395,7 +428,7 @@ pub fn extract_associated_type(
             qualify_with_module(module_prefix.as_deref(), &name)
         }
     };
-    Some(Symbol {
+    let mut symbol = Symbol {
         name,
         symbol_type: SymbolType::TypeAlias,
         qualified_name: Some(qn),
@@ -411,7 +444,10 @@ pub fn extract_associated_type(
             "kind": "associated_type",
             "associated": true,
         }),
-    })
+        ..Default::default()
+    };
+    rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+    Some(symbol)
 }
 
 /// Standalone enum variant symbol (`Status::Active`).
@@ -426,7 +462,7 @@ pub fn extract_enum_variant_symbol(
         .child_by_field_name("name")
         .and_then(|n| n.utf8_text(source).ok())
         .map(str::to_string)?;
-    Some(Symbol {
+    let mut symbol = Symbol {
         name: name.clone(),
         symbol_type: SymbolType::Variable,
         qualified_name: Some(format!("{enum_qn}::{name}")),
@@ -443,7 +479,10 @@ pub fn extract_enum_variant_symbol(
             "enum": enum_name,
             "is_enum_variant": true,
         }),
-    })
+        ..Default::default()
+    };
+    rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+    Some(symbol)
 }
 
 fn extract_trait_method(
@@ -461,7 +500,7 @@ fn extract_trait_method(
         })
         .and_then(|n| n.utf8_text(source).ok())
         .map(str::to_string)?;
-    Some(Symbol {
+    let mut symbol = Symbol {
         name: name.clone(),
         symbol_type: SymbolType::Function,
         qualified_name: Some(format!("{trait_qn}::{name}")),
@@ -480,7 +519,10 @@ fn extract_trait_method(
             "trait_method": true,
             "receiver_type": trait_name,
         }),
-    })
+        ..Default::default()
+    };
+    rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+    Some(symbol)
 }
 
 pub fn emit_impl_relations(
@@ -926,6 +968,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
+            ..Default::default()
         }];
         let mut rels = Vec::new();
         walk_depth_relations(

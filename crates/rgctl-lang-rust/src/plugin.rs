@@ -126,7 +126,7 @@ impl RustPlugin {
             (None, serde_json::json!({ "language": "rust" }))
         };
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: raw_name,
             symbol_type,
             qualified_name,
@@ -151,7 +151,14 @@ impl RustPlugin {
             modifiers,
             documentation,
             metadata,
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     /// Parent-walk fallback when no [`ScopeStack`] is available (legacy symbol walk).
@@ -276,7 +283,7 @@ impl RustPlugin {
         let module_prefix = module_prefix_from_path(Path::new(file_path));
         let qn = qualify_with_module(module_prefix.as_deref(), &name);
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: if is_enum {
                 SymbolType::Enum
@@ -298,7 +305,14 @@ impl RustPlugin {
             modifiers,
             documentation: None,
             metadata: serde_json::json!({}),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     /// Collect `enum_variant` names as [`Field`] entries on the enum symbol.

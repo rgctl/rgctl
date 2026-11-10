@@ -1055,6 +1055,7 @@ fn exposes_route_relation(
         }),
         to_qualified_hint: Some(hint.to_string()),
         to_type_hint: Some("route".to_string()),
+        ..Default::default()
     }
 }
 
@@ -1088,6 +1089,7 @@ fn injects_relation(
         metadata: Value::Object(meta),
         to_qualified_hint: None,
         to_type_hint: to_type_hint.map(str::to_string),
+        ..Default::default()
     }
 }
 
@@ -1549,6 +1551,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: json!({}),
+            ..Default::default()
         }
     }
 
@@ -1611,6 +1614,7 @@ mod tests {
                 metadata: json!({"arguments": "\"/users\""}),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             },
             Relation {
                 from: "UsersController.list".into(),
@@ -1620,6 +1624,7 @@ mod tests {
                 metadata: json!({"arguments": "\"/\""}),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             },
         ];
         apply_framework_catalog("typescript", b"", None, &mut symbols, &mut relations);
@@ -1701,6 +1706,7 @@ mod tests {
             metadata: json!({"language": "typescript"}),
             to_qualified_hint: Some("map.get".into()),
             to_type_hint: None,
+            ..Default::default()
         }];
         apply_framework_catalog(
             "typescript",
@@ -1744,6 +1750,7 @@ mod tests {
             metadata: json!({}),
             to_qualified_hint: None,
             to_type_hint: None,
+            ..Default::default()
         }];
         apply_framework_catalog("java", b"", None, &mut symbols, &mut relations);
         let injects: Vec<_> = relations

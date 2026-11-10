@@ -127,7 +127,7 @@ fn write_snapshot(root: &Path, out: &Path) {
         .expect("discover");
     let extractor = Extractor::new(Arc::clone(&registry));
     let mut builder = GraphBuilder::new();
-    let (_stats, tails) = stream_into_graph(
+    let (_stats, tails, _lossless_sidecars) = stream_into_graph(
         Some(1),
         &extractor,
         registry,

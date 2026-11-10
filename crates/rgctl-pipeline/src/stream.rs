@@ -41,6 +41,15 @@ pub struct StreamStats {
     pub file_hashes: HashMap<String, String>,
 }
 
+/// Lossless sidecar payloads collected during streaming merge (moved out of FileExtraction).
+#[derive(Debug, Default)]
+pub struct LosslessSidecarBatch {
+    /// Worker-compressed RGCS frames.
+    pub frames: Vec<rgctl_graph::LosslessFrame>,
+    /// Worker-built Green-CST columns.
+    pub cst_files: Vec<rgctl_graph::CstFileColumns>,
+}
+
 /// Run parallel extractors into a bounded channel while the caller consumes on the main thread.
 pub fn start_parallel_extraction(
     thread_count: Option<usize>,
@@ -104,7 +113,7 @@ pub fn stream_into_graph(
     capacity: usize,
     builder: &mut GraphBuilder,
     on_file_done: impl Fn() + Send + Sync + 'static,
-) -> Result<(StreamStats, Vec<ExtractionTail>)> {
+) -> Result<(StreamStats, Vec<ExtractionTail>, LosslessSidecarBatch)> {
     let files = Arc::new(files.to_vec());
     let file_count = files.len();
     let read_ns = Arc::new(AtomicU64::new(0));
@@ -122,6 +131,7 @@ pub fn stream_into_graph(
     let mut tails = Vec::with_capacity(file_count);
     let mut stats = StreamStats::default();
     stats.file_hashes.reserve(file_count);
+    let mut lossless = LosslessSidecarBatch::default();
     let mut pass1_wall = Duration::ZERO;
     while let Ok(result) = rx.recv() {
         match result {
@@ -130,6 +140,12 @@ pub fn stream_into_graph(
                     stats
                         .file_hashes
                         .insert(extraction.path.to_string_lossy().into_owned(), hash);
+                }
+                if let Some(frame) = extraction.lossless_frame.take() {
+                    lossless.frames.push(frame);
+                }
+                if let Some(cst) = extraction.green_cst.take() {
+                    lossless.cst_files.push(cst);
                 }
                 let pass1_start = Instant::now();
                 tails.push(extractor.populate_pass1(&mut extraction, builder)?);
@@ -148,7 +164,7 @@ pub fn stream_into_graph(
         pass1_wall,
     };
 
-    Ok((stats, tails))
+    Ok((stats, tails, lossless))
 }
 
 fn duration_as_nanos_u64(d: Duration) -> u64 {
@@ -167,7 +183,7 @@ mod tests {
         let mut builder = GraphBuilder::new();
         let missing = TempDir::new().unwrap().path().join("missing.rs");
 
-        let (stats, tails) = stream_into_graph(
+        let (stats, tails, _lossless_sidecars) = stream_into_graph(
             Some(1),
             &extractor,
             registry,
@@ -194,7 +210,7 @@ mod tests {
         let extractor = Extractor::new(Arc::clone(&registry));
         let mut builder = GraphBuilder::new();
 
-        let (stats, tails) = stream_into_graph(
+        let (stats, tails, _lossless_sidecars) = stream_into_graph(
             Some(1),
             &extractor,
             registry,

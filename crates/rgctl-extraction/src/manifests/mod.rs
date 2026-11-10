@@ -82,6 +82,7 @@ fn declarations_to_graph(
             modifiers: vec![],
             documentation: None,
             metadata: meta,
+            ..Default::default()
         });
         relations.push(Relation {
             from: file.clone(),
@@ -91,6 +92,7 @@ fn declarations_to_graph(
             metadata: serde_json::json!({ "ecosystem": d.ecosystem }),
             to_qualified_hint: None,
             to_type_hint: Some("dependency".to_string()),
+            ..Default::default()
         });
     }
     (symbols, relations)
