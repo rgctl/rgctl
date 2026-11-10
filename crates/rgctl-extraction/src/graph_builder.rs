@@ -541,6 +541,7 @@ impl GraphBuilder {
                     serde_json::Value::String(s) => Some(s.clone()),
                     serde_json::Value::Bool(b) => Some(b.to_string()),
                     serde_json::Value::Number(n) => Some(n.to_string()),
+                    serde_json::Value::Object(_) if k == "source_name_range" => Some(v.to_string()),
                     _ => None,
                 };
                 if let Some(s) = prop_val {
@@ -679,6 +680,27 @@ impl GraphBuilder {
                 .with_label("field".to_string())
                 .with_property("member_of".to_string(), symbol.name.clone())
                 .with_property("owner_qualified_name".to_string(), owner_qn.clone());
+            if let Some(fqn) = symbol
+                .metadata
+                .get("field_type_fqns")
+                .and_then(|v| v.get(&field.name))
+                .and_then(|v| v.as_str())
+            {
+                node = node.with_property("field_type_fqn".into(), fqn.to_owned());
+            }
+            if let Some(range) = symbol
+                .metadata
+                .get("field_name_ranges")
+                .and_then(|v| v.get(&field.name))
+            {
+                if let (Some(start), Some(end)) = (
+                    range.get("start_line").and_then(|v| v.as_u64()),
+                    range.get("end_line").and_then(|v| v.as_u64()),
+                ) {
+                    node = node.with_location(start as usize + 1, end as usize + 1);
+                }
+                node = node.with_property("source_name_range".into(), range.to_string());
+            }
             if let Some(ty) = &field.field_type {
                 node = node.with_property("field_type".to_string(), ty.clone());
                 let simple = go_simple_type_from_str(ty);
@@ -4460,5 +4482,35 @@ mod tests {
             tags.contains("dependency") && tags.contains("service"),
             "target_vocab should land on in-repo Injects target, got {tags:?}"
         );
+    }
+    #[test]
+    fn materialized_fields_keep_qualified_types_and_indexed_name_ranges() {
+        let mut builder = GraphBuilder::new();
+        builder.set_materialize_fields(true);
+        let file = builder.ensure_file_node(Path::new("Order.java"));
+        let mut symbol = sample_symbol();
+        symbol.name = "Order".into();
+        symbol.symbol_type = SymbolType::Class;
+        symbol.fields = vec![rgctl_plugin_api::Field {
+            name: "status".into(),
+            field_type: Some("Status".into()),
+            visibility: None,
+        }];
+        symbol.metadata = serde_json::json!({
+            "field_type_fqns":{"status":"demo.Status"},
+            "field_name_ranges":{"status":{"start_line":9,"start_character":4,"end_line":9,"end_character":10}}
+        });
+        builder.add_symbol(&symbol, file);
+        let field = builder
+            .nodes()
+            .iter()
+            .find(|n| n.name == "status")
+            .expect("field");
+        assert_eq!(field.get_property("field_type_fqn"), Some("demo.Status"));
+        assert_eq!(field.start_line, Some(10));
+        let range: serde_json::Value =
+            serde_json::from_str(field.get_property("source_name_range").expect("range"))
+                .expect("JSON range");
+        assert_eq!(range["start_character"], 4);
     }
 }
