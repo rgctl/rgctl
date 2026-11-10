@@ -273,6 +273,30 @@ fn apply_name_range(node: Node, source: &[u8], metadata: &mut serde_json::Value)
     }
 }
 
+/// Walk type syntax iteratively; annotation arguments are not declaration types.
+fn append_identity_type_tokens(node: Node, source: &[u8], output: &mut String) -> Result<()> {
+    let mut stack = Vec::with_capacity(16);
+    stack.push(node);
+    while let Some(token) = stack.pop() {
+        if matches!(
+            token.kind(),
+            "annotation" | "marker_annotation" | "line_comment" | "block_comment"
+        ) {
+            continue;
+        }
+        if token.child_count() == 0 {
+            output.push_str(token.utf8_text(source)?);
+        } else {
+            for index in (0..token.child_count()).rev() {
+                if let Some(child) = token.child(index) {
+                    stack.push(child);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn first_line_text(node: Node, source: &[u8]) -> Result<String> {
     Ok(node
         .utf8_text(source)?
@@ -595,9 +619,69 @@ impl JavaPlugin {
         receiver.utf8_text(source).ok().map(str::to_string)
     }
 
+    /// Source declaration identity, distinct from a resolved JVM descriptor.
+    /// Read type tokens rather than full declarations so names, annotations,
+    /// formatting, comments, and bodies do not participate in identity.
+    fn callable_discriminator(&self, node: Node, source: &[u8]) -> Result<String> {
+        let owner = if node.kind() == "compact_constructor_declaration" {
+            self.find_enclosing_type_node(node).unwrap_or(node)
+        } else {
+            node
+        };
+        let Some(parameters) = owner.child_by_field_name("parameters") else {
+            return Ok("()".into());
+        };
+        let mut signature = String::from("(");
+        let mut cursor = parameters.walk();
+        let mut first = true;
+        for parameter in parameters.named_children(&mut cursor) {
+            if !matches!(parameter.kind(), "formal_parameter" | "spread_parameter") {
+                continue;
+            }
+            if !first {
+                signature.push(',');
+            }
+            first = false;
+            let mut pcursor = parameter.walk();
+            let ty = parameter
+                .child_by_field_name("type")
+                .or_else(|| {
+                    parameter.named_children(&mut pcursor).find(|child| {
+                        !matches!(
+                            child.kind(),
+                            "modifiers"
+                                | "variable_declarator"
+                                | "annotation"
+                                | "marker_annotation"
+                        )
+                    })
+                })
+                .ok_or_else(|| Error::ParseError {
+                    file: "<java>".into(),
+                    line: parameter.start_position().row + 1,
+                    message: "Callable parameter has no type".into(),
+                })?;
+            append_identity_type_tokens(ty, source, &mut signature)?;
+            if let Some(dimensions) = parameter.child_by_field_name("dimensions") {
+                append_identity_type_tokens(dimensions, source, &mut signature)?;
+            }
+            if parameter.kind() == "spread_parameter" {
+                signature.push_str("[]");
+            }
+        }
+        signature.push(')');
+        Ok(signature)
+    }
+
     /// Populate `type_params` / `throws` / `receiver_type` metadata keys on an
     /// existing metadata object for a method/constructor-shaped node.
-    fn apply_callable_metadata(&self, node: Node, source: &[u8], metadata: &mut serde_json::Value) {
+    fn apply_callable_metadata(
+        &self,
+        node: Node,
+        source: &[u8],
+        metadata: &mut serde_json::Value,
+    ) -> Result<()> {
+        metadata["identity_discriminator"] = self.callable_discriminator(node, source)?.into();
         apply_name_range(node, source, metadata);
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
@@ -608,6 +692,7 @@ impl JavaPlugin {
         if let Some(rt) = self.receiver_type_text(node, source) {
             metadata["receiver_type"] = serde_json::Value::String(rt);
         }
+        Ok(())
     }
 
     // ---------------------------------------------------------------
@@ -785,7 +870,7 @@ impl JavaPlugin {
         let parameters = self.extract_parameters(node, source)?;
 
         let mut metadata = serde_json::json!({ "language": "java" });
-        self.apply_callable_metadata(node, source, &mut metadata);
+        self.apply_callable_metadata(node, source, &mut metadata)?;
 
         let mut symbol = Symbol {
             name,
@@ -837,7 +922,7 @@ impl JavaPlugin {
             "language": "java",
             "is_constructor": true,
         });
-        self.apply_callable_metadata(node, source, &mut metadata);
+        self.apply_callable_metadata(node, source, &mut metadata)?;
 
         let mut symbol = Symbol {
             name,
@@ -900,6 +985,7 @@ impl JavaPlugin {
                 "language": "java",
                 "is_constructor": true,
                 "is_compact_constructor": true,
+                "identity_discriminator": self.callable_discriminator(node, source)?,
             }),
             ..Default::default()
         };
@@ -4058,6 +4144,81 @@ mod tests {
         plugin
             .extract_relations(Path::new(file), source, &symbols)
             .unwrap()
+    }
+
+    #[test]
+    fn callable_identity_tracks_types_not_names_locations_or_bodies() {
+        let original = include_bytes!(
+            "../../../tests/fixtures/tier1_identity_dependencies/java/dependencies/library/baseline/demo/Library.java"
+        );
+        let candidate = include_bytes!(
+            "../../../tests/fixtures/tier1_identity_dependencies/java/dependencies/library/candidate/demo/Library.java"
+        );
+        let before = symbols_of(original, "Library.java");
+        let changed = symbols_of(candidate, "Library.java");
+        let shifted = format!(
+            "\n\n{}",
+            std::str::from_utf8(candidate)
+                .expect("fixture UTF-8")
+                .replace("int value", "final int renamed")
+                .replace("value + 1", "renamed + 2")
+        );
+        let after = symbols_of(shifted.as_bytes(), "Library.java");
+        for symbols in [&before, &changed, &after] {
+            let methods: Vec<_> = symbols.iter().filter(|s| s.name == "quote").collect();
+            assert_eq!(methods.len(), 2);
+            assert_eq!(methods[0].qualified_name, methods[1].qualified_name);
+            assert_eq!(methods[0].metadata["identity_discriminator"], "(int)");
+            assert_eq!(methods[1].metadata["identity_discriminator"], "(String)");
+        }
+    }
+
+    #[test]
+    fn callable_identity_normalizes_arrays_varargs_and_record_constructors() {
+        let symbols = symbols_of(
+            br#"class Arrays {
+            void first(@A String /* type */ [] values) {}
+            void second(String values[]) {}
+            void third(String... values) {}
+            void receiver(Arrays this, int value) {}
+            Arrays(int value) {}
+            Arrays(String value) {}
+        }
+        record Point(int x, String y) { Point {} }
+        "#,
+            "Arrays.java",
+        );
+        for name in ["first", "second", "third"] {
+            let method = symbols
+                .iter()
+                .find(|s| s.name == name)
+                .expect("array method");
+            assert_eq!(
+                method.metadata["identity_discriminator"], "(String[])",
+                "{name}"
+            );
+        }
+        let receiver = symbols
+            .iter()
+            .find(|s| s.name == "receiver")
+            .expect("receiver");
+        assert_eq!(receiver.metadata["identity_discriminator"], "(int)");
+        let constructors: Vec<_> = symbols
+            .iter()
+            .filter(|s| s.name == "Arrays")
+            .filter(|s| s.symbol_type == SymbolType::Function)
+            .collect();
+        assert_eq!(constructors.len(), 2);
+        assert_eq!(constructors[0].metadata["identity_discriminator"], "(int)");
+        assert_eq!(
+            constructors[1].metadata["identity_discriminator"],
+            "(String)"
+        );
+        let compact = symbols
+            .iter()
+            .find(|s| s.metadata["is_compact_constructor"] == true)
+            .expect("compact constructor");
+        assert_eq!(compact.metadata["identity_discriminator"], "(int,String)");
     }
 
     // ---------------------------------------------------------------
