@@ -72,12 +72,27 @@ pub fn deterministic_node_id(
     node_type: NodeType,
     qualified_name: Option<&str>,
 ) -> Uuid {
+    deterministic_node_id_with_discriminator(file_path, name, node_type, qualified_name, None)
+}
+
+/// Derive a node ID with a language-supplied canonical callable discriminator.
+///
+/// An absent or empty discriminator preserves the existing ID contract. The
+/// discriminator must describe the declaration, never its body or coordinates.
+pub fn deterministic_node_id_with_discriminator(
+    file_path: Option<&str>,
+    name: &str,
+    node_type: NodeType,
+    qualified_name: Option<&str>,
+    discriminator: Option<&str>,
+) -> Uuid {
     match file_path {
-        Some(path) => stable_key_to_uuid(stable_key_from_facets(
+        Some(path) => stable_key_to_uuid(stable_key_from_facets_with_discriminator(
             Some(path),
             name,
             node_type,
             qualified_name,
+            discriminator,
         )),
         None => Uuid::new_v4(),
     }
@@ -94,6 +109,20 @@ pub fn stable_key_from_facets(
     node_type: NodeType,
     qualified_name: Option<&str>,
 ) -> StableNodeKey {
+    stable_key_from_facets_with_discriminator(file_path, name, node_type, qualified_name, None)
+}
+
+/// Hash stable declaration facets and an optional canonical callable discriminator.
+///
+/// The optional facet is domain-separated and length-prefixed. Empty values are
+/// treated as absent so callers without callable metadata retain existing keys.
+pub fn stable_key_from_facets_with_discriminator(
+    file_path: Option<&str>,
+    name: &str,
+    node_type: NodeType,
+    qualified_name: Option<&str>,
+    discriminator: Option<&str>,
+) -> StableNodeKey {
     let mut hasher = blake3::Hasher::new();
     if let Some(path) = file_path {
         hasher.update(normalize_path_str(path).as_bytes());
@@ -107,6 +136,11 @@ pub fn stable_key_from_facets(
         hasher.update(qn.as_bytes());
     } else {
         hasher.update(b"");
+    }
+    if let Some(discriminator) = discriminator.filter(|s| !s.is_empty()) {
+        hasher.update(&[0xfe]);
+        hasher.update(&(discriminator.len() as u64).to_le_bytes());
+        hasher.update(discriminator.as_bytes());
     }
     let hash = hasher.finalize();
     StableNodeKey(u64::from_le_bytes(
@@ -197,6 +231,92 @@ mod tests {
         let file = File::open(&path).unwrap();
         let mmap = Arc::new(unsafe { Mmap::map(&file).unwrap() });
         (tmp, ColumnarGraphMmap::open(mmap).unwrap())
+    }
+
+    #[test]
+    fn overload_discriminators_produce_distinct_keys_and_ids() {
+        let key = |signature| {
+            stable_key_from_facets_with_discriminator(
+                Some("Library.java"),
+                "quote",
+                NodeType::Function,
+                Some("demo.Library.quote"),
+                Some(signature),
+            )
+        };
+        let int_key = key("(int)");
+        let string_key = key("(java.lang.String)");
+        assert_ne!(int_key, string_key);
+        assert_ne!(stable_key_to_uuid(int_key), stable_key_to_uuid(string_key));
+        assert_eq!(
+            stable_key_to_uuid(int_key),
+            deterministic_node_id_with_discriminator(
+                Some("Library.java"),
+                "quote",
+                NodeType::Function,
+                Some("demo.Library.quote"),
+                Some("(int)"),
+            ),
+        );
+    }
+
+    #[test]
+    fn optional_discriminator_preserves_existing_identity_contract() {
+        let legacy_key = stable_key_from_facets(
+            Some("Library.java"),
+            "quote",
+            NodeType::Function,
+            Some("demo.Library.quote"),
+        );
+        let legacy_id = deterministic_node_id(
+            Some("Library.java"),
+            "quote",
+            NodeType::Function,
+            Some("demo.Library.quote"),
+        );
+        for discriminator in [None, Some("")] {
+            assert_eq!(
+                legacy_key,
+                stable_key_from_facets_with_discriminator(
+                    Some("Library.java"),
+                    "quote",
+                    NodeType::Function,
+                    Some("demo.Library.quote"),
+                    discriminator,
+                )
+            );
+            assert_eq!(
+                legacy_id,
+                deterministic_node_id_with_discriminator(
+                    Some("Library.java"),
+                    "quote",
+                    NodeType::Function,
+                    Some("demo.Library.quote"),
+                    discriminator,
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn discriminator_does_not_replace_owner_or_node_kind() {
+        let key = |owner, kind| {
+            stable_key_from_facets_with_discriminator(
+                Some("Library.java"),
+                "quote",
+                kind,
+                Some(owner),
+                Some("(int)"),
+            )
+        };
+        assert_ne!(
+            key("demo.A.quote", NodeType::Function),
+            key("demo.B.quote", NodeType::Function)
+        );
+        assert_ne!(
+            key("demo.A.quote", NodeType::Function),
+            key("demo.A.quote", NodeType::Variable)
+        );
     }
 
     #[test]
