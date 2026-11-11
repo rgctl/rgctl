@@ -83,6 +83,10 @@ pub struct GraphBuilder {
     parked_relations: Vec<ParkedRelationRecord>,
     declaration_ids: FxHashSet<Uuid>,
     callable_parameters: HashMap<Uuid, String>,
+    /// Shared dispatch contracts, available even when graph nodes spill to disk.
+    method_identities: HashMap<Uuid, String>,
+    method_override_owners: HashMap<Uuid, String>,
+    signature_families: FxHashSet<Uuid>,
     unresolved_calls: usize,
     callable_resolution_samples: Vec<Relation>,
     /// `file_path → (imported_symbol_or_alias → module_source_path)` from Import symbols.
@@ -667,6 +671,28 @@ impl GraphBuilder {
             SymbolType::Function | SymbolType::Method
         ) {
             return;
+        }
+        if symbol.metadata["superseded_definition"] == true {
+            return;
+        }
+        if let Some(identity) = symbol
+            .metadata
+            .get("override_identity")
+            .or_else(|| symbol.metadata.get("identity_discriminator"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            self.method_identities.insert(id, identity.to_owned());
+        }
+        if let Some(owner) = symbol
+            .metadata
+            .get("override_owner")
+            .and_then(|v| v.as_str())
+        {
+            self.method_override_owners.insert(id, owner.to_owned());
+        }
+        if symbol.metadata["language"] == "typescript" {
+            self.signature_families.insert(id);
         }
         let Some(qn) = symbol.qualified_name.as_deref() else {
             return;
@@ -1419,18 +1445,48 @@ impl GraphBuilder {
             }
             for (method, child_id) in methods {
                 for ancestor in chain.iter().skip(1) {
-                    let ancestor_id = self
-                        .type_methods
-                        .get(ancestor)
-                        .and_then(|ms| unique_method_id(ms, &method));
-                    let Some(ancestor_id) = ancestor_id else {
-                        continue;
-                    };
-                    if ancestor_id == child_id {
+                    if self
+                        .method_override_owners
+                        .get(&child_id)
+                        .is_some_and(|owner| {
+                            owner != ancestor && type_simple_name(owner) != ancestor
+                        })
+                    {
                         continue;
                     }
-                    edges.push(Edge::new(child_id, ancestor_id, EdgeType::Overrides));
-                    break; // nearest ancestor only
+                    let Some(methods) = self.type_methods.get(ancestor) else {
+                        continue;
+                    };
+                    let identity = self.method_identities.get(&child_id);
+                    let mut candidates: Vec<_> = methods
+                        .iter()
+                        .filter(|(name, id)| {
+                            name == &method && self.method_identities.get(id) == identity
+                        })
+                        .map(|(_, id)| *id)
+                        .collect();
+                    // A paired declaration must not hide its runtime body.
+                    if candidates
+                        .iter()
+                        .any(|id| !self.declaration_ids.contains(id))
+                    {
+                        candidates.retain(|id| !self.declaration_ids.contains(id));
+                    }
+                    if candidates.len() != 1
+                        && !(self.signature_families.contains(&child_id)
+                            && !candidates.is_empty()
+                            && candidates
+                                .iter()
+                                .all(|id| self.signature_families.contains(id)))
+                    {
+                        continue;
+                    }
+                    for ancestor_id in candidates {
+                        if ancestor_id != child_id {
+                            edges.push(Edge::new(child_id, ancestor_id, EdgeType::Overrides));
+                        }
+                    }
+                    break; // nearest ancestor with a matching dispatch contract
                 }
             }
         }

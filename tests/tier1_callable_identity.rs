@@ -194,6 +194,21 @@ fn inherited_overrides_never_bind_a_different_overload() {
                     && n.identity_discriminator() == child.identity_discriminator()
             })
             .unwrap_or_else(|| panic!("{language}: base missing: {nodes:?}"));
+        let extracted_overrides: Vec<_> = edges
+            .iter()
+            .filter(|edge| {
+                edge.edge_type == rgctl_graph::schema::EdgeType::Overrides && edge.from == child.id
+            })
+            .collect();
+        assert_eq!(
+            extracted_overrides.len(),
+            1,
+            "{language}: extraction-time override missing/ambiguous"
+        );
+        assert_eq!(
+            extracted_overrides[0].to, expected.id,
+            "{language}: extraction-time override chose another overload"
+        );
         let mut backend = MemoryBackend::new();
         backend.insert_nodes_batch(nodes.clone()).unwrap();
         backend.insert_edges_batch(edges).unwrap();
@@ -558,5 +573,41 @@ fn unresolved_call_evidence_is_bounded_and_replaced_after_recovery() {
         assert!(!rgctl_extraction::callable_resolution::semantics_current(
             directory.path()
         ));
+    }
+}
+
+#[test]
+fn extraction_never_overrides_a_unique_parent_with_a_different_signature() {
+    for (file, source) in [
+        (
+            "Mismatch.java",
+            "class Base { int quote(int value){return 11;} } class Child extends Base { int quote(String value){return 21;} }",
+        ),
+        (
+            "mismatch.cs",
+            "class Base { int quote(int value){return 11;} } class Child : Base { int quote(string value){return 21;} }",
+        ),
+        (
+            "mismatch.cpp",
+            "class Base { public: int quote(int value){return 11;} }; class Child : public Base { public: int quote(const char* value){return 21;} };",
+        ),
+    ] {
+        let (nodes, edges) = graph(file, source);
+        let child = nodes
+            .iter()
+            .find(|n| {
+                n.node_type == NodeType::Function
+                    && n.qualified_name
+                        .as_deref()
+                        .is_some_and(|qn| qn.starts_with("Child.") || qn.starts_with("Child::"))
+            })
+            .unwrap();
+        assert!(
+            !edges
+                .iter()
+                .any(|e| e.from == child.id
+                    && e.edge_type == rgctl_graph::schema::EdgeType::Overrides),
+            "{file}: wrong-signature override emitted"
+        );
     }
 }
