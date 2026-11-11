@@ -41,9 +41,12 @@ rgctl -r "$REPO" install --skill --tools cursor,claude,codex,antigravity,agents
 2. rgctl -f json <command>            # prefer before reading files / grep
 3. Parse schema_version + payload     # never scrape stderr for JSON
 4. Long migrations                    # rgctl serve --watch  OR  rgctl update between waves
+5. Framework migrate                  # discover --lossless → writeback migrate --from/--to|--plan
 ```
 
 **Step 0 is mandatory** on any code question, investigation, refactoring, or migration: acquire `.rgctl/` first, then use `rgctl -f json` before reading source files or falling back to text search.
+
+**Framework / annotation write-back:** `rgctl discover . --lossless`, then `rgctl -f json writeback frameworks` and `rgctl -f json writeback migrate --from <src> --to <dst> --in-place` (or `--plan migration-plan.json`). Process returned `agent_worklist[]` in blast-radius order; finish with `rgctl writeback verify`.
 
 Artifacts live at **`{repo}/.rgctl/`**. Set `REPO` to the repository root:
 

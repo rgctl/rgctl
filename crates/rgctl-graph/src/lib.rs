@@ -48,6 +48,7 @@ pub mod structural_sketch;
 pub mod structured_query;
 /// Piece-table span splicing and Trust Ledger.
 pub mod writeback;
+pub mod writeback_migrate;
 
 pub use code_graph::CodeGraph;
 pub use code_index::{CodeIndex, CodeLocation, hash_code};
@@ -71,7 +72,7 @@ pub use lossless_content::{
 };
 pub use migration::{migrate_snapshot, migrate_v1_to_v2};
 pub use query::{QueryStream, execute, execute_chunks, stream_query};
-pub use schema::{AccessType, CallType, GRAPH_SCHEMA_VERSION, GraphParameter, SharedStr};
+pub use schema::{AccessType, CallType, EdgeType, GRAPH_SCHEMA_VERSION, GraphParameter, SharedStr};
 pub use segmented_spill::{
     DEFAULT_SORT_RUN_BYTES, FinishedSpill, SegmentedSpill, set_sort_run_bytes_override,
     write_columnar_from_spill,
@@ -103,6 +104,11 @@ pub use writeback::{
     EditReason, SpanEdit, TrustLedgerEntry, TrustLedgerReport, TrustStatus, WritebackError,
     apply_span_edits, blake3_hex, open_lossless_sidecars, reconstruct_file, rename_edit,
     sort_edits, validate_syntax_unchanged, verify_file_bytes,
+};
+pub use writeback_migrate::{
+    AgentWorklistItem, MigrateRequest, MigrateWave, MigrationPlan, MigrationWritebackReport,
+    WorklistNodeFacet, is_migratable_source_file, load_migration_plan, materialize_migration,
+    migrate_buffers, worklist_from_graph_nodes,
 };
 
 /// Normalize path separators for consistent comparison.

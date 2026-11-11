@@ -2742,10 +2742,13 @@ dependencies = [
  "rayon",
  "rgctl-error",
  "rgctl-plugin-api",
+ "rgctl-plugin-helpers",
  "serde",
  "serde_json",
  "tempfile",
  "tracing",
+ "tree-sitter",
+ "tree-sitter-java",
  "uuid",
  "zstd",
 ]

@@ -8,7 +8,8 @@
 mod framework_schema;
 
 pub use framework_schema::{
-    CompiledFrameworkCatalog, FrameworkRuleKind, FrameworkRuleSpec, LanguageFrameworkSpec,
+    AnnotationTemplate, CompiledFrameworkCatalog, FrameworkRuleKind, FrameworkRuleSpec,
+    FrameworkWritebackProfile, FrameworkWritebackTemplates, LanguageFrameworkSpec,
     MethodRouteAnnotation,
 };
 
@@ -27,6 +28,8 @@ static BUILTIN: OnceLock<RuntimeFrameworkCatalog> = OnceLock::new();
 #[derive(Debug, Clone)]
 pub struct IndexedLanguageRules {
     pub rules: Vec<FrameworkRuleSpec>,
+    /// Bidirectional writeback profiles for this language.
+    pub frameworks: Vec<FrameworkWritebackProfile>,
     pub annotation_triggers: FxHashSet<String>,
     pub call_triggers: FxHashSet<String>,
     pub wrapper_types: FxHashSet<String>,
@@ -99,6 +102,7 @@ fn index_language(spec: &LanguageFrameworkSpec) -> IndexedLanguageRules {
 
     IndexedLanguageRules {
         rules: spec.rules.clone(),
+        frameworks: spec.frameworks.clone(),
         annotation_triggers,
         call_triggers,
         wrapper_types,
@@ -117,6 +121,67 @@ fn builtin_catalog() -> &'static RuntimeFrameworkCatalog {
             bincode::deserialize(bytes).expect("deserialize built-in frameworks.bin");
         RuntimeFrameworkCatalog::from_compiled(catalog)
     })
+}
+
+/// Process-wide built-in framework catalog (rules + writeback profiles).
+pub fn builtin_framework_catalog() -> &'static RuntimeFrameworkCatalog {
+    builtin_catalog()
+}
+
+/// Normalize common framework aliases to their canonical writeback profile ID.
+pub fn normalize_framework_id(framework_id: &str) -> &str {
+    match framework_id.trim().to_ascii_lowercase().as_str() {
+        "spring" | "spring-boot" | "springboot" | "spring_boot" => "spring",
+        "javaee" | "java-ee" | "java_ee" | "javax" | "j2ee" => "javaee",
+        "jakarta-ee" | "jakartaee" | "jakarta_ee" | "jakarta" => "jakarta-ee",
+        "openliberty" | "open-liberty" | "open_liberty" | "liberty" | "websphere" => "openliberty",
+        "quarkus" => "quarkus",
+        "actix" | "actix-web" | "actix_web" => "actix",
+        "axum" => "axum",
+        "fastapi" | "fast-api" => "fastapi",
+        "flask" => "flask",
+        "express" | "expressjs" => "express",
+        "fastify" => "fastify",
+        "aspnet" | "aspnet-core" | "aspnetcore" => "aspnet",
+        "gin" => "gin",
+        "echo" => "echo",
+        "laravel" => "laravel",
+        "rails" | "ruby-on-rails" => "rails",
+        _ => framework_id.trim(),
+    }
+}
+
+/// Look up a writeback profile by language + framework id (or common alias).
+pub fn find_writeback_profile<'a>(
+    catalog: &'a RuntimeFrameworkCatalog,
+    language: &str,
+    framework_id: &str,
+) -> Option<&'a FrameworkWritebackProfile> {
+    let canonical = normalize_framework_id(framework_id);
+    catalog
+        .by_language
+        .get(language)?
+        .frameworks
+        .iter()
+        .find(|f| f.id == canonical || f.id == framework_id)
+}
+
+/// List writeback framework ids for a language (or all languages when `language` is `None`).
+pub fn list_writeback_frameworks(
+    catalog: &RuntimeFrameworkCatalog,
+    language: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (lang, indexed) in &catalog.by_language {
+        if language.is_some_and(|l| l != lang.as_str()) {
+            continue;
+        }
+        for fw in &indexed.frameworks {
+            out.push((lang.clone(), fw.id.clone()));
+        }
+    }
+    out.sort();
+    out
 }
 
 /// Load built-in catalog, optionally merging `.rgctl/frameworks.d/*.toml` with BLAKE3 cache.
@@ -185,6 +250,7 @@ pub fn load_with_repo_overrides(repo_root: Option<&Path>) -> RuntimeFrameworkCat
             .find(|l| l.language == spec.language)
         {
             existing.rules.extend(spec.rules);
+            existing.frameworks.extend(spec.frameworks);
         } else {
             catalog.languages.push(spec);
         }
@@ -457,8 +523,16 @@ fn apply_route_decorator(
         let path = normalize_route_path(prefix, &sub);
         let (display, hint) = format_route_target(&method, &path);
         let loc = rel.location.clone();
-        out.push(exposes_route_relation(
-            &rel.from, &display, &hint, &method, &path, rule, loc,
+        out.push(exposes_route_relation_with_spans(
+            &rel.from,
+            &display,
+            &hint,
+            &method,
+            &path,
+            rule,
+            loc,
+            rel.call_site_start_byte,
+            rel.call_site_byte_len,
         ));
         if let Some(sym) = find_symbol_mut(symbols, &rel.from) {
             stamp_tags_vocab(sym, &rule.tags, &rule.vocab);
@@ -805,13 +879,15 @@ fn apply_field_annotation_inject(
             continue;
         }
         let loc = rel.location.clone();
-        out.push(injects_relation(
+        out.push(injects_relation_with_spans(
             &class_qn,
             &simple_ty,
             Some("class"),
             rule,
             loc,
             Some(&ann),
+            rel.call_site_start_byte,
+            rel.call_site_byte_len,
         ));
         if let Some(sym) = find_symbol_mut(symbols, &class_qn) {
             stamp_tags_vocab(sym, &rule.tags, &rule.vocab);
@@ -1042,6 +1118,21 @@ fn exposes_route_relation(
     rule: &FrameworkRuleSpec,
     loc: SourceLocation,
 ) -> Relation {
+    exposes_route_relation_with_spans(from, display, hint, method, path, rule, loc, None, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn exposes_route_relation_with_spans(
+    from: &str,
+    display: &str,
+    hint: &str,
+    method: &str,
+    path: &str,
+    rule: &FrameworkRuleSpec,
+    loc: SourceLocation,
+    call_site_start_byte: Option<u32>,
+    call_site_byte_len: Option<u16>,
+) -> Relation {
     Relation {
         from: from.to_string(),
         to: display.to_string(),
@@ -1055,7 +1146,8 @@ fn exposes_route_relation(
         }),
         to_qualified_hint: Some(hint.to_string()),
         to_type_hint: Some("route".to_string()),
-        ..Default::default()
+        call_site_start_byte,
+        call_site_byte_len,
     }
 }
 
@@ -1066,6 +1158,20 @@ fn injects_relation(
     rule: &FrameworkRuleSpec,
     loc: SourceLocation,
     annotation: Option<&str>,
+) -> Relation {
+    injects_relation_with_spans(from, to, to_type_hint, rule, loc, annotation, None, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn injects_relation_with_spans(
+    from: &str,
+    to: &str,
+    to_type_hint: Option<&str>,
+    rule: &FrameworkRuleSpec,
+    loc: SourceLocation,
+    annotation: Option<&str>,
+    call_site_start_byte: Option<u32>,
+    call_site_byte_len: Option<u16>,
 ) -> Relation {
     let mut meta = Map::new();
     meta.insert("framework".into(), Value::String(rule.framework.clone()));
@@ -1089,7 +1195,8 @@ fn injects_relation(
         metadata: Value::Object(meta),
         to_qualified_hint: None,
         to_type_hint: to_type_hint.map(str::to_string),
-        ..Default::default()
+        call_site_start_byte,
+        call_site_byte_len,
     }
 }
 
@@ -1109,8 +1216,20 @@ fn simple_name(s: &str) -> String {
         .to_string()
 }
 
-/// Parse first string-ish token from metadata `arguments` (strip quotes).
+/// Parse first string-ish token from metadata `arguments` / `annotation_args`
+/// (prefer `path` then `value`, then raw `arguments` text).
 pub fn first_string_arg(metadata: &Value) -> Option<String> {
+    if let Some(map) = metadata.get("annotation_args").and_then(|v| v.as_object()) {
+        for key in ["path", "value", "name"] {
+            if let Some(s) = map
+                .get(key)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                return Some(s.to_string());
+            }
+        }
+    }
     let args = metadata.get("arguments")?;
     if let Some(s) = args.as_str() {
         return extract_first_string_literal(s).or_else(|| {
@@ -1161,13 +1280,25 @@ fn resolve_http_method(mra: &MethodRouteAnnotation, metadata: &Value) -> String 
     if let Some(m) = &mra.method {
         return m.to_uppercase();
     }
-    if mra.method_arg.is_some()
-        && let Some(args) = metadata.get("arguments").and_then(|v| v.as_str())
-    {
-        // Look for GET/POST tokens in arguments
-        for verb in ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"] {
-            if args.to_uppercase().contains(verb) {
-                return verb.to_string();
+    if mra.method_arg.is_some() {
+        if let Some(method) = metadata
+            .get("annotation_args")
+            .and_then(|v| v.get("method"))
+            .and_then(|v| v.as_str())
+        {
+            let upper = method.to_uppercase();
+            for verb in ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"] {
+                if upper.contains(verb) {
+                    return verb.to_string();
+                }
+            }
+        }
+        if let Some(args) = metadata.get("arguments").and_then(|v| v.as_str()) {
+            // Look for GET/POST tokens in arguments
+            for verb in ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"] {
+                if args.to_uppercase().contains(verb) {
+                    return verb.to_string();
+                }
             }
         }
     }
@@ -1596,6 +1727,52 @@ mod tests {
                 assert!(!r.tags.is_empty(), "{} tags empty", r.id);
                 assert!(!r.vocab.is_empty(), "{} vocab empty", r.id);
             }
+        }
+    }
+
+    #[test]
+    fn all_framework_tomls_deserialize_with_writeback_profiles() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("frameworks");
+        let mut entries: Vec<_> = std::fs::read_dir(&dir)
+            .expect("frameworks/")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("toml"))
+            .collect();
+        entries.sort();
+        assert_eq!(entries.len(), 10, "expected 10 frameworks/*.toml catalogs");
+        for path in entries {
+            let text = std::fs::read_to_string(&path).expect("read toml");
+            let spec: LanguageFrameworkSpec =
+                toml::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+            assert!(
+                !spec.frameworks.is_empty(),
+                "{} missing [[frameworks]] writeback profiles",
+                path.display()
+            );
+            for fw in &spec.frameworks {
+                assert!(!fw.id.is_empty(), "{} empty framework id", path.display());
+                let has_emitter = fw.writeback.controller_stereotype.is_some()
+                    || fw.writeback.service_stereotype.is_some()
+                    || fw.writeback.field_inject.is_some()
+                    || fw.writeback.config_inject.is_some()
+                    || fw.writeback.class_route_prefix.is_some()
+                    || !fw.writeback.method_route.is_empty()
+                    || !fw.writeback.param_bind.is_empty()
+                    || !fw.namespace_rewrites.is_empty();
+                assert!(
+                    has_emitter,
+                    "{} framework '{}' has empty writeback section",
+                    path.display(),
+                    fw.id
+                );
+            }
+        }
+        let cat = builtin_catalog();
+        let java = cat.by_language.get("java").expect("java");
+        let ids: Vec<_> = java.frameworks.iter().map(|f| f.id.as_str()).collect();
+        for need in ["spring", "javaee", "jakarta-ee", "quarkus"] {
+            assert!(ids.contains(&need), "java missing framework {need}");
         }
     }
 

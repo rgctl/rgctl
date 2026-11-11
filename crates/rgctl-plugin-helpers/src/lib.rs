@@ -9,7 +9,10 @@ pub mod spans;
 pub mod tree_sitter;
 
 pub use framework::{
-    apply_framework_catalog, format_route_target, load_with_repo_overrides, normalize_route_path,
+    AnnotationTemplate, FrameworkWritebackProfile, FrameworkWritebackTemplates,
+    RuntimeFrameworkCatalog, apply_framework_catalog, builtin_framework_catalog,
+    find_writeback_profile, format_route_target, list_writeback_frameworks,
+    load_with_repo_overrides, normalize_route_path,
 };
 
 pub use complexity::ComplexityCalculator;

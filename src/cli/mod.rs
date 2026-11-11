@@ -139,6 +139,35 @@ pub enum WritebackAction {
         #[arg(long = "force")]
         force: bool,
     },
+    /// List bidirectional framework writeback profiles from `frameworks.bin`
+    Frameworks {
+        #[arg(short = 'l', long = "lang", value_name = "LANG")]
+        lang: Option<String>,
+    },
+    /// Framework migration write-back (catalog `--from/--to` or `--plan`)
+    Migrate {
+        #[arg(long = "from", value_name = "SRC_FW")]
+        from: Option<String>,
+        #[arg(long = "to", value_name = "DST_FW")]
+        to: Option<String>,
+        #[arg(long = "plan", value_name = "PATH")]
+        plan: Option<std::path::PathBuf>,
+        #[arg(long = "wave", value_name = "1|2|3|all", default_value = "all")]
+        wave: String,
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long = "output", short = 'o', value_name = "DIR")]
+        output: Option<std::path::PathBuf>,
+        #[arg(long = "in-place")]
+        in_place: bool,
+        #[arg(
+            short = 'l',
+            long = "lang",
+            value_name = "LANG",
+            default_value = "java"
+        )]
+        lang: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1796,6 +1825,28 @@ impl Cli {
                         output,
                         in_place,
                         force,
+                    },
+                    WritebackAction::Frameworks { lang } => {
+                        writeback::WritebackSubcommand::Frameworks { lang }
+                    }
+                    WritebackAction::Migrate {
+                        from,
+                        to,
+                        plan,
+                        wave,
+                        dry_run,
+                        output,
+                        in_place,
+                        lang,
+                    } => writeback::WritebackSubcommand::Migrate {
+                        from,
+                        to,
+                        plan,
+                        wave,
+                        dry_run,
+                        output,
+                        in_place,
+                        lang,
                     },
                 };
                 writeback::run(&ctx, writeback::WritebackArgs { subcommand })

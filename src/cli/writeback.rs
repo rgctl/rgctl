@@ -6,12 +6,19 @@ use crate::languages::registry::LanguageRegistry;
 use anyhow::{Context, Result, bail};
 use rgctl_error::Error as RgctlError;
 use rgctl_graph::{
-    SpanEdit, TrustLedgerEntry, TrustLedgerReport, TrustStatus, WritebackError, apply_span_edits,
-    blake3_hex, open_lossless_sidecars, reconstruct_file, rename_edit, sort_edits,
-    validate_syntax_unchanged,
+    AgentWorklistItem, EdgeType, MigrateRequest, MigrateWave, MigrationPlan, SpanEdit,
+    TrustLedgerEntry, TrustLedgerReport, TrustStatus, WorklistNodeFacet, WritebackError,
+    apply_span_edits, blake3_hex, is_migratable_source_file, load_migration_plan,
+    materialize_migration, migrate_buffers, open_lossless_sidecars, reconstruct_file, rename_edit,
+    sort_edits, validate_syntax_unchanged, worklist_from_graph_nodes,
 };
+use rgctl_plugin_helpers::{
+    builtin_framework_catalog, find_writeback_profile, list_writeback_frameworks,
+};
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -37,6 +44,19 @@ pub enum WritebackSubcommand {
         output: Option<PathBuf>,
         in_place: bool,
         force: bool,
+    },
+    Frameworks {
+        lang: Option<String>,
+    },
+    Migrate {
+        from: Option<String>,
+        to: Option<String>,
+        plan: Option<PathBuf>,
+        wave: String,
+        dry_run: bool,
+        output: Option<PathBuf>,
+        in_place: bool,
+        lang: String,
     },
 }
 
@@ -65,6 +85,27 @@ pub fn run(ctx: &CliContext, args: WritebackArgs) -> Result<()> {
             output.as_deref(),
             in_place,
             force,
+        ),
+        WritebackSubcommand::Frameworks { lang } => run_frameworks(ctx, lang.as_deref()),
+        WritebackSubcommand::Migrate {
+            from,
+            to,
+            plan,
+            wave,
+            dry_run,
+            output,
+            in_place,
+            lang,
+        } => run_migrate(
+            ctx,
+            from.as_deref(),
+            to.as_deref(),
+            plan.as_deref(),
+            &wave,
+            dry_run,
+            output.as_deref(),
+            in_place,
+            &lang,
         ),
     }
 }
@@ -436,6 +477,317 @@ fn is_standalone_ident_token(source: &[u8], start: usize, end: usize) -> bool {
         }
     }
     true
+}
+
+fn run_frameworks(ctx: &CliContext, lang: Option<&str>) -> Result<()> {
+    let catalog = builtin_framework_catalog();
+    let rows = list_writeback_frameworks(catalog, lang);
+    match ctx.format {
+        OutputFormat::Json => {
+            let entries: Vec<_> = rows
+                .iter()
+                .map(|(l, id)| {
+                    let profile = catalog
+                        .by_language
+                        .get(l)
+                        .and_then(|ix| ix.frameworks.iter().find(|f| f.id == *id));
+                    serde_json::json!({
+                        "language": l,
+                        "id": id,
+                        "import_prefixes": profile.map(|p| &p.import_prefixes).cloned().unwrap_or_default(),
+                        "worklist_supertype_triggers": profile.map(|p| &p.worklist_supertype_triggers).cloned().unwrap_or_default(),
+                        "worklist_call_triggers": profile.map(|p| &p.worklist_call_triggers).cloned().unwrap_or_default(),
+                    })
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "schema_version": 1,
+                    "frameworks": entries,
+                }))?
+            );
+        }
+        _ => {
+            println!("writeback frameworks ({} profiles):", rows.len());
+            for (l, id) in rows {
+                println!("  {l}\t{id}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_wave(s: &str) -> Result<MigrateWave> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "1" | "one" => Ok(MigrateWave::One),
+        "2" | "two" => Ok(MigrateWave::Two),
+        "3" | "three" => Ok(MigrateWave::Three),
+        "all" | "*" => Ok(MigrateWave::All),
+        other => bail!("invalid --wave '{other}' (expected 1|2|3|all)"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_migrate(
+    ctx: &CliContext,
+    from: Option<&str>,
+    to: Option<&str>,
+    plan_path: Option<&Path>,
+    wave: &str,
+    dry_run: bool,
+    output: Option<&Path>,
+    in_place: bool,
+    lang: &str,
+) -> Result<()> {
+    let wave = parse_wave(wave)?;
+    let from = from.map(str::to_string);
+    let to = to.map(str::to_string);
+    let mut language = lang.to_string();
+    let mut plan = None;
+    let migration_label;
+
+    if let Some(plan_path) = plan_path {
+        plan = Some(load_migration_plan(plan_path)?);
+        migration_label = plan
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| plan_path.display().to_string());
+        if let Some(p) = plan.as_ref() {
+            language = p.language.clone();
+        }
+    } else if from.is_some() && to.is_some() {
+        migration_label = format!(
+            "{}→{}",
+            from.as_deref().unwrap_or("?"),
+            to.as_deref().unwrap_or("?")
+        );
+    } else {
+        bail!("provide --from <src> --to <dst>, or --plan <file.json>");
+    }
+
+    if !dry_run && !in_place && output.is_none() {
+        bail!("specify --dry-run, --in-place, or --output <dir>");
+    }
+
+    let repo = &ctx.repo;
+    let (content, _) = open_lossless_sidecars(repo)
+        .context("open lossless sidecars (run `rgctl discover --lossless` first)")?;
+
+    let mut files = BTreeMap::new();
+    for idx in 0..content.entry_count() as usize {
+        let rel = content.entry_path(idx)?.to_string();
+        if !is_migratable_source_file(&rel, &language)
+            && !rel.ends_with("pom.xml")
+            && !rel.ends_with("build.gradle")
+            && !rel.ends_with("build.gradle.kts")
+        {
+            continue;
+        }
+        let bytes = content.decompress_at(idx)?;
+        files.insert(rel, bytes);
+    }
+    // Also include build files from disk for worklist (not always in content store).
+    for build in ["pom.xml", "build.gradle", "build.gradle.kts"] {
+        let p = repo.join(build);
+        if p.is_file() && !files.contains_key(build) {
+            files.insert(build.into(), fs::read(&p)?);
+        }
+    }
+
+    let worklist_seeds =
+        seed_worklist_from_snapshot(repo, from.as_deref(), &language, plan.as_ref());
+
+    let req = MigrateRequest {
+        language,
+        from_framework: from,
+        to_framework: to,
+        plan,
+        wave,
+        files,
+        worklist_seeds,
+    };
+    let (patched, mut report) = migrate_buffers(&req).map_err(|e| anyhow::anyhow!("{e}"))?;
+    if report.recipe_or_plan.is_empty() {
+        report.recipe_or_plan = migration_label;
+    }
+
+    let written = materialize_migration(repo, &patched, output, in_place, dry_run)?;
+    report.trust.bytes_written = written;
+
+    if in_place && !dry_run {
+        // Incremental lossless refresh after Wave 3.
+        let status = Command::new(std::env::current_exe().unwrap_or_else(|_| "rgctl".into()))
+            .args(["discover", ".", "--lossless"])
+            .current_dir(repo)
+            .status();
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(s) => {
+                eprintln!("warning: `rgctl discover . --lossless` exited with {s}");
+            }
+            Err(e) => {
+                eprintln!("warning: failed to run `rgctl discover . --lossless`: {e}");
+            }
+        }
+        // Re-check legacy imports after refresh by scanning patched buffers already counted.
+        if report.legacy_imports_remaining > 0 {
+            eprintln!(
+                "warning: legacy_imports_remaining={} after migrate",
+                report.legacy_imports_remaining
+            );
+        }
+    }
+
+    match ctx.format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        _ => {
+            println!(
+                "writeback migrate {}: wave1={} wave2={} wave3={} legacy_imports_remaining={} worklist={}",
+                report.recipe_or_plan,
+                report.wave1_edits,
+                report.wave2_edits,
+                report.wave3_edits,
+                report.legacy_imports_remaining,
+                report.agent_worklist.len()
+            );
+            for e in &report.trust.entries {
+                println!(
+                    "  [{}] {}",
+                    format!("{:?}", e.status).to_lowercase(),
+                    e.file
+                );
+            }
+            for (i, w) in report.agent_worklist.iter().enumerate() {
+                println!(
+                    "  worklist[{}]: {} ({}) — {}",
+                    i + 1,
+                    w.symbol,
+                    w.file,
+                    w.reason
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn seed_worklist_from_snapshot(
+    repo: &Path,
+    from_fw: Option<&str>,
+    language: &str,
+    plan: Option<&MigrationPlan>,
+) -> Vec<AgentWorklistItem> {
+    let catalog = builtin_framework_catalog();
+    let mut triggers = Vec::new();
+    if let Some(fw) = from_fw
+        && let Some(profile) = find_writeback_profile(catalog, language, fw)
+    {
+        triggers.extend(profile.worklist_supertype_triggers.clone());
+        triggers.extend(profile.worklist_call_triggers.clone());
+    }
+    if let Some(p) = plan {
+        triggers.extend(p.worklist_triggers.supertypes.clone());
+        triggers.extend(p.worklist_triggers.calls.clone());
+        triggers.extend(p.worklist_triggers.annotations.clone());
+    }
+    if triggers.is_empty() {
+        return Vec::new();
+    }
+    let snap = repo.join(".rgctl").join("graph.snapshot.bin");
+    let Ok(store) = rgctl_graph::snapshot::SnapshotNodeStore::open(&snap) else {
+        return Vec::new();
+    };
+
+    // Pass 1 over nodes: map UUID → (symbol_name, file, start_line, end_line, start_byte, end_byte)
+    // and collect direct node-name trigger hits.
+    let mut node_meta: HashMap<uuid::Uuid, WorklistNodeFacet> = HashMap::new();
+    let mut trigger_target_ids: HashMap<uuid::Uuid, String> = HashMap::new();
+    let mut direct_nodes = Vec::new();
+    let _ = store.for_each_node_seq(|n| {
+        let name = n
+            .qualified_name
+            .as_deref()
+            .unwrap_or(n.name.as_ref())
+            .to_string();
+        let raw_file = n.file_path.as_deref().unwrap_or("");
+        let norm_file = raw_file.replace('\\', "/");
+        let file = norm_file
+            .strip_prefix("./")
+            .unwrap_or(&norm_file)
+            .to_string();
+        for t in &triggers {
+            if n.name.as_str() == t.as_str()
+                || name.ends_with(&format!(".{t}"))
+                || name.contains(t.as_str())
+            {
+                trigger_target_ids.insert(n.id, t.clone());
+                if !file.is_empty() {
+                    direct_nodes.push((
+                        name.clone(),
+                        file.clone(),
+                        n.start_line,
+                        n.end_line,
+                        n.start_byte,
+                        n.end_byte,
+                    ));
+                }
+                break;
+            }
+        }
+        node_meta.insert(
+            n.id,
+            (
+                name,
+                file,
+                n.start_line,
+                n.end_line,
+                n.start_byte,
+                n.end_byte,
+            ),
+        );
+    });
+
+    // Pass 2 over edges: count incoming Calls per symbol name and resolve Extends/Implements/Calls/AnnotatedWith
+    // edges pointing to trigger targets back to the declaring source symbol (`from_id`).
+    let mut caller_counts: HashMap<String, usize> = HashMap::new();
+    let mut edge_items: Vec<AgentWorklistItem> = Vec::new();
+    let _ = store.mmap().for_each_edge(|from_id, to_id, edge_type| {
+        if edge_type == EdgeType::Calls
+            && let Some((callee_name, ..)) = node_meta.get(&to_id)
+        {
+            *caller_counts.entry(callee_name.clone()).or_insert(0) += 1;
+        }
+        if matches!(
+            edge_type,
+            EdgeType::Extends | EdgeType::Implements | EdgeType::Calls | EdgeType::AnnotatedWith
+        ) && let Some(trig) = trigger_target_ids.get(&to_id)
+            && let Some((sym, file, sl, el, sb, eb)) = node_meta.get(&from_id)
+            && !file.is_empty()
+        {
+            edge_items.push(AgentWorklistItem {
+                symbol: sym.clone(),
+                file: file.clone(),
+                start_line: *sl,
+                end_line: *el,
+                start_byte: *sb,
+                end_byte: *eb,
+                reason: format!("graph {edge_type:?} edge to worklist trigger `{trig}`"),
+                caller_count: 0,
+                blast_radius_order: 0,
+            });
+        }
+        Ok(())
+    });
+
+    for item in &mut edge_items {
+        item.caller_count = *caller_counts.get(&item.symbol).unwrap_or(&0);
+    }
+    let mut direct = worklist_from_graph_nodes(&direct_nodes, &triggers, &caller_counts);
+    edge_items.append(&mut direct);
+    edge_items
 }
 
 fn emit_report(ctx: &CliContext, report: &TrustLedgerReport) -> Result<()> {

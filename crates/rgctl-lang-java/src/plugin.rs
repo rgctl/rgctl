@@ -9,7 +9,7 @@
 use crate::single_pass::{extract_all_single_pass, java_ast_handlers};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::{ComplexityCalculator, record_symbol_spans};
+use rgctl_plugin_helpers::{ComplexityCalculator, record_call_site_spans, record_symbol_spans};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -230,6 +230,18 @@ fn strip_java_type_sugar(raw: &str) -> String {
         .to_string()
 }
 
+/// Strip surrounding quotes from a Java string/char literal; leave other tokens.
+fn strip_java_string_literal(raw: &str) -> String {
+    let t = raw.trim();
+    if t.len() >= 2 {
+        let b = t.as_bytes();
+        if (b[0] == b'"' && b[t.len() - 1] == b'"') || (b[0] == b'\'' && b[t.len() - 1] == b'\'') {
+            return t[1..t.len() - 1].to_string();
+        }
+    }
+    t.to_string()
+}
+
 fn source_location(node: Node, file_path: &str) -> SourceLocation {
     SourceLocation {
         file: file_path.to_string(),
@@ -325,6 +337,66 @@ impl JavaPlugin {
         (simple, raw_name, args)
     }
 
+    /// Parse annotation argument list into a structured map (`value`, `path`,
+    /// `name`, `unitName`, `method`, `produces`, `consumes`, `defaultValue`, …).
+    fn parse_annotation_args_map(
+        &self,
+        ann_node: Node,
+        source: &[u8],
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut out = serde_json::Map::new();
+        let Some(args_node) = ann_node.child_by_field_name("arguments") else {
+            return out;
+        };
+        let mut cursor = args_node.walk();
+        let mut saw_named = false;
+        let mut positional: Option<String> = None;
+        for child in args_node.children(&mut cursor) {
+            match child.kind() {
+                "element_value_pair" => {
+                    saw_named = true;
+                    let key = child
+                        .child_by_field_name("key")
+                        .and_then(|n| n.utf8_text(source).ok())
+                        .unwrap_or("")
+                        .to_string();
+                    let val_node = child
+                        .child_by_field_name("value")
+                        .or_else(|| child.named_child(1));
+                    let raw = val_node
+                        .and_then(|n| n.utf8_text(source).ok())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if key.is_empty() || raw.is_empty() {
+                        continue;
+                    }
+                    let cleaned = strip_java_string_literal(&raw);
+                    out.insert(key, serde_json::Value::String(cleaned));
+                }
+                "string_literal"
+                | "identifier"
+                | "scoped_identifier"
+                | "field_access"
+                | "element_value_array_initializer"
+                | "annotation"
+                | "marker_annotation"
+                    if !saw_named && positional.is_none() =>
+                {
+                    let raw = child.utf8_text(source).unwrap_or("").trim().to_string();
+                    if !raw.is_empty() {
+                        positional = Some(strip_java_string_literal(&raw));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !saw_named && let Some(v) = positional {
+            out.insert("value".into(), serde_json::Value::String(v));
+        }
+        out
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn push_annotated_with(
         &self,
@@ -335,6 +407,30 @@ impl JavaPlugin {
         ctx: &ExtractCtx,
         same_file_types: &HashSet<String>,
         relations: &mut Vec<Relation>,
+    ) {
+        self.push_annotated_with_scoped(
+            from,
+            ann_node,
+            source,
+            file_path,
+            ctx,
+            same_file_types,
+            relations,
+            None,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_annotated_with_scoped(
+        &self,
+        from: &str,
+        ann_node: Node,
+        source: &[u8],
+        file_path: &Path,
+        ctx: &ExtractCtx,
+        same_file_types: &HashSet<String>,
+        relations: &mut Vec<Relation>,
+        scope: Option<&str>,
     ) {
         let (name, raw_name, args) = self.annotation_name_and_args(ann_node, source);
         if name.is_empty() {
@@ -353,10 +449,19 @@ impl JavaPlugin {
         if let Some(args) = args {
             metadata["arguments"] = serde_json::Value::String(args);
         }
+        let args_map = self.parse_annotation_args_map(ann_node, source);
+        if !args_map.is_empty() {
+            metadata["annotation_args"] = serde_json::Value::Object(args_map);
+        }
         if let Some(ref fqn) = fqn {
             metadata["fqn"] = serde_json::Value::String(fqn.clone());
         }
-        relations.push(Relation {
+        if let Some(scope) = scope {
+            metadata["call_context"] =
+                serde_json::Value::String(format!("AnnotationScope::{scope}"));
+            metadata["annotation_scope"] = serde_json::Value::String(scope.to_string());
+        }
+        let mut rel = Relation {
             from: from.to_string(),
             to: name,
             relation_type: RelationType::AnnotatedWith,
@@ -365,7 +470,9 @@ impl JavaPlugin {
             to_qualified_hint: fqn,
             to_type_hint: None,
             ..Default::default()
-        });
+        };
+        record_call_site_spans(&mut rel, ann_node);
+        relations.push(rel);
     }
 
     /// Simple type names declared in this file (class/interface/enum/annotation/record).
@@ -2431,7 +2538,7 @@ impl JavaPlugin {
                         let Some(parent_class) = Self::inheritance_type_name(child, source) else {
                             continue;
                         };
-                        relations.push(Relation {
+                        let mut rel = Relation {
                             from: owner.clone(),
                             to: parent_class.clone(),
                             relation_type: RelationType::Extends,
@@ -2448,7 +2555,9 @@ impl JavaPlugin {
                                 .or_else(|| ctx.import_qualified_hint(&parent_class)),
                             to_type_hint: None,
                             ..Default::default()
-                        });
+                        };
+                        record_call_site_spans(&mut rel, child);
+                        relations.push(rel);
                     }
                 }
             }
@@ -2470,7 +2579,7 @@ impl JavaPlugin {
                                 else {
                                     continue;
                                 };
-                                relations.push(Relation {
+                                let mut rel = Relation {
                                     from: owner.clone(),
                                     to: interface_name.clone(),
                                     relation_type: RelationType::Implements,
@@ -2487,7 +2596,9 @@ impl JavaPlugin {
                                         .or_else(|| ctx.import_qualified_hint(&interface_name)),
                                     to_type_hint: None,
                                     ..Default::default()
-                                });
+                                };
+                                record_call_site_spans(&mut rel, type_node);
+                                relations.push(rel);
                             }
                         }
                     }
@@ -2501,7 +2612,7 @@ impl JavaPlugin {
                         else {
                             continue;
                         };
-                        relations.push(Relation {
+                        let mut rel = Relation {
                             from: owner.clone(),
                             to: interface_name.clone(),
                             relation_type: RelationType::Implements,
@@ -2518,7 +2629,9 @@ impl JavaPlugin {
                                 .or_else(|| ctx.import_qualified_hint(&interface_name)),
                             to_type_hint: None,
                             ..Default::default()
-                        });
+                        };
+                        record_call_site_spans(&mut rel, interface_node);
+                        relations.push(rel);
                     }
                 }
             }
@@ -2557,7 +2670,7 @@ impl JavaPlugin {
                             let Some(name) = Self::inheritance_type_name(t, source) else {
                                 continue;
                             };
-                            relations.push(Relation {
+                            let mut rel = Relation {
                                 from: owner.clone(),
                                 to: name.clone(),
                                 relation_type: RelationType::Extends,
@@ -2574,7 +2687,9 @@ impl JavaPlugin {
                                     .or_else(|| ctx.import_qualified_hint(&name)),
                                 to_type_hint: None,
                                 ..Default::default()
-                            });
+                            };
+                            record_call_site_spans(&mut rel, t);
+                            relations.push(rel);
                         }
                     }
                 }
@@ -2769,12 +2884,25 @@ impl JavaPlugin {
         };
 
         if let Some(from) = from {
+            let scope = match node.kind() {
+                "formal_parameter" | "spread_parameter" => Some("Parameter"),
+                "field_declaration" => Some("Field"),
+                "method_declaration"
+                | "constructor_declaration"
+                | "compact_constructor_declaration" => Some("Method"),
+                "class_declaration"
+                | "interface_declaration"
+                | "enum_declaration"
+                | "record_declaration"
+                | "annotation_type_declaration" => Some("Type"),
+                _ => None,
+            };
             let mut cursor = node.walk();
             let modifiers_node = node.children(&mut cursor).find(|c| c.kind() == "modifiers");
             if let Some(modifiers_node) = modifiers_node {
                 let (_, annotations) = self.split_modifiers(modifiers_node, source);
                 for ann in annotations {
-                    self.push_annotated_with(
+                    self.push_annotated_with_scoped(
                         &from,
                         ann,
                         source,
@@ -2782,6 +2910,7 @@ impl JavaPlugin {
                         ctx,
                         same_file_types,
                         relations,
+                        scope,
                     );
                 }
             }
@@ -3387,16 +3516,18 @@ impl JavaPlugin {
                     .package
                     .clone()
                     .unwrap_or_else(|| file_path.to_string_lossy().to_string());
-                relations.push(Relation {
+                let mut rel = Relation {
                     from: owner,
                     to: simple,
                     relation_type: RelationType::Uses,
                     location: source_location(node, &file_path.to_string_lossy()),
-                    metadata: serde_json::json!({ "language": "java", "fqn": fqn }),
+                    metadata: serde_json::json!({ "language": "java", "fqn": fqn, "import": true }),
                     to_qualified_hint: Some(fqn.to_string()),
                     to_type_hint: None,
                     ..Default::default()
-                });
+                };
+                record_call_site_spans(&mut rel, name_node);
+                relations.push(rel);
             }
         }
 
@@ -4200,6 +4331,105 @@ public class Greeter {
             }),
             "expected Injects OrderService with @Inject call_context, got {injects:?}"
         );
+    }
+
+    #[test]
+    fn parameter_annotations_carry_scope_spans_and_annotation_args() {
+        let source = br#"
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+
+public class Orders {
+    @RequestMapping(path = "/api", method = RequestMethod.GET, produces = "application/json")
+    @GetMapping("/orders/{id}")
+    public String get(
+        @PathVariable("id") Long id,
+        @RequestParam(name = "filter", defaultValue = "all") String filter
+    ) {
+        return filter;
+    }
+}
+"#;
+        let plugin = JavaPlugin::new().unwrap();
+        let result = plugin
+            .extract_all(Path::new("Orders.java"), source)
+            .unwrap();
+
+        let path_var = result
+            .relations
+            .iter()
+            .find(|r| {
+                r.relation_type == RelationType::AnnotatedWith
+                    && r.to == "PathVariable"
+                    && r.metadata.get("call_context").and_then(|v| v.as_str())
+                        == Some("AnnotationScope::Parameter")
+            })
+            .expect("PathVariable parameter AnnotatedWith");
+        assert!(path_var.call_site_start_byte.is_some());
+        assert!(path_var.call_site_byte_len.is_some());
+        let path_args = path_var
+            .metadata
+            .get("annotation_args")
+            .and_then(|v| v.as_object())
+            .expect("PathVariable annotation_args");
+        assert_eq!(path_args.get("value").and_then(|v| v.as_str()), Some("id"));
+
+        let req_param = result
+            .relations
+            .iter()
+            .find(|r| r.relation_type == RelationType::AnnotatedWith && r.to == "RequestParam")
+            .expect("RequestParam");
+        let rp_args = req_param
+            .metadata
+            .get("annotation_args")
+            .and_then(|v| v.as_object())
+            .expect("RequestParam annotation_args");
+        assert_eq!(rp_args.get("name").and_then(|v| v.as_str()), Some("filter"));
+        assert_eq!(
+            rp_args.get("defaultValue").and_then(|v| v.as_str()),
+            Some("all")
+        );
+
+        let req_mapping = result
+            .relations
+            .iter()
+            .find(|r| r.relation_type == RelationType::AnnotatedWith && r.to == "RequestMapping")
+            .expect("RequestMapping");
+        let rm_args = req_mapping
+            .metadata
+            .get("annotation_args")
+            .and_then(|v| v.as_object())
+            .expect("RequestMapping annotation_args");
+        assert_eq!(rm_args.get("path").and_then(|v| v.as_str()), Some("/api"));
+        assert!(
+            rm_args
+                .get("method")
+                .and_then(|v| v.as_str())
+                .is_some_and(|m| m.contains("GET")),
+            "expected method=RequestMethod.GET, got {rm_args:?}"
+        );
+        assert_eq!(
+            rm_args.get("produces").and_then(|v| v.as_str()),
+            Some("application/json")
+        );
+        assert!(req_mapping.call_site_start_byte.is_some());
+
+        let imports: Vec<_> = result
+            .relations
+            .iter()
+            .filter(|r| {
+                r.relation_type == RelationType::Uses
+                    && r.metadata
+                        .get("import")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+            })
+            .collect();
+        assert!(!imports.is_empty());
+        assert!(imports.iter().all(|r| r.call_site_start_byte.is_some()));
     }
 
     // ---------------------------------------------------------------

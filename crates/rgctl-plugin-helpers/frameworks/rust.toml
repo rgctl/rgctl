@@ -49,3 +49,99 @@ kind = "ConceptTagger"
 call_callees = ["type_name", "TypeId", "downcast_ref", "downcast_mut"]
 tags = ["role:reflection"]
 vocab = "reflection reflect typeid downcast dynamic rust"
+
+# --- Bidirectional writeback profiles ---
+
+[[frameworks]]
+id = "actix"
+import_prefixes = ["actix_web"]
+worklist_supertype_triggers = []
+worklist_call_triggers = []
+
+[frameworks.writeback.field_inject]
+template = "Data<{name}>"
+imports = ["actix_web::web::Data"]
+
+[frameworks.writeback.method_route.GET]
+template = "#[get(\"{path}\")]"
+imports = ["actix_web::get"]
+
+[frameworks.writeback.method_route.POST]
+template = "#[post(\"{path}\")]"
+imports = ["actix_web::post"]
+
+[frameworks.writeback.method_route.PUT]
+template = "#[put(\"{path}\")]"
+imports = ["actix_web::put"]
+
+[frameworks.writeback.method_route.DELETE]
+template = "#[delete(\"{path}\")]"
+imports = ["actix_web::delete"]
+
+[frameworks.writeback.method_route.PATCH]
+template = "#[patch(\"{path}\")]"
+imports = ["actix_web::patch"]
+
+[frameworks.writeback.param_bind.path]
+template = "Path<{name}>"
+imports = ["actix_web::web::Path"]
+
+[[frameworks]]
+id = "rocket"
+import_prefixes = ["rocket"]
+worklist_supertype_triggers = []
+worklist_call_triggers = []
+
+[frameworks.writeback.method_route.GET]
+template = "#[get(\"{path}\")]"
+imports = ["rocket::get"]
+
+[frameworks.writeback.method_route.POST]
+template = "#[post(\"{path}\")]"
+imports = ["rocket::post"]
+
+[frameworks.writeback.method_route.PUT]
+template = "#[put(\"{path}\")]"
+imports = ["rocket::put"]
+
+[frameworks.writeback.method_route.DELETE]
+template = "#[delete(\"{path}\")]"
+imports = ["rocket::delete"]
+
+[frameworks.writeback.method_route.PATCH]
+template = "#[patch(\"{path}\")]"
+imports = ["rocket::patch"]
+
+[[frameworks]]
+id = "axum"
+import_prefixes = ["axum"]
+worklist_supertype_triggers = []
+worklist_call_triggers = []
+
+[frameworks.writeback.field_inject]
+template = "State<{name}>"
+imports = ["axum::extract::State"]
+
+[frameworks.writeback.method_route.GET]
+template = ".route(\"{path}\", get({name}))"
+imports = ["axum::routing::get"]
+
+[frameworks.writeback.method_route.POST]
+template = ".route(\"{path}\", post({name}))"
+imports = ["axum::routing::post"]
+
+[frameworks.writeback.method_route.PUT]
+template = ".route(\"{path}\", put({name}))"
+imports = ["axum::routing::put"]
+
+[frameworks.writeback.method_route.DELETE]
+template = ".route(\"{path}\", delete({name}))"
+imports = ["axum::routing::delete"]
+
+[frameworks.writeback.method_route.PATCH]
+template = ".route(\"{path}\", patch({name}))"
+imports = ["axum::routing::patch"]
+
+[frameworks.writeback.param_bind.path]
+template = "Path<{name}>"
+imports = ["axum::extract::Path"]

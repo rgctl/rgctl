@@ -95,4 +95,60 @@ fn validate_language(
             );
         }
     }
+
+    let mut seen_fw: HashSet<String> = HashSet::new();
+    for fw in &spec.frameworks {
+        if fw.id.trim().is_empty() {
+            panic!("{}: frameworks[].id must be non-empty", path.display());
+        }
+        if !seen_fw.insert(fw.id.clone()) {
+            panic!(
+                "{}: duplicate frameworks id '{}' for language '{}'",
+                path.display(),
+                fw.id,
+                spec.language
+            );
+        }
+        validate_writeback_templates(path, &fw.id, &fw.writeback);
+    }
+}
+
+fn validate_writeback_templates(
+    path: &Path,
+    fw_id: &str,
+    wb: &framework_schema::FrameworkWritebackTemplates,
+) {
+    let check = |label: &str, t: &Option<framework_schema::AnnotationTemplate>| {
+        if let Some(t) = t
+            && t.template.trim().is_empty()
+        {
+            panic!(
+                "{}: frameworks[{fw_id}].writeback.{label}.template must be non-empty",
+                path.display()
+            );
+        }
+    };
+    check("controller_stereotype", &wb.controller_stereotype);
+    check("service_stereotype", &wb.service_stereotype);
+    check("repository_stereotype", &wb.repository_stereotype);
+    check("field_inject", &wb.field_inject);
+    check("config_inject", &wb.config_inject);
+    check("transactional", &wb.transactional);
+    check("class_route_prefix", &wb.class_route_prefix);
+    for (verb, t) in &wb.method_route {
+        if t.template.trim().is_empty() {
+            panic!(
+                "{}: frameworks[{fw_id}].writeback.method_route[{verb}].template must be non-empty",
+                path.display()
+            );
+        }
+    }
+    for (kind, t) in &wb.param_bind {
+        if t.template.trim().is_empty() {
+            panic!(
+                "{}: frameworks[{fw_id}].writeback.param_bind[{kind}].template must be non-empty",
+                path.display()
+            );
+        }
+    }
 }

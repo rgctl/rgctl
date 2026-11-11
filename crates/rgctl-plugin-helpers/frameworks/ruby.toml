@@ -31,3 +31,61 @@ kind = "ConceptTagger"
 call_callees = ["send", "public_send", "const_get", "instance_variable_get"]
 tags = ["role:reflection"]
 vocab = "reflection reflect send const_get dynamic ruby"
+
+# --- Bidirectional writeback profiles ---
+
+[[frameworks]]
+id = "rails"
+import_prefixes = ["ActionController", "Rails"]
+worklist_supertype_triggers = ["ApplicationController", "ActionController::Base"]
+worklist_call_triggers = []
+
+[frameworks.writeback.controller_stereotype]
+template = "class {name} < ApplicationController"
+imports = []
+
+[frameworks.writeback.method_route.GET]
+template = "get '{path}', to: '{name}'"
+imports = []
+
+[frameworks.writeback.method_route.POST]
+template = "post '{path}', to: '{name}'"
+imports = []
+
+[frameworks.writeback.method_route.PUT]
+template = "put '{path}', to: '{name}'"
+imports = []
+
+[frameworks.writeback.method_route.DELETE]
+template = "delete '{path}', to: '{name}'"
+imports = []
+
+[frameworks.writeback.method_route.PATCH]
+template = "patch '{path}', to: '{name}'"
+imports = []
+
+[[frameworks]]
+id = "sinatra"
+import_prefixes = ["Sinatra"]
+worklist_supertype_triggers = ["Sinatra::Base"]
+worklist_call_triggers = []
+
+[frameworks.writeback.method_route.GET]
+template = "get '{path}' do"
+imports = ["sinatra"]
+
+[frameworks.writeback.method_route.POST]
+template = "post '{path}' do"
+imports = ["sinatra"]
+
+[frameworks.writeback.method_route.PUT]
+template = "put '{path}' do"
+imports = ["sinatra"]
+
+[frameworks.writeback.method_route.DELETE]
+template = "delete '{path}' do"
+imports = ["sinatra"]
+
+[frameworks.writeback.method_route.PATCH]
+template = "patch '{path}' do"
+imports = ["sinatra"]

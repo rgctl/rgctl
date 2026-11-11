@@ -96,3 +96,447 @@ kind = "ConceptTagger"
 annotations = ["KafkaListener", "JmsListener", "RabbitListener", "Scheduled"]
 tags = ["role:entrypoint", "protocol:messaging"]
 vocab = "kafka jms rabbitmq listener scheduled messaging spring entrypoint consumer"
+
+[[rules]]
+id = "openliberty.microprofile.di"
+framework = "openliberty"
+kind = "FieldAnnotationInject"
+annotations = ["Inject", "EJB", "Resource", "PersistenceContext", "ConfigProperty", "RestClient"]
+tags = ["role:di-consumer"]
+vocab = "dependency injection inject ejb resource persistence openliberty websphere microprofile cdi config restclient"
+target_vocab = "dependency injection provider service injectable bean"
+
+[[rules]]
+id = "openliberty.jaxrs.routes"
+framework = "openliberty"
+kind = "RouteDecorator"
+class_prefix_annotations = ["Path", "WebServlet", "MessageDriven"]
+method_annotations = [
+  { name = "GET", method = "GET" },
+  { name = "POST", method = "POST" },
+  { name = "PUT", method = "PUT" },
+  { name = "DELETE", method = "DELETE" },
+  { name = "PATCH", method = "PATCH" },
+  { name = "Path", method = "GET" },
+]
+tags = ["role:endpoint", "protocol:http"]
+vocab = "endpoint endpoints route routes http rest servlet jaxrs openliberty websphere microprofile mdb"
+
+[[rules]]
+id = "openliberty.messaging.entrypoints"
+framework = "openliberty"
+kind = "ConceptTagger"
+annotations = ["Incoming", "Outgoing", "Asynchronous", "Schedule", "Schedules", "Timeout"]
+tags = ["role:entrypoint", "protocol:messaging"]
+vocab = "reactive messaging incoming outgoing async schedule timer openliberty microprofile"
+
+# --- Bidirectional writeback profiles ---
+
+[[frameworks]]
+id = "spring"
+import_prefixes = [
+  "org.springframework.",
+  "org.springframework.boot.",
+]
+namespace_rewrites = { "javax." = "jakarta." }
+worklist_supertype_triggers = [
+  "JpaRepository",
+  "CrudRepository",
+  "PagingAndSortingRepository",
+  "SecurityFilterChain",
+  "WebSecurityConfigurerAdapter",
+]
+worklist_call_triggers = [
+  "getAuthentication",
+  "SecurityContextHolder",
+]
+
+[frameworks.writeback.controller_stereotype]
+template = "@RestController"
+imports = ["org.springframework.web.bind.annotation.RestController"]
+
+[frameworks.writeback.service_stereotype]
+template = "@Service"
+imports = ["org.springframework.stereotype.Service"]
+
+[frameworks.writeback.repository_stereotype]
+template = "@Repository"
+imports = ["org.springframework.stereotype.Repository"]
+
+[frameworks.writeback.field_inject]
+template = "@Autowired"
+imports = ["org.springframework.beans.factory.annotation.Autowired"]
+
+[frameworks.writeback.config_inject]
+template = "@Value(\"${{key}{default_kv}}\")"
+imports = ["org.springframework.beans.factory.annotation.Value"]
+
+[frameworks.writeback.transactional]
+template = "@Transactional"
+imports = ["org.springframework.transaction.annotation.Transactional"]
+
+[frameworks.writeback.class_route_prefix]
+template = "@RequestMapping(\"{path}\")"
+imports = ["org.springframework.web.bind.annotation.RequestMapping"]
+
+[frameworks.writeback.method_route.GET]
+template = "@GetMapping(\"{path}\")"
+imports = ["org.springframework.web.bind.annotation.GetMapping"]
+
+[frameworks.writeback.method_route.POST]
+template = "@PostMapping(\"{path}\")"
+imports = ["org.springframework.web.bind.annotation.PostMapping"]
+
+[frameworks.writeback.method_route.PUT]
+template = "@PutMapping(\"{path}\")"
+imports = ["org.springframework.web.bind.annotation.PutMapping"]
+
+[frameworks.writeback.method_route.DELETE]
+template = "@DeleteMapping(\"{path}\")"
+imports = ["org.springframework.web.bind.annotation.DeleteMapping"]
+
+[frameworks.writeback.method_route.PATCH]
+template = "@PatchMapping(\"{path}\")"
+imports = ["org.springframework.web.bind.annotation.PatchMapping"]
+
+[frameworks.writeback.param_bind.path]
+template = "@PathVariable(\"{name}\")"
+imports = ["org.springframework.web.bind.annotation.PathVariable"]
+
+[frameworks.writeback.param_bind.query]
+template = "@RequestParam(\"{name}\")"
+imports = ["org.springframework.web.bind.annotation.RequestParam"]
+
+[frameworks.writeback.param_bind.header]
+template = "@RequestHeader(\"{name}\")"
+imports = ["org.springframework.web.bind.annotation.RequestHeader"]
+
+[frameworks.writeback.param_bind.body]
+template = "@RequestBody"
+imports = ["org.springframework.web.bind.annotation.RequestBody"]
+
+[[frameworks]]
+id = "javaee"
+import_prefixes = [
+  "javax.ejb.",
+  "javax.inject.",
+  "javax.persistence.",
+  "javax.ws.rs.",
+  "javax.annotation.",
+  "javax.enterprise.",
+  "javax.transaction.",
+]
+namespace_rewrites = { "javax." = "jakarta." }
+worklist_supertype_triggers = [
+  "AbstractStatelessSessionBean",
+  "SessionBean",
+  "EntityBean",
+]
+worklist_call_triggers = [
+  "getCallerPrincipal",
+  "isCallerInRole",
+  "getUserTransaction",
+]
+
+[frameworks.writeback.controller_stereotype]
+template = "@Stateless"
+imports = ["javax.ejb.Stateless"]
+
+[frameworks.writeback.service_stereotype]
+template = "@Stateless"
+imports = ["javax.ejb.Stateless"]
+
+[frameworks.writeback.repository_stereotype]
+template = "@Stateless"
+imports = ["javax.ejb.Stateless"]
+
+[frameworks.writeback.field_inject]
+template = "@EJB"
+imports = ["javax.ejb.EJB"]
+
+[frameworks.writeback.config_inject]
+template = "@Resource(name = \"{key}\")"
+imports = ["javax.annotation.Resource"]
+
+[frameworks.writeback.transactional]
+template = "@TransactionAttribute(TransactionAttributeType.REQUIRED)"
+imports = ["javax.ejb.TransactionAttribute", "javax.ejb.TransactionAttributeType"]
+
+[frameworks.writeback.class_route_prefix]
+template = "@Path(\"{path}\")"
+imports = ["javax.ws.rs.Path"]
+
+[frameworks.writeback.method_route.GET]
+template = "@GET{indent}@Path(\"{path}\")"
+imports = ["javax.ws.rs.GET", "javax.ws.rs.Path"]
+
+[frameworks.writeback.method_route.POST]
+template = "@POST{indent}@Path(\"{path}\")"
+imports = ["javax.ws.rs.POST", "javax.ws.rs.Path"]
+
+[frameworks.writeback.method_route.PUT]
+template = "@PUT{indent}@Path(\"{path}\")"
+imports = ["javax.ws.rs.PUT", "javax.ws.rs.Path"]
+
+[frameworks.writeback.method_route.DELETE]
+template = "@DELETE{indent}@Path(\"{path}\")"
+imports = ["javax.ws.rs.DELETE", "javax.ws.rs.Path"]
+
+[frameworks.writeback.method_route.PATCH]
+template = "@PATCH{indent}@Path(\"{path}\")"
+imports = ["javax.ws.rs.PATCH", "javax.ws.rs.Path"]
+
+[frameworks.writeback.param_bind.path]
+template = "@PathParam(\"{name}\")"
+imports = ["javax.ws.rs.PathParam"]
+
+[frameworks.writeback.param_bind.query]
+template = "@QueryParam(\"{name}\")"
+imports = ["javax.ws.rs.QueryParam"]
+
+[frameworks.writeback.param_bind.header]
+template = "@HeaderParam(\"{name}\")"
+imports = ["javax.ws.rs.HeaderParam"]
+
+[[frameworks]]
+id = "jakarta-ee"
+import_prefixes = [
+  "jakarta.ejb.",
+  "jakarta.inject.",
+  "jakarta.persistence.",
+  "jakarta.ws.rs.",
+  "jakarta.annotation.",
+  "jakarta.enterprise.",
+  "jakarta.transaction.",
+]
+worklist_supertype_triggers = []
+worklist_call_triggers = [
+  "getCallerPrincipal",
+  "isCallerInRole",
+]
+
+[frameworks.writeback.controller_stereotype]
+template = "@ApplicationScoped"
+imports = ["jakarta.enterprise.context.ApplicationScoped"]
+
+[frameworks.writeback.service_stereotype]
+template = "@ApplicationScoped"
+imports = ["jakarta.enterprise.context.ApplicationScoped"]
+
+[frameworks.writeback.repository_stereotype]
+template = "@ApplicationScoped"
+imports = ["jakarta.enterprise.context.ApplicationScoped"]
+
+[frameworks.writeback.field_inject]
+template = "@Inject"
+imports = ["jakarta.inject.Inject"]
+
+[frameworks.writeback.config_inject]
+template = "@ConfigProperty(name = \"{key}\"{default_kv})"
+imports = ["org.eclipse.microprofile.config.inject.ConfigProperty"]
+
+[frameworks.writeback.transactional]
+template = "@Transactional"
+imports = ["jakarta.transaction.Transactional"]
+
+[frameworks.writeback.class_route_prefix]
+template = "@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.GET]
+template = "@GET{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.GET", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.POST]
+template = "@POST{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.POST", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.PUT]
+template = "@PUT{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.PUT", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.DELETE]
+template = "@DELETE{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.DELETE", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.PATCH]
+template = "@PATCH{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.PATCH", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.param_bind.path]
+template = "@PathParam(\"{name}\")"
+imports = ["jakarta.ws.rs.PathParam"]
+
+[frameworks.writeback.param_bind.query]
+template = "@QueryParam(\"{name}\")"
+imports = ["jakarta.ws.rs.QueryParam"]
+
+[frameworks.writeback.param_bind.header]
+template = "@HeaderParam(\"{name}\")"
+imports = ["jakarta.ws.rs.HeaderParam"]
+
+[[frameworks]]
+id = "quarkus"
+import_prefixes = [
+  "jakarta.",
+  "io.quarkus.",
+  "org.eclipse.microprofile.",
+]
+worklist_supertype_triggers = [
+  "PanacheEntity",
+  "PanacheRepository",
+  "PanacheEntityBase",
+]
+worklist_call_triggers = []
+
+[frameworks.writeback.controller_stereotype]
+template = "@ApplicationScoped"
+imports = ["jakarta.enterprise.context.ApplicationScoped"]
+
+[frameworks.writeback.service_stereotype]
+template = "@ApplicationScoped"
+imports = ["jakarta.enterprise.context.ApplicationScoped"]
+
+[frameworks.writeback.repository_stereotype]
+template = "@ApplicationScoped"
+imports = ["jakarta.enterprise.context.ApplicationScoped"]
+
+[frameworks.writeback.field_inject]
+template = "@Inject"
+imports = ["jakarta.inject.Inject"]
+
+[frameworks.writeback.config_inject]
+template = "@ConfigProperty(name = \"{key}\"{default_kv})"
+imports = ["org.eclipse.microprofile.config.inject.ConfigProperty"]
+
+[frameworks.writeback.transactional]
+template = "@Transactional"
+imports = ["jakarta.transaction.Transactional"]
+
+[frameworks.writeback.class_route_prefix]
+template = "@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.GET]
+template = "@GET{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.GET", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.POST]
+template = "@POST{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.POST", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.PUT]
+template = "@PUT{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.PUT", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.DELETE]
+template = "@DELETE{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.DELETE", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.PATCH]
+template = "@PATCH{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.PATCH", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.param_bind.path]
+template = "@PathParam(\"{name}\")"
+imports = ["jakarta.ws.rs.PathParam"]
+
+[frameworks.writeback.param_bind.query]
+template = "@QueryParam(\"{name}\")"
+imports = ["jakarta.ws.rs.QueryParam"]
+
+[frameworks.writeback.param_bind.header]
+template = "@HeaderParam(\"{name}\")"
+imports = ["jakarta.ws.rs.HeaderParam"]
+
+[[frameworks]]
+id = "openliberty"
+import_prefixes = [
+  "com.ibm.websphere.",
+  "com.ibm.ws.",
+  "io.openliberty.",
+  "javax.ejb.",
+  "javax.inject.",
+  "javax.persistence.",
+  "javax.ws.rs.",
+  "javax.annotation.",
+  "javax.enterprise.",
+  "javax.transaction.",
+  "javax.servlet.",
+]
+namespace_rewrites = { "javax." = "jakarta." }
+worklist_supertype_triggers = [
+  "AbstractStatelessSessionBean",
+  "SessionBean",
+  "EntityBean",
+  "HttpServlet",
+  "ServletContextListener",
+  "RestClientBuilder",
+]
+worklist_call_triggers = [
+  "getCallerPrincipal",
+  "isCallerInRole",
+  "getUserTransaction",
+  "InitialContext",
+  "WSSubject",
+]
+
+[frameworks.writeback.controller_stereotype]
+template = "@ApplicationScoped"
+imports = ["jakarta.enterprise.context.ApplicationScoped"]
+
+[frameworks.writeback.service_stereotype]
+template = "@ApplicationScoped"
+imports = ["jakarta.enterprise.context.ApplicationScoped"]
+
+[frameworks.writeback.repository_stereotype]
+template = "@ApplicationScoped"
+imports = ["jakarta.enterprise.context.ApplicationScoped"]
+
+[frameworks.writeback.field_inject]
+template = "@Inject"
+imports = ["jakarta.inject.Inject"]
+
+[frameworks.writeback.config_inject]
+template = "@ConfigProperty(name = \"{key}\"{default_kv})"
+imports = ["org.eclipse.microprofile.config.inject.ConfigProperty"]
+
+[frameworks.writeback.transactional]
+template = "@Transactional"
+imports = ["jakarta.transaction.Transactional"]
+
+[frameworks.writeback.class_route_prefix]
+template = "@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.GET]
+template = "@GET{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.GET", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.POST]
+template = "@POST{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.POST", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.PUT]
+template = "@PUT{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.PUT", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.DELETE]
+template = "@DELETE{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.DELETE", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.method_route.PATCH]
+template = "@PATCH{indent}@Path(\"{path}\")"
+imports = ["jakarta.ws.rs.PATCH", "jakarta.ws.rs.Path"]
+
+[frameworks.writeback.param_bind.path]
+template = "@PathParam(\"{name}\")"
+imports = ["jakarta.ws.rs.PathParam"]
+
+[frameworks.writeback.param_bind.query]
+template = "@QueryParam(\"{name}\")"
+imports = ["jakarta.ws.rs.QueryParam"]
+
+[frameworks.writeback.param_bind.header]
+template = "@HeaderParam(\"{name}\")"
+imports = ["jakarta.ws.rs.HeaderParam"]

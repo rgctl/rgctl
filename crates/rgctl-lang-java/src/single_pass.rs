@@ -344,7 +344,12 @@ pub fn extract_all_single_pass(
                             metadata: serde_json::json!({ "language": "java" }),
                             ..Default::default()
                         };
-                        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                        let name_node = node.child_by_field_name("name").or_else(|| {
+                            let mut cursor = node.walk();
+                            node.children(&mut cursor)
+                                .find(|c| matches!(c.kind(), "scoped_identifier" | "identifier"))
+                        });
+                        record_symbol_spans(&mut symbol, node, name_node);
                         ctx.symbols.push(symbol);
                     }
                     _ => {}

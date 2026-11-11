@@ -57,3 +57,137 @@ kind = "ConceptTagger"
 call_callees = ["getMetadata", "defineMetadata", "construct", "ownKeys"]
 tags = ["role:reflection"]
 vocab = "reflection reflect metadata introspection reflect-metadata"
+
+# --- Bidirectional writeback profiles ---
+
+[[frameworks]]
+id = "nestjs"
+import_prefixes = ["@nestjs/"]
+worklist_supertype_triggers = []
+worklist_call_triggers = []
+
+[frameworks.writeback.controller_stereotype]
+template = "@Controller()"
+imports = ["@nestjs/common"]
+
+[frameworks.writeback.service_stereotype]
+template = "@Injectable()"
+imports = ["@nestjs/common"]
+
+[frameworks.writeback.field_inject]
+template = "@Inject('{name}')"
+imports = ["@nestjs/common"]
+
+[frameworks.writeback.class_route_prefix]
+template = "@Controller('{path}')"
+imports = ["@nestjs/common"]
+
+[frameworks.writeback.method_route.GET]
+template = "@Get('{path}')"
+imports = ["@nestjs/common"]
+
+[frameworks.writeback.method_route.POST]
+template = "@Post('{path}')"
+imports = ["@nestjs/common"]
+
+[frameworks.writeback.method_route.PUT]
+template = "@Put('{path}')"
+imports = ["@nestjs/common"]
+
+[frameworks.writeback.method_route.DELETE]
+template = "@Delete('{path}')"
+imports = ["@nestjs/common"]
+
+[frameworks.writeback.method_route.PATCH]
+template = "@Patch('{path}')"
+imports = ["@nestjs/common"]
+
+[frameworks.writeback.param_bind.path]
+template = "@Param('{name}')"
+imports = ["@nestjs/common"]
+
+[frameworks.writeback.param_bind.query]
+template = "@Query('{name}')"
+imports = ["@nestjs/common"]
+
+[frameworks.writeback.param_bind.body]
+template = "@Body()"
+imports = ["@nestjs/common"]
+
+[[frameworks]]
+id = "express"
+import_prefixes = ["express"]
+worklist_supertype_triggers = ["Router"]
+worklist_call_triggers = []
+
+[frameworks.writeback.method_route.GET]
+template = "app.get('{path}', {name})"
+imports = ["express"]
+
+[frameworks.writeback.method_route.POST]
+template = "app.post('{path}', {name})"
+imports = ["express"]
+
+[frameworks.writeback.method_route.PUT]
+template = "app.put('{path}', {name})"
+imports = ["express"]
+
+[frameworks.writeback.method_route.DELETE]
+template = "app.delete('{path}', {name})"
+imports = ["express"]
+
+[frameworks.writeback.method_route.PATCH]
+template = "app.patch('{path}', {name})"
+imports = ["express"]
+
+[[frameworks]]
+id = "fastify"
+import_prefixes = ["fastify"]
+worklist_supertype_triggers = []
+worklist_call_triggers = []
+
+[frameworks.writeback.method_route.GET]
+template = "app.get('{path}', {name})"
+imports = ["fastify"]
+
+[frameworks.writeback.method_route.POST]
+template = "app.post('{path}', {name})"
+imports = ["fastify"]
+
+[frameworks.writeback.method_route.PUT]
+template = "app.put('{path}', {name})"
+imports = ["fastify"]
+
+[frameworks.writeback.method_route.DELETE]
+template = "app.delete('{path}', {name})"
+imports = ["fastify"]
+
+[frameworks.writeback.method_route.PATCH]
+template = "app.patch('{path}', {name})"
+imports = ["fastify"]
+
+[[frameworks]]
+id = "hono"
+import_prefixes = ["hono"]
+worklist_supertype_triggers = []
+worklist_call_triggers = []
+
+[frameworks.writeback.method_route.GET]
+template = "app.get('{path}', {name})"
+imports = ["hono"]
+
+[frameworks.writeback.method_route.POST]
+template = "app.post('{path}', {name})"
+imports = ["hono"]
+
+[frameworks.writeback.method_route.PUT]
+template = "app.put('{path}', {name})"
+imports = ["hono"]
+
+[frameworks.writeback.method_route.DELETE]
+template = "app.delete('{path}', {name})"
+imports = ["hono"]
+
+[frameworks.writeback.method_route.PATCH]
+template = "app.patch('{path}', {name})"
+imports = ["hono"]
