@@ -21,7 +21,7 @@ Agent-first docs: index once, query with `-f json`, deepen in the User Guide whe
 **Use rgctl (consumer agent loop):** install the agent pack (`--skill`) → `discover` once → `find` / `callers` / `blast-radius` / `cpg` with `-f json` ([agent-skill](https://rgctl.io/docs/guides/agent-skill/)).  
 **Contribute to this repo:** [AGENTS.md](../AGENTS.md).  
 **First hour (human):** [Install](installation.md) → User Guide §1–4 on [ecommerce-java](user-guide.md#3-example-project-ecommerce-java), then a [Guide](https://rgctl.io/docs/guides/) for the feature you need.  
-**Latest release:** [v0.4.21 release notes](releases/v0.4.21.md).
+**Latest release:** [v0.4.27 release notes](releases/v0.4.27.md).
 
 **Upgrading from v0.4.9:** no breaking changes — PHP is additive (`discover -l php`). Ruby is additive (`discover -l ruby`).
 
