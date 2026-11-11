@@ -258,7 +258,7 @@ Understanding files helps avoid duplicating cache layers:
 | `parked_relations.bin` | `discover` (`RBPK` v1 unresolved cross-repo) | `rgctl merge`, `rgctl inventory --by import-prefix`, `rgctl vuln`, `rgctl writeback` |
 | `blast_engine.snapshot.bin` | `discover` | `try_load_engine`, lite blast-radius path, `serve` |
 | `macro_call_index.db` / `.bin` | `discover` | `blast-radius` T0 fast path only — SQLite/bincode lookup cache, not the graph |
-| `analysis/cfg_pdg.bin` | `discover --with-cfg`, or lazy append from `slice` / `cpg flows` | `inspect`, `slice`, `cpg`, `taint`, `blast-radius --with-slices` |
+| `analysis/cfg_pdg.archive.bin` | `discover --with-cfg`, or lazy append from `slice` / `cpg flows` | `inspect`, `slice`, `cpg`, `taint`, `blast-radius --with-slices` |
 | `analysis/git_churn.json` | `discover --with-git` | `metrics --churn`, `relations --edge cochangeswith` |
 | `analysis.snapshot.bin` | `discover` | Columnar metrics (`CentralityTable`, community, blast); blast columns may stay empty on flat/on-demand graphs (use live `blast-radius`) |
 | `dashboard/` (bundle) | `discover --with-universe` | Browser static universe/dashboard (`index.html`, `manifest.json`, `graph_payload.bin`) |

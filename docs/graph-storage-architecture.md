@@ -15,7 +15,7 @@ This document specifies the **storage, extraction, and compaction architecture**
 │    ├─► Single-pass LanguageExtractor → `FileExtraction`                      │
 │    │     • `Symbol` (spans, signature, `Vec<Parameter>`, visibility, etc.)   │
 │    │     • `Relation` (`Calls`, `Imports`, `Inherits`, `AnnotatedWith`, ...) │
-│    │     • Optional AST reuse (`extract_with_cfg_pdg` → v3 `cfg_pdg.bin`)    │
+│    │     • Optional AST reuse (`extract_with_cfg_pdg` → `cfg_pdg.archive.bin`)│
 │    ├─► Worker-side `SymbolPass1Prep`:                                        │
 │    │     • Line offsets, BLAKE3 `code_hash`, 256-bit `token_bloom` (`[u64;4]`)│
 │    └─► Optional `--lossless` sidecars:                                       │
@@ -62,7 +62,7 @@ This document specifies the **storage, extraction, and compaction architecture**
 1. **Zero-Copy Hot Topology (`RGCL` v2):** Traversal, CSR neighborhood iteration, and symbol table lookups operate directly over OS virtual memory (`memmap2::Mmap`) without deserializing heap objects.
 2. **Hot/Cold Vertical Partitioning:** Fixed-width 64-byte [`NodeRow`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/columnar_snapshot.rs#L65-L96) and 40-byte [`EdgeRow`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/columnar_snapshot.rs#L101-L119) records stay in the hot mmap; variable-width metadata (`qualified_name`, `return_type`, `parameters`, `token_bloom`, `properties`, `labels`, and lossless span overflow) lives in `ColdMetadataDb` (`.rgctl/metadata.db/`).
 3. **Bounded-Memory Streaming Ingest:** Extraction workers stream per-file batches into [`SegmentedSpill`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/spill.rs#L1-L120), bounding heap residency to fixed sort runs (`256 MiB` default; `64 MiB` under `--with-limits`).
-4. **Deterministic Content Digest:** Every `graph.snapshot.bin` embeds a 32-byte BLAKE3 `content_digest` in its header (`offset 72..104`). All downstream caches (`analysis.snapshot.bin`, `blast_engine.snapshot.bin`, `macro_call_index.db`, `cfg_pdg.bin`) validate this digest before reuse.
+4. **Deterministic Content Digest:** Every `graph.snapshot.bin` embeds a 32-byte BLAKE3 `content_digest` in its header (`offset 72..104`). All downstream caches (`analysis.snapshot.bin`, `blast_engine.snapshot.bin`, `macro_call_index.db`, `cfg_pdg.archive.bin`) validate this digest before reuse.
 
 ---
 

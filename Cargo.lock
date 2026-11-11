@@ -2420,7 +2420,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2513,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-agent-pack-codegen"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "serde",
  "serde_json",
@@ -2524,7 +2524,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-analysis"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "bincode",
  "bit-set 0.8.0",
@@ -2583,7 +2583,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-ast-coverage"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-plugin-api",
  "serde_json",
@@ -2616,7 +2616,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-config-formats"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "marked-yaml",
  "rgctl-plugin-api",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-core"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-analysis",
  "rgctl-error",
@@ -2649,7 +2649,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-dashboard"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "blake3",
  "include_dir",
@@ -2668,7 +2668,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-error"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-plugin-api",
  "serde",
@@ -2680,7 +2680,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-export"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "crossbeam-channel",
  "rgctl-error",
@@ -2692,7 +2692,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-extraction"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "bincode",
  "blake3",
@@ -2719,7 +2719,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-gql"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "petgraph",
  "regex",
@@ -2732,7 +2732,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-graph"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "bincode",
  "blake3",
@@ -2752,7 +2752,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-incremental"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "blake3",
  "indicatif",
@@ -2773,7 +2773,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-ada"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -2785,7 +2785,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-apex"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -2797,7 +2797,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-bash"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -2811,7 +2811,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-c"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-extraction",
@@ -2826,7 +2826,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-clojure"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -2838,7 +2838,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-cmake"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -2850,7 +2850,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-cobol"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-plugin-api",
  "rgctl-registry",
@@ -2860,7 +2860,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-cpp"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -2874,7 +2874,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-csharp"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -2887,7 +2887,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-css"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -2899,7 +2899,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-cuda"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -2911,7 +2911,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-d"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -2923,7 +2923,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-dart"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -2937,7 +2937,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-elisp"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -2949,7 +2949,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-elixir"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -2963,7 +2963,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-elm"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -2975,7 +2975,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-erb"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "regex",
  "rgctl-ast-coverage",
@@ -2991,7 +2991,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-erlang"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3003,7 +3003,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-fortran"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3015,7 +3015,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-fsharp"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3027,7 +3027,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-gdscript"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3039,7 +3039,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-gleam"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3051,7 +3051,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-glsl"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3063,7 +3063,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-go"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3077,7 +3077,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-graphql"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3089,7 +3089,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-groovy"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3103,7 +3103,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-haskell"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3115,7 +3115,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-hcl"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3129,7 +3129,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-html"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3141,7 +3141,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-java"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3154,7 +3154,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-javascript"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3169,7 +3169,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-jcl"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-plugin-api",
  "rgctl-registry",
@@ -3179,7 +3179,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-json"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3191,7 +3191,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-julia"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3203,7 +3203,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-kotlin"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-languages",
@@ -3217,7 +3217,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-lua"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3231,7 +3231,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-make"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3243,7 +3243,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-markdown"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "blake3",
  "pretty_assertions",
@@ -3260,7 +3260,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-matlab"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3272,7 +3272,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-nix"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3284,7 +3284,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-objc"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3296,7 +3296,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-ocaml"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3308,7 +3308,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-odin"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3320,7 +3320,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-pascal"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3332,7 +3332,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-perl"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3344,7 +3344,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-php"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3358,7 +3358,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-pli"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-plugin-api",
  "rgctl-registry",
@@ -3368,7 +3368,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-powershell"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3380,7 +3380,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-prisma"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3392,7 +3392,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-proto"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3404,7 +3404,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-puppet"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3419,7 +3419,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-python"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3434,7 +3434,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-r"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3446,7 +3446,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-racket"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3458,7 +3458,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-ruby"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3473,7 +3473,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-runtime"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "regex",
  "rgctl-ast-coverage",
@@ -3486,7 +3486,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-rust"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "criterion",
  "rgctl-ast-coverage",
@@ -3501,7 +3501,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-scala"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3515,7 +3515,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-scheme"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3527,7 +3527,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-solidity"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3539,7 +3539,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-sql"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3553,7 +3553,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-starlark"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3565,7 +3565,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-svelte"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3577,7 +3577,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-swift"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3591,7 +3591,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-toml"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3603,7 +3603,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-typescript"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-plugin-api",
@@ -3617,7 +3617,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-verilog"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3629,7 +3629,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-vhdl"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3641,7 +3641,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-yaml"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3653,7 +3653,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-lang-zig"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-ast-coverage",
  "rgctl-lang-runtime",
@@ -3665,7 +3665,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-languages"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "criterion",
  "rgctl-ast-coverage",
@@ -3742,7 +3742,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-macros"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3752,7 +3752,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-pipeline"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "crossbeam",
  "indicatif",
@@ -3770,7 +3770,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-plugin-api"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "serde",
  "serde_json",
@@ -3785,7 +3785,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-plugin-helpers"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "bincode",
  "blake3",
@@ -3804,7 +3804,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-project-config"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "regex",
  "rgctl-error",
@@ -3821,7 +3821,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-registry"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "rgctl-config-formats",
  "rgctl-error",
@@ -3834,7 +3834,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-rules"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "regex",
  "rgctl-error",
@@ -3847,7 +3847,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-security"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "openvex",
  "osv",
@@ -3866,7 +3866,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-semantic"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "handlebars",
  "regex",
@@ -3879,7 +3879,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-service"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "anyhow",
  "rgctl-analysis",
@@ -3898,7 +3898,7 @@ dependencies = [
 
 [[package]]
 name = "rgctl-wasm"
-version = "0.4.26"
+version = "0.4.27"
 dependencies = [
  "bincode",
  "serde",

@@ -21,7 +21,7 @@ Agent-first docs: index once, query with `-f json`, deepen in the User Guide whe
 **Use rgctl (consumer agent loop):** install the agent pack (`--skill`) → `discover` once → `find` / `callers` / `blast-radius` / `cpg` with `-f json` ([agent-skill](https://rgctl.io/docs/guides/agent-skill/)).  
 **Contribute to this repo:** [AGENTS.md](../AGENTS.md).  
 **First hour (human):** [Install](installation.md) → User Guide §1–4 on [ecommerce-java](user-guide.md#3-example-project-ecommerce-java), then a [Guide](https://rgctl.io/docs/guides/) for the feature you need.  
-**Latest release:** [v0.4.21 release notes](releases/v0.4.21.md).
+**Latest release:** [v0.4.27 release notes](releases/v0.4.27.md).
 
 **Upgrading from v0.4.9:** no breaking changes — PHP is additive (`discover -l php`). Ruby is additive (`discover -l ruby`).
 
@@ -70,15 +70,13 @@ Internals and contribution bars — not the default agent reading path.
 | `--with-cfg` | Whole-repo CFG/PDG archive (needed for `taint --sink`, `cpg mutations`); `slice` / `cpg flows` lazy-build one function without it |
 | Communities | **Fast-Leiden** (local moving + BFS refinement + coarsening) with $\mu+4\sigma$ `HubStripPolicy` |
 | Canonical query / policy CLI | `find` / `callers` / `callees` / `relations` / `inventory`; `review check` (`query` / `pr-check` are compatibility aliases) |
-| Dashboard / migration JSON | Opt-in (`--with-universe` / `--export-migration-hints`; the old `--with-dashboard` flag was removed and is rejected) |
+| Dashboard / migration JSON | Opt-in (`--with-universe` / `--export-migration-hints`) |
 | First-hour fixture | In-tree **ecommerce-java** |
 
 ## Redirects (historical names)
 
-- `cli-getting-started.md` → [Installation](installation.md) / [User Guide](user-guide.md)
+- `cli-getting-started.md` → [User Guide](user-guide.md)
 - `cli-output-schemas.md` → [JSON API](json-api.md)
 - `LANGUAGE_GUIDE.md` → [languages/README.md](languages/README.md)
 
 Docs match the CLI in this repository — verify with `rgctl --version`.
-
-Maintainer scratch: [`internal/`](internal/) (not public).

@@ -68,7 +68,7 @@ Capability designs for contributors: [design/](design/README.md).
 | `--with-git` | Git churn hotspots + `CoChangesWith` edges (`metrics --churn`) |
 | `--scip PATH` | SCIP overlay — upgrades ambiguous calls (`resolution = "scip"`) |
 | `--full` | Full pipeline (large corpora / Gate B style runs) |
-| `--with-universe` / `--export-migration-hints` | Opt-in universe UI bundle / migration JSON (`--with-dashboard` was removed and is rejected) |
+| `--with-universe` / `--export-migration-hints` | Opt-in Universe UI bundle / migration JSON |
 
 ```bash
 rgctl discover . -l java,kotlin,python --with-cfg
@@ -133,6 +133,6 @@ Current Tier-1 ids with `*-ast-coverage.json` (24): Bash, C, C++, C#, Dart, Elix
 | Language support matrix | [languages/README.md](languages/README.md) (JSON SSOT → website) |
 | JSON fields / `schema_version` | [json-api.md](json-api.md) |
 | HTTP `serve` API | [HTTP Server and Dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/) |
-| Latest release notes | [v0.4.21](releases/v0.4.21.md) |
+| Latest release notes | [v0.4.27](releases/v0.4.27.md) |
 | Contribute / cold profiles | [AGENTS.md](../AGENTS.md) · [docs hub — For contributors](README.md#for-contributors) |
 | Research map | [further-reading.md](further-reading.md) |
