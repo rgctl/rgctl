@@ -2449,6 +2449,43 @@ mod tests {
     }
 
     #[test]
+    fn legacy_span_extension_preserves_spans_when_upgraded_with_identity_prefix() {
+        let legacy = NodeExtensionV2WithSpans {
+            qualified_name: Some("demo.Library.quote".into()),
+            decl_byte_len: 80,
+            name_span_overflow: (70_000, 5),
+            name_token_len: 5,
+            ..Default::default()
+        };
+        let bytes = bincode::serialize(&legacy).unwrap();
+        let decoded = decode_node_extension(&bytes, 2).unwrap();
+        assert_eq!(decoded.identity_discriminator, None);
+        assert_eq!(decoded.qualified_name, legacy.qualified_name);
+        assert_eq!(decoded.end_byte_for(Some(100)), Some(180));
+        assert_eq!(decoded.overflow_opt(), Some((70_000, 5)));
+        assert_eq!(decoded.token_len_opt(), Some(5));
+
+        let mut upgraded = decoded;
+        upgraded.identity_discriminator = Some("(int)".into());
+        let bytes = bincode::serialize(&upgraded).unwrap();
+        let mut offset = 0;
+        assert_eq!(
+            borrowed_optional_string(&bytes, &mut offset).unwrap(),
+            Some("demo.Library.quote")
+        );
+        assert_eq!(
+            borrowed_optional_string(&bytes, &mut offset).unwrap(),
+            Some("(int)")
+        );
+        let decoded = decode_node_extension(&bytes, COLUMNAR_SNAPSHOT_VERSION).unwrap();
+        assert_eq!(decoded.identity_discriminator.as_deref(), Some("(int)"));
+        assert_eq!(
+            decode_extension_span_tail(Some(&bytes), Some(100)),
+            (Some(180), Some((70_000, 5)), Some(5))
+        );
+    }
+
+    #[test]
     fn decode_node_extension_handles_truncated_bytes_gracefully() {
         let corrupt_bytes = [0xFF, 0xFE, 0x00, 0x12];
         let result = decode_node_extension(&corrupt_bytes, 3);

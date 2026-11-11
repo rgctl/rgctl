@@ -391,6 +391,7 @@ pub fn extract_all_single_pass(
                                 metadata: serde_json::json!({"language":"swift"}),
                                 to_qualified_hint: Some(parent),
                                 to_type_hint: None,
+                                ..Default::default()
                             });
                         }
                     }

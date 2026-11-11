@@ -551,7 +551,9 @@ impl GraphBuilder {
         }
         if let Some(obj) = symbol.metadata.as_object() {
             for (k, v) in obj {
-                if k == rgctl_plugin_api::COMPLEXITY_META_KEY {
+                if k == rgctl_plugin_api::COMPLEXITY_META_KEY
+                    || matches!(k.as_str(), "source_start_byte" | "source_end_byte")
+                {
                     continue;
                 }
                 let prop_val = match v {

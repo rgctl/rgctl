@@ -715,13 +715,19 @@ fn compute_function_cfg(
     let build_start = stage.map(|_| Instant::now());
     let bytes = source.as_bytes();
     let exact_bytes = func_node
-        .get_property("source_start_byte")
-        .and_then(|s| s.parse::<usize>().ok())
-        .zip(
+        .start_byte
+        .zip(func_node.end_byte)
+        .map(|(start, end)| (start as usize, end as usize))
+        .or_else(|| {
             func_node
-                .get_property("source_end_byte")
-                .and_then(|s| s.parse::<usize>().ok()),
-        );
+                .get_property("source_start_byte")
+                .and_then(|s| s.parse::<usize>().ok())
+                .zip(
+                    func_node
+                        .get_property("source_end_byte")
+                        .and_then(|s| s.parse::<usize>().ok()),
+                )
+        });
     let mut cfg_data = if let Some(p) = parsed {
         if let Some((start, end)) = exact_bytes {
             p.build_cfg_for_byte_range(language, bytes, &func_node.name, start, end)

@@ -58,6 +58,46 @@ fn inventory_covers_every_registered_tier1_language() {
         .collect();
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn java_overload_identity_preserves_each_declarations_lossless_name_span() {
+    let source = "class Library {\n  int quote(int value) { return value; }\n  int quote(String value) { return value.length(); }\n}\n";
+    let (nodes, edges) = graph("Library.java", source);
+    let methods: Vec<_> = nodes
+        .iter()
+        .filter(|node| node.name == "quote")
+        .cloned()
+        .collect();
+    assert_eq!(methods.len(), 2);
+    assert_ne!(methods[0].id, methods[1].id);
+    assert_ne!(methods[0].start_byte, methods[1].start_byte);
+    assert_ne!(
+        methods[0].identity_discriminator(),
+        methods[1].identity_discriminator()
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("graph.bin");
+    rgctl_graph::write_columnar_from_nodes_edges(nodes, edges, &path).unwrap();
+    let store = rgctl_graph::SnapshotNodeStore::open(&path).unwrap();
+    let columnar = store.columnar().unwrap();
+    for method in methods {
+        let (declaration, name) = columnar.node_byte_span(method.id).unwrap();
+        let (start, end) = declaration.expect("declaration span");
+        let (name_start, name_end) = name.expect("name token span");
+        assert_eq!(Some(start), method.start_byte);
+        assert_eq!(Some(end), method.end_byte);
+        assert_eq!(&source[name_start as usize..name_end as usize], "quote");
+        assert!(start <= name_start && name_end <= end);
+        let restored = columnar.get_node(method.id).unwrap().unwrap();
+        assert_eq!(
+            restored.identity_discriminator(),
+            method.identity_discriminator()
+        );
+        assert_eq!(restored.start_byte, method.start_byte);
+        assert_eq!(restored.end_byte, method.end_byte);
+    }
+}
+
 #[test]
 fn all_tier1_callables_survive_body_edits_line_shifts_parameter_renames_and_snapshots() {
     let expected = BTreeMap::from([

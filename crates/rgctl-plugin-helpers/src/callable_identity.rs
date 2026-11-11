@@ -362,6 +362,12 @@ fn rename_type_variables(value: &str, bindings: &[(String, String)]) -> String {
 
 /// Common source-span attachment for callable declarations.
 fn source_span(symbol: &mut Symbol, node: Node<'_>) {
+    symbol.start_byte = symbol
+        .start_byte
+        .or_else(|| u32::try_from(node.start_byte()).ok());
+    symbol.end_byte = symbol
+        .end_byte
+        .or_else(|| u32::try_from(node.end_byte()).ok());
     symbol.metadata["source_start_byte"] = node.start_byte().into();
     symbol.metadata["source_end_byte"] = node.end_byte().into();
 }

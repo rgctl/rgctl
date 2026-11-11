@@ -52,11 +52,18 @@ reuse verifies source hashes and does not remap graph IDs through ambiguous name
 
 ## Migration and evidence
 
-Facts-cache format 3 and extraction semantics version 5 invalidate old extraction
+Facts-cache format 4 and extraction semantics version 6 invalidate old extraction
 results. Missing or stale `.rgctl/extraction_semantics.json` forces full source
 extraction, including when `discover --files` was requested. The semantics marker
 is written after successful snapshot persistence. Existing snapshots remain
 readable for queries.
+
+Callable byte spans use the dedicated source-span fields introduced by lossless
+writeback. Absolute extraction byte offsets stay out of node properties, preventing
+those offsets from changing function extension digests after line shifts. CFG selection prefers these
+span fields and accepts legacy offset properties when reading older nodes. The
+snapshot extension preserves both the discriminator prefix and the relative span
+tail; older format-2 span extensions remain readable.
 
 `.rgctl/callable_resolution.json` counts unresolved canonical calls and retains at
 most 1,024 original relation samples with reasons. This is evidence of incomplete
