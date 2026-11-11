@@ -1,6 +1,6 @@
 # rgctl User Guide
 
-End-to-end guide for installing rgctl, indexing an in-tree example, and querying a codebase from the **command line**. Sample outputs target **`rgctl-tests/ecommerce-java`**. Runnable examples are backed by scenarios under [`user-guide/scenarios/`](user-guide/scenarios/) (see change `docs-agent-first-diataxis`).
+End-to-end guide for installing rgctl, indexing an in-tree example, and querying a codebase from the **command line**. Sample outputs target **`rgctl-tests/ecommerce-java`**. Runnable examples are backed by scenarios under [`user-guide/`](user-guide/README.md) (see change `docs-agent-first-diataxis`).
 
 **Concepts:** [Introduction](Introduction.md). **Use with agents:** [agent-skill](https://rgctl.io/docs/guides/agent-skill/) · [USER_AGENTS_TEMPLATE](agents/USER_AGENTS_TEMPLATE.md). **Contribute:** [AGENTS.md](../AGENTS.md). **JSON fields:** [json-api.md](json-api.md).
 
@@ -89,7 +89,7 @@ If no release is published yet for your platform, use [Option C](#option-c--buil
 
 ### Option C — Build from source
 
-Requires **Rust 1.99+** (Edition 2024; [rustup.rs](https://rustup.rs/)).
+Requires **Rust 1.85+** (Edition 2024; [rustup.rs](https://rustup.rs/)).
 
 ```bash
 git clone https://github.com/rgctl/rgctl.git
@@ -237,7 +237,7 @@ All commands below assume `REPO` points at `ecommerce-java`, or that you run fro
 
 Full table: [Discovering and indexing](https://rgctl.io/docs/guides/discovering-and-indexing/).
 
-Built-in registry includes **markdown** (`rgctl-lang-markdown`): `.md` and `.mdx` are indexed by default (headings, links, code blocks, frontmatter). See [markdown-context.md](markdown-context.md). Use `-l markdown` or `-l markdown,java` to limit languages.
+Built-in registry includes **markdown** (`rgctl-lang-markdown`): `.md` and `.mdx` are indexed by default (headings, links, code blocks, frontmatter). See the [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/). Use `-l markdown` or `-l markdown,java` to limit languages.
 
 ### Full pipeline (`--full`)
 
@@ -340,6 +340,7 @@ Harmonic, dashboard, migration export, security, CFG/PDG, and discover-time tain
 | `--with-git` | Git churn hotspots + `CoChangesWith` edges (`metrics --churn`, `relations --edge cochangeswith`) |
 | `--scip PATH` | SCIP overlay — upgrades ambiguous call edges (`resolution = "scip"`) |
 | `--with-harmonic` | Harmonic centrality (migration ranking) |
+| `--lossless` | Lossless source + Green-CST sidecars (`RGCS` v2 `content_store.bin` + `RGCT` v1 `cst.archive.bin`) for `rgctl writeback` |
 | `--with-universe` | Universe dashboard bundle under `.rgctl/dashboard/` (`manifest.mode: "universe"`). Served by `rgctl serve --open`. |
 | `--export-migration-hints` | Migration roadmap JSON (alias: `--export-migration-plan`) |
 
@@ -414,7 +415,9 @@ After a successful run, the layout below appears under **`{repo}/.rgctl/`**:
 ```
 {repo}/.rgctl/
 ├── graph.snapshot.bin          # RGCL v2 columnar mmap graph (primary cache for queries)
-├── content_store.bin           # Large markdown bodies / files (body_ref / blob_ref; Obsidian + doc semantic)
+├── content_store.bin           # Large markdown bodies / lossless source store (RGCS v2 with --lossless)
+├── cst.archive.bin             # Green-CST leaf token & trivia spans (RGCT v1 with --lossless)
+├── annotation_args.json        # Structured annotation key-value arguments (find --annotation)
 ├── blast_engine.snapshot.bin   # Pre-built blast-radius engine
 ├── macro_call_index.db         # Blast-radius lookup cache (SQLite; not the graph)
 ├── macro_call_index.bin        # Same index in bincode (companion to .db)
@@ -550,8 +553,11 @@ rgctl -r "$REPO" -f json relations clearCart --edge calls --direction in | jq '.
 
 ### Common node / edge types
 
-- Node types for `--type`: `function`, `class`, `interface`, `module`, `file`, …
-- Edge types for `--edge`: `calls`, `imports`, `contains`, `depends_on`, `implements`, `overrides`, `references`, `cochangeswith`, …
+- Node types for `--type`: `function`, `class`, `interface`, `module`, `file`, `import`, `annotation`, …
+- Edge types for `--edge`: `calls`, `imports`, `contains`, `depends_on`, `implements`, `overrides`, `references`, `cochangeswith`, `annotatedwith`, …
+- Annotation and import-prefix queries:
+  - `rgctl -r "$REPO" -f json find --annotation RestController --show-attributes`
+  - `rgctl -r "$REPO" -f json inventory --by import-prefix --prefix javax.`
 
 ### Named communities (analysis overlay)
 
@@ -688,7 +694,7 @@ rgctl -r "$REPO" blast-radius 'CartService::clearCart' --with-slices
 
 ## 8. Program slicing and taint
 
-`slice` performs **line-level** backward or forward slicing on a source file. Paths may be absolute, cwd-relative, or relative to `--repo`. **No upfront `discover --with-cfg` is required:** if the target function is missing from `.rgctl/analysis/cfg_pdg.bin`, `slice` lazily builds that function's CFG/PDG and appends it to the v3 archive. Whole-repo `rgctl taint --sink` still needs `discover --with-cfg`.
+`slice` performs **line-level** backward or forward slicing on a source file. Paths may be absolute, cwd-relative, or relative to `--repo`. **No upfront `discover --with-cfg` is required:** if the target function is missing from `.rgctl/analysis/cfg_pdg.archive.bin`, `slice` lazily builds that function's CFG/PDG and appends it to the v3 archive. Whole-repo `rgctl taint --sink` still needs `discover --with-cfg`.
 
 ### Backward slice
 
@@ -873,7 +879,7 @@ rgctl -r "$REPO" blast-radius 'ShoppingCartService::priceShoppingCart'
 # → Callers include CartEndpoint.add / delete / checkout and checkOutShoppingCart
 ```
 
-**Dashboard:** after `discover --with-cfg --with-universe`, the **Dataflow** tab includes a **Field mutations (CPG)** panel (same filters). Click a hit to open that function’s PDG and highlight the write line. See [Dashboard user guide](dashboard-user-guide.md#dataflow).
+**Dashboard:** after `discover --with-cfg --with-universe`, the **Dataflow** tab includes a **Field mutations (CPG)** panel (same filters). Click a hit to open that function’s PDG and highlight the write line. See [HTTP Server and Dashboard guide](https://rgctl.io/docs/guides/http-server-and-dashboard/).
 
 JSON for agents:
 
@@ -881,7 +887,7 @@ JSON for agents:
 rgctl -r "$REPO" -f json cpg mutations --type ShoppingCart --exclude-ctors
 ```
 
-Empty result means no **typed** non-ctor writes were recovered (receivers without a resolved type are omitted unless `--include-unresolved`). On C fixtures, query the struct typedef name (e.g. `shopping_cart_t`). See [agent-recipes.md](agent-recipes.md) Recipe 11 and [hybrid-cpg-plan.md](design/hybrid-cpg-plan.md).
+Empty result means no **typed** non-ctor writes were recovered (receivers without a resolved type are omitted unless `--include-unresolved`). On C fixtures, query the struct typedef name (e.g. `shopping_cart_t`). See [Agent pack](https://rgctl.io/docs/guides/agent-skill/) and [hybrid-cpg-plan.md](design/hybrid-cpg-plan.md).
 
 ### Flows, AST, export
 
@@ -972,7 +978,7 @@ rgctl -r .rgctl-merged -f json callers validateToken
 
 Semantic search is **opt-in** — it does not run during `discover`. Build a separate Hamming index, then query by natural language or keywords.
 
-**Default index scope:** `:Function` symbols. **Doc headings:** `semantic index --scope docs` (or `--scope all` for functions + docs). See [markdown-context.md](markdown-context.md#semantic-search-doc-sections).
+**Default index scope:** `:Function` symbols. **Doc headings:** `semantic index --scope docs` (or `--scope all` for functions + docs). See [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/).
 
 **Prerequisites:** `discover` completed. Default embedder is **vocab** (compiled token table, no ONNX). Quality extra: `--embedder code-daemon` (needs `git lfs pull` for bundled ONNX). CI smoke: `--embedder hash`.
 
@@ -1094,9 +1100,9 @@ rgctl -r "$REPO" export \
 
 Open `$REPO/vault` in Obsidian (**Open folder as vault**). Each note is one heading section; YAML `qualified_name` maps back to graph `module` nodes (`find` / `relations`). Re-run `discover` + `export` after doc changes.
 
-Other doc export formats: `--export-format okf` (JSON entity bundle). Full walkthrough: [markdown-context.md](markdown-context.md#obsidian-vault-export).
+Other doc export formats: `--export-format okf` (JSON entity bundle). Full walkthrough: [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/).
 
-For structural lookups on docs, use `find` / `relations` — see [markdown context](markdown-context.md). For browsing, use `serve` + the dashboard ([HTTP Server and Dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/)).
+For structural lookups on docs, use `find` / `relations` — see [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/). For browsing, use `serve` + the dashboard ([HTTP Server and Dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/)).
 
 ---
 
@@ -1217,7 +1223,11 @@ Migration hints (with `--export-migration-hints`) land under `.rgctl/migration_p
 | `metrics` | PageRank, betweenness, communities, `--churn` |
 | `export` | Serialize graph (json, graphml, dot, mermaid, obsidian vault, okf) |
 | `check` / `review check` / `review paths` | CI policy; temporal PR gate (`pr-check` alias); call-path deltas |
+| `diff` | Cold/open columnar snapshot pair diff (`diff <base> <head>`) |
+| `vuln` / `deps` / `taint` | OSV triage (`vuln triage`), manifest reachability (`deps check`), full VEX report (`vuln analyze`), taint flows (`taint --sink`) |
+| `writeback` | Lossless round-trip verification (`verify`), tree reconstruction (`export`), and piece-table span splicing (`patch`; requires `discover --lossless`) |
 | `install` | Copy the bundled agent pack (single skill `rgctl`) into adapter dirs |
+| `completions` | Emit shell completions (`bash`, `zsh`, `fish`, `elvish`, `powershell`) |
 | `semantic` | Opt-in semantic index + query (`--scope community`, `docs`, `all`) |
 | `serve` | HTTP dashboard + `/api/query` + `/api/status` (serve-only; run `discover` first) |
 
@@ -1239,10 +1249,12 @@ Full taxonomy: [CLI command reference](https://rgctl.io/docs/guides/cli-command-
 | `--with-dfg-loops` | Tag loop-carried `DataDependency` edges in PDG (with `--with-cfg`) |
 | `--with-ast-skeleton` | Build AST skeleton archive for `cpg ast` |
 | `--with-harmonic` | Harmonic centrality (default off; needed for migration ranking) |
+| `--lossless` | Emit `RGCS` v2 `content_store.bin` + `RGCT` v1 `cst.archive.bin` for `rgctl writeback` |
+| `--with-limits SPEC` | Resource caps (`max-mem-mb=N,threads=M`) for container / constrained runs |
 | `--with-universe` | Universe dashboard bundle under `.rgctl/dashboard/` (default off; UI for `serve --open`) |
 | `--full` | Staged pipeline: basic discover, then CFG+Universe+harmonic+taint, then semantic index |
 | `--export-migration-hints` | Migration roadmap JSON (alias `--export-migration-plan`) |
-| `--migration-preset` | Preset for migration hints (`hybrid`, `foundational`, …) |
+| `--migration-preset` | Preset for migration hints (`hybrid_default`, `foundational_first`, `dense_cluster`, `risk_mitigation`) |
 | `--migration-order` | `scheduled` (topological) or `priority` |
 | `--write-json-graph` | Also write legacy `graph.db` / `graph.json` |
 
@@ -1318,7 +1330,7 @@ RUST_LOG=info,profile=info rgctl discover . -v 2>&1 | grep '\[profile\]'
 ### Further reading
 
 - [Introduction](Introduction.md) — concepts and feature goals
-- [cli-getting-started.md](cli-getting-started.md) — deprecated stub (use this User Guide)
+- [Installation](installation.md) — standalone installation and operating modes
 - [HTTP Server and Dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/) — dashboard HTTP API
 - [json-api.md](json-api.md) — machine-readable output + field catalogs
 - [USER_AGENTS_TEMPLATE](agents/USER_AGENTS_TEMPLATE.md) — paste into consumer repos’ `AGENTS.md`

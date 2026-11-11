@@ -32,8 +32,8 @@ Legend: **Implemented** = algorithm or structure in the codebase with tests; **I
 | Work | Status | rgctl | CLI |
 |------|--------|----------|-----|
 | [Page & Brin — PageRank (1998)](https://doi.org/10.1109/69.681760) | **Implemented** | [`centrality.rs`](../crates/rgctl-analysis/src/centrality.rs) — pull-based CSR `FastPageRank` + `NodeRole` filtering; adaptive gating >500k nodes | `rgctl metrics --pagerank [--include-tests]` |
-| [Brandes — Betweenness centrality (2001)](https://doi.org/10.1080/00207160108942084) | **Implemented** | [`centrality.rs`](../crates/rgctl-analysis/src/centrality.rs), [`centrality_approx.rs`](../crates/rgctl-analysis/src/centrality_approx.rs) — `SampledBetweenness` ($K=256$ degree-stratified pivots) | `rgctl metrics --betweenness` |
-| Boldi & Vigna — HyperANF / HyperBall | **Implemented** | [`centrality_approx.rs`](../crates/rgctl-analysis/src/centrality_approx.rs) — `HyperBallHarmonic` (parallel HLL) | `discover --with-harmonic` / migration harmonic term |
+| [Brandes — Betweenness centrality (2001)](https://doi.org/10.1080/00207160108942084) | **Implemented** | [`centrality.rs`](../crates/rgctl-analysis/src/centrality.rs), [`centrality_approx.rs`](../crates/rgctl-analysis/src/centrality_approx.rs) — exact Brandes ($V \le 500$) + `SampledBetweenness` ($K=512$ degree-stratified pivots for $V > 500$) | `rgctl metrics --betweenness` |
+| Boldi & Vigna — HyperANF / HyperBall | **Implemented** | [`centrality_approx.rs`](../crates/rgctl-analysis/src/centrality_approx.rs) — `HyperBallHarmonic` (exact bitsets for $V \le 8,192$; parallel HLL $p \in \{14, 12, 10\}$ for $V > 8,192$) | `discover --with-harmonic` / migration harmonic term |
 | [Traag, Waltman & van Eck — From Louvain to Leiden (Sci. Rep. 2019)](https://doi.org/10.1038/s41598-019-41695-z) | **Implemented** | [`community.rs`](../crates/rgctl-analysis/src/community.rs) — **Fast-Leiden** (local moving + BFS connected-subgraph refinement + coarsening) with $\mu+4\sigma$ `HubStripPolicy` | `rgctl metrics --communities`, `rgctl communities list` |
 | [Raghavan et al. — Label propagation (2007)](https://doi.org/10.1103/PhysRevE.76.036106) + Newman modularity | **Reading / historical** | Early community designs referenced LPA; **what ships is Fast-Leiden** (row above), not Raghavan LPA | — |
 
@@ -53,7 +53,7 @@ This is the core differentiator for **LLM agents**: deterministic reachability a
 | Work | Status | Overlap with rgctl | Gap / opportunity |
 |------|--------|----------------------|-------------------|
 | [CodexGraph (NAACL 2025)](#2-codexgraph-bridging-large-language-models-and-code-repositories-via-code-graph-databases-naacl-2025) | **Inspired** | Structured query verbs, rich node metadata, `-f json`, [JSON API](json-api.md), export | Dual-agent “write then translate” query planner not implemented — good contribution target |
-| [Codebadger — CPG + LLM (ICSE 2026)](https://arxiv.org/abs/2603.24837) | **Inspired** | CFG + PDG + slice + taint stack (CPG-shaped) | No Joern import; interprocedural taint depth varies — see [TASK_PLAN](../.github/TASK_PLAN.md) Phase 12/13 |
+| [Codebadger — CPG + LLM (ICSE 2026)](https://arxiv.org/abs/2603.24837) | **Inspired** | CFG + PDG + slice + taint stack (CPG-shaped) | No Joern import; interprocedural taint depth varies — see [hybrid-cpg-plan.md](design/hybrid-cpg-plan.md) |
 | [TAILOR / hybrid AST+CFG+DFG](#7-learning-graph-based-code-representations-for-source-code-tailor) | **Reading** | Tree-sitter AST + CFG/PDG layer | Learned embeddings not in scope today |
 | [Reliable Graph-RAG for Codebases (2026)](#5-reliable-graph-rag-for-codebases-ast-derived-graphs-vs-llm-extracted-knowledge-graphs-arxiv-2026) | **Aligned** | AST-derived graph via Tree-sitter, not LLM-extracted KG | Benchmark comparisons welcome |
 
