@@ -106,12 +106,7 @@ fn try_resolve_type_members(
     }
     let mut type_candidates: Vec<_> = nodes
         .into_iter()
-        .filter(|n| {
-            matches!(
-                n.node_type,
-                NodeType::Class | NodeType::Interface | NodeType::Struct
-            )
-        })
+        .filter(|n| rgctl_graph::is_aggregate_container_type(n.node_type))
         .filter(|n| {
             if let Some(ref ff) = parsed.file_filter {
                 let p = n.file_path.as_deref().unwrap_or("").replace('\\', "/");
@@ -131,15 +126,17 @@ fn try_resolve_type_members(
         .qualified_name
         .as_deref()
         .unwrap_or(type_node.name.as_str());
-    let dot_prefix = format!("{qn}.");
-    let colon_prefix = format!("{qn}::");
-    let simple_dot = format!("{}.", type_node.name);
-    let simple_colon = format!("{}::", type_node.name);
+    let prefixes = [format!("{qn}."), format!("{qn}::"), format!("{qn}\\")];
+    let simple_prefixes = [
+        format!("{}.", type_node.name),
+        format!("{}::", type_node.name),
+        format!("{}\\", type_node.name),
+    ];
     let fn_nodes = backend.find_nodes_by_type(NodeType::Function).ok()?;
     let mut members = Vec::new();
     for fn_node in fn_nodes {
         if let Some(fqn) = fn_node.qualified_name.as_deref()
-            && (fqn.starts_with(&dot_prefix) || fqn.starts_with(&colon_prefix))
+            && prefixes.iter().any(|p| fqn.starts_with(p))
         {
             members.push(fn_node.id);
             continue;
@@ -149,7 +146,7 @@ fn try_resolve_type_members(
             && fn_node
                 .qualified_name
                 .as_deref()
-                .is_some_and(|fqn| fqn.starts_with(&simple_dot) || fqn.starts_with(&simple_colon))
+                .is_some_and(|fqn| simple_prefixes.iter().any(|p| fqn.starts_with(p)))
         {
             members.push(fn_node.id);
         }
@@ -272,4 +269,61 @@ fn resolve_blast_result(
     }
     let engine = BlastRadiusEngine::build(backend).map_err(ServiceError::from)?;
     engine.analyze(symbol_id).map_err(ServiceError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rgctl_analysis::ParsedSymbol;
+    use rgctl_graph::backend::{GraphBackend, MemoryBackend};
+    use rgctl_graph::schema::{Node, NodeType};
+
+    #[test]
+    fn resolve_type_members_enum_and_backslash() {
+        let mut backend = MemoryBackend::new();
+        let en = Node::new(NodeType::Enum, "Status")
+            .with_qualified_name("app::Status")
+            .with_file_path("status.rs");
+        let parse = Node::new(NodeType::Function, "parse")
+            .with_qualified_name("app::Status::parse")
+            .with_file_path("status.rs");
+        let php = Node::new(NodeType::Class, "OrderService")
+            .with_qualified_name(r"App\Service\OrderService")
+            .with_file_path("OrderService.php");
+        let place = Node::new(NodeType::Function, "place")
+            .with_qualified_name(r"App\Service\OrderService\place")
+            .with_file_path("OrderService.php");
+        let eid = en.id;
+        let pid = parse.id;
+        let oid = php.id;
+        let place_id = place.id;
+        backend.insert_node(en).unwrap();
+        backend.insert_node(parse).unwrap();
+        backend.insert_node(php).unwrap();
+        backend.insert_node(place).unwrap();
+
+        let (tid, members) = try_resolve_type_members(
+            &backend,
+            &ParsedSymbol {
+                target_name: "Status".into(),
+                class_filter: None,
+                file_filter: None,
+            },
+        )
+        .expect("enum members");
+        assert_eq!(tid, eid);
+        assert!(members.contains(&pid));
+
+        let (tid, members) = try_resolve_type_members(
+            &backend,
+            &ParsedSymbol {
+                target_name: "OrderService".into(),
+                class_filter: None,
+                file_filter: None,
+            },
+        )
+        .expect("php class members");
+        assert_eq!(tid, oid);
+        assert!(members.contains(&place_id));
+    }
 }

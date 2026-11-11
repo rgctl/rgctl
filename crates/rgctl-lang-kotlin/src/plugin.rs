@@ -636,7 +636,141 @@ impl KotlinPlugin {
         Some(symbol)
     }
 
-    /// `@Ann` / `@file:Ann` → `AnnotatedWith` from nearest enclosing symbol.
+    fn root_package_name(node: Node, source: &[u8]) -> Option<String> {
+        let mut root = node;
+        while let Some(p) = root.parent() {
+            root = p;
+        }
+        Self::package_name(root, source)
+    }
+
+    fn resolve_annotated_target_qn(
+        &self,
+        node: Node,
+        source: &[u8],
+        symbols: &[Symbol],
+    ) -> Option<String> {
+        let mut cur = Some(node);
+        let mut target_decl = None;
+        while let Some(n) = cur {
+            match n.kind() {
+                "function_declaration"
+                | "class_declaration"
+                | "object_declaration"
+                | "companion_object"
+                | "property_declaration"
+                | "primary_constructor"
+                | "secondary_constructor" => {
+                    target_decl = Some(n);
+                    break;
+                }
+                "prefix_expression" => {
+                    let mut c = n.walk();
+                    if let Some(child_decl) = n.children(&mut c).find(|ch| {
+                        matches!(
+                            ch.kind(),
+                            "function_declaration"
+                                | "class_declaration"
+                                | "object_declaration"
+                                | "property_declaration"
+                        )
+                    }) {
+                        target_decl = Some(child_decl);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            if let Some(parent) = n.parent()
+                && matches!(parent.kind(), "class_body" | "source_file" | "statements")
+            {
+                let mut sib = n.next_named_sibling();
+                while let Some(s) = sib {
+                    if matches!(
+                        s.kind(),
+                        "function_declaration"
+                            | "class_declaration"
+                            | "object_declaration"
+                            | "property_declaration"
+                    ) {
+                        target_decl = Some(s);
+                        break;
+                    }
+                    sib = s.next_named_sibling();
+                }
+                if target_decl.is_some() {
+                    break;
+                }
+            }
+            cur = n.parent();
+        }
+
+        if let Some(decl) = target_decl {
+            let pkg = Self::root_package_name(decl, source);
+            match decl.kind() {
+                "function_declaration" => {
+                    if let Some(sym) = self.emit_function(decl, source, "", pkg.as_deref()) {
+                        return sym.qualified_name.or(Some(sym.name));
+                    }
+                }
+                "class_declaration" | "object_declaration" | "companion_object" => {
+                    let simple = if decl.kind() == "companion_object" {
+                        Self::type_name(decl, source).unwrap_or_else(|| "Companion".to_string())
+                    } else {
+                        Self::type_name(decl, source)?
+                    };
+                    let mut type_path = Self::enclosing_type_path(decl, source);
+                    if type_path.last() != Some(&simple) {
+                        type_path.push(simple);
+                    }
+                    return Some(Self::qualify(pkg.as_deref(), &type_path.join(".")));
+                }
+                "primary_constructor" | "secondary_constructor" => {
+                    let type_path = Self::enclosing_type_path(decl, source);
+                    if !type_path.is_empty() {
+                        return Some(Self::qualify(
+                            pkg.as_deref(),
+                            &format!("{}.<init>", type_path.join(".")),
+                        ));
+                    }
+                }
+                "property_declaration" => {
+                    let decl_line = decl.start_position().row + 1;
+                    if let Some(sym) = symbols
+                        .iter()
+                        .rev()
+                        .find(|s| s.location.start_line == decl_line)
+                    {
+                        return sym
+                            .qualified_name
+                            .clone()
+                            .or_else(|| Some(sym.name.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        symbols
+            .iter()
+            .rev()
+            .find(|s| {
+                matches!(
+                    s.symbol_type,
+                    SymbolType::Class
+                        | SymbolType::Interface
+                        | SymbolType::Struct
+                        | SymbolType::Enum
+                        | SymbolType::Module
+                        | SymbolType::Function
+                        | SymbolType::Method
+                        | SymbolType::Variable
+                ) && s.metadata.get("is_constructor") != Some(&serde_json::json!(true))
+            })
+            .and_then(|s| s.qualified_name.clone().or_else(|| Some(s.name.clone())))
+    }
+
+    /// `@Ann` / `@file:Ann` → `AnnotatedWith` from nearest enclosing declaration.
     pub(crate) fn emit_annotation_relation(
         &self,
         node: Node,
@@ -656,16 +790,19 @@ impl KotlinPlugin {
         if ann.is_empty() {
             return;
         }
-        let from = symbols
-            .last()
-            .and_then(|s| s.qualified_name.clone().or_else(|| Some(s.name.clone())))
+        let from = self
+            .resolve_annotated_target_qn(node, source, symbols)
             .unwrap_or_else(|| file_path.to_string_lossy().into_owned());
+        let mut metadata = serde_json::json!({ "language": "kotlin" });
+        if let Some(paren) = text.find('(') {
+            metadata["arguments"] = serde_json::Value::String(text[paren..].to_string());
+        }
         relations.push(Relation {
             from,
             to: ann.to_string(),
             relation_type: RelationType::AnnotatedWith,
             location: Self::loc(&file_path.to_string_lossy(), node),
-            metadata: serde_json::json!({ "language": "kotlin" }),
+            metadata,
             to_qualified_hint: Some(ann.to_string()),
             to_type_hint: None,
             ..Default::default()
@@ -1115,5 +1252,44 @@ data class User(val email: String)
             "expected email field: {:?}",
             class.fields
         );
+    }
+
+    #[test]
+    fn annotation_arguments_on_annotated_with() {
+        let src = br#"
+package com.example
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.RestController
+@RestController
+class UserController(val repo: String) {
+  @GetMapping("/users")
+  fun list(): String = "ok"
+}
+"#;
+        let plugin = KotlinPlugin::new().unwrap();
+        let all = plugin
+            .extract_all(Path::new("UserController.kt"), src)
+            .unwrap();
+        let cls_ann = all
+            .relations
+            .iter()
+            .find(|r| {
+                r.relation_type == RelationType::AnnotatedWith && r.to.contains("RestController")
+            })
+            .expect("AnnotatedWith RestController");
+        assert_eq!(cls_ann.from, "com.example.UserController");
+
+        let ann = all
+            .relations
+            .iter()
+            .find(|r| r.relation_type == RelationType::AnnotatedWith && r.to.contains("GetMapping"))
+            .expect("AnnotatedWith GetMapping");
+        assert_eq!(
+            ann.metadata.get("arguments").and_then(|v| v.as_str()),
+            Some("(\"/users\")"),
+            "expected arguments metadata: {:?}",
+            ann.metadata
+        );
+        assert_eq!(ann.from, "com.example.UserController.list");
     }
 }

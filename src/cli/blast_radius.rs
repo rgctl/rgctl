@@ -504,12 +504,7 @@ fn try_resolve_type_node_snapshot(
     }
     let mut type_candidates: Vec<rgctl_graph::schema::Node> = nodes
         .into_iter()
-        .filter(|n| {
-            matches!(
-                n.node_type,
-                NodeType::Class | NodeType::Interface | NodeType::Struct
-            )
-        })
+        .filter(|n| rgctl_graph::is_aggregate_container_type(n.node_type))
         .filter(|n| {
             if let Some(l) = line
                 && n.start_line != Some(l)

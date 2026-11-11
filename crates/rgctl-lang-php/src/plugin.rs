@@ -961,15 +961,19 @@ impl PhpPlugin {
                 });
             }
             "attribute" => {
-                let mut attrs = Vec::new();
-                push_attribute_text(node, source, &mut attrs);
-                for attr in attrs {
+                let mut parts = Vec::new();
+                push_attribute_parts(node, source, &mut parts);
+                for (name, args) in parts {
+                    let mut metadata = serde_json::json!({ "language": "php" });
+                    if let Some(a) = args {
+                        metadata["arguments"] = serde_json::Value::String(a);
+                    }
                     relations.push(Relation {
                         from: from.clone(),
-                        to: attr,
+                        to: name,
                         relation_type: RelationType::AnnotatedWith,
                         location: source_location(node, file_path),
-                        metadata: serde_json::json!({ "language": "php" }),
+                        metadata,
                         to_qualified_hint: None,
                         to_type_hint: None,
                         ..Default::default()
@@ -1309,7 +1313,7 @@ fn access_member_name(node: Node, source: &[u8]) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn push_attribute_text(attr: Node, source: &[u8], attrs: &mut Vec<String>) {
+fn push_attribute_parts(attr: Node, source: &[u8], parts: &mut Vec<(String, Option<String>)>) {
     let name = attr
         .child_by_field_name("name")
         .or_else(|| {
@@ -1319,13 +1323,23 @@ fn push_attribute_text(attr: Node, source: &[u8], attrs: &mut Vec<String>) {
         .and_then(|n| n.utf8_text(source).ok())
         .map(|s| s.trim_start_matches('\\').to_string());
     if let Some(name) = name {
-        if let Some(params) = attr.child_by_field_name("parameters") {
-            if let Ok(args) = params.utf8_text(source) {
-                attrs.push(format!("{name}{args}"));
-                return;
-            }
+        let args = attr
+            .child_by_field_name("parameters")
+            .and_then(|n| n.utf8_text(source).ok())
+            .map(str::to_string);
+        parts.push((name, args));
+    }
+}
+
+fn push_attribute_text(attr: Node, source: &[u8], attrs: &mut Vec<String>) {
+    let mut parts = Vec::new();
+    push_attribute_parts(attr, source, &mut parts);
+    for (name, args) in parts {
+        if let Some(a) = args {
+            attrs.push(format!("{name}{a}"));
+        } else {
+            attrs.push(name);
         }
-        attrs.push(name);
     }
 }
 
@@ -1875,6 +1889,19 @@ class C {
         );
         assert!(symbols.iter().any(|s| s.name.starts_with("$Anonymous")));
         assert!(symbols.iter().any(|s| s.name == "m"));
+        let all = plugin.extract_all(path, source).unwrap();
+        let ann = all
+            .relations
+            .iter()
+            .find(|r| r.relation_type == RelationType::AnnotatedWith && r.to.contains("Route"))
+            .expect("AnnotatedWith Route");
+        assert_eq!(ann.to, "Route");
+        assert_eq!(
+            ann.metadata.get("arguments").and_then(|v| v.as_str()),
+            Some("('/api')"),
+            "expected arguments metadata: {:?}",
+            ann.metadata
+        );
     }
 
     #[test]
