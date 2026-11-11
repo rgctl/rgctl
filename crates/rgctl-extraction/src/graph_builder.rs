@@ -560,7 +560,6 @@ impl GraphBuilder {
                     serde_json::Value::String(s) => Some(s.clone()),
                     serde_json::Value::Bool(b) => Some(b.to_string()),
                     serde_json::Value::Number(n) => Some(n.to_string()),
-                    serde_json::Value::Object(_) if k == "source_name_range" => Some(v.to_string()),
                     _ => None,
                 };
                 if let Some(s) = prop_val {
@@ -749,18 +748,33 @@ impl GraphBuilder {
             {
                 node = node.with_property("field_type_fqn".into(), fqn.to_owned());
             }
-            if let Some(range) = symbol
+            if let Some(spans) = symbol
                 .metadata
-                .get("field_name_ranges")
+                .get("field_byte_spans")
                 .and_then(|v| v.get(&field.name))
             {
+                let integer = |key: &str| spans.get(key).and_then(|v| v.as_u64());
+                let byte = |key: &str| integer(key).and_then(|v| u32::try_from(v).ok());
+                let overflow = spans.get("name_span_overflow").and_then(|v| {
+                    let values = v.as_array()?;
+                    Some((
+                        u32::try_from(values.first()?.as_u64()?).ok()?,
+                        u32::try_from(values.get(1)?.as_u64()?).ok()?,
+                    ))
+                });
+                node = node.with_byte_spans(
+                    byte("start_byte"),
+                    byte("end_byte"),
+                    integer("name_rel_offset").and_then(|v| u16::try_from(v).ok()),
+                    integer("name_token_len").and_then(|v| u16::try_from(v).ok()),
+                    overflow,
+                );
                 if let (Some(start), Some(end)) = (
-                    range.get("start_line").and_then(|v| v.as_u64()),
-                    range.get("end_line").and_then(|v| v.as_u64()),
+                    integer("start_line").and_then(|v| usize::try_from(v).ok()),
+                    integer("end_line").and_then(|v| usize::try_from(v).ok()),
                 ) {
-                    node = node.with_location(start as usize + 1, end as usize + 1);
+                    node = node.with_location(start, end);
                 }
-                node = node.with_property("source_name_range".into(), range.to_string());
             }
             if let Some(ty) = &field.field_type {
                 node = node.with_property("field_type".to_string(), ty.clone());
@@ -4937,7 +4951,7 @@ class Library {
         );
     }
     #[test]
-    fn materialized_fields_keep_qualified_types_and_indexed_name_ranges() {
+    fn materialized_fields_keep_qualified_types_and_byte_spans() {
         let mut builder = GraphBuilder::new();
         builder.set_materialize_fields(true);
         let file = builder.ensure_file_node(Path::new("Order.java"));
@@ -4951,7 +4965,7 @@ class Library {
         }];
         symbol.metadata = serde_json::json!({
             "field_type_fqns":{"status":"demo.Status"},
-            "field_name_ranges":{"status":{"start_line":9,"start_character":4,"end_line":9,"end_character":10}}
+            "field_byte_spans":{"status":{"start_line":10,"end_line":10,"start_byte":100,"end_byte":120,"name_rel_offset":4,"name_token_len":6}}
         });
         builder.add_symbol(&symbol, file);
         let field = builder
@@ -4961,9 +4975,9 @@ class Library {
             .expect("field");
         assert_eq!(field.get_property("field_type_fqn"), Some("demo.Status"));
         assert_eq!(field.start_line, Some(10));
-        let range: serde_json::Value =
-            serde_json::from_str(field.get_property("source_name_range").expect("range"))
-                .expect("JSON range");
-        assert_eq!(range["start_character"], 4);
+        assert_eq!(field.start_byte, Some(100));
+        assert_eq!(field.end_byte, Some(120));
+        assert_eq!(field.name_rel_offset, Some(4));
+        assert_eq!(field.name_token_len, Some(6));
     }
 }

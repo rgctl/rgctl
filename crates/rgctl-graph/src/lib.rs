@@ -97,9 +97,8 @@ pub use structural_sketch::{
 pub use structured_query::{
     ALL_EDGE_TYPES, ALL_NODE_TYPES, CallNeighborsResult, EdgeRow, EntityRow, FindResult,
     InventoryBy, InventoryCount, InventoryResult, QueryFilters, RelationDirection, RelationsResult,
-    STRUCTURED_QUERY_SCHEMA_VERSION, ScopeMode, SourceRange, StructuredQuery, glob_match,
-    import_package_prefix, is_aggregate_container_type, parse_annotation_list, parse_edge_type,
-    parse_node_type,
+    STRUCTURED_QUERY_SCHEMA_VERSION, ScopeMode, StructuredQuery, glob_match, import_package_prefix,
+    is_aggregate_container_type, parse_annotation_list, parse_edge_type, parse_node_type,
 };
 pub use writeback::{
     EditReason, SpanEdit, TrustLedgerEntry, TrustLedgerReport, TrustStatus, WritebackError,

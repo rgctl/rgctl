@@ -18,6 +18,9 @@ fn cases() -> Vec<serde_json::Value> {
     serde_json::from_slice(&std::fs::read(root().join("inventory.json")).unwrap()).unwrap()
 }
 fn graph(file: &str, source: &str) -> (Vec<Node>, Vec<Edge>) {
+    graph_with_members(file, source, false)
+}
+fn graph_with_members(file: &str, source: &str, fields: bool) -> (Vec<Node>, Vec<Edge>) {
     static EXTRACTOR: std::sync::OnceLock<Extractor> = std::sync::OnceLock::new();
     let extractor =
         EXTRACTOR.get_or_init(|| Extractor::new(Arc::new(rgctl_languages::default_registry())));
@@ -25,10 +28,141 @@ fn graph(file: &str, source: &str) -> (Vec<Node>, Vec<Edge>) {
         .extract_file_with_source(Path::new(file), source.as_bytes().to_vec())
         .unwrap();
     let mut builder = GraphBuilder::new();
+    builder.set_materialize_fields(fields);
     extractor
         .populate_graph(&[extraction], &mut builder)
         .unwrap();
     builder.into_graph()
+}
+
+#[test]
+fn java_fields_share_byte_spans_and_stay_stable_across_line_shifts() {
+    let source = r#"package demo;
+import java.util.List;
+class Base { int value; }
+@Deprecated
+class Example extends Base {
+    /* 😀 */ @Deprecated List<String> first, second;
+    int café;
+    int value;
+    int quote(int value) { return value; }
+    int quote(String value) { return value.length(); }
+    class Inner { int value; }
+}
+interface Flags { int LIMIT = 1, OTHER = 2; }
+@interface Settings { int CONSTANT = 3; }
+enum Choice { FIRST, SECOND; }
+record Pair(int left, String right) {}
+"#;
+    let (nodes, edges) = graph_with_members("Example.java", source, true);
+    let fields: Vec<_> = nodes
+        .iter()
+        .filter(|n| n.has_label("field"))
+        .cloned()
+        .collect();
+    let names: BTreeSet<_> = fields
+        .iter()
+        .map(|n| n.qualified_name.as_deref().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        BTreeSet::from([
+            "demo.Base.value",
+            "demo.Example.first",
+            "demo.Example.second",
+            "demo.Example.café",
+            "demo.Example.value",
+            "demo.Example.Inner.value",
+            "demo.Flags.LIMIT",
+            "demo.Flags.OTHER",
+            "demo.Settings.CONSTANT",
+            "demo.Choice.FIRST",
+            "demo.Choice.SECOND",
+            "demo.Pair.left",
+            "demo.Pair.right",
+        ])
+    );
+    assert_eq!(
+        fields.iter().map(|n| n.id).collect::<BTreeSet<_>>().len(),
+        fields.len()
+    );
+    for field in fields
+        .iter()
+        .filter(|n| matches!(n.name.as_ref(), "first" | "second"))
+    {
+        assert_eq!(field.get_property("field_type_fqn"), Some("java.util.List"));
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let base_path = directory.path().join("base.bin");
+    rgctl_graph::write_columnar_from_nodes_edges(nodes, edges, &base_path).unwrap();
+    let base = rgctl_graph::SnapshotNodeStore::open(&base_path).unwrap();
+    let col = base.columnar().unwrap();
+    for field in &fields {
+        let (declaration, identifier) = col.node_byte_span(field.id).unwrap();
+        let (start, end) = declaration.expect("field declaration span");
+        let (name_start, name_end) = identifier.expect("field name span");
+        assert_eq!(
+            &source[name_start as usize..name_end as usize],
+            field.name.as_str()
+        );
+        assert!(start <= name_start && name_end <= end);
+        let restored = col.get_node(field.id).unwrap().unwrap();
+        assert_eq!(restored.start_byte, field.start_byte);
+        assert_eq!(restored.end_byte, field.end_byte);
+        assert!(restored.identity_discriminator().is_none());
+    }
+
+    let shifted = format!("\n\n{source}");
+    let (nodes, edges) = graph_with_members("Example.java", &shifted, true);
+    let head_path = directory.path().join("head.bin");
+    rgctl_graph::write_columnar_from_nodes_edges(nodes, edges, &head_path).unwrap();
+    let head = rgctl_graph::SnapshotNodeStore::open(&head_path).unwrap();
+    for field in &fields {
+        let (declaration, identifier) = head.columnar().unwrap().node_byte_span(field.id).unwrap();
+        assert_eq!(declaration.unwrap().0, field.start_byte.unwrap() + 2);
+        let (start, end) = identifier.unwrap();
+        assert_eq!(&shifted[start as usize..end as usize], field.name.as_str());
+    }
+    let mut changes = rgctl_graph::VecDiffSink::default();
+    let stats = rgctl_graph::diff_snapshots(&base, &head, &mut changes).unwrap();
+    assert_eq!(stats.nodes_added, 0);
+    assert_eq!(stats.nodes_removed, 0);
+    assert_eq!(stats.edges_added, 0);
+    assert_eq!(stats.edges_removed, 0);
+    assert!(
+        changes
+            .nodes
+            .iter()
+            .filter(|event| event.kind == rgctl_graph::NodeDeltaKind::Changed)
+            .all(|event| matches!(
+                event.head.as_ref().unwrap().node_type,
+                NodeType::File | NodeType::Module
+            )),
+        "location-only edits changed semantic nodes: {:?}",
+        changes.nodes
+    );
+}
+
+#[test]
+fn java_field_name_span_survives_oversized_annotation() {
+    let source = format!(
+        "class Example {{ @Label(\"{}\") int target; }}",
+        "x".repeat(70_000)
+    );
+    let (nodes, edges) = graph_with_members("Example.java", &source, true);
+    let field = nodes
+        .iter()
+        .find(|n| n.has_label("field") && n.name == "target")
+        .unwrap()
+        .clone();
+    assert!(field.name_span_overflow.is_some());
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("graph.bin");
+    rgctl_graph::write_columnar_from_nodes_edges(nodes, edges, &path).unwrap();
+    let store = rgctl_graph::SnapshotNodeStore::open(&path).unwrap();
+    let (_, name) = store.columnar().unwrap().node_byte_span(field.id).unwrap();
+    let (start, end) = name.unwrap();
+    assert_eq!(&source[start as usize..end as usize], "target");
 }
 fn function_keys(nodes: &[Node]) -> BTreeMap<String, (uuid::Uuid, Option<String>)> {
     nodes

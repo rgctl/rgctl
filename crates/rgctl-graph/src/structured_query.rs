@@ -10,7 +10,7 @@
 use crate::schema::{EdgeType, Node, NodeType, SharedStr};
 use crate::snapshot::SnapshotNodeStore;
 use rgctl_error::{Error, Result};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -125,19 +125,6 @@ impl ScopeMode {
     }
 }
 
-/// Zero-based source range with UTF-16 character offsets, when indexed by a language plugin.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SourceRange {
-    /// First line (zero-based).
-    pub start_line: usize,
-    /// First UTF-16 character on the first line.
-    pub start_character: usize,
-    /// Ending line (zero-based); the ending position is exclusive.
-    pub end_line: usize,
-    /// Exclusive UTF-16 character on the ending line.
-    pub end_character: usize,
-}
-
 /// Lean entity row for JSON.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct EntityRow {
@@ -172,9 +159,6 @@ pub struct EntityRow {
     /// Annotation argument text when `--show-attributes` and args are indexed
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attributes: Option<String>,
-    /// Indexed name-token range, available when `QueryFilters::include_ranges` is enabled.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub range: Option<SourceRange>,
 }
 
 /// Keyed edge row (direction-stable; never positional).
@@ -301,8 +285,6 @@ pub struct QueryFilters {
     pub show_attributes: bool,
     /// Optional map `source_id\0annotation_simple` → arguments (from sidecar).
     pub annotation_arg_index: Option<HashMap<String, String>>,
-    /// Materialize indexed UTF-16 name ranges; off by default to preserve hot-column scans.
-    pub include_ranges: bool,
 }
 
 /// Session over an open snapshot store.
@@ -321,7 +303,7 @@ impl<'a> StructuredQuery<'a> {
         "When invoking StructuredQuery from rgctl serve, run find/callers/relations/inventory on spawn_blocking"
     }
 
-    fn project(node: &Node, include_ranges: bool) -> EntityRow {
+    fn project(node: &Node) -> EntityRow {
         let (name_start_byte, name_end_byte) = match (node.start_byte, node.name_rel_offset) {
             (Some(start), Some(rel)) => {
                 let ns = start.saturating_add(u32::from(rel));
@@ -353,12 +335,6 @@ impl<'a> StructuredQuery<'a> {
             name_end_byte,
             id: node.id.to_string(),
             attributes: None,
-            range: if include_ranges {
-                node.get_property("source_name_range")
-                    .and_then(|v| serde_json::from_str(v).ok())
-            } else {
-                None
-            },
         }
     }
 
@@ -367,9 +343,8 @@ impl<'a> StructuredQuery<'a> {
         annots: &[String],
         arg_index: Option<&HashMap<String, String>>,
         matched_annots: Option<&Vec<String>>,
-        include_ranges: bool,
     ) -> EntityRow {
-        let mut row = Self::project(node, include_ranges);
+        let mut row = Self::project(node);
         let mut parts = Vec::new();
         for a in annots {
             let simple = normalize_annotation_name(a);
@@ -659,7 +634,7 @@ impl<'a> StructuredQuery<'a> {
 
     /// Whether query filters require cold `properties` / labels (not hot columns + qn).
     fn filters_need_cold_ext(filters: &QueryFilters) -> bool {
-        filters.class.is_some() || filters.include_ranges
+        filters.class.is_some()
     }
 
     /// Sequential columnar scan with hot-column pre-filter; cold_ext only when needed.
@@ -810,15 +785,9 @@ impl<'a> StructuredQuery<'a> {
                 .map(|n| {
                     if filters.show_attributes {
                         let matched = matched_annots.get(&n.id);
-                        Self::project_with_annotation_attrs(
-                            &n,
-                            annots,
-                            arg_index,
-                            matched,
-                            filters.include_ranges,
-                        )
+                        Self::project_with_annotation_attrs(&n, annots, arg_index, matched)
                     } else {
-                        Self::project(&n, filters.include_ranges)
+                        Self::project(&n)
                     }
                 })
                 .collect()
@@ -845,7 +814,7 @@ impl<'a> StructuredQuery<'a> {
             candidates
                 .into_iter()
                 .take(limit)
-                .map(|n| Self::project(&n, filters.include_ranges))
+                .map(|n| Self::project(&n))
                 .collect()
         };
         let returned = if filters.count_only {
@@ -979,7 +948,7 @@ impl<'a> StructuredQuery<'a> {
                     continue;
                 }
             }
-            neighbors.push(Self::project(&n, filters.include_ranges));
+            neighbors.push(Self::project(&n));
             hops.push(*hop);
         }
         let total = neighbors.len();
@@ -990,7 +959,7 @@ impl<'a> StructuredQuery<'a> {
         }
         Ok(CallNeighborsResult {
             schema_version: STRUCTURED_QUERY_SCHEMA_VERSION,
-            target: Self::project(&seed, filters.include_ranges),
+            target: Self::project(&seed),
             returned: neighbors.len(),
             total,
             neighbors,
@@ -1056,18 +1025,12 @@ impl<'a> StructuredQuery<'a> {
                 return Ok(());
             }
             let (source, target, dir_label, key) = match direction {
-                RelationDirection::In => (
-                    Self::project(&dst, filters.include_ranges),
-                    Self::project(&src, filters.include_ranges),
-                    "in",
-                    (to, from),
-                ),
-                RelationDirection::Out | RelationDirection::Both => (
-                    Self::project(&src, filters.include_ranges),
-                    Self::project(&dst, filters.include_ranges),
-                    "out",
-                    (from, to),
-                ),
+                RelationDirection::In => {
+                    (Self::project(&dst), Self::project(&src), "in", (to, from))
+                }
+                RelationDirection::Out | RelationDirection::Both => {
+                    (Self::project(&src), Self::project(&dst), "out", (from, to))
+                }
             };
             agg.entry(key)
                 .and_modify(|row| row.occurrences = row.occurrences.saturating_add(1))
@@ -1171,10 +1134,10 @@ impl<'a> StructuredQuery<'a> {
                             }
                         })
                         .or_insert(EdgeRow {
-                            source: Self::project(&src, filters.include_ranges),
+                            source: Self::project(&src),
                             edge: edge_type_cli(edge),
                             direction: if incoming { "in" } else { "out" }.into(),
-                            target: Self::project(&dst, filters.include_ranges),
+                            target: Self::project(&dst),
                             hops: Some(hop),
                             occurrences: 1,
                         });
@@ -1210,7 +1173,7 @@ impl<'a> StructuredQuery<'a> {
 
         Ok(RelationsResult {
             schema_version: STRUCTURED_QUERY_SCHEMA_VERSION,
-            target: Some(Self::project(&seed, filters.include_ranges)),
+            target: Some(Self::project(&seed)),
             returned: rows.len(),
             total,
             edges: rows,
@@ -2807,57 +2770,5 @@ mod tests {
             .unwrap();
         assert_eq!(inv.counts.len(), 1);
         assert_eq!(inv.counts[0].key, "javax.ejb");
-    }
-
-    #[test]
-    fn indexed_source_ranges_are_opt_in_and_survive_mmap_roundtrip() {
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("graph.snapshot.bin");
-        let mut backend = MemoryBackend::new();
-        backend
-            .insert_node(
-                Node::new(NodeType::Class, "Example")
-                    .with_file_path("Example.java")
-                    .with_location(2, 10)
-                    .with_property(
-                        "source_name_range".into(),
-                        serde_json::json!({"start_line":2,"start_character":6,"end_line":2,"end_character":13}).to_string(),
-                    ),
-            )
-            .unwrap();
-        write_columnar_from_backend(&backend, &path).unwrap();
-        let store = SnapshotNodeStore::open(&path).unwrap();
-        let query = StructuredQuery::new(&store);
-        let ordinary = query.find(None, &QueryFilters::default()).unwrap();
-        assert!(ordinary.entities[0].range.is_none());
-        assert!(
-            serde_json::to_value(&ordinary.entities[0])
-                .unwrap()
-                .get("range")
-                .is_none()
-        );
-        let precise = query
-            .find(
-                None,
-                &QueryFilters {
-                    include_ranges: true,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            precise.entities[0].range,
-            Some(SourceRange {
-                start_line: 2,
-                start_character: 6,
-                end_line: 2,
-                end_character: 13
-            })
-        );
-        assert_eq!(
-            precise.entities[0].line,
-            Some(2),
-            "definition span is independent of name range"
-        );
     }
 }

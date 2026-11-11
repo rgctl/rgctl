@@ -1,6 +1,7 @@
 //! Red-Green byte-span helpers for Tier-1 lossless write-back.
 //!
-//! Zero heap allocations on the hot path: only scalar `u32`/`u16` field writes.
+//! Symbol/call-site recording writes scalar fields without allocating. Field
+//! spans travel in worker-owned metadata until graph member materialization.
 
 use rgctl_plugin_api::{Relation, Symbol};
 use tree_sitter::Node;
@@ -58,6 +59,26 @@ pub fn record_symbol_spans(symbol: &mut Symbol, decl_node: Node, name_node: Opti
             }
         }
     }
+}
+
+/// Capture field spans on an extraction worker for later member materialization.
+/// The metadata is extraction-only; graph nodes store spans in their dedicated fields.
+pub fn record_field_spans(
+    metadata: &mut serde_json::Value,
+    name: &str,
+    declaration: Node,
+    identifier: Node,
+) {
+    let (start, end, relative, overflow) = compute_symbol_byte_spans(declaration, Some(identifier));
+    metadata["field_byte_spans"][name] = serde_json::json!({
+        "start_byte": start,
+        "end_byte": end,
+        "name_rel_offset": if overflow.is_none() { Some(relative) } else { None },
+        "name_token_len": u16::try_from(identifier.end_byte() - identifier.start_byte()).ok(),
+        "name_span_overflow": overflow,
+        "start_line": declaration.start_position().row + 1,
+        "end_line": declaration.end_position().row + 1,
+    });
 }
 
 /// Record call-site / reference identifier spans onto a relation (no heap alloc).

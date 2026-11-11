@@ -52,7 +52,7 @@ reuse verifies source hashes and does not remap graph IDs through ambiguous name
 
 ## Migration and evidence
 
-Facts-cache format 4 and extraction semantics version 6 invalidate old extraction
+Facts-cache format 5 and extraction semantics version 7 invalidate old extraction
 results. Missing or stale `.rgctl/extraction_semantics.json` forces full source
 extraction, including when `discover --files` was requested. The semantics marker
 is written after successful snapshot persistence. Existing snapshots remain
@@ -64,6 +64,19 @@ those offsets from changing function extension digests after line shifts. CFG se
 span fields and accepts legacy offset properties when reading older nodes. The
 snapshot extension preserves both the discriminator prefix and the relative span
 tail; older format-2 span extensions remain readable.
+
+Materialized Java fields use `rgctl_plugin_helpers::record_field_spans` to carry
+declaration and identifier byte spans from extraction into the same node columns
+and relative extension tail. This covers class fields, interface/annotation
+constants, enum constants, and record components. Qualified field-type metadata
+is retained. Field identity remains owner-qualified; callable discriminators select
+overloaded methods independently of locations. Field materialization retains its
+existing `--with-cfg` opt-in.
+
+This replaces the separate UTF-16 range-property API from superseded PR #184.
+Structured queries expose the existing declaration/name byte offsets; no new
+UTF-16 projection API is added. Absolute name-range properties are not emitted,
+so blank-line shifts preserve semantic diff results as well as node IDs.
 
 `.rgctl/callable_resolution.json` counts unresolved canonical calls and retains at
 most 1,024 original relation samples with reasons. This is evidence of incomplete

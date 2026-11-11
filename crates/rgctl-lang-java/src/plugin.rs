@@ -253,27 +253,6 @@ fn source_location(node: Node, file_path: &str) -> SourceLocation {
     }
 }
 
-/// Reuse the current parser's token positions; translate byte columns once on extraction workers.
-fn source_name_range(node: Node, source: &[u8]) -> Option<serde_json::Value> {
-    let start = node.start_position();
-    let end = node.end_position();
-    let first =
-        std::str::from_utf8(&source[node.start_byte() - start.column..node.start_byte()]).ok()?;
-    let last = std::str::from_utf8(&source[node.end_byte() - end.column..node.end_byte()]).ok()?;
-    Some(serde_json::json!({
-        "start_line": start.row, "start_character": first.encode_utf16().count(),
-        "end_line": end.row, "end_character": last.encode_utf16().count(),
-    }))
-}
-
-fn apply_name_range(node: Node, source: &[u8], metadata: &mut serde_json::Value) {
-    if let Some(name) = node.child_by_field_name("name")
-        && let Some(range) = source_name_range(name, source)
-    {
-        metadata["source_name_range"] = range;
-    }
-}
-
 fn first_line_text(node: Node, source: &[u8]) -> Result<String> {
     Ok(node
         .utf8_text(source)?
@@ -604,7 +583,6 @@ impl JavaPlugin {
         source: &[u8],
         metadata: &mut serde_json::Value,
     ) -> Result<()> {
-        apply_name_range(node, source, metadata);
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
@@ -1086,7 +1064,6 @@ impl JavaPlugin {
         metadata: &mut serde_json::Value,
     ) -> Result<Vec<Field>> {
         let mut fields = Vec::new();
-        let mut ranges = serde_json::Map::new();
         let mut cursor = class_node.walk();
         let body = class_node
             .children(&mut cursor)
@@ -1119,9 +1096,7 @@ impl JavaPlugin {
                     && let Some(name_node) = field_child.child_by_field_name("name")
                 {
                     let name = name_node.utf8_text(source)?.to_string();
-                    if let Some(range) = source_name_range(name_node, source) {
-                        ranges.insert(name.clone(), range);
-                    }
+                    rgctl_plugin_helpers::record_field_spans(metadata, &name, child, name_node);
                     fields.push(Field {
                         name,
                         field_type: field_type.clone(),
@@ -1130,14 +1105,16 @@ impl JavaPlugin {
                 }
             }
         }
-        if !ranges.is_empty() {
-            metadata["field_name_ranges"] = serde_json::Value::Object(ranges);
-        }
         Ok(fields)
     }
 
     /// Each `enum_constant` becomes a field on the owning Enum symbol.
-    fn extract_enum_fields(&self, enum_node: Node, source: &[u8]) -> Result<Vec<Field>> {
+    fn extract_enum_fields(
+        &self,
+        enum_node: Node,
+        source: &[u8],
+        metadata: &mut serde_json::Value,
+    ) -> Result<Vec<Field>> {
         let mut fields = Vec::new();
         let mut cursor = enum_node.walk();
         let Some(body) = enum_node
@@ -1168,6 +1145,7 @@ impl JavaPlugin {
                     Some(args) => Some(format!("enum_constant{args}")),
                     None => Some("enum_constant".to_string()),
                 };
+                rgctl_plugin_helpers::record_field_spans(metadata, name, child, name_node);
                 fields.push(Field {
                     name: name.to_string(),
                     field_type: None,
@@ -1181,7 +1159,12 @@ impl JavaPlugin {
     /// `constant_declaration` inside an `interface_body` or
     /// `annotation_type_body` becomes a field on the owning Interface/Annotation
     /// symbol (mirrors `extract_class_fields`).
-    fn extract_interface_constants(&self, node: Node, source: &[u8]) -> Result<Vec<Field>> {
+    fn extract_interface_constants(
+        &self,
+        node: Node,
+        source: &[u8],
+        metadata: &mut serde_json::Value,
+    ) -> Result<Vec<Field>> {
         let mut fields = Vec::new();
         let mut cursor = node.walk();
         let Some(body) = node
@@ -1207,6 +1190,7 @@ impl JavaPlugin {
                     && let Some(name_node) = decl.child_by_field_name("name")
                 {
                     let name = name_node.utf8_text(source)?.to_string();
+                    rgctl_plugin_helpers::record_field_spans(metadata, &name, child, name_node);
                     fields.push(Field {
                         name,
                         field_type: field_type.clone(),
@@ -1220,7 +1204,21 @@ impl JavaPlugin {
 
     /// Record components (declared in the record's `parameters` field, just
     /// like a method/constructor parameter list) become fields.
-    fn extract_record_fields(&self, record_node: Node, source: &[u8]) -> Result<Vec<Field>> {
+    fn extract_record_fields(
+        &self,
+        record_node: Node,
+        source: &[u8],
+        metadata: &mut serde_json::Value,
+    ) -> Result<Vec<Field>> {
+        if let Some(parameters) = record_node.child_by_field_name("parameters") {
+            let mut cursor = parameters.walk();
+            for parameter in parameters.named_children(&mut cursor) {
+                if let Some(name_node) = parameter.child_by_field_name("name") {
+                    let name = name_node.utf8_text(source)?;
+                    rgctl_plugin_helpers::record_field_spans(metadata, name, parameter, name_node);
+                }
+            }
+        }
         let params = self.extract_parameters(record_node, source)?;
         Ok(params
             .into_iter()
@@ -1254,12 +1252,11 @@ impl JavaPlugin {
         let modifiers = self.collect_keyword_modifiers(node, source);
 
         let mut metadata = serde_json::json!({ "language": "java" });
-        apply_name_range(node, source, &mut metadata);
         let fields = match symbol_type {
             SymbolType::Class => self.extract_class_fields(node, source, &mut metadata)?,
-            SymbolType::Enum => self.extract_enum_fields(node, source)?,
+            SymbolType::Enum => self.extract_enum_fields(node, source, &mut metadata)?,
             SymbolType::Interface | SymbolType::Annotation => {
-                self.extract_interface_constants(node, source)?
+                self.extract_interface_constants(node, source, &mut metadata)?
             }
             _ => vec![],
         };
@@ -1728,10 +1725,10 @@ impl JavaPlugin {
         let name = name_node.utf8_text(source)?.to_string();
 
         let modifiers = self.collect_keyword_modifiers(node, source);
-        let fields = self.extract_record_fields(node, source)?;
         let qualified_name = Some(self.type_node_qualified_name(node, source, ctx));
 
         let mut metadata = serde_json::json!({ "language": "java", "is_record": true });
+        let fields = self.extract_record_fields(node, source, &mut metadata)?;
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
@@ -5574,32 +5571,6 @@ class Service {
                             .unwrap_or(false))
             }),
             "expected Calls toward builder()"
-        );
-    }
-    #[test]
-    fn indexed_name_ranges_skip_annotations_and_use_utf16() {
-        let symbols = symbols_of(
-            "package p;\n@Deprecated\nclass Example {\n int field;\n /* 😀 */ void run() {}\n}\n"
-                .as_bytes(),
-            "Example.java",
-        );
-        let class = symbols.iter().find(|s| s.name == "Example").expect("class");
-        assert_eq!(
-            class.location.start_line, 2,
-            "full declaration span remains unchanged"
-        );
-        assert_eq!(
-            class.metadata["source_name_range"],
-            serde_json::json!({"start_line":2,"start_character":6,"end_line":2,"end_character":13})
-        );
-        assert_eq!(
-            class.metadata["field_name_ranges"]["field"]["start_line"],
-            3
-        );
-        let method = symbols.iter().find(|s| s.name == "run").expect("method");
-        assert_eq!(
-            method.metadata["source_name_range"],
-            serde_json::json!({"start_line":4,"start_character":15,"end_line":4,"end_character":18})
         );
     }
 }
