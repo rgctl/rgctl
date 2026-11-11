@@ -52,7 +52,7 @@ reuse verifies source hashes and does not remap graph IDs through ambiguous name
 
 ## Migration and evidence
 
-Facts-cache format 3 and extraction semantics version 4 invalidate old extraction
+Facts-cache format 3 and extraction semantics version 5 invalidate old extraction
 results. Missing or stale `.rgctl/extraction_semantics.json` forces full source
 extraction, including when `discover --files` was requested. The semantics marker
 is written after successful snapshot persistence. Existing snapshots remain

@@ -1101,6 +1101,26 @@ impl GraphBuilder {
             }
         }
 
+        // Signature text can contain namespace separators (for example Rust
+        // trait names). A suffix candidate must still satisfy the typed edge.
+        if is_inheritance_relation(relation.relation_type)
+            && let Some(to) = to_id
+            && !matches!(
+                self.node_types.get(&to),
+                Some(
+                    NodeType::Class
+                        | NodeType::Struct
+                        | NodeType::Enum
+                        | NodeType::Interface
+                        | NodeType::Module
+                        | NodeType::Annotation
+                        | NodeType::TypeAlias
+                )
+            )
+        {
+            to_id = None;
+        }
+
         if relation_allows_external_stub(relation) {
             // Only stub unresolved *targets*. Stubbing missing `from` when
             // resolution is ambiguous invents phantom callers and inflates
@@ -1545,11 +1565,34 @@ impl GraphBuilder {
             .unwrap_or(name)
             .to_string();
 
+        let compatible = |id: &Uuid| {
+            let Some(kind) = self.node_types.get(id) else {
+                return false;
+            };
+            if matches!(
+                node_type,
+                NodeType::Class | NodeType::Interface | NodeType::Annotation
+            ) {
+                matches!(
+                    kind,
+                    NodeType::Class
+                        | NodeType::Struct
+                        | NodeType::Enum
+                        | NodeType::Interface
+                        | NodeType::Module
+                        | NodeType::Annotation
+                        | NodeType::TypeAlias
+                )
+            } else {
+                *kind == node_type
+            }
+        };
         // Prefer an existing unique resolution (another stub or late symbol).
         if let Some(id) = self
             .symbols_by_qualified
             .get(&qn)
             .and_then(|ids| unique_resolved(ids))
+            .filter(compatible)
         {
             return id;
         }
@@ -1560,6 +1603,7 @@ impl GraphBuilder {
                 .symbols_by_suffix
                 .get(name)
                 .and_then(|ids| unique_resolved(ids))
+                .filter(compatible)
             {
                 return id;
             }
@@ -1568,6 +1612,7 @@ impl GraphBuilder {
                     .symbols_by_suffix
                     .get(simple)
                     .and_then(|ids| unique_resolved(ids))
+                    .filter(compatible)
             {
                 return id;
             }

@@ -611,3 +611,25 @@ fn extraction_never_overrides_a_unique_parent_with_a_different_signature() {
         );
     }
 }
+
+#[test]
+fn inheritance_never_resolves_trait_names_to_methods_inside_their_identity_suffix() {
+    let (nodes, edges) = graph(
+        "mask.rs",
+        "struct Mask;\nimpl std::ops::BitOr for Mask { type Output = Mask; fn bitor(self, other: Mask) -> Mask { self } }\nimpl std::ops::BitOrAssign for Mask { fn bitor_assign(&mut self, other: Mask) {} }\n",
+    );
+    let implementations: Vec<_> = edges
+        .iter()
+        .filter(|e| e.edge_type == rgctl_graph::schema::EdgeType::Implements)
+        .collect();
+    assert_eq!(implementations.len(), 2);
+    for edge in implementations {
+        let target = nodes.iter().find(|n| n.id == edge.to).unwrap();
+        assert_eq!(
+            target.node_type,
+            NodeType::Interface,
+            "trait identity suffix resolved to a function"
+        );
+        assert!(matches!(target.name.as_str(), "BitOr" | "BitOrAssign"));
+    }
+}
