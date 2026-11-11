@@ -468,7 +468,11 @@ pub fn extract_all_single_pass(
         &mut relations,
     );
 
-    plugin.annotate_relation_identities(&ctx.symbols, &mut relations);
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Java,
+        &mut ctx.symbols,
+        &mut relations,
+    );
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }
 

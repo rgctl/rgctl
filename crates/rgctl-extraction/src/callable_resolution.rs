@@ -4,7 +4,7 @@ use rgctl_error::{Error, Result};
 use rgctl_plugin_api::Relation;
 use serde::Serialize;
 use std::path::Path;
-pub const SEMANTICS_VERSION: u32 = 3;
+pub const SEMANTICS_VERSION: u32 = 4;
 pub const DIAGNOSTIC_LIMIT: usize = 1024;
 const SEMANTICS_FILE: &str = "extraction_semantics.json";
 pub fn semantics_current(root: &Path) -> bool {

@@ -1,10 +1,13 @@
 //! Language-selected callable identity contracts, independent of display
 //! signatures, parameter spelling, body text and source coordinates.
-use rgctl_plugin_api::{Relation, RelationType, Symbol, SymbolType};
+use rgctl_plugin_api::{Relation, RelationType, Result, Symbol, SymbolType};
+
+pub mod java;
 use std::collections::{BTreeMap, HashMap};
 use tree_sitter::Node;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Policy {
+    Java,
     C,
     Cpp,
     Csharp,
@@ -30,7 +33,8 @@ impl Policy {
     fn typed(self) -> bool {
         matches!(
             self,
-            Self::Cpp
+            Self::Java
+                | Self::Cpp
                 | Self::Csharp
                 | Self::Groovy
                 | Self::Kotlin
@@ -356,8 +360,46 @@ fn rename_type_variables(value: &str, bindings: &[(String, String)]) -> String {
     out
 }
 
+/// Common source-span attachment for callable declarations.
+fn source_span(symbol: &mut Symbol, node: Node<'_>) {
+    symbol.metadata["source_start_byte"] = node.start_byte().into();
+    symbol.metadata["source_end_byte"] = node.end_byte().into();
+}
+
+/// Fallible entry point for policies whose syntax validation can fail. Java
+/// retains parse errors rather than substituting an empty/default identity.
+pub fn try_symbol(
+    mut symbol: Symbol,
+    node: Node<'_>,
+    source: &[u8],
+    policy: Policy,
+) -> Result<Symbol> {
+    if policy != Policy::Java {
+        return Ok(self::symbol(symbol, node, source, policy));
+    }
+    if !matches!(
+        symbol.symbol_type,
+        SymbolType::Function | SymbolType::Method
+    ) {
+        return Ok(symbol);
+    }
+    source_span(&mut symbol, node);
+    match node.kind() {
+        "method_declaration" | "constructor_declaration" | "compact_constructor_declaration" => {
+            symbol.metadata["identity_discriminator"] = java::discriminator(node, source)?.into();
+        }
+        "lambda_expression" => {
+            symbol.metadata["identity_discriminator"] =
+                java::enclosing_discriminator(node, source)?.into();
+        }
+        _ => {}
+    }
+    Ok(symbol)
+}
+
 /// Apply the selected language contract at the existing CST extraction site.
-/// Non-callable symbols are returned unchanged.
+/// Non-callable symbols are returned unchanged. Java callers use [`try_symbol`]
+/// so malformed declaration types are reported as parse errors.
 pub fn symbol(mut symbol: Symbol, node: Node<'_>, source: &[u8], policy: Policy) -> Symbol {
     if !matches!(
         symbol.symbol_type,
@@ -365,8 +407,7 @@ pub fn symbol(mut symbol: Symbol, node: Node<'_>, source: &[u8], policy: Policy)
     ) {
         return symbol;
     }
-    symbol.metadata["source_start_byte"] = node.start_byte().into();
-    symbol.metadata["source_end_byte"] = node.end_byte().into();
+    source_span(&mut symbol, node);
     let groups = parameter_groups(node, policy);
     let parameters: Vec<Vec<_>> = groups
         .iter()
@@ -619,7 +660,19 @@ pub fn finish(policy: Policy, symbols: &mut [Symbol], relations: &mut [Relation]
         let from = from_candidates
             .and_then(|candidates| {
                 let mut matches = candidates.iter().copied().filter(|s| {
-                    s.location.start_line <= relation.location.start_line
+                    s.location.file == relation.location.file
+                        && relation
+                            .metadata
+                            .get("from_identity_discriminator")
+                            .and_then(|v| v.as_str())
+                            .is_none_or(|identity| {
+                                s.metadata
+                                    .get("identity_discriminator")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    == identity
+                            })
+                        && s.location.start_line <= relation.location.start_line
                         && s.location.end_line >= relation.location.end_line
                         && (s.location.start_line != relation.location.start_line
                             || s.location.start_column <= relation.location.start_column)
@@ -634,7 +687,13 @@ pub fn finish(policy: Policy, symbols: &mut [Symbol], relations: &mut [Relation]
                 }
             })
             .or_else(|| from_candidates.and_then(|c| if c.len() == 1 { Some(c[0]) } else { None }));
-        if let Some(from) = from {
+        if let Some(from) = from
+            && relation
+                .metadata
+                .get("from_identity_discriminator")
+                .and_then(|v| v.as_str())
+                .is_none()
+        {
             relation.metadata["from_identity_discriminator"] = from
                 .metadata
                 .get("identity_discriminator")
@@ -724,6 +783,40 @@ pub fn call(
     from: Option<&Symbol>,
     relations: &mut [Relation],
 ) {
+    call_with_local_types(node, source, policy, from, relations, |_| None);
+}
+
+/// Like [`call`], with language-plugin scope evidence for local identifiers.
+/// The callback does not parse source or change the common identity format.
+pub fn call_with_local_types(
+    node: Node<'_>,
+    source: &[u8],
+    policy: Policy,
+    from: Option<&Symbol>,
+    relations: &mut [Relation],
+    local_type: impl FnMut(&str) -> Option<String>,
+) {
+    if policy == Policy::Java {
+        let Some(from) = from else {
+            return;
+        };
+        if let Some(identity) = from
+            .metadata
+            .get("identity_discriminator")
+            .and_then(|v| v.as_str())
+        {
+            for relation in relations
+                .iter_mut()
+                .filter(|r| r.relation_type == RelationType::Calls)
+            {
+                relation.metadata["from_identity_discriminator"] = identity.into();
+            }
+        }
+        if let Some(identity) = java::argument_identity(node, source, from, local_type) {
+            attach_argument_identity(relations, &identity);
+        }
+        return;
+    }
     if !policy.typed() && policy != Policy::Typescript {
         return;
     }
@@ -856,11 +949,14 @@ pub fn call(
             ty
         });
     }
+    attach_argument_identity(relations, &format!("({})", types.join(",")));
+}
+
+fn attach_argument_identity(relations: &mut [Relation], identity: &str) {
     for relation in relations
         .iter_mut()
         .filter(|r| r.relation_type == RelationType::Calls)
     {
-        relation.metadata["argument_identity_discriminator"] =
-            format!("({})", types.join(",")).into();
+        relation.metadata["argument_identity_discriminator"] = identity.into();
     }
 }

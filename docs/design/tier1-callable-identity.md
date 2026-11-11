@@ -12,10 +12,15 @@ it does not add package readers, class-file readers, or dependency traversal.
 
 ## Implementation
 
-The existing stable node key accepts an optional callable discriminator. Java
-uses its source signature. The other Tier 1 extractors attach language-specific
-identity metadata at their existing CST construction sites through
-`rgctl_plugin_helpers::callable_identity`. Extraction remains on the existing
+The existing stable node key accepts an optional callable discriminator. Tier 1
+extractors, including Java, attach language-specific identity metadata at their
+existing CST construction sites through
+`rgctl_plugin_helpers::callable_identity`. Java uses the fallible `try_symbol`
+entry point to preserve parse errors; the Java policy owns constructor, array,
+varargs, receiver-parameter, and enclosing-lambda identity rules. Shared
+`finish` and call-site helpers attach relation identities. The Java plugin
+supplies its existing local-variable type evidence and retains import/receiver
+resolution. Extraction remains on the existing
 parallel workers, without a second parse or whole-graph hydration.
 
 Typed overload languages retain parameter types and relevant dispatch syntax:
@@ -47,7 +52,7 @@ reuse verifies source hashes and does not remap graph IDs through ambiguous name
 
 ## Migration and evidence
 
-Facts-cache format 3 and extraction semantics version 3 invalidate old extraction
+Facts-cache format 3 and extraction semantics version 4 invalidate old extraction
 results. Missing or stale `.rgctl/extraction_semantics.json` forces full source
 extraction, including when `discover --files` was requested. The semantics marker
 is written after successful snapshot persistence. Existing snapshots remain
