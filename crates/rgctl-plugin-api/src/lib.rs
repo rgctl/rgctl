@@ -234,9 +234,24 @@ pub struct Parameter {
     pub default_value: Option<String>,
 }
 
+/// Source coordinates carried with an extracted field until graph materialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldSourceSpan {
+    pub start_byte: u32,
+    pub end_byte: u32,
+    pub name_rel_offset: Option<u16>,
+    pub name_token_len: Option<u16>,
+    pub name_span_overflow: Option<(u32, u32)>,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
 /// Struct/class field
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Field {
+    /// Field declaration and identifier coordinates, when backed by source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_span: Option<FieldSourceSpan>,
     /// Field name
     pub name: String,
 

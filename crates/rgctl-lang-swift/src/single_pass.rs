@@ -510,25 +510,33 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            ctx.symbols.push(Symbol {
-                                name,
-                                symbol_type: SymbolType::Variable,
-                                qualified_name: Some(qn),
-                                location: node_to_location(node, &file_path_str),
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.trim().to_string()),
-                                return_type: None,
-                                parameters: vec![],
-                                fields: vec![],
-                                modifiers: vec![],
-                                documentation: None,
-                                metadata: serde_json::json!({
-                                    "language": "swift",
-                                    "kind": "property",
-                                }),
-                                ..Default::default()
+                            ctx.symbols.push({
+                                let mut field_symbol = Symbol {
+                                    name,
+                                    symbol_type: SymbolType::Variable,
+                                    qualified_name: Some(qn),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: node
+                                        .utf8_text(source)
+                                        .ok()
+                                        .map(|s| s.trim().to_string()),
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "swift",
+                                        "kind": "property",
+                                    }),
+                                    ..Default::default()
+                                };
+                                rgctl_plugin_helpers::spans::field_symbol_spans(
+                                    &mut field_symbol,
+                                    node,
+                                    source,
+                                );
+                                field_symbol
                             });
                         }
                     }
@@ -639,25 +647,33 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            ctx.symbols.push(Symbol {
-                                name,
-                                symbol_type: SymbolType::Variable,
-                                qualified_name: Some(qn),
-                                location: node_to_location(node, &file_path_str),
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.trim().to_string()),
-                                return_type: None,
-                                parameters: vec![],
-                                fields: vec![],
-                                modifiers: vec![],
-                                documentation: None,
-                                metadata: serde_json::json!({
-                                    "language": "swift",
-                                    "kind": "protocol_property",
-                                }),
-                                ..Default::default()
+                            ctx.symbols.push({
+                                let mut field_symbol = Symbol {
+                                    name,
+                                    symbol_type: SymbolType::Variable,
+                                    qualified_name: Some(qn),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: node
+                                        .utf8_text(source)
+                                        .ok()
+                                        .map(|s| s.trim().to_string()),
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "swift",
+                                        "kind": "protocol_property",
+                                    }),
+                                    ..Default::default()
+                                };
+                                rgctl_plugin_helpers::spans::field_symbol_spans(
+                                    &mut field_symbol,
+                                    node,
+                                    source,
+                                );
+                                field_symbol
                             });
                         }
                     }

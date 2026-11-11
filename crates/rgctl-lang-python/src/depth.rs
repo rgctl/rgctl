@@ -39,9 +39,12 @@ pub fn push_field(
     seen: &mut HashSet<String>,
     name: String,
     field_type: Option<String>,
+    declaration: Node,
+    source: &[u8],
 ) {
     if seen.insert(name.clone()) {
         fields.push(Field {
+            source_span: rgctl_plugin_helpers::field_source_span(declaration, source, &name),
             name,
             field_type,
             visibility: None,

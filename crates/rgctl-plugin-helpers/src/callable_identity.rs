@@ -411,6 +411,9 @@ pub fn symbol(mut symbol: Symbol, node: Node<'_>, source: &[u8], policy: Policy)
         symbol.symbol_type,
         SymbolType::Function | SymbolType::Method
     ) {
+        if symbol.symbol_type == SymbolType::Variable {
+            crate::spans::field_symbol_spans(&mut symbol, node, source);
+        }
         return symbol;
     }
     source_span(&mut symbol, node);

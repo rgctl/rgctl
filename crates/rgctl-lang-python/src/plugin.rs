@@ -349,7 +349,14 @@ impl PythonPlugin {
                             if let Some((name, ty)) =
                                 crate::depth::annotated_assignment_field(expr_child, source)
                             {
-                                crate::depth::push_field(&mut fields, &mut seen, name, ty);
+                                crate::depth::push_field(
+                                    &mut fields,
+                                    &mut seen,
+                                    name,
+                                    ty,
+                                    expr_child,
+                                    source,
+                                );
                                 continue;
                             }
                         }
@@ -361,6 +368,8 @@ impl PythonPlugin {
                                 &mut seen,
                                 name,
                                 Some("Callable".to_string()),
+                                expr_child,
+                                source,
                             );
                             continue;
                         }
@@ -368,7 +377,14 @@ impl PythonPlugin {
                         if let Some(left) = expr_child.child_by_field_name("left") {
                             if left.kind() == "identifier" {
                                 let name = left.utf8_text(source)?.to_string();
-                                crate::depth::push_field(&mut fields, &mut seen, name, None);
+                                crate::depth::push_field(
+                                    &mut fields,
+                                    &mut seen,
+                                    name,
+                                    None,
+                                    expr_child,
+                                    source,
+                                );
                             }
                         }
                     }
@@ -450,7 +466,7 @@ impl PythonPlugin {
                     let field_type = node
                         .child_by_field_name("right")
                         .and_then(|r| infer_field_type_from_rhs(r, source));
-                    crate::depth::push_field(fields, seen, name, field_type);
+                    crate::depth::push_field(fields, seen, name, field_type, node, source);
                 }
             } else {
                 // Fallback without field names: attribute whose first identifier is self/cls
@@ -466,7 +482,7 @@ impl PythonPlugin {
                             let obj = parts[0].utf8_text(source)?;
                             if obj == "self" || obj == "cls" {
                                 let name = parts[1].utf8_text(source)?.to_string();
-                                crate::depth::push_field(fields, seen, name, None);
+                                crate::depth::push_field(fields, seen, name, None, node, source);
                             }
                         }
                         break;

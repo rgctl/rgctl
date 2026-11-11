@@ -41,7 +41,7 @@
     "return_statement": "CfgStatement",
     "string": "Literal",
     "string_content": "Literal",
-    "table_constructor": "AstSkeleton",
+    "table_constructor": "Symbol",
     "true": "Literal",
     "unary_expression": "CfgStatement",
     "vararg_expression": "Literal",

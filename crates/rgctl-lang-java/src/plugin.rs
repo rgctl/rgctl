@@ -1057,12 +1057,7 @@ impl JavaPlugin {
     // Symbol extraction: types (class/interface/enum/annotation/record)
     // ---------------------------------------------------------------
 
-    fn extract_class_fields(
-        &self,
-        class_node: Node,
-        source: &[u8],
-        metadata: &mut serde_json::Value,
-    ) -> Result<Vec<Field>> {
+    fn extract_class_fields(&self, class_node: Node, source: &[u8]) -> Result<Vec<Field>> {
         let mut fields = Vec::new();
         let mut cursor = class_node.walk();
         let body = class_node
@@ -1096,8 +1091,9 @@ impl JavaPlugin {
                     && let Some(name_node) = field_child.child_by_field_name("name")
                 {
                     let name = name_node.utf8_text(source)?.to_string();
-                    rgctl_plugin_helpers::record_field_spans(metadata, &name, child, name_node);
+
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                         name,
                         field_type: field_type.clone(),
                         visibility: visibility.clone(),
@@ -1109,12 +1105,7 @@ impl JavaPlugin {
     }
 
     /// Each `enum_constant` becomes a field on the owning Enum symbol.
-    fn extract_enum_fields(
-        &self,
-        enum_node: Node,
-        source: &[u8],
-        metadata: &mut serde_json::Value,
-    ) -> Result<Vec<Field>> {
+    fn extract_enum_fields(&self, enum_node: Node, source: &[u8]) -> Result<Vec<Field>> {
         let mut fields = Vec::new();
         let mut cursor = enum_node.walk();
         let Some(body) = enum_node
@@ -1145,8 +1136,9 @@ impl JavaPlugin {
                     Some(args) => Some(format!("enum_constant{args}")),
                     None => Some("enum_constant".to_string()),
                 };
-                rgctl_plugin_helpers::record_field_spans(metadata, name, child, name_node);
+
                 fields.push(Field {
+                    source_span: rgctl_plugin_helpers::field_source_span(child, source, name),
                     name: name.to_string(),
                     field_type: None,
                     visibility,
@@ -1159,12 +1151,7 @@ impl JavaPlugin {
     /// `constant_declaration` inside an `interface_body` or
     /// `annotation_type_body` becomes a field on the owning Interface/Annotation
     /// symbol (mirrors `extract_class_fields`).
-    fn extract_interface_constants(
-        &self,
-        node: Node,
-        source: &[u8],
-        metadata: &mut serde_json::Value,
-    ) -> Result<Vec<Field>> {
+    fn extract_interface_constants(&self, node: Node, source: &[u8]) -> Result<Vec<Field>> {
         let mut fields = Vec::new();
         let mut cursor = node.walk();
         let Some(body) = node
@@ -1190,8 +1177,9 @@ impl JavaPlugin {
                     && let Some(name_node) = decl.child_by_field_name("name")
                 {
                     let name = name_node.utf8_text(source)?.to_string();
-                    rgctl_plugin_helpers::record_field_spans(metadata, &name, child, name_node);
+
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                         name,
                         field_type: field_type.clone(),
                         visibility: None,
@@ -1204,25 +1192,12 @@ impl JavaPlugin {
 
     /// Record components (declared in the record's `parameters` field, just
     /// like a method/constructor parameter list) become fields.
-    fn extract_record_fields(
-        &self,
-        record_node: Node,
-        source: &[u8],
-        metadata: &mut serde_json::Value,
-    ) -> Result<Vec<Field>> {
-        if let Some(parameters) = record_node.child_by_field_name("parameters") {
-            let mut cursor = parameters.walk();
-            for parameter in parameters.named_children(&mut cursor) {
-                if let Some(name_node) = parameter.child_by_field_name("name") {
-                    let name = name_node.utf8_text(source)?;
-                    rgctl_plugin_helpers::record_field_spans(metadata, name, parameter, name_node);
-                }
-            }
-        }
+    fn extract_record_fields(&self, record_node: Node, source: &[u8]) -> Result<Vec<Field>> {
         let params = self.extract_parameters(record_node, source)?;
         Ok(params
             .into_iter()
             .map(|p| Field {
+                source_span: rgctl_plugin_helpers::field_source_span(record_node, source, &p.name),
                 name: p.name,
                 field_type: p.param_type,
                 visibility: None,
@@ -1253,10 +1228,10 @@ impl JavaPlugin {
 
         let mut metadata = serde_json::json!({ "language": "java" });
         let fields = match symbol_type {
-            SymbolType::Class => self.extract_class_fields(node, source, &mut metadata)?,
-            SymbolType::Enum => self.extract_enum_fields(node, source, &mut metadata)?,
+            SymbolType::Class => self.extract_class_fields(node, source)?,
+            SymbolType::Enum => self.extract_enum_fields(node, source)?,
             SymbolType::Interface | SymbolType::Annotation => {
-                self.extract_interface_constants(node, source, &mut metadata)?
+                self.extract_interface_constants(node, source)?
             }
             _ => vec![],
         };
@@ -1696,6 +1671,7 @@ impl JavaPlugin {
             let class_sym = &mut symbols[class_idx];
             if !class_sym.fields.iter().any(|f| f.name == "log") {
                 class_sym.fields.push(Field {
+                    source_span: None,
                     name: "log".into(),
                     field_type: Some("Logger".into()),
                     visibility: Some("private static final".into()),
@@ -1728,7 +1704,7 @@ impl JavaPlugin {
         let qualified_name = Some(self.type_node_qualified_name(node, source, ctx));
 
         let mut metadata = serde_json::json!({ "language": "java", "is_record": true });
-        let fields = self.extract_record_fields(node, source, &mut metadata)?;
+        let fields = self.extract_record_fields(node, source)?;
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
         }

@@ -295,7 +295,7 @@ impl GoPlugin {
                 let mut field_cursor = child.walk();
                 for field_child in child.children(&mut field_cursor) {
                     if field_child.kind() == "field_declaration" {
-                        let mut name = None;
+                        let mut names = Vec::new();
                         let mut field_type = None;
                         let mut embedded = false;
 
@@ -303,7 +303,7 @@ impl GoPlugin {
                         for decl_child in field_child.children(&mut decl_cursor) {
                             match decl_child.kind() {
                                 "field_identifier" => {
-                                    name = Some(decl_child.utf8_text(source)?.to_string());
+                                    names.push(decl_child.utf8_text(source)?.to_string());
                                 }
                                 "type_identifier" | "pointer_type" | "slice_type"
                                 | "qualified_type" | "generic_type" => {
@@ -315,22 +315,24 @@ impl GoPlugin {
                         if let Some(t) = field_child.child_by_field_name("type") {
                             field_type = Some(t.utf8_text(source)?.to_string());
                         }
-                        if let Some(n) = field_child.child_by_field_name("name") {
-                            name = Some(n.utf8_text(source)?.to_string());
-                        }
 
                         // Embedded field: no explicit name (LF-06).
-                        if name.is_none() {
+                        if names.is_empty() {
                             if let Some(ty) = &field_type {
-                                name = Some(ty.trim_start_matches('*').to_string());
+                                names.push(ty.trim_start_matches('*').to_string());
                                 embedded = true;
                             }
                         }
 
-                        if let Some(name) = name {
+                        for name in names {
                             fields.push(Field {
+                                source_span: rgctl_plugin_helpers::field_source_span(
+                                    field_child,
+                                    source,
+                                    &name,
+                                ),
                                 name,
-                                field_type,
+                                field_type: field_type.clone(),
                                 visibility: if embedded {
                                     Some("embedded".into())
                                 } else {

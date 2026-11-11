@@ -850,6 +850,7 @@ pub(crate) fn extract_type_fields(type_node: Node, source: &[u8]) -> Result<Vec<
             };
             if let Some(name) = name_from_declarator(declarator, source) {
                 fields.push(Field {
+                    source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                     name,
                     field_type: field_type.clone(),
                     visibility: None,

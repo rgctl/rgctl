@@ -748,33 +748,16 @@ impl GraphBuilder {
             {
                 node = node.with_property("field_type_fqn".into(), fqn.to_owned());
             }
-            if let Some(spans) = symbol
-                .metadata
-                .get("field_byte_spans")
-                .and_then(|v| v.get(&field.name))
-            {
-                let integer = |key: &str| spans.get(key).and_then(|v| v.as_u64());
-                let byte = |key: &str| integer(key).and_then(|v| u32::try_from(v).ok());
-                let overflow = spans.get("name_span_overflow").and_then(|v| {
-                    let values = v.as_array()?;
-                    Some((
-                        u32::try_from(values.first()?.as_u64()?).ok()?,
-                        u32::try_from(values.get(1)?.as_u64()?).ok()?,
-                    ))
-                });
-                node = node.with_byte_spans(
-                    byte("start_byte"),
-                    byte("end_byte"),
-                    integer("name_rel_offset").and_then(|v| u16::try_from(v).ok()),
-                    integer("name_token_len").and_then(|v| u16::try_from(v).ok()),
-                    overflow,
-                );
-                if let (Some(start), Some(end)) = (
-                    integer("start_line").and_then(|v| usize::try_from(v).ok()),
-                    integer("end_line").and_then(|v| usize::try_from(v).ok()),
-                ) {
-                    node = node.with_location(start, end);
-                }
+            if let Some(span) = field.source_span {
+                node = node
+                    .with_byte_spans(
+                        Some(span.start_byte),
+                        Some(span.end_byte),
+                        span.name_rel_offset,
+                        span.name_token_len,
+                        span.name_span_overflow,
+                    )
+                    .with_location(span.start_line as usize, span.end_line as usize);
             }
             if let Some(ty) = &field.field_type {
                 node = node.with_property("field_type".to_string(), ty.clone());
@@ -4308,6 +4291,7 @@ class Library {
         symbol.symbol_type = SymbolType::Class;
         symbol.location.file = "OrderDTO.java".to_string();
         symbol.fields = vec![rgctl_plugin_api::Field {
+            source_span: None,
             name: "status".to_string(),
             field_type: Some("String".to_string()),
             visibility: Some("private".to_string()),
@@ -4495,6 +4479,7 @@ class Library {
             return_type: None,
             parameters: vec![],
             fields: vec![rgctl_plugin_api::Field {
+                source_span: None,
                 name: "total".to_string(),
                 field_type: Some("int".to_string()),
                 visibility: None,
@@ -4534,6 +4519,7 @@ class Library {
             return_type: None,
             parameters: vec![],
             fields: vec![rgctl_plugin_api::Field {
+                source_span: None,
                 name: "total".to_string(),
                 field_type: Some("int".to_string()),
                 visibility: None,
@@ -4959,14 +4945,21 @@ class Library {
         symbol.name = "Order".into();
         symbol.symbol_type = SymbolType::Class;
         symbol.fields = vec![rgctl_plugin_api::Field {
+            source_span: None,
             name: "status".into(),
             field_type: Some("Status".into()),
             visibility: None,
         }];
-        symbol.metadata = serde_json::json!({
-            "field_type_fqns":{"status":"demo.Status"},
-            "field_byte_spans":{"status":{"start_line":10,"end_line":10,"start_byte":100,"end_byte":120,"name_rel_offset":4,"name_token_len":6}}
+        symbol.fields[0].source_span = Some(rgctl_plugin_api::FieldSourceSpan {
+            start_byte: 100,
+            end_byte: 120,
+            name_rel_offset: Some(4),
+            name_token_len: Some(6),
+            name_span_overflow: None,
+            start_line: 10,
+            end_line: 10,
         });
+        symbol.metadata = serde_json::json!({"field_type_fqns":{"status":"demo.Status"}});
         builder.add_symbol(&symbol, file);
         let field = builder
             .nodes()

@@ -214,7 +214,43 @@ pub fn extract_all_single_pass(
                 match kind {
                     "call" => {
                         let head = call_head(node, source).unwrap_or("");
-                        if head == "defmodule" {
+                        if head == "defstruct" {
+                            let mut pending = vec![node];
+                            while let Some(member) = pending.pop() {
+                                let key = if member.kind() == "pair" {
+                                    member.child_by_field_name("key")
+                                } else if matches!(member.kind(), "atom" | "quoted_atom") {
+                                    Some(member)
+                                } else {
+                                    None
+                                };
+                                if let Some(key) = key {
+                                    if let Ok(raw) = key.utf8_text(source) {
+                                        let name = raw.trim().trim_matches(&[':', '\'', '"'][..]);
+                                        let mut symbol = Symbol {
+                                            name: name.into(),
+                                            symbol_type: SymbolType::Variable,
+                                            qualified_name: Some(ctx.scopes.qualified_name(name)),
+                                            location: node_to_location(member, &file_path_str),
+                                            metadata: serde_json::json!({"language":"elixir","kind":"field"}),
+                                            ..Default::default()
+                                        };
+                                        rgctl_plugin_helpers::spans::field_symbol_spans(
+                                            &mut symbol,
+                                            member,
+                                            source,
+                                        );
+                                        ctx.symbols.push(symbol);
+                                    }
+                                    continue;
+                                }
+                                for i in (0..member.named_child_count()).rev() {
+                                    if let Some(child) = member.named_child(i) {
+                                        pending.push(child);
+                                    }
+                                }
+                            }
+                        } else if head == "defmodule" {
                             if let Some(name) = module_name(node, source) {
                                 let qn = name.clone();
                                 ctx.symbols.push(Symbol {

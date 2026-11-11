@@ -167,10 +167,11 @@ impl PuppetPlugin {
         out
     }
 
-    fn params_as_fields(params: &[Parameter]) -> Vec<Field> {
+    fn params_as_fields(params: &[Parameter], node: Node, source: &[u8]) -> Vec<Field> {
         params
             .iter()
             .map(|p| Field {
+                source_span: rgctl_plugin_helpers::field_source_span(node, source, &p.name),
                 name: p.name.clone(),
                 field_type: p.param_type.clone(),
                 visibility: None,
@@ -260,7 +261,7 @@ impl PuppetPlugin {
                         .find(|c| c.kind() == "parameter_list")
                         .map(|p| Self::extract_parameters(p, source))
                         .unwrap_or_default();
-                    let fields = Self::params_as_fields(&params);
+                    let fields = Self::params_as_fields(&params, node, source);
                     let mut sym = Symbol {
                         name: name.clone(),
                         symbol_type: SymbolType::PuppetClass,
@@ -298,7 +299,7 @@ impl PuppetPlugin {
                         .find(|c| c.kind() == "parameter_list")
                         .map(|p| Self::extract_parameters(p, source))
                         .unwrap_or_default();
-                    let fields = Self::params_as_fields(&params);
+                    let fields = Self::params_as_fields(&params, node, source);
                     let mut sym = Symbol {
                         name: name.clone(),
                         symbol_type: SymbolType::PuppetDefinedType,

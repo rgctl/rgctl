@@ -37,7 +37,7 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("parameters", HandlerMask::AST_SKELETON),
     ("repeat_statement", HandlerMask::CFG_STMT),
     ("return_statement", HandlerMask::CFG_STMT),
-    ("table_constructor", HandlerMask::AST_SKELETON),
+    ("table_constructor", HandlerMask::SYMBOL),
     ("unary_expression", HandlerMask::CFG_STMT),
     ("variable_declaration", HandlerMask::AST_SKELETON),
     ("while_statement", HandlerMask::CFG_STMT),
@@ -238,6 +238,63 @@ pub fn extract_all_single_pass(
                 let mut pushed_scope = false;
 
                 match kind {
+                    "table_constructor" => {
+                        let mut ancestor = node.parent();
+                        let mut owner = None;
+                        let mut path = Vec::new();
+                        while let Some(parent) = ancestor {
+                            if parent.kind() == "field"
+                                && let Some(key) = parent.child_by_field_name("name")
+                                && key.kind() == "identifier"
+                            {
+                                if let Ok(name) = key.utf8_text(source) {
+                                    path.push(name.to_owned());
+                                }
+                            }
+                            if parent.kind() == "assignment_statement" {
+                                let mut c = parent.walk();
+                                owner = parent
+                                    .named_children(&mut c)
+                                    .find(|n| n.kind() == "variable_list")
+                                    .and_then(|n| n.named_child(0))
+                                    .and_then(|n| n.utf8_text(source).ok())
+                                    .map(str::to_owned);
+                                break;
+                            }
+                            ancestor = parent.parent();
+                        }
+                        if let Some(mut owner) = owner {
+                            for component in path.iter().rev() {
+                                owner.push('.');
+                                owner.push_str(component);
+                            }
+                            let mut cursor = node.walk();
+                            for member in node
+                                .named_children(&mut cursor)
+                                .filter(|n| n.kind() == "field")
+                            {
+                                if let Some(key) = member.child_by_field_name("name")
+                                    && key.kind() == "identifier"
+                                    && let Ok(name) = key.utf8_text(source)
+                                {
+                                    let mut symbol = Symbol {
+                                        name: name.into(),
+                                        symbol_type: SymbolType::Variable,
+                                        qualified_name: Some(format!("{owner}.{name}")),
+                                        location: node_to_location(member, &file_path_str),
+                                        metadata: serde_json::json!({"language":"lua","kind":"field"}),
+                                        ..Default::default()
+                                    };
+                                    rgctl_plugin_helpers::spans::field_symbol_spans(
+                                        &mut symbol,
+                                        member,
+                                        source,
+                                    );
+                                    ctx.symbols.push(symbol);
+                                }
+                            }
+                        }
+                    }
                     "function_declaration" => {
                         if let Some(name) = lua_function_decl_name(node, source) {
                             pushed_scope =

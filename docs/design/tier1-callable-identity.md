@@ -52,7 +52,7 @@ reuse verifies source hashes and does not remap graph IDs through ambiguous name
 
 ## Migration and evidence
 
-Facts-cache format 5 and extraction semantics version 7 invalidate old extraction
+Facts-cache format 6 and extraction semantics version 8 invalidate old extraction
 results. Missing or stale `.rgctl/extraction_semantics.json` forces full source
 extraction, including when `discover --files` was requested. The semantics marker
 is written after successful snapshot persistence. Existing snapshots remain
@@ -65,13 +65,19 @@ span fields and accepts legacy offset properties when reading older nodes. The
 snapshot extension preserves both the discriminator prefix and the relative span
 tail; older format-2 span extensions remain readable.
 
-Materialized Java fields use `rgctl_plugin_helpers::record_field_spans` to carry
-declaration and identifier byte spans from extraction into the same node columns
-and relative extension tail. This covers class fields, interface/annotation
-constants, enum constants, and record components. Qualified field-type metadata
-is retained. Field identity remains owner-qualified; callable discriminators select
-overloaded methods independently of locations. Field materialization retains its
-existing `--with-cfg` opt-in.
+Field positions travel as typed `FieldSourceSpan` payloads on `Symbol.fields`,
+using the shared `field_source_span` helper and the common graph materializer.
+This covers field-producing Tier 1 plugins; native property/column symbols use
+shared symbol-span recording. Lua named table entries and Elixir struct fields
+are emitted directly with spans. Field identities remain scoped by owner, while
+callable discriminators distinguish overloaded methods independently of position.
+Field materialization retains its existing `--with-cfg` opt-in.
+
+`tests/fixtures/tier1_field_spans/inventory.json` covers all 24 registered Tier 1
+languages: 20 source member/property/column cases and four explicit non-applicable
+contracts (Bash, HCL, Markdown, ERB). Tests check exact identifiers, owner/type-token
+collisions, sigils, snapshot round trips, and line-shift identity/diff invariance.
+Dynamic computed member keys and inferred external types are not compiler-checked.
 
 This replaces the separate UTF-16 range-property API from superseded PR #184.
 Structured queries expose the existing declaration/name byte offsets; no new

@@ -339,6 +339,7 @@ impl RustPlugin {
                 .map(str::to_string);
             if let Some(name) = name {
                 fields.push(Field {
+                    source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                     name,
                     field_type: None,
                     visibility: None,
@@ -384,6 +385,7 @@ impl RustPlugin {
 
                 if let Some(name) = name {
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                         name,
                         field_type,
                         visibility,

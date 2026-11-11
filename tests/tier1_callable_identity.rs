@@ -807,3 +807,110 @@ fn inheritance_never_resolves_trait_names_to_methods_inside_their_identity_suffi
         assert!(matches!(target.name.as_str(), "BitOr" | "BitOrAssign"));
     }
 }
+
+#[test]
+fn every_tier1_language_has_a_checked_field_span_contract() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tier1_field_spans");
+    let inventory: Vec<serde_json::Value> =
+        serde_json::from_slice(&std::fs::read(root.join("inventory.json")).unwrap()).unwrap();
+    let actual: BTreeSet<_> = inventory
+        .iter()
+        .map(|v| v["language"].as_str().unwrap())
+        .collect();
+    let expected: BTreeSet<_> = rgctl_ast_coverage::bundled_specs()
+        .iter()
+        .map(|v| v.id)
+        .collect();
+    assert_eq!(actual, expected);
+    let mut failures = Vec::new();
+    for case in inventory {
+        let language = case["language"].as_str().unwrap();
+        let names = case["fields"].as_array().unwrap();
+        assert!(!case["applicability"].as_str().unwrap().is_empty());
+        let source = std::fs::read_to_string(root.join(case["file"].as_str().unwrap())).unwrap();
+        if names.is_empty() {
+            continue;
+        }
+        let result = std::panic::catch_unwind(|| {
+            let file = case["file"].as_str().unwrap();
+            let (nodes, edges) = graph_with_members(file, &source, true);
+            let fields: Vec<_> = nodes
+                .iter()
+                .filter(|n| {
+                    n.node_type == NodeType::Variable
+                        && names
+                            .iter()
+                            .any(|name| name.as_str() == Some(n.name.as_str()))
+                })
+                .cloned()
+                .collect();
+            for name in names {
+                assert!(
+                    fields
+                        .iter()
+                        .any(|n| Some(n.name.as_str()) == name.as_str()),
+                    "{language}: missing field {name}; nodes={nodes:?}"
+                );
+            }
+            let dir = tempfile::tempdir().unwrap();
+            let base_path = dir.path().join("base.bin");
+            rgctl_graph::write_columnar_from_nodes_edges(nodes, edges, &base_path).unwrap();
+            let base = rgctl_graph::SnapshotNodeStore::open(&base_path).unwrap();
+            for field in &fields {
+                let (decl, name) = base.columnar().unwrap().node_byte_span(field.id).unwrap();
+                let (start, end) =
+                    name.unwrap_or_else(|| panic!("{language}: missing name span for {field:?}"));
+                let (decl_start, decl_end) = decl.expect("field declaration");
+                assert!(decl_start <= start && end <= decl_end);
+                assert_eq!(
+                    &source[start as usize..end as usize],
+                    field.name.as_str(),
+                    "{language}"
+                );
+            }
+            let shifted = format!("\n\n{source}");
+            let (nodes, edges) = graph_with_members(file, &shifted, true);
+            let head_path = dir.path().join("head.bin");
+            rgctl_graph::write_columnar_from_nodes_edges(nodes, edges, &head_path).unwrap();
+            let head = rgctl_graph::SnapshotNodeStore::open(&head_path).unwrap();
+            for field in &fields {
+                let (_, span) = head.columnar().unwrap().node_byte_span(field.id).unwrap();
+                let (start, end) = span.expect("shifted field span");
+                assert_eq!(
+                    &shifted[start as usize..end as usize],
+                    field.name.as_str(),
+                    "{language}"
+                );
+            }
+            let mut sink = rgctl_graph::VecDiffSink::default();
+            let stats = rgctl_graph::diff_snapshots(&base, &head, &mut sink).unwrap();
+            assert_eq!(
+                stats.nodes_added + stats.nodes_removed,
+                0,
+                "{language}: unstable field identity"
+            );
+            assert_eq!(
+                stats.edges_added + stats.edges_removed,
+                0,
+                "{language}: unstable relationships"
+            );
+            assert!(
+                sink.nodes
+                    .iter()
+                    .filter(|v| v.kind == rgctl_graph::NodeDeltaKind::Changed)
+                    .all(|v| matches!(
+                        v.head.as_ref().unwrap().node_type,
+                        NodeType::File | NodeType::Module
+                    )),
+                "{language}: location-only edits changed semantic nodes {sink:?}"
+            );
+        });
+        if result.is_err() {
+            failures.push(language.to_owned());
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "field-span contract failures: {failures:?}"
+    );
+}

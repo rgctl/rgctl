@@ -61,24 +61,137 @@ pub fn record_symbol_spans(symbol: &mut Symbol, decl_node: Node, name_node: Opti
     }
 }
 
-/// Capture field spans on an extraction worker for later member materialization.
-/// The metadata is extraction-only; graph nodes store spans in their dedicated fields.
-pub fn record_field_spans(
-    metadata: &mut serde_json::Value,
-    name: &str,
+/// Locate a field's name within its already parsed declaration, preserving sigils
+/// and quotes outside the identifier span. No source parse or file read occurs.
+pub fn field_source_span(
     declaration: Node,
-    identifier: Node,
-) {
-    let (start, end, relative, overflow) = compute_symbol_byte_spans(declaration, Some(identifier));
-    metadata["field_byte_spans"][name] = serde_json::json!({
-        "start_byte": start,
-        "end_byte": end,
-        "name_rel_offset": if overflow.is_none() { Some(relative) } else { None },
-        "name_token_len": u16::try_from(identifier.end_byte() - identifier.start_byte()).ok(),
-        "name_span_overflow": overflow,
-        "start_line": declaration.start_position().row + 1,
-        "end_line": declaration.end_position().row + 1,
-    });
+    source: &[u8],
+    name: &str,
+) -> Option<rgctl_plugin_api::FieldSourceSpan> {
+    let mut stack = vec![declaration];
+    let mut candidate = None;
+    while let Some(node) = stack.pop() {
+        let mut priority = match node.kind() {
+            "field_identifier" | "property_identifier" | "private_property_identifier" => 0,
+            "identifier" | "name" | "simple_identifier" | "variable_name" | "variable"
+            | "instance_variable" | "class_variable" | "simple_symbol" | "string" | "atom"
+            | "keyword" => 1,
+            "type_identifier" | "qualified_type" => 2,
+            _ => 3,
+        };
+        let mut ancestor = node;
+        while ancestor.id() != declaration.id() {
+            let Some(parent) = ancestor.parent() else {
+                break;
+            };
+            if parent
+                .child_by_field_name("type")
+                .is_some_and(|ty| ty.id() == ancestor.id())
+            {
+                priority = priority.max(2);
+                break;
+            }
+            ancestor = parent;
+        }
+        if priority < 3
+            && let Ok(raw) = node.utf8_text(source)
+        {
+            let normalized = raw
+                .trim()
+                .trim_matches(&['$', '@', ':', '\'', '"', '`'][..]);
+            if (raw == name || normalized == name)
+                && candidate
+                    .as_ref()
+                    .is_none_or(|(best, _, _)| priority < *best)
+            {
+                let offset = if raw == name { 0 } else { raw.find(name)? };
+                candidate = Some((priority, node, offset));
+                if priority <= 1 {
+                    break;
+                }
+            }
+        }
+        if node.id() != declaration.id()
+            && matches!(
+                node.kind(),
+                "block"
+                    | "class_body"
+                    | "declaration_list"
+                    | "function_body"
+                    | "argument_list"
+                    | "arguments"
+                    | "type_arguments"
+                    | "type_annotation"
+            )
+        {
+            continue;
+        }
+        if matches!(node.kind(), "attribute" | "member_expression")
+            && let Some(property) = node
+                .child_by_field_name("attribute")
+                .or_else(|| node.child_by_field_name("property"))
+        {
+            stack.push(property);
+            continue;
+        }
+        for i in (0..node.named_child_count()).rev() {
+            if let Some(child) = node.named_child(i) {
+                stack.push(child);
+            }
+        }
+    }
+    let (_, identifier, offset) = candidate?;
+    let mut owner = declaration;
+    // Constructor/record field parameters have their own declaration spans.
+    if matches!(
+        declaration.kind(),
+        "record_declaration" | "primary_constructor" | "class_parameters" | "parameter_list"
+    ) {
+        let mut parent = identifier.parent();
+        while let Some(node) = parent {
+            if matches!(
+                node.kind(),
+                "formal_parameter"
+                    | "class_parameter"
+                    | "parameter"
+                    | "property_promotion_parameter"
+            ) {
+                owner = node;
+                break;
+            }
+            if node.id() == declaration.id() {
+                break;
+            }
+            parent = node.parent();
+        }
+    }
+    let start = u32::try_from(owner.start_byte()).ok()?;
+    let end = u32::try_from(owner.end_byte()).ok()?;
+    let relative = u32::try_from(identifier.start_byte().checked_add(offset)?)
+        .ok()?
+        .checked_sub(start)?;
+    let length = u32::try_from(name.len()).ok()?;
+    let overflow = relative >= u32::from(u16::MAX) || length >= u32::from(u16::MAX);
+    Some(rgctl_plugin_api::FieldSourceSpan {
+        start_byte: start,
+        end_byte: end,
+        name_rel_offset: (!overflow).then_some(relative as u16),
+        name_token_len: u16::try_from(length).ok(),
+        name_span_overflow: overflow.then_some((relative, length)),
+        start_line: u32::try_from(owner.start_position().row + 1).ok()?,
+        end_line: u32::try_from(owner.end_position().row + 1).ok()?,
+    })
+}
+
+/// Attach dedicated byte spans to a directly emitted field/property symbol.
+pub fn field_symbol_spans(symbol: &mut Symbol, declaration: Node, source: &[u8]) {
+    if let Some(span) = field_source_span(declaration, source, &symbol.name) {
+        symbol.start_byte = Some(span.start_byte);
+        symbol.end_byte = Some(span.end_byte);
+        symbol.name_rel_offset = span.name_rel_offset;
+        symbol.name_token_len = span.name_token_len;
+        symbol.name_span_overflow = span.name_span_overflow;
+    }
 }
 
 /// Record call-site / reference identifier spans onto a relation (no heap alloc).

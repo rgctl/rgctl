@@ -298,6 +298,9 @@ impl RubyPlugin {
                                 for arg in child.children(&mut c2) {
                                     if let Some(n) = Self::constant_text(arg, source) {
                                         fields.push(Field {
+                                            source_span: rgctl_plugin_helpers::field_source_span(
+                                                arg, source, &n,
+                                            ),
                                             name: n,
                                             field_type: None,
                                             visibility: None,
@@ -336,6 +339,11 @@ impl RubyPlugin {
                     if left.kind() == "instance_variable" {
                         if let Ok(name) = left.utf8_text(source) {
                             fields.push(Field {
+                                source_span: rgctl_plugin_helpers::field_source_span(
+                                    node,
+                                    source,
+                                    name.trim_start_matches('@'),
+                                ),
                                 name: name.trim_start_matches('@').to_string(),
                                 field_type: None,
                                 visibility: None,
