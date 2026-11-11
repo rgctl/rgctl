@@ -457,8 +457,16 @@ fn apply_route_decorator(
         let path = normalize_route_path(prefix, &sub);
         let (display, hint) = format_route_target(&method, &path);
         let loc = rel.location.clone();
-        out.push(exposes_route_relation(
-            &rel.from, &display, &hint, &method, &path, rule, loc,
+        out.push(exposes_route_relation_with_spans(
+            &rel.from,
+            &display,
+            &hint,
+            &method,
+            &path,
+            rule,
+            loc,
+            rel.call_site_start_byte,
+            rel.call_site_byte_len,
         ));
         if let Some(sym) = find_symbol_mut(symbols, &rel.from) {
             stamp_tags_vocab(sym, &rule.tags, &rule.vocab);
@@ -805,13 +813,15 @@ fn apply_field_annotation_inject(
             continue;
         }
         let loc = rel.location.clone();
-        out.push(injects_relation(
+        out.push(injects_relation_with_spans(
             &class_qn,
             &simple_ty,
             Some("class"),
             rule,
             loc,
             Some(&ann),
+            rel.call_site_start_byte,
+            rel.call_site_byte_len,
         ));
         if let Some(sym) = find_symbol_mut(symbols, &class_qn) {
             stamp_tags_vocab(sym, &rule.tags, &rule.vocab);
@@ -1042,6 +1052,21 @@ fn exposes_route_relation(
     rule: &FrameworkRuleSpec,
     loc: SourceLocation,
 ) -> Relation {
+    exposes_route_relation_with_spans(from, display, hint, method, path, rule, loc, None, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn exposes_route_relation_with_spans(
+    from: &str,
+    display: &str,
+    hint: &str,
+    method: &str,
+    path: &str,
+    rule: &FrameworkRuleSpec,
+    loc: SourceLocation,
+    call_site_start_byte: Option<u32>,
+    call_site_byte_len: Option<u16>,
+) -> Relation {
     Relation {
         from: from.to_string(),
         to: display.to_string(),
@@ -1055,6 +1080,8 @@ fn exposes_route_relation(
         }),
         to_qualified_hint: Some(hint.to_string()),
         to_type_hint: Some("route".to_string()),
+        call_site_start_byte,
+        call_site_byte_len,
     }
 }
 
@@ -1065,6 +1092,20 @@ fn injects_relation(
     rule: &FrameworkRuleSpec,
     loc: SourceLocation,
     annotation: Option<&str>,
+) -> Relation {
+    injects_relation_with_spans(from, to, to_type_hint, rule, loc, annotation, None, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn injects_relation_with_spans(
+    from: &str,
+    to: &str,
+    to_type_hint: Option<&str>,
+    rule: &FrameworkRuleSpec,
+    loc: SourceLocation,
+    annotation: Option<&str>,
+    call_site_start_byte: Option<u32>,
+    call_site_byte_len: Option<u16>,
 ) -> Relation {
     let mut meta = Map::new();
     meta.insert("framework".into(), Value::String(rule.framework.clone()));
@@ -1088,6 +1129,8 @@ fn injects_relation(
         metadata: Value::Object(meta),
         to_qualified_hint: None,
         to_type_hint: to_type_hint.map(str::to_string),
+        call_site_start_byte,
+        call_site_byte_len,
     }
 }
 
@@ -1107,8 +1150,20 @@ fn simple_name(s: &str) -> String {
         .to_string()
 }
 
-/// Parse first string-ish token from metadata `arguments` (strip quotes).
+/// Parse first string-ish token from metadata `arguments` / `annotation_args`
+/// (prefer `path` then `value`, then raw `arguments` text).
 pub fn first_string_arg(metadata: &Value) -> Option<String> {
+    if let Some(map) = metadata.get("annotation_args").and_then(|v| v.as_object()) {
+        for key in ["path", "value", "name"] {
+            if let Some(s) = map
+                .get(key)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                return Some(s.to_string());
+            }
+        }
+    }
     let args = metadata.get("arguments")?;
     if let Some(s) = args.as_str() {
         return extract_first_string_literal(s).or_else(|| {
@@ -1159,13 +1214,25 @@ fn resolve_http_method(mra: &MethodRouteAnnotation, metadata: &Value) -> String 
     if let Some(m) = &mra.method {
         return m.to_uppercase();
     }
-    if mra.method_arg.is_some()
-        && let Some(args) = metadata.get("arguments").and_then(|v| v.as_str())
-    {
-        // Look for GET/POST tokens in arguments
-        for verb in ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"] {
-            if args.to_uppercase().contains(verb) {
-                return verb.to_string();
+    if mra.method_arg.is_some() {
+        if let Some(method) = metadata
+            .get("annotation_args")
+            .and_then(|v| v.get("method"))
+            .and_then(|v| v.as_str())
+        {
+            let upper = method.to_uppercase();
+            for verb in ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"] {
+                if upper.contains(verb) {
+                    return verb.to_string();
+                }
+            }
+        }
+        if let Some(args) = metadata.get("arguments").and_then(|v| v.as_str()) {
+            // Look for GET/POST tokens in arguments
+            for verb in ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"] {
+                if args.to_uppercase().contains(verb) {
+                    return verb.to_string();
+                }
             }
         }
     }
@@ -1549,6 +1616,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: json!({}),
+            ..Default::default()
         }
     }
 
@@ -1611,6 +1679,7 @@ mod tests {
                 metadata: json!({"arguments": "\"/users\""}),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             },
             Relation {
                 from: "UsersController.list".into(),
@@ -1620,6 +1689,7 @@ mod tests {
                 metadata: json!({"arguments": "\"/\""}),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             },
         ];
         apply_framework_catalog("typescript", b"", None, &mut symbols, &mut relations);
@@ -1701,6 +1771,7 @@ mod tests {
             metadata: json!({"language": "typescript"}),
             to_qualified_hint: Some("map.get".into()),
             to_type_hint: None,
+            ..Default::default()
         }];
         apply_framework_catalog(
             "typescript",
@@ -1744,6 +1815,7 @@ mod tests {
             metadata: json!({}),
             to_qualified_hint: None,
             to_type_hint: None,
+            ..Default::default()
         }];
         apply_framework_catalog("java", b"", None, &mut symbols, &mut relations);
         let injects: Vec<_> = relations

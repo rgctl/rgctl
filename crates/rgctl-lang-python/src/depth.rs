@@ -1,6 +1,7 @@
 //! Deep Python AST extraction helpers (OpenSpec 3.2).
 
 use rgctl_plugin_api::{Field, Relation, RelationType, SourceLocation, Symbol, SymbolType};
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::collections::HashSet;
 use tree_sitter::Node;
 
@@ -97,15 +98,15 @@ pub fn class_lambda_binding_name(node: Node, source: &[u8]) -> Option<String> {
 pub fn extract_type_alias_statement(node: Node, source: &[u8], file_path: &str) -> Option<Symbol> {
     let left = node.child_by_field_name("left")?;
     // Grammar wraps the name in a `type` node: `(type (identifier))`.
-    let name = if left.kind() == "identifier" {
-        text(left, source)?
+    let name_node = if left.kind() == "identifier" {
+        Some(left)
     } else {
         let mut c = left.walk();
         left.children(&mut c)
             .find(|ch| ch.kind() == "identifier")
-            .and_then(|n| text(n, source))
-            .or_else(|| text(left, source))?
+            .or(Some(left))
     };
+    let name = name_node.and_then(|n| text(n, source))?;
     // Strip type params if present: `Point[T]` → `Point`
     let name = name.split('[').next().unwrap_or(&name).trim().to_string();
     let right = node
@@ -115,7 +116,7 @@ pub fn extract_type_alias_statement(node: Node, source: &[u8], file_path: &str) 
     if let Some(ref ty) = right {
         meta["aliased_type"] = serde_json::Value::String(ty.clone());
     }
-    Some(Symbol {
+    let mut sym = Symbol {
         name: name.clone(),
         symbol_type: SymbolType::TypeAlias,
         qualified_name: Some(name),
@@ -127,7 +128,10 @@ pub fn extract_type_alias_statement(node: Node, source: &[u8], file_path: &str) 
         modifiers: vec![],
         documentation: None,
         metadata: meta,
-    })
+        ..Default::default()
+    };
+    record_symbol_spans(&mut sym, node, name_node);
+    Some(sym)
 }
 
 /// Module / local binding from identifier assignment.
@@ -142,7 +146,7 @@ pub fn extract_simple_binding(
         return None;
     }
     let name = text(left, source)?;
-    Some(Symbol {
+    let mut sym = Symbol {
         name: name.clone(),
         symbol_type: SymbolType::Variable,
         qualified_name: Some(name),
@@ -157,22 +161,23 @@ pub fn extract_simple_binding(
             "language": "python",
             "kind": kind_tag,
         }),
-    })
+        ..Default::default()
+    };
+    record_symbol_spans(&mut sym, node, Some(left));
+    Some(sym)
 }
 
 /// `with open(...) as f` / `as_pattern_target` binding.
 pub fn extract_as_pattern_target(node: Node, source: &[u8], file_path: &str) -> Option<Symbol> {
-    let name = if node.kind() == "as_pattern_target" {
-        text(node, source)?
+    let name_node = if node.kind() == "as_pattern_target" || node.kind() == "identifier" {
+        Some(node)
     } else if node.kind() == "as_pattern" {
         node.child_by_field_name("alias")
-            .and_then(|n| text(n, source))?
-    } else if node.kind() == "identifier" {
-        text(node, source)?
     } else {
-        return None;
+        None
     };
-    Some(Symbol {
+    let name = name_node.and_then(|n| text(n, source))?;
+    let mut sym = Symbol {
         name: name.clone(),
         symbol_type: SymbolType::Variable,
         qualified_name: Some(name),
@@ -187,7 +192,10 @@ pub fn extract_as_pattern_target(node: Node, source: &[u8], file_path: &str) -> 
             "language": "python",
             "kind": "with_as_target",
         }),
-    })
+        ..Default::default()
+    };
+    record_symbol_spans(&mut sym, node, name_node);
+    Some(sym)
 }
 
 /// True when an `if_statement` looks like `if TYPE_CHECKING:` / version guard.
@@ -305,6 +313,7 @@ pub fn maybe_subscript_call_relation(
         }),
         to_qualified_hint: Some(format!("{simple}.{method}")),
         to_type_hint: Some(simple.to_string()),
+        ..Default::default()
     })
 }
 
@@ -326,10 +335,9 @@ pub fn extract_named_expression(node: Node, source: &[u8], file_path: &str) -> O
     if node.kind() != "named_expression" {
         return None;
     }
-    let name = node
-        .child_by_field_name("name")
-        .and_then(|n| text(n, source))?;
-    Some(Symbol {
+    let name_node = node.child_by_field_name("name")?;
+    let name = text(name_node, source)?;
+    let mut sym = Symbol {
         name: name.clone(),
         symbol_type: SymbolType::Variable,
         qualified_name: Some(name),
@@ -344,7 +352,10 @@ pub fn extract_named_expression(node: Node, source: &[u8], file_path: &str) -> O
             "language": "python",
             "kind": "named_expression",
         }),
-    })
+        ..Default::default()
+    };
+    record_symbol_spans(&mut sym, node, Some(name_node));
+    Some(sym)
 }
 
 /// Standalone / class-bound `lambda` → Function symbol.
@@ -361,23 +372,22 @@ pub fn extract_lambda_symbol(
         return None;
     }
     // Prefer binding name from `name = lambda ...` parent assignment.
-    let name = node
-        .parent()
-        .and_then(|p| {
-            if p.kind() == "assignment" {
-                p.child_by_field_name("left")
-                    .filter(|l| l.kind() == "identifier")
-                    .and_then(|l| text(l, source))
-            } else {
-                None
-            }
-        })
+    let name_node = node.parent().and_then(|p| {
+        if p.kind() == "assignment" {
+            p.child_by_field_name("left")
+                .filter(|l| l.kind() == "identifier")
+        } else {
+            None
+        }
+    });
+    let name = name_node
+        .and_then(|l| text(l, source))
         .unwrap_or_else(|| format!("<lambda@{}>", node.start_position().row + 1));
     let qualified_name = match class_qn {
         Some(c) if !c.is_empty() => Some(format!("{c}.{name}")),
         _ => Some(name.clone()),
     };
-    Some(Symbol {
+    let mut sym = Symbol {
         name,
         symbol_type: SymbolType::Function,
         qualified_name,
@@ -392,5 +402,8 @@ pub fn extract_lambda_symbol(
             "language": "python",
             "kind": "lambda",
         }),
-    })
+        ..Default::default()
+    };
+    record_symbol_spans(&mut sym, node, name_node);
+    Some(sym)
 }

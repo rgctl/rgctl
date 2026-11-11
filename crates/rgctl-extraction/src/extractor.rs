@@ -20,6 +20,10 @@ pub struct Extractor {
     registry: Arc<LanguageRegistry>,
     /// Optional content-addressed FileFacts cache (warm discover / update).
     facts: Option<Arc<FactsCache>>,
+    /// When true, workers compress source frames + Green-CST for lossless write-back.
+    lossless: bool,
+    /// Session / repo root used to store repo-relative paths in lossless sidecars.
+    repo_root: Option<PathBuf>,
 }
 
 /// Precomputed pass-1 work for one symbol (filled on extract workers).
@@ -29,6 +33,16 @@ pub struct SymbolPass1Prep {
     pub code_hash: Option<String>,
     /// Token bloom for functions (when sketched).
     pub token_bloom: Option<TokenBloom>,
+    /// Declaration start byte (copied from [`Symbol`] on the worker — no merge-thread work).
+    pub start_byte: Option<u32>,
+    /// Declaration exclusive end byte.
+    pub end_byte: Option<u32>,
+    /// Identifier offset relative to `start_byte`.
+    pub name_rel_offset: Option<u16>,
+    /// Raw identifier token length when it differs from the symbol name.
+    pub name_token_len: Option<u16>,
+    /// Overflow `(rel_start, len)` when `name_rel_offset` cannot fit in `u16`.
+    pub name_span_overflow: Option<(u32, u32)>,
 }
 
 /// Result of extracting a single file.
@@ -52,6 +66,10 @@ pub struct FileExtraction {
     pub source: Vec<u8>,
     /// Out-of-line content blobs keyed by Blake3 hex (`body_ref`).
     pub content_blobs: HashMap<String, String>,
+    /// Worker-compressed RGCS frame when `discover --lossless` is active.
+    pub lossless_frame: Option<rgctl_graph::LosslessFrame>,
+    /// Worker-built Green-CST columns when lossless is active.
+    pub green_cst: Option<rgctl_graph::CstFileColumns>,
 }
 
 /// Lightweight remainder after pass-1 graph population (symbols committed; source dropped).
@@ -83,6 +101,8 @@ impl Extractor {
         Self {
             registry,
             facts: None,
+            lossless: false,
+            repo_root: None,
         }
     }
 
@@ -90,6 +110,23 @@ impl Extractor {
     pub fn with_facts_cache(mut self, facts: Arc<FactsCache>) -> Self {
         self.facts = Some(facts);
         self
+    }
+
+    /// Enable worker-side Zstd frames + Green-CST for `discover --lossless`.
+    pub fn with_lossless(mut self, enabled: bool) -> Self {
+        self.lossless = enabled;
+        self
+    }
+
+    /// Set the repo root so lossless frames / CST entries use repo-relative paths.
+    pub fn with_repo_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.repo_root = Some(root.into());
+        self
+    }
+
+    /// Whether lossless sidecars are requested.
+    pub fn lossless(&self) -> bool {
+        self.lossless
     }
 
     /// Shared facts cache, if configured.
@@ -132,6 +169,9 @@ impl Extractor {
         let file_hash = Some(digest.to_hex().to_string());
         if let Ok(plugin) = self.registry.get_plugin_for_file_with_source(path, &source) {
             let path_str = path.to_string_lossy();
+            if self.lossless {
+                rgctl_plugin_api::set_capture_last_tree(true);
+            }
             let extracted = if let Some(facts) = &self.facts {
                 let key = facts_key_for_hash(plugin.as_ref(), *digest.as_bytes());
                 let cached = facts.get(&key).and_then(|mut hit| {
@@ -169,6 +209,8 @@ impl Extractor {
             };
             let config_usages = ConfigUsageDetector::detect(plugin.language_id(), &source, path);
             let symbol_preps = prepare_symbol_pass1(&source, &extracted.symbols);
+            let (lossless_frame, green_cst) =
+                self.maybe_lossless_sidecars(path, &source, *digest.as_bytes(), plugin.as_ref())?;
             return Ok(FileExtraction {
                 path: path.to_path_buf(),
                 file_hash,
@@ -179,6 +221,8 @@ impl Extractor {
                 config_usages,
                 source,
                 content_blobs: extracted.content_blobs,
+                lossless_frame,
+                green_cst,
             });
         }
 
@@ -196,6 +240,8 @@ impl Extractor {
                 config_usages: Vec::new(),
                 source,
                 content_blobs: HashMap::new(),
+                lossless_frame: None,
+                green_cst: None,
             });
         }
 
@@ -211,12 +257,64 @@ impl Extractor {
                 config_usages: Vec::new(),
                 source,
                 content_blobs: HashMap::new(),
+                lossless_frame: None,
+                green_cst: None,
             });
         }
 
         Err(Error::UnsupportedLanguage(
             path.to_string_lossy().to_string(),
         ))
+    }
+
+    fn maybe_lossless_sidecars(
+        &self,
+        path: &Path,
+        source: &[u8],
+        blake3_hash: [u8; 32],
+        plugin: &dyn rgctl_plugin_api::LanguagePlugin,
+    ) -> Result<(
+        Option<rgctl_graph::LosslessFrame>,
+        Option<rgctl_graph::CstFileColumns>,
+    )> {
+        if !self.lossless {
+            return Ok((None, None));
+        }
+        let rel = repo_relative_path(self.repo_root.as_deref(), path);
+        let frame =
+            rgctl_graph::LosslessFrame::from_source_with_hash(rel.clone(), source, blake3_hash)
+                .map_err(|e| Error::Other(e.to_string()))?;
+        let captured_tree = rgctl_plugin_api::take_last_parsed_tree(source);
+        let green_cst = if let Some(grammar) = plugin.grammar() {
+            let tree_opt = match captured_tree {
+                Some(tree) => Some(tree),
+                None => rgctl_plugin_helpers::parse_source(source, path, grammar).ok(),
+            };
+            if let Some(tree) = tree_opt {
+                let mut builder = rgctl_plugin_helpers::GreenCstFileBuilder::with_capacity(256);
+                let mut has_error = false;
+                builder.walk_tree(tree.root_node(), |_, _, node| {
+                    if node.is_error() || node.is_missing() {
+                        has_error = true;
+                    }
+                });
+                Some(rgctl_graph::CstFileColumns {
+                    file_path: rel,
+                    lang_id: 0,
+                    flags: u8::from(has_error),
+                    bp_bits: builder.bp_bits,
+                    bp_bit_len: builder.bp_bit_len,
+                    kind_ids: builder.kind_ids,
+                    rel_delta_and_width: builder.rel_delta_and_width,
+                    graph_anchors: builder.graph_anchors,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Ok((Some(frame), green_cst))
     }
 
     /// Pass 1 for one file: add symbols/config keys, then drop source from memory.
@@ -455,6 +553,15 @@ fn symbol_body_from_source<'a>(
     if text.is_empty() { None } else { Some(text) }
 }
 
+/// Repo-relative POSIX path for lossless sidecar keys (falls back to the input path).
+fn repo_relative_path(repo_root: Option<&Path>, path: &Path) -> String {
+    let rel = match repo_root {
+        Some(root) => path.strip_prefix(root).unwrap_or(path).to_path_buf(),
+        None => path.to_path_buf(),
+    };
+    rgctl_graph::normalize_path_str(&rel.to_string_lossy()).into_owned()
+}
+
 fn prepare_symbol_pass1(source: &[u8], symbols: &[Symbol]) -> Vec<SymbolPass1Prep> {
     if symbols.is_empty() {
         return Vec::new();
@@ -498,6 +605,11 @@ fn prepare_symbol_pass1(source: &[u8], symbols: &[Symbol]) -> Vec<SymbolPass1Pre
         preps.push(SymbolPass1Prep {
             code_hash,
             token_bloom,
+            start_byte: symbol.start_byte,
+            end_byte: symbol.end_byte,
+            name_rel_offset: symbol.name_rel_offset,
+            name_token_len: symbol.name_token_len,
+            name_span_overflow: symbol.name_span_overflow,
         });
     }
     preps

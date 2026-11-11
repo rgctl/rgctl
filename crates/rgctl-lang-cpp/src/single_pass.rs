@@ -8,6 +8,7 @@ use crate::plugin::{
 };
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -502,7 +503,7 @@ pub fn extract_all_single_pass(
                     }
                     "preproc_include" => {
                         let text = node.utf8_text(source)?.trim().to_string();
-                        ctx.symbols.push(Symbol {
+                        let mut symbol = Symbol {
                             name: text,
                             symbol_type: SymbolType::Import,
                             qualified_name: None,
@@ -514,11 +515,14 @@ pub fn extract_all_single_pass(
                             modifiers: vec![],
                             documentation: None,
                             metadata: serde_json::json!({ "language": "cpp" }),
-                        });
+                            ..Default::default()
+                        };
+                        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                        ctx.symbols.push(symbol);
                     }
                     "using_declaration" => {
                         let (name, qualified) = using_import_names(node, source);
-                        ctx.symbols.push(Symbol {
+                        let mut symbol = Symbol {
                             name: name.clone(),
                             symbol_type: SymbolType::Import,
                             qualified_name: qualified,
@@ -530,7 +534,10 @@ pub fn extract_all_single_pass(
                             modifiers: vec![],
                             documentation: None,
                             metadata: serde_json::json!({ "language": "cpp", "import_kind": "using" }),
-                        });
+                            ..Default::default()
+                        };
+                        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                        ctx.symbols.push(symbol);
                         if let Some(rel) =
                             depth::using_declaration_relation(node, source, &file_path_str)
                         {
@@ -560,7 +567,7 @@ pub fn extract_all_single_pass(
                                         }),
                                         to_qualified_hint: Some(scoped),
                                         to_type_hint: None,
-                                    });
+                                     ..Default::default() });
                                 }
                             }
                         }
@@ -636,6 +643,7 @@ pub fn extract_all_single_pass(
                                 }),
                                 to_qualified_hint: None,
                                 to_type_hint: None,
+                                ..Default::default()
                             });
                         }
                     }

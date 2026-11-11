@@ -46,12 +46,34 @@ const EDGE_ROW_SIZE: usize = 40;
 const _: () = assert!(std::mem::size_of::<NodeRow>() == NODE_ROW_SIZE);
 const _: () = assert!(std::mem::size_of::<EdgeRow>() == EDGE_ROW_SIZE);
 
+const DECL_LEN_NONE: u32 = u32::MAX;
+const OVERFLOW_NONE: (u32, u32) = (u32::MAX, u32::MAX);
+const TOKEN_LEN_NONE: u16 = u16::MAX;
+const EXTENSION_SPAN_TAIL_BYTES: usize = 4 + 8 + 2;
+
+const fn default_decl_len_none() -> u32 {
+    DECL_LEN_NONE
+}
+
+const fn default_overflow_none() -> (u32, u32) {
+    OVERFLOW_NONE
+}
+
+const fn default_token_len_none() -> u16 {
+    TOKEN_LEN_NONE
+}
+
 /// Per-node cold fields stored as a small bincode blob.
 ///
 /// `properties` uses [`LazyStringMap`], which serializes keys in sorted order so
 /// extension blob bytes (and [`crate::stable_key::extension_digest`]) are stable (#93).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct NodeExtension {
+///
+/// The trailing 14 bytes (`decl_byte_len`, `name_span_overflow`, `name_token_len`) are
+/// fixed-width and position-independent (Green: relative to `NodeRow::start_byte`), so:
+/// 1. [`extension_digest_excluding_spans`] hashes the raw mmap slice with zero bincode decode/encode.
+/// 2. [`ColumnarGraphMmap::materialize_node_hot_at`] reads spans in O(1) from the 14-byte tail.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct NodeExtension {
     qualified_name: Option<String>,
     return_type: Option<String>,
     code_hash: Option<String>,
@@ -60,6 +82,81 @@ struct NodeExtension {
     parameters: Vec<GraphParameter>,
     properties: LazyStringMap,
     labels: Vec<String>,
+    /// Declaration byte length (`end_byte - start_byte`), or [`DECL_LEN_NONE`].
+    #[serde(default = "default_decl_len_none")]
+    decl_byte_len: u32,
+    /// Overflow when identifier starts ≥ 65535 bytes after `start_byte`: `(rel_start, byte_len)`.
+    #[serde(default = "default_overflow_none")]
+    name_span_overflow: (u32, u32),
+    /// Raw identifier token length when it differs from the stored node name length.
+    #[serde(default = "default_token_len_none")]
+    name_token_len: u16,
+}
+
+impl Default for NodeExtension {
+    fn default() -> Self {
+        Self {
+            qualified_name: None,
+            return_type: None,
+            code_hash: None,
+            token_bloom: None,
+            parameters: Vec::new(),
+            properties: LazyStringMap::new(),
+            labels: Vec::new(),
+            decl_byte_len: DECL_LEN_NONE,
+            name_span_overflow: OVERFLOW_NONE,
+            name_token_len: TOKEN_LEN_NONE,
+        }
+    }
+}
+
+impl NodeExtension {
+    #[inline]
+    fn end_byte_for(&self, start_byte: Option<u32>) -> Option<u32> {
+        if self.decl_byte_len == DECL_LEN_NONE {
+            None
+        } else {
+            start_byte?.checked_add(self.decl_byte_len)
+        }
+    }
+
+    #[inline]
+    fn overflow_opt(&self) -> Option<(u32, u32)> {
+        (self.name_span_overflow != OVERFLOW_NONE).then_some(self.name_span_overflow)
+    }
+
+    #[inline]
+    fn token_len_opt(&self) -> Option<u16> {
+        (self.name_token_len != TOKEN_LEN_NONE).then_some(self.name_token_len)
+    }
+}
+
+/// Decode the fixed 14-byte Green span tail from a current-format `NodeExtension` blob
+/// without deserializing strings/maps.
+#[inline]
+fn decode_extension_span_tail(
+    ext_bytes: Option<&[u8]>,
+    start_byte: Option<u32>,
+) -> (Option<u32>, Option<(u32, u32)>, Option<u16>) {
+    let Some(start) = start_byte else {
+        return (None, None, None);
+    };
+    let Some(bytes) = ext_bytes else {
+        return (None, None, None);
+    };
+    if bytes.len() < EXTENSION_SPAN_TAIL_BYTES {
+        return (None, None, None);
+    }
+    let tail = &bytes[bytes.len() - EXTENSION_SPAN_TAIL_BYTES..];
+    let decl_len = u32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]);
+    let ov_start = u32::from_le_bytes([tail[4], tail[5], tail[6], tail[7]]);
+    let ov_len = u32::from_le_bytes([tail[8], tail[9], tail[10], tail[11]]);
+    let tok_len = u16::from_le_bytes([tail[12], tail[13]]);
+
+    let end_byte = (decl_len != DECL_LEN_NONE).then(|| start.saturating_add(decl_len));
+    let overflow = ((ov_start, ov_len) != OVERFLOW_NONE).then_some((ov_start, ov_len));
+    let token_len = (tok_len != TOKEN_LEN_NONE).then_some(tok_len);
+    (end_byte, overflow, token_len)
 }
 
 /// Borrowed view for write-path serialization (no String/Vec clones).
@@ -72,10 +169,18 @@ struct NodeExtensionRef<'a> {
     parameters: &'a [GraphParameter],
     properties: &'a LazyStringMap,
     labels: &'a [String],
+    /// Fixed 14-byte Green span tail so bincode layout matches [`NodeExtension`].
+    decl_byte_len: u32,
+    name_span_overflow: (u32, u32),
+    name_token_len: u16,
 }
 
 impl NodeExtensionRef<'_> {
     fn from_node(node: &Node) -> NodeExtensionRef<'_> {
+        let decl_byte_len = match (node.start_byte, node.end_byte) {
+            (Some(s), Some(e)) if e >= s => e - s,
+            _ => DECL_LEN_NONE,
+        };
         NodeExtensionRef {
             qualified_name: node.qualified_name.as_deref(),
             return_type: node.return_type.as_deref(),
@@ -84,6 +189,9 @@ impl NodeExtensionRef<'_> {
             parameters: &node.parameters,
             properties: &node.properties,
             labels: &node.labels,
+            decl_byte_len,
+            name_span_overflow: node.name_span_overflow.unwrap_or(OVERFLOW_NONE),
+            name_token_len: node.name_token_len.unwrap_or(TOKEN_LEN_NONE),
         }
     }
 }
@@ -99,9 +207,36 @@ struct NodeExtensionV1 {
     labels: Vec<String>,
 }
 
+/// Pre-span-fields layout (`token_bloom` present, no Red-Green spans).
+#[derive(Debug, Clone, Deserialize)]
+struct NodeExtensionV2 {
+    qualified_name: Option<String>,
+    return_type: Option<String>,
+    code_hash: Option<String>,
+    #[serde(default)]
+    token_bloom: Option<[u64; 4]>,
+    parameters: Vec<GraphParameter>,
+    properties: LazyStringMap,
+    labels: Vec<String>,
+}
+
 fn decode_node_extension(bytes: &[u8]) -> Result<NodeExtension> {
     if let Ok(ext) = bincode::deserialize::<NodeExtension>(bytes) {
         return Ok(ext);
+    }
+    if let Ok(v2) = bincode::deserialize::<NodeExtensionV2>(bytes) {
+        return Ok(NodeExtension {
+            qualified_name: v2.qualified_name,
+            return_type: v2.return_type,
+            code_hash: v2.code_hash,
+            token_bloom: v2.token_bloom,
+            parameters: v2.parameters,
+            properties: v2.properties,
+            labels: v2.labels,
+            decl_byte_len: DECL_LEN_NONE,
+            name_span_overflow: OVERFLOW_NONE,
+            name_token_len: TOKEN_LEN_NONE,
+        });
     }
     let legacy = bincode::deserialize::<NodeExtensionV1>(bytes)
         .map_err(|err| Error::SerdeError(format!("node extension: {err}")))?;
@@ -113,16 +248,39 @@ fn decode_node_extension(bytes: &[u8]) -> Result<NodeExtension> {
         parameters: legacy.parameters,
         properties: legacy.properties,
         labels: legacy.labels,
+        decl_byte_len: DECL_LEN_NONE,
+        name_span_overflow: OVERFLOW_NONE,
+        name_token_len: TOKEN_LEN_NONE,
     })
 }
 
+/// Zero-copy BLAKE3-8 digest of a node extension blob.
+///
+/// Because [`NodeExtension`] encodes only relative (Green) span lengths (`decl_byte_len`,
+/// `name_span_overflow`, `name_token_len`), line or byte shifts above a symbol do not alter
+/// the extension blob bytes, so hashing the raw mmap slice is both zero-allocation and shift-invariant.
+pub(crate) fn extension_digest_excluding_spans(bytes: Option<&[u8]>) -> u64 {
+    match bytes {
+        None | Some([]) => 0,
+        Some(blob) => {
+            let hash = blake3::hash(blob);
+            u64::from_le_bytes(hash.as_bytes()[..8].try_into().expect("8 bytes"))
+        }
+    }
+}
+
 /// Fixed-width node column (64 bytes).
+///
+/// Red-Green span packing (lossless write-back):
+/// - [`Self::name_rel_offset`] replaces unused `_pad` at byte offset 18 (`u16::MAX` = none).
+/// - [`Self::start_byte`] replaces unused `_pad_end` at byte offset 60 (`u32::MAX` = none).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct NodeRow {
     pub(crate) id: [u8; 16],
     pub(crate) node_type: u16,
-    pub(crate) _pad: u16,
+    /// Identifier start relative to [`Self::start_byte`] (`u16::MAX` = unknown / overflow).
+    pub name_rel_offset: u16,
     pub(crate) name_off: u32,
     pub(crate) name_len: u32,
     pub(crate) file_path_off: u32,
@@ -133,7 +291,41 @@ pub(crate) struct NodeRow {
     pub(crate) end_line: u32,
     pub(crate) extension_off: u32,
     pub(crate) extension_len: u32,
-    pub(crate) _pad_end: u32,
+    /// Exact 0-indexed declaration start byte (`u32::MAX` = unknown).
+    pub start_byte: u32,
+}
+
+impl NodeRow {
+    /// Sentinel for missing [`Self::start_byte`].
+    pub const START_BYTE_NONE: u32 = u32::MAX;
+    /// Sentinel for missing / overflow [`Self::name_rel_offset`].
+    pub const NAME_REL_NONE: u16 = u16::MAX;
+
+    /// Reconstruct absolute `[name_start, name_end)` from Red-Green relative packing.
+    ///
+    /// `name` is the stored node name; when `name_token_len` is set it wins over
+    /// `name.len()` (synthesized FQNs / overload suffixes).
+    pub(crate) fn name_byte_span_parts(
+        &self,
+        name: &str,
+        name_span_overflow: Option<(u32, u32)>,
+        name_token_len: Option<u16>,
+    ) -> Option<(u32, u32)> {
+        if self.start_byte == Self::START_BYTE_NONE {
+            return None;
+        }
+        if self.name_rel_offset != Self::NAME_REL_NONE {
+            let start = self
+                .start_byte
+                .checked_add(u32::from(self.name_rel_offset))?;
+            let len = name_token_len.map(u32::from).unwrap_or(name.len() as u32);
+            Some((start, start.checked_add(len)?))
+        } else {
+            let (rel_start, len) = name_span_overflow?;
+            let start = self.start_byte.checked_add(rel_start)?;
+            Some((start, start.checked_add(len)?))
+        }
+    }
 }
 
 /// Fixed-width edge column (40 bytes).
@@ -422,6 +614,17 @@ impl ColumnarGraphMmap {
             row.signature_off,
             row.signature_len,
         )?;
+        let start_byte = (row.start_byte != NodeRow::START_BYTE_NONE).then_some(row.start_byte);
+        let ext_bytes = if row.extension_len > 0 && start_byte.is_some() {
+            let start = self.offset_extensions as usize + row.extension_off as usize;
+            let end = start + row.extension_len as usize;
+            (end <= self.mmap.len()).then(|| &self.mmap[start..end])
+        } else {
+            None
+        };
+        let (end_byte, name_span_overflow, name_token_len) =
+            decode_extension_span_tail(ext_bytes, start_byte);
+
         Ok(Node {
             id,
             node_type: node_type_from_u16(row.node_type)?,
@@ -435,6 +638,12 @@ impl ColumnarGraphMmap {
             file_path: file_path.map(SharedStr::from),
             start_line: (row.start_line > 0).then_some(row.start_line as usize),
             end_line: (row.end_line > 0).then_some(row.end_line as usize),
+            start_byte,
+            end_byte,
+            name_rel_offset: (row.name_rel_offset != NodeRow::NAME_REL_NONE)
+                .then_some(row.name_rel_offset),
+            name_span_overflow,
+            name_token_len,
             properties: LazyStringMap::new(),
             labels: Vec::new(),
         })
@@ -662,6 +871,11 @@ impl ColumnarGraphMmap {
             NodeExtension::default()
         };
 
+        let start_byte = (row.start_byte != NodeRow::START_BYTE_NONE).then_some(row.start_byte);
+        let end_byte = extension.end_byte_for(start_byte);
+        let name_span_overflow = extension.overflow_opt();
+        let name_token_len = extension.token_len_opt();
+
         Ok(Node {
             id,
             node_type: node_type_from_u16(row.node_type)?,
@@ -675,9 +889,36 @@ impl ColumnarGraphMmap {
             file_path: file_path.map(SharedStr::from),
             start_line: (row.start_line > 0).then_some(row.start_line as usize),
             end_line: (row.end_line > 0).then_some(row.end_line as usize),
+            start_byte,
+            end_byte,
+            name_rel_offset: (row.name_rel_offset != NodeRow::NAME_REL_NONE)
+                .then_some(row.name_rel_offset),
+            name_span_overflow,
+            name_token_len,
             properties: extension.properties,
             labels: extension.labels,
         })
+    }
+
+    /// Red-tree declaration and identifier byte spans for `node_id`, when present.
+    ///
+    /// Returns `((decl_start, decl_end), (name_start, name_end))` — either half may be `None`.
+    #[allow(clippy::type_complexity)]
+    pub fn node_byte_span(
+        &self,
+        node_id: uuid::Uuid,
+    ) -> Result<(Option<(u32, u32)>, Option<(u32, u32)>)> {
+        let idx = self
+            .find_node_index(node_id)
+            .ok_or_else(|| Error::SerdeError(format!("unknown node id {node_id}")))?;
+        let row = self.node_row_at(idx)?;
+        let name = self.node_name_str(idx)?;
+        let start_byte = (row.start_byte != NodeRow::START_BYTE_NONE).then_some(row.start_byte);
+        let ext_bytes = self.extension_bytes_at(idx)?;
+        let (end_byte, overflow, token_len) = decode_extension_span_tail(ext_bytes, start_byte);
+        let decl = start_byte.zip(end_byte);
+        let name_span = row.name_byte_span_parts(name, overflow, token_len);
+        Ok((decl, name_span))
     }
 
     /// Materialize a full [`PreparedGraphSnapshot`] (explicit hydrate / legacy API).
@@ -724,22 +965,14 @@ impl PreparedGraphSnapshot {
             let extension_len = ext_scratch.len() as u32;
             extensions_blob.extend_from_slice(&ext_scratch);
 
-            node_rows.push(NodeRow {
-                id: *node.id.as_bytes(),
-                node_type: node_type_to_u16(node.node_type),
-                _pad: 0,
-                name_off: name_off.off,
-                name_len: name_off.len,
-                file_path_off: file_path_off.off,
-                file_path_len: file_path_off.len,
-                signature_off: signature_off.off,
-                signature_len: signature_off.len,
-                start_line: node.start_line.unwrap_or(0) as u32,
-                end_line: node.end_line.unwrap_or(0) as u32,
+            node_rows.push(node_to_row(
+                node,
+                name_off,
+                file_path_off,
+                signature_off,
                 extension_off,
                 extension_len,
-                _pad_end: 0,
-            });
+            ));
         }
 
         let mut edge_rows = Vec::with_capacity(self.edges.len());
@@ -1024,7 +1257,7 @@ fn encode_node_row(row: &NodeRow) -> [u8; NODE_ROW_SIZE] {
     let mut buf = [0u8; NODE_ROW_SIZE];
     buf[0..16].copy_from_slice(&row.id);
     buf[16..18].copy_from_slice(&row.node_type.to_le_bytes());
-    buf[18..20].copy_from_slice(&row._pad.to_le_bytes());
+    buf[18..20].copy_from_slice(&row.name_rel_offset.to_le_bytes());
     buf[20..24].copy_from_slice(&row.name_off.to_le_bytes());
     buf[24..28].copy_from_slice(&row.name_len.to_le_bytes());
     buf[28..32].copy_from_slice(&row.file_path_off.to_le_bytes());
@@ -1035,7 +1268,7 @@ fn encode_node_row(row: &NodeRow) -> [u8; NODE_ROW_SIZE] {
     buf[48..52].copy_from_slice(&row.end_line.to_le_bytes());
     buf[52..56].copy_from_slice(&row.extension_off.to_le_bytes());
     buf[56..60].copy_from_slice(&row.extension_len.to_le_bytes());
-    buf[60..64].copy_from_slice(&row._pad_end.to_le_bytes());
+    buf[60..64].copy_from_slice(&row.start_byte.to_le_bytes());
     buf
 }
 
@@ -1154,8 +1387,7 @@ pub(crate) fn node_type_to_u16(t: NodeType) -> u16 {
         NodeType::PuppetVariable => 33,
         NodeType::PuppetFact => 34,
         NodeType::Annotation => 35,
-        NodeType::KantraRuleset => 36,
-        NodeType::KantraRule => 37,
+        // 36/37 were KantraRuleset/KantraRule (retired); do not reuse.
         NodeType::PuppetNode => 38,
     }
 }
@@ -1198,8 +1430,12 @@ pub(crate) fn node_type_from_u16(v: u16) -> Result<NodeType> {
         33 => NodeType::PuppetVariable,
         34 => NodeType::PuppetFact,
         35 => NodeType::Annotation,
-        36 => NodeType::KantraRuleset,
-        37 => NodeType::KantraRule,
+        // Retired KantraRuleset (36) / KantraRule (37) — reserved slots; PuppetNode stays 38.
+        36 | 37 => {
+            return Err(Error::SerdeError(format!(
+                "retired node type code {v} (former KantraRuleset/KantraRule)"
+            )));
+        }
         38 => NodeType::PuppetNode,
         _ => return Err(Error::SerdeError(format!("unknown node type code {v}"))),
     })
@@ -1274,10 +1510,37 @@ pub(crate) fn append_node_columnar_prehashed(
         }
     };
 
-    node_rows.push(NodeRow {
+    node_rows.push(node_to_row(
+        node,
+        name_off,
+        file_path_off,
+        signature_off,
+        extension_off,
+        extension_len,
+    ));
+
+    name_index
+        .entry(node.name.to_string())
+        .or_default()
+        .push(node.id);
+    type_index.entry(node.node_type).or_default().push(node.id);
+    Ok(())
+}
+
+fn node_to_row(
+    node: &Node,
+    name_off: StrRef,
+    file_path_off: StrRef,
+    signature_off: StrRef,
+    extension_off: u32,
+    extension_len: u32,
+) -> NodeRow {
+    let name_rel_offset = node.name_rel_offset.unwrap_or(NodeRow::NAME_REL_NONE);
+    let start_byte = node.start_byte.unwrap_or(NodeRow::START_BYTE_NONE);
+    NodeRow {
         id: *node.id.as_bytes(),
         node_type: node_type_to_u16(node.node_type),
-        _pad: 0,
+        name_rel_offset,
         name_off: name_off.off,
         name_len: name_off.len,
         file_path_off: file_path_off.off,
@@ -1288,15 +1551,8 @@ pub(crate) fn append_node_columnar_prehashed(
         end_line: node.end_line.unwrap_or(0) as u32,
         extension_off,
         extension_len,
-        _pad_end: 0,
-    });
-
-    name_index
-        .entry(node.name.to_string())
-        .or_default()
-        .push(node.id);
-    type_index.entry(node.node_type).or_default().push(node.id);
-    Ok(())
+        start_byte,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1755,6 +2011,11 @@ mod tests {
         assert_eq!(edge_type_to_u8(EdgeType::Injects), 33);
         assert_eq!(edge_type_to_u8(EdgeType::CoChangesWith), 47);
         assert_eq!(node_type_to_u16(NodeType::Annotation), 35);
+        assert_eq!(node_type_to_u16(NodeType::PuppetNode), 38);
+        assert!(node_type_from_u16(36).is_err());
+        assert!(node_type_from_u16(37).is_err());
+        assert!(edge_type_from_u8(30).is_err());
+        assert_eq!(edge_type_to_u8(EdgeType::Overrides), 31);
     }
 
     #[test]

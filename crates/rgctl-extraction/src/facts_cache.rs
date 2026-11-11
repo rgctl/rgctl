@@ -336,6 +336,7 @@ mod tests {
                 modifiers: vec![],
                 documentation: None,
                 metadata: serde_json::Value::Null,
+                ..Default::default()
             }],
             vec![],
         )

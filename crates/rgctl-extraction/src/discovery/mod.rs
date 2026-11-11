@@ -41,6 +41,7 @@ impl Default for DiscoveryConfig {
                 "**/dist-*/**".to_string(),
                 "**/.next/**".to_string(),
                 "**/node_modules/**".to_string(),
+                "**/bower_components/**".to_string(),
                 "**/target/**".to_string(),
             ],
             languages: None,

@@ -1,4 +1,0 @@
-name: rgctl-fixture-rules
-description: Minimal Kantra rules for rgctl integration tests
-labels:
-  - konveyor.io/source=multi

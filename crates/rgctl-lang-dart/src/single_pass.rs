@@ -202,6 +202,7 @@ fn push_type_symbol(
             "language": "dart",
             "kind": kind_meta,
         }),
+        ..Default::default()
     });
     ctx.enter_scope(
         scope_kind,
@@ -246,6 +247,7 @@ fn push_function(
             "language": "dart",
             "kind": kind_meta,
         }),
+        ..Default::default()
     });
     ctx.enter_scope(
         ScopeKind::Function,
@@ -421,6 +423,7 @@ pub fn extract_all_single_pass(
                                     "language": "dart",
                                     "kind": "type_alias",
                                 }),
+                                ..Default::default()
                             });
                         }
                     }
@@ -449,6 +452,7 @@ pub fn extract_all_single_pass(
                                     "language": "dart",
                                     "kind": "enum_constant",
                                 }),
+                                ..Default::default()
                             });
                         }
                     }
@@ -514,6 +518,7 @@ pub fn extract_all_single_pass(
                                         "language": "dart",
                                         "kind": meta,
                                     }),
+                                    ..Default::default()
                                 });
                             } else {
                                 pushed_scope = push_function(
@@ -562,6 +567,7 @@ pub fn extract_all_single_pass(
                                             "language": "dart",
                                             "kind": "import",
                                         }),
+                                        ..Default::default()
                                     });
                                 }
                             }
@@ -581,6 +587,7 @@ pub fn extract_all_single_pass(
                                     "language": "dart",
                                     "kind": "import",
                                 }),
+                                ..Default::default()
                             });
                         }
                     }

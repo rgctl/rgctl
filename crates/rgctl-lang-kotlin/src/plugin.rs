@@ -5,6 +5,7 @@
 use crate::single_pass::{extract_all_single_pass, kotlin_ast_handlers};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::path::Path;
 use tree_sitter::Node;
 
@@ -342,7 +343,7 @@ impl KotlinPlugin {
                 });
             }
         }
-        symbols.push(Symbol {
+        let mut symbol = Symbol {
             name: type_simple.clone(),
             symbol_type: SymbolType::Function,
             qualified_name: Some(format!("{type_qn}.<init>")),
@@ -361,7 +362,14 @@ impl KotlinPlugin {
                 "is_constructor": true,
                 "primary": is_primary,
             }),
-        });
+            ..Default::default()
+        };
+        record_symbol_spans(
+            &mut symbol,
+            ctor_node,
+            ctor_node.child_by_field_name("name"),
+        );
+        symbols.push(symbol);
         // Attach primary-ctor fields onto the class symbol if we already emitted it —
         // handled when emitting the class by merging class_parameters.
         let _ = fields;
@@ -416,7 +424,7 @@ impl KotlinPlugin {
             }
         }
 
-        symbols.push(Symbol {
+        let mut symbol = Symbol {
             name: simple.clone(),
             symbol_type,
             qualified_name: Some(qn.clone()),
@@ -434,7 +442,10 @@ impl KotlinPlugin {
                 "language": "kotlin",
                 "kind": kind_meta,
             }),
-        });
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbols.push(symbol);
 
         let mut c2 = node.walk();
         for child in node.children(&mut c2) {
@@ -484,7 +495,7 @@ impl KotlinPlugin {
             .and_then(|n| n.utf8_text(source).ok())
             .map(|s| s.trim().to_string());
         let parameters = self.extract_parameters(node, source);
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qn),
@@ -499,7 +510,10 @@ impl KotlinPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "kotlin" }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Some(symbol)
     }
 
     /// Synthetic function symbol for `lambda_literal` / `anonymous_function`.
@@ -520,7 +534,7 @@ impl KotlinPlugin {
             Self::qualify(package, &format!("{}.{}", type_path.join("."), name))
         };
         let parameters = self.extract_parameters(node, source);
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qn),
@@ -539,7 +553,10 @@ impl KotlinPlugin {
                 "is_lambda": kind_tag == "lambda",
                 "is_anonymous_function": kind_tag == "anon_fn",
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Some(symbol)
     }
 
     /// Anonymous `object : Type { ... }` literal.
@@ -558,7 +575,7 @@ impl KotlinPlugin {
         } else {
             Self::qualify(package, &format!("{}.{}", type_path.join("."), name))
         };
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Class,
             qualified_name: Some(qn),
@@ -576,7 +593,10 @@ impl KotlinPlugin {
                 "language": "kotlin",
                 "is_object_literal": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Some(symbol)
     }
 
     /// Class `init { ... }` block.
@@ -595,7 +615,7 @@ impl KotlinPlugin {
         } else {
             Self::qualify(package, &format!("{}.{}", type_path.join("."), name))
         };
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qn),
@@ -610,10 +630,147 @@ impl KotlinPlugin {
                 "language": "kotlin",
                 "is_initializer": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Some(symbol)
     }
 
-    /// `@Ann` / `@file:Ann` → `AnnotatedWith` from nearest enclosing symbol.
+    fn root_package_name(node: Node, source: &[u8]) -> Option<String> {
+        let mut root = node;
+        while let Some(p) = root.parent() {
+            root = p;
+        }
+        Self::package_name(root, source)
+    }
+
+    fn resolve_annotated_target_qn(
+        &self,
+        node: Node,
+        source: &[u8],
+        symbols: &[Symbol],
+    ) -> Option<String> {
+        let mut cur = Some(node);
+        let mut target_decl = None;
+        while let Some(n) = cur {
+            match n.kind() {
+                "function_declaration"
+                | "class_declaration"
+                | "object_declaration"
+                | "companion_object"
+                | "property_declaration"
+                | "primary_constructor"
+                | "secondary_constructor" => {
+                    target_decl = Some(n);
+                    break;
+                }
+                "prefix_expression" => {
+                    let mut c = n.walk();
+                    if let Some(child_decl) = n.children(&mut c).find(|ch| {
+                        matches!(
+                            ch.kind(),
+                            "function_declaration"
+                                | "class_declaration"
+                                | "object_declaration"
+                                | "property_declaration"
+                        )
+                    }) {
+                        target_decl = Some(child_decl);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            if let Some(parent) = n.parent()
+                && matches!(parent.kind(), "class_body" | "source_file" | "statements")
+            {
+                let mut sib = n.next_named_sibling();
+                while let Some(s) = sib {
+                    if matches!(
+                        s.kind(),
+                        "function_declaration"
+                            | "class_declaration"
+                            | "object_declaration"
+                            | "property_declaration"
+                    ) {
+                        target_decl = Some(s);
+                        break;
+                    }
+                    sib = s.next_named_sibling();
+                }
+                if target_decl.is_some() {
+                    break;
+                }
+            }
+            cur = n.parent();
+        }
+
+        if let Some(decl) = target_decl {
+            let pkg = Self::root_package_name(decl, source);
+            match decl.kind() {
+                "function_declaration" => {
+                    if let Some(sym) = self.emit_function(decl, source, "", pkg.as_deref()) {
+                        return sym.qualified_name.or(Some(sym.name));
+                    }
+                }
+                "class_declaration" | "object_declaration" | "companion_object" => {
+                    let simple = if decl.kind() == "companion_object" {
+                        Self::type_name(decl, source).unwrap_or_else(|| "Companion".to_string())
+                    } else {
+                        Self::type_name(decl, source)?
+                    };
+                    let mut type_path = Self::enclosing_type_path(decl, source);
+                    if type_path.last() != Some(&simple) {
+                        type_path.push(simple);
+                    }
+                    return Some(Self::qualify(pkg.as_deref(), &type_path.join(".")));
+                }
+                "primary_constructor" | "secondary_constructor" => {
+                    let type_path = Self::enclosing_type_path(decl, source);
+                    if !type_path.is_empty() {
+                        return Some(Self::qualify(
+                            pkg.as_deref(),
+                            &format!("{}.<init>", type_path.join(".")),
+                        ));
+                    }
+                }
+                "property_declaration" => {
+                    let decl_line = decl.start_position().row + 1;
+                    if let Some(sym) = symbols
+                        .iter()
+                        .rev()
+                        .find(|s| s.location.start_line == decl_line)
+                    {
+                        return sym
+                            .qualified_name
+                            .clone()
+                            .or_else(|| Some(sym.name.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        symbols
+            .iter()
+            .rev()
+            .find(|s| {
+                matches!(
+                    s.symbol_type,
+                    SymbolType::Class
+                        | SymbolType::Interface
+                        | SymbolType::Struct
+                        | SymbolType::Enum
+                        | SymbolType::Module
+                        | SymbolType::Function
+                        | SymbolType::Method
+                        | SymbolType::Variable
+                ) && s.metadata.get("is_constructor") != Some(&serde_json::json!(true))
+            })
+            .and_then(|s| s.qualified_name.clone().or_else(|| Some(s.name.clone())))
+    }
+
+    /// `@Ann` / `@file:Ann` → `AnnotatedWith` from nearest enclosing declaration.
     pub(crate) fn emit_annotation_relation(
         &self,
         node: Node,
@@ -633,18 +790,22 @@ impl KotlinPlugin {
         if ann.is_empty() {
             return;
         }
-        let from = symbols
-            .last()
-            .and_then(|s| s.qualified_name.clone().or_else(|| Some(s.name.clone())))
+        let from = self
+            .resolve_annotated_target_qn(node, source, symbols)
             .unwrap_or_else(|| file_path.to_string_lossy().into_owned());
+        let mut metadata = serde_json::json!({ "language": "kotlin" });
+        if let Some(paren) = text.find('(') {
+            metadata["arguments"] = serde_json::Value::String(text[paren..].to_string());
+        }
         relations.push(Relation {
             from,
             to: ann.to_string(),
             relation_type: RelationType::AnnotatedWith,
             location: Self::loc(&file_path.to_string_lossy(), node),
-            metadata: serde_json::json!({ "language": "kotlin" }),
+            metadata,
             to_qualified_hint: Some(ann.to_string()),
             to_type_hint: None,
+            ..Default::default()
         });
     }
 
@@ -687,6 +848,7 @@ impl KotlinPlugin {
             }),
             to_qualified_hint: Some(to.to_string()),
             to_type_hint: None,
+            ..Default::default()
         });
     }
 
@@ -707,7 +869,7 @@ impl KotlinPlugin {
             return;
         }
         let simple = imported.rsplit('.').next().unwrap_or(imported).to_string();
-        symbols.push(Symbol {
+        let mut symbol = Symbol {
             name: simple,
             symbol_type: SymbolType::Import,
             qualified_name: Some(imported.to_string()),
@@ -719,7 +881,10 @@ impl KotlinPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "kotlin" }),
-        });
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbols.push(symbol);
     }
 
     fn symbols_from_tree(
@@ -876,6 +1041,7 @@ impl KotlinPlugin {
             metadata: serde_json::json!({ "language": "kotlin" }),
             to_qualified_hint: Some(to_name.to_string()),
             to_type_hint: None,
+            ..Default::default()
         });
     }
 
@@ -1086,5 +1252,44 @@ data class User(val email: String)
             "expected email field: {:?}",
             class.fields
         );
+    }
+
+    #[test]
+    fn annotation_arguments_on_annotated_with() {
+        let src = br#"
+package com.example
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.RestController
+@RestController
+class UserController(val repo: String) {
+  @GetMapping("/users")
+  fun list(): String = "ok"
+}
+"#;
+        let plugin = KotlinPlugin::new().unwrap();
+        let all = plugin
+            .extract_all(Path::new("UserController.kt"), src)
+            .unwrap();
+        let cls_ann = all
+            .relations
+            .iter()
+            .find(|r| {
+                r.relation_type == RelationType::AnnotatedWith && r.to.contains("RestController")
+            })
+            .expect("AnnotatedWith RestController");
+        assert_eq!(cls_ann.from, "com.example.UserController");
+
+        let ann = all
+            .relations
+            .iter()
+            .find(|r| r.relation_type == RelationType::AnnotatedWith && r.to.contains("GetMapping"))
+            .expect("AnnotatedWith GetMapping");
+        assert_eq!(
+            ann.metadata.get("arguments").and_then(|v| v.as_str()),
+            Some("(\"/users\")"),
+            "expected arguments metadata: {:?}",
+            ann.metadata
+        );
+        assert_eq!(ann.from, "com.example.UserController.list");
     }
 }

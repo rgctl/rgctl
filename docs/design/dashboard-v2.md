@@ -19,7 +19,7 @@ v2's job is **not** more graph. It is to convert existing, already-correct engin
 
 A live audit of the shipping dashboard (indexing a 5,345-node / 11,801-edge TypeScript repo) found:
 
-- All six deep-analysis views (**CFG, Dataflow, Slice, Blast, Taint, Kantra**) render blank on arrival and need manual multi-step selection before showing anything.
+- All five deep-analysis views (**CFG, Dataflow, Slice, Blast, Taint**) render blank on arrival and need manual multi-step selection before showing anything.
 - The two views that *do* render on load (Graph, Migration) open to unreadable overlapping node piles.
 - The always-visible stat row renders **"Filtered Nodes" with an identical value to "Total Nodes"** (`dashboard/src/App.tsx:98` and `:104` both read `manifest?.graph.node_count`).
 - The Metrics columns in the Functions table read `—` for every row on a real repo, and the dashboard does not say why.

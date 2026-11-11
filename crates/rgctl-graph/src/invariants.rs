@@ -113,7 +113,6 @@ fn is_container(nt: NodeType) -> bool {
             | NodeType::PuppetClass
             | NodeType::PuppetDefinedType
             | NodeType::PuppetNode
-            | NodeType::KantraRuleset
             | NodeType::ChefCookbook
             | NodeType::AnsiblePlaybook
             | NodeType::AnsiblePlay

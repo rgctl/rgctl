@@ -82,7 +82,7 @@ rgctl install --skill --tools cursor,claude,codex,antigravity,agents
 
 <p align="center">
   <a href="docs/videos/user-guide-cli.mp4">
-    <img src="docs/videos/user-guide-cli.gif" alt="rgctl CLI showcase — discover, blast-radius, communities, CPG slicing, clones, semantic search, Kantra & agent skills" width="100%" />
+    <img src="docs/videos/user-guide-cli.gif" alt="rgctl CLI showcase — discover, blast-radius, communities, CPG slicing, clones, semantic search & agent skills" width="100%" />
   </a>
 </p>
 
@@ -176,7 +176,7 @@ Commands are organized into six groups (`rgctl --help`). Full flag tables: **[CL
 
 | Group | You need… | Command |
 |-------|-----------|---------|
-| **Lifecycle** | Index, incremental refresh, multi-repo merge, Universe UI | `discover` (`--full`, `--with-cfg`, `--with-universe`, `--with-git`, `--scip`, `--with-kantra`), `status`, `update`, `watch`, `merge`, `serve`, `diff` |
+| **Lifecycle** | Index, incremental refresh, multi-repo merge, Universe UI | `discover` (`--full`, `--with-cfg`, `--with-universe`, `--with-git`, `--scip`), `status`, `update`, `watch`, `merge`, `serve`, `diff` |
 | **Query** | Find symbols, callers, callees, typed edges, GQL | `find`, `inventory`, `callers`, `callees`, `relations` (`-e overrides` / `cochangeswith` / `exposesroute` / `injects` / …), `gql` |
 | **Analysis** | Upstream impact (“what breaks if I edit X?”) | `blast-radius` |
 | **Analysis** | CFG / PDG / dominance / slices (lazy single-function v3 archive) | `slice` (`--with-alias`, `--taint`), `inspect`, `cpg` (`flows` / `calls` / `status` lazy; `mutations` needs `--with-cfg`) |
@@ -184,10 +184,10 @@ Commands are organized into six groups (`rgctl --help`). Full flag tables: **[CL
 | **Analysis** | FastPageRank hotspots, Fast-Leiden communities, git churn | `metrics` (`--pagerank`, `--communities`, `--churn`), `communities` (`list`, `label`) |
 | **Analysis** | Natural-language search over functions or docs | `semantic` (`index`, `query`) |
 | **Security** | OSV advisories, lockfile deps, sink-first & on-demand taint | `vuln`, `deps`, `security`, `taint` |
-| **Policy** | PR call-path deltas, composed review & CI blast-radius gates | `review paths`, `review check` (`pr-check` alias), `review export`, `check`, `rules` |
+| **Policy** | PR call-path deltas, composed review & CI blast-radius gates | `review paths`, `review check` (`pr-check` alias), `review export`, `check` |
 | **Meta** | Snapshot export, agent pack install, shell completions, help | `export`, `install`, `completions`, `help` |
 
-Highlights: single-pass `KindDispatchTable` + `ScopeStack` AST engine, content-addressed `FileFacts` cache + `rgctl watch`, cross-language C3 MRO (`relations -e overrides`), framework route & DI extraction (`ExposesRoute`, `Injects`), Konveyor Kantra rules (`discover --with-kantra`) & migration roadmaps (`--export-migration-hints`), SCIP overlay (`discover --scip`), git co-change (`discover --with-git` → `metrics --churn` / `relations -e cochangeswith`), park-and-resolve multi-repo merge (`rgctl merge`), Fast-Leiden + $\mu+4\sigma$ hub stripping, pull-based CSR FastPageRank with `NodeRole` filtering, lazy v3 `cfg_pdg.bin` slicing, Type-3/4 fragment clones, and the Universe spatial architecture dashboard (`discover --with-universe` → `rgctl serve --open`).
+Highlights: single-pass `KindDispatchTable` + `ScopeStack` AST engine, content-addressed `FileFacts` cache + `rgctl watch`, cross-language C3 MRO (`relations -e overrides`), framework route & DI extraction (`ExposesRoute`, `Injects`), migration roadmaps (`--export-migration-hints`), SCIP overlay (`discover --scip`), git co-change (`discover --with-git` → `metrics --churn` / `relations -e cochangeswith`), park-and-resolve multi-repo merge (`rgctl merge`), Fast-Leiden + $\mu+4\sigma$ hub stripping, pull-based CSR FastPageRank with `NodeRole` filtering, lazy v3 `cfg_pdg.bin` slicing, Type-3/4 fragment clones, and the Universe spatial architecture dashboard (`discover --with-universe` → `rgctl serve --open`).
 
 - **CLI command reference:** **[cli command reference](https://rgctl.io/docs/guides/cli-command-reference/)**
 - **Step-by-step feature guides:** **[Guides](https://rgctl.io/docs/guides/)** ([rgctl-website](https://github.com/rgctl/rgctl-website))
@@ -212,7 +212,7 @@ Each plugin’s AST or query coverage is rendered at [rgctl.io/docs/languages/](
 We welcome contributors across four tracks — see **[CONTRIBUTING.md](CONTRIBUTING.md)** to get started:
 
 1. **Language Plugins & AST Coverage:** Add or deepen tree-sitter extractors ([contributor-checklist.md](docs/contributor-checklist.md), [language-testing-guide.md](docs/language-testing-guide.md)).
-2. **Declarative Taint & Kantra Rules:** Expand security source/sink/sanitizer rules and migration rule packs ([Vulnerability and Osv Analysis](https://rgctl.io/docs/guides/vulnerability-and-osv-analysis/)).
+2. **Declarative Taint Rules:** Expand security source/sink/sanitizer rules ([Vulnerability and Osv Analysis](https://rgctl.io/docs/guides/vulnerability-and-osv-analysis/)).
 3. **Agent Host Adapters & Skills:** Improve agent workflows, slash commands, and IDE host adapters ([Agent Skill](https://rgctl.io/docs/guides/agent-skill/)).
 4. **Graph & CPG Algorithms:** Work on CSR projections, reachability, dominance, SESE clone detection, and columnar storage ([analysis-architecture.md](docs/analysis-architecture.md), [graph-storage-architecture.md](docs/graph-storage-architecture.md)).
 

@@ -439,12 +439,31 @@ impl GraphBuilder {
             return *id;
         }
 
+        let start_byte = prep.and_then(|p| p.start_byte).or(symbol.start_byte);
+        let end_byte = prep.and_then(|p| p.end_byte).or(symbol.end_byte);
+        let name_rel_offset = prep
+            .and_then(|p| p.name_rel_offset)
+            .or(symbol.name_rel_offset);
+        let name_token_len = prep
+            .and_then(|p| p.name_token_len)
+            .or(symbol.name_token_len);
+        let name_span_overflow = prep
+            .and_then(|p| p.name_span_overflow)
+            .or(symbol.name_span_overflow);
+
         let mut node = Node::new(
             symbol_type_to_node_type(symbol.symbol_type),
             symbol.name.clone(),
         )
         .with_file_path(symbol.location.file.clone())
-        .with_location(symbol.location.start_line, symbol.location.end_line);
+        .with_location(symbol.location.start_line, symbol.location.end_line)
+        .with_byte_spans(
+            start_byte,
+            end_byte,
+            name_rel_offset,
+            name_token_len,
+            name_span_overflow,
+        );
 
         if let Some(qn) = &symbol.qualified_name {
             node = node.with_qualified_name(qn.clone());
@@ -2451,6 +2470,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
+            ..Default::default()
         }
     }
 
@@ -2478,6 +2498,7 @@ mod tests {
             modifiers: vec!["public".into()],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         let method = Symbol {
             name: "bar".to_string(),
@@ -2497,6 +2518,7 @@ mod tests {
             modifiers: vec!["public".into()],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&annotation, marker_file);
         builder.add_symbol(&method, foo_file);
@@ -2515,6 +2537,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2549,6 +2572,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&method, file_id);
         builder
@@ -2566,6 +2590,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: Some("java.lang.String".to_string()),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2608,6 +2633,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&class, file_id);
         builder.build_resolution_indexes();
@@ -2626,6 +2652,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2668,6 +2695,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&class, file_id);
         builder.build_resolution_indexes();
@@ -2688,6 +2716,7 @@ mod tests {
                     "org.springframework.security.core.userdetails.UserDetailsService".to_string(),
                 ),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2730,6 +2759,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&class, file_id);
         builder.build_resolution_indexes();
@@ -2748,6 +2778,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2789,6 +2820,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&module, file_id);
         builder
@@ -2806,6 +2838,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: Some("java.base".to_string()),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2848,6 +2881,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&method, file_id);
         builder
@@ -2865,6 +2899,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2908,6 +2943,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "c" }),
+            ..Default::default()
         };
         let defn = Symbol {
             location: SourceLocation {
@@ -2937,6 +2973,7 @@ mod tests {
             metadata: serde_json::json!({ "language": "c" }),
             to_qualified_hint: None,
             to_type_hint: None,
+            ..Default::default()
         };
         let before = builder.edge_count();
         builder.add_relation(&rel).unwrap();
@@ -2966,6 +3003,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "cpp" }),
+            ..Default::default()
         };
         let order_create = Symbol {
             name: "order_create".to_string(),
@@ -2985,6 +3023,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "cpp" }),
+            ..Default::default()
         };
         builder.add_symbol(&checkout, checkout_file);
         builder.add_symbol(&order_create, repo_file);
@@ -3004,6 +3043,7 @@ mod tests {
             metadata: serde_json::json!({ "language": "cpp" }),
             to_qualified_hint: Some("ecommerce::repositories::order_create".to_string()),
             to_type_hint: None,
+            ..Default::default()
         };
         let before = builder.edge_count();
         builder.add_relation(&rel).unwrap();
@@ -3033,6 +3073,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         }
     }
 
@@ -3063,6 +3104,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: Some("User.email".to_string()),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
         assert_eq!(
@@ -3091,6 +3133,7 @@ mod tests {
             metadata: serde_json::json!({ "language": "java" }),
             to_qualified_hint: Some("User.email".to_string()),
             to_type_hint: None,
+            ..Default::default()
         };
         let calls = Relation {
             from: "AuthService.register".to_string(),
@@ -3100,6 +3143,7 @@ mod tests {
             metadata: serde_json::json!({ "language": "java" }),
             to_qualified_hint: None,
             to_type_hint: None,
+            ..Default::default()
         };
 
         for order_refs_first in [true, false] {
@@ -3116,6 +3160,7 @@ mod tests {
                     metadata: serde_json::json!({ "language": "java" }),
                     to_qualified_hint: Some("User.email".to_string()),
                     to_type_hint: None,
+                    ..Default::default()
                 })
                 .unwrap();
             let stub_id = builder
@@ -3169,6 +3214,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         let enc_file = builder.ensure_file_node(Path::new("PasswordEncoder.java"));
         builder.add_symbol(&callee, enc_file);
@@ -3183,6 +3229,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
         assert_eq!(builder.edge_count(), before + 1);
@@ -3211,6 +3258,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java", "is_lambda": true }),
+            ..Default::default()
         };
         let current_lambda = Symbol {
             name: "$lambda$0".to_string(),
@@ -3230,6 +3278,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java", "is_lambda": true }),
+            ..Default::default()
         };
         let id_a = builder.add_symbol(&login_lambda, file_id);
         let id_b = builder.add_symbol(&current_lambda, file_id);
@@ -3266,6 +3315,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&method, file_id);
         for _ in 0..2 {
@@ -3284,6 +3334,7 @@ mod tests {
                     metadata: serde_json::json!({ "language": "java" }),
                     to_qualified_hint: Some("java.lang.String".to_string()),
                     to_type_hint: None,
+                    ..Default::default()
                 })
                 .unwrap();
         }
@@ -3321,6 +3372,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "kind": "heading" }),
+            ..Default::default()
         };
         builder.add_symbol(&heading, guide_id);
         builder.build_resolution_indexes();
@@ -3339,6 +3391,7 @@ mod tests {
                 metadata: serde_json::json!({ "kind": "markdown_link" }),
                 to_qualified_hint: Some("docs/adr.md".to_string()),
                 to_type_hint: Some("file".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -3382,6 +3435,7 @@ mod tests {
                 metadata: serde_json::json!({ "kind": "markdown_link" }),
                 to_qualified_hint: Some("docs/adr.md".to_string()),
                 to_type_hint: Some("file".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -3410,6 +3464,7 @@ mod tests {
                 metadata: serde_json::json!({ "kind": "markdown_link" }),
                 to_qualified_hint: Some("docs/missing.md".to_string()),
                 to_type_hint: Some("file".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -3457,6 +3512,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "kind": "heading", "level": 1 }),
+            ..Default::default()
         };
         let checkout_id = builder.add_symbol(&checkout, guide_id);
         builder.build_resolution_indexes();
@@ -3475,6 +3531,7 @@ mod tests {
                 metadata: serde_json::json!({ "kind": "markdown_link" }),
                 to_qualified_hint: Some("src/CheckoutService.java".to_string()),
                 to_type_hint: Some("file".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -3509,6 +3566,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&method, file_id);
         builder.build_resolution_indexes();
@@ -3528,6 +3586,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
         assert_eq!(builder.node_count(), before);
@@ -3564,6 +3623,7 @@ mod tests {
                 modifiers: vec![],
                 documentation: None,
                 metadata: serde_json::json!({ "language": "java" }),
+                ..Default::default()
             },
             file_id,
         );
@@ -3583,6 +3643,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java", "throws": true }),
                 to_qualified_hint: Some("java.io.IOException".to_string()),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
         assert!(
@@ -3621,6 +3682,7 @@ mod tests {
                 modifiers: vec![],
                 documentation: None,
                 metadata: serde_json::json!({ "language": "puppet" }),
+                ..Default::default()
             },
             file_id,
         );
@@ -3640,6 +3702,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "puppet" }),
                 to_qualified_hint: Some("Package[nginx]".to_string()),
                 to_type_hint: Some("puppetresource".to_string()),
+                ..Default::default()
             })
             .unwrap();
         assert!(
@@ -3674,6 +3737,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: Some("com.foo.Builder".to_string()),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
         builder
@@ -3691,6 +3755,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: Some("org.bar.Builder".to_string()),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
         let stubs: Vec<_> = builder
@@ -3840,6 +3905,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
+            ..Default::default()
         }
     }
 
@@ -3947,6 +4013,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
+            ..Default::default()
         };
         builder.add_symbol(&symbol, file_id);
         assert!(
@@ -3985,6 +4052,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
+            ..Default::default()
         };
         builder.add_symbol(&symbol, file_id);
         builder.build_resolution_indexes();
@@ -4038,6 +4106,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
+            ..Default::default()
         }
     }
 
@@ -4075,6 +4144,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "python" }),
                 to_qualified_hint: Some("Base".to_string()),
                 to_type_hint: Some("class".to_string()),
+                ..Default::default()
             })
             .unwrap();
         builder.emit_mro_overrides();
@@ -4124,6 +4194,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "python" }),
                 to_qualified_hint: Some("Base".to_string()),
                 to_type_hint: Some("class".to_string()),
+                ..Default::default()
             })
             .unwrap();
         builder
@@ -4141,6 +4212,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "python" }),
                 to_qualified_hint: Some("Child.run".to_string()),
                 to_type_hint: Some("Child".to_string()),
+                ..Default::default()
             })
             .unwrap();
         let (_, edges) = builder.into_graph();
@@ -4180,6 +4252,7 @@ mod tests {
                 modifiers: vec![],
                 documentation: None,
                 metadata: serde_json::json!({}),
+                ..Default::default()
             },
             mod_file,
         );
@@ -4201,6 +4274,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "ruby" }),
                 to_qualified_hint: Some("Walkable".to_string()),
                 to_type_hint: Some("module".to_string()),
+                ..Default::default()
             })
             .unwrap();
         builder
@@ -4218,6 +4292,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "ruby" }),
                 to_qualified_hint: Some("Dog#bark".to_string()),
                 to_type_hint: Some("Dog".to_string()),
+                ..Default::default()
             })
             .unwrap();
         let (_, edges) = builder.into_graph();
@@ -4251,6 +4326,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "python" }),
+            ..Default::default()
         };
         builder.add_symbol(&handler, file_id);
         builder.build_resolution_indexes();
@@ -4274,6 +4350,7 @@ mod tests {
                 }),
                 to_qualified_hint: Some("route::GET /api/users/{id}".to_string()),
                 to_type_hint: Some("route".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -4314,6 +4391,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         let service = Symbol {
             name: "OrderService".to_string(),
@@ -4333,6 +4411,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&controller, file_id);
         builder.add_symbol(&service, file_id);
@@ -4355,6 +4434,7 @@ mod tests {
                 }),
                 to_qualified_hint: None,
                 to_type_hint: Some("class".to_string()),
+                ..Default::default()
             })
             .unwrap();
 

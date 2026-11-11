@@ -11,7 +11,7 @@ use rgctl_plugin_api::{
 };
 use rgctl_plugin_helpers::{
     containing_class_name, extract_decorator_relations, extract_python_class_extends_relations,
-    extract_python_import_symbols, python_simple_type_name,
+    extract_python_import_symbols, python_simple_type_name, record_symbol_spans,
 };
 use rgctl_semantic::type_inference::TypeInferencer;
 use std::path::Path;
@@ -121,7 +121,7 @@ impl PythonPlugin {
             (raw_name, None, serde_json::json!({ "language": "python" }))
         };
 
-        Ok(Symbol {
+        let mut sym = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -146,7 +146,10 @@ impl PythonPlugin {
             modifiers,
             documentation,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut sym, node, node.child_by_field_name("name"));
+        Ok(sym)
     }
 
     fn find_containing_class_name(&self, node: Node, source: &[u8]) -> Option<String> {
@@ -294,7 +297,7 @@ impl PythonPlugin {
             message: "Class missing name".to_string(),
         })?;
 
-        Ok(Symbol {
+        let mut sym = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Class,
             qualified_name: None,
@@ -312,7 +315,10 @@ impl PythonPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "python" }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut sym, node, node.child_by_field_name("name"));
+        Ok(sym)
     }
 
     /// Extract class fields: annotated attrs, body assigns, lambdas, `self`/`cls` in methods.
@@ -721,6 +727,7 @@ impl PythonPlugin {
                             metadata: serde_json::json!({ "language": "python" }),
                             to_qualified_hint: Some(target),
                             to_type_hint: None,
+                            ..Default::default()
                         });
                     }
                 }
@@ -819,6 +826,7 @@ impl PythonPlugin {
                             metadata: meta,
                             to_qualified_hint,
                             to_type_hint,
+                            ..Default::default()
                         });
                     }
                 }

@@ -274,6 +274,7 @@ pub fn extract_all_single_pass(
                                         metadata: serde_json::json!({ "language": "javascript" }),
                                         to_qualified_hint: Some(target),
                                         to_type_hint: None,
+                                        ..Default::default()
                                     });
                                 }
                             }

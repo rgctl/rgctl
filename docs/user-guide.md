@@ -241,7 +241,7 @@ Built-in registry includes **markdown** (`rgctl-lang-markdown`): `.md` and `.mdx
 
 ### Full pipeline (`--full`)
 
-`rgctl discover PATH --full` prints an execution plan, runs a **basic** discover (queryable snapshot), reports that the initial discover is complete, then continues in the same process with `--with-cfg --with-universe --with-harmonic --with-taint --with-kantra`, then `semantic index`. Other terminals can run `find` / `inventory` after stage 1. Does **not** imply secret scanning, git churn, SCIP, or migration roadmap export (pass those flags alongside `--full` when needed).
+`rgctl discover PATH --full` prints an execution plan, runs a **basic** discover (queryable snapshot), reports that the initial discover is complete, then continues in the same process with `--with-cfg --with-universe --with-harmonic --with-taint`, then `semantic index`. Other terminals can run `find` / `inventory` after stage 1. Does **not** imply secret scanning, git churn, SCIP, or migration roadmap export (pass those flags alongside `--full` when needed).
 
 ```bash
 rgctl discover . --full
@@ -342,7 +342,6 @@ Harmonic, dashboard, migration export, security, CFG/PDG, and discover-time tain
 | `--with-harmonic` | Harmonic centrality (migration ranking) |
 | `--with-universe` | Universe dashboard bundle under `.rgctl/dashboard/` (`manifest.mode: "universe"`). Served by `rgctl serve --open`. |
 | `--export-migration-hints` | Migration roadmap JSON (alias: `--export-migration-plan`) |
-| `--with-kantra` | Konveyor Kantra rule evaluation + rules graph index (see below) |
 
 ```bash
 # Whole-repo CFG for inspect / cpg mutations / taint --sink
@@ -369,53 +368,6 @@ Example lines from that richer run:
 ```
 
 Use `--with-cfg` when you need whole-repo `inspect` richness, `cpg mutations`, or `taint --sink`. `slice` and `cpg flows` lazy-build a single function's CFG/PDG into the v3 archive on demand. Add `--with-taint` for discover-time taint flows. On large monorepos (100k+ functions) expect minutes to hours.
-
-### Kantra migration rules (`--with-kantra`)
-
-Evaluate [Konveyor Kantra](https://github.com/konveyor/kantra) rules natively against the indexed graph and source cache — no Kantra CLI, LSP, or containers. Release binaries embed the Konveyor `stable/java` catalog (~2.6k rules); `discover --with-kantra` uses it by default.
-
-```bash
-# Default: embedded catalog + eval + index rules into graph.snapshot.bin
-rgctl discover . -l java -e target --with-kantra
-
-# Migration target filter (konveyor.io/target=<NAME> labels)
-rgctl discover . -l java --with-kantra --kantra-target quarkus
-
-# CI / fixtures: override with a local ruleset directory
-rgctl discover . --with-kantra --kantra-rules tests/fixtures/kantra-rules
-
-# Dev: local konveyor/rulesets checkout instead of embedded blob
-rgctl discover . --with-kantra --kantra-catalog /path/to/rulesets/stable/java
-
-# Index rules into graph only (skip eval)
-rgctl discover . --with-kantra --kantra-index-only
-```
-
-| Flag | Purpose |
-|------|---------|
-| `--with-kantra` | Run Kantra eval and index `KantraRule` / `KantraRuleset` nodes into the session graph |
-| `--kantra-target NAME` | Evaluate only rules labeled `konveyor.io/target=NAME` |
-| `--kantra-rules DIR` | Single ruleset directory (`ruleset.yaml` + `*.yaml`); overrides embedded catalog |
-| `--kantra-catalog ROOT` | Rulesets tree (e.g. `stable/java`); overrides embedded catalog |
-| `--kantra-index-only` | Skip eval; still index catalog rules into the graph |
-
-**Artifacts:** `.rgctl/kantra_findings.json` (violations + skipped rules). Rule nodes are queryable after index:
-
-```bash
-rgctl -f json find --type kantrarule --limit 10 | jq '.returned'
-# Target filter at discover time:
-rgctl discover . --with-kantra --kantra-target quarkus
-```
-
-Konveyor labels (`konveyor.io/target`, `konveyor.io/source`, …) are stored on rule nodes; filter eval with `--kantra-target` and inspect violations in `kantra_findings.json`.
-
-**Source builds:** full embedded catalog requires the git submodule — `git submodule update --init crates/rgctl-kantra/assets/rulesets` or `./scripts/init-kantra-rulesets.sh`. Without it, the build falls back to `tests/fixtures/kantra-rules/`. See [`crates/rgctl-kantra/README.md`](../crates/rgctl-kantra/README.md).
-
-**Further reading:** [Kantra Migration Rules guide](https://rgctl.io/docs/guides/kantra-migration-rules/) (metasfresh scale walkthrough) · [Kantra integration — design & current state](design/kantra-integration-exploration.md) · [`rgctl-kantra` crate README](../crates/rgctl-kantra/README.md) · [JSON schema](json-api.md#kantra_findingsjson)
-
-Does **not** require `--with-cfg`. Unsupported rule providers and invalid regex patterns are skipped with reasons in `skipped_rules`. After full eval, `violates` edges link each `KantraRule` to matched code nodes (`rgctl relations --edge violates --from-type kantrarule`).
-
-**Dashboard:** `discover --with-kantra --with-universe` exports `kantra_index.json` and per-file violation shards. Open the Universe **Static rules** room (category + Konveyor target filters, syntax-highlighted snippets). The **Migration** room remains the strangler-fig schedule — it is not Kantra triage.
 
 ### Verbose logging and stage profiling
 
@@ -467,7 +419,6 @@ After a successful run, the layout below appears under **`{repo}/.rgctl/`**:
 ├── macro_call_index.db         # Blast-radius lookup cache (SQLite; not the graph)
 ├── macro_call_index.bin        # Same index in bincode (companion to .db)
 ├── analysis_results.bin        # Columnar analysis properties
-├── kantra_findings.json        # With --with-kantra (violations + skipped rules)
 ├── file_hashes.json            # Incremental file tracker
 ├── migration_plan.json         # With --export-migration-hints
 ├── analysis/                   # Per-function CFG/PDG/taint (with --with-cfg / --with-taint)
@@ -599,8 +550,8 @@ rgctl -r "$REPO" -f json relations clearCart --edge calls --direction in | jq '.
 
 ### Common node / edge types
 
-- Node types for `--type`: `function`, `class`, `interface`, `module`, `file`, `kantrarule`, …
-- Edge types for `--edge`: `calls`, `imports`, `contains`, `depends_on`, `implements`, `overrides`, `references`, `violates`, `cochangeswith`, …
+- Node types for `--type`: `function`, `class`, `interface`, `module`, `file`, …
+- Edge types for `--edge`: `calls`, `imports`, `contains`, `depends_on`, `implements`, `overrides`, `references`, `cochangeswith`, …
 
 ### Named communities (analysis overlay)
 
@@ -1211,9 +1162,9 @@ cd /path/to/rgctl
 export REPO="$PWD/rgctl-tests/ecommerce-java"
 cd "$REPO"
 
-# 2. Index (add CFG + dashboard + Kantra for the rest of this walkthrough)
+# 2. Index (add CFG + dashboard for the rest of this walkthrough)
 rgctl discover . -l java -e target \
-  --with-cfg --with-universe --with-harmonic --with-kantra --export-migration-hints
+  --with-cfg --with-universe --with-harmonic --export-migration-hints
 
 # 3. Explore structure
 rgctl -r "$REPO" -f json find --type function --count-only | jq '.total'
@@ -1229,12 +1180,6 @@ rgctl -r "$REPO" -f json blast-radius 'CartService::clearCart' | jq '.metrics'
 rgctl -r "$REPO" cpg status
 rgctl -r "$REPO" cpg mutations --type ShoppingCart --exclude-ctors
 rgctl -r "$REPO" blast-radius 'ShoppingCartService::priceShoppingCart'
-
-# 5b. Konveyor Kantra migration rules (optional target filter)
-rgctl -r "$REPO" -f json find --type kantrarule --limit 5 | jq '.returned'
-rgctl -r "$REPO" -f json relations --edge violates --from-type kantrarule --limit 10 | jq '.returned'
-jq '{violations: (.violations|length), evaluated_rules, target_filter}' \
-  "$REPO/.rgctl/kantra_findings.json"
 
 # 6. Architectural hotspots
 rgctl -r "$REPO" -f json metrics --communities | jq .
@@ -1260,7 +1205,7 @@ Migration hints (with `--export-migration-hints`) land under `.rgctl/migration_p
 
 | Command | Purpose |
 |---------|---------|
-| `discover` | Index repo, build `.rgctl/` artifacts (`--full` = staged CFG/Universe/harmonic/taint/Kantra + semantic) |
+| `discover` | Index repo, build `.rgctl/` artifacts (`--full` = staged CFG/Universe/harmonic/taint + semantic) |
 | `update` / `watch` / `merge` | Incremental patch; live watch; multi-repo park-and-resolve merge |
 | `find` / `callers` / `callees` / `relations` / `inventory` / `status` | Structured graph queries ([§6](#6-structured-graph-queries)); `query …` is a compatibility alias |
 | `communities` | List / refresh Fast-Leiden community labels |
@@ -1295,16 +1240,11 @@ Full taxonomy: [CLI command reference](https://rgctl.io/docs/guides/cli-command-
 | `--with-ast-skeleton` | Build AST skeleton archive for `cpg ast` |
 | `--with-harmonic` | Harmonic centrality (default off; needed for migration ranking) |
 | `--with-universe` | Universe dashboard bundle under `.rgctl/dashboard/` (default off; UI for `serve --open`) |
-| `--full` | Staged pipeline: basic discover, then CFG+Universe+harmonic+taint+Kantra, then semantic index |
+| `--full` | Staged pipeline: basic discover, then CFG+Universe+harmonic+taint, then semantic index |
 | `--export-migration-hints` | Migration roadmap JSON (alias `--export-migration-plan`) |
 | `--migration-preset` | Preset for migration hints (`hybrid`, `foundational`, …) |
 | `--migration-order` | `scheduled` (topological) or `priority` |
 | `--write-json-graph` | Also write legacy `graph.db` / `graph.json` |
-| `--with-kantra` | Konveyor Kantra eval + rules graph index (embedded catalog by default) |
-| `--kantra-target NAME` | Filter eval to `konveyor.io/target=NAME` |
-| `--kantra-rules DIR` | Override embedded catalog with one ruleset directory |
-| `--kantra-catalog ROOT` | Override embedded catalog with a rulesets tree |
-| `--kantra-index-only` | Index rules into graph; skip eval |
 
 There is no umbrella `--all` flag — combine `--with-cfg --with-security --with-taint` explicitly when you want the former deep pass.
 

@@ -8,7 +8,6 @@ import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
 import { MigrationRoom } from "./rooms/Migration";
 import { TaintRoom } from "./rooms/Taint";
-import { RulesRoom } from "./rooms/Rules";
 import { loadManifest, type FunctionEntry } from "./data";
 import { LENSES, ROOMS, keyOf, type LensId, type RoomId } from "./focus";
 import { useFocus } from "./useFocus";
@@ -181,13 +180,11 @@ export function App() {
             )}
             {room === "migration" && <MigrationRoom />}
             {room === "taint" && <TaintRoom />}
-            {room === "rules" && <RulesRoom />}
             {room !== "repo" &&
               room !== "understand" &&
               room !== "architecture" &&
               room !== "migration" &&
-              room !== "taint" &&
-              room !== "rules" && <Placeholder room={room} />}
+              room !== "taint" && <Placeholder room={room} />}
           </div>
         </main>
       </div>

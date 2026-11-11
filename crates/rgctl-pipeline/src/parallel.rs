@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Default Rayon worker stack (OS default, typically ~2 MiB on macOS).
-/// Used for extract, preload, Kantra, and other shallow work.
+/// Used for extract, preload, and other shallow work.
 const _DEFAULT_WORKER_STACK_SIZE: usize = 0; // rayon default
 
 /// CFG / field-write workers that may still hit deep native stacks before iterative

@@ -158,6 +158,7 @@ fn push_type_symbol(
             "language": "scala",
             "kind": kind_meta,
         }),
+        ..Default::default()
     });
     ctx.enter_scope(
         scope_kind,
@@ -204,6 +205,7 @@ fn push_named_symbol(
             "language": "scala",
             "kind": kind_meta,
         }),
+        ..Default::default()
     });
 }
 
@@ -354,6 +356,7 @@ pub fn extract_all_single_pass(
                                     "language": "scala",
                                     "kind": "given",
                                 }),
+                                ..Default::default()
                             });
                             ctx.enter_scope(
                                 ScopeKind::Function,
@@ -386,6 +389,7 @@ pub fn extract_all_single_pass(
                                     "language": "scala",
                                     "kind": "given",
                                 }),
+                                ..Default::default()
                             });
                             ctx.enter_scope(
                                 ScopeKind::Function,
@@ -442,6 +446,7 @@ pub fn extract_all_single_pass(
                                         "function"
                                     },
                                 }),
+                                ..Default::default()
                             });
                             ctx.enter_scope(
                                 ScopeKind::Function,
@@ -491,6 +496,7 @@ pub fn extract_all_single_pass(
                                 "language": "scala",
                                 "kind": "lambda",
                             }),
+                            ..Default::default()
                         });
                         ctx.enter_scope(
                             ScopeKind::Function,
@@ -554,6 +560,7 @@ pub fn extract_all_single_pass(
                                     "language": "scala",
                                     "kind": keyword,
                                 }),
+                                ..Default::default()
                             });
                         }
                     }
@@ -578,6 +585,7 @@ pub fn extract_all_single_pass(
                                     }),
                                     to_qualified_hint: Some(base),
                                     to_type_hint: None,
+                                    ..Default::default()
                                 });
                             }
                         }
@@ -593,18 +601,45 @@ pub fn extract_all_single_pass(
                                     .map(|t| t.qualified_prefix.clone())
                             })
                         {
-                            if let Some(ann) = extract_name_from_node(node, source).ok().flatten() {
+                            // tree-sitter-scala uses `type_identifier` (not `identifier`) for
+                            // annotation names; `extract_name_from_node` skips those.
+                            let mut ann = None;
+                            let mut args = None;
+                            let mut c = node.walk();
+                            for ch in node.children(&mut c) {
+                                match ch.kind() {
+                                    "type_identifier" | "identifier" | "simple_identifier"
+                                        if ann.is_none() =>
+                                    {
+                                        ann = ch
+                                            .utf8_text(source)
+                                            .ok()
+                                            .map(|s| s.trim().to_string())
+                                            .filter(|s| !s.is_empty());
+                                    }
+                                    "arguments" => {
+                                        args = ch.utf8_text(source).ok().map(|s| s.to_string());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if let Some(ann) = ann {
+                                let mut metadata = serde_json::json!({
+                                    "language": "scala",
+                                    "kind": "annotation",
+                                });
+                                if let Some(a) = args {
+                                    metadata["arguments"] = serde_json::Value::String(a);
+                                }
                                 relations.push(Relation {
                                     from,
                                     to: ann.clone(),
                                     relation_type: RelationType::AnnotatedWith,
                                     location: node_to_location(node, &file_path_str),
-                                    metadata: serde_json::json!({
-                                        "language": "scala",
-                                        "kind": "annotation",
-                                    }),
+                                    metadata,
                                     to_qualified_hint: Some(ann),
                                     to_type_hint: None,
+                                    ..Default::default()
                                 });
                             }
                         }
@@ -778,6 +813,30 @@ object Foo {
             baz.qualified_name.as_deref(),
             Some("Foo.Bar.baz"),
             "method under nested type must be Foo.Bar.baz"
+        );
+    }
+
+    #[test]
+    fn scala_annotation_arguments_on_annotated_with() {
+        let src = r#"
+@SerialVersionUID(1L)
+class Foo extends Serializable
+"#;
+        let plugin = Plugin::new().unwrap();
+        let path = PathBuf::from("ann.scala");
+        let result = extract_all_single_pass(&plugin, &path, src.as_bytes()).unwrap();
+        let ann = result
+            .relations
+            .iter()
+            .find(|r| {
+                r.relation_type == RelationType::AnnotatedWith && r.to.contains("SerialVersionUID")
+            })
+            .expect("AnnotatedWith SerialVersionUID");
+        assert_eq!(
+            ann.metadata.get("arguments").and_then(|v| v.as_str()),
+            Some("(1L)"),
+            "expected arguments metadata: {:?}",
+            ann.metadata
         );
     }
 }

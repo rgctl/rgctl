@@ -293,8 +293,6 @@ fn parse_node_type(value: &str) -> Result<NodeType> {
         "puppetvariable" => Ok(NodeType::PuppetVariable),
         "puppetfact" => Ok(NodeType::PuppetFact),
         "puppetnode" => Ok(NodeType::PuppetNode),
-        "kantraruleset" | "kantra_ruleset" => Ok(NodeType::KantraRuleset),
-        "kantrarule" | "kantra_rule" => Ok(NodeType::KantraRule),
         other => Err(Error::InvalidQuery(format!("unknown node type: {other}"))),
     }
 }

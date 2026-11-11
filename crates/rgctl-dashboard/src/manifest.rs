@@ -24,31 +24,6 @@ pub struct SemanticSection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KantraSection {
-    pub available: bool,
-    pub violation_count: usize,
-    pub evaluated_rules: usize,
-    pub cache_hits: usize,
-    pub cache_misses: usize,
-    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
-    pub by_category: std::collections::HashMap<String, usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail_dir: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub catalog_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ruleset: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_filter: Option<String>,
-    #[serde(default)]
-    pub file_count: usize,
-    #[serde(default)]
-    pub rule_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardManifest {
     pub schema_version: u32,
     pub dashboard_version: String,
@@ -59,8 +34,6 @@ pub struct DashboardManifest {
     pub analysis: Option<AnalysisSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic: Option<SemanticSection>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kantra: Option<KantraSection>,
     pub metrics: MetricsSection,
     pub generated_at: String,
     /// Stable fingerprint for incremental dashboard export (semantic, not volatile UUID digest).
@@ -330,7 +303,6 @@ impl DashboardManifest {
             },
             analysis,
             semantic,
-            kantra: None,
             metrics,
             generated_at: chrono_now_rfc3339(),
             export_fingerprint: Some(export_fingerprint),

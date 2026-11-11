@@ -20,8 +20,29 @@ fn build_snapshots(nodes: usize, edges: usize) -> (TempDir, PathBuf, PathBuf) {
     let mut base_ids = Vec::with_capacity(nodes);
     let mut head_ids = Vec::with_capacity(nodes);
     for i in 0..nodes {
-        let base = Node::new(NodeType::Function, format!("fn{i}")).with_file_path("src/a.rs");
-        let head = Node::new(NodeType::Function, format!("fn{i}")).with_file_path("src/a.rs");
+        let base = Node::new(NodeType::Function, format!("fn{i}"))
+            .with_file_path("src/a.rs")
+            .with_byte_spans(
+                Some((i * 100) as u32),
+                Some((i * 100 + 60) as u32),
+                Some(3),
+                None,
+                None,
+            );
+        let head_name = if i + 1 == nodes {
+            format!("fn{i}_modified")
+        } else {
+            format!("fn{i}")
+        };
+        let head = Node::new(NodeType::Function, head_name)
+            .with_file_path("src/a.rs")
+            .with_byte_spans(
+                Some((i * 100 + 50) as u32),
+                Some((i * 100 + 110) as u32),
+                Some(3),
+                None,
+                None,
+            );
         base_ids.push(base.id);
         head_ids.push(head.id);
         base_nodes.push(base);
@@ -49,11 +70,11 @@ fn build_snapshots(nodes: usize, edges: usize) -> (TempDir, PathBuf, PathBuf) {
 }
 
 fn bench_digest_fast_path(c: &mut Criterion) {
-    let (_tmp, base_path, head_path) = build_snapshots(1_000, 4_000);
+    let (_tmp, base_path, _head_path) = build_snapshots(1_000, 4_000);
     let base = SnapshotNodeStore::open(&base_path).unwrap();
-    let head = SnapshotNodeStore::open(&head_path).unwrap();
+    let base_dup = SnapshotNodeStore::open(&base_path).unwrap();
     c.bench_function("digest_fast_path_equal", |b| {
-        b.iter(|| black_box(base.content_digest().unwrap() == head.content_digest().unwrap()))
+        b.iter(|| black_box(base.content_digest().unwrap() == base_dup.content_digest().unwrap()))
     });
 }
 

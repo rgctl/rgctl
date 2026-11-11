@@ -60,10 +60,6 @@ const K8S_WEBSITE_MARKDOWN_COLD_WALL_BASELINE_SECS: f64 = 9.0;
 const ECOMMERCE_JAVA_COLD_WALL_BASELINE_SECS: f64 = 0.36;
 /// `index_graph_build` stage for the same corpus (relation commit + stubs).
 const ECOMMERCE_JAVA_COLD_INDEX_GRAPH_BUILD_BASELINE_SECS: f64 = 0.013;
-/// ecommerce-java discover with `--with-kantra` fixture ruleset (2026-10-21; ~0.31 s).
-const ECOMMERCE_JAVA_KANTRA_COLD_WALL_BASELINE_SECS: f64 = 0.36;
-const ECOMMERCE_JAVA_KANTRA_COLD_EVAL_BASELINE_SECS: f64 = 0.005;
-const ECOMMERCE_JAVA_KANTRA_ENRICH_BASELINE_SECS: f64 = 0.05;
 const K8S_WEBSITE_MIN_HEADING_MODULES: u64 = 500;
 /// Obsidian vault export on warm k8s index (~15–25s on maintainer machine).
 const K8S_WEBSITE_OBSIDIAN_EXPORT_BASELINE_SECS: f64 = 30.0;
@@ -84,8 +80,6 @@ pub struct ProfileSummary {
     pub nodes: u64,
     pub functions: u64,
     pub index_graph_build_secs: Option<f64>,
-    pub kantra_eval_secs: Option<f64>,
-    pub kantra_enrich_secs: Option<f64>,
 }
 
 pub fn linux_repo_path() -> PathBuf {
@@ -200,14 +194,6 @@ pub fn parse_profile_summary(log: &str) -> Option<ProfileSummary> {
         } else if line.contains("[profile] stage") && line.contains("index_graph_build") {
             if let Some(secs) = parse_field_f64(line, "secs=") {
                 summary.index_graph_build_secs = Some(secs);
-            }
-        } else if line.contains("[profile] stage") && line.contains("kantra_eval") {
-            if let Some(secs) = parse_field_f64(line, "secs=") {
-                summary.kantra_eval_secs = Some(secs);
-            }
-        } else if line.contains("[profile] stage") && line.contains("kantra_enrich") {
-            if let Some(secs) = parse_field_f64(line, "secs=") {
-                summary.kantra_enrich_secs = Some(secs);
             }
         }
     }
@@ -781,87 +767,6 @@ fn ecommerce_java_inheritance_cold_discover_within_baseline() {
     }
 }
 
-#[test]
-#[ignore = "manual: cold discover profile on rgctl-tests/ecommerce-java (--with-kantra)"]
-fn ecommerce_java_kantra_cold_discover_within_baseline() {
-    let repo = ecommerce_java_repo_path();
-    if !repo.is_dir() {
-        eprintln!("skip: ecommerce-java not at {}", repo.display());
-        return;
-    }
-    let rules = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/kantra-rules");
-    let wall_baseline = std::env::var("RGCTL_ECOMMERCE_JAVA_KANTRA_COLD_WALL_BASELINE_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(ECOMMERCE_JAVA_KANTRA_COLD_WALL_BASELINE_SECS);
-    let kantra_baseline = std::env::var("RGCTL_ECOMMERCE_JAVA_KANTRA_EVAL_BASELINE_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(ECOMMERCE_JAVA_KANTRA_COLD_EVAL_BASELINE_SECS);
-
-    let (output, elapsed) = run_cold_discover_timed(
-        &repo,
-        &[
-            "--languages",
-            "java",
-            "--with-kantra",
-            "--kantra-rules",
-            rules.to_str().unwrap(),
-        ],
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success(),
-        "discover failed:\nstdout={stdout}\nstderr={stderr}"
-    );
-    let profile = resolve_profile_summary(&stdout, &stderr, elapsed);
-    eprintln!(
-        "ecommerce-java kantra cold: wall={:.3}s kantra_eval={:?} kantra_enrich={:?} peak_rss_mb={:.1}",
-        profile.wall_secs,
-        profile.kantra_eval_secs,
-        profile.kantra_enrich_secs,
-        profile.peak_rss_mb
-    );
-    assert_within_baseline(
-        "ecommerce-java kantra cold discover",
-        Duration::from_secs_f64(profile.wall_secs),
-        wall_baseline,
-    );
-    if let Some(kantra_secs) = profile.kantra_eval_secs {
-        let limit = kantra_baseline * TOLERANCE;
-        assert!(
-            kantra_secs <= limit,
-            "kantra_eval {:.4}s exceeds baseline {:.4}s (+10% = {:.4}s)",
-            kantra_secs,
-            kantra_baseline,
-            limit
-        );
-    } else {
-        panic!("kantra_eval stage missing from profile output");
-    }
-    let enrich_baseline = std::env::var("RGCTL_ECOMMERCE_JAVA_KANTRA_ENRICH_BASELINE_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(ECOMMERCE_JAVA_KANTRA_ENRICH_BASELINE_SECS);
-    if let Some(enrich_secs) = profile.kantra_enrich_secs {
-        let limit = enrich_baseline * TOLERANCE;
-        assert!(
-            enrich_secs <= limit,
-            "kantra_enrich {:.4}s exceeds baseline {:.4}s (+10% = {:.4}s)",
-            enrich_secs,
-            enrich_baseline,
-            limit
-        );
-    } else {
-        panic!("kantra_enrich stage missing from profile output");
-    }
-    assert!(
-        repo.join(".rgctl/kantra_findings.json").is_file(),
-        "kantra_findings.json missing"
-    );
-}
-
 fn parse_gql_json(stdout: &[u8]) -> Option<Value> {
     let text = String::from_utf8_lossy(stdout);
     for anchor in ["\"rows\"", "\"count\""] {
@@ -1342,4 +1247,81 @@ fn linux_cold_diff_within_baseline() {
         baseline
     );
     assert_within_baseline("linux cold diff", elapsed, baseline);
+}
+
+/// Opt-in lossless discover + writeback verify throughput (does not alter Gate A).
+///
+/// Default Gate A (`linux_cold_discover_within_baseline`) remains the non-`--lossless`
+/// discover path; this gate only measures the opt-in sidecar path on a small fixture.
+const TIER1_LOSSLESS_WRITEBACK_BASELINE_SECS: f64 = 8.0;
+
+#[test]
+#[ignore = "manual: tier1 lossless writeback roundtrip perf (discover --lossless + writeback verify)"]
+fn tier1_lossless_writeback_roundtrip_perf() {
+    let repo = ecommerce_java_repo_path();
+    if !repo.is_dir() {
+        eprintln!("skip: ecommerce-java not at {}", repo.display());
+        return;
+    }
+    let baseline = std::env::var("RGCTL_TIER1_LOSSLESS_WRITEBACK_BASELINE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(TIER1_LOSSLESS_WRITEBACK_BASELINE_SECS);
+
+    let bin = rgctl_bin();
+    assert!(
+        bin.is_file(),
+        "rgctl binary not found at {} — run cargo build --release --bin rgctl",
+        bin.display()
+    );
+
+    let _ = std::fs::remove_dir_all(repo.join(".rgctl"));
+    let start = Instant::now();
+    let discover = Command::new(&bin)
+        .current_dir(&repo)
+        .env("RUST_LOG", "info,profile=info")
+        .args(["discover", ".", "--lossless"])
+        .output()
+        .expect("spawn discover --lossless");
+    let discover_elapsed = start.elapsed();
+    assert!(
+        discover.status.success(),
+        "discover --lossless failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&discover.stdout),
+        String::from_utf8_lossy(&discover.stderr)
+    );
+
+    let verify_start = Instant::now();
+    let verify = Command::new(&bin)
+        .current_dir(&repo)
+        .args(["writeback", "verify", "-f", "json"])
+        .output()
+        .expect("spawn writeback verify");
+    let verify_elapsed = verify_start.elapsed();
+    assert!(
+        verify.status.success(),
+        "writeback verify failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&verify.stdout),
+        String::from_utf8_lossy(&verify.stderr)
+    );
+
+    let total = discover_elapsed + verify_elapsed;
+    eprintln!(
+        "tier1 lossless writeback: discover={:.3}s verify={:.3}s total={:.3}s (baseline {:.1}s); Gate A path unchanged (opt-in --lossless only)",
+        discover_elapsed.as_secs_f64(),
+        verify_elapsed.as_secs_f64(),
+        total.as_secs_f64(),
+        baseline
+    );
+    assert_within_baseline("tier1 lossless writeback roundtrip", total, baseline);
+
+    // Content store + CST must exist after --lossless; default discover does not require them.
+    assert!(
+        repo.join(".rgctl/content_store.bin").is_file(),
+        "expected RGCS content_store.bin after --lossless"
+    );
+    assert!(
+        repo.join(".rgctl/cst.archive.bin").is_file(),
+        "expected RGCT cst.archive.bin after --lossless"
+    );
 }

@@ -122,6 +122,15 @@ fn try_fast_cached_lookup(
     parsed: &crate::analysis::ParsedSymbol,
 ) -> Result<Option<BlastRadiusResponse>> {
     let session = ctx.snapshot_session()?;
+    if parsed.class_filter.is_none()
+        && let Some(s) = session.as_ref()
+        && try_resolve_type_node_snapshot(&s.store, parsed, args.line)
+            .ok()
+            .flatten()
+            .is_some()
+    {
+        return Ok(None);
+    }
     let lookup = node_lookup(None, session.as_ref().map(|s| s.store.as_ref()));
     let max_depth = max_caller_depth(args);
     let view = session
@@ -425,6 +434,34 @@ pub(crate) fn build_lite_response(
     store: &SnapshotNodeStore,
     engine: &BlastRadiusEngine,
 ) -> Result<BlastRadiusResponse> {
+    if parsed.class_filter.is_none()
+        && let Some((type_node, member_ids)) =
+            try_resolve_type_node_snapshot(store, parsed, args.line)?
+    {
+        let view = PetGraphView::from_snapshot_store(store)?;
+        let max_depth = max_caller_depth(args);
+        let (result, impact_ids) = aggregate_type_blast_snapshot(
+            store,
+            engine,
+            &view,
+            type_node.id,
+            &member_ids,
+            max_depth,
+        )?;
+        let lookup = NodeLookup::Snapshot(store);
+        return Ok(build_from_engine_result(
+            &args.symbol,
+            parsed.class_filter.clone(),
+            &result,
+            &result.direct_caller_ids,
+            &impact_ids,
+            result.score,
+            depth_limit_metric(max_depth),
+            lookup,
+            skipped_gatekeeping(),
+        ));
+    }
+
     let (id, _resolved_name) = resolve_target_uuid_snapshot(ctx, parsed, store, args.line)?;
     let result = engine.analyze(id)?;
     let view = PetGraphView::from_snapshot_store(store)?;
@@ -443,6 +480,110 @@ pub(crate) fn build_lite_response(
         lookup,
         skipped_gatekeeping(),
     ))
+}
+
+fn is_constructor_node(n: &rgctl_graph::schema::Node) -> bool {
+    n.qualified_name
+        .as_deref()
+        .is_some_and(|qn| qn.ends_with(".<init>") || qn.ends_with("::<init>"))
+}
+
+fn try_resolve_type_node_snapshot(
+    store: &SnapshotNodeStore,
+    parsed: &crate::analysis::ParsedSymbol,
+    line: Option<usize>,
+) -> Result<Option<(rgctl_graph::schema::Node, Vec<Uuid>)>> {
+    use rgctl_graph::schema::NodeType;
+    let nodes = store.find_nodes_by_name(&parsed.target_name)?;
+    // If there is a non-constructor Function with the exact same name, let normal function resolution run.
+    if nodes
+        .iter()
+        .any(|n| n.node_type == NodeType::Function && !is_constructor_node(n))
+    {
+        return Ok(None);
+    }
+    let mut type_candidates: Vec<rgctl_graph::schema::Node> = nodes
+        .into_iter()
+        .filter(|n| rgctl_graph::is_aggregate_container_type(n.node_type))
+        .filter(|n| {
+            if let Some(l) = line
+                && n.start_line != Some(l)
+            {
+                return false;
+            }
+            if let Some(ref ff) = parsed.file_filter {
+                let p = n.file_path.as_deref().unwrap_or("").replace('\\', "/");
+                let f = ff.replace('\\', "/");
+                if !p.contains(&f) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+    if type_candidates.len() != 1 {
+        return Ok(None);
+    }
+    let type_node = type_candidates.pop().expect("single type candidate");
+    let member_ids =
+        rgctl_graph::StructuredQuery::new(store).collect_member_functions_of_type(&type_node)?;
+    Ok(Some((type_node, member_ids)))
+}
+
+fn aggregate_type_blast_snapshot(
+    store: &SnapshotNodeStore,
+    engine: &BlastRadiusEngine,
+    view: &PetGraphView,
+    type_id: Uuid,
+    member_ids: &[Uuid],
+    max_depth: usize,
+) -> Result<(BlastRadiusResult, Vec<Uuid>)> {
+    use std::collections::HashSet;
+    let member_set: HashSet<Uuid> = member_ids.iter().copied().collect();
+    let mut direct_seen = HashSet::new();
+    let mut direct_caller_ids = Vec::new();
+    let mut impact_seen = HashSet::new();
+    let mut impact_zone_ids = Vec::new();
+    let mut depth_filtered_seen = HashSet::new();
+    let mut depth_filtered_ids = Vec::new();
+
+    for &mid in member_ids {
+        let Ok(res) = engine.analyze(mid) else {
+            continue;
+        };
+        for &cid in &res.direct_caller_ids {
+            if cid != type_id && !member_set.contains(&cid) && direct_seen.insert(cid) {
+                direct_caller_ids.push(cid);
+            }
+        }
+        for &iid in &res.impact_zone_ids {
+            if iid != type_id && !member_set.contains(&iid) && impact_seen.insert(iid) {
+                impact_zone_ids.push(iid);
+            }
+        }
+        let fn_impact = store.filter_function_impact(&res.impact_zone_ids)?;
+        let filtered = if max_depth == usize::MAX {
+            fn_impact
+        } else {
+            filter_impact_by_caller_depth(view, mid, &fn_impact, max_depth)
+        };
+        for iid in filtered {
+            if iid != type_id && !member_set.contains(&iid) && depth_filtered_seen.insert(iid) {
+                depth_filtered_ids.push(iid);
+            }
+        }
+    }
+
+    let score = impact_score_from_counts(direct_caller_ids.len(), depth_filtered_ids.len());
+    let result = BlastRadiusResult {
+        symbol_id: type_id,
+        direct_caller_ids,
+        impact_zone_ids,
+        score,
+        scc_id: 0,
+        scc_size: member_ids.len().max(1),
+    };
+    Ok((result, depth_filtered_ids))
 }
 
 fn resolve_blast_result(

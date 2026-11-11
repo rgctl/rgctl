@@ -413,6 +413,7 @@ pub fn extract_with_query(
             modifiers: vec![],
             documentation: d.documentation,
             metadata: default_meta.clone(),
+            ..Default::default()
         })
         .collect();
 
@@ -514,6 +515,7 @@ pub fn extract_with_query(
             metadata: default_meta.clone(),
             to_qualified_hint: None,
             to_type_hint: None,
+            ..Default::default()
         });
     }
 

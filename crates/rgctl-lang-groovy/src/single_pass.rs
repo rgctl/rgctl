@@ -3,6 +3,7 @@
 use crate::plugin::{GROOVY_BRANCH_KINDS, GROOVY_CALL_KINDS, GroovyPlugin};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -214,7 +215,7 @@ pub fn extract_all_single_pass(
                             if kind == "record_declaration" {
                                 metadata["is_record"] = serde_json::Value::Bool(true);
                             }
-                            ctx.symbols.push(Symbol {
+                            let mut symbol = Symbol {
                                 name: simple.clone(),
                                 symbol_type,
                                 qualified_name: Some(qn.clone()),
@@ -229,7 +230,14 @@ pub fn extract_all_single_pass(
                                 modifiers: vec![],
                                 documentation: None,
                                 metadata,
-                            });
+                                ..Default::default()
+                            };
+                            record_symbol_spans(
+                                &mut symbol,
+                                node,
+                                node.child_by_field_name("name"),
+                            );
+                            ctx.symbols.push(symbol);
                             ctx.enter_scope(
                                 scope_kind,
                                 Some(simple),

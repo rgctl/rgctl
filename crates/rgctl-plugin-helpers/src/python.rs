@@ -171,7 +171,7 @@ fn import_symbol(
     if let Some(binding) = binding {
         meta["binding"] = serde_json::Value::String(binding.to_string());
     }
-    Symbol {
+    let mut sym = Symbol {
         name: name.to_string(),
         symbol_type: SymbolType::Import,
         qualified_name: None,
@@ -183,7 +183,10 @@ fn import_symbol(
         modifiers: vec![],
         documentation: None,
         metadata: meta,
-    }
+        ..Default::default()
+    };
+    crate::spans::record_symbol_spans(&mut sym, node, None);
+    sym
 }
 
 /// `Extends` edges from `class_definition` superclasses.
@@ -296,6 +299,7 @@ fn push_extends(
         metadata: meta,
         to_qualified_hint: Some(base.to_string()),
         to_type_hint: None,
+        ..Default::default()
     });
 }
 
@@ -413,6 +417,7 @@ pub fn extract_decorator_relations(
                 metadata: meta,
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             });
         }
     }

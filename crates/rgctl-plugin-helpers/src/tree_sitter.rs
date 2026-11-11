@@ -231,7 +231,8 @@ fn walk_extract(
             }
         }
 
-        symbols.push(Symbol {
+        let name_node = node.child_by_field_name("name");
+        let mut symbol = Symbol {
             name,
             symbol_type,
             qualified_name: None,
@@ -250,7 +251,10 @@ fn walk_extract(
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "extractor": "generic" }),
-        });
+            ..Default::default()
+        };
+        crate::spans::record_symbol_spans(&mut symbol, node, name_node);
+        symbols.push(symbol);
     }
 
     let mut cursor = node.walk();

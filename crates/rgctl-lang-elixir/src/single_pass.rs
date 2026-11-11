@@ -224,6 +224,7 @@ pub fn extract_all_single_pass(
                                         "language": "elixir",
                                         "kind": "defmodule",
                                     }),
+                                    ..Default::default()
                                 });
                                 ctx.enter_scope(
                                     ScopeKind::Module,
@@ -259,6 +260,7 @@ pub fn extract_all_single_pass(
                                         "language": "elixir",
                                         "kind": head,
                                     }),
+                                    ..Default::default()
                                 });
                                 ctx.enter_scope(
                                     ScopeKind::Function,
@@ -291,6 +293,7 @@ pub fn extract_all_single_pass(
                                         "language": "elixir",
                                         "kind": head,
                                     }),
+                                    ..Default::default()
                                 });
                             }
                         } else if CFG_FORMS.contains(&head) {
@@ -348,6 +351,7 @@ pub fn extract_all_single_pass(
                                 "language": "elixir",
                                 "kind": "anonymous_function",
                             }),
+                            ..Default::default()
                         });
                         ctx.enter_scope(
                             ScopeKind::Lambda,
@@ -391,6 +395,7 @@ pub fn extract_all_single_pass(
                                 }),
                                 to_qualified_hint: Some(target),
                                 to_type_hint: None,
+                                ..Default::default()
                             });
                         }
                     }
@@ -414,6 +419,7 @@ pub fn extract_all_single_pass(
                                 }),
                                 to_qualified_hint: Some(target),
                                 to_type_hint: None,
+                                ..Default::default()
                             });
                         }
                     }
@@ -501,6 +507,7 @@ pub fn extract_all_single_pass(
             metadata: serde_json::json!({ "language": "elixir" }),
             to_qualified_hint: Some(callee),
             to_type_hint: None,
+            ..Default::default()
         });
     }
 

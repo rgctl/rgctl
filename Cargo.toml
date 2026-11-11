@@ -21,7 +21,6 @@ members = [
     "crates/rgctl-incremental",
     "crates/rgctl-semantic",
     "crates/rgctl-rules",
-    "crates/rgctl-kantra",
     "crates/rgctl-core",
     "crates/rgctl-service",
     "crates/rgctl-lang-go",
@@ -121,7 +120,6 @@ rgctl-project-config = { path = "crates/rgctl-project-config", version = "0.4.26
 rgctl-incremental = { path = "crates/rgctl-incremental", version = "0.4.26" }
 rgctl-semantic = { path = "crates/rgctl-semantic", version = "0.4.26" }
 rgctl-rules = { path = "crates/rgctl-rules", version = "0.4.26" }
-rgctl-kantra = { path = "crates/rgctl-kantra", version = "0.4.26" }
 rgctl-core = { path = "crates/rgctl-core", version = "0.4.26" }
 rgctl-service = { path = "crates/rgctl-service", version = "0.4.26" }
 tempfile = "3"
@@ -279,7 +277,6 @@ rgctl-project-config = { workspace = true }
 rgctl-incremental = { workspace = true }
 rgctl-semantic = { workspace = true }
 rgctl-rules = { workspace = true }
-rgctl-kantra = { workspace = true }
 rgctl-languages = { workspace = true }
 
 rgctl-macros = { path = "rgctl-macros", optional = true }
@@ -312,6 +309,7 @@ blake3 = "1"
 xxhash-rust = "0.8"
 anyhow = "1"
 thiserror = "1"
+walkdir = { workspace = true }
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -557,6 +555,18 @@ path = "tests/graph_determinism_qe.rs"
 [[test]]
 name = "stable_key_invariance_qe"
 path = "tests/stable_key_invariance_qe.rs"
+
+[[test]]
+name = "snapshot_diff_invariance"
+path = "tests/snapshot_diff_invariance.rs"
+
+[[test]]
+name = "writeback_roundtrip_tier1"
+path = "tests/writeback_roundtrip_tier1.rs"
+
+[[test]]
+name = "writeback_patch_integration"
+path = "tests/writeback_patch_integration.rs"
 
 [[test]]
 name = "e2e_workflow_equivalence"

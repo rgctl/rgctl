@@ -70,9 +70,6 @@ struct SessionStatus {
     nodes: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     edges: Option<usize>,
-    kantra_findings: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    kantra_findings_path: Option<String>,
     /// Whether discoverable sources match `file_hashes.json` (None when snapshot missing).
     #[serde(skip_serializing_if = "Option::is_none")]
     index_current: Option<bool>,
@@ -185,10 +182,6 @@ struct Staleness {
     dirty_sample: Vec<String>,
 }
 
-fn kantra_findings_path(repo: &Path) -> std::path::PathBuf {
-    rgctl_graph::paths::artifact_path(repo, "kantra_findings.json")
-}
-
 /// Compute working-tree vs tracker freshness without extract/compact.
 fn compute_staleness(repo: &Path) -> Staleness {
     let registry: Arc<rgctl_registry::LanguageRegistry> = LanguageRegistry::new().into();
@@ -237,10 +230,6 @@ fn compute_staleness(repo: &Path) -> Staleness {
 
 /// `rgctl status` — report whether `.rgctl/` has a usable snapshot.
 pub fn run_status(ctx: &CliContext) -> Result<()> {
-    let findings = kantra_findings_path(&ctx.repo);
-    let kantra_present = findings.is_file();
-    let kantra_path = kantra_present.then(|| findings.display().to_string());
-
     let watcher = super::pipeline_status::detect_live_watcher(&ctx.repo);
     let watcher_alive = Some(watcher.is_some());
     let watcher_pid = watcher.map(|w| w.pid);
@@ -276,8 +265,6 @@ pub fn run_status(ctx: &CliContext) -> Result<()> {
                 digest: Some(s.digest.to_string()),
                 nodes: Some(s.store.node_count()),
                 edges: Some(s.store.edge_count()),
-                kantra_findings: kantra_present,
-                kantra_findings_path: kantra_path,
                 index_current: Some(stale.index_current),
                 dirty_files: Some(stale.dirty_files),
                 files_added: Some(stale.files_added),
@@ -304,8 +291,6 @@ pub fn run_status(ctx: &CliContext) -> Result<()> {
             digest: None,
             nodes: None,
             edges: None,
-            kantra_findings: kantra_present,
-            kantra_findings_path: kantra_path,
             index_current: None,
             dirty_files: None,
             files_added: None,
@@ -329,16 +314,11 @@ pub fn run_status(ctx: &CliContext) -> Result<()> {
             .map(|c| if c { "yes" } else { "no" })
             .unwrap_or("?");
         ctx.stdout_line(&format!(
-            "status=ok nodes={} edges={} digest={} index_current={}{}{}",
+            "status=ok nodes={} edges={} digest={} index_current={}{}",
             payload.nodes.unwrap_or(0),
             payload.edges.unwrap_or(0),
             payload.digest.as_deref().unwrap_or("?"),
             current,
-            if payload.kantra_findings {
-                " kantra_findings=yes"
-            } else {
-                ""
-            },
             payload
                 .message
                 .as_ref()

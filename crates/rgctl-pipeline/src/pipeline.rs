@@ -2,7 +2,7 @@
 //!
 //! Task 1.6.2: Parallel file parsing with rayon
 
-use crate::stream::{DEFAULT_STREAM_CHANNEL_CAPACITY, stream_into_graph};
+use crate::stream::{DEFAULT_STREAM_CHANNEL_CAPACITY, LosslessSidecarBatch, stream_into_graph};
 use indicatif::{ProgressBar, ProgressStyle};
 use rgctl_error::Result;
 use rgctl_extraction::discovery::{DiscoveryConfig, FileDiscoverer};
@@ -39,6 +39,8 @@ pub struct PipelineConfig {
     /// payloads in RAM. Default `true` — cache stores encoded bytes only (no
     /// decoded `ExtractAllResult` trees).
     pub facts_cache: bool,
+    /// Persist RGCS v2 content store + RGCT Green-CST (`discover --lossless`).
+    pub lossless: bool,
 }
 
 impl Default for PipelineConfig {
@@ -51,6 +53,7 @@ impl Default for PipelineConfig {
             stream_channel_capacity: DEFAULT_STREAM_CHANNEL_CAPACITY,
             materialize_fields: false,
             facts_cache: true,
+            lossless: false,
         }
     }
 }
@@ -158,7 +161,9 @@ impl ProcessingPipeline {
         } else {
             None
         };
-        let mut extractor = Extractor::new(Arc::clone(&self.registry));
+        let mut extractor = Extractor::new(Arc::clone(&self.registry))
+            .with_lossless(self.config.lossless)
+            .with_repo_root(store.to_path_buf());
         if let Some(ref facts) = facts {
             extractor = extractor.with_facts_cache(Arc::clone(facts));
         }
@@ -173,10 +178,13 @@ impl ProcessingPipeline {
         builder.set_materialize_fields(self.config.materialize_fields);
         // Default discover: do not load/store CodeIndex bodies (multi-GB on linux).
         // Nodes still get `code_hash` via worker-precomputed prep / `hash_code`.
-        builder.set_content_store(ContentStore::load(ContentStore::default_path(store))?);
+        // When `--lossless`, RGCS v2 owns `content_store.bin` — skip the legacy blob vault.
+        if !self.config.lossless {
+            builder.set_content_store(ContentStore::load(ContentStore::default_path(store))?);
+        }
 
         let progress_for_stream = progress.clone();
-        let (stream_stats, tails) = stream_into_graph(
+        let (stream_stats, tails, lossless_sidecars) = stream_into_graph(
             self.config.thread_count,
             &extractor,
             Arc::clone(&self.registry),
@@ -193,6 +201,12 @@ impl ProcessingPipeline {
 
         if let Some(pb) = progress {
             pb.finish_with_message("done");
+        }
+
+        if self.config.lossless {
+            write_lossless_sidecars(store, lossless_sidecars)?;
+        } else {
+            drop(lossless_sidecars);
         }
 
         let files_processed = stream_stats.files_processed;
@@ -326,16 +340,20 @@ impl ProcessingPipeline {
         } else {
             None
         };
-        let mut extractor = Extractor::new(Arc::clone(&self.registry));
+        let mut extractor = Extractor::new(Arc::clone(&self.registry))
+            .with_lossless(self.config.lossless)
+            .with_repo_root(root.to_path_buf());
         if let Some(ref facts) = facts {
             extractor = extractor.with_facts_cache(Arc::clone(facts));
         }
         let extract_start = Instant::now();
         let mut builder = GraphBuilder::new();
         builder.set_materialize_fields(self.config.materialize_fields);
-        builder.set_content_store(ContentStore::load(ContentStore::default_path(root))?);
+        if !self.config.lossless {
+            builder.set_content_store(ContentStore::load(ContentStore::default_path(root))?);
+        }
         let progress_for_stream = progress.clone();
-        let (stream_stats, tails) = stream_into_graph(
+        let (stream_stats, tails, lossless_sidecars) = stream_into_graph(
             self.config.thread_count,
             &extractor,
             Arc::clone(&self.registry),
@@ -352,6 +370,12 @@ impl ProcessingPipeline {
 
         if let Some(pb) = progress {
             pb.finish_with_message("done");
+        }
+
+        if self.config.lossless {
+            write_lossless_sidecars(root, lossless_sidecars)?;
+        } else {
+            drop(lossless_sidecars);
         }
 
         let files_processed = stream_stats.files_processed;
@@ -403,6 +427,29 @@ impl ProcessingPipeline {
             },
         ))
     }
+}
+
+fn write_lossless_sidecars(artifact_root: &Path, batch: LosslessSidecarBatch) -> Result<()> {
+    if batch.frames.is_empty() && batch.cst_files.is_empty() {
+        return Ok(());
+    }
+    let rgctl = artifact_root.join(".rgctl");
+    std::fs::create_dir_all(&rgctl)?;
+    if !batch.frames.is_empty() {
+        let mut writer = rgctl_graph::LosslessContentWriter::new();
+        for frame in batch.frames {
+            writer.push(frame);
+        }
+        writer.write_to_path(&rgctl.join(rgctl_graph::LOSSLESS_CONTENT_STORE_FILE))?;
+    }
+    if !batch.cst_files.is_empty() {
+        let mut writer = rgctl_graph::CstArchiveWriter::new();
+        for file in batch.cst_files {
+            writer.push_file(file);
+        }
+        writer.write_to_path(&rgctl.join(rgctl_graph::CST_ARCHIVE_FILE))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

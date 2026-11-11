@@ -25,15 +25,11 @@ pub struct DiscoverArtifacts {
     pub migration_plan: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dashboard_dir: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kantra_findings: Option<String>,
 }
 
 impl DiscoverArtifacts {
     pub fn is_empty(&self) -> bool {
-        self.migration_plan.is_none()
-            && self.dashboard_dir.is_none()
-            && self.kantra_findings.is_none()
+        self.migration_plan.is_none() && self.dashboard_dir.is_none()
     }
 }
 
@@ -49,7 +45,7 @@ pub struct DiscoverJsonResponse {
     /// Stage plan when `full` is true.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<Vec<super::pipeline_status::PipelineStagePlan>>,
-    /// Sidecar files written this run (`migration_plan`, `dashboard`, `kantra`).
+    /// Sidecar files written this run (`migration_plan`, `dashboard`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifacts: Option<DiscoverArtifacts>,
 }

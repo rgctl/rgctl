@@ -13,6 +13,8 @@ pub mod columnar_snapshot;
 pub mod content_store;
 /// Typed bidirectional CSR topology.
 pub mod csr;
+/// Succinct Columnar Green-CST archive (`RGCT` v1).
+pub mod cst_archive;
 /// JSON import/export for graph snapshots.
 pub mod export;
 /// Streaming compaction of columnar snapshots with a delta segment.
@@ -23,6 +25,8 @@ pub mod intern;
 pub mod invariants;
 /// Lazy heap-backed collections for graph schema types.
 pub mod lazy_collections;
+/// Zstd content-addressed source store for lossless write-back (`RGCS` v2).
+pub mod lossless_content;
 /// Snapshot version migration helpers.
 pub mod migration;
 /// On-disk `.rgctl/` artifact paths and `RGCTL_*` env helpers.
@@ -42,6 +46,8 @@ pub mod stable_key;
 pub mod structural_sketch;
 /// Deterministic mmap structured query (`find` / `callers` / `relations` / `inventory`).
 pub mod structured_query;
+/// Piece-table span splicing and Trust Ledger.
+pub mod writeback;
 
 pub use code_graph::CodeGraph;
 pub use code_index::{CodeIndex, CodeLocation, hash_code};
@@ -54,11 +60,15 @@ pub use content_store::{
     CONTENT_STORE_FILE, ContentStore, INLINE_BODY_MAX_BYTES, hash_bytes, hash_text,
 };
 pub use csr::{CodeGraphCsr, edge_type_from_u8, edge_type_to_u8};
+pub use cst_archive::{CST_ARCHIVE_FILE, CstArchiveReader, CstArchiveWriter, CstFileColumns};
 pub use export::{GraphSnapshot, export_json, export_json_to, import_json};
 pub use graph_compactor::{
     CompactStats, DeltaSegment, GraphCompactor, compact_repo_snapshot, compact_snapshot_file,
 };
 pub use invariants::assert_graph_invariants;
+pub use lossless_content::{
+    LOSSLESS_CONTENT_STORE_FILE, LosslessContentReader, LosslessContentWriter, LosslessFrame,
+};
 pub use migration::{migrate_snapshot, migrate_v1_to_v2};
 pub use query::{QueryStream, execute, execute_chunks, stream_query};
 pub use schema::{AccessType, CallType, GRAPH_SCHEMA_VERSION, GraphParameter, SharedStr};
@@ -87,7 +97,12 @@ pub use structured_query::{
     ALL_EDGE_TYPES, ALL_NODE_TYPES, CallNeighborsResult, EdgeRow, EntityRow, FindResult,
     InventoryBy, InventoryCount, InventoryResult, QueryFilters, RelationDirection, RelationsResult,
     STRUCTURED_QUERY_SCHEMA_VERSION, ScopeMode, StructuredQuery, glob_match, import_package_prefix,
-    parse_annotation_list, parse_edge_type, parse_node_type,
+    is_aggregate_container_type, parse_annotation_list, parse_edge_type, parse_node_type,
+};
+pub use writeback::{
+    EditReason, SpanEdit, TrustLedgerEntry, TrustLedgerReport, TrustStatus, WritebackError,
+    apply_span_edits, blake3_hex, open_lossless_sidecars, reconstruct_file, rename_edit,
+    sort_edits, validate_syntax_unchanged, verify_file_bytes,
 };
 
 /// Normalize path separators for consistent comparison.

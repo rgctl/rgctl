@@ -7,6 +7,7 @@ use rgctl_plugin_api::{
     RelationType, Result, SourceLocation, Symbol, SymbolType, complexity_from_metadata,
     parse_with_pool,
 };
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::{Node, Parser, Tree};
@@ -401,7 +402,7 @@ impl ErbPlugin {
                 let line = node.start_position().row + 1;
                 let sym_name = format!("erb:{block_type}@L{line}");
 
-                symbols.push(Symbol {
+                let mut sym = Symbol {
                     name: sym_name.clone(),
                     symbol_type: SymbolType::Variable,
                     qualified_name: Some(sym_name.clone()),
@@ -432,7 +433,11 @@ impl ErbPlugin {
                             "scope_refs": scope_refs,
                         })
                     },
-                });
+                    ..Default::default()
+                };
+                // Synthetic `erb:{kind}@L{n}` names — decl span only.
+                record_symbol_spans(&mut sym, node, None);
+                symbols.push(sym);
 
                 let rel_from = sym_name;
 
@@ -451,6 +456,7 @@ impl ErbPlugin {
                         }),
                         to_qualified_hint: Some(format!("${var}")),
                         to_type_hint: Some("puppetvariable".to_string()),
+                        ..Default::default()
                     });
                 }
 
@@ -466,6 +472,7 @@ impl ErbPlugin {
                         }),
                         to_qualified_hint: None,
                         to_type_hint: Some("puppetfact".to_string()),
+                        ..Default::default()
                     });
                 }
 
@@ -481,6 +488,7 @@ impl ErbPlugin {
                         }),
                         to_qualified_hint: Some(scope_ref.clone()),
                         to_type_hint: Some("puppetvariable".to_string()),
+                        ..Default::default()
                     });
                 }
             }

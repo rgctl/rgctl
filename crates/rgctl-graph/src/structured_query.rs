@@ -59,8 +59,6 @@ pub const ALL_NODE_TYPES: &[NodeType] = &[
     NodeType::PuppetVariable,
     NodeType::PuppetFact,
     NodeType::PuppetNode,
-    NodeType::KantraRuleset,
-    NodeType::KantraRule,
 ];
 
 /// All [`EdgeType`] variants except [`EdgeType::Unknown`] for inventory zeros.
@@ -95,7 +93,6 @@ pub const ALL_EDGE_TYPES: &[EdgeType] = &[
     EdgeType::UsesFact,
     EdgeType::AnnotatedWith,
     EdgeType::Permits,
-    EdgeType::Violates,
     EdgeType::Overrides,
     EdgeType::ExposesRoute,
     EdgeType::Injects,
@@ -145,6 +142,18 @@ pub struct EntityRow {
     /// Definition line
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
+    /// Declaration start byte (Red-Green), when known
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_byte: Option<u32>,
+    /// Declaration exclusive end byte, when known
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_byte: Option<u32>,
+    /// Identifier token start byte, when known
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_start_byte: Option<u32>,
+    /// Identifier token exclusive end byte, when known
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_end_byte: Option<u32>,
     /// Node UUID (string)
     pub id: String,
     /// Annotation argument text when `--show-attributes` and args are indexed
@@ -295,12 +304,35 @@ impl<'a> StructuredQuery<'a> {
     }
 
     fn project(node: &Node) -> EntityRow {
+        let (name_start_byte, name_end_byte) = match (node.start_byte, node.name_rel_offset) {
+            (Some(start), Some(rel)) => {
+                let ns = start.saturating_add(u32::from(rel));
+                let len = node
+                    .name_token_len
+                    .map(u32::from)
+                    .unwrap_or_else(|| node.name.len() as u32);
+                (Some(ns), Some(ns.saturating_add(len)))
+            }
+            (Some(start), None) => {
+                if let Some((rel, len)) = node.name_span_overflow {
+                    let ns = start.saturating_add(rel);
+                    (Some(ns), Some(ns.saturating_add(len)))
+                } else {
+                    (None, None)
+                }
+            }
+            _ => (None, None),
+        };
         EntityRow {
             name: node.name.to_string(),
             qualified_name: node.qualified_name.as_ref().map(|s| s.to_string()),
             node_type: node_type_cli(node.node_type),
             file: node.file_path.as_ref().map(|s| s.to_string()),
             line: node.start_line,
+            start_byte: node.start_byte,
+            end_byte: node.end_byte,
+            name_start_byte,
+            name_end_byte,
             id: node.id.to_string(),
             attributes: None,
         }
@@ -310,26 +342,45 @@ impl<'a> StructuredQuery<'a> {
         node: &Node,
         annots: &[String],
         arg_index: Option<&HashMap<String, String>>,
+        matched_annots: Option<&Vec<String>>,
     ) -> EntityRow {
         let mut row = Self::project(node);
-        if let Some(idx) = arg_index {
-            let mut parts = Vec::new();
-            for a in annots {
+        let mut parts = Vec::new();
+        for a in annots {
+            let simple = normalize_annotation_name(a);
+            let simple_tail = annotation_simple_tail(simple.as_str());
+            let mut found_args = None;
+            if let Some(idx) = arg_index {
                 let key = format!("{}\0{a}", node.id);
                 if let Some(args) = idx.get(&key) {
-                    parts.push(format!("@{a}{args}"));
+                    found_args = Some((a.as_str(), args.as_str()));
                 } else {
-                    // Also try bare annotation key variants
-                    let simple = normalize_annotation_name(a);
                     let key2 = format!("{}\0{simple}", node.id);
                     if let Some(args) = idx.get(&key2) {
-                        parts.push(format!("@{simple}{args}"));
+                        found_args = Some((simple.as_str(), args.as_str()));
+                    } else {
+                        let key3 = format!("{}\0{simple_tail}", node.id);
+                        if let Some(args) = idx.get(&key3) {
+                            found_args = Some((simple_tail, args.as_str()));
+                        }
                     }
                 }
             }
-            if !parts.is_empty() {
-                row.attributes = Some(parts.join("; "));
+            if let Some((label, args)) = found_args {
+                parts.push(format!("@{label}{args}"));
+            } else if matched_annots.is_some_and(|m| {
+                m.iter().any(|ma| {
+                    ma == &simple
+                        || ma == simple_tail
+                        || ma == a
+                        || annotation_simple_tail(ma) == simple_tail
+                })
+            }) {
+                parts.push(format!("@{simple_tail}"));
             }
+        }
+        if !parts.is_empty() {
+            row.attributes = Some(parts.join("; "));
         }
         row
     }
@@ -453,6 +504,29 @@ impl<'a> StructuredQuery<'a> {
     pub fn resolve_symbol(&self, symbol: &str, filters: &QueryFilters) -> Result<Node> {
         let mut matches = self.lookup_name_candidates(symbol, filters.exact)?;
         matches.retain(|n| self.node_passes(n, filters));
+        if matches.len() > 1 && filters.node_type.is_none() {
+            // Collapse same-type constructor (`<init>`) collision: when a single
+            // Class/Interface/Struct shares its simple name with its `<init>`
+            // constructor Function(s), resolve to the enclosing type declaration.
+            let non_ctor_types: Vec<usize> = matches
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| is_aggregate_container_type(n.node_type))
+                .map(|(i, _)| i)
+                .collect();
+            let all_others_are_ctors = matches.iter().all(|n| {
+                is_aggregate_container_type(n.node_type)
+                    || (n.node_type == NodeType::Function
+                        && n.qualified_name.as_deref().is_some_and(|qn| {
+                            qn.ends_with(".<init>")
+                                || qn.ends_with("::<init>")
+                                || qn.ends_with("\\<init>")
+                        }))
+            });
+            if non_ctor_types.len() == 1 && all_others_are_ctors {
+                return Ok(matches.swap_remove(non_ctor_types[0]));
+            }
+        }
         match matches.len() {
             0 => Err(Error::NodeNotFound(symbol.to_string())),
             1 => Ok(matches.remove(0)),
@@ -535,17 +609,8 @@ impl<'a> StructuredQuery<'a> {
                     "--show-attributes requires --annotation".into(),
                 ));
             }
-            if filters
-                .annotation_arg_index
-                .as_ref()
-                .map(|m| m.is_empty())
-                .unwrap_or(true)
-            {
-                return Err(Error::InvalidQuery(
-                    "annotation attributes are not indexed yet; omit --show-attributes or re-discover after a Java index that writes .rgctl/annotation_args.json"
-                        .into(),
-                ));
-            }
+            // Marker-only annotations still project as `@<simple_name>` when the
+            // arg index is absent/empty — do not hard-fail.
         }
 
         if let Some(annots) = filters.annotation_names.as_ref()
@@ -657,6 +722,7 @@ impl<'a> StructuredQuery<'a> {
         }
 
         let mut seen = HashSet::new();
+        let mut matched_annots: HashMap<Uuid, Vec<String>> = HashMap::new();
         let mut candidates: Vec<Node> = Vec::new();
         self.store.for_each_edge(|from, to, et| {
             if et != EdgeType::AnnotatedWith {
@@ -670,6 +736,11 @@ impl<'a> StructuredQuery<'a> {
                 .any(|want| annotation_name_matches(&ann, want))
             {
                 return Ok(());
+            }
+            let simple = annotation_simple_tail(ann.name.as_str()).to_string();
+            let list = matched_annots.entry(from).or_default();
+            if !list.contains(&simple) {
+                list.push(simple);
             }
             if !seen.insert(from) {
                 return Ok(());
@@ -693,13 +764,14 @@ impl<'a> StructuredQuery<'a> {
             Ok(())
         })?;
 
-        Self::finish_find_annotated(candidates, filters, &normalized)
+        Self::finish_find_annotated(candidates, filters, &normalized, &matched_annots)
     }
 
     fn finish_find_annotated(
         candidates: Vec<Node>,
         filters: &QueryFilters,
         annots: &[String],
+        matched_annots: &HashMap<Uuid, Vec<String>>,
     ) -> Result<FindResult> {
         let total = candidates.len();
         let limit = filters.limit.unwrap_or(total);
@@ -712,7 +784,8 @@ impl<'a> StructuredQuery<'a> {
                 .take(limit)
                 .map(|n| {
                     if filters.show_attributes {
-                        Self::project_with_annotation_attrs(&n, annots, arg_index)
+                        let matched = matched_annots.get(&n.id);
+                        Self::project_with_annotation_attrs(&n, annots, arg_index, matched)
                     } else {
                         Self::project(&n)
                     }
@@ -757,6 +830,59 @@ impl<'a> StructuredQuery<'a> {
         })
     }
 
+    /// Collect member `Function` node IDs belonging to a container type node.
+    pub fn collect_member_functions_of_type(&self, type_node: &Node) -> Result<Vec<Uuid>> {
+        let qn = type_node
+            .qualified_name
+            .as_deref()
+            .unwrap_or(type_node.name.as_str());
+        let prefixes = member_qn_prefixes(qn);
+        let simple_prefixes = member_qn_prefixes(&type_node.name);
+        let type_fp = type_node.file_path.as_deref();
+        let mut out = Vec::new();
+        if let Some(col) = self.store.columnar() {
+            for idx in 0..col.node_count() {
+                if col.node_type_at(idx)? != NodeType::Function {
+                    continue;
+                }
+                let Some(fqn) = col.node_qualified_name_str(idx)? else {
+                    continue;
+                };
+                if prefixes.iter().any(|p| fqn.starts_with(p.as_str())) {
+                    out.push(Uuid::from_bytes(col.node_row_at(idx)?.id));
+                    continue;
+                }
+                if let Some(tfp) = type_fp
+                    && col.node_file_path_str(idx)? == Some(tfp)
+                    && simple_prefixes.iter().any(|p| fqn.starts_with(p.as_str()))
+                {
+                    out.push(Uuid::from_bytes(col.node_row_at(idx)?.id));
+                }
+            }
+            return Ok(out);
+        }
+        for fn_node in
+            self.collect_nodes_hot_scan(Some(NodeType::Function), &QueryFilters::default())?
+        {
+            if let Some(fqn) = fn_node.qualified_name.as_deref()
+                && prefixes.iter().any(|p| fqn.starts_with(p))
+            {
+                out.push(fn_node.id);
+                continue;
+            }
+            if type_node.file_path.is_some()
+                && fn_node.file_path == type_node.file_path
+                && fn_node
+                    .qualified_name
+                    .as_deref()
+                    .is_some_and(|fqn| simple_prefixes.iter().any(|p| fqn.starts_with(p)))
+            {
+                out.push(fn_node.id);
+            }
+        }
+        Ok(out)
+    }
+
     /// Incoming (`callers`) or outgoing (`callees`) CALLS.
     pub fn call_neighbors(
         &self,
@@ -770,6 +896,13 @@ impl<'a> StructuredQuery<'a> {
         let adj = self.build_typed_adjacency(EdgeType::Calls)?;
         let mut seen = HashSet::from([seed.id]);
         let mut q = VecDeque::from([(seed.id, 0usize)]);
+        if is_aggregate_container_type(seed.node_type) {
+            for member_id in self.collect_member_functions_of_type(&seed)? {
+                if seen.insert(member_id) {
+                    q.push_back((member_id, 0usize));
+                }
+            }
+        }
         let mut found: Vec<(Uuid, usize)> = Vec::new();
         while let Some((id, d)) = q.pop_front() {
             if d >= depth {
@@ -789,6 +922,16 @@ impl<'a> StructuredQuery<'a> {
                 found.push((nid, hop));
                 if hop < depth {
                     q.push_back((nid, hop));
+                }
+            }
+        }
+        if incoming && is_aggregate_container_type(seed.node_type) {
+            let inj = self.build_typed_adjacency(EdgeType::Injects)?;
+            if let Some(injectors) = inj.incoming.get(&seed.id) {
+                for &nid in injectors {
+                    if seen.insert(nid) {
+                        found.push((nid, 1));
+                    }
                 }
             }
         }
@@ -1206,12 +1349,67 @@ impl<'a> StructuredQuery<'a> {
                 })
             }
             InventoryBy::ImportPrefix => {
-                // Observed prefixes only (no zero-fill). Default depth = 2 dotted segments.
+                // Observed prefixes only (no zero-fill). Default depth = 2 segments.
                 const DEPTH: usize = 2;
                 let mut map: HashMap<String, usize> = HashMap::new();
-                for n in self.collect_nodes_hot_scan(Some(NodeType::Import), filters)? {
-                    let key = import_package_prefix(&n.name, DEPTH);
-                    *map.entry(key).or_insert(0) += 1;
+                let can_zero_copy = !Self::filters_need_cold_ext(filters)
+                    && filters.scope.is_none()
+                    && filters.line.is_none()
+                    && filters.file_glob.is_none()
+                    && filters.lang.is_none();
+                if let Some(col) = self.store.columnar().filter(|_| can_zero_copy) {
+                    for idx in 0..col.node_count() {
+                        if col.node_type_at(idx)? != NodeType::Import {
+                            continue;
+                        }
+                        if let Some(fp) = col.node_file_path_str(idx)? {
+                            let lower = fp.to_ascii_lowercase();
+                            if lower.ends_with(".md")
+                                || lower.ends_with(".markdown")
+                                || lower.ends_with(".mdx")
+                            {
+                                continue;
+                            }
+                        }
+                        let raw = match col.node_qualified_name_str(idx)? {
+                            Some(q) if !q.is_empty() => q,
+                            _ => col.node_name_str(idx)?,
+                        };
+                        let key = import_package_prefix(raw, DEPTH);
+                        if key == "<unknown>"
+                            || key.starts_with('/')
+                            || key.chars().any(char::is_whitespace)
+                        {
+                            continue;
+                        }
+                        *map.entry(key).or_insert(0) += 1;
+                    }
+                } else {
+                    for n in self.collect_nodes_hot_scan(Some(NodeType::Import), filters)? {
+                        if let Some(fp) = n.file_path.as_deref() {
+                            let lower = fp.to_ascii_lowercase();
+                            if lower.ends_with(".md")
+                                || lower.ends_with(".markdown")
+                                || lower.ends_with(".mdx")
+                            {
+                                continue;
+                            }
+                        }
+                        // Prefer qualified_name when present (Kotlin/Rust/Go/PHP short local name).
+                        let raw = n
+                            .qualified_name
+                            .as_deref()
+                            .filter(|q| !q.is_empty())
+                            .unwrap_or(n.name.as_str());
+                        let key = import_package_prefix(raw, DEPTH);
+                        if key == "<unknown>"
+                            || key.starts_with('/')
+                            || key.chars().any(char::is_whitespace)
+                        {
+                            continue;
+                        }
+                        *map.entry(key).or_insert(0) += 1;
+                    }
                 }
                 let mut counts: Vec<_> = map
                     .into_iter()
@@ -1460,9 +1658,47 @@ fn lang_from_ext(ext: &str) -> String {
     }
 }
 
-/// Strip `@` and whitespace from an annotation CLI token.
+/// Container types whose member functions are aggregated for `callers` / blast-radius.
+pub fn is_aggregate_container_type(nt: NodeType) -> bool {
+    matches!(
+        nt,
+        NodeType::Class
+            | NodeType::Interface
+            | NodeType::Struct
+            | NodeType::Enum
+            | NodeType::Module
+    )
+}
+
+/// Qualified-name prefixes for member matching across `.`, `::`, and `\`.
+fn member_qn_prefixes(qn: &str) -> [String; 3] {
+    [format!("{qn}."), format!("{qn}::"), format!("{qn}\\")]
+}
+
+/// Last simple segment of an annotation/attribute name (`.` / `:` / `\` separators).
+fn annotation_simple_tail(name: &str) -> &str {
+    name.rsplit(['.', ':', '\\'])
+        .find(|p| !p.is_empty())
+        .unwrap_or(name)
+}
+
+/// Strip `@` / `#[...]` / `[...]` / `@file:` wrappers and any trailing `(...)` args.
 pub fn normalize_annotation_name(raw: &str) -> String {
-    raw.trim().trim_start_matches('@').trim().to_string()
+    let mut s = raw.trim();
+    if let Some(rest) = s.strip_prefix("#[") {
+        s = rest.trim_end_matches(']');
+    } else if let Some(rest) = s.strip_prefix('[') {
+        s = rest.trim_end_matches(']');
+    } else if let Some(rest) = s.strip_prefix("@file:") {
+        s = rest;
+    } else if let Some(rest) = s.strip_prefix('@') {
+        s = rest;
+    }
+    s = s.trim();
+    if let Some(idx) = s.find('(') {
+        s = s[..idx].trim();
+    }
+    s.to_string()
 }
 
 /// Parse `--annotation @A,@B` into normalized names (empty tokens dropped).
@@ -1473,51 +1709,159 @@ pub fn parse_annotation_list(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// Find the byte index of the first single `:` (not part of `::`).
+fn find_single_colon(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    for i in 0..bytes.len() {
+        if bytes[i] == b':' {
+            let prev_colon = i > 0 && bytes[i - 1] == b':';
+            let next_colon = i + 1 < bytes.len() && bytes[i + 1] == b':';
+            if !prev_colon && !next_colon {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
 /// True when an Annotation node matches a normalized want (simple name or FQN).
 fn annotation_name_matches(node: &Node, want: &str) -> bool {
     if want.is_empty() {
         return false;
     }
-    if node.name == want {
-        return true;
-    }
-    if let Some(simple) = node.name.rsplit('.').next()
-        && simple == want
-    {
-        return true;
-    }
-    if let Some(qn) = node.qualified_name.as_deref() {
-        if qn == want {
+    let want_tail = annotation_simple_tail(want);
+    let want_is_qualified = want != want_tail;
+    if !want_is_qualified {
+        if node.name == want || annotation_simple_tail(node.name.as_str()) == want {
             return true;
         }
-        if let Some(simple) = qn.rsplit('.').next()
-            && simple == want
+        if let Some(qn) = node.qualified_name.as_deref()
+            && (qn == want || annotation_simple_tail(qn) == want)
         {
             return true;
         }
+        return false;
     }
-    false
+    // `want` is qualified (e.g. `javax.ws.rs.Path`, `tokio::main`, `App\Attr\Route`).
+    if node.name == want {
+        return true;
+    }
+    if let Some(qn) = node.qualified_name.as_deref()
+        && !qn.is_empty()
+    {
+        if qn == want {
+            return true;
+        }
+        // If `qn` is itself qualified and does not equal `want`, do NOT match by tail
+        // (prevents `javax.ws.rs.Path` from matching `jakarta.ws.rs.Path`).
+        if qn != annotation_simple_tail(qn) {
+            return false;
+        }
+    }
+    // Node has no conflicting qualified FQN recorded; allow matching an unqualified node name by tail.
+    node.name == want_tail
 }
 
-/// Derive import package prefix: strip `import` / `static` / `.*` / `;`, take first `depth` segments.
+/// Derive import package/module prefix across Tier-1 languages.
+///
+/// Supports `.` (JVM/Python/C#), `::` (Rust/C++), `/` (Go/JS/TS/Ruby/C), and `\` (PHP).
+/// Filters relative paths (`./`, `../`, bare `self`/`super`).
 pub fn import_package_prefix(import_name: &str, depth: usize) -> String {
     let mut s = import_name.trim();
-    if let Some(rest) = s.strip_prefix("import ") {
+    if let Some(rest) = s.strip_prefix("global ") {
         s = rest.trim();
     }
-    if let Some(rest) = s.strip_prefix("static ") {
-        s = rest.trim();
+
+    if let Some(rest) = s.strip_prefix("from ") {
+        // Python: `from a.b.c import d`
+        if let Some(idx) = rest.find(" import ") {
+            s = rest[..idx].trim();
+        } else {
+            s = rest.trim();
+        }
+    } else if let Some(idx) = s.find(" from ") {
+        // ECMAScript: `import { x } from '@scope/pkg/sub'`
+        s = s[idx + " from ".len()..].trim();
+    } else {
+        for kw in [
+            "import ",
+            "use ",
+            "using ",
+            "require_relative ",
+            "require ",
+            "#include ",
+        ] {
+            if let Some(rest) = s.strip_prefix(kw) {
+                s = rest.trim();
+                break;
+            }
+        }
+        if let Some(rest) = s.strip_prefix("static ") {
+            s = rest.trim();
+        }
+        // C# alias directive: `using Alias = Microsoft.AspNetCore.Mvc;`
+        if let Some((_, rhs)) = s.split_once('=') {
+            s = rhs.trim();
+        }
     }
+
     s = s.trim_end_matches(';').trim();
+    if s == "<unknown>" || s.is_empty() {
+        return "<unknown>".into();
+    }
+    s = s.trim_matches(|c| matches!(c, '"' | '\'' | '<' | '>'));
+    if let Some(rest) = s.strip_prefix("package:") {
+        s = rest.trim();
+    }
+    // Strip single-colon `:<binding>` suffix used by Python (`fastapi.routing:APIRouter`)
+    // and ECMAScript (`@nestjs/common:Controller`, `path:* as path`) Import symbols.
+    if let Some(colon_idx) = find_single_colon(s) {
+        s = s[..colon_idx].trim();
+    }
     if let Some(rest) = s.strip_suffix(".*") {
         s = rest.trim();
     }
-    let parts: Vec<&str> = s.split('.').filter(|p| !p.is_empty()).collect();
+    if let Some(rest) = s.strip_suffix("::*") {
+        s = rest.trim();
+    }
+    // Drop ECMAScript / Rust brace-import leftovers: `{ Foo }` / `std::{io, fs}`
+    if s.contains('{') {
+        if let Some(before) = s.split('{').next() {
+            let before = before.trim().trim_end_matches("::").trim();
+            if !before.is_empty() {
+                s = before;
+            }
+        }
+    }
+
+    if s.starts_with("./")
+        || s.starts_with("../")
+        || s == "."
+        || s == ".."
+        || s.starts_with('.')
+        || s == "self"
+        || s == "super"
+        || s.starts_with("self::")
+        || s.starts_with("super::")
+    {
+        return "<unknown>".into();
+    }
+
+    let (sep, parts): (&str, Vec<&str>) = if s.contains("::") {
+        ("::", s.split("::").filter(|p| !p.is_empty()).collect())
+    } else if s.contains('\\') {
+        ("\\", s.split('\\').filter(|p| !p.is_empty()).collect())
+    } else if s.contains('/') {
+        ("/", s.split('/').filter(|p| !p.is_empty()).collect())
+    } else {
+        (".", s.split('.').filter(|p| !p.is_empty()).collect())
+    };
+
     if parts.is_empty() {
         return "<unknown>".into();
     }
     let take = depth.max(1).min(parts.len());
-    parts[..take].join(".")
+    parts[..take].join(sep)
 }
 
 #[cfg(test)]
@@ -1759,21 +2103,25 @@ mod tests {
     }
 
     #[test]
-    fn show_attributes_errors_when_not_indexed() {
+    fn show_attributes_marker_fallback_when_not_indexed() {
         let (_dir, store) = sample_store();
         let q = StructuredQuery::new(&store);
-        let err = q
+        let res = q
             .find(
                 None,
                 &QueryFilters {
-                    annotation_names: Some(vec!["Resource".into()]),
+                    annotation_names: Some(vec!["MessageDriven".into()]),
+                    node_type: Some(NodeType::Class),
                     show_attributes: true,
                     ..Default::default()
                 },
             )
-            .unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("not indexed") || msg.contains("attributes"));
+            .unwrap();
+        assert_eq!(res.total, 1);
+        assert_eq!(
+            res.entities[0].attributes.as_deref(),
+            Some("@MessageDriven")
+        );
     }
 
     #[test]
@@ -1852,6 +2200,229 @@ mod tests {
             import_package_prefix("com.fasterxml.jackson.databind.ObjectMapper", 2),
             "com.fasterxml"
         );
+        assert_eq!(
+            import_package_prefix("std::collections::HashMap", 2),
+            "std::collections"
+        );
+        assert_eq!(
+            import_package_prefix("use std::collections::HashMap;", 2),
+            "std::collections"
+        );
+        assert_eq!(
+            import_package_prefix("github.com/gin-gonic/gin", 2),
+            "github.com/gin-gonic"
+        );
+        assert_eq!(import_package_prefix(r"App\Models\User", 2), r"App\Models");
+        assert_eq!(
+            import_package_prefix("from fastapi.routing import APIRouter", 2),
+            "fastapi.routing"
+        );
+        assert_eq!(
+            import_package_prefix("import { Controller } from '@nestjs/common/http'", 2),
+            "@nestjs/common"
+        );
+        assert_eq!(
+            import_package_prefix("using System.Collections.Generic;", 2),
+            "System.Collections"
+        );
+        assert_eq!(import_package_prefix("./relative/mod", 2), "<unknown>");
+        assert_eq!(import_package_prefix("self::foo", 2), "<unknown>");
+        assert_eq!(normalize_annotation_name("#[tokio::main]"), "tokio::main");
+        assert_eq!(normalize_annotation_name("[HttpGet(\"/x\")]"), "HttpGet");
+        assert_eq!(
+            normalize_annotation_name(r"#[App\Attr\Route]"),
+            r"App\Attr\Route"
+        );
+    }
+
+    #[test]
+    fn inventory_import_prefix_multi_language() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("graph.snapshot.bin");
+        let mut backend = MemoryBackend::new();
+        let imports = [
+            ("Path", Some("jakarta.ws.rs.Path"), "src/A.kt", "jakarta.ws"),
+            (
+                "HashMap",
+                Some("std::collections::HashMap"),
+                "src/a.rs",
+                "std::collections",
+            ),
+            (
+                "gin",
+                Some("github.com/gin-gonic/gin"),
+                "src/a.go",
+                "github.com/gin-gonic",
+            ),
+            ("User", Some(r"App\Models\User"), "src/a.php", r"App\Models"),
+            (
+                "from fastapi.routing import APIRouter",
+                None,
+                "src/a.py",
+                "fastapi.routing",
+            ),
+            (
+                "fastapi.routing:APIRouter",
+                None,
+                "src/b.py",
+                "fastapi.routing",
+            ),
+            ("fastapi:FastAPI", None, "src/c.py", "fastapi"),
+            (
+                "import { Controller } from '@nestjs/common/http'",
+                None,
+                "src/a.ts",
+                "@nestjs/common",
+            ),
+            (
+                "@nestjs/common:Controller",
+                None,
+                "src/b.ts",
+                "@nestjs/common",
+            ),
+            ("path:* as path", None, "src/c.ts", "path"),
+            ("using System.Net.Http;", None, "src/a.cs", "System.Net"),
+            (
+                "global using Microsoft.AspNetCore.Mvc;",
+                None,
+                "src/b.cs",
+                "Microsoft.AspNetCore",
+            ),
+            ("import javax.ws.rs.Path;", None, "src/a.java", "javax.ws"),
+        ];
+        for (name, qn, file, _) in imports {
+            let mut n = Node::new(NodeType::Import, name).with_file_path(file);
+            if let Some(q) = qn {
+                n = n.with_qualified_name(q);
+            }
+            backend.insert_node(n).unwrap();
+        }
+        write_columnar_from_backend(&backend, &path).unwrap();
+        let store = SnapshotNodeStore::open(&path).unwrap();
+        let q = StructuredQuery::new(&store);
+        let res = q
+            .inventory(InventoryBy::ImportPrefix, &QueryFilters::default())
+            .unwrap();
+        let keys: HashSet<_> = res.counts.iter().map(|c| c.key.as_str()).collect();
+        for (_, _, _, expect) in imports {
+            assert!(
+                keys.contains(expect),
+                "missing prefix {expect}; got {keys:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn find_annotation_cross_language_wrappers() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("graph.snapshot.bin");
+        let mut backend = MemoryBackend::new();
+        let rust_fn = Node::new(NodeType::Function, "boot")
+            .with_qualified_name("app::boot")
+            .with_file_path("src/main.rs");
+        let rust_ann = Node::new(NodeType::Annotation, "main")
+            .with_qualified_name("tokio::main")
+            .with_file_path("<external>");
+        let csharp_fn = Node::new(NodeType::Function, "Get")
+            .with_qualified_name("Controllers.UsersController.Get")
+            .with_file_path("UsersController.cs");
+        let csharp_ann = Node::new(NodeType::Annotation, "HttpGet").with_file_path("<external>");
+        let php_cls = Node::new(NodeType::Class, "CartController")
+            .with_qualified_name(r"App\Controller\CartController")
+            .with_file_path("CartController.php");
+        let php_ann = Node::new(NodeType::Annotation, "Route")
+            .with_qualified_name(r"App\Attr\Route")
+            .with_file_path("<external>");
+        let rid = rust_fn.id;
+        let cid = csharp_fn.id;
+        let pid = php_cls.id;
+        let ra = rust_ann.id;
+        let ca = csharp_ann.id;
+        let pa = php_ann.id;
+        backend.insert_node(rust_fn).unwrap();
+        backend.insert_node(rust_ann).unwrap();
+        backend.insert_node(csharp_fn).unwrap();
+        backend.insert_node(csharp_ann).unwrap();
+        backend.insert_node(php_cls).unwrap();
+        backend.insert_node(php_ann).unwrap();
+        backend
+            .insert_edge(Edge::new(rid, ra, EdgeType::AnnotatedWith))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(cid, ca, EdgeType::AnnotatedWith))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(pid, pa, EdgeType::AnnotatedWith))
+            .unwrap();
+        write_columnar_from_backend(&backend, &path).unwrap();
+        let store = SnapshotNodeStore::open(&path).unwrap();
+        let q = StructuredQuery::new(&store);
+        let list = parse_annotation_list("#[tokio::main],[HttpGet],#[App\\Attr\\Route]");
+        let res = q
+            .find(
+                None,
+                &QueryFilters {
+                    annotation_names: Some(list),
+                    show_attributes: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(res.total, 3);
+        let attrs: Vec<_> = res
+            .entities
+            .iter()
+            .filter_map(|e| e.attributes.as_deref())
+            .collect();
+        assert!(attrs.iter().any(|a| a.contains("@main")));
+        assert!(attrs.iter().any(|a| a.contains("@HttpGet")));
+        assert!(attrs.iter().any(|a| a.contains("@Route")));
+
+        // Qualified annotation query must not match a different namespace with the same tail name.
+        let wrong_ns = q
+            .find(
+                None,
+                &QueryFilters {
+                    annotation_names: Some(parse_annotation_list(" #[other::main] ")),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(wrong_ns.total, 0);
+    }
+
+    #[test]
+    fn callers_aggregates_enum_members() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("graph.snapshot.bin");
+        let mut backend = MemoryBackend::new();
+        let en = Node::new(NodeType::Enum, "Status")
+            .with_qualified_name("app::Status")
+            .with_file_path("src/status.rs");
+        let parse = Node::new(NodeType::Function, "parse")
+            .with_qualified_name("app::Status::parse")
+            .with_file_path("src/status.rs");
+        let caller = Node::new(NodeType::Function, "run")
+            .with_qualified_name("app::run")
+            .with_file_path("src/main.rs");
+        let eid = en.id;
+        let pid = parse.id;
+        let cid = caller.id;
+        backend.insert_node(en).unwrap();
+        backend.insert_node(parse).unwrap();
+        backend.insert_node(caller).unwrap();
+        backend
+            .insert_edge(Edge::new(cid, pid, EdgeType::Calls))
+            .unwrap();
+        write_columnar_from_backend(&backend, &path).unwrap();
+        let store = SnapshotNodeStore::open(&path).unwrap();
+        let q = StructuredQuery::new(&store);
+        let res = q
+            .call_neighbors("Status", true, 1, &QueryFilters::default())
+            .unwrap();
+        assert_eq!(res.returned, 1);
+        assert_eq!(res.neighbors[0].name, "run");
+        assert_eq!(eid, store.find_nodes_by_name("Status").unwrap()[0].id);
     }
 
     #[test]
@@ -2126,5 +2697,78 @@ mod tests {
         assert!(parse_node_type("not_a_type").is_err());
         assert!(parse_edge_type("annotatedwith").is_ok());
         assert!(parse_node_type("import").is_ok());
+    }
+
+    #[test]
+    fn class_vs_init_disambiguation_and_class_level_callers() {
+        use crate::schema::Edge;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("snap.bin");
+        let mut backend = MemoryBackend::new();
+
+        let cls = Node::new(NodeType::Class, "ShoppingCartService")
+            .with_qualified_name("com.acme.ShoppingCartService")
+            .with_file_path("src/ShoppingCartService.java");
+        let cls_id = cls.id;
+        backend.insert_node(cls).unwrap();
+
+        let ctor = Node::new(NodeType::Function, "ShoppingCartService")
+            .with_qualified_name("com.acme.ShoppingCartService.<init>")
+            .with_file_path("src/ShoppingCartService.java");
+        backend.insert_node(ctor).unwrap();
+
+        let method = Node::new(NodeType::Function, "getCart")
+            .with_qualified_name("com.acme.ShoppingCartService.getCart")
+            .with_file_path("src/ShoppingCartService.java");
+        let method_id = method.id;
+        backend.insert_node(method).unwrap();
+
+        let caller_fn = Node::new(NodeType::Function, "checkout")
+            .with_qualified_name("com.acme.CartEndpoint.checkout")
+            .with_file_path("src/CartEndpoint.java");
+        let caller_id = caller_fn.id;
+        backend.insert_node(caller_fn).unwrap();
+
+        backend
+            .insert_edge(Edge::new(caller_id, method_id, EdgeType::Calls))
+            .unwrap();
+
+        write_columnar_from_backend(&backend, &path).unwrap();
+        let store = SnapshotNodeStore::open(&path).unwrap();
+        let q = StructuredQuery::new(&store);
+
+        let res = q
+            .call_neighbors("ShoppingCartService", true, 2, &QueryFilters::default())
+            .unwrap();
+        assert_eq!(res.target.id, cls_id.to_string());
+        assert_eq!(res.total, 1);
+        assert_eq!(res.neighbors[0].name, "checkout");
+    }
+
+    #[test]
+    fn import_prefix_inventory_filters_markdown_and_unknown() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("snap.bin");
+        let mut backend = MemoryBackend::new();
+
+        let valid =
+            Node::new(NodeType::Import, "javax.ejb.Stateless").with_file_path("src/Service.java");
+        backend.insert_node(valid).unwrap();
+
+        let bogus_md = Node::new(NodeType::Import, "this repository (`target/coolstore.war`)")
+            .with_file_path("README.md");
+        backend.insert_node(bogus_md).unwrap();
+
+        let bogus_unknown = Node::new(NodeType::Import, "<unknown>").with_file_path("src/app.js");
+        backend.insert_node(bogus_unknown).unwrap();
+
+        write_columnar_from_backend(&backend, &path).unwrap();
+        let store = SnapshotNodeStore::open(&path).unwrap();
+        let q = StructuredQuery::new(&store);
+        let inv = q
+            .inventory(InventoryBy::ImportPrefix, &QueryFilters::default())
+            .unwrap();
+        assert_eq!(inv.counts.len(), 1);
+        assert_eq!(inv.counts[0].key, "javax.ejb");
     }
 }

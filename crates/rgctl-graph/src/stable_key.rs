@@ -53,14 +53,11 @@ pub struct NodeRowRef {
 }
 
 /// BLAKE3 digest of extension blob (0 when absent).
+///
+/// Absolute span fields (`end_byte`, `name_span_overflow`) are excluded so inserting
+/// lines/bytes above an unchanged symbol leaves the digest stable for `rgctl diff`.
 pub fn extension_digest(bytes: Option<&[u8]>) -> u64 {
-    match bytes {
-        None | Some([]) => 0,
-        Some(blob) => {
-            let hash = blake3::hash(blob);
-            u64::from_le_bytes(hash.as_bytes()[..8].try_into().expect("8 bytes"))
-        }
-    }
+    crate::columnar_snapshot::extension_digest_excluding_spans(bytes)
 }
 
 /// Derive a deterministic node [`Uuid`] from a [`StableNodeKey`].
@@ -334,5 +331,40 @@ mod tests {
                 "digest differs on iteration {i} for identical input"
             );
         }
+    }
+
+    #[test]
+    fn extension_digest_invariant_under_line_and_byte_shifts() {
+        let base = Node::new(NodeType::Function, "process")
+            .with_file_path("svc.rs")
+            .with_qualified_name("svc::process")
+            .with_location(10, 20)
+            .with_byte_spans(Some(120), Some(340), Some(4), None, None)
+            .with_property("cyclomatic".into(), "2".into());
+        let shifted = Node::new(NodeType::Function, "process")
+            .with_file_path("svc.rs")
+            .with_qualified_name("svc::process")
+            .with_location(60, 70)
+            .with_byte_spans(Some(920), Some(1140), Some(4), None, None)
+            .with_property("cyclomatic".into(), "2".into());
+
+        assert_eq!(
+            stable_key_from_node(&base),
+            stable_key_from_node(&shifted),
+            "StableNodeKey must ignore absolute line/byte coordinates"
+        );
+
+        let (_t0, c0) = open_columnar(vec![base]);
+        let (_t1, c1) = open_columnar(vec![shifted]);
+        let d0 = node_row_ref(&c0, 0).unwrap().extension_digest;
+        let d1 = node_row_ref(&c1, 0).unwrap().extension_digest;
+        assert_eq!(
+            d0, d1,
+            "extension_digest must ignore end_byte / absolute span shifts"
+        );
+        assert_eq!(
+            stable_key_from_row(&c0, 0).unwrap(),
+            stable_key_from_row(&c1, 0).unwrap()
+        );
     }
 }

@@ -243,10 +243,6 @@ pub enum NodeType {
     PuppetFact,
     /// Puppet node definition (`node { ... }`)
     PuppetNode,
-    /// Konveyor Kantra ruleset container (discover `--with-kantra`)
-    KantraRuleset,
-    /// Konveyor Kantra migration rule
-    KantraRule,
 }
 
 /// Edge types representing relationships between nodes
@@ -312,8 +308,6 @@ pub enum EdgeType {
     AnnotatedWith,
     /// Sealed type permits another type
     Permits,
-    /// Kantra rule violation on a code graph node
-    Violates,
     /// Subtype method overrides an ancestor method (`Child.m` → `Ancestor.m`)
     Overrides,
     /// Handler or controller exposes an HTTP/RPC route endpoint
@@ -416,6 +410,27 @@ pub struct Node {
     /// End line in source file
     pub end_line: Option<usize>,
 
+    /// Exact 0-indexed declaration start byte (Red-Green write-back).
+    /// Always bincode-serialized (even as `None`) for spill round-trips.
+    #[serde(default)]
+    pub start_byte: Option<u32>,
+
+    /// Exact exclusive declaration end byte (excluded from extension digest).
+    #[serde(default)]
+    pub end_byte: Option<u32>,
+
+    /// Identifier start relative to [`Self::start_byte`].
+    #[serde(default)]
+    pub name_rel_offset: Option<u16>,
+
+    /// Overflow when identifier starts ≥ 65535 bytes after `start_byte`: `(rel_start, len)`.
+    #[serde(default)]
+    pub name_span_overflow: Option<(u32, u32)>,
+
+    /// Raw identifier token length when it differs from [`Self::name`].
+    #[serde(default)]
+    pub name_token_len: Option<u16>,
+
     /// Additional properties as key-value pairs
     #[serde(default)]
     pub properties: LazyStringMap,
@@ -440,8 +455,47 @@ impl Node {
             file_path: None,
             start_line: None,
             end_line: None,
+            start_byte: None,
+            end_byte: None,
+            name_rel_offset: None,
+            name_span_overflow: None,
+            name_token_len: None,
             properties: LazyStringMap::new(),
             labels: Vec::new(),
+        }
+    }
+
+    /// Set Red-Green declaration / identifier byte spans (does not affect deterministic id).
+    pub fn with_byte_spans(
+        mut self,
+        start_byte: Option<u32>,
+        end_byte: Option<u32>,
+        name_rel_offset: Option<u16>,
+        name_token_len: Option<u16>,
+        name_span_overflow: Option<(u32, u32)>,
+    ) -> Self {
+        self.start_byte = start_byte;
+        self.end_byte = end_byte;
+        self.name_rel_offset = name_rel_offset;
+        self.name_token_len = name_token_len;
+        self.name_span_overflow = name_span_overflow;
+        self
+    }
+
+    /// Reconstruct absolute `[name_start_byte, name_end_byte)` from Red-Green relative packing.
+    pub fn name_byte_span(&self) -> Option<(u32, u32)> {
+        let start_byte = self.start_byte?;
+        if let Some(rel) = self.name_rel_offset {
+            let start = start_byte.checked_add(u32::from(rel))?;
+            let len = self
+                .name_token_len
+                .map(u32::from)
+                .unwrap_or(self.name.len() as u32);
+            Some((start, start.checked_add(len)?))
+        } else {
+            let (rel_start, len) = self.name_span_overflow?;
+            let start = start_byte.checked_add(rel_start)?;
+            Some((start, start.checked_add(len)?))
         }
     }
 
@@ -749,10 +803,8 @@ mod tests {
             NodeType::PuppetVariable,
             NodeType::PuppetFact,
             NodeType::PuppetNode,
-            NodeType::KantraRuleset,
-            NodeType::KantraRule,
         ];
-        assert_eq!(types.len(), 39);
+        assert_eq!(types.len(), 37);
     }
 
     #[test]
@@ -788,14 +840,13 @@ mod tests {
             EdgeType::UsesFact,
             EdgeType::AnnotatedWith,
             EdgeType::Permits,
-            EdgeType::Violates,
             EdgeType::Overrides,
             EdgeType::ExposesRoute,
             EdgeType::Injects,
             EdgeType::CoChangesWith,
             EdgeType::Unknown,
         ];
-        assert_eq!(types.len(), 36);
+        assert_eq!(types.len(), 35);
     }
 
     #[test]

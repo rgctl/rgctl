@@ -5,6 +5,7 @@ use crate::slug::{slugify, unique_slug};
 use rgctl_plugin_api::{
     ExtractAllResult, Relation, RelationType, SourceLocation, Symbol, SymbolType,
 };
+use rgctl_plugin_helpers::record_symbol_spans;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -126,6 +127,7 @@ fn extract_heading(node: Node<'_>, ctx: &mut ExtractCtx<'_>) -> rgctl_plugin_api
         Some(qn.clone()),
         location(node, &ctx.file),
         json!({ "kind": "heading", "level": level.to_string(), "slug": slug }),
+        node,
     ));
     ctx.heading_records.push(HeadingRecord {
         heading_start_byte: node.start_byte(),
@@ -158,6 +160,7 @@ fn extract_code_block(node: Node<'_>, ctx: &mut ExtractCtx<'_>) -> rgctl_plugin_
         Some(qn.clone()),
         location(node, &ctx.file),
         serde_json::Value::Object(meta),
+        node,
     ));
 
     if let Some(heading_qn) = ctx.current_heading_qn() {
@@ -276,6 +279,7 @@ fn push_frontmatter_key(
         Some(qn),
         location(node, &ctx.file),
         serde_json::Value::Object(meta),
+        node,
     ));
 }
 
@@ -300,6 +304,7 @@ fn push_frontmatter_key_toml(
         Some(qn),
         location(node, &ctx.file),
         serde_json::Value::Object(meta),
+        node,
     ));
 }
 
@@ -386,6 +391,7 @@ fn emit_link(
         Some(qn),
         location(node, &ctx.file),
         json!({ "kind": "markdown_link", "url": dest }),
+        node,
     ));
 
     if is_external_url(&dest) {
@@ -404,6 +410,7 @@ fn emit_link(
             metadata: json!({ "kind": "markdown_link" }),
             to_qualified_hint: Some(to),
             to_type_hint: Some(to_type.to_string()),
+            ..Default::default()
         });
     }
     Ok(())
@@ -610,8 +617,9 @@ fn symbol(
     qualified_name: Option<String>,
     location: SourceLocation,
     metadata: serde_json::Value,
+    decl_node: Node<'_>,
 ) -> Symbol {
-    Symbol {
+    let mut sym = Symbol {
         name,
         symbol_type,
         qualified_name,
@@ -623,7 +631,11 @@ fn symbol(
         modifiers: vec![],
         documentation: None,
         metadata,
-    }
+        ..Default::default()
+    };
+    // Markdown names are derived (slug / synthetic); record decl span only.
+    record_symbol_spans(&mut sym, decl_node, None);
+    sym
 }
 
 fn push_defines(ctx: &mut ExtractCtx<'_>, from: String, to: String, node: Node<'_>) {
@@ -635,6 +647,7 @@ fn push_defines(ctx: &mut ExtractCtx<'_>, from: String, to: String, node: Node<'
         metadata: json!({ "kind": "heading_nesting" }),
         to_qualified_hint: Some(to),
         to_type_hint: Some("module".to_string()),
+        ..Default::default()
     });
 }
 

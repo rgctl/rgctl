@@ -148,7 +148,7 @@ impl TypeScriptPlugin {
         }
 
         let name = name.unwrap_or_else(|| "anonymous".to_string());
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Function,
             qualified_name: Some(format!("{owner_name}.{name}")),
@@ -173,7 +173,14 @@ impl TypeScriptPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     /// `namespace N { ... }` / ambient `module M`.
@@ -198,7 +205,7 @@ impl TypeScriptPlugin {
                 })
             })
             .unwrap_or_else(|| "anonymous".to_string());
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Module,
             qualified_name: Some(name),
@@ -219,7 +226,14 @@ impl TypeScriptPlugin {
                 "language": "typescript",
                 "kind": node.kind(),
             }),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     /// `export { foo as bar } from './m'` → Uses edges per specifier.
@@ -266,6 +280,7 @@ impl TypeScriptPlugin {
             metadata: meta,
             to_qualified_hint,
             to_type_hint: module_path,
+            ..Default::default()
         });
     }
 
@@ -279,7 +294,7 @@ impl TypeScriptPlugin {
         if !text.starts_with("export type") {
             return None;
         }
-        Some(Symbol {
+        let mut symbol = Symbol {
             name: text,
             symbol_type: SymbolType::Import,
             qualified_name: None,
@@ -301,7 +316,10 @@ impl TypeScriptPlugin {
                 "is_type_only": true,
                 "direction": "export",
             }),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, None);
+        Some(symbol)
     }
 
     pub(crate) fn extract_function(
@@ -384,7 +402,7 @@ impl TypeScriptPlugin {
             )
         };
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -409,7 +427,14 @@ impl TypeScriptPlugin {
             modifiers,
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     fn extract_parameters(&self, params_node: Node, source: &[u8]) -> Result<Vec<Parameter>> {
@@ -483,7 +508,7 @@ impl TypeScriptPlugin {
             message: "Class missing name".to_string(),
         })?;
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Class,
             qualified_name: None,
@@ -501,7 +526,14 @@ impl TypeScriptPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     fn extract_class_fields(&self, class_body: Node, source: &[u8]) -> Result<Vec<Field>> {
@@ -577,7 +609,7 @@ impl TypeScriptPlugin {
             message: "Interface missing name".to_string(),
         })?;
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Interface,
             qualified_name: None,
@@ -595,7 +627,14 @@ impl TypeScriptPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     pub(crate) fn extract_enum(
@@ -661,7 +700,7 @@ impl TypeScriptPlugin {
             }
         }
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Enum,
             qualified_name: None,
@@ -679,7 +718,14 @@ impl TypeScriptPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "typescript" }),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     pub(crate) fn extract_type_alias(
@@ -713,7 +759,7 @@ impl TypeScriptPlugin {
             .and_then(|n| n.utf8_text(source).ok())
             .map(|s| s.trim().to_string());
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::TypeAlias,
             qualified_name: None,
@@ -731,7 +777,14 @@ impl TypeScriptPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "typescript" }),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     fn extract_interface_properties(&self, object_type: Node, source: &[u8]) -> Result<Vec<Field>> {
@@ -1053,6 +1106,7 @@ impl TypeScriptPlugin {
                         metadata: meta,
                         to_qualified_hint,
                         to_type_hint,
+                        ..Default::default()
                     });
                 }
             }
@@ -1261,6 +1315,7 @@ impl TypeScriptPlugin {
                                 metadata: serde_json::json!({ "language": "typescript" }),
                                 to_qualified_hint: Some(target),
                                 to_type_hint: None,
+                                ..Default::default()
                             });
                         }
                     }
@@ -1295,6 +1350,7 @@ impl TypeScriptPlugin {
                     metadata: serde_json::json!({ "language": "typescript" }),
                     to_qualified_hint: Some(target),
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
         }
@@ -1356,6 +1412,7 @@ impl TypeScriptPlugin {
                     metadata: meta,
                     to_qualified_hint: None,
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
         }
@@ -1404,6 +1461,7 @@ impl TypeScriptPlugin {
                         metadata: serde_json::json!({ "language": "typescript" }),
                         to_qualified_hint: Some(target),
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -1474,6 +1532,7 @@ impl TypeScriptPlugin {
                     metadata: meta,
                     to_qualified_hint: None,
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
         }
@@ -1531,6 +1590,7 @@ impl TypeScriptPlugin {
             metadata: meta,
             to_qualified_hint,
             to_type_hint,
+            ..Default::default()
         });
     }
 }

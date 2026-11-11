@@ -14,7 +14,6 @@ export interface DashboardManifest {
   view?: ViewSection;
   analysis?: AnalysisSection;
   semantic?: SemanticSection;
-  kantra?: KantraSection;
   metrics: {
     function_count: number;
     class_count: number;
@@ -77,96 +76,6 @@ export interface SemanticSection {
   model_id: string;
   dimensions: number;
   graph_digest?: string | null;
-}
-
-export interface KantraSection {
-  available: boolean;
-  violation_count: number;
-  evaluated_rules: number;
-  cache_hits: number;
-  cache_misses: number;
-  by_category?: Record<string, number>;
-  index_path?: string;
-  detail_dir?: string;
-  catalog_id?: string | null;
-  ruleset?: string | null;
-  target_filter?: string | null;
-  file_count?: number;
-  rule_count?: number;
-}
-
-export interface KantraIndexPayload {
-  schema_version: number;
-  available: boolean;
-  detail_dir: string;
-  catalog_id?: string | null;
-  ruleset: string;
-  target_filter?: string | null;
-  evaluated_rules: number;
-  violation_count: number;
-  cache_hits: number;
-  cache_misses: number;
-  by_category: Record<string, number>;
-  file_count: number;
-  rule_count: number;
-  available_targets?: KantraTargetEntry[];
-  files: KantraFileEntry[];
-  rules: KantraRuleEntry[];
-  skipped_rules: KantraSkippedRule[];
-}
-
-export interface KantraTargetEntry {
-  target: string;
-  violation_count: number;
-}
-
-export interface KantraFileEntry {
-  id: string;
-  path: string;
-  count: number;
-  categories: Record<string, number>;
-  max_blast: number;
-  target_categories?: Record<string, Record<string, number>>;
-  source_id?: string | null;
-}
-
-export interface KantraRuleEntry {
-  rule_id: string;
-  count: number;
-  category?: string | null;
-  message?: string | null;
-  targets?: string[];
-}
-
-export interface KantraSkippedRule {
-  rule_id: string;
-  reason: string;
-}
-
-export interface KantraViolationEnrichment {
-  node_id?: string | null;
-  community_id?: number | null;
-  pagerank?: number | null;
-  blast_radius_score?: number | null;
-  impact_zone_size?: number | null;
-}
-
-export interface KantraViolation {
-  rule_id: string;
-  category?: string | null;
-  file: string;
-  line: number;
-  message?: string | null;
-  matched_by: string;
-  symbol?: string | null;
-  enrichment?: KantraViolationEnrichment | null;
-}
-
-export interface KantraFileBundle {
-  schema_version: number;
-  path: string;
-  source_id?: string | null;
-  violations: KantraViolation[];
 }
 
 export interface AnalysisSection {
