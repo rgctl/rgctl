@@ -35,7 +35,7 @@ tests/fixtures/{id}/
   …                        # optional taint / edge-case snippets
 
 tests/
-  {id}_langfeatures.rs     # GQL / structured-query gates on ecommerce or fixtures
+  {id}_langfeatures.rs     # Structured-query gates on ecommerce or fixtures
   {id}_cfg_analysis.rs     # CFG/PDG after discover --with-cfg
   {id}_taint.rs            # source→sink (or declarative pack) gate
   dashboard_ecommerce_{id}.rs
@@ -86,7 +86,7 @@ Add **all** of the following before calling the language “fully supported.” 
 | T1 | `cargo test -p rgctl-lang-{id}` | Symbols (functions/types), `Calls` (and inheritance if applicable), honesty limits documented in tests or plugin comments |
 | T2 | AST coverage JSON + unit test | Every named grammar kind classified; bump grammar ⇒ update JSON |
 | T3 | `tests/fixtures/{id}/langfeatures/` (+ optional) | Snippets for features you claim (methods, generics, embeds, …) |
-| T4 | `tests/{id}_langfeatures.rs` + `[[test]]` | After `discover -l {id}`, GQL/structured query finds harness symbols and expected `Calls` |
+| T4 | `tests/{id}_langfeatures.rs` + `[[test]]` | After `discover -l {id}`, structured queries (`find`, `callers`, `relations`) find harness symbols and expected `Calls` |
 | T5 | `tests/{id}_cfg_analysis.rs` | `discover --with-cfg`: CFG block/edge counts or kinds for a branching + looping function |
 | T6 | `tests/{id}_taint.rs` + `rules/taint/{id}.yaml` | At least one source→sink path (or pack hit) with `--with-cfg --with-taint` |
 | T7 | `rgctl-tests/ecommerce-{id}/` | Multi-file sample with real calls across files |
@@ -122,7 +122,7 @@ Assert on **extracted structures**, not CLI:
 Typical pattern (see `tests/ruby_langfeatures.rs`, `tests/go_langfeatures.rs`):
 
 1. Cold `discover . -l {id}` on `rgctl-tests/ecommerce-{id}` or `tests/fixtures/{id}/langfeatures`
-2. `rgctl -f json gql '…'` or structured `find` / `callers`
+2. `rgctl -f json find` / `callers` / `relations`
 3. Assert symbol presence, callee/caller sets, and language property when set
 
 ### `{id}_cfg_analysis.rs`

@@ -28,7 +28,7 @@ This doc **does not replace** the deep guides it links to. Use it to pick a path
 | **Tier 2 language** | Declarative tree-sitter `queries/tags.scm` + `LanguageConfig` | [tier-2-language-support.md](tier-2-language-support.md) · [languages/README.md](languages/README.md) (coverage JSON + website) |
 | **Tier 3 language** | Regex patterns only | [languages/README.md](languages/README.md) |
 | **Config formats** | JSON, YAML, TOML, properties, … | `crates/rgctl-config-formats` |
-| **Markup (Markdown)** | Doc context graph (not Tier 1/2) | [markdown-context.md](markdown-context.md) |
+| **Markup (Markdown)** | Doc context graph (not Tier 1/2) | [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/) |
 | **Feature change** | CLI, analysis, graph, dashboard, semantic, … | [§4](#4-feature-updates) + matching [design/](design/README.md) doc |
 
 ---
@@ -109,7 +109,7 @@ Run workspace tests touching the format crate; add fixture tests if you change e
 
 ### Markdown context graph
 
-Deep guide: [markdown-context.md](markdown-context.md). Fixture: `tests/fixtures/markdown-context/`.
+Deep guide: [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/). Fixture: `tests/fixtures/markdown-context/`.
 
 | Gate | Command |
 |------|---------|
@@ -117,7 +117,7 @@ Deep guide: [markdown-context.md](markdown-context.md). Fixture: `tests/fixtures
 | In-memory spec matrix | `cargo test -p rgctl-extraction markdown_spec_coverage` |
 | Extraction unit tests | `cargo test -p rgctl-lang-markdown` · `cargo test -p rgctl-extraction` |
 
-Optional cold profile (large corpus): [markdown-context.md § Cold profile](markdown-context.md#cold-profile-kuberneteswebsite).
+Optional cold profile (large corpus): see `k8s_website_markdown_cold_discover_within_baseline` in [internal/profile.md](internal/profile.md).
 
 ---
 
@@ -127,7 +127,7 @@ Map **what you touched** → **tests to run**. Design detail lives in [design/RE
 
 | Touch area | Primary tests | Notes |
 |------------|---------------|-------|
-| CLI JSON serializers | `cargo test --test cli_output` | [cli-io-sanity-qe.md](cli-io-sanity-qe.md) Layer 1 |
+| CLI JSON serializers | `cargo test --test cli_output` | [internal/integration-tests.md](internal/integration-tests.md) Layer 1 |
 | CLI subprocess / flags | `cargo test --release --test subprocess_golden_path` · `--test all_commands_sanity` | Layers 2–3 |
 | Blast radius / policy | `cargo test --test blast_radius` · `--release --test blast_radius_perf` | [blast-radius-design.md](design/blast-radius-design.md) |
 | Semantic search | `cargo test --test semantic_search_qe` · `semantic_audit` · `semantic_boundary` | [semantic-search-design.md](design/semantic-search-design.md) |
@@ -135,10 +135,11 @@ Map **what you touched** → **tests to run**. Design detail lives in [design/RE
 | CFG / PDG / slice | `cargo test --test slicing` · `with_cfg_cli` · `dominance` | [cfg-design.md](design/cfg-design.md) · [pdg-design.md](design/pdg-design.md) |
 | Taint | `cargo test --test taint_analysis` · language `*_taint.rs` | [taint-analysis-design.md](design/taint-analysis-design.md) |
 | Hybrid CPG (`cpg` CLI) | `field_write` unit tests · `with_cfg_cli` | [hybrid-cpg-plan.md](design/hybrid-cpg-plan.md) |
+| Lossless writeback (`writeback` CLI) | `cargo test -p rgctl-graph` · `cargo test --test writeback_cli` | [lossless-writeback-architecture.md](design/lossless-writeback-architecture.md) |
 | Migration planner | `cargo test --test migration_plan_cli` · `with_dashboard_cli` | [migration-planner-design.md](design/migration-planner-design.md) |
 | CI policy `check` | subprocess golden paths · `graph_projections` | [ci-policy-checks-design.md](design/ci-policy-checks-design.md) |
 | HTTP `serve` | `cargo test --test http_serve` | [HTTP Server and Dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/) |
-| Dashboard export / UI | `cargo test dashboard_harness` · `./scripts/test-dashboard-golden.sh` | [dashboard-design.md](dashboard-design.md) |
+| Dashboard export / UI | `cargo test dashboard_harness` · `./scripts/test-dashboard-golden.sh` | [dashboard-v2.md](design/dashboard-v2.md) |
 | User-guide workflow | `cargo test --test user_guide_scenarios` (needs release `rgctl`, `jq`) | [user-guide.md](user-guide.md) |
 | Core integration | `cargo test --test integration_core_features` · `bundles` | Edge extraction + persistence |
 
@@ -146,9 +147,9 @@ Map **what you touched** → **tests to run**. Design detail lives in [design/RE
 
 When changing `dashboard/` or `crates/rgctl-dashboard/`:
 
-- [ ] Update [dashboard-design.md](dashboard-design.md) implementation status
+- [ ] Update [dashboard-v2.md](design/dashboard-v2.md) implementation status
 - [ ] `./scripts/test-dashboard-golden.sh` passes
-- [ ] Full checklist: [dashboard-design § PR checklist](dashboard-design.md#pr-checklist-every-phase)
+- [ ] Full checklist: [dashboard-v2.md](design/dashboard-v2.md)
 
 ---
 
@@ -198,7 +199,7 @@ cargo test --release --test blast_radius_perf
 
 Optional release-mode dashboard gates: add `--release --test dashboard_*` targets from [§2](#2-programming-languages).
 
-CLI I/O layer reference: [cli-io-sanity-qe.md](cli-io-sanity-qe.md). Workflow mirror: [.github/workflows/ci.yml](../.github/workflows/ci.yml).
+CLI I/O layer reference: [internal/integration-tests.md](internal/integration-tests.md). Workflow mirror: [.github/workflows/ci.yml](../.github/workflows/ci.yml).
 
 ---
 
@@ -210,10 +211,10 @@ CLI I/O layer reference: [cli-io-sanity-qe.md](cli-io-sanity-qe.md). Workflow mi
 |-------------|--------|
 | User CLI | [user-guide.md](user-guide.md) · validate with `cargo test --test user_guide_scenarios` |
 | Contribute (agent README) | [AGENTS.md](../AGENTS.md) |
-| Use rgctl / JSON | [USER_AGENTS_TEMPLATE](agents/USER_AGENTS_TEMPLATE.md) · [json-api.md](json-api.md) · [agent-recipes.md](agent-recipes.md) · [agent-skill](https://rgctl.io/docs/guides/agent-skill/) |
+| Use rgctl / JSON | [USER_AGENTS_TEMPLATE](agents/USER_AGENTS_TEMPLATE.md) · [json-api.md](json-api.md) · [agent-skill](https://rgctl.io/docs/guides/agent-skill/) |
 | Languages (coverage JSON → website) | [languages/README.md](languages/README.md) |
 | Language tests (new / Tier 1) | [language-testing-guide.md](language-testing-guide.md) |
-| Dashboard UX | [dashboard-user-guide.md](dashboard-user-guide.md) |
+| Dashboard UX | [HTTP Server and Dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/) |
 | New capability | Matching doc in [design/](design/README.md) |
 
 ### Signed commits and DCO
@@ -284,5 +285,5 @@ git log -1 --format=%B | grep -i '^Signed-off-by:'
 
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — clone, build, test overview
 - [tier-1-language-support.md](tier-1-language-support.md) — Layer A–F depth
-- [cli-io-sanity-qe.md](cli-io-sanity-qe.md) — CLI test layers
-- [dashboard-design.md](dashboard-design.md) — WASM export pipeline
+- [internal/integration-tests.md](internal/integration-tests.md) — CLI test layers
+- [dashboard-v2.md](design/dashboard-v2.md) — Universe dashboard bundle pipeline

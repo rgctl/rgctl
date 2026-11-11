@@ -52,7 +52,7 @@ cargo build --bin rgctl
 
 | File | Purpose |
 |------|---------|
-| [`../dashboard/scripts/record-feature-demo.mjs`](../dashboard/scripts/record-feature-demo.mjs) | Tab montage (ecommerce-java defaults) |
+| [`../../dashboard/scripts/record-feature-demo.mjs`](../../dashboard/scripts/record-feature-demo.mjs) | Tab montage (ecommerce-java defaults) |
 | [`record-feature-demo.sh`](record-feature-demo.sh) | Discover + serve + record + burn |
 | [`rgctl-feature-demo.srt`](rgctl-feature-demo.srt) | Written by the recorder |
 | [`burn-feature-demo-captions.sh`](burn-feature-demo-captions.sh) | Burn → `rgctl-feature-demo.mp4` |
@@ -78,10 +78,10 @@ Blog walkthrough for [Decomposing a Monolith into Microservices](https://shaaf.d
 
 | File | Purpose |
 |------|---------|
-| [`microservices-decomposition-cli.tape`](microservices-decomposition-cli.tape) | VHS script |
-| [`record-microservices-decomposition-cli.sh`](record-microservices-decomposition-cli.sh) | Record → `microservices-decomposition-cli-no-captions.{gif,mp4}` |
-| [`microservices-decomposition-cli.srt`](microservices-decomposition-cli.srt) | Subtitle cues |
-| [`burn-microservices-decomposition-cli.sh`](burn-microservices-decomposition-cli.sh) | Burn → `microservices-decomposition-cli.mp4` |
+| `microservices-decomposition-cli.tape` | VHS script |
+| `record-microservices-decomposition-cli.sh` | Record → `microservices-decomposition-cli-no-captions.{gif,mp4}` |
+| `microservices-decomposition-cli.srt` | Subtitle cues |
+| `burn-microservices-decomposition-cli.sh` | Burn → `microservices-decomposition-cli.mp4` |
 
 ```bash
 cargo build --release

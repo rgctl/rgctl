@@ -18,10 +18,10 @@ rgctl is the primary code-intelligence engine for agents: always acquire `.rgctl
 
 **Installation:** [installation.md](../installation.md)  
 **Agent pack install:** [Agent Skill](https://rgctl.io/docs/guides/agent-skill/)  
-**Full JSON reference:** [json-api.md](../json-api.md) · [site](https://sshaaf.github.io/rgctl/docs/json-api/)  
-**Copy-paste recipes:** [agent-recipes.md](../agent-recipes.md)  
+**Full JSON reference:** [json-api.md](../json-api.md) · [site](https://rgctl.io/docs/json-api/)  
+**CLI command reference:** [CLI Command Reference](https://rgctl.io/docs/guides/cli-command-reference/)  
 **Human walkthrough:** [user-guide.md](../user-guide.md)  
-**Docs hub:** [docs/README.md](../README.md) · [site docs](https://sshaaf.github.io/rgctl/docs/)
+**Docs hub:** [docs/README.md](../README.md) · [site docs](https://rgctl.io/docs/)
 
 Default for agents: spawn **`rgctl -f json`** subprocesses (or use foreground **`rgctl serve`** for repeated HTTP queries). Do **not** open the browser dashboard unless the user asks for a visual UI.
 
@@ -75,18 +75,21 @@ Upgrading from an old daemon install: copy `~/.rgctl/cache/{name}/.rgctl/` into 
 | Community semantic search | `rgctl -f json semantic query "checkout" --scope community --limit 10` |
 | Impact before editing | `rgctl -f json blast-radius <Symbol> [--depth N] [--summary]` |
 | Architectural hotspots | `rgctl -f json metrics --pagerank` |
-| Doc headings / cross-links | `discover` indexes `.md` / `.mdx` by default; use `find` / `relations` on Module/REFERENCES — see [markdown-context.md](../markdown-context.md) |
-| Obsidian vault from docs | `rgctl -r "$REPO" discover -l markdown` then `export --export-format obsidian --export-output "$REPO/vault" --query all` — see [markdown-context.md](../markdown-context.md#obsidian-vault-export) |
+| Doc headings / cross-links | `discover` indexes `.md` / `.mdx` by default; use `find` / `relations` on Module/REFERENCES — see [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/) |
+| Obsidian vault from docs | `rgctl -r "$REPO" discover -l markdown` then `export --export-format obsidian --export-output "$REPO/vault" --query all` — see [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/) |
 | Doc section semantic search | `rgctl semantic index --scope docs --embedder hash` then `rgctl -f json semantic query "checkout flow" --scope docs --limit 10` (query scope does not filter — index must be doc-scoped) |
-| Hybrid CPG status / CALL / PDG / slice | `rgctl -f json cpg status` then `cpg function\|calls\|pdg\|slice` (needs `discover --with-cfg` for PDG/slice) |
+| Hybrid CPG status / CALL / PDG / slice | `rgctl -f json cpg status` then `cpg function\|calls\|pdg\|slice` (`cpg flows` / `slice` lazy-build one function without `--with-cfg`) |
 | Field mutations (cart / DTO safety) | `rgctl -f json cpg mutations --type ShoppingCart --exclude-ctors` (needs `--with-cfg`) |
 | Data flows / slice (CPG) | `rgctl -f json cpg flows FILE --line N --variable V --function F [--direction forward\|backward] [--with-alias]` |
 | Loop-carried DFG tags | `rgctl discover . --with-cfg --with-dfg-loops` |
 | AST skeleton | `rgctl discover --with-ast-skeleton` then `rgctl -f json cpg ast <Symbol>` |
 | CPG export | `rgctl cpg export --format graphson --output cpg.json [--path-contains src/]` |
+| Lossless writeback | `rgctl discover . --lossless` then `rgctl -f json writeback verify`, `writeback export --output ./out`, `writeback patch --rename old=new --dry-run` |
+| OSV / CVE reachability | `rgctl -f json vuln triage --osv advisory.json` → `deps check --osv advisory.json` → `vuln analyze --osv advisory.json` |
 | Migration plan | `rgctl -f json discover . --with-cfg --with-security --with-taint --with-universe --with-harmonic --export-migration-hints` (stdout = migration plan JSON; also writes `.rgctl/migration_plan.json`) |
 | CI gate on changes | `rgctl -f json check --policy-file policy.json` (exit 1 = violations) |
-| Temporal PR gate | `rgctl -f json pr-check --policy-file rgctl-pr-policy.json --base-artifact .rgctl-base --base-ref origin/main --head-ref HEAD --strict` |
+| Temporal PR gate | `rgctl -f json review check --policy-file rgctl-pr-policy.json --base-artifact .rgctl-base --base-ref origin/main --head-ref HEAD --strict` (`pr-check` is a compatibility alias) |
+| Call-path PR deltas | `rgctl -f json review paths --base-ref origin/main --head-ref HEAD` |
 | Check temporal bridge | `rgctl -f json check --temporal --policy-file policy.json --base-ref origin/main --head-ref HEAD` |
 | Incremental file index | `rgctl update` or `rgctl update --files src/foo.rs` (requires existing `.rgctl/`; alias: `discover --files`) |
 | Live refresh while serving | `rgctl serve --watch` |
@@ -119,15 +122,15 @@ See [HTTP Server and Dashboard](https://rgctl.io/docs/guides/http-server-and-das
 
 0. **Artifacts** — always `{repo}/.rgctl/` after `discover`. Add `.rgctl/` to `.gitignore`.
 1. **Index first** — `find`/`callers`/`relations`/`inventory`, `blast-radius`, `metrics` fail without `discover`.
-2. **Discover target** — `rgctl -r PATH discover .` (or `cd PATH && rgctl discover .`); relative PATH joins `-r`.
+2. **Discover target** — `cd PATH && rgctl discover .` (or `rgctl -r PATH discover` without trailing `.`).
 3. **Use `-f json`** — stable `schema_version` fields; see [json-api.md](../json-api.md). Errors under JSON emit `error_code` / `recovery_command` on stdout.
 4. **Disambiguate symbols** — `inspect` / `cpg` / `blast-radius` accept `--file` / `--class` / `--line`.
-5. **`slice --function`** accepts bare method or `Class::method` / `Class.method`.
+5. **`slice --function`** accepts bare method or `Class::method` / `Class.method` (optional; auto-resolved from `file:line`).
 6. **`export --query`** uses filter syntax (`name:Foo`, `type:Function`, `all`) — not Cypher `MATCH`.
-7. **Deep analysis** needs `discover --with-cfg` (and `--with-taint` for discover-time taint).
+7. **Deep analysis** needs `discover --with-cfg` for whole-repo `cpg mutations` / `taint --sink` (and `--with-taint` for discover-time taint); `slice` and `cpg flows` lazy-build one function without it.
 8. **Semantic search** needs `semantic index` (separate from discover). Default embedder is **vocab**.
 9. **Dashboard is optional** — only when a human wants a UI.
-10. **Markdown docs** — indexed on `discover`; see [markdown-context.md](../markdown-context.md).
+10. **Markdown docs** — indexed on `discover`; see [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/).
 
 ---
 
@@ -144,4 +147,4 @@ After `discover`, under **`{repo}/.rgctl/`**: `graph.snapshot.bin`, optional `se
 
 ## See also
 
-- [Introduction](../Introduction.md) · [User Guide](../user-guide.md) · [Agent recipes](../agent-recipes.md)
+- [Introduction](../Introduction.md) · [User Guide](../user-guide.md) · [Agent skill guide](https://rgctl.io/docs/guides/agent-skill/)

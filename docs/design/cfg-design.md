@@ -1,205 +1,224 @@
 # Control-Flow Graph (CFG) — Engineering Design
 
-Per-function **control-flow graphs**: basic blocks, branch edges, and loop structure — the same IR layer compilers use before optimization.
+This document specifies the **per-function Control-Flow Graph (CFG) subsystem** in `rgctl` (`crates/rgctl-analysis/src/cfg.rs`, `cfg_builder.rs`, and `cfg_pdg_archive.rs`). It covers single-parse AST lowering into basic blocks and typed branch edges, parameter and signature initialization, the v3 indexed `.rgctl/analysis/cfg_pdg.archive.bin` binary layout, CLI inspection contracts, and language-specific lowering rules.
 
 ![CFG tab — blocks and Sigma graph (gbuilder)](../images/design/cfg/cfg-control-flow.png)
 
-*Figure 1: **CFG / PDG Analysis** tab — function list, block table, and interactive CFG layout.*
+*Figure 1: **CFG / PDG Analysis** tab — function list, basic-block table, and interactive Sigma.js CFG layout.*
 
 ---
 
-## 1. Goals
+## 1. System Overview & End-to-End Data Flow
 
-| Goal | How |
-|------|-----|
-| Visualize executable structure | Basic blocks + conditional/unconditional edges |
-| Feed PDG / slice / taint | Shared CFG construction in analysis pipeline |
-| Scale to large repos | v3 indexed `cfg_pdg.archive.bin` (`TocEntry` + `memmap2`); dashboard `archive_only` lazy load |
-| CLI dumps | `inspect SYMBOL cfg` (+ `--prune`, `-f mermaid`) |
-| On-demand build | `ensure_cfg_pdg_for_source` appends one function for `slice` / `cpg flows` without whole-repo `--with-cfg` |
-
----
-
-## 2. Architecture overview
-
-```mermaid
-flowchart LR
-  subgraph build["Whole-repo or lazy"]
-    DISC["discover --with-cfg (full archive)"]
-    LAZY["ensure_cfg_pdg_for_source (single fn)"]
-    PARSE[Language CFG builder]
-    CFG[ControlFlowGraph]
-    DISC --> PARSE
-    LAZY --> PARSE
-    PARSE --> CFG
-  end
-
-  subgraph store["Storage — v3 indexed archive"]
-    ARC["cfg_pdg.archive.bin (TocEntry + memmap2)"]
-    CFG --> ARC
-  end
-
-  subgraph export["Dashboard"]
-    CI[cfg_index.json]
-    CD[cfg/*.json or archive sidecar]
-    CV[CfgView.tsx + Sigma]
-    CI --> CV
-    CD --> CV
-  end
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 1. SINGLE-PARSE OR ON-DEMAND AST LOWERING (`cfg_builder.rs`)                 │
+│                                                                              │
+│  A. Eager (`rgctl discover . --with-cfg`):                                   │
+│     • `extract_with_cfg_pdg` reuses the worker's in-memory `tree_sitter::Tree`│
+│     • Lowers every `Function` / `Method` / `Constructor` in a single parse   │
+│                                                                              │
+│  B. Lazy On-Demand (`rgctl slice` / `rgctl cpg flows` / `rgctl inspect`):    │
+│     • `ensure_cfg_pdg_for_source` parses only the target file and appends    │
+│       the function's `CfgPdgRecord` to `.rgctl/analysis/cfg_pdg.archive.bin` │
+└───────────────────────────────────────┬──────────────────────────────────────┘
+                                        │
+                                        ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 2. CFG IR CONSTRUCTION (`crates/rgctl-analysis/src/cfg.rs`)                  │
+│                                                                              │
+│  `ControlFlowGraph`:                                                         │
+│    ├─► `Entry` block (`BlockId(0)`): seeds formal parameters (`Parameter`    │
+│    │     defs at `(param_name, scope_id = 0)`)                               │
+│    ├─► `BasicBlock` table: `statements: Vec<Statement>` with lexical         │
+│    │     `ScopeStack` (`scope_id`) and def/use variable sets                 │
+│    ├─► `CfgEdge` list: `Unconditional`, `TrueBranch`, `FalseBranch`,         │
+│    │     `LoopBack`, `SwitchCase(String)`, `Exception`, `Finally`            │
+│    └─► `Exit` block: unified post-dominator sink for `return` / `throw`      │
+└───────────────────────────────────────┬──────────────────────────────────────┘
+                                        │
+                                        ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 3. V3 MMAP ARCHIVE & DOWNSTREAM CONSUMERS (`cfg_pdg_archive.rs`)             │
+│                                                                              │
+│  `.rgctl/analysis/cfg_pdg.archive.bin` (`RBCP` v3 + `TOC3` footer):          │
+│    ├─► `DominatorTree::build(&cfg)`   → Immediate dominators & frontiers     │
+│    ├─► `ProgramDependenceGraph::build`→ Control + `(name, scope_id)` data    │
+│    ├─► `rgctl inspect <symbol> cfg`   → JSON / Mermaid / DOT / text dump     │
+│    └─► `rgctl-dashboard` (`cfg_index.json` + lazy `archive_only` detail)     │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**v3 archive:** `CfgPdgArchiveMmap` with 32-byte `TocEntry` directory and zero-copy record lookup. Whole-repo build via `discover --with-cfg`; `rgctl slice` / `rgctl cpg flows` call `ensure_cfg_pdg_for_source` to parse one enclosing function and **atomically append** its `TocEntry` when missing. Lexical `(name, scope_id)` tracking on defs/statements feeds PDG reaching defs (see [pdg-design.md](pdg-design.md)).
+---
 
-**Large repos:** `cfg_index.json` sets `detail_mode: "archive_only"` — UI offers **Load CFG graph** to fetch one function from the record pack on demand.
+## 2. Theoretical Foundations Mapped to `rgctl`
+
+| Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
+| :--- | :--- | :--- |
+| **Maximal Basic Blocks & Leader Partitioning** | Aho, Lam, Sethi & Ullman (2006), *Compilers: Principles, Techniques, and Tools* (Dragon Book, §8.4) | [`CfgBuilder`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_builder.rs#L1-L260) splits linear statement sequences at branch conditions, merge targets, loop headers, and exception handlers into `BasicBlock` records with explicit `BlockKind` (`Entry`, `Normal`, `Branch`, `LoopHeader`, `LoopBody`, `TryBlock`, `CatchBlock`, `FinallyBlock`, `Exit`). |
+| **Short-Circuit Boolean Evaluation Lowering** | Clarke & Emerson (1981); standard compiler IR lowering for `&&` / `\|\|` | `wire_condition` decomposes compound `&&` and `\|\|` expressions (and Rust `let_condition` chains) into intermediate conditional basic blocks with `TrueBranch` / `FalseBranch` edges so short-circuit control dependencies are preserved in the PDG. |
+| **Lexical Scope-Indexed Statement IR** | Cytron et al. (1991), *Efficiently Computing Static Single Assignment Form and the Control Dependence Graph* | As `CfgBuilder` walks nested AST blocks, it maintains a monotonic `scope_id` stack (`ScopeStack`). Every variable definition (`defs`) and reference (`uses`) on a `Statement` is tagged with `(name, scope_id)` so inner variable shadowing never aliases outer declarations while RHS-before-LHS (`let x = x + 1`) resolves accurately. |
+| **Structured Exception & Resource Unwind** | Gosling et al., *Java Language Specification* (§14.20); Rust `?` (`Try`) operator semantics | `try`/`catch`/`finally`, Java `try-with-resources` (synthetic reverse-order `.close()` calls), C# `using`/`lock`, and Rust `?` (`try_expression`) emit explicit `Exception` and `Finally` edges to handler blocks or the terminal `Exit` sink. |
 
 ---
 
-## 3. CFG schema (dashboard detail)
+## 3. Binary Layout, Data Structures & Memory Discipline
 
-| Field | Meaning |
-|-------|---------|
-| `blocks[]` | `id`, `start_line`, `end_line`, `label` |
-| `edges[]` | `from`, `to`, `kind` (`true`/`false`/`unconditional`) |
-| `entry` / `exit` | Block ids |
+### 3.1 In-Memory CFG Structures (`crates/rgctl-analysis/src/cfg.rs`)
+
+```rust
+pub struct ControlFlowGraph {
+    pub function_name: String,
+    pub file_path: Option<String>,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub entry: BlockId,
+    pub exit: BlockId,
+    pub blocks: Vec<BasicBlock>,
+    pub edges: Vec<CfgEdge>,
+    pub parameters: Vec<String>,
+}
+```
+
+- **Parameter & Signature Binding:**
+  - In the main graph (`graph.snapshot.bin`), a callable's full parameter list (`Vec<GraphParameter>` with `name`, `param_type`, `default_value`) lives in `NodeExtension.parameters` and its signature string in `NodeRow.signature_off`.
+  - In `ControlFlowGraph`, formal parameter names are extracted from the function AST node's `parameters` child and recorded both in `ControlFlowGraph.parameters` and as initial `StatementKind::Parameter` definitions in the `Entry` block (`scope_id = 0`) so downstream reaching-definition analysis (`dataflow.rs`) and interprocedural slicing (`interprocedural_slicing.rs`) map caller arguments to callee parameters by position and name.
+
+### 3.2 `RBCP` v3 Indexed Archive Layout (`.rgctl/analysis/cfg_pdg.archive.bin`)
+
+Defined in [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs#L28-L185):
+
+```text
++-----------------------------------------------------------------------+
+| Header: magic = b"RBCP" (4B) | version = 3 (u32 LE)                   |
+|         has_digest (u8) | [digest_len (u32 LE) | digest_bytes]        |
++-----------------------------------------------------------------------+
+| Contiguous bincode CfgPdgRecord Payloads                              |
+|   Record 0: { function_id: Uuid, code_hash, function_name,            |
+|               file_path, cfg: Arc<ControlFlowGraph>,                  |
+|               pdg: Arc<ProgramDependenceGraph> }                      |
+|   Record 1: ...                                                       |
++-----------------------------------------------------------------------+
+| 8-Byte Alignment Padding                                              |
++-----------------------------------------------------------------------+
+| Sorted 32-Byte TocEntry Array (toc_count * 32B, sorted by uuid)       |
+|   [0..16]  uuid: [u8; 16]                                             |
+|   [16..24] offset: u64 (LE)                                           |
+|   [24..28] len: u32 (LE)                                              |
+|   [28..32] flags: u32 (LE) (0 = PRIMARY, 1 = STABLE_ALIAS)            |
++-----------------------------------------------------------------------+
+| 16-Byte EOF Trailer (TOC_TRAILER_SIZE = 16)                           |
+|   [file_len - 16 .. file_len - 8] toc_offset: u64 (LE)                |
+|   [file_len - 8  .. file_len - 4] toc_count: u32 (LE)                 |
+|   [file_len - 4  .. file_len]     footer_magic: u32 (0x3354_4F43)     |
++-----------------------------------------------------------------------+
+```
+
+- **Dual UUID Addressing (`TOC_FLAG_PRIMARY` + `TOC_FLAG_STABLE_ALIAS`):** Every function record writes two 32-byte `TocEntry` rows pointing to the same `(offset, len)` payload: one keyed by the graph node's `Uuid` (`TOC_FLAG_PRIMARY = 0`) and one keyed by `stable_record_uuid(file_path, function_name)` (`TOC_FLAG_STABLE_ALIAS = 1`).
+- **Lazy Atomic Append (`ensure_cfg_pdg_for_source`):** When `rgctl slice` or `rgctl cpg flows` targets a function not yet in `cfg_pdg.archive.bin`, `ensure_cfg_pdg_for_source` parses only that file, serializes the new `CfgPdgRecord` over the old TOC footer, and writes a newly sorted TOC + 16-byte `TOC3` trailer.
+
+### 3.3 Multi-Language CFG Lowering Matrix
+
+| Language | Lowered Control Constructs (`cfg_builder.rs`) |
+| :--- | :--- |
+| **Rust** | `if` / `if let` / `let_condition` chains, `&&`/`\|\|` short-circuit, `match` arms + guard conditions, `?` (`try_expression` → `TrueBranch` continue / `FalseBranch` early return), `for`/`while`/`while let`/`loop`, `'label:` break/continue (`breakable_stack`), `panic!`/`todo!`/`unimplemented!`/`unreachable!` → `Exception` exit, `.await` suspend split. |
+| **Java** | `if`, `&&`/`\|\|` short-circuit, classic `for` (`continue` → update block) & `enhanced_for_statement`, `switch_statement` (implicit fallthrough) & `switch_expression` (`switch_rule` arrow arms), labeled `break`/`continue`, `try`/`catch`/`finally`, `try-with-resources` (reverse-order synthetic `.close()` before `finally`), `throw_statement`. |
+| **Go** | `if` (with init statement), `for` (3-clause, condition-only, infinite, `range`), `switch` / `type_switch` (no implicit fallthrough unless `fallthrough` statement), `select` communication cases, labeled `break`/`continue`/`goto`, `defer` unwind before return, `panic` → `Exception`. |
+| **C / C++** | `if` (including C++17 `condition_clause` initializer), `&&`/`\|\|`, `for` / C++ `for_range_loop`, `while` / `do-while`, `switch` / `case_statement` (implicit fallthrough), ternary `?:`, `goto` / forward labels, `abort`/`exit`/`_Exit`, C `setjmp`/`longjmp` (intra-procedural jump back), C++ `try`/`catch`/`throw`, `co_await`/`co_yield`/`co_return`. |
+| **C#** | `if`, `&&`/`\|\|`, `for`/`foreach`, `switch_statement` (`when` guards, `goto case`/`goto default`) & `switch_expression`, `??` / `?.` null-conditional splits, `try`/`catch`/`when`/`finally`, `using` statement & `using var` declaration (`Dispose()`), `lock` (`Monitor.Exit`), `await`, `yield return`/`yield break`, lambdas/local functions. |
+| **Python / TS / JS / Ruby / PHP / Kotlin** | `if`/`elif`/`else`, ternary, `for`/`while`/`foreach`, `try`/`except`/`finally` (`rescue`/`ensure`), `match`/`switch`, `with` context managers, `raise`/`throw`, `yield`/`await`. |
 
 ---
 
-## 4. Rust implementation map
+## 4. CLI Contract, JSON Schema & Implementation Map
 
-| Component | Path |
-|-----------|------|
-| CFG IR | `crates/rgctl-analysis/src/cfg.rs` |
-| Language lowering | `crates/rgctl-lang-*/` CFG hooks |
-| Archive | `crates/rgctl-analysis/src/cfg_pdg_archive.rs` (`CfgPdgArchiveMmap`, `ensure_cfg_pdg_for_source`) |
-| CLI inspect | `src/cli/inspect.rs` |
-| Dashboard export | `crates/rgctl-dashboard/src/cfg_export.rs` |
+### 4.1 CLI Commands
 
----
-
-## 5. Dashboard implementation
-
-| Piece | Path |
-|-------|------|
-| Tab | `dashboard/src/CfgView.tsx` |
-| Graph render | Sigma.js with `CFG_NODE_LEGEND` / `CFG_EDGE_LEGEND` |
-| Lazy load | `loadCfgDetail(functionId)` worker → archive records |
-| Dominance table | Immediate dominators when detail includes `idom` |
-
----
-
-## 6. CLI usage
+Verified against `rgctl inspect --help` and [`src/cli/inspect.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect.rs):
 
 ```bash
-# Optional whole-repo prebuild (needed for taint --sink / cpg mutations / richest inspect)
+# Optional whole-repo CFG/PDG precomputation during discover
 rgctl discover . --with-cfg
 
-# Inspect (uses archive when present)
-rgctl inspect MyClass#myMethod cfg
-rgctl -f mermaid inspect MyClass#myMethod cfg --prune
-rgctl -f json inspect MyClass#myMethod cfg -o /tmp/cfg.json
+# Inspect a function's CFG (text summary, JSON, Mermaid, or Graphviz DOT)
+rgctl inspect <symbol> cfg
+rgctl inspect <symbol> cfg --prune -f json
+rgctl inspect <symbol> cfg --prune -f mermaid
+rgctl inspect <symbol> cfg -f dot
 
-# slice / cpg flows build a single-function record on demand if missing from the archive
-rgctl slice src/Foo.java --line 42 --variable x
+# Disambiguate overloaded or same-named symbols by file, class, or line
+rgctl inspect <symbol> --file src/Service.java --class Service --line 42 cfg -f json
+```
+
+### 4.2 JSON Schema (`rgctl inspect <symbol> cfg -f json`)
+
+Implemented in [`src/cli/inspect_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect_output.rs):
+
+```json
+{
+  "schema_version": "1.0",
+  "symbol": "processOrder",
+  "layer": "cfg",
+  "pruned": true,
+  "start_byte": 412,
+  "end_byte": 1180,
+  "name_byte_span": [424, 436],
+  "entry_block": 0,
+  "exit_block": 1,
+  "block_count": 6,
+  "edge_count": 7,
+  "blocks": [
+    {
+      "id": 0,
+      "kind": "Entry",
+      "label": "entry",
+      "start_line": 18,
+      "end_line": 18,
+      "statement_count": 2
+    }
+  ],
+  "edges": [
+    {
+      "from": 0,
+      "to": 2,
+      "kind": "Unconditional"
+    }
+  ]
+}
+```
+
+### 4.3 Implementation Map
+
+| Component | Source File | Key Types & Functions |
+| :--- | :--- | :--- |
+| **CFG Data Structures** | [`crates/rgctl-analysis/src/cfg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg.rs) | `ControlFlowGraph`, `BasicBlock`, `BlockId`, `BlockKind`, `CfgEdge`, `CfgEdgeKind`, `Statement` |
+| **Multi-Language AST Lowering** | [`crates/rgctl-analysis/src/cfg_builder.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_builder.rs) | `CfgBuilder`, `build_cfg_for_function`, `wire_condition`, `ScopeStack` |
+| **v3 Mmap Archive & Lazy Append** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `CfgPdgArchive`, `CfgPdgArchiveMmap`, `CfgPdgRecord`, `TocEntry`, `ensure_cfg_pdg_for_source` |
+| **CLI Inspect Command** | [`src/cli/inspect.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect.rs), [`src/cli/inspect_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect_output.rs) | `run`, `InspectArgs`, `inspect_cfg_json`, `cfg_to_mermaid`, `cfg_to_dot` |
+| **Dashboard Export & UI** | [`crates/rgctl-dashboard/src/cfg_export.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-dashboard/src/cfg_export.rs), [`dashboard/src/CfgView.tsx`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/CfgView.tsx) | `export_cfg_index`, `CfgView` |
+
+---
+
+## 5. Performance Guardrails & Verification Checklist
+
+1. **Single-Parse AST Reuse:** During `rgctl discover --with-cfg`, `extract_with_cfg_pdg` lowers the CFG from the existing `tree_sitter::Tree` on the Rayon worker thread; never re-parse the source file a second time.
+2. **$O(1)$ Archive Open & $O(\log F)$ Lookup:** `CfgPdgArchiveMmap::open` reads only the 16-byte `TOC3` EOF trailer (`file_len - 16`) and binary-searches the 32-byte `TocEntry` slice without deserializing untouched function records.
+3. **Large-Repo Dashboard Gate:** When exporting the static dashboard bundle (`--with-universe`), `cfg_index.json` switches to `detail_mode: "archive_only"` on large repositories so per-function JSON files are not eagerly written to disk.
+
+### Verification Commands
+
+```bash
+# Run multi-language CFG lowering & v3 archive unit tests
+cargo test -p rgctl-analysis cfg
+
+# Verify CLI inspect cfg output formats (json, mermaid, dot)
+cargo test --test subprocess_golden_path
 ```
 
 ---
 
-## 7. Testing
+## 6. Known Limitations & By-Design Boundaries
 
-| Layer | Location |
-|-------|----------|
-| CFG unit tests | `crates/rgctl-analysis/src/cfg.rs`, `cfg_builder.rs` (`test_go_*`, `test_java_*`, `test_rust_*`, `test_c_*`, `test_cpp_*`) |
-| Dashboard harness | `tests/dashboard_harness.rs` (`cfg_index.json`) |
-| Playwright | `dashboard/scripts/test-graph-tabs.mjs` |
-
-Screenshots: `capture-design-screenshots.mjs` → `docs/images/design/cfg/`.
-
-### Go-specific notes
-
-See [go-language-coverage.md](./go-language-coverage.md#go-cfg-lowering-tree-sitter) for the Tree-sitter Go checklist vs current lowering. Remaining honesty: `go` does not fork a parallel CFG; defer multiplicity inside loops is static-once.
-
-### Java-specific notes
-
-Shared `cfg_builder` now lowers Java:
-
-| Surface | Lowering |
-|---------|----------|
-| `if` / `&&` `\|\|` | Unwrap `parenthesized_expression`; short-circuit via `wire_condition` |
-| Classic `for` | Fields `init` / `condition` / `update`; `continue` → update block |
-| `enhanced_for_statement` | Header branch + body cycle |
-| `switch_statement` / `switch_expression` | `switch_block_statement_group` (implicit fallthrough) and `switch_rule` (arrow, no fallthrough); `return switch (...)` visits nested switch |
-| Labels | `identifier ':' stmt` (no `label` field); labeled break/continue via `breakable_stack` |
-| `try` / `try_with_resources` | Exception edges from try entry **and** body statement blocks to catch; `finally_stack` unwind on return/throw; resources emit synthetic `name.close()` (reverse order) before user `finally` |
-| `throw_statement` | Inside try → Exception to catch; otherwise terminal `Exception` exit |
-
-### Rust-specific notes
-
-| Surface | Lowering |
-|---------|----------|
-| `if` / `if let` / `&&` `\|\|` | `let_condition` as branch; short-circuit via `wire_condition`; unwrap `else_clause` |
-| `match` + guards | Sequential arms; guard `condition` short-circuits to next arm; arm `value` field visited (returns lower) |
-| `try_expression` (`?`) | `IfTrue` success continue / `IfFalse` early `Return` exit |
-| `for pat in iter` | Iterator expression + next/body cycle |
-| `loop` | Unconditional body cycle; exit only via `break` / `return` / panic (no `IfFalse`) |
-| `while` / `while let` | Condition header + body cycle |
-| Labels | `'label:` embedded on loop nodes; `break`/`continue 'label` via `breakable_stack` |
-| `panic!` / `todo!` / `unimplemented!` / `unreachable!` | `macro_invocation` → terminal `Exception` |
-| `.await` | Branch marker + basic-block resume split |
-
-Honesty left: implicit `Drop` cleanup blocks are not inserted; `async_block` / `closure_expression` are not separate sub-CFGs (nested control flow inside them is still walked when reachable).
-
-### C-specific notes
-
-| Surface | Lowering |
-|---------|----------|
-| `if` / `&&` `\|\|` | Unwrap `parenthesized_expression` and C++ `condition_clause`; short-circuit via `wire_condition` |
-| `for` | Fields `initializer` / `condition` / `update`; `continue` → update |
-| `do` / `while` | Body-then-condition cycle; condition on header block |
-| `switch` / `case_statement` | Implicit fallthrough between cases; `default` = case with no `value` |
-| Ternary | `conditional_expression` → IfTrue/IfFalse merge |
-| `goto` / labels | `statement_identifier` label field; eager label blocks for forward jumps |
-| `abort` / `exit` / `_Exit` | Terminal `Exception` exit |
-| `setjmp` / `longjmp` | Record setjmp sites; longjmp `Jump` back (intra-procedural approx) |
-
-Honesty left: computed `goto *ptr` not modeled; `longjmp` across functions is not inter-procedural; Duff’s-device case nesting relies on recursive case collection.
-
-### C++-specific notes
-
-| Surface | Lowering |
-|---------|----------|
-| C++17 `if` / `switch` init | `condition_clause.initializer` before `value` condition |
-| `condition_clause` | Unwrap to `value` for short-circuit / branch text |
-| `for_range_loop` | Range expr + begin/end-style header cycle |
-| `try` / `catch` / `throw` | Exception edges; throw → catch or function exit |
-| Ternary / `goto` / fallthrough | Same as C |
-| Coroutines | `co_await` / `co_yield` suspend split; `co_return` as return |
-
-Honesty left: RAII destructor cleanup blocks not inserted; overloaded `&&`/`||` still short-circuit (no type info); `lambda_expression` is not a separate sub-CFG.
-
-### C#-specific notes
-
-| Surface | Lowering |
-|---------|----------|
-| `if` / `&&` `\|\|` | Short-circuit via `wire_condition` (same as Java/C) |
-| `for` | Init / condition / update; `continue` → update |
-| `foreach` | Collection expr + `for-each` header cycle (`MoveNext`-style) |
-| `switch_statement` / `switch_section` | Case fan-out; **no** implicit fallthrough; `when` guards before body |
-| `switch_expression` / `switch_expression_arm` | Sequential pattern arms (C#); Java `switch_expression` falls back to statement lowering |
-| `??` / `?.` | Null-coalesce and null-conditional branch splits |
-| `try` / `catch` / `when` / `finally` | Exception edges; catch filter before body; finally on exit |
-| `using` / `lock` | Finally-style `Dispose()` / `Monitor.Exit` on all exits (statement **and** `using var` declaration) |
-| `await` | Async state-machine split: `IfTrue` resume / `IfFalse` suspend exit |
-| `yield return` / `yield break` | Suspend split / terminal exit through finallies |
-| `goto` / labels | Unconditional jump within method |
-| `goto case` / `goto default` | Resolve to pre-created switch section entry blocks |
-| Lambdas / local functions | Disconnected sub-CFG (`Jump` from definition); body returns use nested exit |
-
-Honesty left: full async state-machine (multiple awaits / `MoveNext` resume table) is still a per-await bifurcate, not a global state enum; expression-bodied members and iterators beyond `yield` are not specialized further.
-
----
-
-## 8. Related docs
-
-- [PDG design](pdg-design.md) · [Dominance design](dominance-design.md)
-- [Go language coverage](go-language-coverage.md) — LF-11…LF-15 CFG expectations
-- [Dashboard design](../dashboard-design.md) — Phase 4 CFG export
+1. **Implicit RAII / `Drop` Destructors Not Expanded:** Rust `Drop::drop` and C++ RAII stack-unwinding destructors are not synthesized as explicit basic-block nodes at every scope exit (unlike Java `try-with-resources` and C# `using`, which have explicit lexical resource blocks).
+2. **Async / Coroutine Lowering Is Intra-Function:** `.await`, `co_await`, and `yield` split basic blocks with suspend/resume edges inside the enclosing function's CFG rather than synthesizing a separate compiler state-machine struct.
+3. **Computed `goto *ptr` & Inter-Procedural `longjmp`:** C/C++ computed indirect jumps (`goto *table[i]`) and cross-function `longjmp` unwinds are not statically wired across functions.

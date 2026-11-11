@@ -162,7 +162,7 @@ Default discover does **not** attach a body-storing `CodeIndex` (avoids multi-GB
 
 Harmonic runs only when `--with-harmonic` or **`discover --full`** (deep stage). Default linux discover skips harmonic and dashboard export.
 
-Algorithm detail (sampled betweenness, HyperBall, adaptive gating): [analysis-architecture.md](../analysis-architecture.md), [harmonic-centrality.md](../harmonic-centrality.md), [graph-metrics-design.md](../design/graph-metrics-design.md).
+Algorithm detail (sampled betweenness, HyperBall, adaptive gating): [analysis-architecture.md](../analysis-architecture.md), [graph-metrics-design.md](../design/graph-metrics-design.md).
 
 ---
 
@@ -331,8 +331,8 @@ Groups: `digest_fast_path_equal`, `node_index_parallel`, `edge_merge_join`, `ful
 cargo build --release --bin rgctl
 ./scripts/prepare-linux-diff-snapshots.sh   # worktrees + discover → example/linux/.rgctl-diff/{base,head}/
 RUST_LOG=info,profile=info ./target/release/rgctl -f json diff \
-  --base example/linux/.rgctl-diff/base \
-  --head example/linux/.rgctl-diff/head
+  example/linux/.rgctl-diff/base \
+  example/linux/.rgctl-diff/head
 cargo test --release --test cold_profile_gates linux_cold_diff_within_baseline -- --ignored --nocapture
 ```
 

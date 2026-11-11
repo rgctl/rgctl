@@ -4,7 +4,7 @@ This document defines what **fully supported** means for a programming language 
 
 **Audience:** contributors adding a new Tier 1 language or bringing a language to parity with the current bar (Java-shaped Layer F + Layers A–E).
 
-**Related docs:** [tier-2-language-support.md](tier-2-language-support.md) (declarative `tags.scm` query plugins), [language-testing-guide.md](language-testing-guide.md) (where to add tests / what to assert), [Code_structure.md](Code_structure.md) (crate layout), [dashboard-design.md](dashboard-design.md) (dashboard bundle), [user-guide.md](user-guide.md) (discover / serve), [hybrid-cpg-plan.md](design/hybrid-cpg-plan.md) (CPG).
+**Related docs:** [tier-2-language-support.md](tier-2-language-support.md) (declarative `tags.scm` query plugins), [language-testing-guide.md](language-testing-guide.md) (where to add tests / what to assert), [Code_structure.md](Code_structure.md) (crate layout), [dashboard-v2.md](design/dashboard-v2.md) (dashboard bundle), [user-guide.md](user-guide.md) (discover / serve), [hybrid-cpg-plan.md](design/hybrid-cpg-plan.md) (CPG).
 
 ---
 
@@ -24,7 +24,7 @@ rgctl uses a **hybrid tiering** model across **~69 language plugins**:
 
 **Cross-language MRO / DI:** Tier-1 OOP languages should emit inheritance / mixin edges that `MroIndex` can linearize into `Overrides`, and framework DI/route edges (`Injects`, `ExposesRoute`, …) where applicable — see [Dependency Injection and Frameworks](https://rgctl.io/docs/guides/dependency-injection-and-frameworks/).
 
-**Markdown** is a separate **custom markup plugin** (`rgctl-lang-markdown`): documentation context graph only — not Tier 1 and not generic Tier 2. See [markdown-context.md](markdown-context.md).
+**Markdown** is a separate **custom markup plugin** (`rgctl-lang-markdown`): documentation context graph only — not Tier 1 and not generic Tier 2. See [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/).
 
 <a id="mainframe-triad"></a>
 **Mainframe triad (structural custom plugins, not Layer A–F Tier 1):** `cobol`, `pli`, and `jcl` ship as line/card extractors that emit modules, paragraphs/procs/steps, copybook/`%INCLUDE`/`INCLUDE MEMBER` imports, `PERFORM`/`CALL`/`EXEC CICS`/`EXEC PGM`/`RUN PROGRAM` calls, and JCL `DD DSN` dataset `References`. They are migration-oriented (batch coupling for `blast-radius` / communities / roadmap) and do **not** claim CFG/PDG/taint Layer F parity.
@@ -467,6 +467,6 @@ Layer F golden coverage lives in `crates/rgctl-analysis/src/field_write.rs` (`*_
 
 ## 9. Getting help
 
-- Open a **[Language Support Request](.github/ISSUE_TEMPLATE/language_request.md)** issue before large work.
+- Open a **[Language Support Request](../.github/ISSUE_TEMPLATE/language_request.md)** issue before large work.
 - Point questions at `rgctl-plugin-api::LanguagePlugin` and the reference crates above.
-- For dashboard contract details, see `tests/dashboard_harness.rs` and `docs/dashboard-design.md`.
+- For dashboard contract details, see `tests/dashboard_harness.rs` and [design/dashboard-v2.md](design/dashboard-v2.md).

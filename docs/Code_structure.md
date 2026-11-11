@@ -136,7 +136,7 @@ flowchart TB
 #### Entry (`rgctl` root crate)
 
 - **`src/main.rs`** — process entry, dispatches to CLI.
-- **`src/cli/`** — subcommands: `discover`, `update`, `watch`, `merge`, `find` / `callers` / `callees` / `relations` / `inventory`, `blast-radius`, `serve`, `slice`, `inspect`, `metrics`, `semantic`, `communities`, `clones`, `cpg`, `check`, `review`, `export` (`query` / `pr-check` are compatibility aliases).
+- **`src/cli/`** — subcommands: `discover`, `update`, `watch`, `compact`, `merge`, `status`, `find` / `callers` / `callees` / `relations` / `inventory`, `blast-radius`, `diff`, `serve`, `slice`, `inspect`, `metrics`, `semantic`, `communities`, `clones`, `cpg`, `taint`, `vuln`, `deps`, `check`, `review`, `writeback`, `export`, `install`, `completions` (`query` / `pr-check` are compatibility aliases).
 - **`src/cli/http_serve.rs`** — `serve`: dashboard + `POST /api/query` (foreground HTTP for one repo).
 - **`src/cli/session_status.rs`** — `status`: cheap snapshot / digest / node-edge summary.
 - **`src/cli/*_output.rs`** — typed JSON serializers (`blast_radius_output`, `discover_output`, structured-query envelopes, …). Commands assemble domain results from workspace crates and serialize here; **do not** embed algorithm logic in output modules.
@@ -237,7 +237,9 @@ Single home for **graph algorithms and semantic analysis**:
 | `inspect` | `graph`, `analysis` |
 | `metrics` | `analysis` (centrality, community, git churn) |
 | `clones` | `analysis` (`clones`, `fragment_clones`) |
-| `check` / `review check` | `analysis` (policies, blast radius, temporal ledger) |
+| `check` / `review` | `analysis` (policies, blast radius, call-path deltas, temporal ledger) |
+| `vuln` / `deps` | `security`, `analysis` (OSV/CVE triage, OpenVEX, `.sink_taint` parked reachability), `graph` |
+| `writeback` | `graph` (`RGCS` v2 `content_store.bin`, `RGCT` v1 `cst.archive.bin`, Red-Green span splicer, trust ledger) |
 | `export` | `export`, `graph` |
 
 ### On-disk artifacts (`.rgctl/`)
@@ -247,15 +249,18 @@ Understanding files helps avoid duplicating cache layers:
 | File | Produced by | Consumed by |
 |---|---|---|
 | `graph.snapshot.bin` | `discover` / `update` / `merge` (`RGCL` v2 default) | `CodeGraph::open_snapshot`, `SnapshotNodeStore`, `ColumnarGraphMmap`, `serve` |
+| `metadata.db/` | `discover` / `update` (`ColdMetadataDb`) | Lazy `NodeExtension` lookups (`parameters`, `return_type`, `token_bloom`, 14B Green span tail) |
+| `content_store.bin` | `discover --lossless` (`RGCS` v2) | `rgctl writeback verify|export|patch` |
+| `cst.archive.bin` | `discover --lossless` (`RGCT` v1) | `rgctl writeback verify|export` |
+| `annotation_args.json` | `discover` | `rgctl find --annotation <name> --show-attributes` |
 | `graph.db` / `graph.json` | `discover --write-json-graph` only | Legacy load paths |
 | `facts/` | `discover` / `update` | Per-file extraction facts cache |
-| `parked_relations.bin` | `discover` (unresolved cross-repo) | `rgctl merge` park-and-resolve |
+| `parked_relations.bin` | `discover` (`RBPK` v1 unresolved cross-repo) | `rgctl merge`, `rgctl inventory --by import-prefix`, `rgctl vuln`, `rgctl writeback` |
 | `blast_engine.snapshot.bin` | `discover` | `try_load_engine`, lite blast-radius path, `serve` |
 | `macro_call_index.db` / `.bin` | `discover` | `blast-radius` T0 fast path only — SQLite/bincode lookup cache, not the graph |
-| `analysis/cfg_pdg.archive.bin` | `discover --with-cfg`, or lazy append from `slice` / `cpg flows` | `inspect`, slice, `cpg`, `blast-radius --with-slices` |
+| `analysis/cfg_pdg.bin` | `discover --with-cfg`, or lazy append from `slice` / `cpg flows` | `inspect`, `slice`, `cpg`, `taint`, `blast-radius --with-slices` |
 | `analysis/git_churn.json` | `discover --with-git` | `metrics --churn`, `relations --edge cochangeswith` |
-| `query.sock` | *(retired)* | Former blast-radius Unix-socket client (v0.4.7); removed with daemon mode |
-| `analysis_results.bin` | `discover` | Columnar metrics (`CentralityTable`, community, blast); blast columns may stay empty on flat/on-demand graphs (bulk fill skipped — #28 won't-fix; use live `blast-radius`) |
+| `analysis.snapshot.bin` | `discover` | Columnar metrics (`CentralityTable`, community, blast); blast columns may stay empty on flat/on-demand graphs (use live `blast-radius`) |
 | `dashboard/` (bundle) | `discover --with-universe` | Browser static universe/dashboard (`index.html`, `manifest.json`, `graph_payload.bin`) |
 
 ---
@@ -270,7 +275,7 @@ Alphabetical list of workspace crates **excluding** individual `rgctl-lang-*` pl
 | **rgctl-analysis** | `crates/rgctl-analysis` | Graph algorithms: blast radius, FastPageRank / SampledBetweenness / HyperBall, Fast-Leiden, CFG/PDG, slicing, taint, clones, MRO, SCIP, git churn, policies, caches, `PetGraphView`. |
 | **rgctl-ast-coverage** | `crates/rgctl-ast-coverage` | Grammar ↔ coverage-manifest drift (`RGCTL_AST_COVERAGE_STRICT` / `_TRACK`). |
 | **rgctl-dashboard** | `crates/rgctl-dashboard` | Static dashboard bundle generation. |
-| **rgctl-gql** | `crates/rgctl-gql` | Graph query language (`rgctl gql`). |
+| **rgctl-gql** | `crates/rgctl-gql` | Internal graph query parser/evaluator crate (not exposed as a CLI command; CLI uses `find`/`callers`/`callees`/`relations`/`inventory`). |
 | **rgctl-languages** | `crates/rgctl-languages` | Registers language plugins from the workspace catalog (`languages.toml`). |
 | **rgctl-config-formats** | `crates/rgctl-config-formats` | Config file plugins (YAML, JSON, TOML, properties). |
 | **rgctl-lang-markdown** | `crates/rgctl-lang-markdown` | Markdown context graph (headings, links, frontmatter). |
@@ -313,7 +318,7 @@ When adding or fixing language support:
 | Add a CLI flag or subcommand | `src/cli/` + call into library crate |
 | Add `--depth` or query-tier behavior | `graph_utils` filter + `blast_radius.rs` paths (cache, lite, full) |
 | Add CLI JSON schema / field | `src/cli/<command>_output.rs` + `tests/cli_output/` (Layer 1) |
-| Add subprocess regression for CLI | `subprocess_golden_path.rs` (narrow) or `all_commands_sanity.rs` (full audit) + `tests/fixtures/` — see [`cli-io-sanity-qe.md`](cli-io-sanity-qe.md) |
+| Add subprocess regression for CLI | `subprocess_golden_path.rs` (narrow) or `all_commands_sanity.rs` (full audit) + `tests/fixtures/` |
 | Add a structured query filter or verb | `rgctl-graph` + `src/cli/structured_query.rs` |
 | Add HTML/Mermaid/GraphML output | `rgctl-export` |
 | Add a discover-time cache file | `discover_impl` writer + relevant analysis/graph module reader |
@@ -322,4 +327,4 @@ When adding or fixing language support:
 
 ---
 
-*Related docs: [`user-guide.md`](user-guide.md), [`json-api.md`](json-api.md), [`guides/cli-command-reference.md`](https://rgctl.io/docs/guides/cli-command-reference/), [`dashboard-design.md`](dashboard-design.md), [`cli-io-sanity-qe.md`](cli-io-sanity-qe.md), [`graph-storage-architecture.md`](graph-storage-architecture.md), [`CLI_STRUCTURE.txt`](CLI_STRUCTURE.txt).*
+*Related docs: [`user-guide.md`](user-guide.md), [`json-api.md`](json-api.md), [`cli-command-reference`](https://rgctl.io/docs/guides/cli-command-reference/), [`design/dashboard-v2.md`](design/dashboard-v2.md), [`graph-storage-architecture.md`](graph-storage-architecture.md), [`analysis-architecture.md`](analysis-architecture.md).*

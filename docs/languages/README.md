@@ -14,6 +14,6 @@ The **website** ([rgctl-website](https://github.com/rgctl/rgctl-website)) builds
 
 - [Tier 1 language support](../tier-1-language-support.md) — Layers A–F contributor bar (`handler = "custom"`)
 - [Tier 2 language support](../tier-2-language-support.md) — Declarative `tags.scm` query plugins (`handler = "queries"`)
-- [Markdown context](../markdown-context.md) — doc markup plugin (also has a coverage JSON)
+- [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/) — doc markup plugin (also has a coverage JSON)
 - Honesty notes (where present): `docs/*-extract-honesty.md`
 - Langfeature / structured-query smoke harnesses under `rgctl-tests/` (per-language ecommerce fixtures).

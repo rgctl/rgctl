@@ -42,6 +42,8 @@ You do not need graph theory to use the CLI: **indexing builds the map; commands
       │
       ├── find / callers / callees / relations / inventory / blast-radius / metrics / communities / clones / cpg / slice / inspect
       ├── check / review check / review paths / diff   (CI + temporal PR gate + snapshot compare)
+      ├── vuln / deps / taint                          (OSV supply-chain triage, parked call reachability, taint)
+      ├── writeback verify / export / patch            (lossless round-trip + piece-table span splicing)
       ├── update / watch / merge                       (incremental + multi-repo park-and-resolve)
       ├── semantic index + query                       (opt-in embedder)
       ├── export                                       (JSON, GraphML, Mermaid, Obsidian, …)
@@ -60,8 +62,9 @@ Capability designs for contributors: [design/](design/README.md).
 | Flags | Use |
 |-------|-----|
 | (default) | Fast graph + metrics caches → `.rgctl/graph.snapshot.bin` (`RGCL` v2) |
-| `--with-cfg` | Whole-repo CFG/PDG archive (v3 `cfg_pdg.bin`); needed for `taint --sink`, `cpg mutations`, richest `inspect`. **Not** required for `slice` / `cpg flows` (lazy single-function build) |
+| `--with-cfg` | Whole-repo CFG/PDG archive (v3 `cfg_pdg.archive.bin`); needed for `taint --sink`, `cpg mutations`, richest `inspect`. **Not** required for `slice` / `cpg flows` (lazy single-function build) |
 | `--with-taint` | Discover-time taint (with CFG) |
+| `--lossless` | Lossless source + Green-CST sidecars (`RGCS` v2 `content_store.bin` + `RGCT` v1 `cst.archive.bin`) for `rgctl writeback` |
 | `--with-git` | Git churn hotspots + `CoChangesWith` edges (`metrics --churn`) |
 | `--scip PATH` | SCIP overlay — upgrades ambiguous calls (`resolution = "scip"`) |
 | `--full` | Full pipeline (large corpora / Gate B style runs) |
@@ -95,6 +98,8 @@ Step-by-step how-tos: **[Guides](https://rgctl.io/docs/guides/)**. Full CLI walk
 | **export** | Subgraph / projection export (JSON, GraphML, Mermaid, Obsidian, …) |
 | **check / review check** | CI blast-radius policy; temporal PR gate (`pr-check` = alias of `review check`) |
 | **diff** | Compare two columnar snapshots (digest + `diff_snapshots`) |
+| **vuln / deps** | OSV advisory triage, manifest dependency matching, parked call-site reachability, OpenVEX emission |
+| **writeback** | Lossless round-trip verification (`verify`), tree reconstruction (`export`), and piece-table span splicing (`patch`) |
 | **migration hints** | Package roadmap JSON (`--export-migration-hints`) |
 | **MRO / Overrides** | Cross-language method resolution → `Overrides` edges; polymorphic call retarget |
 | **install** | Bundle agent skills / optional policy into IDEs |
@@ -128,6 +133,6 @@ Current Tier-1 ids with `*-ast-coverage.json` (24): Bash, C, C++, C#, Dart, Elix
 | Language support matrix | [languages/README.md](languages/README.md) (JSON SSOT → website) |
 | JSON fields / `schema_version` | [json-api.md](json-api.md) |
 | HTTP `serve` API | [HTTP Server and Dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/) |
-| Latest release notes | [v0.4.17](releases/v0.4.17.md) |
+| Latest release notes | [v0.4.21](releases/v0.4.21.md) |
 | Contribute / cold profiles | [AGENTS.md](../AGENTS.md) · [docs hub — For contributors](README.md#for-contributors) |
 | Research map | [further-reading.md](further-reading.md) |
