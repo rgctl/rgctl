@@ -1,6 +1,6 @@
 # `rgctl` Graph Analysis, CPG & Reachability Architecture
 
-This document specifies the **macro-level graph analytics and intra-procedural Code Property Graph (CPG) architecture** of `rgctl` (`crates/rgctl-analysis`). It details the three-tier memory model, CSR projection and topology residency, centrality and community detection algorithms, SCC-condensed blast-radius reachability, and the indexed v3 `cfg_pdg.bin` archive.
+This document specifies the **macro-level graph analytics and intra-procedural Code Property Graph (CPG) architecture** of `rgctl` (`crates/rgctl-analysis`). It details the three-tier memory model, CSR projection and topology residency, centrality and community detection algorithms, SCC-condensed blast-radius reachability, and the indexed v3 `cfg_pdg.archive.bin` archive.
 
 ---
 
@@ -45,7 +45,7 @@ This document specifies the **macro-level graph analytics and intra-procedural C
 │     • `.rgctl/blast_engine.snapshot.bin` (Kosaraju SCC DAG + bitset/BFS)     │
 │     • `.rgctl/macro_call_index.db` (transitive function call bitsets)        │
 │                                                                              │
-│  C. Hybrid CPG Archive (`.rgctl/analysis/cfg_pdg.bin`, v3 TOC):              │
+│  C. Hybrid CPG Archive (`.rgctl/analysis/cfg_pdg.archive.bin`, v3 TOC):      │
 │     • 40-byte header + 32-byte `TocEntry` table sorted by `func_idx`         │
 │     • Per-function bincode `FunctionCfgPdg` (CFG + CHK Dominance + PDG)      │
 │     • Populated eagerly via `discover --with-cfg` or lazily via              │
@@ -187,4 +187,4 @@ cargo bench -p rgctl-analysis --bench analysis_benchmarks
 
 1. **Active-Pivot Sampling on Sparse Heterogeneous Graphs ([#187](https://github.com/rgctl/rgctl/issues/187)):** `SampledBetweenness` currently selects $K = 512$ pivots across all $0..V$ node indices; on sparse graphs with high ratios of 0-out-degree leaf/non-callable nodes (`File`, `Import`, `Field`), effective active pivot coverage is lower than $K$ (tracked in OpenSpec change `sampled-betweenness-active-pivots`).
 2. **Intra-Procedural Reaching Definitions Are Lexical (`(name, scope_id)`):** `DataflowAnalyzer` tracks variable definitions and uses by lexical identifier and nested scope ID without full inter-procedural pointer aliasing (Andersen/Steensgaard). Field mutations are indexed separately via `FieldWriteIndex` (`rgctl cpg mutations`).
-3. **Whole-Repo Sink Taint Requires `--with-cfg`:** While `rgctl slice <symbol> --taint` and `rgctl cpg flows` lazily build missing function CFG/PDG entries on demand via `ensure_cfg_pdg_for_source`, whole-repository sink scanning (`rgctl taint --sink <pattern>`) requires `rgctl discover --with-cfg` so all function PDGs are present in `cfg_pdg.bin`.
+3. **Whole-Repo Sink Taint Requires `--with-cfg`:** While `rgctl slice <symbol> --taint` and `rgctl cpg flows` lazily build missing function CFG/PDG entries on demand via `ensure_cfg_pdg_for_source`, whole-repository sink scanning (`rgctl taint --sink <pattern>`) requires `rgctl discover --with-cfg` so all function PDGs are present in `cfg_pdg.archive.bin`.

@@ -70,15 +70,13 @@ Internals and contribution bars — not the default agent reading path.
 | `--with-cfg` | Whole-repo CFG/PDG archive (needed for `taint --sink`, `cpg mutations`); `slice` / `cpg flows` lazy-build one function without it |
 | Communities | **Fast-Leiden** (local moving + BFS refinement + coarsening) with $\mu+4\sigma$ `HubStripPolicy` |
 | Canonical query / policy CLI | `find` / `callers` / `callees` / `relations` / `inventory`; `review check` (`query` / `pr-check` are compatibility aliases) |
-| Dashboard / migration JSON | Opt-in (`--with-universe` / `--export-migration-hints`; the old `--with-dashboard` flag was removed and is rejected) |
+| Dashboard / migration JSON | Opt-in (`--with-universe` / `--export-migration-hints`) |
 | First-hour fixture | In-tree **ecommerce-java** |
 
 ## Redirects (historical names)
 
-- `cli-getting-started.md` → [Installation](installation.md) / [User Guide](user-guide.md)
+- `cli-getting-started.md` → [User Guide](user-guide.md)
 - `cli-output-schemas.md` → [JSON API](json-api.md)
 - `LANGUAGE_GUIDE.md` → [languages/README.md](languages/README.md)
 
 Docs match the CLI in this repository — verify with `rgctl --version`.
-
-Maintainer scratch: [`internal/`](internal/) (not public).

@@ -68,7 +68,7 @@ Capability designs for contributors: [design/](design/README.md).
 | `--with-git` | Git churn hotspots + `CoChangesWith` edges (`metrics --churn`) |
 | `--scip PATH` | SCIP overlay — upgrades ambiguous calls (`resolution = "scip"`) |
 | `--full` | Full pipeline (large corpora / Gate B style runs) |
-| `--with-universe` / `--export-migration-hints` | Opt-in universe UI bundle / migration JSON (`--with-dashboard` was removed and is rejected) |
+| `--with-universe` / `--export-migration-hints` | Opt-in Universe UI bundle / migration JSON |
 
 ```bash
 rgctl discover . -l java,kotlin,python --with-cfg
