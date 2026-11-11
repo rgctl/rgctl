@@ -220,7 +220,9 @@ pub(crate) fn run_full_analysis(
     // Index the repository (or reuse snapshot when sources are unchanged).
     // Lever 1: write columnar from GraphBuilder Vecs — never build MemoryBackend for discover.
     let index_start = Instant::now();
-    let graph_from_snapshot = !force_reindex && file_changes.is_empty() && snapshot_path.is_file();
+    let lossless_ready = !lossless || rgctl_graph::open_lossless_sidecars(store).is_ok();
+    let graph_from_snapshot =
+        !force_reindex && file_changes.is_empty() && snapshot_path.is_file() && lossless_ready;
     let mut cold_reused: Option<crate::analysis::ColdMetadataDb> = None;
     let (mut index_stats, mut graph_digest) = if graph_from_snapshot {
         let load_start = Instant::now();

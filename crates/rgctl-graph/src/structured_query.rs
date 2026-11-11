@@ -342,26 +342,41 @@ impl<'a> StructuredQuery<'a> {
         node: &Node,
         annots: &[String],
         arg_index: Option<&HashMap<String, String>>,
+        matched_annots: Option<&Vec<String>>,
     ) -> EntityRow {
         let mut row = Self::project(node);
-        if let Some(idx) = arg_index {
-            let mut parts = Vec::new();
-            for a in annots {
+        let mut parts = Vec::new();
+        for a in annots {
+            let simple = normalize_annotation_name(a);
+            let simple_tail = simple.rsplit('.').next().unwrap_or(simple.as_str());
+            let mut found_args = None;
+            if let Some(idx) = arg_index {
                 let key = format!("{}\0{a}", node.id);
                 if let Some(args) = idx.get(&key) {
-                    parts.push(format!("@{a}{args}"));
+                    found_args = Some((a.as_str(), args.as_str()));
                 } else {
-                    // Also try bare annotation key variants
-                    let simple = normalize_annotation_name(a);
                     let key2 = format!("{}\0{simple}", node.id);
                     if let Some(args) = idx.get(&key2) {
-                        parts.push(format!("@{simple}{args}"));
+                        found_args = Some((simple.as_str(), args.as_str()));
+                    } else {
+                        let key3 = format!("{}\0{simple_tail}", node.id);
+                        if let Some(args) = idx.get(&key3) {
+                            found_args = Some((simple_tail, args.as_str()));
+                        }
                     }
                 }
             }
-            if !parts.is_empty() {
-                row.attributes = Some(parts.join("; "));
+            if let Some((label, args)) = found_args {
+                parts.push(format!("@{label}{args}"));
+            } else if matched_annots.is_some_and(|m| {
+                m.iter()
+                    .any(|ma| ma == &simple || ma == simple_tail || ma == a)
+            }) {
+                parts.push(format!("@{simple_tail}"));
             }
+        }
+        if !parts.is_empty() {
+            row.attributes = Some(parts.join("; "));
         }
         row
     }
@@ -485,6 +500,34 @@ impl<'a> StructuredQuery<'a> {
     pub fn resolve_symbol(&self, symbol: &str, filters: &QueryFilters) -> Result<Node> {
         let mut matches = self.lookup_name_candidates(symbol, filters.exact)?;
         matches.retain(|n| self.node_passes(n, filters));
+        if matches.len() > 1 && filters.node_type.is_none() {
+            // Collapse same-type constructor (`<init>`) collision: when a single
+            // Class/Interface/Struct shares its simple name with its `<init>`
+            // constructor Function(s), resolve to the enclosing type declaration.
+            let non_ctor_types: Vec<usize> = matches
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| {
+                    matches!(
+                        n.node_type,
+                        NodeType::Class | NodeType::Interface | NodeType::Struct
+                    )
+                })
+                .map(|(i, _)| i)
+                .collect();
+            let all_others_are_ctors = matches.iter().all(|n| {
+                matches!(
+                    n.node_type,
+                    NodeType::Class | NodeType::Interface | NodeType::Struct
+                ) || (n.node_type == NodeType::Function
+                    && n.qualified_name
+                        .as_deref()
+                        .is_some_and(|qn| qn.ends_with(".<init>") || qn.ends_with("::<init>")))
+            });
+            if non_ctor_types.len() == 1 && all_others_are_ctors {
+                return Ok(matches.swap_remove(non_ctor_types[0]));
+            }
+        }
         match matches.len() {
             0 => Err(Error::NodeNotFound(symbol.to_string())),
             1 => Ok(matches.remove(0)),
@@ -689,6 +732,7 @@ impl<'a> StructuredQuery<'a> {
         }
 
         let mut seen = HashSet::new();
+        let mut matched_annots: HashMap<Uuid, Vec<String>> = HashMap::new();
         let mut candidates: Vec<Node> = Vec::new();
         self.store.for_each_edge(|from, to, et| {
             if et != EdgeType::AnnotatedWith {
@@ -702,6 +746,17 @@ impl<'a> StructuredQuery<'a> {
                 .any(|want| annotation_name_matches(&ann, want))
             {
                 return Ok(());
+            }
+            let simple = ann
+                .name
+                .rsplit('.')
+                .next()
+                .unwrap_or(ann.name.as_str())
+                .trim_start_matches('@')
+                .to_string();
+            let list = matched_annots.entry(from).or_default();
+            if !list.contains(&simple) {
+                list.push(simple);
             }
             if !seen.insert(from) {
                 return Ok(());
@@ -725,13 +780,14 @@ impl<'a> StructuredQuery<'a> {
             Ok(())
         })?;
 
-        Self::finish_find_annotated(candidates, filters, &normalized)
+        Self::finish_find_annotated(candidates, filters, &normalized, &matched_annots)
     }
 
     fn finish_find_annotated(
         candidates: Vec<Node>,
         filters: &QueryFilters,
         annots: &[String],
+        matched_annots: &HashMap<Uuid, Vec<String>>,
     ) -> Result<FindResult> {
         let total = candidates.len();
         let limit = filters.limit.unwrap_or(total);
@@ -744,7 +800,8 @@ impl<'a> StructuredQuery<'a> {
                 .take(limit)
                 .map(|n| {
                     if filters.show_attributes {
-                        Self::project_with_annotation_attrs(&n, annots, arg_index)
+                        let matched = matched_annots.get(&n.id);
+                        Self::project_with_annotation_attrs(&n, annots, arg_index, matched)
                     } else {
                         Self::project(&n)
                     }
@@ -789,6 +846,37 @@ impl<'a> StructuredQuery<'a> {
         })
     }
 
+    /// Collect member `Function` node IDs belonging to a `Class` / `Interface` / `Struct` node.
+    pub fn collect_member_functions_of_type(&self, type_node: &Node) -> Result<Vec<Uuid>> {
+        let qn = type_node
+            .qualified_name
+            .as_deref()
+            .unwrap_or(type_node.name.as_str());
+        let dot_prefix = format!("{qn}.");
+        let colon_prefix = format!("{qn}::");
+        let mut out = Vec::new();
+        for fn_node in
+            self.collect_nodes_hot_scan(Some(NodeType::Function), &QueryFilters::default())?
+        {
+            if let Some(fqn) = fn_node.qualified_name.as_deref()
+                && (fqn.starts_with(&dot_prefix) || fqn.starts_with(&colon_prefix))
+            {
+                out.push(fn_node.id);
+                continue;
+            }
+            if type_node.file_path.is_some() && fn_node.file_path == type_node.file_path {
+                let simple_dot = format!("{}.", type_node.name);
+                let simple_colon = format!("{}::", type_node.name);
+                if fn_node.qualified_name.as_deref().is_some_and(|fqn| {
+                    fqn.starts_with(&simple_dot) || fqn.starts_with(&simple_colon)
+                }) {
+                    out.push(fn_node.id);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Incoming (`callers`) or outgoing (`callees`) CALLS.
     pub fn call_neighbors(
         &self,
@@ -802,6 +890,16 @@ impl<'a> StructuredQuery<'a> {
         let adj = self.build_typed_adjacency(EdgeType::Calls)?;
         let mut seen = HashSet::from([seed.id]);
         let mut q = VecDeque::from([(seed.id, 0usize)]);
+        if matches!(
+            seed.node_type,
+            NodeType::Class | NodeType::Interface | NodeType::Struct
+        ) {
+            for member_id in self.collect_member_functions_of_type(&seed)? {
+                if seen.insert(member_id) {
+                    q.push_back((member_id, 0usize));
+                }
+            }
+        }
         let mut found: Vec<(Uuid, usize)> = Vec::new();
         while let Some((id, d)) = q.pop_front() {
             if d >= depth {
@@ -821,6 +919,21 @@ impl<'a> StructuredQuery<'a> {
                 found.push((nid, hop));
                 if hop < depth {
                     q.push_back((nid, hop));
+                }
+            }
+        }
+        if incoming
+            && matches!(
+                seed.node_type,
+                NodeType::Class | NodeType::Interface | NodeType::Struct
+            )
+        {
+            let inj = self.build_typed_adjacency(EdgeType::Injects)?;
+            if let Some(injectors) = inj.incoming.get(&seed.id) {
+                for &nid in injectors {
+                    if seen.insert(nid) {
+                        found.push((nid, 1));
+                    }
                 }
             }
         }
@@ -1242,7 +1355,22 @@ impl<'a> StructuredQuery<'a> {
                 const DEPTH: usize = 2;
                 let mut map: HashMap<String, usize> = HashMap::new();
                 for n in self.collect_nodes_hot_scan(Some(NodeType::Import), filters)? {
+                    if let Some(fp) = n.file_path.as_deref() {
+                        let lower = fp.to_ascii_lowercase();
+                        if lower.ends_with(".md")
+                            || lower.ends_with(".markdown")
+                            || lower.ends_with(".mdx")
+                        {
+                            continue;
+                        }
+                    }
                     let key = import_package_prefix(&n.name, DEPTH);
+                    if key == "<unknown>"
+                        || key.starts_with('/')
+                        || key.chars().any(char::is_whitespace)
+                    {
+                        continue;
+                    }
                     *map.entry(key).or_insert(0) += 1;
                 }
                 let mut counts: Vec<_> = map
@@ -2158,5 +2286,78 @@ mod tests {
         assert!(parse_node_type("not_a_type").is_err());
         assert!(parse_edge_type("annotatedwith").is_ok());
         assert!(parse_node_type("import").is_ok());
+    }
+
+    #[test]
+    fn class_vs_init_disambiguation_and_class_level_callers() {
+        use crate::schema::Edge;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("snap.bin");
+        let mut backend = MemoryBackend::new();
+
+        let cls = Node::new(NodeType::Class, "ShoppingCartService")
+            .with_qualified_name("com.acme.ShoppingCartService")
+            .with_file_path("src/ShoppingCartService.java");
+        let cls_id = cls.id;
+        backend.insert_node(cls).unwrap();
+
+        let ctor = Node::new(NodeType::Function, "ShoppingCartService")
+            .with_qualified_name("com.acme.ShoppingCartService.<init>")
+            .with_file_path("src/ShoppingCartService.java");
+        backend.insert_node(ctor).unwrap();
+
+        let method = Node::new(NodeType::Function, "getCart")
+            .with_qualified_name("com.acme.ShoppingCartService.getCart")
+            .with_file_path("src/ShoppingCartService.java");
+        let method_id = method.id;
+        backend.insert_node(method).unwrap();
+
+        let caller_fn = Node::new(NodeType::Function, "checkout")
+            .with_qualified_name("com.acme.CartEndpoint.checkout")
+            .with_file_path("src/CartEndpoint.java");
+        let caller_id = caller_fn.id;
+        backend.insert_node(caller_fn).unwrap();
+
+        backend
+            .insert_edge(Edge::new(caller_id, method_id, EdgeType::Calls))
+            .unwrap();
+
+        write_columnar_from_backend(&backend, &path).unwrap();
+        let store = SnapshotNodeStore::open(&path).unwrap();
+        let q = StructuredQuery::new(&store);
+
+        let res = q
+            .call_neighbors("ShoppingCartService", true, 2, &QueryFilters::default())
+            .unwrap();
+        assert_eq!(res.target.id, cls_id.to_string());
+        assert_eq!(res.total, 1);
+        assert_eq!(res.neighbors[0].name, "checkout");
+    }
+
+    #[test]
+    fn import_prefix_inventory_filters_markdown_and_unknown() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("snap.bin");
+        let mut backend = MemoryBackend::new();
+
+        let valid =
+            Node::new(NodeType::Import, "javax.ejb.Stateless").with_file_path("src/Service.java");
+        backend.insert_node(valid).unwrap();
+
+        let bogus_md = Node::new(NodeType::Import, "this repository (`target/coolstore.war`)")
+            .with_file_path("README.md");
+        backend.insert_node(bogus_md).unwrap();
+
+        let bogus_unknown = Node::new(NodeType::Import, "<unknown>").with_file_path("src/app.js");
+        backend.insert_node(bogus_unknown).unwrap();
+
+        write_columnar_from_backend(&backend, &path).unwrap();
+        let store = SnapshotNodeStore::open(&path).unwrap();
+        let q = StructuredQuery::new(&store);
+        let inv = q
+            .inventory(InventoryBy::ImportPrefix, &QueryFilters::default())
+            .unwrap();
+        assert_eq!(inv.counts.len(), 1);
+        assert_eq!(inv.counts[0].key, "javax.ejb");
     }
 }

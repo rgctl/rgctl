@@ -8,8 +8,7 @@
 mod framework_schema;
 
 pub use framework_schema::{
-    AnnotationTemplate, CompiledFrameworkCatalog, FrameworkRuleKind, FrameworkRuleSpec,
-    FrameworkWritebackProfile, FrameworkWritebackTemplates, LanguageFrameworkSpec,
+    CompiledFrameworkCatalog, FrameworkRuleKind, FrameworkRuleSpec, LanguageFrameworkSpec,
     MethodRouteAnnotation,
 };
 
@@ -28,8 +27,6 @@ static BUILTIN: OnceLock<RuntimeFrameworkCatalog> = OnceLock::new();
 #[derive(Debug, Clone)]
 pub struct IndexedLanguageRules {
     pub rules: Vec<FrameworkRuleSpec>,
-    /// Bidirectional writeback profiles for this language.
-    pub frameworks: Vec<FrameworkWritebackProfile>,
     pub annotation_triggers: FxHashSet<String>,
     pub call_triggers: FxHashSet<String>,
     pub wrapper_types: FxHashSet<String>,
@@ -102,7 +99,6 @@ fn index_language(spec: &LanguageFrameworkSpec) -> IndexedLanguageRules {
 
     IndexedLanguageRules {
         rules: spec.rules.clone(),
-        frameworks: spec.frameworks.clone(),
         annotation_triggers,
         call_triggers,
         wrapper_types,
@@ -121,67 +117,6 @@ fn builtin_catalog() -> &'static RuntimeFrameworkCatalog {
             bincode::deserialize(bytes).expect("deserialize built-in frameworks.bin");
         RuntimeFrameworkCatalog::from_compiled(catalog)
     })
-}
-
-/// Process-wide built-in framework catalog (rules + writeback profiles).
-pub fn builtin_framework_catalog() -> &'static RuntimeFrameworkCatalog {
-    builtin_catalog()
-}
-
-/// Normalize common framework aliases to their canonical writeback profile ID.
-pub fn normalize_framework_id(framework_id: &str) -> &str {
-    match framework_id.trim().to_ascii_lowercase().as_str() {
-        "spring" | "spring-boot" | "springboot" | "spring_boot" => "spring",
-        "javaee" | "java-ee" | "java_ee" | "javax" | "j2ee" => "javaee",
-        "jakarta-ee" | "jakartaee" | "jakarta_ee" | "jakarta" => "jakarta-ee",
-        "openliberty" | "open-liberty" | "open_liberty" | "liberty" | "websphere" => "openliberty",
-        "quarkus" => "quarkus",
-        "actix" | "actix-web" | "actix_web" => "actix",
-        "axum" => "axum",
-        "fastapi" | "fast-api" => "fastapi",
-        "flask" => "flask",
-        "express" | "expressjs" => "express",
-        "fastify" => "fastify",
-        "aspnet" | "aspnet-core" | "aspnetcore" => "aspnet",
-        "gin" => "gin",
-        "echo" => "echo",
-        "laravel" => "laravel",
-        "rails" | "ruby-on-rails" => "rails",
-        _ => framework_id.trim(),
-    }
-}
-
-/// Look up a writeback profile by language + framework id (or common alias).
-pub fn find_writeback_profile<'a>(
-    catalog: &'a RuntimeFrameworkCatalog,
-    language: &str,
-    framework_id: &str,
-) -> Option<&'a FrameworkWritebackProfile> {
-    let canonical = normalize_framework_id(framework_id);
-    catalog
-        .by_language
-        .get(language)?
-        .frameworks
-        .iter()
-        .find(|f| f.id == canonical || f.id == framework_id)
-}
-
-/// List writeback framework ids for a language (or all languages when `language` is `None`).
-pub fn list_writeback_frameworks(
-    catalog: &RuntimeFrameworkCatalog,
-    language: Option<&str>,
-) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for (lang, indexed) in &catalog.by_language {
-        if language.is_some_and(|l| l != lang.as_str()) {
-            continue;
-        }
-        for fw in &indexed.frameworks {
-            out.push((lang.clone(), fw.id.clone()));
-        }
-    }
-    out.sort();
-    out
 }
 
 /// Load built-in catalog, optionally merging `.rgctl/frameworks.d/*.toml` with BLAKE3 cache.
@@ -250,7 +185,6 @@ pub fn load_with_repo_overrides(repo_root: Option<&Path>) -> RuntimeFrameworkCat
             .find(|l| l.language == spec.language)
         {
             existing.rules.extend(spec.rules);
-            existing.frameworks.extend(spec.frameworks);
         } else {
             catalog.languages.push(spec);
         }
@@ -1727,52 +1661,6 @@ mod tests {
                 assert!(!r.tags.is_empty(), "{} tags empty", r.id);
                 assert!(!r.vocab.is_empty(), "{} vocab empty", r.id);
             }
-        }
-    }
-
-    #[test]
-    fn all_framework_tomls_deserialize_with_writeback_profiles() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("frameworks");
-        let mut entries: Vec<_> = std::fs::read_dir(&dir)
-            .expect("frameworks/")
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("toml"))
-            .collect();
-        entries.sort();
-        assert_eq!(entries.len(), 10, "expected 10 frameworks/*.toml catalogs");
-        for path in entries {
-            let text = std::fs::read_to_string(&path).expect("read toml");
-            let spec: LanguageFrameworkSpec =
-                toml::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
-            assert!(
-                !spec.frameworks.is_empty(),
-                "{} missing [[frameworks]] writeback profiles",
-                path.display()
-            );
-            for fw in &spec.frameworks {
-                assert!(!fw.id.is_empty(), "{} empty framework id", path.display());
-                let has_emitter = fw.writeback.controller_stereotype.is_some()
-                    || fw.writeback.service_stereotype.is_some()
-                    || fw.writeback.field_inject.is_some()
-                    || fw.writeback.config_inject.is_some()
-                    || fw.writeback.class_route_prefix.is_some()
-                    || !fw.writeback.method_route.is_empty()
-                    || !fw.writeback.param_bind.is_empty()
-                    || !fw.namespace_rewrites.is_empty();
-                assert!(
-                    has_emitter,
-                    "{} framework '{}' has empty writeback section",
-                    path.display(),
-                    fw.id
-                );
-            }
-        }
-        let cat = builtin_catalog();
-        let java = cat.by_language.get("java").expect("java");
-        let ids: Vec<_> = java.frameworks.iter().map(|f| f.id.as_str()).collect();
-        for need in ["spring", "javaee", "jakarta-ee", "quarkus"] {
-            assert!(ids.contains(&need), "java missing framework {need}");
         }
     }
 

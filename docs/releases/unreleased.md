@@ -45,36 +45,6 @@ rgctl writeback patch --plan mutations.json --output ./patched -f json
     - Emits a structured `TrustLedgerReport` JSON (`verified_identical`, `patched_verified`, `conflict_rejected`, `syntax_error_rejected`) with before/after BLAKE3 hashes per file.
   - Architecture & contributor reference: [Lossless Write-Back Architecture](../design/lossless-writeback-architecture.md).
 
-### Two-Layer Framework Migration Write-Back (`rgctl writeback migrate` & `rgctl writeback frameworks`)
-
-Building on lossless sidecars, `rgctl` now includes a **two-layer A→B framework migration engine** (`java-framework-migration-writeback`) that deterministically splices 80–90% of structural boilerplate across **Waves 1–3** while emitting a blast-radius-ordered `agent_worklist[]` for the remaining ~10–20% of behavioral code and build manifests.
-
-```bash
-# 1. Inspect built-in bidirectional framework write-back profiles
-rgctl -f json writeback frameworks --lang java
-
-# 2. Layer 1 — Catalog A→B migration (e.g., Spring Boot → Quarkus, JavaEE → Quarkus, OpenLiberty → Quarkus)
-rgctl -f json writeback migrate --from spring --to quarkus --dry-run
-rgctl -f json writeback migrate --from javaee --to quarkus --in-place
-rgctl -f json writeback migrate --from openliberty --to quarkus --in-place
-
-# 3. Layer 2 — Uncataloged / custom library migration via declarative JSON plan (e.g., JUnit 4 → JUnit 5)
-rgctl -f json writeback migrate --plan junit4-to-junit5.json --in-place
-```
-
-- **Layer 1 — Bidirectional Framework Catalog (`frameworks/*.toml` → `frameworks.bin`):**
-  - Ships compiled `[[frameworks]]` write-back profiles across 10 languages (`java`, `kotlin`, `python`, `typescript`, `javascript`, `rust`, `csharp`, `go`, `php`, `ruby`), including `spring`, `javaee`, `openliberty`, `jakarta-ee`, and `quarkus` for Java/Kotlin.
-  - Supports repo-local overrides in `.rgctl/frameworks.d/*.toml` (cached with BLAKE3 in `.rgctl/cache/frameworks.bin`) and normalizes common framework aliases (`springboot`/`spring-boot` → `spring`, `javax`/`java-ee` → `javaee`, `websphere`/`liberty` → `openliberty`, `jakarta` → `jakarta-ee`).
-  - Self-correcting CLI diagnostics: passing an uncataloged framework to `--from` or `--to` lists all valid catalog IDs for that language and points the agent to `--plan <migration-plan.json>`.
-- **Layer 2 — Declarative Migration Plans (`--plan <file.json>`) & Structural Census (`inventory --by import-prefix`):**
-  - Added `rgctl -f json inventory --by import-prefix` to group `Import` nodes by 2–3 segment package prefixes so LLM agents can census any uncataloged library and author a `MigrationPlan` JSON (`namespace_rewrites`, `import_rewrites`, `annotation_rewrites`, `worklist_triggers`).
-- **3-Wave AST-Aware Splicing + Graph-Seeded `agent_worklist[]`:**
-  - **Wave 1 (Imports & Namespaces):** Rewrites `import` declarations, strips replaced source-framework annotation imports (including wildcard imports), rewrites qualified namespace prefixes (`javax.` → `jakarta.`) outside comments/strings, and inserts sorted target imports only for concepts actually matched in each file.
-  - **Wave 2 (Class, Field & Method Annotations):** Single-pass tree-sitter AST matching rewrites stereotypes (`@RestController`/`@Service`/`@Repository`/`@Stateless` → `@ApplicationScoped`), DI (`@Autowired`/`@EJB`/`@PersistenceContext` → `@Inject`), config (`@Value("${k:default}")` → `@ConfigProperty(name = "k", defaultValue = "default")`), transactions (`@TransactionAttribute` → `@Transactional`), and HTTP routes (`@RequestMapping`/`@GetMapping`/`@PostMapping` → `@Path`/`@GET`/`@POST`, including `method = RequestMethod.POST` and multi-attribute `value =` / `path =`).
-  - **Wave 3 (Parameter Annotations):** Rewrites `@PathVariable`/`@RequestParam`/`@RequestHeader` ↔ `@PathParam`/`@QueryParam`/`@HeaderParam` on formal parameters.
-  - **Blast-Radius-Ordered `agent_worklist[]`:** Combines `.rgctl/graph.snapshot.bin` `Extends`/`Implements`/`Calls`/`AnnotatedWith` edges and incoming `Calls` counts with AST fallback triggers (e.g., `JpaRepository`, `AbstractStatelessSessionBean`, `SecurityContextHolder`, `WSSubject`, `getCallerPrincipal`, plus `pom.xml` / `build.gradle`) sorted by `caller_count` descending.
-  - **Automatic `--in-place` refresh:** Running `rgctl writeback migrate --in-place` automatically runs `rgctl discover . --lossless` after Wave 3 so `.rgctl/` snapshots and lossless sidecars stay in sync.
-
 ### Shell completions
 
 - `rgctl completions <bash|zsh|fish|elvish|powershell>` prints a shell completion script generated from the CLI definition; no repo or cache needed. Setup: [Installation → Shell completions](../installation.md#shell-completions).

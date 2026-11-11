@@ -198,59 +198,11 @@ Headings become modules; `references` edges traverse doc→code. Passing `.entit
 
 # Migrate workflow
 
-**Prefer slash command `/rgctl:migrate` (skill `rgctl-migrate`)** for both **A→B framework/library migrations** (`rgctl writeback migrate`) and **Strangler-Fig architectural extraction** (`--export-migration-hints` → `.rgctl/migration_plan.json`).
+**Primary migration deliverable for agents:** `.rgctl/migration_plan.json` from `--export-migration-hints`. Prefer slash command **`/rgctl:migrate`** for the full Strangler-Fig brief. With `-f json`, the same migration plan object is also printed on **stdout** (plain `discover -f json` without the flag still emits DiscoverResponse telemetry). Dashboard Migration tab via `serve --open` when `--with-universe` is set.
 
-### Scenario A: Catalog A→B Framework Migration (e.g., Spring Boot → Quarkus, JavaEE → Quarkus)
+Use this workflow for roadmap / extraction-order / "what should we migrate first?" questions. Summarize the plan — do not dump the whole JSON into context.
 
-**User intent:** *"Migrate this Spring Boot (or JavaEE) service to Quarkus"* / *"Upgrade `javax.*` to `jakarta.*`"*
-
-```bash
-# 1) Build lossless index + Green-CST sidecars
-rgctl discover . --lossless
-
-# 2) Inspect cataloged frameworks and run pre-migration census
-rgctl -f json writeback frameworks --lang java
-rgctl -f json inventory --by import-prefix --limit 50
-
-# 3) Preview 3-Wave splicing (imports/namespaces → stereotypes/DI/routes → parameter annotations)
-rgctl -f json writeback migrate --from spring --to quarkus --dry-run
-# Other catalog pairs:
-#   --from javaee --to quarkus | --from javaee --to jakarta-ee | --from spring --to spring
-
-# 4) Execute in-place (automatically refreshes .rgctl/ lossless sidecars)
-rgctl -f json writeback migrate --from spring --to quarkus --in-place
-
-# 5) Process returned agent_worklist[] in blast_radius_order (JpaRepository, SecurityFilterChain, pom.xml, ...)
-rgctl -f json callers "<worklist_symbol>" --depth 2
-rgctl -f json blast-radius "<worklist_symbol>" --depth 2 --summary
-rgctl -f json slice "<worklist_file>" --line <start_line> --variable <var>
-
-# 6) Verify lossless integrity and zero remaining legacy imports
-rgctl discover . --lossless
-rgctl -f json writeback verify --strict
-rgctl -f json find "import org.springframework*" --type import   # expect total == 0
-```
-
-### Scenario B: Uncataloged / Custom Library Migration (`--plan migration-plan.json`)
-
-**User intent:** *"Migrate JUnit 4 tests to JUnit 5"* / *"Migrate our internal SDK v1 annotations to v2"*
-
-```bash
-rgctl discover . --lossless
-rgctl -f json inventory --by import-prefix --limit 50
-rgctl -f json find --annotation "@Before,@After,@Ignore,@Test,@RunWith,@Rule" --show-attributes --limit 50
-# Author migration-plan.json (namespace_rewrites, import_rewrites, annotation_rewrites, worklist_triggers)
-rgctl -f json writeback migrate --plan migration-plan.json --dry-run
-rgctl -f json writeback migrate --plan migration-plan.json --in-place
-rgctl discover . --lossless
-rgctl -f json writeback verify --strict
-```
-
-### Scenario C: Strangler-Fig Architectural Extraction (`--export-migration-hints`)
-
-**Primary Strangler-Fig deliverable for agents:** `.rgctl/migration_plan.json` from `--export-migration-hints`. With `-f json`, the same migration plan object is also printed on **stdout** (plain `discover -f json` without the flag still emits DiscoverResponse telemetry). Dashboard Migration tab via `serve --open` when `--with-universe` is set.
-
-Use this workflow for roadmap / extraction-order / "what should we extract first?" questions. Summarize the plan — do not dump the whole JSON into context.
+### Migration plan
 
 **User intent:** *"Generate a complete migration plan for this codebase"* / *"What should we extract first?"*
 

@@ -118,8 +118,6 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | User Intent | CLI Command |
 |-------------|-------------|
 | **Any migration / modernization** | **`/rgctl:migrate`** → skill `rgctl-migrate` |
-| Catalog framework migrate | `discover . --lossless` → `writeback frameworks` → `writeback migrate --from <src> --to <dst> --in-place` |
-| LLM / uncataloged migrate | census → author `migration-plan.json` → `writeback migrate --plan … --in-place` → process `agent_worklist[]` |
 | Import census | `inventory --by import-prefix --limit 50` (optional `--prefix javax.`) |
 | Annotation surface | `find --annotation "@PersistenceContext,@Inject,@ConfigProperty" --show-attributes` |
 | Package / DI edges | `find --package <coords>` · `relations --edge injects` |

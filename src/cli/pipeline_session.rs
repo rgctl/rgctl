@@ -111,12 +111,15 @@ pub fn run_full_pipeline(
     let mut last_response: Option<DiscoverJsonResponse> = None;
 
     // --- stage 1 ---
-    let skip_basic = should_skip_basic(
-        source_path,
-        store_path,
-        extras.languages.as_deref(),
-        extras.exclude.as_deref(),
-    );
+    let lossless_wanted = extras.lossless
+        || std::env::var_os("RGCTL_LOSSLESS").is_some_and(|v| v != "0" && v != "false");
+    let skip_basic = (!lossless_wanted || rgctl_graph::open_lossless_sidecars(store_path).is_ok())
+        && should_skip_basic(
+            source_path,
+            store_path,
+            extras.languages.as_deref(),
+            extras.exclude.as_deref(),
+        );
     if skip_basic {
         pipeline_status::set_stage(store_path, STAGE_BASIC, StageStatus::Skipped)?;
         if human {
