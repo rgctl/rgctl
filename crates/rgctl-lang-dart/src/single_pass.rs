@@ -3,7 +3,10 @@
 use crate::plugin::Plugin;
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::{extract_name_from_node, node_to_location};
+use rgctl_plugin_helpers::{
+    declaration_header_signature, extract_name_from_node, node_to_location,
+    record_symbol_spans_from_source,
+};
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -187,12 +190,12 @@ fn push_type_symbol(
         Some(o) => format!("{o}.{name}"),
         None => name.clone(),
     };
-    ctx.symbols.push(Symbol {
+    let mut sym = Symbol {
         name: name.clone(),
         symbol_type,
         qualified_name: Some(qn.clone()),
         location: node_to_location(node, file_path),
-        signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+        signature: declaration_header_signature(node, source),
         return_type: None,
         parameters: vec![],
         fields: vec![],
@@ -203,7 +206,9 @@ fn push_type_symbol(
             "kind": kind_meta,
         }),
         ..Default::default()
-    });
+    };
+    record_symbol_spans_from_source(&mut sym, node, source);
+    ctx.symbols.push(sym);
     ctx.enter_scope(
         scope_kind,
         Some(name),
@@ -232,12 +237,16 @@ fn push_function(
         None => name.clone(),
     };
     let loc = ((node.end_position().row - node.start_position().row) + 1).max(1) as u32;
-    ctx.symbols.push(Symbol {
+    let mut sym = Symbol {
         name: name.clone(),
         symbol_type: SymbolType::Function,
         qualified_name: Some(qn.clone()),
         location: node_to_location(node, file_path),
-        signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+        signature: if kind_meta == "function_expression" {
+            None
+        } else {
+            declaration_header_signature(node, source)
+        },
         return_type: None,
         parameters: vec![],
         fields: vec![],
@@ -248,7 +257,9 @@ fn push_function(
             "kind": kind_meta,
         }),
         ..Default::default()
-    });
+    };
+    record_symbol_spans_from_source(&mut sym, node, source);
+    ctx.symbols.push(sym);
     ctx.enter_scope(
         ScopeKind::Function,
         Some(name),
@@ -302,6 +313,7 @@ pub fn extract_all_single_pass(
     let mut relations = Vec::new();
     let mut pending_calls: Vec<PendingCall<'_>> = Vec::new();
     let mut depth_warned = false;
+    let mut lambda_idx: u32 = 0;
 
     let mut stack = vec![Visit::Pre(root, 0)];
 
@@ -405,15 +417,12 @@ pub fn extract_all_single_pass(
                     "type_alias" => {
                         if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
                             let qn = name.clone();
-                            ctx.symbols.push(Symbol {
+                            let mut sym = Symbol {
                                 name: name.clone(),
                                 symbol_type: SymbolType::TypeAlias,
                                 qualified_name: Some(qn),
                                 location: node_to_location(node, &file_path_str),
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.trim().to_string()),
+                                signature: declaration_header_signature(node, source),
                                 return_type: None,
                                 parameters: vec![],
                                 fields: vec![],
@@ -424,7 +433,9 @@ pub fn extract_all_single_pass(
                                     "kind": "type_alias",
                                 }),
                                 ..Default::default()
-                            });
+                            };
+                            record_symbol_spans_from_source(&mut sym, node, source);
+                            ctx.symbols.push(sym);
                         }
                     }
                     "enum_constant" => {
@@ -437,7 +448,7 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            ctx.symbols.push(Symbol {
+                            let mut sym = Symbol {
                                 name,
                                 symbol_type: SymbolType::Variable,
                                 qualified_name: Some(qn),
@@ -453,7 +464,9 @@ pub fn extract_all_single_pass(
                                     "kind": "enum_constant",
                                 }),
                                 ..Default::default()
-                            });
+                            };
+                            record_symbol_spans_from_source(&mut sym, node, source);
+                            ctx.symbols.push(sym);
                         }
                     }
                     "function_declaration"
@@ -500,15 +513,12 @@ pub fn extract_all_single_pass(
                                     Some(o) => format!("{o}.{name}"),
                                     None => name.clone(),
                                 };
-                                ctx.symbols.push(Symbol {
+                                let mut sym = Symbol {
                                     name,
                                     symbol_type: SymbolType::Variable,
                                     qualified_name: Some(qn),
                                     location: node_to_location(node, &file_path_str),
-                                    signature: node
-                                        .utf8_text(source)
-                                        .ok()
-                                        .map(|s| s.trim().to_string()),
+                                    signature: declaration_header_signature(node, source),
                                     return_type: None,
                                     parameters: vec![],
                                     fields: vec![],
@@ -519,7 +529,9 @@ pub fn extract_all_single_pass(
                                         "kind": meta,
                                     }),
                                     ..Default::default()
-                                });
+                                };
+                                record_symbol_spans_from_source(&mut sym, node, source);
+                                ctx.symbols.push(sym);
                             } else {
                                 pushed_scope = push_function(
                                     &mut ctx,
@@ -533,8 +545,8 @@ pub fn extract_all_single_pass(
                         }
                     }
                     "function_expression" => {
-                        let line = node.start_position().row + 1;
-                        let name = format!("<lambda@{line}>");
+                        lambda_idx += 1;
+                        let name = format!("<lambda#{lambda_idx}>");
                         pushed_scope = push_function(
                             &mut ctx,
                             node,
@@ -552,7 +564,7 @@ pub fn extract_all_single_pass(
                                 if parent.kind() == "import_or_export" {
                                     // handled by parent
                                 } else if let Some(uri) = import_uri(node, source) {
-                                    ctx.symbols.push(Symbol {
+                                    let mut sym = Symbol {
                                         name: uri.clone(),
                                         symbol_type: SymbolType::Import,
                                         qualified_name: Some(uri),
@@ -568,11 +580,13 @@ pub fn extract_all_single_pass(
                                             "kind": "import",
                                         }),
                                         ..Default::default()
-                                    });
+                                    };
+                                    record_symbol_spans_from_source(&mut sym, node, source);
+                                    ctx.symbols.push(sym);
                                 }
                             }
                         } else if let Some(uri) = import_uri(node, source) {
-                            ctx.symbols.push(Symbol {
+                            let mut sym = Symbol {
                                 name: uri.clone(),
                                 symbol_type: SymbolType::Import,
                                 qualified_name: Some(uri),
@@ -588,7 +602,9 @@ pub fn extract_all_single_pass(
                                     "kind": "import",
                                 }),
                                 ..Default::default()
-                            });
+                            };
+                            record_symbol_spans_from_source(&mut sym, node, source);
+                            ctx.symbols.push(sym);
                         }
                     }
                     _ => {}

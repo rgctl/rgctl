@@ -523,7 +523,8 @@ if [[ "$RUN_TEST" -eq 1 ]]; then
     --test taint_analysis \
     --test community_audit \
     --test centrality_audit \
-    --test incremental_performance_integration
+    --test incremental_performance_integration \
+    --test metamorphic_correctness_qe
   pass "Tier 2 unit & core integration tests passed"
 fi
 

@@ -565,6 +565,10 @@ name = "writeback_roundtrip_tier1"
 path = "tests/writeback_roundtrip_tier1.rs"
 
 [[test]]
+name = "metamorphic_correctness_qe"
+path = "tests/metamorphic_correctness_qe.rs"
+
+[[test]]
 name = "writeback_patch_integration"
 path = "tests/writeback_patch_integration.rs"
 

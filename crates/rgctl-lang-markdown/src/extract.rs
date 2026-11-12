@@ -407,7 +407,7 @@ fn emit_link(
             to: to.clone(),
             relation_type: RelationType::References,
             location: location(node, &ctx.file),
-            metadata: json!({ "kind": "markdown_link" }),
+            metadata: json!({ "kind": "markdown_link", "url": dest }),
             to_qualified_hint: Some(to),
             to_type_hint: Some(to_type.to_string()),
             ..Default::default()

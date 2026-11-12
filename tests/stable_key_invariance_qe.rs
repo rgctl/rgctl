@@ -1,4 +1,4 @@
-//! Cross-commit StableNodeKey invariance under top-of-file line shifts (15 languages).
+//! Cross-commit StableNodeKey invariance under top-of-file line shifts (24 Tier-1 languages).
 
 use rgctl_extraction::{DiscoveryConfig, Extractor, FileDiscoverer, GraphBuilder};
 use rgctl_graph::schema::NodeType;
@@ -19,97 +19,152 @@ struct LangCase {
     comment_line: &'static str,
 }
 
-/// One minimal function-bearing fixture per supported language plugin.
+/// Two sibling callables (or two sibling symbols for DSLs) plus UTF-8 trivia.
 const LANGS: &[LangCase] = &[
     LangCase {
         id: "rust",
         filename: "lib.rs",
-        source: "pub fn target_fn() {\n    let x = 1;\n}\n",
+        source: "// café\npub fn target_fn() {\n    let x = 1;\n}\npub fn sibling_fn() {\n    let y = 2;\n}\n",
         comment_line: "// shift\n",
     },
     LangCase {
         id: "python",
         filename: "mod.py",
-        source: "def target_fn():\n    return 1\n",
+        source: "# café\ndef target_fn():\n    return 1\n\ndef sibling_fn():\n    return 2\n",
         comment_line: "# shift\n",
     },
     LangCase {
         id: "typescript",
         filename: "mod.ts",
-        source: "export function target_fn(): number {\n  return 1;\n}\n",
+        source: "// café\nexport function target_fn(): number {\n  return 1;\n}\nexport function sibling_fn(): number {\n  return 2;\n}\n",
         comment_line: "// shift\n",
     },
     LangCase {
         id: "javascript",
         filename: "mod.js",
-        source: "export function target_fn() {\n  return 1;\n}\n",
+        source: "// café\nexport function target_fn() {\n  return 1;\n}\nexport function sibling_fn() {\n  return 2;\n}\n",
         comment_line: "// shift\n",
     },
     LangCase {
         id: "go",
         filename: "mod.go",
-        source: "package main\n\nfunc target_fn() int {\n\treturn 1\n}\n",
+        source: "package main\n\n// café\nfunc target_fn() int {\n\treturn 1\n}\n\nfunc sibling_fn() int {\n\treturn 2\n}\n",
         comment_line: "// shift\n",
     },
     LangCase {
         id: "java",
         filename: "Mod.java",
-        source: "public class Mod {\n  public static int target_fn() { return 1; }\n}\n",
+        source: "public class Mod {\n  // café\n  public static int target_fn() { return 1; }\n  public static int sibling_fn() { return 2; }\n}\n",
         comment_line: "// shift\n",
     },
     LangCase {
         id: "csharp",
         filename: "Mod.cs",
-        source: "public class Mod {\n  public static int TargetFn() { return 1; }\n}\n",
+        source: "public class Mod {\n  // café\n  public static int TargetFn() { return 1; }\n  public static int SiblingFn() { return 2; }\n}\n",
         comment_line: "// shift\n",
     },
     LangCase {
         id: "cpp",
         filename: "mod.cpp",
-        source: "int target_fn() { return 1; }\n",
+        source: "// café\nint target_fn() { return 1; }\nint sibling_fn() { return 2; }\n",
         comment_line: "// shift\n",
     },
     LangCase {
         id: "c",
         filename: "mod.c",
-        source: "int target_fn(void) { return 1; }\n",
+        source: "/* café */\nint target_fn(void) { return 1; }\nint sibling_fn(void) { return 2; }\n",
         comment_line: "// shift\n",
     },
     LangCase {
         id: "php",
         filename: "mod.php",
-        source: "<?php\nfunction target_fn() { return 1; }\n",
+        source: "<?php\n// café\nfunction target_fn() { return 1; }\nfunction sibling_fn() { return 2; }\n",
         comment_line: "// shift\n",
     },
     LangCase {
         id: "ruby",
         filename: "mod.rb",
-        source: "def target_fn\n  1\nend\n",
+        source: "# café\ndef target_fn\n  1\nend\ndef sibling_fn\n  2\nend\n",
         comment_line: "# shift\n",
     },
     LangCase {
         id: "puppet",
         filename: "mod.pp",
-        source: "class target_fn {\n}\n",
+        source: "# café\nfunction target_fn() {\n  1\n}\nfunction sibling_fn() {\n  2\n}\n",
         comment_line: "# shift\n",
     },
     LangCase {
         id: "kotlin",
         filename: "Mod.kt",
-        source: "fun target_fn(): Int = 1\n",
+        source: "// café\nfun target_fn(): Int = 1\nfun sibling_fn(): Int = 2\n",
         comment_line: "// shift\n",
     },
     LangCase {
         id: "groovy",
         filename: "Mod.groovy",
-        source: "def target_fn() { return 1 }\n",
+        source: "// café\ndef target_fn() { return 1 }\ndef sibling_fn() { return 2 }\n",
         comment_line: "// shift\n",
     },
     LangCase {
         id: "erb",
         filename: "mod.html.erb",
-        source: "<p><%= @target_fn %></p>\n",
+        source: "<p><%= @target_fn %></p>\n<% sibling_fn = 1 %>\n<!-- café -->\n",
         // Blank lines only — ERB comment tags can emit extra symbols.
+        comment_line: "\n",
+    },
+    LangCase {
+        id: "swift",
+        filename: "Mod.swift",
+        source: "// café\nfunc target_fn() -> Int { return 1 }\nfunc sibling_fn() -> Int { return 2 }\n",
+        comment_line: "// shift\n",
+    },
+    LangCase {
+        id: "scala",
+        filename: "Mod.scala",
+        source: "// café\nclass Mod {\n  def target_fn(): Int = 1\n  def sibling_fn(): Int = 2\n}\n",
+        comment_line: "// shift\n",
+    },
+    LangCase {
+        id: "dart",
+        filename: "mod.dart",
+        source: "// café\nint target_fn() { return 1; }\nint sibling_fn() { return 2; }\n",
+        comment_line: "// shift\n",
+    },
+    LangCase {
+        id: "elixir",
+        filename: "mod.ex",
+        source: "# café\ndefmodule Mod do\n  def target_fn, do: 1\n  def sibling_fn, do: 2\nend\n",
+        comment_line: "# shift\n",
+    },
+    LangCase {
+        id: "lua",
+        filename: "mod.lua",
+        source: "-- café\nfunction target_fn()\n  return 1\nend\nfunction sibling_fn()\n  return 2\nend\n",
+        comment_line: "-- shift\n",
+    },
+    LangCase {
+        id: "bash",
+        filename: "mod.sh",
+        source: "# café\ntarget_fn() { echo 1; }\nsibling_fn() { echo 2; }\n",
+        comment_line: "# shift\n",
+    },
+    LangCase {
+        id: "sql",
+        filename: "mod.sql",
+        source: "-- café\nCREATE FUNCTION target_fn() RETURNS INT LANGUAGE sql AS $$ SELECT 1; $$;\nCREATE FUNCTION sibling_fn() RETURNS INT LANGUAGE sql AS $$ SELECT 2; $$;\n",
+        comment_line: "-- shift\n",
+    },
+    LangCase {
+        id: "hcl",
+        filename: "mod.tf",
+        source: "# café\nresource \"null_resource\" \"target_fn\" {\n}\nresource \"null_resource\" \"sibling_fn\" {\n}\n",
+        comment_line: "# shift\n",
+    },
+    LangCase {
+        id: "markdown",
+        filename: "doc.md",
+        source: "# Target Fn\n\nParagraph with café.\n\n# Sibling Fn\n\nMore.\n",
+        // A new heading would add a symbol; blank lines only shift spans.
         comment_line: "\n",
     },
 ];
@@ -142,18 +197,18 @@ fn write_snapshot(root: &Path, out: &Path) {
         .populate_pass2(&tails, &mut builder)
         .expect("pass2");
     let (nodes, edges) = builder.into_graph();
+    let symbol_count = nodes
+        .iter()
+        .filter(|n| {
+            !matches!(
+                n.node_type,
+                NodeType::File | NodeType::Import | NodeType::Dependency
+            )
+        })
+        .count();
     assert!(
-        nodes.iter().any(|n| matches!(
-            n.node_type,
-            NodeType::Function
-                | NodeType::Class
-                | NodeType::PuppetClass
-                | NodeType::PuppetVariable
-                | NodeType::Variable
-                | NodeType::Struct
-                | NodeType::Interface
-        )),
-        "expected at least one symbol node in {}",
+        symbol_count >= 2,
+        "expected ≥2 sibling symbols in {}, got {symbol_count}",
         root.display()
     );
     fs::create_dir_all(out.parent().unwrap()).unwrap();
@@ -195,11 +250,6 @@ fn run_lang(case: &LangCase) {
 #[test]
 fn line_shift_preserves_stable_keys_all_languages() {
     for case in LANGS {
-        // ERB embeds start_line in qualified_name (`erb:output@L16`); line shifts
-        // intentionally change StableNodeKey until the plugin drops the line facet.
-        if case.id == "erb" {
-            continue;
-        }
         run_lang(case);
     }
 }
@@ -210,8 +260,7 @@ fn line_shift_preserves_stable_keys_rust() {
 }
 
 #[test]
-#[ignore = "erb qualified_name includes @L{line}; StableNodeKey churns on prepend"]
-fn line_shift_preserves_stable_keys_erb() {
-    let erb = LANGS.iter().find(|c| c.id == "erb").unwrap();
+fn line_shift_preserves_stable_keys_erb_multiblock() {
+    let erb = LANGS.iter().find(|c| c.id == "erb").expect("erb fixture");
     run_lang(erb);
 }

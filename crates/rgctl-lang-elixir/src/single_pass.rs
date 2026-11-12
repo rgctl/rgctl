@@ -6,7 +6,10 @@
 use crate::plugin::Plugin;
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::node_to_location;
+use rgctl_plugin_helpers::{
+    declaration_header_signature, node_to_location, record_call_site_spans,
+    record_symbol_spans_from_source,
+};
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -164,6 +167,7 @@ pub fn extract_all_single_pass(
     let mut relations = Vec::new();
     let mut pending_calls: Vec<PendingCall<'_>> = Vec::new();
     let mut depth_warned = false;
+    let mut anon_idx: u32 = 0;
 
     let mut stack = vec![Visit::Pre(root, 0)];
 
@@ -209,7 +213,7 @@ pub fn extract_all_single_pass(
                         if head == "defmodule" {
                             if let Some(name) = module_name(node, source) {
                                 let qn = name.clone();
-                                ctx.symbols.push(Symbol {
+                                let mut sym = Symbol {
                                     name: name.clone(),
                                     symbol_type: SymbolType::Module,
                                     qualified_name: Some(qn.clone()),
@@ -225,7 +229,9 @@ pub fn extract_all_single_pass(
                                         "kind": "defmodule",
                                     }),
                                     ..Default::default()
-                                });
+                                };
+                                record_symbol_spans_from_source(&mut sym, node, source);
+                                ctx.symbols.push(sym);
                                 ctx.enter_scope(
                                     ScopeKind::Module,
                                     Some(name),
@@ -242,15 +248,12 @@ pub fn extract_all_single_pass(
                                 let loc = ((node.end_position().row - node.start_position().row)
                                     + 1)
                                 .max(1) as u32;
-                                ctx.symbols.push(Symbol {
+                                let mut sym = Symbol {
                                     name: name.clone(),
                                     symbol_type: SymbolType::Function,
                                     qualified_name: Some(qn.clone()),
                                     location: node_to_location(node, &file_path_str),
-                                    signature: node
-                                        .utf8_text(source)
-                                        .ok()
-                                        .map(|s| s.trim().to_string()),
+                                    signature: declaration_header_signature(node, source),
                                     return_type: None,
                                     parameters: vec![],
                                     fields: vec![],
@@ -261,7 +264,9 @@ pub fn extract_all_single_pass(
                                         "kind": head,
                                     }),
                                     ..Default::default()
-                                });
+                                };
+                                record_symbol_spans_from_source(&mut sym, node, source);
+                                ctx.symbols.push(sym);
                                 ctx.enter_scope(
                                     ScopeKind::Function,
                                     Some(name),
@@ -278,7 +283,7 @@ pub fn extract_all_single_pass(
                             }
                         } else if IMPORT_FORMS.contains(&head) {
                             if let Some(target) = import_target(node, source) {
-                                ctx.symbols.push(Symbol {
+                                let mut sym = Symbol {
                                     name: target.clone(),
                                     symbol_type: SymbolType::Import,
                                     qualified_name: Some(target),
@@ -294,7 +299,9 @@ pub fn extract_all_single_pass(
                                         "kind": head,
                                     }),
                                     ..Default::default()
-                                });
+                                };
+                                record_symbol_spans_from_source(&mut sym, node, source);
+                                ctx.symbols.push(sym);
                             }
                         } else if CFG_FORMS.contains(&head) {
                             if ctx.scopes.current_function().is_some() {
@@ -331,12 +338,12 @@ pub fn extract_all_single_pass(
                         }
                     }
                     "anonymous_function" => {
-                        let line = node.start_position().row + 1;
-                        let name = format!("<fn@{line}>");
-                        let qn = name.clone();
+                        anon_idx += 1;
+                        let name = format!("<fn#{anon_idx}>");
+                        let qn = ctx.scopes.qualified_name(&name);
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
-                        ctx.symbols.push(Symbol {
+                        let mut sym = Symbol {
                             name: name.clone(),
                             symbol_type: SymbolType::Function,
                             qualified_name: Some(qn.clone()),
@@ -352,7 +359,9 @@ pub fn extract_all_single_pass(
                                 "kind": "anonymous_function",
                             }),
                             ..Default::default()
-                        });
+                        };
+                        record_symbol_spans_from_source(&mut sym, node, source);
+                        ctx.symbols.push(sym);
                         ctx.enter_scope(
                             ScopeKind::Lambda,
                             Some(name),
@@ -499,7 +508,7 @@ pub fn extract_all_single_pass(
             .qualified_name
             .clone()
             .unwrap_or_else(|| from_fn.name.clone());
-        relations.push(Relation {
+        let mut rel = Relation {
             from,
             to: callee.clone(),
             relation_type: RelationType::Calls,
@@ -508,7 +517,9 @@ pub fn extract_all_single_pass(
             to_qualified_hint: Some(callee),
             to_type_hint: None,
             ..Default::default()
-        });
+        };
+        record_call_site_spans(&mut rel, pending.node);
+        relations.push(rel);
     }
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))

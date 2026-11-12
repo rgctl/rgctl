@@ -668,10 +668,27 @@ fn resolve_symbol(index: &HashMap<String, Uuid>, name: &str, file: &str) -> Opti
     if let Some(id) = index.get(&qualified) {
         return Some(*id);
     }
-    index
-        .iter()
-        .find(|(k, _)| k.ends_with(&format!("::{name}")))
-        .map(|(_, id)| *id)
+    // Bare names that occur in more than one file are ambiguous. Cold discover
+    // refuses them (`unique_resolved`); do not pick an arbitrary HashMap entry.
+    let mut found: Option<Uuid> = None;
+    for (key, id) in index {
+        if !bare_name_eq(key, name) {
+            continue;
+        }
+        match found {
+            None => found = Some(*id),
+            Some(prev) if prev == *id => {}
+            Some(_) => return None,
+        }
+    }
+    found
+}
+
+fn bare_name_eq(key: &str, name: &str) -> bool {
+    let Some(tail) = key.strip_suffix(name) else {
+        return false;
+    };
+    tail.ends_with("::") || tail.ends_with('.') || tail.ends_with('#')
 }
 
 /// Delete `.rgctl` artifacts that embed `graph_digest` so they cannot outlive a compact.
@@ -731,8 +748,24 @@ mod tests {
     use super::*;
     use crate::facts_key_for;
     use rgctl_graph::schema::NodeType;
+    use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
+    use uuid::Uuid;
+
+    #[test]
+    fn resolve_symbol_rejects_ambiguous_bare_names() {
+        let mut index = HashMap::new();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let helper = Uuid::new_v4();
+        index.insert("a.rs::sibling_fn".to_string(), a);
+        index.insert("b.rs::sibling_fn".to_string(), b);
+        index.insert("a.rs::helper".to_string(), helper);
+        assert_eq!(resolve_symbol(&index, "sibling_fn", "a.rs"), Some(a));
+        assert_eq!(resolve_symbol(&index, "sibling_fn", "c.rs"), None);
+        assert_eq!(resolve_symbol(&index, "helper", "missing.rs"), Some(helper));
+    }
 
     #[test]
     fn test_incremental_update() {

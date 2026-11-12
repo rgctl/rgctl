@@ -18,6 +18,7 @@
 - **Clone hygiene:** Prefer `&[u8]` / `Cow` / borrows in tree-sitter walkers; `Vec::with_capacity` when sizes are known; no `unwrap()` in library paths.
 - **Ingest hot path:** Follow **Ingest hot-path practices** below (no per-symbol heap strings, hash/prep once on workers, spill scratch reuse, tracker mapping without re-scan).
 - **Typed graph:** Respect `EdgeType` / node kinds; do not invent ad-hoc string edges for hot paths.
+- **No `rgctl gql` in tests (`gql` is deprecated):** `rgctl gql` is deprecated. Never write new tests or migrate existing correctness/QE/integration tests to execute `rgctl gql`. Always test canonical structured JSON verbs (`rgctl -f json find`, `callers`, `callees`, `relations`, `inventory`, `blast-radius`, `inspect`, `slice`, `cpg`, `security`, `clones`, `semantic`, `review`) or typed Rust snapshot APIs (`ColumnarGraphSnapshot`, `GraphView`, `structured_query`).
 - **Artifacts:** Session data lives in `{repo}/.rgctl/`. Warm caches invalidate wall-time claims.
 - **Constrained discover (opt-in):** Prefer `rgctl discover . --with-limits max-mem-mb=4096,threads=1` (or `RGCTL_WITH_LIMITS`) in containers / cgroups — do **not** change default desktop discover for memory. Soft RSS tripwire at ~95%; smaller spill sort-runs and stream channel when `max-mem-mb` is set. Container smoke: `./scripts/run-container-with-limits-smoke.sh` (`tests/Containerfile`, mounts `example/linux`).
 - **Features:** Default semantic embedder is compiled **vocab**. Do not require ONNX / Python ML unless behind an explicit feature (e.g. `semantic-onnx` / code-daemon + Git LFS).
@@ -32,7 +33,7 @@
 ## Context & architecture
 
 - **Discover** walks the tree, runs language plugins (tree-sitter), builds the graph, writes compact caches to `.rgctl/` (`graph.snapshot.bin`). Optional overlays: `--scip`, `--with-git` (churn / `CoChangesWith`); multi-repo: `rgctl merge`.
-- **Query** paths are read-oriented and return versioned JSON (`schema_version` on stdout — never scrape stderr). Canonical verbs: `find` / `callers` / `callees` / `relations` / `inventory` (see [Cli Command Reference](https://rgctl.io/docs/guides/cli-command-reference/)).
+- **Query** paths are read-oriented and return versioned JSON (`schema_version` on stdout — never scrape stderr). Canonical verbs: `find` / `callers` / `callees` / `relations` / `inventory` (see [Cli Command Reference](https://rgctl.io/docs/guides/cli-command-reference/)). Legacy `rgctl gql` is **deprecated** — do not build workflows, skills, or correctness tests around `gql`.
 - **Analysis** (`rgctl-analysis`) projects CSR / callgraph / FastPageRank / Fast-Leiden communities / blast-radius / lazy v3 CFG–PDG (`slice`, `cpg flows`); see [docs/analysis-architecture.md](docs/analysis-architecture.md).
 - **Languages:** `crates/rgctl-lang-*` + `rgctl-plugin-api`; register in `languages.toml` (~60 plugins; Tier-1 deep-analysis languages additionally ship `*-ast-coverage.json`). See **Grammar bumps** under Must-follow. Adding a language: [docs/language-testing-guide.md](docs/language-testing-guide.md).
 

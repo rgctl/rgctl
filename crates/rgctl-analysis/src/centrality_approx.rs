@@ -138,16 +138,26 @@ impl SampledBetweenness {
     /// Estimate normalized betweenness using `pivot_count` sources on a flat index.
     pub fn compute_flat(index: &FlatGraphIndex, pivot_count: usize, seed: u64) -> Vec<f64> {
         let n = index.node_count;
-        if n == 0 {
-            return Vec::new();
-        }
-        let k = pivot_count.min(n);
-        if k == 0 {
+        if n == 0 || pivot_count == 0 {
             return vec![0.0; n];
         }
 
         let out_adj = index.build_out_csr();
-        let pivots = sample_pivot_indices(n, k, seed);
+        // Sources with out-degree 0 never reach another vertex and contribute
+        // identically zero to Brandes partial dependencies; restricting the
+        // sampling frame to active sources makes Brandes exact and deterministic
+        // whenever |active| <= pivot_count and strictly reduces variance otherwise.
+        let active_sources: Vec<usize> = (0..n)
+            .filter(|&u| !out_adj.neighbors(u).is_empty())
+            .collect();
+        if active_sources.is_empty() {
+            return vec![0.0; n];
+        }
+        let k = pivot_count.min(active_sources.len());
+        let pivots: Vec<usize> = sample_pivot_indices(active_sources.len(), k, seed)
+            .into_iter()
+            .map(|i| active_sources[i])
+            .collect();
 
         // Small graphs pay Rayon pool sync without enough work to amortize it.
         const PARALLEL_THRESHOLD: usize = 4_096;
@@ -188,7 +198,7 @@ impl SampledBetweenness {
         };
 
         let norm = if n > 2 {
-            (n as f64 / k as f64) / ((n - 1) as f64 * (n - 2) as f64)
+            (active_sources.len() as f64 / k as f64) / ((n - 1) as f64 * (n - 2) as f64)
         } else {
             0.0
         };

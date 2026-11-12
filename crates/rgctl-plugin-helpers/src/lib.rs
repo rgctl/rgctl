@@ -26,7 +26,10 @@ pub use python::{
     extract_decorator_relations, extract_import_symbols as extract_python_import_symbols,
     python_simple_type_name, source_location as python_source_location,
 };
-pub use spans::{compute_symbol_byte_spans, record_call_site_spans, record_symbol_spans};
+pub use spans::{
+    compute_symbol_byte_spans, declaration_header_signature, record_call_site_spans,
+    record_symbol_spans, record_symbol_spans_from_source,
+};
 pub use tree_sitter::{
     extract_name_from_node, extract_parameters_generic, extract_symbols_by_kinds, node_to_location,
     parse_source, symbol_type_for_kind,

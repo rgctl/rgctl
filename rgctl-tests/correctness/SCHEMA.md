@@ -83,10 +83,12 @@ Prefer **exact** fields for harness symbols. Soft `min_*` / `*_any` remain for d
 
 ### Layers
 
+> **Important:** `rgctl gql` is **deprecated** and is not used by `graph_correctness`. All symbol and edge assertions run against canonical structured JSON verbs (`find`, `callers`, `callees`, `relations`, `inventory`, `blast-radius`, `inspect`, `slice`, `cpg`, `security`, `clones`, `semantic`, `review`) and typed `ColumnarGraphSnapshot` / `AnalysisResults` APIs.
+
 | Section | Source of truth | What we assert |
 |---------|-----------------|----------------|
 | `identity` | `blast-radius` `target` + `inspect` `symbol` | Exact function name, FQN, class, file, language |
-| `exact_callees` / `exact_callers` | GQL `CALLS` | Exact short-name sets (no extras) |
+| `exact_callees` / `exact_callers` | Structured `relations --edge calls` / `callers` / `callees` | Exact short-name sets (no extras) |
 | `blast` | `blast-radius` topology/metrics | Exact callers, impact zone, counts, score |
 | `ast` | CFG statement texts/kinds | Call sites and statement text as lowered from AST |
 | `cfg` | `inspect SYMBOL cfg` | Exact blocks, edges, edge kinds, statement text |
@@ -133,3 +135,79 @@ Keep harness definitions in **one translation unit** (avoid header prototypes th
 ## Versioning
 
 Bump `schema_version` when fields are removed or semantics change. Additive fields may keep `1`.
+`schema_version` `2` marks a file that uses the v2 sections below. The runner accepts v1 files unchanged.
+
+## v2 sections (additive)
+
+Omitted sections are skipped. Set `severity` to `unsupported` to record a dimension the language does not implement.
+
+| Section | CLI | What we assert |
+|---------|-----|----------------|
+| `match.discriminator` / `match.line` | `find` + `blast-radius`/`inspect --line` | One overload: qualified name or signature contains the discriminator, and the definition line matches when `find` returns `line` |
+| `identity.discriminator` | `blast-radius` target / `inspect` | The same fragment appears on the resolved node |
+| `mro.extends` / `implements` / `overrides` | `relations --edge extends\|implements\|overrides` | Owner (class, or the symbol when no class) has each named `Extends`/`Implements` target; the symbol has each named `Overrides` target |
+| `slice` | `rgctl -f json slice FILE --line N --variable V` | `must_contain` / `must_exclude` substrings. Default direction is `backward` |
+| `flows` | `rgctl -f json cpg flows FILE --line N --variable V --with-alias` | Same text checks. Default direction is `forward`; `with_alias` defaults to true |
+| `mutations` | `rgctl -f json cpg mutations --type NAME --exclude-ctors` | Text checks. `exclude_ctors` defaults to true. Optional `member` |
+| `taint` | `rgctl -f json security taint --sink S --source external` | Text checks plus optional `min_flows` against the `flows` array |
+| `clones` | `rgctl -f json clones --mode exact\|bloom\|fragment --no-write` | `group_with` names share a group with this symbol; `not_grouped_with` names do not. Optional `seed`, `min_loc` (default 1) |
+| `semantic` | `semantic index --embedder vocab` then `semantic query --limit 3 --expand neighbors` | `top3_contains` is in the top 3 hit names. `neighbor_names` must appear in the neighbor expansion |
+| `review` | `review paths --synthetic-head worktree` | Sandbox-only edit: replace `find` with `replace` in `file`, then require `must_contain` names in the report. The tracked fixture is not modified |
+
+## `analytics`
+
+Present only when the harness should re-discover with
+`discover . --with-cfg --with-taint --with-security --with-harmonic --export-migration-hints`
+and check the call chain `root -> mid -> leaf`:
+
+| Check | Law |
+|-------|-----|
+| `harmonic` | `harmonic(root) > harmonic(mid) > harmonic(leaf) == 0` |
+| `hyperball` | Exact BFS harmonic and `HyperBallHarmonic` agree on that strict order |
+| `pagerank` | `pagerank(leaf) > pagerank(mid) > pagerank(root)` |
+| `betweenness` | `betweenness(mid) > 0`, and both endpoints are `0` |
+| `migration_plan.json` | at least one finite `avg_harmonic` greater than 0 |
+| `separate` | optional pair of names that must receive different community ids |
+| connectedness | each non-infrastructure community's behavioral (`Calls` / `Uses` / `References`) participants form one connected subgraph |
+
+```json
+{
+  "analytics": {
+    "root": "correctnessRoot",
+    "mid": "correctnessMid",
+    "leaf": "correctnessLeaf",
+    "separate": ["cliqueA", "cliqueB"]
+  }
+}
+```
+
+```json
+{
+  "match": { "name": "process", "class": "Order", "discriminator": "(int)", "line": 40 },
+  "identity": { "discriminator": "(int)" },
+  "mro": { "overrides": ["process"] },
+  "slice": {
+    "file": "src/Order.java",
+    "line": 42,
+    "variable": "y",
+    "must_contain": ["input"],
+    "must_exclude": ["99"]
+  },
+  "flows": {
+    "file": "src/Order.java",
+    "line": 42,
+    "variable": "y",
+    "must_contain": ["alias"]
+  },
+  "mutations": { "type": "Order", "must_exclude": ["<init>"] },
+  "taint": { "sink": "sink", "min_flows": 1 },
+  "clones": { "mode": "exact", "group_with": ["processCopy"], "not_grouped_with": ["sibling"] },
+  "semantic": { "query": "refund payment", "top3_contains": "process", "neighbor_names": ["save"] },
+  "review": {
+    "file": "src/Order.java",
+    "find": "return y",
+    "replace": "return z",
+    "must_contain": ["correctnessRoot"]
+  }
+}
+```

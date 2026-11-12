@@ -3,7 +3,9 @@
 use crate::plugin::Plugin;
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::{extract_name_from_node, node_to_location};
+use rgctl_plugin_helpers::{
+    extract_name_from_node, node_to_location, record_symbol_spans_from_source,
+};
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -76,12 +78,13 @@ enum Visit<'a> {
 fn push_function_symbol(
     ctx: &mut SinglePassCtx,
     node: Node,
+    source: &[u8],
     name: String,
     file_path: &str,
 ) -> bool {
     let loc = ((node.end_position().row - node.start_position().row) + 1).max(1) as u32;
     let qn = name.clone();
-    ctx.symbols.push(Symbol {
+    let mut sym = Symbol {
         name: name.clone(),
         symbol_type: SymbolType::Function,
         qualified_name: Some(qn.clone()),
@@ -94,7 +97,9 @@ fn push_function_symbol(
         documentation: None,
         metadata: serde_json::json!({ "language": "lua" }),
         ..Default::default()
-    });
+    };
+    record_symbol_spans_from_source(&mut sym, node, source);
+    ctx.symbols.push(sym);
     ctx.enter_scope(
         ScopeKind::Function,
         Some(name),
@@ -234,13 +239,13 @@ pub fn extract_all_single_pass(
                     "function_declaration" => {
                         if let Some(name) = lua_function_decl_name(node, source) {
                             pushed_scope =
-                                push_function_symbol(&mut ctx, node, name, &file_path_str);
+                                push_function_symbol(&mut ctx, node, source, name, &file_path_str);
                         }
                     }
                     "assignment_statement" => {
                         if let Some(name) = assignment_function_name(node, source) {
                             pushed_scope =
-                                push_function_symbol(&mut ctx, node, name, &file_path_str);
+                                push_function_symbol(&mut ctx, node, source, name, &file_path_str);
                         }
                     }
                     "function_definition" => {

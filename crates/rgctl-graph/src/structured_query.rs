@@ -501,9 +501,25 @@ impl<'a> StructuredQuery<'a> {
     }
 
     /// Resolve a unique symbol or return ambiguity / not-found errors.
+    ///
+    /// Note: `--scope` / `--scope-mode` on `callers`, `callees`, and seeded
+    /// `relations` filter the neighbor/edge side (not the seed itself), except
+    /// as a tiebreaker when `ScopeMode::Inside` narrows an otherwise-ambiguous seed.
     pub fn resolve_symbol(&self, symbol: &str, filters: &QueryFilters) -> Result<Node> {
+        let mut seed_filters = filters.clone();
+        seed_filters.scope = None;
         let mut matches = self.lookup_name_candidates(symbol, filters.exact)?;
-        matches.retain(|n| self.node_passes(n, filters));
+        matches.retain(|n| self.node_passes(n, &seed_filters));
+        if matches.len() > 1 && filters.scope.is_some() && filters.scope_mode == ScopeMode::Inside {
+            let scoped: Vec<Node> = matches
+                .iter()
+                .filter(|n| Self::matches_scope(n, filters.scope.as_deref(), ScopeMode::Inside))
+                .cloned()
+                .collect();
+            if !scoped.is_empty() {
+                matches = scoped;
+            }
+        }
         if matches.len() > 1 && filters.node_type.is_none() {
             // Collapse same-type constructor (`<init>`) collision: when a single
             // Class/Interface/Struct shares its simple name with its `<init>`
@@ -515,13 +531,7 @@ impl<'a> StructuredQuery<'a> {
                 .map(|(i, _)| i)
                 .collect();
             let all_others_are_ctors = matches.iter().all(|n| {
-                is_aggregate_container_type(n.node_type)
-                    || (n.node_type == NodeType::Function
-                        && n.qualified_name.as_deref().is_some_and(|qn| {
-                            qn.ends_with(".<init>")
-                                || qn.ends_with("::<init>")
-                                || qn.ends_with("\\<init>")
-                        }))
+                is_aggregate_container_type(n.node_type) || is_same_name_constructor_node(n)
             });
             if non_ctor_types.len() == 1 && all_others_are_ctors {
                 return Ok(matches.swap_remove(non_ctor_types[0]));
@@ -942,9 +952,15 @@ impl<'a> StructuredQuery<'a> {
             let Some(n) = self.store.get_node(*id)? else {
                 continue;
             };
-            if !self.node_passes(&n, filters) && filters.scope.is_some() {
-                // For callers, scope typically filters the *neighbor* side.
-                if !Self::matches_scope(&n, filters.scope.as_deref(), filters.scope_mode) {
+            if let Some(prefix) = filters.scope.as_deref() {
+                let keep = match filters.scope_mode {
+                    ScopeMode::Inside => node_in_scope(&n, prefix),
+                    ScopeMode::Outside => !node_in_scope(&n, prefix),
+                    ScopeMode::Crossing => {
+                        node_in_scope(&n, prefix) != node_in_scope(&seed, prefix)
+                    }
+                };
+                if !keep {
                     continue;
                 }
             }
@@ -1668,6 +1684,46 @@ pub fn is_aggregate_container_type(nt: NodeType) -> bool {
             | NodeType::Enum
             | NodeType::Module
     )
+}
+
+/// True when `n` is a constructor `Function` sharing its enclosing type's simple name
+/// (`.<init>` / `::<init>` / `\<init>`, `is_constructor == "true"`, or C++/C# `Owner::Owner` / `Owner.Owner`).
+pub fn is_same_name_constructor_node(n: &Node) -> bool {
+    if n.node_type != NodeType::Function {
+        return false;
+    }
+    if n.get_property("is_constructor") == Some("true")
+        || matches!(
+            n.get_property("kind"),
+            Some("constructor" | "constructor_declaration")
+        )
+    {
+        return true;
+    }
+    let Some(qn) = n.qualified_name.as_deref() else {
+        return false;
+    };
+    let base_qn = qn.split('(').next().unwrap_or(qn);
+    if base_qn.ends_with(".<init>")
+        || base_qn.ends_with("::<init>")
+        || base_qn.ends_with("\\<init>")
+    {
+        return true;
+    }
+    let name = n.name.as_str();
+    if name.is_empty() {
+        return false;
+    }
+    let owner = base_qn
+        .strip_suffix(&format!("::{name}"))
+        .or_else(|| base_qn.strip_suffix(&format!(".{name}")))
+        .or_else(|| base_qn.strip_suffix(&format!("\\{name}")));
+    owner.is_some_and(|prefix| {
+        prefix
+            .rsplit(['.', ':', '\\'])
+            .find(|seg| !seg.is_empty())
+            .is_some_and(|enclosing| enclosing == name)
+    })
 }
 
 /// Qualified-name prefixes for member matching across `.`, `::`, and `\`.
@@ -2770,5 +2826,73 @@ mod tests {
             .unwrap();
         assert_eq!(inv.counts.len(), 1);
         assert_eq!(inv.counts[0].key, "javax.ejb");
+    }
+
+    #[test]
+    fn callers_scope_inside_and_outside_partition_neighbors_without_rejecting_seed() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("snap.bin");
+        let mut backend = MemoryBackend::new();
+
+        let callee = Node::new(NodeType::Function, "save")
+            .with_qualified_name("com.acme.repo.OrderRepo.save")
+            .with_file_path("src/repo/OrderRepo.java");
+        let callee_id = callee.id;
+        backend.insert_node(callee).unwrap();
+
+        let inside_caller = Node::new(NodeType::Function, "saveAll")
+            .with_qualified_name("com.acme.repo.OrderRepo.saveAll")
+            .with_file_path("src/repo/OrderRepo.java");
+        let inside_id = inside_caller.id;
+        backend.insert_node(inside_caller).unwrap();
+
+        let outside_caller = Node::new(NodeType::Function, "checkout")
+            .with_qualified_name("com.acme.web.OrderController.checkout")
+            .with_file_path("src/web/OrderController.java");
+        let outside_id = outside_caller.id;
+        backend.insert_node(outside_caller).unwrap();
+
+        backend
+            .insert_edge(Edge::new(inside_id, callee_id, EdgeType::Calls))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(outside_id, callee_id, EdgeType::Calls))
+            .unwrap();
+
+        write_columnar_from_backend(&backend, &path).unwrap();
+        let store = SnapshotNodeStore::open(&path).unwrap();
+        let q = StructuredQuery::new(&store);
+
+        let ins = q
+            .call_neighbors(
+                "save",
+                true,
+                1,
+                &QueryFilters {
+                    file_glob: Some("src/repo/OrderRepo.java".into()),
+                    scope: Some("com.acme.repo".into()),
+                    scope_mode: ScopeMode::Inside,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let out = q
+            .call_neighbors(
+                "save",
+                true,
+                1,
+                &QueryFilters {
+                    file_glob: Some("src/repo/OrderRepo.java".into()),
+                    scope: Some("com.acme.repo".into()),
+                    scope_mode: ScopeMode::Outside,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(ins.neighbors.len(), 1);
+        assert_eq!(ins.neighbors[0].name, "saveAll");
+        assert_eq!(out.neighbors.len(), 1);
+        assert_eq!(out.neighbors[0].name, "checkout");
     }
 }

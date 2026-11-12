@@ -3,7 +3,8 @@
 use crate::plugin::{GROOVY_BRANCH_KINDS, GROOVY_CALL_KINDS, GroovyPlugin};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::record_symbol_spans;
+use rgctl_plugin_helpers::{declaration_header_signature, record_symbol_spans};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -151,8 +152,8 @@ pub fn extract_all_single_pass(
     let mut relations = Vec::new();
     let mut pending_calls: Vec<PendingCall<'_>> = Vec::new();
     let mut depth_warned = false;
-    let mut lambda_idx: u32 = 0;
-    let mut closure_idx: u32 = 0;
+    let mut lambda_counts: HashMap<String, u32> = HashMap::new();
+    let mut closure_counts: HashMap<String, u32> = HashMap::new();
 
     let mut stack = vec![Visit::Pre(root, 0)];
 
@@ -220,10 +221,7 @@ pub fn extract_all_single_pass(
                                 symbol_type,
                                 qualified_name: Some(qn.clone()),
                                 location: GroovyPlugin::loc(&file, node),
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+                                signature: declaration_header_signature(node, source),
                                 return_type: None,
                                 parameters: vec![],
                                 fields: vec![],
@@ -332,13 +330,20 @@ pub fn extract_all_single_pass(
                         }
                     }
                     "lambda_expression" => {
-                        lambda_idx += 1;
+                        let owner_key =
+                            GroovyPlugin::anon_owner_qn(node, source, package.as_deref())
+                                .unwrap_or_default();
+                        let next = lambda_counts
+                            .entry(owner_key)
+                            .and_modify(|n| *n += 1)
+                            .or_insert(1);
+                        let idx = *next;
                         if let Some(sym) = plugin.extract_lambda_symbol(
                             node,
                             source,
                             &file,
                             package.as_deref(),
-                            lambda_idx,
+                            idx,
                         ) {
                             let name = sym.name.clone();
                             let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
@@ -355,26 +360,45 @@ pub fn extract_all_single_pass(
                         }
                     }
                     "closure" => {
-                        closure_idx += 1;
-                        if let Some(sym) = plugin.extract_closure_symbol(
-                            node,
-                            source,
-                            &file,
-                            package.as_deref(),
-                            closure_idx,
-                        ) {
-                            let name = sym.name.clone();
-                            let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
-                            ctx.symbols.push(sym);
-                            ctx.enter_scope(
-                                ScopeKind::Lambda,
-                                Some(name),
-                                qn,
-                                node.start_byte(),
-                                node.end_byte(),
-                                true,
-                            );
-                            pushed_scope = true;
+                        let is_decl_body = node.parent().is_some_and(|p| {
+                            matches!(
+                                p.kind(),
+                                "function_definition"
+                                    | "method_declaration"
+                                    | "constructor_declaration"
+                                    | "compact_constructor_declaration"
+                                    | "static_initializer"
+                            ) && p.child_by_field_name("body") == Some(node)
+                        });
+                        if !is_decl_body {
+                            let owner_key =
+                                GroovyPlugin::anon_owner_qn(node, source, package.as_deref())
+                                    .unwrap_or_default();
+                            let next = closure_counts
+                                .entry(owner_key)
+                                .and_modify(|n| *n += 1)
+                                .or_insert(1);
+                            let idx = *next;
+                            if let Some(sym) = plugin.extract_closure_symbol(
+                                node,
+                                source,
+                                &file,
+                                package.as_deref(),
+                                idx,
+                            ) {
+                                let name = sym.name.clone();
+                                let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
+                                ctx.symbols.push(sym);
+                                ctx.enter_scope(
+                                    ScopeKind::Lambda,
+                                    Some(name),
+                                    qn,
+                                    node.start_byte(),
+                                    node.end_byte(),
+                                    true,
+                                );
+                                pushed_scope = true;
+                            }
                         }
                     }
                     "annotation_type_element_declaration" => {

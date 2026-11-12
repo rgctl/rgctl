@@ -122,7 +122,7 @@ Assert on **extracted structures**, not CLI:
 Typical pattern (see `tests/ruby_langfeatures.rs`, `tests/go_langfeatures.rs`):
 
 1. Cold `discover . -l {id}` on `rgctl-tests/ecommerce-{id}` or `tests/fixtures/{id}/langfeatures`
-2. `rgctl -f json find` / `callers` / `relations`
+2. `rgctl -f json find` / `callers` / `callees` / `relations` / `inventory` (**never** `rgctl gql` — `gql` is deprecated; all new and migrated tests must use structured JSON verbs or typed Rust snapshot APIs)
 3. Assert symbol presence, callee/caller sets, and language property when set
 
 ### `{id}_cfg_analysis.rs`

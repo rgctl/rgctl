@@ -57,6 +57,7 @@ pub fn extract_all_single_pass(
     let dispatch = erb_dispatch();
 
     let mut ctx = SinglePassCtx::new(dispatch);
+    let mut ordinals = [0usize; 4];
     let mut relations = Vec::new();
     let mut depth_warned = false;
 
@@ -98,6 +99,7 @@ pub fn extract_all_single_pass(
                     node,
                     source,
                     &file_path_str,
+                    &mut ordinals,
                     &mut ctx.symbols,
                     &mut relations,
                 );
