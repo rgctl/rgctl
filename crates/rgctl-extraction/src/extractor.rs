@@ -537,21 +537,14 @@ fn symbol_body_from_source<'a>(
     line_offsets: &[usize],
     symbol: &Symbol,
 ) -> Option<&'a str> {
-    if let (Some(start), Some(end)) = (
-        symbol
-            .metadata
-            .get("source_start_byte")
-            .and_then(|v| v.as_u64()),
-        symbol
-            .metadata
-            .get("source_end_byte")
-            .and_then(|v| v.as_u64()),
-    ) {
-        return std::str::from_utf8(
-            source.get(usize::try_from(start).ok()?..usize::try_from(end).ok()?)?,
-        )
-        .ok()
-        .filter(|body| !body.is_empty());
+    // Shared callable extraction opts into exact-byte hashing. Other plugins'
+    // scalar writeback ranges must not change their existing line-based hashes.
+    let exact_callable = symbol.metadata.get("callable_role").is_some()
+        || symbol.metadata.get("identity_discriminator").is_some();
+    if exact_callable && let (Some(start), Some(end)) = (symbol.start_byte, symbol.end_byte) {
+        return std::str::from_utf8(source.get(start as usize..end as usize)?)
+            .ok()
+            .filter(|body| !body.is_empty());
     }
     let start = symbol.location.start_line.saturating_sub(1);
     let end_line = symbol.location.end_line.max(symbol.location.start_line);
@@ -637,6 +630,41 @@ mod tests {
     use std::fs;
     use std::time::Duration;
     use tempfile::TempDir;
+
+    #[test]
+    fn callable_body_selection_uses_scalar_spans_and_legacy_line_fallback() {
+        let source = b"fn first() {} fn second() {}\nfn legacy() {}\n";
+        let mut symbol = Symbol {
+            name: "second".into(),
+            symbol_type: SymbolType::Function,
+            start_byte: Some(14),
+            end_byte: Some(28),
+            // Stale duplicate metadata must never override the typed source span.
+            metadata: serde_json::json!({"callable_role":"implementation","source_start_byte":0,"source_end_byte":13}),
+            ..Default::default()
+        };
+        let offsets = line_start_offsets(source);
+        assert_eq!(
+            symbol_body_from_source(source, &offsets, &symbol),
+            Some("fn second() {}")
+        );
+        symbol.start_byte = None;
+        symbol.end_byte = None;
+        symbol.location.start_line = 2;
+        symbol.location.end_line = 2;
+        assert_eq!(
+            symbol_body_from_source(source, &offsets, &symbol),
+            Some("fn legacy() {}")
+        );
+        // Writeback spans alone do not opt older extraction paths into exact hashing.
+        symbol.start_byte = Some(14);
+        symbol.end_byte = Some(28);
+        symbol.metadata = serde_json::json!({});
+        assert_eq!(
+            symbol_body_from_source(source, &offsets, &symbol),
+            Some("fn legacy() {}")
+        );
+    }
 
     #[test]
     fn test_extract_rust_file() {

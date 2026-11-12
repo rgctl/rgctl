@@ -63,14 +63,15 @@ reuse verifies source hashes and does not remap graph IDs through ambiguous name
 
 ## Migration and evidence
 
-Facts-cache format 7 and extraction semantics version 10 invalidate old extraction
+Facts-cache format 8 and extraction semantics version 11 invalidate old extraction
 results. Missing or stale `.rgctl/extraction_semantics.json` forces full source
 extraction, including when `discover --files` was requested. The semantics marker
 is written after successful snapshot persistence. Existing snapshots remain
 readable for queries.
 
 Callable byte spans use the dedicated source-span fields introduced by lossless
-writeback. Absolute extraction byte offsets stay out of node properties, preventing
+writeback. Extraction hashes and repeated-definition ordering read these scalar
+fields directly; fresh facts do not duplicate their values in JSON metadata. Absolute extraction byte offsets stay out of node properties, preventing
 those offsets from changing function extension digests after line shifts. CFG selection prefers these
 span fields and accepts legacy offset properties when reading older nodes. The
 snapshot extension preserves both the discriminator prefix and the relative span

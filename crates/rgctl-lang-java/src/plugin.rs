@@ -897,8 +897,6 @@ impl JavaPlugin {
                 "language": "java",
                 "is_constructor": true,
                 "is_compact_constructor": true,
-                "source_start_byte": node.start_byte(),
-                "source_end_byte": node.end_byte(),
             }),
             ..Default::default()
         };
@@ -1806,7 +1804,6 @@ impl JavaPlugin {
             documentation: None,
             metadata: serde_json::json!({
                 "language": "java", "is_lambda": true,
-                "source_start_byte": node.start_byte(), "source_end_byte": node.end_byte(),
             }),
             ..Default::default()
         };

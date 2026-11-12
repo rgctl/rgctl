@@ -504,7 +504,6 @@ pub struct FunctionLocation {
 struct FunctionLocationIndex {
     by_name_first: HashMap<String, FunctionLocation>,
     by_name: HashMap<String, Vec<FunctionLocation>>,
-    by_span: HashMap<(usize, usize, String), FunctionLocation>,
 }
 
 /// Build a CFG for a named function in an already-parsed tree (no re-parse).
@@ -544,7 +543,6 @@ fn index_function_locations_full(
     let mut index = FunctionLocationIndex {
         by_name_first: HashMap::new(),
         by_name: HashMap::new(),
-        by_span: HashMap::new(),
     };
     collect_function_locations(
         tree.root_node(),
@@ -576,8 +574,6 @@ fn collect_function_locations(
             };
             out.by_name.entry(func_name.clone()).or_default().push(loc);
             out.by_name_first.entry(func_name.clone()).or_insert(loc);
-            out.by_span
-                .insert((loc.start_line, loc.end_line, func_name), loc);
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {

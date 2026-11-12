@@ -91,8 +91,10 @@ fn shared_java_symbol_policy_preserves_spans_and_propagates_type_errors() {
     let migrated =
         callable_identity::try_symbol(original.clone(), method, source, Policy::Java).unwrap();
     assert_eq!(migrated.metadata["identity_discriminator"], "(Widget)");
-    assert_eq!(migrated.metadata["source_start_byte"], method.start_byte());
-    assert_eq!(migrated.metadata["source_end_byte"], method.end_byte());
+    assert_eq!(migrated.start_byte, Some(method.start_byte() as u32));
+    assert_eq!(migrated.end_byte, Some(method.end_byte() as u32));
+    assert!(migrated.metadata.get("source_start_byte").is_none());
+    assert!(migrated.metadata.get("source_end_byte").is_none());
     assert_eq!(migrated.qualified_name, original.qualified_name);
 
     // Keep the CST but make the type token invalid UTF-8: the fallible helper
@@ -125,13 +127,16 @@ fn legacy_and_single_pass_keep_the_same_java_declaration_identities() {
             .iter()
             .filter(|s| s.symbol_type == SymbolType::Function)
             .map(|s| {
+                assert!(s.metadata.get("source_start_byte").is_none());
+                assert!(s.metadata.get("source_end_byte").is_none());
+                assert!(s.start_byte.is_some() && s.end_byte.is_some());
                 (
                     s.qualified_name.clone(),
                     s.metadata["identity_discriminator"]
                         .as_str()
                         .map(str::to_owned),
-                    s.metadata["source_start_byte"].as_u64(),
-                    s.metadata["source_end_byte"].as_u64(),
+                    s.start_byte,
+                    s.end_byte,
                 )
             })
             .collect();

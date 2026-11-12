@@ -42,8 +42,8 @@ ambiguous rather than selecting an arbitrary declaration. Incremental relation
 rebuilding preserves candidates and explicit identity discriminators instead of
 overwriting them in a single-value name map.
 
-Extraction semantics version 10 forces graphs built with the old insertion rule
-to rebuild. Facts-cache format 7 invalidates extraction records affected by the declaration and field-span correctness fixes.
+Extraction semantics version 11 forces graphs built with the old insertion rule
+to rebuild. Facts-cache format 8 invalidates extraction records affected by the declaration and field-span correctness fixes.
 
 ## Separate execution controls
 

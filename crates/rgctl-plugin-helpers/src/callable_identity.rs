@@ -368,8 +368,6 @@ fn source_span(symbol: &mut Symbol, node: Node<'_>) {
     symbol.end_byte = symbol
         .end_byte
         .or_else(|| u32::try_from(node.end_byte()).ok());
-    symbol.metadata["source_start_byte"] = node.start_byte().into();
-    symbol.metadata["source_end_byte"] = node.end_byte().into();
 }
 
 /// Fallible entry point for policies whose syntax validation can fail. Java
@@ -641,13 +639,7 @@ pub fn finish(policy: Policy, symbols: &mut [Symbol], relations: &mut [Relation]
             .push(index);
     }
     for indices in groups.values_mut() {
-        indices.sort_by_key(|i| {
-            symbols[*i]
-                .metadata
-                .get("source_start_byte")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0)
-        });
+        indices.sort_by_key(|i| symbols[*i].start_byte.unwrap_or(0));
         if policy.dynamic() && indices.len() > 1 {
             for (ordinal, &index) in indices.iter().enumerate() {
                 if ordinal > 0 {
@@ -968,5 +960,32 @@ fn attach_argument_identity(relations: &mut [Relation], identity: &str) {
         .filter(|r| r.relation_type == RelationType::Calls)
     {
         relation.metadata["argument_identity_discriminator"] = identity.into();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_definition_order_uses_scalar_offsets_not_input_or_legacy_metadata_order() {
+        let declaration = |start, legacy| Symbol {
+            name: "quote".into(),
+            symbol_type: SymbolType::Function,
+            qualified_name: Some("Example.quote".into()),
+            start_byte: Some(start),
+            end_byte: Some(start + 10),
+            metadata: serde_json::json!({"source_start_byte":legacy}),
+            ..Default::default()
+        };
+        let mut symbols = [declaration(80, 1), declaration(10, 100)];
+        finish(Policy::Python, &mut symbols, &mut []);
+        assert_eq!(
+            symbols[0].metadata["identity_discriminator"],
+            "definition:1"
+        );
+        assert_eq!(symbols[0].metadata["superseded_definition"], false);
+        assert!(symbols[1].metadata.get("identity_discriminator").is_none());
+        assert_eq!(symbols[1].metadata["superseded_definition"], true);
     }
 }
