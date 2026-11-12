@@ -45,6 +45,7 @@ pub mod macro_call_lookup;
 pub mod migration;
 pub mod mro;
 pub mod node_lookup;
+pub mod operands;
 pub mod pdg;
 pub mod policy;
 pub mod policy_diff;

@@ -875,6 +875,9 @@ fn build_cfg_from_function_node(
     );
     let mut builder = CfgBuilder::new(&mut cfg, language);
     builder.build_function(func_node, source)?;
+    if let Some(body) = function_body_node(func_node, language) {
+        cfg.operands = crate::operands::lower_function_operands(language, func_node, body, source)?;
+    }
     Ok(cfg)
 }
 

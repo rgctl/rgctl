@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 mod revision_tests;
 
 /// Procedural lowering semantics. Bump when unchanged source must be reanalyzed.
-pub const CFG_SEMANTICS_VERSION: u32 = 1;
+pub const CFG_SEMANTICS_VERSION: u32 = 2;
 
 const fn cfg_revision_tag() -> [u8; 8] {
     let version = CFG_SEMANTICS_VERSION.to_le_bytes();
@@ -158,6 +158,8 @@ pub struct ControlFlowGraph {
     pub entry: BlockId,
     /// Exit block ids (returns, implicit fall-through exits).
     pub exits: Vec<BlockId>,
+    /// Source-native invocation, formal and return operand roles.
+    pub operands: crate::operands::FunctionOperands,
     /// Typed locals + formals (name → bare type), populated at CFG build (not persisted).
     pub local_types: HashMap<String, String>,
     /// Successor lists keyed by block id (derived from [`Self::edges`], not serialized).
@@ -269,6 +271,7 @@ impl ControlFlowGraph {
             edges: Vec::new(),
             entry,
             exits: Vec::new(),
+            operands: crate::operands::FunctionOperands::default(),
             local_types: HashMap::new(),
             succ: HashMap::new(),
             pred: HashMap::new(),
@@ -559,6 +562,7 @@ impl Serialize for ControlFlowGraph {
             edges: &'a [CfgEdge],
             entry: BlockId,
             exits: &'a [BlockId],
+            operands: &'a crate::operands::FunctionOperands,
         }
         Stored {
             revision: cfg_revision_tag(),
@@ -566,6 +570,7 @@ impl Serialize for ControlFlowGraph {
             edges: &self.edges,
             entry: self.entry,
             exits: &self.exits,
+            operands: &self.operands,
         }
         .serialize(serializer)
     }
@@ -584,14 +589,21 @@ impl<'de> Deserialize<'de> for ControlFlowGraph {
             edges: Vec<CfgEdge>,
             entry: BlockId,
             exits: Vec<BlockId>,
+            operands: crate::operands::FunctionOperands,
         }
 
         let data = ControlFlowGraphData::deserialize(deserializer)?;
+        if !data.operands.valid_references() {
+            return Err(serde::de::Error::custom(
+                "invalid procedural operand reference",
+            ));
+        }
         let mut cfg = Self {
             blocks: data.blocks,
             edges: data.edges,
             entry: data.entry,
             exits: data.exits,
+            operands: data.operands,
             local_types: HashMap::new(),
             succ: HashMap::new(),
             pred: HashMap::new(),

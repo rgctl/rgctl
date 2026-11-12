@@ -930,7 +930,10 @@ fn try_fast_cache_hit(
 ) -> Option<CfgFunctionWork> {
     let key = analysis_cache_key(func_node.id, code_hash);
     let entry = cache.index.get(&key)?;
-    if entry.code_hash != code_hash || entry.function_id != func_node.id {
+    if entry.code_hash != code_hash
+        || entry.function_id != func_node.id
+        || !entry.matches_source(func_node)
+    {
         return None;
     }
     Some(CfgFunctionWork {
@@ -1291,6 +1294,7 @@ fn compute_from_cfg(
         stable_key: stable_key.clone(),
         function_id: func_node.id,
         code_hash: code_hash.to_string(),
+        source_location: crate::analysis::storage::AnalysisSourceLocation::from_node(func_node),
         flow_count,
         vulnerable_count,
     });
@@ -1341,7 +1345,10 @@ fn try_full_incremental_shortcut(
         eligible += 1;
         let key = analysis_cache_key(func.id, code_hash);
         let entry = cache.index.get(&key)?;
-        if *code_hash != entry.code_hash || entry.function_id != func.id {
+        if *code_hash != entry.code_hash
+            || entry.function_id != func.id
+            || !entry.matches_source(func)
+        {
             return None;
         }
         matched += 1;
@@ -1371,15 +1378,55 @@ mod overload_cache_tests {
     use crate::analysis::FunctionAnalysis;
 
     #[test]
+    fn relocated_or_unknown_source_cannot_reuse_absolute_operand_spans() {
+        let mut original = Node::new(rgctl_graph::schema::NodeType::Function, "example")
+            .with_file_path("example.js")
+            .with_code_hash("same")
+            .with_byte_spans(Some(0), Some(40), None, None, None);
+        original.start_line = Some(1);
+        let key = analysis_cache_key(original.id, "same");
+        let cache = CfgIncrementalCache {
+            index: HashMap::from([(
+                key.clone(),
+                AnalysisIndexEntry {
+                    stable_key: key,
+                    function_id: original.id,
+                    code_hash: "same".into(),
+                    source_location: crate::analysis::storage::AnalysisSourceLocation::from_node(
+                        &original,
+                    ),
+                    flow_count: 0,
+                    vulnerable_count: 0,
+                },
+            )]),
+        };
+        assert!(try_fast_cache_hit(&original, "same", &cache).is_some());
+        assert!(try_full_incremental_shortcut(std::slice::from_ref(&original), &cache).is_some());
+        let mut moved = original.clone();
+        moved.start_byte = Some(20);
+        moved.end_byte = Some(60);
+        moved.start_line = Some(3);
+        assert!(try_fast_cache_hit(&moved, "same", &cache).is_none());
+        assert!(try_full_incremental_shortcut(std::slice::from_ref(&moved), &cache).is_none());
+        let mut unknown = original;
+        unknown.start_byte = None;
+        assert!(try_fast_cache_hit(&unknown, "same", &cache).is_none());
+    }
+
+    #[test]
     fn identical_name_and_body_cache_cannot_remap_another_overload() {
-        let first = Node::new(rgctl_graph::schema::NodeType::Function, "quote")
+        let mut first = Node::new(rgctl_graph::schema::NodeType::Function, "quote")
             .with_file_path("Library.java")
             .with_identity_discriminator("(int)")
-            .with_code_hash("same");
-        let second = Node::new(rgctl_graph::schema::NodeType::Function, "quote")
+            .with_code_hash("same")
+            .with_byte_spans(Some(0), Some(10), None, None, None);
+        let mut second = Node::new(rgctl_graph::schema::NodeType::Function, "quote")
             .with_file_path("Library.java")
             .with_identity_discriminator("(String)")
-            .with_code_hash("same");
+            .with_code_hash("same")
+            .with_byte_spans(Some(0), Some(10), None, None, None);
+        first.start_line = Some(1);
+        second.start_line = Some(1);
         let key = analysis_cache_key(first.id, "same");
         let cache = CfgIncrementalCache {
             index: std::collections::HashMap::from([(
@@ -1388,6 +1435,9 @@ mod overload_cache_tests {
                     stable_key: key,
                     function_id: first.id,
                     code_hash: "same".into(),
+                    source_location: crate::analysis::storage::AnalysisSourceLocation::from_node(
+                        &first,
+                    ),
                     flow_count: 0,
                     vulnerable_count: 0,
                 },
