@@ -314,16 +314,20 @@ pub fn build_cfg_for_function(
 ) -> Result<ControlFlowGraph> {
     let bytes = source.as_bytes();
     let tree = parse_language(language, bytes)?;
-    let function_kinds = function_kinds_for(language)?;
-    let func_node = find_function_by_name(
-        tree.root_node(),
-        bytes,
-        function_name,
-        function_kinds,
-        language,
-    )
-    .ok_or_else(|| Error::NotFound(format!("function '{function_name}' not found")))?;
-    build_cfg_from_function_node(language, func_node, bytes, function_name)
+    build_cfg_for_function_in_tree(language, &tree, bytes, function_name)
+}
+
+/// Prove the source-level name selection used by name-only CFG construction,
+/// without constructing blocks/edges. Archive coverage alone is not proof of
+/// uniqueness: a partial archive may hold just one of several source overloads.
+pub(crate) fn validate_unique_function_name(
+    language: &str,
+    source: &str,
+    function_name: &str,
+) -> Result<()> {
+    let bytes = source.as_bytes();
+    let tree = parse_language(language, bytes)?;
+    unique_function_node(language, &tree, bytes, function_name).map(|_| ())
 }
 
 /// Parsed source file with function name / span → byte index (one tree-sitter parse per file).
@@ -513,16 +517,25 @@ pub fn build_cfg_for_function_in_tree(
     source: &[u8],
     function_name: &str,
 ) -> Result<ControlFlowGraph> {
+    let func_node = unique_function_node(language, tree, source, function_name)?;
+    build_cfg_from_function_node(language, func_node, source, function_name)
+}
+
+fn unique_function_node<'tree>(
+    language: &str,
+    tree: &'tree Tree,
+    source: &[u8],
+    function_name: &str,
+) -> Result<Node<'tree>> {
     let function_kinds = function_kinds_for(language)?;
-    let func_node = find_function_by_name(
+    find_function_by_name(
         tree.root_node(),
         source,
         function_name,
         function_kinds,
         language,
     )
-    .ok_or_else(|| Error::NotFound(format!("function '{function_name}' not found")))?;
-    build_cfg_from_function_node(language, func_node, source, function_name)
+    .ok_or_else(|| Error::NotFound(format!("function '{function_name}' not found")))
 }
 
 /// Parse a source file once and index function names to source byte spans.

@@ -199,7 +199,13 @@ the source changes.
 - Dynamic computed member keys and external field types are not compiler-checked.
   Field nodes and source locations do not guarantee complete field-reference or
   read/write tracking. CFG alone does not establish that coverage either.
-- Ambiguous name-only CFG selection fails. Archive reuse validates source hashes;
+- Ambiguous name-only CFG selection fails. Warm name-only archive hits validate
+  the unique source declaration with a CST lookup, without constructing another
+  CFG. A single cached record cannot prove uniqueness when archive coverage is
+  partial. Source parsing remains necessary for this name-only evidence; exact
+  graph-ID/span cache paths retain their existing behavior. Legacy initializer
+  ordinal requests retain their full-build compatibility path rather than
+  assuming owner-qualified uniqueness. Archive reuse validates source hashes;
   graph IDs are not remapped through ambiguous callable names. Cache optimization
   must preserve those checks, including when archive coverage is partial.
 - Position-only edits preserve callable identity. Changing a language identity
