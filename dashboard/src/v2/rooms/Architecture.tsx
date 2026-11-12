@@ -24,6 +24,7 @@ import { loadMemberIndices } from "../metagraphMembers";
 import { loadFunctions, type FunctionEntry } from "../data";
 import { STALE_CHUNK_MESSAGE, isStaleChunkError } from "../staleChunk";
 import { shouldRestoreLevel } from "./levelRestore";
+import { compareMembers, nonFunctionReason } from "./memberKind";
 import { SymbolReader } from "./SymbolReader";
 import type { ArchitectureState, ArchitectureView, Metagraph, PackageNode } from "../architectureTypes";
 import type { HoverEntry, MemberEntry, UniverseLayer, UniverseScene } from "../universe/UniverseScene";
@@ -426,6 +427,13 @@ export function ArchitectureRoom({
   const openSymbol = useCallback(async (member: MemberEntry | null) => {
     if (!member) return;
     setMemberState({ kind: "resolving", member });
+    // Answered before the index is asked: a file node is not a function, and saying "the CFG index does not reach
+    // it" about one sends the reader looking for a missing artifact that was never meant to exist.
+    const kindReason = nonFunctionReason(member.nodeTypeName, member.name);
+    if (kindReason) {
+      setMemberState({ kind: "failed", member, reason: kindReason });
+      return;
+    }
     const functions = await loadFunctions();
     const matches = functions.filter(
       (f) => f.name === member.name && (!member.filePath || f.file_path === member.filePath),
@@ -1050,7 +1058,8 @@ function Members({
    * underneath says how many are hidden rather than implying the list is the whole level.
    */
   const MAX_ROWS = 5;
-  const sorted = useMemo(() => [...nodes].sort((a, b) => a.name.localeCompare(b.name)), [nodes]);
+  // Functions first, then the rest by name; see `compareMembers` for why the order is load-bearing.
+  const sorted = useMemo(() => [...nodes].sort(compareMembers), [nodes]);
   const needle = query.trim().toLowerCase();
   const matched = needle ? sorted.filter((n) => n.name.toLowerCase().includes(needle)) : sorted;
   const rows = matched.slice(0, MAX_ROWS);
@@ -1078,10 +1087,19 @@ function Members({
                   selected ? "bg-amber-400/12 text-amber-100" : "text-zinc-300 hover:bg-white/[0.05]"
                 }`}
               >
-                <span className="truncate font-mono text-[11px]">{node.name}</span>
-                <span className="ml-auto shrink-0 truncate text-[9.5px] text-zinc-500">
-                  {node.filePath?.split("/").pop() ?? node.kind}
+                <span className="w-[52px] shrink-0 truncate text-[9.5px] uppercase tracking-wide text-zinc-500">
+                  {node.kind}
                 </span>
+                <span className="truncate font-mono text-[11px]">{node.name}</span>
+                {/*
+                  The file only where it adds something: a file node's name *is* its path, so repeating the basename
+                  would give the row two spellings of the same thing and no room for the name itself.
+                */}
+                {node.filePath && node.filePath.split("/").pop() !== node.name && (
+                  <span className="ml-auto shrink-0 truncate text-[9.5px] text-zinc-500">
+                    {node.filePath.split("/").pop()}
+                  </span>
+                )}
               </button>
             </li>
           );
