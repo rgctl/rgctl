@@ -914,3 +914,186 @@ fn every_tier1_language_has_a_checked_field_span_contract() {
         "field-span contract failures: {failures:?}"
     );
 }
+
+#[test]
+fn materializing_fields_never_replaces_same_named_callables() {
+    for (file, source) in [
+        ("Box.java", "@lombok.Getter class Box { boolean isActive; }"),
+        ("box.py", "class Box:\n    value = lambda: 1\n"),
+        (
+            "box.rb",
+            "class Box\n attr_reader :value\n def self.value; 1; end\nend\n",
+        ),
+        ("box.js", "class Box { value = 1; value() { return 2; } }"),
+    ] {
+        let baseline = graph(file, source).0;
+        let with_fields = graph_with_members(file, source, true).0;
+        let expected = function_keys(&baseline);
+        let actual = function_keys(&with_fields);
+        assert!(!expected.is_empty(), "missing reproducer callable: {file}");
+        assert_eq!(
+            expected, actual,
+            "{file}: field materialization replaced a callable; nodes={with_fields:?}"
+        );
+    }
+}
+
+#[test]
+fn fields_only_discovery_upgrades_warm_snapshots_and_survives_incremental_updates() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    std::fs::write(
+        repo.join("Box.java"),
+        "@lombok.Getter class Box { boolean isActive; }\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("Other.java"), "class Other { int count; }\n").unwrap();
+    let run = |args: &[&str]| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_rgctl"))
+            .current_dir(repo)
+            .args(["-f", "json"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    let snapshot = || {
+        rgctl_graph::CodeGraph::open_snapshot(&repo.join(".rgctl/graph.snapshot.bin"))
+            .unwrap()
+            .snapshot()
+            .unwrap()
+    };
+    run(&["discover", "."]);
+    let before = function_keys(&snapshot().nodes);
+    assert!(!before.is_empty());
+    assert!(!snapshot().nodes.iter().any(|n| n.has_label("field")));
+    // An explicit --files request must upgrade the entire field-less snapshot.
+    run(&["discover", ".", "--with-fields", "--files", "Box.java"]);
+    let nodes = snapshot().nodes;
+    assert_eq!(function_keys(&nodes), before);
+    for name in ["isActive", "count"] {
+        assert!(
+            nodes.iter().any(|n| n.has_label("field") && n.name == name),
+            "missing {name}"
+        );
+    }
+    assert!(!rgctl_analysis::CfgPdgArchive::default_path(repo).exists());
+    run(&["discover", ".", "--with-fields"]);
+    assert_eq!(function_keys(&snapshot().nodes), before);
+    // A subsequent plain discover can reuse the richer snapshot without erasing its mode.
+    run(&["discover", "."]);
+    assert!(repo.join(".rgctl/materialized_fields.digest").is_file());
+    std::fs::write(
+        repo.join("Box.java"),
+        "@lombok.Getter class Box { boolean isActive; int added; }\n",
+    )
+    .unwrap();
+    run(&["discover", ".", "--files", "Box.java"]);
+    let nodes = snapshot().nodes;
+    for name in ["isActive", "added", "count"] {
+        assert!(
+            nodes.iter().any(|n| n.has_label("field") && n.name == name),
+            "incremental update lost {name}"
+        );
+    }
+    assert!(
+        nodes
+            .iter()
+            .any(|n| n.node_type == NodeType::Function && n.name == "isActive")
+    );
+    assert!(!rgctl_analysis::CfgPdgArchive::default_path(repo).exists());
+}
+
+#[test]
+fn bound_method_field_keeps_call_edges_on_the_callable() {
+    let source = "class Box { constructor(){ this.value = this.value.bind(this); } value(){return 1;} run(){this.value();} }";
+    let (nodes, edges) = graph_with_members("box.js", source, true);
+    let method = nodes
+        .iter()
+        .find(|n| n.node_type == NodeType::Function && n.name == "value")
+        .unwrap();
+    let field = nodes
+        .iter()
+        .find(|n| n.node_type == NodeType::Variable && n.name == "value")
+        .unwrap();
+    let caller = nodes
+        .iter()
+        .find(|n| n.node_type == NodeType::Function && n.name == "run")
+        .unwrap();
+    assert_ne!(method.id, field.id);
+    assert!(
+        edges
+            .iter()
+            .any(|e| e.edge_type == rgctl_graph::schema::EdgeType::Calls
+                && e.from == caller.id
+                && e.to == method.id)
+    );
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e.edge_type == rgctl_graph::schema::EdgeType::Calls && e.to == field.id)
+    );
+}
+
+#[test]
+fn incremental_bound_method_calls_never_target_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = "class Box { constructor(){ this.value = this.value.bind(this); } value(){return 1;} run(){this.value();} }";
+    let file = dir.path().join("box.js");
+    std::fs::write(&file, source).unwrap();
+    for args in [
+        vec!["discover", ".", "--with-fields"],
+        vec!["discover", ".", "--files", "box.js"],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_rgctl"))
+            .current_dir(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let graph =
+            rgctl_graph::CodeGraph::open_snapshot(&dir.path().join(".rgctl/graph.snapshot.bin"))
+                .unwrap()
+                .snapshot()
+                .unwrap();
+        let method = graph
+            .nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Function && n.name == "value")
+            .unwrap();
+        let field = graph
+            .nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Variable && n.name == "value")
+            .unwrap();
+        let caller = graph
+            .nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Function && n.name == "run")
+            .unwrap();
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|e| e.edge_type == rgctl_graph::schema::EdgeType::Calls
+                    && e.from == caller.id
+                    && e.to == method.id)
+        );
+        assert!(
+            !graph
+                .edges
+                .iter()
+                .any(|e| e.edge_type == rgctl_graph::schema::EdgeType::Calls && e.to == field.id)
+        );
+        std::fs::write(&file, source.replace("return 1", "return 2")).unwrap();
+    }
+}

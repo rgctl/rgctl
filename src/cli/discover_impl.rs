@@ -228,10 +228,17 @@ pub(crate) fn run_full_analysis(
         && lossless_ready
         && rgctl_graph::SnapshotNodeStore::open(&snapshot_path)
             .ok()
-            .and_then(|store| {
-                store.columnar().map(|col| {
+            .and_then(|snapshot| {
+                snapshot.columnar().map(|col| {
                     col.format_version()
                         == rgctl_graph::columnar_snapshot::COLUMNAR_SNAPSHOT_VERSION
+                        && (!materialize_fields
+                            || super::pipeline_status::read_digest_marker(
+                                store,
+                                super::pipeline_status::MATERIALIZED_FIELDS_DIGEST_FILE,
+                            )
+                            .as_deref()
+                                == Some(col.content_digest()))
                 })
             })
             .unwrap_or(false);
@@ -367,6 +374,11 @@ pub(crate) fn run_full_analysis(
             super::pipeline_status::MATERIALIZED_FIELDS_DIGEST_FILE,
             &graph_digest,
         );
+    } else if !graph_from_snapshot {
+        let _ = std::fs::remove_file(rgctl_graph::paths::artifact_path(
+            store,
+            super::pipeline_status::MATERIALIZED_FIELDS_DIGEST_FILE,
+        ));
     }
 
     if human_output {

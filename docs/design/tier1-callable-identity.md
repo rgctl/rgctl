@@ -52,7 +52,7 @@ reuse verifies source hashes and does not remap graph IDs through ambiguous name
 
 ## Migration and evidence
 
-Facts-cache format 6 and extraction semantics version 8 invalidate old extraction
+Facts-cache format 6 and extraction semantics version 9 invalidate old extraction
 results. Missing or stale `.rgctl/extraction_semantics.json` forces full source
 extraction, including when `discover --files` was requested. The semantics marker
 is written after successful snapshot persistence. Existing snapshots remain
@@ -71,7 +71,16 @@ This covers field-producing Tier 1 plugins; native property/column symbols use
 shared symbol-span recording. Lua named table entries and Elixir struct fields
 are emitted directly with spans. Field identities remain scoped by owner, while
 callable discriminators distinguish overloaded methods independently of position.
-Field materialization retains its existing `--with-cfg` opt-in.
+`discover --with-fields` materializes fields without enabling CFG, dominators,
+PDG, or taint. CFG continues to request fields for compatibility; `--full` also
+requests them. Default cold discovery remains unchanged. Field capability is
+recorded against the snapshot digest, so adding `--with-fields` upgrades a warm
+field-less graph. Incremental updates preserve an existing field-enabled mode.
+
+Insertion indexes include node kind as well as the existing qualified name and
+optional callable discriminator. This prevents a field and a method with the
+same name from suppressing one another; it does not change their stable keys.
+See [field/callable collision](field-callable-collision.md) for the corpus audit.
 
 `tests/fixtures/tier1_field_spans/inventory.json` covers all 24 registered Tier 1
 languages: 20 source member/property/column cases and four explicit non-applicable

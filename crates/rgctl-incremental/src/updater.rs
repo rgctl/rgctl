@@ -13,7 +13,7 @@ use rgctl_error::Result;
 use rgctl_extraction::discovery::{DiscoveryConfig, FileDiscoverer};
 use rgctl_extraction::{Extractor, FactsCache, GraphBuilder};
 use rgctl_graph::code_graph::CodeGraph;
-use rgctl_graph::schema::EdgeType;
+use rgctl_graph::schema::{EdgeType, Node, NodeType, SharedStr};
 use rgctl_graph::{
     DeltaSegment, MmappedGraphSnapshot, compact_repo_snapshot, compact_snapshot_file,
     write_columnar_from_backend,
@@ -93,6 +93,23 @@ impl Default for UpdateOptions {
 }
 
 impl IncrementalUpdater {
+    // Preserve the last discover mode when changed files are re-extracted.
+    fn fields_enabled(repo_root: &Path) -> bool {
+        rgctl_graph::paths::artifact_path(repo_root, "materialized_fields.digest").is_file()
+    }
+
+    fn refresh_fields_marker(repo_root: &Path) {
+        if Self::fields_enabled(repo_root)
+            && let Ok(store) = rgctl_graph::SnapshotNodeStore::open_from_repo(repo_root)
+            && let Ok(digest) = store.content_digest()
+        {
+            let _ = std::fs::write(
+                rgctl_graph::paths::artifact_path(repo_root, "materialized_fields.digest"),
+                digest,
+            );
+        }
+    }
+
     /// Create an updater with default options.
     pub fn new(registry: Arc<LanguageRegistry>) -> Self {
         Self {
@@ -210,6 +227,7 @@ impl IncrementalUpdater {
         }
         std::fs::create_dir_all(&spill_dir)?;
         let mut builder = GraphBuilder::with_spill(&spill_dir)?;
+        builder.set_materialize_fields(Self::fields_enabled(repo_root));
         let (_stream_stats, tails, _lossless_sidecars) = stream_into_graph(
             self.config.thread_count,
             &extractor,
@@ -293,6 +311,7 @@ impl IncrementalUpdater {
                 discovery: self.config.discovery.clone(),
                 show_progress: self.config.show_progress,
                 thread_count: self.config.thread_count,
+                materialize_fields: Self::fields_enabled(repo_root),
                 ..PipelineConfig::default()
             },
         );
@@ -314,6 +333,7 @@ impl IncrementalUpdater {
         tracker.index_files(&files, graph)?;
         tracker.save()?;
 
+        Self::refresh_fields_marker(repo_root);
         Ok(UpdateResult {
             files_changed: stats.files_processed,
             nodes_removed,
@@ -405,6 +425,7 @@ impl IncrementalUpdater {
         }
         std::fs::create_dir_all(&spill_dir)?;
         let mut builder = GraphBuilder::with_spill(&spill_dir)?;
+        builder.set_materialize_fields(Self::fields_enabled(repo_root));
         let (_stream_stats, tails, _lossless_sidecars) = stream_into_graph(
             self.config.thread_count,
             &extractor,
@@ -469,6 +490,7 @@ impl IncrementalUpdater {
         rgctl_graph::paths::ensure_rgctl_git_exclude(repo_root);
 
         result.duration = start.elapsed();
+        Self::refresh_fields_marker(repo_root);
         Ok(result)
     }
 
@@ -538,6 +560,7 @@ impl IncrementalUpdater {
         let extractor =
             Extractor::new(Arc::clone(&self.registry)).with_facts_cache(Arc::clone(&facts));
         let mut builder = GraphBuilder::new();
+        builder.set_materialize_fields(Self::fields_enabled(repo_root));
         let (stream_stats, tails, _lossless_sidecars) = stream_into_graph(
             self.config.thread_count,
             &extractor,
@@ -575,6 +598,7 @@ impl IncrementalUpdater {
         let _ = facts.save(repo_root);
 
         result.duration = start.elapsed();
+        Self::refresh_fields_marker(repo_root);
         Ok(result)
     }
 
@@ -615,7 +639,14 @@ impl IncrementalUpdater {
         let facts = Arc::new(FactsCache::load(repo_root));
         let extractor =
             Extractor::new(Arc::clone(&self.registry)).with_facts_cache(Arc::clone(&facts));
-        let symbol_index = graph.backend().build_symbol_index();
+        // Preserve all kinds and overloads; a single-value name index silently
+        // overwrites same-named fields/methods before relation resolution.
+        let mut symbol_index: HashMap<SharedStr, Vec<RelationSymbol>> = HashMap::new();
+        for node in graph.backend().all_nodes()? {
+            let candidate = RelationSymbol::from(&node);
+            let name = node.qualified_name.unwrap_or(node.name);
+            symbol_index.entry(name).or_default().push(candidate);
+        }
         let repo_root = repo_root.to_path_buf();
 
         let pending_edges = par_map(self.config.thread_count, changed_files, |path| {
@@ -628,8 +659,30 @@ impl IncrementalUpdater {
 
             let mut batch = Vec::new();
             for relation in extraction.relations {
-                let from_id = resolve_symbol(&symbol_index, &relation.from, &file);
-                let to_id = resolve_symbol(&symbol_index, &relation.to, &file);
+                let callable = relation.relation_type == rgctl_plugin_api::RelationType::Calls;
+                let from_id = resolve_symbol(
+                    &symbol_index,
+                    &relation.from,
+                    &file,
+                    callable,
+                    relation
+                        .metadata
+                        .get("from_identity_discriminator")
+                        .and_then(|v| v.as_str()),
+                );
+                let to_id = resolve_symbol(
+                    &symbol_index,
+                    relation
+                        .to_qualified_hint
+                        .as_deref()
+                        .unwrap_or(&relation.to),
+                    &file,
+                    callable,
+                    relation
+                        .metadata
+                        .get("to_identity_discriminator")
+                        .and_then(|v| v.as_str()),
+                );
 
                 if let (Some(from), Some(to)) = (from_id, to_id) {
                     batch.push((from, to, relation_type_to_edge(relation.relation_type)));
@@ -663,15 +716,47 @@ impl IncrementalUpdater {
     }
 }
 
-fn resolve_symbol(index: &HashMap<String, Uuid>, name: &str, file: &str) -> Option<Uuid> {
-    let qualified = format!("{file}::{name}");
-    if let Some(id) = index.get(&qualified) {
-        return Some(*id);
+// Retain only resolution data, not whole nodes and their metadata/bodies.
+struct RelationSymbol {
+    id: Uuid,
+    node_type: NodeType,
+    file_path: Option<SharedStr>,
+    identity: Option<String>,
+}
+
+impl From<&Node> for RelationSymbol {
+    fn from(node: &Node) -> Self {
+        Self {
+            id: node.id,
+            node_type: node.node_type,
+            file_path: node.file_path.clone(),
+            identity: node.identity_discriminator().map(str::to_owned),
+        }
     }
-    index
+}
+
+fn resolve_symbol(
+    index: &HashMap<SharedStr, Vec<RelationSymbol>>,
+    name: &str,
+    file: &str,
+    callable: bool,
+    identity: Option<&str>,
+) -> Option<Uuid> {
+    let candidates = index.get(name)?;
+    let eligible = |node: &&RelationSymbol| {
+        (!callable || node.node_type == NodeType::Function)
+            && identity.is_none_or(|value| node.identity.as_deref() == Some(value))
+    };
+    let mut local = candidates
         .iter()
-        .find(|(k, _)| k.ends_with(&format!("::{name}")))
-        .map(|(_, id)| *id)
+        .filter(eligible)
+        .filter(|node| node.file_path.as_deref() == Some(file));
+    if let Some(first) = local.next() {
+        return local.all(|node| node.id == first.id).then_some(first.id);
+    }
+    let mut global = candidates.iter().filter(eligible);
+    let first = global.next()?;
+    global.all(|node| node.id == first.id).then_some(first.id)
 }
 
 /// Delete `.rgctl` artifacts that embed `graph_digest` so they cannot outlive a compact.
@@ -733,6 +818,31 @@ mod tests {
     use rgctl_graph::schema::NodeType;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn relation_rebuild_preserves_kinds_and_rejects_ambiguous_overloads() {
+        let field = Node::new(NodeType::Variable, "value").with_file_path("box.js");
+        let method = Node::new(NodeType::Function, "value").with_file_path("box.js");
+        let overload = method.clone().with_identity_discriminator("(int)");
+        let mut index = HashMap::from([(
+            SharedStr::from("value"),
+            vec![RelationSymbol::from(&field), RelationSymbol::from(&method)],
+        )]);
+        assert_eq!(
+            resolve_symbol(&index, "value", "box.js", true, None),
+            Some(method.id)
+        );
+        assert_eq!(resolve_symbol(&index, "value", "box.js", false, None), None);
+        index
+            .get_mut("value")
+            .unwrap()
+            .push(RelationSymbol::from(&overload));
+        assert_eq!(resolve_symbol(&index, "value", "box.js", true, None), None);
+        assert_eq!(
+            resolve_symbol(&index, "value", "box.js", true, Some("(int)")),
+            Some(overload.id)
+        );
+    }
 
     #[test]
     fn test_incremental_update() {
