@@ -19,9 +19,19 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-/// Stable cache key across graph re-indexes (UUIDs may change).
+/// Legacy name-based key for CFG/PDG archive aliases.
+///
+/// Not suitable for analysis caching: different owners can have identical names and bodies.
 pub fn stable_function_key(file_path: &str, function_name: &str, code_hash: &str) -> String {
     format!("{file_path}\x1f{function_name}\x1f{code_hash}")
+}
+
+/// Cache key for one exact graph callable and body revision.
+///
+/// The node UUID includes path, owner, callable discriminator and node kind.
+/// A real identity change must rebuild analysis rather than rename its payload.
+pub fn analysis_cache_key(function_id: Uuid, code_hash: &str) -> String {
+    format!("function-v1\x1f{function_id}\x1f{code_hash}")
 }
 
 /// Suffix for bincode per-function analysis artifacts (`{uuid}.analysis.bin`).
@@ -33,7 +43,7 @@ pub const ANALYSIS_INDEX_FILE: &str = "analysis_index.bin";
 /// Lightweight metadata for incremental CFG reuse (no CFG/PDG payload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisIndexEntry {
-    /// Stable cache key (`file\x1fname\x1fcode_hash`).
+    /// Versioned exact-function cache key (UUID plus body hash).
     pub stable_key: String,
     /// Current graph node UUID for the function.
     pub function_id: Uuid,
@@ -72,11 +82,7 @@ impl FunctionAnalysis {
     /// Stable cache key when body hash is known.
     pub fn stable_key(&self) -> Option<String> {
         let hash = self.code_hash.as_deref()?;
-        Some(stable_function_key(
-            &self.file_path,
-            &self.function_name,
-            hash,
-        ))
+        Some(analysis_cache_key(self.function_id, hash))
     }
 }
 
@@ -120,6 +126,23 @@ impl AnalysisStorage {
         Ok(Mutex::new(Some(AnalysisPackWriter::create(
             &self.base_dir,
         )?)))
+    }
+
+    /// Replace a pack while retaining exact cache-hit payloads without decoding.
+    ///
+    /// Open the old mmap before `create` unlinks the data file. Its mapping stays
+    /// valid while records stream into the replacement; obsolete records are omitted.
+    pub fn open_pack_writer_preserving(&self, retained_ids: &[Uuid]) -> Result<SharedPackWriter> {
+        let reader = self.pack_reader.get()?;
+        let mut writer = AnalysisPackWriter::create(&self.base_dir)?;
+        if let Some(reader) = reader {
+            for id in retained_ids {
+                if let Some(bytes) = reader.record_bytes(*id)? {
+                    writer.append(*id, bytes)?;
+                }
+            }
+        }
+        Ok(Mutex::new(Some(writer)))
     }
 
     /// Finish the pack writer and write the offset index.
@@ -215,10 +238,23 @@ impl AnalysisStorage {
         let bytes = fs::read(&path)?;
         let entries: Vec<AnalysisIndexEntry> = bincode::deserialize(&bytes)
             .map_err(|e| Error::SerdeError(format!("analysis index decode: {e}")))?;
-        Ok(entries
+        // Keep the existing bincode layout. Upgrade legacy name-based keys using
+        // their recorded UUID, never by guessing which current callable owns them.
+        // Entries already lost to a legacy collision rebuild on their next miss.
+        let mut upgraded = false;
+        let index = entries
             .into_iter()
-            .map(|e| (e.stable_key.clone(), e))
-            .collect())
+            .map(|mut entry| {
+                let key = analysis_cache_key(entry.function_id, &entry.code_hash);
+                upgraded |= entry.stable_key != key;
+                entry.stable_key = key.clone();
+                (key, entry)
+            })
+            .collect();
+        if upgraded {
+            self.write_analysis_index(&index)?;
+        }
+        Ok(index)
     }
 
     fn write_analysis_index(&self, entries: &HashMap<String, AnalysisIndexEntry>) -> Result<()> {
@@ -244,14 +280,6 @@ impl AnalysisStorage {
             })
             .unwrap_or((0, 0));
         let mut index = self.load_analysis_index().unwrap_or_default();
-        if let Some(prev) = index.get(&stable_key)
-            && prev.function_id != analysis.function_id
-        {
-            let old_bin = self.bin_path(prev.function_id);
-            let old_json = self.json_path(prev.function_id);
-            let _ = fs::remove_file(old_bin);
-            let _ = fs::remove_file(old_json);
-        }
         index.insert(
             stable_key.clone(),
             AnalysisIndexEntry {
@@ -301,15 +329,9 @@ impl AnalysisStorage {
     ) -> Result<()> {
         let mut index = self.load_analysis_index().unwrap_or_default();
         for entry in entries {
-            if let Some(prev) = index.get(&entry.stable_key)
-                && prev.function_id != entry.function_id
-            {
-                let old_bin = self.bin_path(prev.function_id);
-                let old_json = self.json_path(prev.function_id);
-                let _ = fs::remove_file(old_bin);
-                let _ = fs::remove_file(old_json);
-            }
-            index.insert(entry.stable_key.clone(), entry.clone());
+            let mut entry = entry.clone();
+            entry.stable_key = analysis_cache_key(entry.function_id, &entry.code_hash);
+            index.insert(entry.stable_key.clone(), entry);
         }
         self.write_analysis_index(&index)
     }
@@ -379,29 +401,15 @@ impl AnalysisStorage {
         Ok(())
     }
 
-    /// Align index entries (and artifact filenames) with current graph function UUIDs.
-    pub fn sync_index_function_ids(&self, functions: &[FunctionIdSyncEntry<'_>]) -> Result<usize> {
-        let mut index = self.load_analysis_index()?;
-        let mut remapped = 0usize;
-        for func in functions {
-            let key = stable_function_key(func.file_path, func.function_name, func.code_hash);
-            let Some(entry) = index.get_mut(&key) else {
-                continue;
-            };
-            if entry.code_hash != func.code_hash {
-                continue;
-            }
-            if entry.function_id == func.function_id {
-                continue;
-            }
-            self.remap_function_artifact(entry.function_id, func.function_id)?;
-            entry.function_id = func.function_id;
-            remapped += 1;
-        }
-        if remapped > 0 {
-            self.write_analysis_index(&index)?;
-        }
-        Ok(remapped)
+    /// Compatibility shim: exact-identity cache entries never remap UUIDs.
+    ///
+    /// Callers must rebuild analyses when graph identity changes; renaming an
+    /// artifact does not update UUIDs embedded in CFG/PDG and archive payloads.
+    #[deprecated(
+        note = "analysis cache keys now require exact function UUIDs; rebuild on ID changes"
+    )]
+    pub fn sync_index_function_ids(&self, _functions: &[FunctionIdSyncEntry<'_>]) -> Result<usize> {
+        Ok(0)
     }
 
     /// Remove artifacts whose stable keys are not in `active_keys`.
@@ -409,16 +417,25 @@ impl AnalysisStorage {
         let index = self.load_analysis_index()?;
         let mut removed = 0usize;
         let mut next = index.clone();
+        let active_ids: HashSet<_> = index
+            .iter()
+            .filter(|(key, _)| active_keys.contains(*key))
+            .map(|(_, entry)| entry.function_id)
+            .collect();
         for (key, entry) in &index {
             if active_keys.contains(key) {
                 continue;
             }
-            let bin = self.bin_path(entry.function_id);
-            let json = self.json_path(entry.function_id);
-            if fs::remove_file(&bin).is_ok() {
-                removed += 1;
+            // A body edit retains the UUID: the old hash entry must not delete
+            // the newly saved payload belonging to the active hash entry.
+            if !active_ids.contains(&entry.function_id) {
+                let bin = self.bin_path(entry.function_id);
+                let json = self.json_path(entry.function_id);
+                if fs::remove_file(&bin).is_ok() {
+                    removed += 1;
+                }
+                let _ = fs::remove_file(json);
             }
-            let _ = fs::remove_file(json);
             next.remove(key);
         }
         if next.len() != index.len() {
@@ -902,6 +919,82 @@ mod tests {
 
         let loaded = storage.load_function(id).unwrap().unwrap();
         assert_eq!(loaded.function_name, "legacy");
+    }
+
+    #[test]
+    fn exact_identity_index_preserves_identical_names_and_bodies() {
+        let tmp = TempDir::new().unwrap();
+        let storage = AnalysisStorage::new(tmp.path());
+        let first = sample_analysis(Uuid::new_v4(), "score", "same");
+        let second = sample_analysis(Uuid::new_v4(), "score", "same");
+        storage.save_function(&first).unwrap();
+        storage.save_function(&second).unwrap();
+        let reloaded = AnalysisStorage::new(tmp.path());
+        assert_eq!(reloaded.load_analysis_index().unwrap().len(), 2);
+        for analysis in [&first, &second] {
+            let loaded = reloaded
+                .load_by_stable_key(&analysis.stable_key().unwrap())
+                .unwrap()
+                .unwrap();
+            assert_eq!(loaded.function_id, analysis.function_id);
+        }
+        fs::remove_file(storage.index_path()).unwrap();
+        assert_eq!(storage.load_analysis_index().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn legacy_index_upgrade_preserves_recorded_identity_only() {
+        let tmp = TempDir::new().unwrap();
+        let storage = AnalysisStorage::new(tmp.path());
+        storage.ensure_dir().unwrap();
+        let id = Uuid::new_v4();
+        let entry = AnalysisIndexEntry {
+            stable_key: stable_function_key("Library.java", "score", "same"),
+            function_id: id,
+            code_hash: "same".into(),
+            flow_count: 3,
+            vulnerable_count: 1,
+        };
+        fs::write(
+            storage.index_path(),
+            bincode::serialize(&vec![entry]).unwrap(),
+        )
+        .unwrap();
+        let index = storage.load_analysis_index().unwrap();
+        let key = analysis_cache_key(id, "same");
+        assert_eq!(index.len(), 1);
+        assert_eq!(index[&key].function_id, id);
+        assert_eq!(index[&key].flow_count, 3);
+        assert_eq!(index[&key].vulnerable_count, 1);
+        assert!(!index.contains_key(&analysis_cache_key(Uuid::new_v4(), "same")));
+        let persisted: Vec<AnalysisIndexEntry> =
+            bincode::deserialize(&fs::read(storage.index_path()).unwrap()).unwrap();
+        assert_eq!(persisted[0].stable_key, key);
+    }
+
+    #[test]
+    fn stale_hash_purge_keeps_current_payload_for_same_identity() {
+        let tmp = TempDir::new().unwrap();
+        let storage = AnalysisStorage::new(tmp.path());
+        let id = Uuid::new_v4();
+        storage
+            .save_function(&sample_analysis(id, "score", "before"))
+            .unwrap();
+        storage
+            .save_function(&sample_analysis(id, "score", "after"))
+            .unwrap();
+        let active = HashSet::from([analysis_cache_key(id, "after")]);
+        storage.purge_stale_by_stable_keys(&active).unwrap();
+        assert_eq!(storage.load_analysis_index().unwrap().len(), 1);
+        assert_eq!(
+            storage
+                .load_function(id)
+                .unwrap()
+                .unwrap()
+                .code_hash
+                .as_deref(),
+            Some("after")
+        );
     }
 
     #[test]

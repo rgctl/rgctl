@@ -103,6 +103,22 @@ representations can report property-only node changes, with no added/removed
 nodes or edges when source and identities are unchanged. This targeted migration
 contract does not provide cross-version semantic normalization.
 
+The lightweight analysis index keys entries by versioned exact node UUID plus
+body hash. The UUID already carries callable ownership, discriminator and node
+kind, so identical method bodies in different owners remain separate cache
+entries. Lookup, batch shortcuts, persistence, index reconstruction and stale-key
+cleanup use the same key. Partial rebuilds stream retained pack records as opaque
+bytes so cache-hit payloads survive without CFG/PDG deserialization. Actual UUID
+changes rebuild analysis; file/name/body
+matches cannot establish equivalent CFG/PDG ownership.
+
+The sidecar keeps its existing bincode entry layout. Loading legacy keys upgrades
+them using their recorded UUIDs and preserves flow counts. Entries previously lost
+to a name-key collision rebuild once on a miss. CFG/PDG archive aliases retain
+their legacy name-based keys and existing uniqueness checks; snapshot and archive
+formats do not change. This index repair does not broaden cache compatibility
+across analysis options or algorithm versions.
+
 ## 4. CLI Contract, JSON Schema & Implementation Map
 
 ```sh
