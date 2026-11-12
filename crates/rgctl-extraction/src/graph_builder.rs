@@ -571,7 +571,25 @@ impl GraphBuilder {
         if let Some(obj) = symbol.metadata.as_object() {
             for (k, v) in obj {
                 if k == rgctl_plugin_api::COMPLEXITY_META_KEY
-                    || matches!(k.as_str(), "source_start_byte" | "source_end_byte")
+                    || matches!(
+                        k.as_str(),
+                        "source_start_byte" | "source_end_byte" | "identity_discriminator"
+                    )
+                {
+                    continue;
+                }
+                // The canonical identity is stored by with_identity_discriminator
+                // below. Dispatch identity only needs its own property when it
+                // differs; an explicit empty value intentionally blocks fallback.
+                if k == "override_identity"
+                    && v.as_str().is_some_and(|dispatch| {
+                        !dispatch.is_empty()
+                            && symbol
+                                .metadata
+                                .get("identity_discriminator")
+                                .and_then(|value| value.as_str())
+                                == Some(dispatch)
+                    })
                 {
                     continue;
                 }

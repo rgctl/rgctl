@@ -1,138 +1,209 @@
 # Tier 1 callable identity and overrides
 
-## Problem
+## 1. System Overview & End-to-End Data Flow
 
 Using only a callable's qualified name as its graph identity collapses overloads.
 Calls, code hashes, inherited overrides, and cached CFGs can then refer to another
-body. Source ranges alone cannot repair the graph once two declarations share a
-node ID.
+body. Source ranges cannot repair the graph once declarations share a node ID.
 
-Dependency discovery is separate work. This change operates on project source;
-it does not add package readers, class-file readers, or dependency traversal.
+An optional canonical callable discriminator distinguishes declarations while
+preserving readable names. Field materialization separately records supported
+members and their source spans. Dependency discovery, package readers, class-file
+readers, and dependency traversal are outside this source-graph design.
 
-## Implementation
+```text
+Source files
+  -> existing parallel CST extraction workers
+  -> shared callable identity and field-span helpers
+  -> Symbol facts and relation identity/argument evidence
+  -> GraphBuilder: typed insertion, call resolution, inherited overrides
+  -> columnar snapshot: stable identity, spans, properties
+  -> queries / snapshot diff / merge / optional CFG analysis
+```
 
-The existing stable node key accepts an optional callable discriminator. Tier 1
-extractors, including Java, attach language-specific identity metadata at their
-existing CST construction sites through
-`rgctl_plugin_helpers::callable_identity`. Java uses the fallible `try_symbol`
-entry point to preserve parse errors; the Java policy owns constructor, array,
-varargs, receiver-parameter, and enclosing-lambda identity rules. Shared
-`finish` and call-site helpers attach relation identities. The Java plugin
-supplies its existing local-variable type evidence and retains import/receiver
-resolution. Extraction remains on the existing
-parallel workers, without a second parse or whole-graph hydration.
+Extraction uses the existing workers and CST construction sites. It does not
+introduce a second identity parse or whole-graph hydration pass. Fields can be
+materialized independently of CFG through `discover --with-fields`.
 
-Typed overload languages retain parameter types and relevant dispatch syntax:
-C++ receiver qualifiers and declarators, C# parameter modifiers, Swift labels,
-Kotlin extension receivers, Scala parameter groups, and generic arity. Parameter
-names and bodies do not form identity. SQL retains schema ownership and argument
-types. Rust distinguishes implementations belonging to different traits.
+## 2. Theoretical Foundations Mapped to `rgctl`
 
-TypeScript overload declarations retain individual signatures while the runtime
-implementation has its own identity. Declaration identity and override dispatch
-identity are separate, allowing inherited signatures to describe one runtime
-method without merging graph nodes. Dynamic languages use runtime name binding;
-repeated definitions retain separate bodies and mark superseded definitions.
-Elixir includes arity, clause patterns, and guards. Languages without callable
-overloads retain their existing name/owner semantics. Markdown, HCL, and ERB are
-explicitly non-applicable overload cases.
+Callable identity follows declaration equivalence: parameter names, bodies,
+whitespace, annotations, and source coordinates do not distinguish overloads.
+The language policy retains syntax that affects declaration or dispatch identity.
 
-Callable helpers receive the declaration CST node, including individual Go
-interface methods, so editing a sibling cannot change another method's body
-hash or canonical identity. Call-owner hints synthesized from lexical scope are
-marked as inferred; explicit receiver qualification is preserved.
+- Typed overload languages retain canonical parameter types and relevant syntax:
+  C++ receiver qualifiers and declarators, C# parameter modifiers, Swift labels,
+  Kotlin extension receivers, Scala parameter groups, and generic arity.
+- SQL retains schema ownership and argument types. Rust distinguishes
+  implementations belonging to different traits.
+- TypeScript overload declarations retain individual signatures, with a separate
+  runtime implementation identity. Declaration and override-dispatch identities
+  can therefore differ without merging graph nodes.
+- Dynamic languages follow runtime name binding. Repeated definitions retain
+  separate bodies and mark superseded definitions. Elixir also includes arity,
+  clause patterns, and guards.
+- Languages without callable overloads retain their existing name/owner semantics.
+  Markdown, HCL, and ERB are explicitly non-applicable overload cases.
 
-Call relations preserve the caller's discriminator. Literal or known formal
-argument types can establish a target; unknown expressions do not establish an
-overload. Argument evidence is separate from canonical identity, so an argument
-tuple cannot silently choose between const/non-const or generic variants. Exact
-evidence survives parked relations and cross-repository merge, with no fallback
-to another overload when that evidence fails.
+`rgctl_plugin_helpers::callable_identity` implements the shared extraction
+contract, including Java. Java uses the fallible `try_symbol` entry point to
+preserve parse errors; its policy owns constructor, array, varargs,
+receiver-parameter, and enclosing-lambda rules. The plugin supplies existing local
+variable evidence and import/receiver resolution to the shared call helpers.
 
-Signature-aware calls search the receiver's inheritance chain before considering
-an inferred lexical fallback. A known incompatible or ambiguous overload family
-cannot fall back to an unrelated bare-name target. Java inherited overloads remain
-available when a child declares a different signature. Incremental edge repair
-uses the same explicit identity and argument evidence, including across files.
+Canonical identity and argument evidence serve different purposes. A literal or
+known formal argument type may establish a call target; an unknown expression
+cannot prove an overload. Argument tuples cannot silently choose between
+const/non-const or generic variants. Explicit identity evidence survives parked
+relations and merge, without falling back to a different overload when it fails.
 
-MRO uses dispatch identity and implementation ownership, excludes superseded
-definitions, and prefers runtime implementations over paired declarations.
-CFG selection uses exact source bytes; ambiguous name-only lookups fail. Archive
-reuse verifies source hashes and does not remap graph IDs through ambiguous names.
+Method resolution order (MRO) uses dispatch identity and implementation ownership,
+excludes superseded definitions, and prefers runtime implementations over paired
+declarations. A field and a same-named method differ by node kind; callable
+discriminators distinguish callable declarations independently of field positions.
 
-## Migration and evidence
+## 3. Binary Layout, Data Structures & Memory Discipline
 
-Facts-cache format 8 and extraction semantics version 11 invalidate old extraction
-results. Missing or stale `.rgctl/extraction_semantics.json` forces full source
-extraction, including when `discover --files` was requested. The semantics marker
-is written after successful snapshot persistence. Existing snapshots remain
-readable for queries.
+Stable node keys and deterministic UUID construction include the optional
+callable discriminator alongside the existing path, name, node kind, and
+qualified name. The columnar extension keeps a borrowed identity prefix so mmap
+identity lookup does not decode parameters, properties, or labels.
 
-Callable byte spans use the dedicated source-span fields introduced by lossless
-writeback. Extraction hashes and repeated-definition ordering read these scalar
-fields directly; fresh facts do not duplicate their values in JSON metadata. Absolute extraction byte offsets stay out of node properties, preventing
-those offsets from changing function extension digests after line shifts. CFG selection prefers these
-span fields and accepts legacy offset properties when reading older nodes. The
-snapshot extension preserves both the discriminator prefix and the relative span
-tail; older format-2 span extensions remain readable.
+| Representation | Role |
+| --- | --- |
+| `Symbol` identity metadata | Canonical declaration identity and separate dispatch/argument evidence during extraction and graph construction. |
+| `NodeExtension` identity prefix | Canonical identity for borrowed mmap lookup and stable-key generation. |
+| `callable_identity` node property | Canonical identity for the in-memory node accessor and UUID generation. |
+| `override_identity` node property | Stored when different from canonical identity, including explicit empty values that suppress fallback. |
+| Typed `FieldSourceSpan` | Declaration and identifier positions carried by `Symbol.fields` into the shared materializer. |
+| Fixed 14-byte Green span tail | Declaration length (`u32`), overflow identifier offset/length (`u32`, `u32`), and identifier token length (`u16`), relative to the row's start byte. |
 
-Field positions travel as typed `FieldSourceSpan` payloads on `Symbol.fields`,
-using the shared `field_source_span` helper and the common graph materializer.
-This covers field-producing Tier 1 plugins; native property/column symbols use
-shared symbol-span recording. Lua named table entries and Elixir struct fields
-are emitted directly with spans. Field identities remain scoped by owner, while
-callable discriminators distinguish overloaded methods independently of position.
-`discover --with-fields` materializes fields without enabling CFG, dominators,
-PDG, or taint. CFG continues to request fields for compatibility; `--full` also
-requests them. Default cold discovery remains unchanged. Field capability is
-recorded against the snapshot digest, so adding `--with-fields` upgrades a warm
-field-less graph. Incremental updates preserve an existing field-enabled mode.
+The extraction-only `identity_discriminator` metadata key is not copied into node
+properties. Equal non-empty dispatch identities use the canonical-property
+fallback. Distinct and explicitly empty dispatch identities retain their meaning.
+This storage cleanup changes neither UUID construction nor the snapshot layout.
 
-Insertion indexes include node kind as well as the existing qualified name and
-optional callable discriminator. This prevents a field and a method with the
-same name from suppressing one another; it does not change their stable keys.
-See [field/callable collision](field-callable-collision.md) for the corpus audit.
+Helper-marked callable body hashing and repeated-definition ordering read scalar
+source-span fields. Fresh facts do not duplicate those offsets in JSON metadata;
+unmarked callable extraction retains its existing body-selection fallback.
+Absolute extraction offsets stay out of node properties, so blank-line shifts do
+not change function extension digests. CFG selection prefers dedicated byte spans
+and accepts legacy offset properties when reading older nodes. The extension
+retains its discriminator prefix and relative span tail; older format-2 span
+extensions remain readable through the compatibility decoder.
 
-`tests/fixtures/tier1_field_spans/inventory.json` covers all 24 registered Tier 1
-languages: 20 source member/property/column cases and four explicit non-applicable
-contracts (Bash, HCL, Markdown, ERB). Tests check exact identifiers, owner/type-token
-collisions, sigils, snapshot round trips, and line-shift identity/diff invariance.
-Dynamic computed member keys and inferred external types are not compiler-checked.
+Facts-cache format 8 invalidates older extracted payloads. Extraction semantics
+version 12 also invalidates graphs requiring the current materialization rules.
+A missing or stale `.rgctl/extraction_semantics.json` forces source-graph rebuilding,
+including when `discover --files` was requested. The marker is written after
+successful snapshot persistence. Existing supported snapshots remain readable.
 
-This replaces the separate UTF-16 range-property API from superseded PR #184.
-Structured queries expose the existing declaration/name byte offsets; no new
-UTF-16 projection API is added. Absolute name-range properties are not emitted,
-so blank-line shifts preserve semantic diff results as well as node IDs.
+Older redundant identity properties remain readable. Comparing old and new
+representations can report property-only node changes, with no added/removed
+nodes or edges when source and identities are unchanged. This targeted migration
+contract does not provide cross-version semantic normalization.
 
-`.rgctl/callable_resolution.json` counts unresolved canonical calls and retains at
-most 1,024 original relation samples with reasons. This is evidence of incomplete
-source resolution, not a claim of compiler-level type checking. Type aliases,
-implicit conversions, dynamic dispatch, and arbitrary expressions can require
-more evidence than the source extractor provides.
-
-## Validation
-
-`tests/fixtures/tier1_callable_identity/inventory.json` is checked against the
-registered Tier 1 coverage inventory. Every language has a source example and an
-explicit applicability contract. `tests/tier1_callable_identity.rs` verifies body
-isolation, stable IDs across layout and parameter renames, snapshot round trips,
-overload calls, inherited dispatch, Rust trait ownership, generic arity,
-declarator details, and dynamic rebinding. It also exercises actual CLI rebuilds
-from simulated collapsed snapshots with missing and obsolete semantics markers.
-
-Merge and CFG unit tests cover refusal to select another overload. The Tier 1
-parity gate verifies extraction and AST coverage manifests. Required validation:
+## 4. CLI Contract, JSON Schema & Implementation Map
 
 ```sh
-cargo +1.99.0 test --test tier1_callable_identity
-cargo +1.99.0 test --workspace --lib
-cargo +1.99.0 test -p rgctl-analysis --test tier1_parity_gate
+rgctl -f json discover . --with-fields
+rgctl -f json discover . --with-cfg
+```
+
+`--with-fields` materializes supported field nodes and source positions without
+CFG, dominators, PDG, or taint. CFG and `--full` also request fields. Default cold
+discovery leaves optional field materialization off; native property/column
+symbols can already exist without this option.
+
+Field capability is recorded against the snapshot digest. Requesting fields
+upgrades a warm field-less graph across all files, even with `--files`.
+Incremental updates preserve an existing field-enabled mode. Structured queries
+expose existing declaration/name byte offsets. This uses shared byte-span storage
+in place of the earlier UTF-16 range-property approach; no UTF-16 projection API
+is introduced.
+
+`.rgctl/callable_resolution.json` records unresolved-call counts and at most 1,024
+original relation samples with reasons. It is bounded resolution evidence, not
+proof of compiler-level type checking. Materialization capability is tracked by
+`.rgctl/materialized_fields.digest` and does not imply CFG archive coverage.
+
+| Component | Implementation |
+| --- | --- |
+| Shared declaration, finishing, and call-site helpers | [callable_identity.rs](../../crates/rgctl-plugin-helpers/src/callable_identity.rs) and its Java policy module |
+| Shared field and identifier spans | [spans.rs](../../crates/rgctl-plugin-helpers/src/spans.rs) |
+| Worker preparation and declaration-body hashing | [extractor.rs](../../crates/rgctl-extraction/src/extractor.rs) |
+| Typed insertion, identity storage, call resolution, and inherited overrides | [graph_builder.rs](../../crates/rgctl-extraction/src/graph_builder.rs) |
+| Stable keys and columnar identity/span encoding | [stable_key.rs](../../crates/rgctl-graph/src/stable_key.rs), [columnar_snapshot.rs](../../crates/rgctl-graph/src/columnar_snapshot.rs) |
+| Incremental field preservation and identity-aware relation repair | [updater.rs](../../crates/rgctl-incremental/src/updater.rs) |
+| Discover field/CFG controls and capability reuse | [discover.rs](../../src/cli/discover.rs), [discover_impl.rs](../../src/cli/discover_impl.rs) |
+| MRO and CFG declaration selection/archive handling | [mro.rs](../../crates/rgctl-analysis/src/mro.rs), [cfg_builder.rs](../../crates/rgctl-analysis/src/cfg_builder.rs), [cfg_pdg_archive.rs](../../crates/rgctl-analysis/src/cfg_pdg_archive.rs) |
+
+Callable helpers receive declaration CST nodes, including individual Go interface
+methods. An unrelated member edit therefore cannot contaminate another callable's
+body hash or discriminator. Shared `finish` and call-site helpers attach the
+caller's identity and distinguish inferred lexical hints from explicit receivers.
+Signature-aware resolution searches inheritance before an inferred free-function
+fallback, excludes unrelated type members, and rejects incompatible or ambiguous
+families. Java inherited overloads remain available when a child declares another
+signature. Incremental repair enforces identity/argument evidence across files and
+preserves class-over-interface precedence.
+
+Field positions cover field-producing Tier 1 plugins through the shared
+materializer; native properties/columns use shared symbol spans. Lua named table
+members and Elixir struct fields are emitted directly. Insertion indexes include
+node kind, qualified name, and optional discriminator so fields cannot suppress
+same-named methods. See the [field/callable collision audit](field-callable-collision.md).
+
+## 5. Performance Guardrails & Verification Checklist
+
+Use the configured Cargo toolchain meeting the workspace minimum of Rust 1.99.
+Run commands from the repository root:
+
+```sh
+cargo test --test tier1_callable_identity
+cargo test --test tier1_field_review_regressions
+cargo test --test tier1_identity_storage
+cargo test --workspace --lib
+cargo test -p rgctl-analysis --test tier1_parity_gate
 ./scripts/preflight-pr.sh --quick
 ```
 
-No cold-ingest performance claim is made by these correctness tests. Before a
-performance comparison, use release builds and fresh artifacts with the
-language-filtered corpora and commands in `AGENTS.md` (for example Roslyn with
-`discover src -l csharp`, LLVM clang with `-l cpp`, and VS Code src with
-`-l typescript`). Record wall time, node/function counts, and `index_graph_build`.
+The callable fixture inventory is checked against all registered Tier 1 languages.
+It covers body isolation, stable IDs after layout edits and parameter renames,
+snapshot round trips, overload calls, inherited dispatch, Rust trait ownership,
+generic arity, declarator details, and dynamic rebinding. CLI regressions rebuild
+collapsed snapshots with missing/stale markers and preserve cross-file calls
+through incremental edits. Merge and CFG tests reject wrong-overload selection.
+
+The field inventory checks all 24 registered Tier 1 languages: 20 source
+member/property/column cases and four explicit non-applicable contracts (Bash,
+HCL, Markdown, ERB). Cases cover exact identifiers, type/name collisions, sigils,
+grouped declarations, decorators/annotations, initializer references, quoted
+struct atoms, lexical table ownership, snapshot round trips, and line-shift
+identity/diff invariance. Identity-storage migration checks preserve canonical
+IDs and edges while identifying property-only representation changes.
+
+Correctness tests do not establish ingest performance. Use immutable release
+binaries, fresh artifacts, the language-filtered corpora, and commands in
+[AGENTS.md](../../AGENTS.md) and the [profiling guide](../internal/profile.md).
+Record wall time, peak memory, graph/function counts, and `index_graph_build`.
+Compare repeated before/after observations without concurrent compilation, and
+report cache state and measurement variability. Keep benchmark artifacts outside
+the source changes.
+
+## 6. Known Limitations & By-Design Boundaries
+
+- Source resolution remains conservative. Type aliases, implicit conversions,
+  dynamic dispatch, arbitrary expressions, and inferred external types can require
+  evidence unavailable to the extractor. This design does not ingest dependencies.
+- Dynamic computed member keys and external field types are not compiler-checked.
+  Field nodes and source locations do not guarantee complete field-reference or
+  read/write tracking. CFG alone does not establish that coverage either.
+- Ambiguous name-only CFG selection fails. Archive reuse validates source hashes;
+  graph IDs are not remapped through ambiguous callable names. Cache optimization
+  must preserve those checks, including when archive coverage is partial.
+- Position-only edits preserve callable identity. Changing a language identity
+  contract can legitimately change IDs and requires cache/semantics invalidation.
+- Backward readability is supported through explicit format readers. Cross-version
+  comparisons can include extraction/metadata representation changes; there is no
+  universal normalization layer that guarantees source-only diff results.
