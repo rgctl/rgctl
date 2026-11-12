@@ -722,6 +722,7 @@ pub fn finish(policy: Policy, symbols: &mut [Symbol], relations: &mut [Relation]
                         let target = format!("{owner}{separator}{}", relation.to);
                         relation.to_type_hint = Some(owner.to_owned());
                         relation.to_qualified_hint = Some(target);
+                        relation.metadata["inferred_callable_owner"] = true.into();
                     }
                 }
             }

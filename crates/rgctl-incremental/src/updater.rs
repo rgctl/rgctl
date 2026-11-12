@@ -22,7 +22,7 @@ use rgctl_pipeline::parallel::par_map;
 use rgctl_pipeline::stream::{DEFAULT_STREAM_CHANNEL_CAPACITY, stream_into_graph};
 use rgctl_pipeline::{PipelineConfig, ProcessingPipeline};
 use rgctl_registry::LanguageRegistry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -641,11 +641,97 @@ impl IncrementalUpdater {
             Extractor::new(Arc::clone(&self.registry)).with_facts_cache(Arc::clone(&facts));
         // Preserve all kinds and overloads; a single-value name index silently
         // overwrites same-named fields/methods before relation resolution.
-        let mut symbol_index: HashMap<SharedStr, Vec<RelationSymbol>> = HashMap::new();
+        let mut symbol_index: HashMap<SharedStr, Vec<Arc<RelationSymbol>>> = HashMap::new();
+        let mut type_names = HashMap::new();
         for node in graph.backend().all_nodes()? {
-            let candidate = RelationSymbol::from(&node);
-            let name = node.qualified_name.unwrap_or(node.name);
-            symbol_index.entry(name).or_default().push(candidate);
+            let candidate = Arc::new(RelationSymbol::from(&node));
+            let name = node
+                .qualified_name
+                .clone()
+                .unwrap_or_else(|| node.name.clone());
+            if matches!(
+                node.node_type,
+                NodeType::Class | NodeType::Struct | NodeType::Interface | NodeType::Module
+            ) {
+                type_names.insert(node.id, name.clone());
+            }
+            if !node.has_label("field") {
+                let mut aliases = Vec::new();
+                if node.name != name {
+                    aliases.push(node.name.clone());
+                }
+                for (offset, ch) in name.char_indices() {
+                    let width = match ch {
+                        '.' | '#' => 1,
+                        ':' if name[offset..].starts_with("::") => 2,
+                        _ => continue,
+                    };
+                    let suffix = &name[offset + width..];
+                    if !suffix.is_empty() {
+                        aliases.push(SharedStr::from(suffix));
+                    }
+                }
+                for alias in aliases {
+                    let entries = symbol_index.entry(alias).or_default();
+                    if entries
+                        .last()
+                        .is_none_or(|previous| previous.id != candidate.id)
+                    {
+                        entries.push(Arc::clone(&candidate));
+                    }
+                }
+            }
+            let entries = symbol_index.entry(name).or_default();
+            if entries
+                .last()
+                .is_none_or(|previous| previous.id != candidate.id)
+            {
+                entries.push(candidate);
+            }
+        }
+        let mut bases: HashMap<SharedStr, Vec<(SharedStr, bool)>> = HashMap::new();
+        graph.backend().for_each_edge(|edge| {
+            if matches!(
+                edge.edge_type,
+                EdgeType::Extends
+                    | EdgeType::Implements
+                    | EdgeType::IncludesClass
+                    | EdgeType::InheritsClass
+            ) && let (Some(child), Some(parent)) =
+                (type_names.get(&edge.from), type_names.get(&edge.to))
+            {
+                bases.entry(child.clone()).or_default().push((
+                    parent.clone(),
+                    matches!(
+                        edge.edge_type,
+                        EdgeType::Implements | EdgeType::IncludesClass
+                    ),
+                ));
+            }
+        })?;
+        let mut member_methods = HashSet::new();
+        for (name, candidates) in &symbol_index {
+            if let Some((owner, _)) = split_callable_owner(name)
+                && symbol_index.get(owner).is_some_and(|nodes| {
+                    nodes.iter().any(|n| {
+                        matches!(
+                            n.node_type,
+                            NodeType::Class
+                                | NodeType::Struct
+                                | NodeType::Interface
+                                | NodeType::Enum
+                                | NodeType::Annotation
+                        )
+                    })
+                })
+            {
+                member_methods.extend(
+                    candidates
+                        .iter()
+                        .filter(|n| n.node_type == NodeType::Function)
+                        .map(|n| n.id),
+                );
+            }
         }
         let repo_root = repo_root.to_path_buf();
 
@@ -670,19 +756,20 @@ impl IncrementalUpdater {
                         .get("from_identity_discriminator")
                         .and_then(|v| v.as_str()),
                 );
-                let to_id = resolve_symbol(
-                    &symbol_index,
-                    relation
-                        .to_qualified_hint
-                        .as_deref()
-                        .unwrap_or(&relation.to),
-                    &file,
-                    callable,
-                    relation
-                        .metadata
-                        .get("to_identity_discriminator")
-                        .and_then(|v| v.as_str()),
-                );
+                let to_id = if callable {
+                    resolve_call_target(&symbol_index, &bases, &member_methods, &relation, &file)
+                } else {
+                    resolve_symbol(
+                        &symbol_index,
+                        relation
+                            .to_qualified_hint
+                            .as_deref()
+                            .unwrap_or(&relation.to),
+                        &file,
+                        false,
+                        None,
+                    )
+                };
 
                 if let (Some(from), Some(to)) = (from_id, to_id) {
                     batch.push((from, to, relation_type_to_edge(relation.relation_type)));
@@ -722,6 +809,7 @@ struct RelationSymbol {
     node_type: NodeType,
     file_path: Option<SharedStr>,
     identity: Option<String>,
+    parameters: Option<String>,
 }
 
 impl From<&Node> for RelationSymbol {
@@ -731,21 +819,22 @@ impl From<&Node> for RelationSymbol {
             node_type: node.node_type,
             file_path: node.file_path.clone(),
             identity: node.identity_discriminator().map(str::to_owned),
+            parameters: node.get_property("parameter_identity").map(str::to_owned),
         }
     }
 }
 
 fn resolve_symbol(
-    index: &HashMap<SharedStr, Vec<RelationSymbol>>,
+    index: &HashMap<SharedStr, Vec<Arc<RelationSymbol>>>,
     name: &str,
     file: &str,
     callable: bool,
     identity: Option<&str>,
 ) -> Option<Uuid> {
     let candidates = index.get(name)?;
-    let eligible = |node: &&RelationSymbol| {
+    let eligible = |node: &&Arc<RelationSymbol>| {
         (!callable || node.node_type == NodeType::Function)
-            && identity.is_none_or(|value| node.identity.as_deref() == Some(value))
+            && identity.is_none_or(|value| node.identity.as_deref().unwrap_or("") == value)
     };
     let mut local = candidates
         .iter()
@@ -757,6 +846,137 @@ fn resolve_symbol(
     let mut global = candidates.iter().filter(eligible);
     let first = global.next()?;
     global.all(|node| node.id == first.id).then_some(first.id)
+}
+
+// Incremental edge repair obeys the same identity/argument evidence as cold
+// discovery; a rejected overload must not be resurrected by a bare-name lookup.
+fn resolve_call_target(
+    index: &HashMap<SharedStr, Vec<Arc<RelationSymbol>>>,
+    bases: &HashMap<SharedStr, Vec<(SharedStr, bool)>>,
+    member_methods: &HashSet<Uuid>,
+    relation: &rgctl_plugin_api::Relation,
+    file: &str,
+) -> Option<Uuid> {
+    let identity = relation
+        .metadata
+        .get("to_identity_discriminator")
+        .and_then(|v| v.as_str());
+    let arguments = relation
+        .metadata
+        .get("argument_identity_discriminator")
+        .and_then(|v| v.as_str());
+    if relation.metadata.get("explicit_generic_arity").is_some() && identity.is_none() {
+        return None;
+    }
+    let direct = |name: &str, free_only: bool| -> Option<Option<Uuid>> {
+        let candidates = index.get(name)?;
+        if !candidates.iter().any(|n| n.node_type == NodeType::Function) {
+            return None;
+        }
+        let eligible = |n: &&Arc<RelationSymbol>| {
+            n.node_type == NodeType::Function
+                && (!free_only || !member_methods.contains(&n.id))
+                && identity.is_none_or(|value| n.identity.as_deref().unwrap_or("") == value)
+                && (identity.is_some()
+                    || arguments.is_none_or(|args| {
+                        n.identity.is_none()
+                            || n.parameters.as_deref().or(n.identity.as_deref()) == Some(args)
+                    }))
+        };
+        let mut local = candidates
+            .iter()
+            .filter(eligible)
+            .filter(|n| n.file_path.as_deref() == Some(file));
+        if let Some(first) = local.next() {
+            return Some(local.all(|n| n.id == first.id).then_some(first.id));
+        }
+        let mut global = candidates.iter().filter(eligible);
+        Some(
+            global
+                .next()
+                .map(|first| first.id)
+                .filter(|first| global.all(|n| n.id == *first)),
+        )
+    };
+    let target = relation
+        .to_qualified_hint
+        .as_deref()
+        .unwrap_or(&relation.to);
+    let inherited_overloads =
+        relation.metadata["language"] == "java" && arguments.is_some() && identity.is_none();
+    let local = direct(target, false);
+    if let Some(found) = local
+        && (found.is_some() || !inherited_overloads)
+    {
+        return found;
+    }
+    if let Some((owner, method)) = split_callable_owner(target) {
+        let mut seen = HashSet::new();
+        let mut pending: Vec<_> = bases
+            .get(owner)
+            .into_iter()
+            .flatten()
+            .map(|(name, iface)| (name, *iface))
+            .collect();
+        let mut class_target = None;
+        let mut interface_target = None;
+        let mut class_ambiguous = false;
+        let mut interface_ambiguous = false;
+        while let Some((ancestor, interface_path)) = pending.pop() {
+            if !seen.insert((ancestor, interface_path)) {
+                continue;
+            }
+            let mut family = false;
+            for separator in [".", "::", "#"] {
+                if let Some(candidate) = direct(&format!("{ancestor}{separator}{method}"), false) {
+                    family = true;
+                    let Some(id) = candidate else {
+                        if inherited_overloads {
+                            family = false;
+                            break;
+                        }
+                        return None;
+                    };
+                    let (target, ambiguous) = if interface_path {
+                        (&mut interface_target, &mut interface_ambiguous)
+                    } else {
+                        (&mut class_target, &mut class_ambiguous)
+                    };
+                    if target.is_some_and(|previous| previous != id) {
+                        *ambiguous = true;
+                    }
+                    *target = Some(id);
+                    break;
+                }
+            }
+            if !family {
+                pending.extend(
+                    bases
+                        .get(ancestor)
+                        .into_iter()
+                        .flatten()
+                        .map(|(name, iface)| (name, interface_path || *iface)),
+                );
+            }
+        }
+        if class_target.is_some() || class_ambiguous {
+            return class_target.filter(|_| !class_ambiguous);
+        }
+        if interface_target.is_some() || interface_ambiguous {
+            return interface_target.filter(|_| !interface_ambiguous);
+        }
+    }
+    if local.is_none() && relation.metadata["inferred_callable_owner"] == true && identity.is_none()
+    {
+        return direct(&relation.to, true).flatten();
+    }
+    None
+}
+
+fn split_callable_owner(name: &str) -> Option<(&str, &str)> {
+    name.rsplit_once("::")
+        .or_else(|| name.rsplit_once('#'))
+        .or_else(|| name.rsplit_once('.'))
 }
 
 /// Delete `.rgctl` artifacts that embed `graph_digest` so they cannot outlive a compact.
@@ -826,7 +1046,10 @@ mod tests {
         let overload = method.clone().with_identity_discriminator("(int)");
         let mut index = HashMap::from([(
             SharedStr::from("value"),
-            vec![RelationSymbol::from(&field), RelationSymbol::from(&method)],
+            vec![
+                Arc::new(RelationSymbol::from(&field)),
+                Arc::new(RelationSymbol::from(&method)),
+            ],
         )]);
         assert_eq!(
             resolve_symbol(&index, "value", "box.js", true, None),
@@ -836,7 +1059,7 @@ mod tests {
         index
             .get_mut("value")
             .unwrap()
-            .push(RelationSymbol::from(&overload));
+            .push(Arc::new(RelationSymbol::from(&overload)));
         assert_eq!(resolve_symbol(&index, "value", "box.js", true, None), None);
         assert_eq!(
             resolve_symbol(&index, "value", "box.js", true, Some("(int)")),

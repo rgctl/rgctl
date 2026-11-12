@@ -1056,7 +1056,7 @@ impl GroovyPlugin {
                     record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
                     symbol = rgctl_plugin_helpers::callable_identity::symbol(
                         symbol,
-                        root,
+                        node,
                         source,
                         rgctl_plugin_helpers::callable_identity::Policy::Groovy,
                     );
@@ -1137,7 +1137,7 @@ impl GroovyPlugin {
                     record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
                     symbol = rgctl_plugin_helpers::callable_identity::symbol(
                         symbol,
-                        root,
+                        node,
                         source,
                         rgctl_plugin_helpers::callable_identity::Policy::Groovy,
                     );
@@ -1171,7 +1171,7 @@ impl GroovyPlugin {
                     record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
                     symbol = rgctl_plugin_helpers::callable_identity::symbol(
                         symbol,
-                        root,
+                        node,
                         source,
                         rgctl_plugin_helpers::callable_identity::Policy::Groovy,
                     );

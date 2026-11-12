@@ -38,12 +38,23 @@ Elixir includes arity, clause patterns, and guards. Languages without callable
 overloads retain their existing name/owner semantics. Markdown, HCL, and ERB are
 explicitly non-applicable overload cases.
 
+Callable helpers receive the declaration CST node, including individual Go
+interface methods, so editing a sibling cannot change another method's body
+hash or canonical identity. Call-owner hints synthesized from lexical scope are
+marked as inferred; explicit receiver qualification is preserved.
+
 Call relations preserve the caller's discriminator. Literal or known formal
 argument types can establish a target; unknown expressions do not establish an
 overload. Argument evidence is separate from canonical identity, so an argument
 tuple cannot silently choose between const/non-const or generic variants. Exact
 evidence survives parked relations and cross-repository merge, with no fallback
 to another overload when that evidence fails.
+
+Signature-aware calls search the receiver's inheritance chain before considering
+an inferred lexical fallback. A known incompatible or ambiguous overload family
+cannot fall back to an unrelated bare-name target. Java inherited overloads remain
+available when a child declares a different signature. Incremental edge repair
+uses the same explicit identity and argument evidence, including across files.
 
 MRO uses dispatch identity and implementation ownership, excludes superseded
 definitions, and prefers runtime implementations over paired declarations.
@@ -52,7 +63,7 @@ reuse verifies source hashes and does not remap graph IDs through ambiguous name
 
 ## Migration and evidence
 
-Facts-cache format 6 and extraction semantics version 9 invalidate old extraction
+Facts-cache format 7 and extraction semantics version 10 invalidate old extraction
 results. Missing or stale `.rgctl/extraction_semantics.json` forces full source
 extraction, including when `discover --files` was requested. The semantics marker
 is written after successful snapshot persistence. Existing snapshots remain

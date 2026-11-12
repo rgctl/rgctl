@@ -708,6 +708,7 @@ fn walk_cpp_calls(
                             let callee = func.utf8_text(source).ok().unwrap_or("").trim();
                             if !callee.is_empty() {
                                 last.to_qualified_hint = Some(format!("{scope}::{callee}"));
+                                last.metadata["inferred_callable_owner"] = true.into();
                             }
                         } else if let Some(hint) = last.to_qualified_hint.clone() {
                             if let Some(enriched) = enrich_cpp_namespace_hint(&hint, scope) {

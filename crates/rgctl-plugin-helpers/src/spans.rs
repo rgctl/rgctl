@@ -68,17 +68,65 @@ pub fn field_source_span(
     source: &[u8],
     name: &str,
 ) -> Option<rgctl_plugin_api::FieldSourceSpan> {
-    let mut stack = vec![declaration];
+    // A record's type name and body are not component declarations. Restrict
+    // the search before considering same-spelled identifiers elsewhere.
+    let search_root = if declaration.kind() == "record_declaration" {
+        declaration.child_by_field_name("parameters")?
+    } else {
+        declaration
+    };
+    let mut stack = vec![search_root];
     let mut candidate = None;
     while let Some(node) = stack.pop() {
+        // Attributes/decorators describe a declaration; their identifiers are
+        // never its binding, even when both have exactly the same spelling.
+        if node.id() != declaration.id()
+            && (matches!(
+                node.kind(),
+                "annotation"
+                    | "marker_annotation"
+                    | "decorator"
+                    | "decorators"
+                    | "attribute_list"
+                    | "attribute_specifier"
+                    | "attribute_specifier_sequence"
+                    | "annotations"
+            ) || node.kind() == "attribute"
+                && node
+                    .utf8_text(source)
+                    .is_ok_and(|text| text.starts_with('@')))
+        {
+            continue;
+        }
         let mut priority = match node.kind() {
             "field_identifier" | "property_identifier" | "private_property_identifier" => 0,
             "identifier" | "name" | "simple_identifier" | "variable_name" | "variable"
             | "instance_variable" | "class_variable" | "simple_symbol" | "string" | "atom"
-            | "keyword" => 1,
+            | "quoted_atom" | "keyword" => 1,
             "type_identifier" | "qualified_type" => 2,
             _ => 3,
         };
+        if node.parent().is_some_and(|parent| {
+            matches!(
+                parent.kind(),
+                "variable_declarator"
+                    | "field_declaration"
+                    | "property_declaration"
+                    | "public_field_definition"
+                    | "formal_parameter"
+                    | "class_parameter"
+                    | "parameter"
+                    | "property_promotion_parameter"
+                    | "assignment"
+                    | "pair"
+            ) && ["name", "left", "key"].iter().any(|field| {
+                parent
+                    .child_by_field_name(field)
+                    .is_some_and(|binding| binding.id() == node.id())
+            })
+        }) {
+            priority = 0;
+        }
         let mut ancestor = node;
         while ancestor.id() != declaration.id() {
             let Some(parent) = ancestor.parent() else {
@@ -106,7 +154,7 @@ pub fn field_source_span(
             {
                 let offset = if raw == name { 0 } else { raw.find(name)? };
                 candidate = Some((priority, node, offset));
-                if priority <= 1 {
+                if priority == 0 {
                     break;
                 }
             }
@@ -134,8 +182,17 @@ pub fn field_source_span(
             stack.push(property);
             continue;
         }
+        // Initializers may reference a later declarator with the same name.
+        // Those uses are not declaration bindings (for example `a = self.b, b`).
+        let initializer_nodes = ["value", "right", "default_value", "initializer"]
+            .map(|field| node.child_by_field_name(field));
         for i in (0..node.named_child_count()).rev() {
-            if let Some(child) = node.named_child(i) {
+            if let Some(child) = node.named_child(i)
+                && !initializer_nodes
+                    .iter()
+                    .flatten()
+                    .any(|initializer| initializer.id() == child.id())
+            {
                 stack.push(child);
             }
         }

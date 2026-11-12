@@ -27,6 +27,9 @@ fn graph_with_members(file: &str, source: &str, fields: bool) -> (Vec<Node>, Vec
     let extraction = extractor
         .extract_file_with_source(Path::new(file), source.as_bytes().to_vec())
         .unwrap();
+    if std::env::var_os("RGCTL_REVIEW_DEBUG").is_some() {
+        eprintln!("{file}: {:#?}", extraction);
+    }
     let mut builder = GraphBuilder::new();
     builder.set_materialize_fields(fields);
     extractor
@@ -1096,4 +1099,321 @@ fn incremental_bound_method_calls_never_target_fields() {
         );
         std::fs::write(&file, source.replace("return 1", "return 2")).unwrap();
     }
+}
+
+#[test]
+fn declaration_helpers_isolate_groovy_methods_and_go_interface_members() {
+    for (file, source, needle, changed, first) in [
+        (
+            "Box.groovy",
+            "class Box { int first(int n) { return 1; } int second(String s) { return 2; } }",
+            "return 2",
+            "return 3",
+            "first",
+        ),
+        (
+            "box.go",
+            "package demo\ntype Box interface { First(n int) int; Second(s string) string }",
+            "Second(s string)",
+            "Second(s []byte)",
+            "First",
+        ),
+    ] {
+        let (nodes, _) = graph(file, source);
+        let before = nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Function && n.name == first)
+            .unwrap();
+        let (updated, _) = graph(file, &source.replace(needle, changed));
+        let after = updated
+            .iter()
+            .find(|n| n.node_type == NodeType::Function && n.name == first)
+            .unwrap();
+        assert_eq!(
+            before.id, after.id,
+            "{file}: unrelated member changed identity"
+        );
+        assert_eq!(
+            before.code_hash, after.code_hash,
+            "{file}: unrelated member changed body hash"
+        );
+        let peer = nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Function && n.name != first)
+            .unwrap();
+        assert_ne!(
+            before.code_hash, peer.code_hash,
+            "{file}: declarations share enclosing body"
+        );
+    }
+}
+
+#[test]
+fn lexical_and_inherited_calls_keep_argument_evidence_without_wrong_fallbacks() {
+    for (file, source, caller, callee) in [
+        (
+            "box.rs",
+            "fn helper(n: i32) {} mod m { use super::helper; fn caller() { helper(7); } }",
+            "caller",
+            "helper",
+        ),
+        (
+            "box.cpp",
+            "void helper(int n) {} namespace demo { void caller() { helper(7); } }",
+            "caller",
+            "helper",
+        ),
+        (
+            "Box.java",
+            "class Base { void helper(int n) {} void helper(String s) {} } class Child extends Base { void caller() { helper(7); } }",
+            "caller",
+            "helper",
+        ),
+    ] {
+        let (nodes, edges) = graph(file, source);
+        let from = nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Function && n.name == caller)
+            .unwrap();
+        let targets: Vec<_> = nodes
+            .iter()
+            .filter(|n| {
+                n.node_type == NodeType::Function
+                    && n.name == callee
+                    && n.identity_discriminator().is_none_or(|i| i == "(int)")
+            })
+            .collect();
+        assert_eq!(targets.len(), 1, "{file}: {nodes:?}");
+        assert!(
+            edges
+                .iter()
+                .any(|e| e.edge_type == rgctl_graph::schema::EdgeType::Calls
+                    && e.from == from.id
+                    && e.to == targets[0].id),
+            "{file}: missing intended call: {edges:?}"
+        );
+    }
+    // An explicitly qualified missing receiver must never bind a free helper.
+    let (nodes, edges) = graph(
+        "Box.java",
+        "class Helpers { static void helper(int n) {} } class Other {} class Child { void caller(Other other) { other.helper(7); } }",
+    );
+    let caller = nodes
+        .iter()
+        .find(|n| n.node_type == NodeType::Function && n.name == "caller")
+        .unwrap();
+    let helper = nodes
+        .iter()
+        .find(|n| n.node_type == NodeType::Function && n.name == "helper")
+        .unwrap();
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e.edge_type == rgctl_graph::schema::EdgeType::Calls
+                && e.from == caller.id
+                && e.to == helper.id)
+    );
+}
+
+#[test]
+fn incremental_cross_file_inheritance_keeps_calls_and_never_resurrects_mismatches() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("Base.java"),
+        "class Base { int helper; void helper(int n) {} }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("I.java"),
+        "interface I { void helper(int n); }\n",
+    )
+    .unwrap();
+    let child = dir.path().join("Child.java");
+    let source = "class Child extends Base implements I { void caller() { helper(7); } }\n";
+    std::fs::write(&child, source).unwrap();
+    for (index, args) in [
+        vec!["discover", ".", "--with-fields"],
+        vec!["discover", ".", "--files", "Child.java"],
+        vec!["discover", ".", "--files", "Child.java"],
+    ]
+    .iter()
+    .enumerate()
+    {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_rgctl"))
+            .current_dir(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let graph =
+            rgctl_graph::CodeGraph::open_snapshot(&dir.path().join(".rgctl/graph.snapshot.bin"))
+                .unwrap()
+                .snapshot()
+                .unwrap();
+        let from = graph
+            .nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Function && n.name == "caller")
+            .unwrap();
+        let target = graph
+            .nodes
+            .iter()
+            .find(|n| {
+                n.node_type == NodeType::Function
+                    && n.qualified_name.as_deref() == Some("Base.helper")
+            })
+            .unwrap();
+        assert_eq!(
+            graph
+                .edges
+                .iter()
+                .any(|e| e.edge_type == rgctl_graph::schema::EdgeType::Calls
+                    && e.from == from.id
+                    && e.to == target.id),
+            index < 2,
+            "cross-file call state mismatch at step {index}"
+        );
+        assert!(!graph.edges.iter().any(|e| {
+            e.edge_type == rgctl_graph::schema::EdgeType::Calls
+                && graph
+                    .nodes
+                    .iter()
+                    .any(|n| n.id == e.to && n.has_label("field"))
+        }));
+        std::fs::write(
+            &child,
+            source.replace(
+                "helper(7)",
+                if index == 0 {
+                    "helper(8)"
+                } else {
+                    "helper(\"wrong\")"
+                },
+            ),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn java_inherited_overload_remains_callable_when_child_declares_another_signature() {
+    let (nodes, edges) = graph(
+        "Own.java",
+        "class Base { void helper(String value) {} } class Child extends Base { void helper(int n) {} void caller() { helper(\"hello\"); } }",
+    );
+    let caller = nodes
+        .iter()
+        .find(|n| n.node_type == NodeType::Function && n.name == "caller")
+        .unwrap();
+    let inherited = nodes
+        .iter()
+        .find(|n| {
+            n.node_type == NodeType::Function && n.qualified_name.as_deref() == Some("Base.helper")
+        })
+        .unwrap();
+    assert!(
+        edges
+            .iter()
+            .any(|e| e.edge_type == rgctl_graph::schema::EdgeType::Calls
+                && e.from == caller.id
+                && e.to == inherited.id)
+    );
+}
+
+#[test]
+fn incremental_module_imports_keep_unique_suffix_call_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("a.hpp"),
+        "namespace a { inline void helper(int n) {} }\n",
+    )
+    .unwrap();
+    let source =
+        "#include \"a.hpp\"\nnamespace b { using a::helper; void caller() { helper(7); } }\n";
+    std::fs::write(dir.path().join("b.cpp"), source).unwrap();
+    for args in [
+        vec!["discover", "."],
+        vec!["discover", ".", "--files", "b.cpp"],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_rgctl"))
+            .current_dir(dir.path())
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let graph =
+            rgctl_graph::CodeGraph::open_snapshot(&dir.path().join(".rgctl/graph.snapshot.bin"))
+                .unwrap()
+                .snapshot()
+                .unwrap();
+        let caller = graph
+            .nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Function && n.name == "caller")
+            .unwrap();
+        let helper = graph
+            .nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Function && n.name == "helper")
+            .unwrap();
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|e| e.edge_type == rgctl_graph::schema::EdgeType::Calls
+                    && e.from == caller.id
+                    && e.to == helper.id),
+            "missing call in {args:?}"
+        );
+        std::fs::write(
+            dir.path().join("b.cpp"),
+            source.replace("helper(7)", "helper(8)"),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn inferred_call_owners_never_fall_back_to_unrelated_type_members() {
+    let extractor = Extractor::new(Arc::new(rgctl_languages::default_registry()));
+    let files = [
+        ("Other.java", "class Other { void helper(int n) {} }"),
+        ("Child.java", "class Child { void caller() { helper(7); } }"),
+    ];
+    let extractions: Vec<_> = files
+        .iter()
+        .map(|(file, source)| {
+            extractor
+                .extract_file_with_source(Path::new(file), source.as_bytes().to_vec())
+                .unwrap()
+        })
+        .collect();
+    let mut builder = GraphBuilder::new();
+    extractor
+        .populate_graph(&extractions, &mut builder)
+        .unwrap();
+    let (nodes, edges) = builder.into_graph();
+    let caller = nodes
+        .iter()
+        .find(|n| n.node_type == NodeType::Function && n.name == "caller")
+        .unwrap();
+    let unrelated = nodes
+        .iter()
+        .find(|n| n.node_type == NodeType::Function && n.name == "helper")
+        .unwrap();
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e.edge_type == rgctl_graph::schema::EdgeType::Calls
+                && e.from == caller.id
+                && e.to == unrelated.id)
+    );
 }

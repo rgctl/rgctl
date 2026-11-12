@@ -85,6 +85,8 @@ pub struct GraphBuilder {
     callable_parameters: HashMap<Uuid, String>,
     /// Shared dispatch contracts, available even when graph nodes spill to disk.
     method_identities: HashMap<Uuid, String>,
+    /// Type members cannot be selected as free functions by lexical fallback.
+    member_method_ids: FxHashSet<Uuid>,
     method_override_owners: HashMap<Uuid, String>,
     signature_families: FxHashSet<Uuid>,
     unresolved_calls: usize,
@@ -224,6 +226,20 @@ impl GraphBuilder {
                         .entry(suffix)
                         .or_default()
                         .push(node.id);
+                }
+            }
+            // Namespace-qualified callables also need bare suffixes without
+            // the discriminator appended to symbol_index's logical key.
+            // Without a discriminator, the key suffix loop below already adds them.
+            if !is_field_member && node.identity_discriminator().is_some() {
+                for (offset, _) in qualified.match_indices("::") {
+                    let suffix = &qualified[offset + 2..];
+                    if !suffix.is_empty() {
+                        self.symbols_by_suffix
+                            .entry(suffix.to_owned())
+                            .or_default()
+                            .push(node.id);
+                    }
                 }
             }
             // Ruby method QN uses `#` / `.` (e.g. `OrderDTO#mark_processed`, `OrderService.build`).
@@ -855,6 +871,31 @@ impl GraphBuilder {
             }
         }
 
+        self.member_method_ids.clear();
+        for (owner, methods) in &self.type_methods {
+            if self
+                .symbols_by_qualified
+                .get(owner)
+                .or_else(|| self.symbols_by_suffix.get(owner))
+                .is_some_and(|ids| {
+                    ids.iter().any(|id| {
+                        matches!(
+                            self.node_types.get(id),
+                            Some(
+                                NodeType::Class
+                                    | NodeType::Struct
+                                    | NodeType::Interface
+                                    | NodeType::Enum
+                                    | NodeType::Annotation
+                            )
+                        )
+                    })
+                })
+            {
+                self.member_method_ids
+                    .extend(methods.iter().map(|(_, id)| *id));
+            }
+        }
         self.build_c_preferred_impl();
 
         self.indexes_built = true;
@@ -932,10 +973,17 @@ impl GraphBuilder {
         name: &str,
         file: &str,
         arguments: &str,
+        free_only: bool,
     ) -> Option<Option<Uuid>> {
         let candidates = self
             .symbols_by_qualified
             .get(name)
+            .filter(|ids| {
+                ids.iter().any(|id| {
+                    self.node_types.get(id) == Some(&NodeType::Function)
+                        && (!free_only || !self.member_method_ids.contains(id))
+                })
+            })
             .or_else(|| self.symbols_by_suffix.get(name))?;
         let mut known = false;
         let mut global = None;
@@ -943,6 +991,9 @@ impl GraphBuilder {
         let mut global_ambiguous = false;
         let mut local_ambiguous = false;
         for id in candidates {
+            if free_only && self.member_method_ids.contains(id) {
+                continue;
+            }
             if let Some(parameters) = self.callable_parameters.get(id) {
                 known = true;
                 if parameters != arguments {
@@ -971,6 +1022,96 @@ impl GraphBuilder {
         } else {
             global
         })
+    }
+
+    /// Resolve a signature-aware call within its receiver/lexical owner before
+    /// considering any speculative bare-name fallback. `Some(None)` means a
+    /// known family was ambiguous or incompatible and must not be bypassed.
+    fn resolve_scoped_callable(
+        &self,
+        name: &str,
+        file: &str,
+        identity: Option<&str>,
+        arguments: Option<&str>,
+        inherited_overloads: bool,
+        free_only: bool,
+    ) -> Option<Option<Uuid>> {
+        let direct = |name: &str| {
+            let candidates = self
+                .symbols_by_qualified
+                .get(name)
+                .filter(|ids| {
+                    ids.iter().any(|id| {
+                        self.node_types.get(id) == Some(&NodeType::Function)
+                            && (!free_only || !self.member_method_ids.contains(id))
+                    })
+                })
+                .or_else(|| self.symbols_by_suffix.get(name))?;
+            let eligible = |id: &Uuid| {
+                self.node_types.get(id) == Some(&NodeType::Function)
+                    && (!free_only || !self.member_method_ids.contains(id))
+            };
+            if !candidates.iter().any(eligible) {
+                return None;
+            }
+            if let Some(identity) = identity {
+                return Some(
+                    self.resolve_callable_identity(name, file, identity)
+                        .filter(eligible),
+                );
+            }
+            if let Some(arguments) = arguments {
+                // Non-overloaded declarations need no argument-type proof.
+                // Literal spellings (e.g. Rust int vs i32) are only hints.
+                if let Some(id) = unique_matching(candidates, eligible)
+                    && !self.method_identities.contains_key(&id)
+                    && !self.declaration_ids.contains(&id)
+                {
+                    return Some(Some(id));
+                }
+                return Some(
+                    self.resolve_argument_identity(name, file, arguments, free_only)
+                        .unwrap_or_else(|| {
+                            self.resolve_callable_identity(name, file, arguments)
+                                .filter(eligible)
+                        }),
+                );
+            }
+            Some(unique_matching(candidates, eligible))
+        };
+        let local = direct(name);
+        if local.is_some_and(|found| found.is_some())
+            || local.is_some()
+                && !(inherited_overloads && arguments.is_some() && identity.is_none())
+        {
+            return local;
+        }
+        let Some((owner, method)) = split_owner_method(name) else {
+            return local;
+        };
+        if !self.inheritance_bases.contains_key(type_simple_name(owner)) {
+            return local;
+        }
+        let chain = compute_mro_chain(owner, &self.inheritance_bases);
+        let mut key = String::with_capacity(name.len());
+        for ancestor in chain.iter().skip(1) {
+            for separator in [".", "::", "#"] {
+                key.clear();
+                key.push_str(ancestor);
+                key.push_str(separator);
+                key.push_str(method);
+                if let Some(found) = direct(&key) {
+                    if found.is_some()
+                        || !inherited_overloads
+                        || arguments.is_none()
+                        || identity.is_some()
+                    {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        local
     }
 
     /// Add a relation between symbols when endpoints resolve.
@@ -1071,17 +1212,35 @@ impl GraphBuilder {
             .and_then(|v| v.as_str());
         let unresolved_generic =
             relation.metadata.get("explicit_generic_arity").is_some() && explicit_to.is_none();
-        let exact_id = if unresolved_generic {
-            None
-        } else if let Some(identity) = explicit_to {
-            self.resolve_callable_identity(target, &relation.location.file, identity)
-        } else if let Some(arguments) = argument_to {
-            self.resolve_argument_identity(target, &relation.location.file, arguments)
-                .unwrap_or_else(|| {
-                    self.resolve_callable_identity(target, &relation.location.file, arguments)
-                })
+        let mut scoped = if relation.relation_type == RelationType::Calls {
+            self.resolve_scoped_callable(
+                target,
+                &relation.location.file,
+                explicit_to,
+                argument_to,
+                java_call,
+                false,
+            )
         } else {
             None
+        };
+        // Only a helper-inferred owner may fall back to the unqualified name.
+        // Explicit receiver hints and known-but-incompatible families are final.
+        let inferred_owner = relation.metadata["inferred_callable_owner"] == true;
+        if scoped.is_none() && inferred_owner && explicit_to.is_none() {
+            scoped = self.resolve_scoped_callable(
+                &relation.to,
+                &relation.location.file,
+                None,
+                argument_to,
+                java_call,
+                true,
+            );
+        }
+        let exact_id = if unresolved_generic {
+            None
+        } else {
+            scoped.flatten()
         };
         let signature_call = java_call
             || relation.relation_type == RelationType::Calls
@@ -1098,7 +1257,9 @@ impl GraphBuilder {
                 .is_some_and(|ids| self.unique_typed(ids, Some(NodeType::Function)).is_none());
         let mut to_id = if exact_id.is_some() {
             exact_id
-        } else if explicit_to.is_some() || ambiguous_java || signature_call && argument_to.is_some()
+        } else if explicit_to.is_some()
+            || ambiguous_java
+            || signature_call && (argument_to.is_some() || scoped == Some(None))
         {
             None
         } else {

@@ -470,7 +470,7 @@ impl GoPlugin {
                     );
                     symbol = rgctl_plugin_helpers::callable_identity::symbol(
                         symbol,
-                        interface_type,
+                        child,
                         source,
                         rgctl_plugin_helpers::callable_identity::Policy::Go,
                     );

@@ -42,8 +42,8 @@ ambiguous rather than selecting an arbitrary declaration. Incremental relation
 rebuilding preserves candidates and explicit identity discriminators instead of
 overwriting them in a single-value name map.
 
-Extraction semantics version 9 forces graphs built with the old insertion rule
-to rebuild. Facts-cache payloads are unchanged by this fix.
+Extraction semantics version 10 forces graphs built with the old insertion rule
+to rebuild. Facts-cache format 7 invalidates extraction records affected by the declaration and field-span correctness fixes.
 
 ## Separate execution controls
 
@@ -74,3 +74,15 @@ updates. It asserts that no CFG/PDG archive is created. The existing Tier 1 fiel
 inventory covers every applicable Tier 1 language.
 
 Profiling artifacts and benchmark scripts are kept outside the source tree.
+
+## Field correctness review regressions
+
+The shared span helper excludes annotations/decorators and initializer/default
+expressions when selecting declaration identifiers; record searches are limited
+to components. Quoted Elixir struct atoms retain identifier-content spans.
+Lua table members follow the matching left-hand assignment slot, keep nested
+owners, and distinguish local bindings in separate functions/blocks without
+using source coordinates as identity. Tables passed as arguments, returned from
+functions, or stored in array positions do not inherit unrelated assignment
+owners. Focused regressions live in `tests/tier1_field_review_regressions.rs` and
+the Lua single-pass unit tests, alongside the full Tier 1 field inventory.
