@@ -45,7 +45,7 @@ not an end-to-end dispatch or dependency-impact qualification.
 
 ## Compatibility and limits
 
-CFG semantics revision is **3**, procedural archive format **RBCP v6**. Existing
+CFG semantics revision is **4**, procedural archive format **RBCP v7**. Existing
 revision guards invalidate older lowering even if source is unchanged. Formal
 statement IDs and CFG block shapes can change; use canonical callable IDs and
 typed local formal IDs rather than retaining statement UUIDs across revisions.
@@ -54,12 +54,12 @@ Defaults are still handled by the invocation binder, not executed at entry.
 The statement-level PDG remains conservative: earlier same-block definitions can
 remain in its dependency set after reassignment. This change does not qualify
 precise dead-definition exclusions. Hoisting, Python function-wide local-name
-rules, Go mixed short declarations, complex parameter patterns, capture/state
+rules, complex parameter patterns, capture/state
 flow and other unsupported language forms still need dedicated qualification;
 these tests do not establish complete lexical semantics.
 
-Body expression occurrences have not yet been mapped to precise statement/value
-identities. This adds the formal-entry bridge and local statement dependencies;
-matched invocation contexts, receiver-origin propagation, target discovery and
-shared interprocedural taint consumption remain separate work. A partial or
+[Local value transfers](local-value-flow.md) now map supported body expression
+occurrences to exact scoped reads and initializer/assignment values. Matched
+invocation contexts, receiver-origin propagation, target discovery and shared
+interprocedural taint consumption remain separate work. A partial or
 empty result cannot certify absence of dependency impact.

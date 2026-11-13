@@ -323,6 +323,7 @@ fn collect_field_access_base_uses<'a>(
 ) {
     if let Some(object) = node
         .child_by_field_name("object")
+        .or_else(|| node.child_by_field_name("operand"))
         .or_else(|| node.child_by_field_name("argument"))
         .or_else(|| node.child_by_field_name("value"))
         .or_else(|| node.child_by_field_name("expression"))
@@ -742,9 +743,8 @@ fn collect_def_use_node<'a>(
                 if child.is_named() {
                     if is_def_target {
                         collect_pattern_defs(child, source, defined, depth + 1);
-                    } else {
-                        stack.push((child, false, depth + 1));
                     }
+                    stack.push((child, false, depth + 1));
                 }
             }
         }

@@ -41,6 +41,7 @@ pub mod hash_maps;
 pub mod interprocedural_cfg;
 pub mod interprocedural_slicing;
 pub mod language_profile;
+pub mod local_value_flow;
 pub mod macro_call_index;
 pub mod macro_call_lookup;
 pub mod migration;

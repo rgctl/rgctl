@@ -1,13 +1,13 @@
 //! Compact, source-native operand roles for one callable's procedural record.
 //!
 //! IDs are local to a source/semantics revision, not cross-snapshot identities.
-//! A name is presentation/syntax evidence, not a resolved lexical binding.
+//! Name IDs retain spelling; local slot/use/write pools carry scoped bindings.
 
 use serde::{Deserialize, Serialize};
 
 #[path = "operand_lowering.rs"]
 mod lowering;
-pub(crate) use lowering::lower_function_operands;
+pub(crate) use lowering::{local_write_sources, lower_function_operands};
 
 #[cfg(test)]
 #[path = "operand_tests.rs"]
@@ -87,7 +87,7 @@ pub enum OperandStatus {
 /// Role of a native expression. Computation inputs are not necessarily aliases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExpressionKind {
-    /// Unbound name occurrence; use its span for later scoped resolution.
+    /// Name occurrence; local_uses carries captured scoped read bindings.
     Name(OperandNameId),
     /// Member selection; inputs contain the receiver expression.
     Member(OperandNameId),
@@ -151,7 +151,7 @@ pub enum ReceiverConvention {
     Explicit,
 }
 
-/// One formal definition, mapped to a future actual/formal transfer by its ID.
+/// One formal definition shared by invocation and local value transfers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FormalFact {
     /// Interned name.
@@ -238,6 +238,8 @@ pub enum OperandDiagnosticKind {
     NestedCallable,
     /// Malformed native syntax.
     MalformedSyntax,
+    /// Local write RHS/pattern has no supported whole-value mapping.
+    LocalWriteShape,
     /// Expression lowering reached its bounded recursion depth.
     DepthLimit,
 }
@@ -278,6 +280,12 @@ pub struct FunctionOperands {
     pub arguments: Vec<ArgumentFact>,
     /// Return sites and their value operands.
     pub returns: Vec<ReturnFact>,
+    /// Scoped native local keys, indexed by LocalSlotId.
+    pub local_slots: Vec<OperandNameId>,
+    /// Exact local read occurrences and CFG positions.
+    pub local_uses: Vec<LocalUseFact>,
+    /// Exact local definitions, including incoming formals.
+    pub local_writes: Vec<LocalWriteFact>,
     /// Explicit unsupported/malformed forms.
     pub diagnostics: Vec<OperandDiagnostic>,
 }
@@ -291,6 +299,7 @@ impl FunctionOperands {
     /// Check ranges and references before accepting persisted operand records.
     pub fn valid_references(&self) -> bool {
         let expr = |id: ExpressionId| (id.0 as usize) < self.expressions.len();
+        let slot = |id: LocalSlotId| (id.0 as usize) < self.local_slots.len();
         let name = |id: OperandNameId| (id.0 as usize) < self.names.len();
         self.expressions.iter().all(|e| {
             e.inputs.slice(&self.inputs).is_some()
@@ -301,7 +310,16 @@ impl FunctionOperands {
                     ExpressionKind::Construction(id) => expr(id),
                     _ => true,
                 }
-        }) && self.inputs.iter().all(|&id| expr(id))
+        }) && self.local_slots.iter().all(|&id| name(id))
+            && self
+                .local_uses
+                .iter()
+                .all(|u| expr(u.value) && slot(u.slot))
+            && self
+                .local_writes
+                .iter()
+                .all(|w| slot(w.slot) && w.value.is_none_or(expr))
+            && self.inputs.iter().all(|&id| expr(id))
             && self
                 .formals
                 .iter()
@@ -324,4 +342,39 @@ impl FunctionOperands {
                 .iter()
                 .all(|r| r.values.slice(&self.inputs).is_some())
     }
+}
+
+/// Dense function-local lexical slot selected by the native scope resolver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct LocalSlotId(pub u32);
+
+/// Exact CFG position; source lines are not statement identities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StatementRef {
+    /// Containing basic block.
+    pub block: crate::cfg::BlockId,
+    /// Statement index within that block, after native lowering.
+    pub index: u32,
+}
+
+/// Scoped local read of a particular native expression occurrence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalUseFact {
+    /// Expression whose value is read.
+    pub value: ExpressionId,
+    /// Native lexical slot; spelling alone is not the binding.
+    pub slot: LocalSlotId,
+    /// Exact consuming CFG statement.
+    pub statement: StatementRef,
+}
+
+/// One local definition and its native RHS, when modeled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalWriteFact {
+    /// Native lexical slot being defined.
+    pub slot: LocalSlotId,
+    /// Formal entry or initializer/RHS value; absent for unmodeled writes.
+    pub value: Option<ExpressionId>,
+    /// Exact defining CFG statement.
+    pub statement: StatementRef,
 }

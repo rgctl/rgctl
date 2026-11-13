@@ -20,6 +20,9 @@ mod predicate_tests;
 #[path = "formal_entry_tests.rs"]
 mod formal_entry_tests;
 
+#[path = "local_operand_capture.rs"]
+mod local_operand_capture;
+
 /// Maximum AST recursion depth for CFG expression walks (matches C++ extraction cap).
 const AST_WALK_MAX_DEPTH: usize = 2048;
 
@@ -882,7 +885,7 @@ fn build_cfg_from_function_node(
         cfg.operands = crate::operands::lower_function_operands(language, func_node, body, source)?;
     }
     let mut builder = CfgBuilder::new(&mut cfg, language);
-    builder.seed_formal_definitions(func_node.start_position().row + 1);
+    builder.seed_formal_definitions(func_node.start_position().row + 1)?;
     builder.build_function(func_node, source)?;
     Ok(cfg)
 }
@@ -931,6 +934,8 @@ struct CfgBuilder<'a> {
     next_shadow_id: u32,
     /// Set after the function-body block has been entered (nested blocks push frames).
     block_scope_entered: bool,
+    /// Query-free native source/CFG links reused throughout one function build.
+    operand_anchors: local_operand_capture::OperandAnchors,
 }
 
 struct BreakableContext {
@@ -951,6 +956,7 @@ struct DeferredCall {
 impl<'a> CfgBuilder<'a> {
     fn new(cfg: &'a mut ControlFlowGraph, language: &'a str) -> Self {
         let entry = cfg.entry;
+        let operand_anchors = local_operand_capture::OperandAnchors::new(&cfg.operands);
         Self {
             cfg,
             current_block: entry,
@@ -975,6 +981,7 @@ impl<'a> CfgBuilder<'a> {
             scope_frames: vec![HashMap::new()],
             next_shadow_id: 1,
             block_scope_entered: false,
+            operand_anchors,
         }
     }
 
@@ -1021,6 +1028,7 @@ impl<'a> CfgBuilder<'a> {
         defined: SmallVec<[DefVar; 2]>,
         used: SmallVec<[String; 3]>,
         is_declaration: bool,
+        reuse_current: bool,
     ) -> (SmallVec<[DefVar; 2]>, SmallVec<[String; 3]>) {
         // RHS uses must resolve against the *prior* binding (`let x = x + 1`).
         let used: SmallVec<[String; 3]> = used
@@ -1032,7 +1040,14 @@ impl<'a> CfgBuilder<'a> {
             .map(|dv| match dv {
                 DefVar::Local(name) => {
                     let scoped = if is_declaration {
-                        self.bind_local(&name)
+                        if reuse_current
+                            && let Some(existing) =
+                                self.scope_frames.last().and_then(|f| f.get(&name))
+                        {
+                            existing.clone()
+                        } else {
+                            self.bind_local(&name)
+                        }
                     } else {
                         self.resolve_local(&name)
                     };
@@ -1049,14 +1064,16 @@ impl<'a> CfgBuilder<'a> {
 
     /// Formal values exist on entry, before any body definition can shadow them.
     /// The typed ID bridges the operand/binding API to ordinary CFG/PDG analysis.
-    fn seed_formal_definitions(&mut self, line: usize) {
+    fn seed_formal_definitions(&mut self, line: usize) -> Result<()> {
         for index in 0..self.cfg.operands.formals.len() {
             let formal = &self.cfg.operands.formals[index];
             let Some(name) = self.cfg.operands.name(formal.name) else {
                 continue;
             };
             let name = name.to_owned();
+            let value = formal.value;
             let scoped = self.bind_local(&name);
+            self.capture_formal_write(&scoped, value)?;
             self.add_statement_to_current(Statement {
                 kind: StatementKind::Parameter(crate::operands::FormalId(index as u32)),
                 line,
@@ -1065,6 +1082,7 @@ impl<'a> CfgBuilder<'a> {
                 used_vars: SmallVec::new(),
             });
         }
+        Ok(())
     }
 
     fn build_function(&mut self, func_node: Node, source: &[u8]) -> Result<()> {
@@ -1087,6 +1105,20 @@ impl<'a> CfgBuilder<'a> {
         }
         self.cfg.prune_unreachable_blocks();
         self.cfg.contract_empty_blocks();
+        let blocks = &self.cfg.blocks;
+        let retained = |position: crate::operands::StatementRef| {
+            blocks
+                .get(&position.block)
+                .is_some_and(|b| (position.index as usize) < b.statements.len())
+        };
+        self.cfg
+            .operands
+            .local_uses
+            .retain(|u| retained(u.statement));
+        self.cfg
+            .operands
+            .local_writes
+            .retain(|w| retained(w.statement));
         Ok(())
     }
 
@@ -1119,9 +1151,18 @@ impl<'a> CfgBuilder<'a> {
     fn add_statement(&mut self, node: Node, source: &[u8], kind: StatementKind) -> Result<()> {
         let line = node.start_position().row + 1;
         let text = node.utf8_text(source)?.trim().to_string();
-        let (defined_vars, used_vars) = extract_def_use(node, source);
+        let (mut defined_vars, mut used_vars) = extract_def_use(node, source);
+        defined_vars.sort();
+        used_vars.sort();
+        self.capture_local_reads(node, &used_vars)?;
         let is_decl = matches!(kind, StatementKind::Declaration);
-        let (defined_vars, used_vars) = self.rewrite_scoped_vars(defined_vars, used_vars, is_decl);
+        let (defined_vars, used_vars) = self.rewrite_scoped_vars(
+            defined_vars,
+            used_vars,
+            is_decl,
+            self.language == "go" && node.kind() == "short_var_declaration",
+        );
+        self.capture_local_writes(node, source, &defined_vars)?;
         let stmt = Statement {
             kind,
             line,
@@ -1168,11 +1209,14 @@ impl<'a> CfgBuilder<'a> {
 
     fn visit_block(&mut self, node: Node, source: &[u8]) -> Result<BlockId> {
         // First block-like is the function body (reuse root frame); nested blocks push.
-        let should_push = is_block_like(node.kind()) && self.block_scope_entered;
+        // `statement_list` is a transparent grammar wrapper (not another
+        // lexical block inside a Go function's braces).
+        let owns_scope = is_block_like(node.kind()) && node.kind() != "statement_list";
+        let should_push = owns_scope && self.block_scope_entered;
         if should_push {
             self.push_scope_frame();
         }
-        if is_block_like(node.kind()) {
+        if owns_scope {
             self.block_scope_entered = true;
         }
         let mut using_decls = 0usize;

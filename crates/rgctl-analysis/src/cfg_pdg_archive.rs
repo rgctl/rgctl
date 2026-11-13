@@ -11,7 +11,8 @@
 //!   record is binary-search + zero-copy slice deserialize.
 //! - **v4**: same indexed layout, with versioned CFG semantics in records.
 //! - **v5**: same indexed layout, with structured function operand pools.
-//! - **v6** (current): typed formal entry definitions and seeded local scope.
+//! - **v6**: typed formal entry definitions and seeded local scope.
+//! - **v7** (current): exact local expression/statement and read/write bindings.
 
 use crate::cfg::ControlFlowGraph;
 use crate::hash_maps::FxHashMap;
@@ -34,8 +35,8 @@ static NEXT_ARCHIVE_TMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Magic bytes for CFG/PDG archive files (`RBCP`).
 pub const ARCHIVE_MAGIC: [u8; 4] = *b"RBCP";
-/// Current archive format (v6 = typed formal entry definitions).
-pub const ARCHIVE_VERSION: u32 = 6;
+/// Current archive format (v7 = exact local operand bindings).
+pub const ARCHIVE_VERSION: u32 = 7;
 /// Legacy monolithic bincode payload.
 pub const ARCHIVE_VERSION_V1: u32 = 1;
 /// Legacy header-TOC format.

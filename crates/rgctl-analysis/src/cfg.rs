@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 mod revision_tests;
 
 /// Procedural lowering semantics. Bump when unchanged source must be reanalyzed.
-pub const CFG_SEMANTICS_VERSION: u32 = 3;
+pub const CFG_SEMANTICS_VERSION: u32 = 4;
 
 const fn cfg_revision_tag() -> [u8; 8] {
     let version = CFG_SEMANTICS_VERSION.to_le_bytes();
@@ -55,7 +55,7 @@ impl<'de> Deserialize<'de> for BlockId {
 }
 
 /// A variable definition site on a CFG statement.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DefVar {
     /// Simple local / parameter name.
     Local(String),
@@ -255,6 +255,36 @@ pub enum CfgEdgeType {
 }
 
 impl ControlFlowGraph {
+    /// Validate persisted local anchors against the selected CFG revision.
+    pub fn valid_local_operand_positions(&self) -> bool {
+        let statement = |at: crate::operands::StatementRef| {
+            self.blocks
+                .get(&at.block)
+                .and_then(|b| b.statements.get(at.index as usize))
+        };
+        self.operands.local_uses.iter().all(|u| {
+            statement(u.statement).is_some_and(|s| {
+                self.operands
+                    .local_slots
+                    .get(u.slot.0 as usize)
+                    .and_then(|&n| self.operands.name(n))
+                    .is_some_and(|key| s.used_vars.iter().any(|v| v == key))
+            })
+        }) && self.operands.local_writes.iter().all(|w| {
+            statement(w.statement).is_some_and(|s| {
+                self.operands
+                    .local_slots
+                    .get(w.slot.0 as usize)
+                    .and_then(|&n| self.operands.name(n))
+                    .is_some_and(|key| {
+                        s.defined_vars
+                            .iter()
+                            .any(|v| matches!(v, DefVar::Local(name) if name == key))
+                    })
+            })
+        })
+    }
+
     /// Create an empty CFG with a fresh entry block.
     pub fn new() -> Self {
         let entry = BlockId(0);
@@ -610,6 +640,11 @@ impl<'de> Deserialize<'de> for ControlFlowGraph {
             succ: HashMap::new(),
             pred: HashMap::new(),
         };
+        if !cfg.valid_local_operand_positions() {
+            return Err(serde::de::Error::custom(
+                "invalid local operand statement reference",
+            ));
+        }
         cfg.rebuild_adjacency();
         Ok(cfg)
     }

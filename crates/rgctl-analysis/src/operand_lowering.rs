@@ -83,6 +83,14 @@ pub(crate) fn lower_function_operands(
             lowerer.diagnostic(node, OperandDiagnosticKind::NestedCallable)?;
             continue;
         }
+        for (_, value) in local_write_sources(node) {
+            if let Some(value) = value {
+                lowerer.expression(value, 0)?;
+            }
+        }
+        if let Some(condition) = node.child_by_field_name("condition") {
+            lowerer.expression(condition, 0)?;
+        }
         match node.kind() {
             "call_expression"
             | "call"
@@ -660,4 +668,74 @@ fn member_parts(node: Node<'_>) -> Option<(Node<'_>, Node<'_>)> {
         .or_else(|| node.child_by_field_name("attribute"))
         .or_else(|| node.child_by_field_name("field"))?;
     Some((object, member))
+}
+
+/// Native simple-local write operands. Complex patterns intentionally have no
+/// whole-value alias mapping. This helper never parses or walks a second tree.
+pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<'_>>)> {
+    let mut root = node;
+    while root.kind() == "expression_statement" && root.named_child_count() == 1 {
+        root = root.named_child(0).unwrap_or(root);
+    }
+    fn scalar(value: Node<'_>) -> Node<'_> {
+        if value.kind() == "expression_list" && value.named_child_count() == 1 {
+            value.named_child(0).unwrap_or(value)
+        } else {
+            value
+        }
+    }
+    match root.kind() {
+        "let_declaration" | "let_statement" => root
+            .child_by_field_name("pattern")
+            .map(|target| vec![(target, root.child_by_field_name("value").map(scalar))])
+            .unwrap_or_default(),
+        "var_declaration" | "var_spec_list" => children(root)
+            .into_iter()
+            .flat_map(local_write_sources)
+            .collect(),
+        "variable_declaration"
+        | "lexical_declaration"
+        | "local_variable_declaration"
+        | "local_declaration_statement" => children(root)
+            .into_iter()
+            .filter(|n| n.kind() == "variable_declarator")
+            .filter_map(|n| {
+                n.child_by_field_name("name")
+                    .map(|name| (name, n.child_by_field_name("value")))
+            })
+            .collect(),
+        "variable_declarator" | "var_spec" => root
+            .child_by_field_name("name")
+            .map(|target| vec![(target, root.child_by_field_name("value").map(scalar))])
+            .unwrap_or_default(),
+        "assignment"
+        | "assignment_expression"
+        | "assignment_statement"
+        | "short_var_declaration" => {
+            let Some(left) = root.child_by_field_name("left") else {
+                return vec![];
+            };
+            let Some(right) = root.child_by_field_name("right") else {
+                return vec![(left, None)];
+            };
+            let lefts = if left.kind() == "expression_list" {
+                children(left)
+            } else {
+                vec![left]
+            };
+            let rights = if right.kind() == "expression_list" {
+                children(right)
+            } else {
+                vec![right]
+            };
+            if lefts.len() != rights.len() {
+                return lefts.into_iter().map(|n| (n, None)).collect();
+            }
+            lefts
+                .into_iter()
+                .zip(rights.into_iter().map(Some))
+                .collect()
+        }
+        _ => vec![],
+    }
 }
