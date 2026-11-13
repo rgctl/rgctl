@@ -305,3 +305,6 @@ pub use violation_ledger::{
     VIOLATION_LEDGER_FILE, ViolationLedger, ViolationLedgerEntry, ledger_entry_from_delta,
 };
 pub use wl_hash::{CanonicalEdgeTag, CanonicalStatementKind, WeisfeilerLehmanHasher};
+
+/// Bounded possible-type origins over native value transfers.
+pub mod value_origins;

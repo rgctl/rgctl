@@ -113,3 +113,11 @@ Ordinary arithmetic and other computations are not aliases of their children.
 
 These persisted expression roles use CFG semantics 5 and RBCP v8; prior procedural
 records are invalidated by the existing archive and source-revision guards.
+
+## Possible-origin integration
+
+The [bounded possible-origin query](value-origins.md) now composes these native
+local and invocation facts and activates supplied canonical member candidates.
+It merges caller alternatives, reports coverage gaps, and preserves transfer
+provenance. Matched-context exclusions and interprocedural taint verdicts remain
+separate work; the query cannot certify absence of impact.

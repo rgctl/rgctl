@@ -63,3 +63,11 @@ occurrences to exact scoped reads and initializer/assignment values. Matched
 invocation contexts, receiver-origin propagation, target discovery and shared
 interprocedural taint consumption remain separate work. A partial or
 empty result cannot certify absence of dependency impact.
+
+## Possible-origin integration
+
+The [bounded possible-origin query](value-origins.md) now composes these native
+local and invocation facts and activates supplied canonical member candidates.
+It merges caller alternatives, reports coverage gaps, and preserves transfer
+provenance. Matched-context exclusions and interprocedural taint verdicts remain
+separate work; the query cannot certify absence of impact.

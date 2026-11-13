@@ -93,3 +93,11 @@ conventions, unknown spreads, repeated-call result isolation, constructors,
 multiple returns, missing/invalid inputs, limits, memoization and archive-backed
 equivalence. They test the binding contract separately from target resolution and
 the end-to-end dependency-impact qualification suite.
+
+## Possible-origin integration
+
+The [bounded possible-origin query](value-origins.md) now composes these native
+local and invocation facts and activates supplied canonical member candidates.
+It merges caller alternatives, reports coverage gaps, and preserves transfer
+provenance. Matched-context exclusions and interprocedural taint verdicts remain
+separate work; the query cannot certify absence of impact.
