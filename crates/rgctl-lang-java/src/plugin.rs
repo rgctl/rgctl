@@ -65,9 +65,11 @@ pub(crate) struct ExtractCtx {
     /// Per-owner counters for instance initializer blocks (`Type.<initblock>N`).
     initblock_counters: RefCell<HashMap<String, usize>>,
     /// Per-enclosing-callable counters for lambda expressions (`Owner.$lambda$N`),
-    /// assigned in document order (pre-order DFS) so the symbol pass and the
-    /// relations pass (each re-parsing the source independently) agree on `N`.
+    /// assigned in document order on first visits and reused by later walks.
     lambda_counters: RefCell<HashMap<String, usize>>,
+    /// A lambda may be visited by both symbol and relation walks on this tree.
+    /// Node ids are transient lookup keys, never persisted graph identities.
+    lambda_indices: RefCell<HashMap<usize, usize>>,
 }
 
 impl ExtractCtx {
@@ -80,6 +82,7 @@ impl ExtractCtx {
             anon_names: Self::collect_anonymous_names(root),
             initblock_counters: RefCell::new(HashMap::new()),
             lambda_counters: RefCell::new(HashMap::new()),
+            lambda_indices: RefCell::new(HashMap::new()),
         }
     }
 
@@ -718,10 +721,9 @@ impl JavaPlugin {
 
     /// Stable pre-order index for a `lambda_expression`, scoped to its
     /// nearest enclosing callable (or enclosing type, for field/static
-    /// initializer lambdas). Called identically from the symbol pass and the
-    /// relations pass (each with a fresh `ExtractCtx`/counter) so both agree
-    /// on `N` for `Owner.$lambda$N`, since both walk the tree in the same
-    /// document order.
+    /// initializer lambdas). First encounters assign in document order; repeated
+    /// visits to the same immutable AST node reuse its index. This supports both
+    /// fresh contexts in the split APIs and one shared context in `extract_all`.
     fn lambda_index(
         &self,
         node: Node,
@@ -734,6 +736,9 @@ impl JavaPlugin {
                 self.find_containing_type_name(node, source, ctx)
                     .map(|o| ctx.qualify_type(&o))
             });
+        if let Some(index) = ctx.lambda_indices.borrow().get(&node.id()).copied() {
+            return Ok((owner, index));
+        }
         let key = format!(
             "{}\u{1f}{}",
             owner.as_deref().unwrap_or("<unknown>"),
@@ -748,6 +753,7 @@ impl JavaPlugin {
             *counter += 1;
             current
         };
+        ctx.lambda_indices.borrow_mut().insert(node.id(), idx);
         Ok((owner, idx))
     }
 
@@ -4094,6 +4100,83 @@ mod tests {
         assert_eq!(lambdas[1].name, "$lambda$0");
         assert_eq!(lambdas[0].metadata["identity_discriminator"], "(int)");
         assert_eq!(lambdas[1].metadata["identity_discriminator"], "(String)");
+    }
+
+    #[test]
+    fn combined_lambda_targets_match_symbols_and_split_extraction() {
+        let plugin = JavaPlugin::new().unwrap();
+        for source in [
+            "class Demo { int run(){ java.util.function.IntSupplier f=()->1; return f.getAsInt(); } }",
+            "class Demo { void run(){ Runnable a=()->{}; Runnable b=()->{}; a.run(); b.run(); } }",
+            "class Demo { Runnable run(int x){return ()->{};} Runnable run(String x){return ()->{};} }",
+            "class Demo { java.util.function.Supplier<Runnable> run(){return ()->()->{};} }",
+            "class Demo { Runnable field=()->{}; static Runnable global=()->{}; Demo(){Runnable x=()->{};} static {Runnable x=()->{};} {Runnable x=()->{};} }",
+        ] {
+            for text in [source.to_owned(), format!("\n// line shift\n{source}")] {
+                let path = Path::new("Demo.java");
+                let bytes = text.as_bytes();
+                let combined = plugin.extract_all(path, bytes).unwrap();
+                let split_symbols = plugin.extract_symbols(path, bytes).unwrap();
+                let split_relations = plugin
+                    .extract_relations(path, bytes, &split_symbols)
+                    .unwrap();
+                let keys = |symbols: &[Symbol]| {
+                    let mut keys: Vec<_> = symbols
+                        .iter()
+                        .filter(|s| s.metadata["is_lambda"] == true)
+                        .map(|s| {
+                            (
+                                s.qualified_name.clone(),
+                                s.metadata
+                                    .get("identity_discriminator")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_owned(),
+                            )
+                        })
+                        .collect();
+                    keys.sort();
+                    keys
+                };
+                assert_eq!(keys(&combined.symbols), keys(&split_symbols), "{text}");
+                for (symbols, relations) in [
+                    (&combined.symbols, &combined.relations),
+                    (&split_symbols, &split_relations),
+                ] {
+                    let mut targets = vec![];
+                    for relation in relations
+                        .iter()
+                        .filter(|r| r.metadata["is_lambda_call"] == true)
+                    {
+                        let identity = relation
+                            .metadata
+                            .get("to_identity_discriminator")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let matches = symbols
+                            .iter()
+                            .filter(|s| {
+                                s.metadata["is_lambda"] == true
+                                    && s.qualified_name.as_deref() == Some(relation.to.as_str())
+                                    && s.metadata
+                                        .get("identity_discriminator")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        == identity
+                            })
+                            .count();
+                        assert_eq!(
+                            matches, 1,
+                            "dangling lambda target {} in {text}",
+                            relation.to
+                        );
+                        targets.push((Some(relation.to.clone()), identity.to_owned()));
+                    }
+                    targets.sort();
+                    assert_eq!(targets, keys(symbols), "{text}");
+                }
+            }
+        }
     }
 
     #[test]
