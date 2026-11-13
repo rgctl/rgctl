@@ -10,7 +10,8 @@
 //!   (`Uuid`, `u64` offset, `u32` len, `u32` flags) so open is `O(1)` and a single
 //!   record is binary-search + zero-copy slice deserialize.
 //! - **v4**: same indexed layout, with versioned CFG semantics in records.
-//! - **v5** (current): same indexed layout, with structured function operand pools.
+//! - **v5**: same indexed layout, with structured function operand pools.
+//! - **v6** (current): typed formal entry definitions and seeded local scope.
 
 use crate::cfg::ControlFlowGraph;
 use crate::hash_maps::FxHashMap;
@@ -33,8 +34,8 @@ static NEXT_ARCHIVE_TMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Magic bytes for CFG/PDG archive files (`RBCP`).
 pub const ARCHIVE_MAGIC: [u8; 4] = *b"RBCP";
-/// Current archive format (v5 = indexed CFG/PDG records with operand pools).
-pub const ARCHIVE_VERSION: u32 = 5;
+/// Current archive format (v6 = typed formal entry definitions).
+pub const ARCHIVE_VERSION: u32 = 6;
 /// Legacy monolithic bincode payload.
 pub const ARCHIVE_VERSION_V1: u32 = 1;
 /// Legacy header-TOC format.

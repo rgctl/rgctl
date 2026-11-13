@@ -745,3 +745,53 @@ fn repeated_binding_requests_reuse_pools_and_keep_deterministic_keyword_edges() 
     assert_eq!(query.transfers, second.transfers);
     assert_eq!(query.diagnostics, second.diagnostics);
 }
+
+#[test]
+fn selected_binding_formal_id_joins_native_pdg_without_name_matching() {
+    let fixture = Fixture::new(
+        "javascript",
+        "function caller(first, second) { return consume(second, first); }",
+        "function consume(left, right) { const alias = right; return alias.execute(); }",
+    );
+    let mut query = fixture.icfg.call_bindings();
+    let binding = query.bind(fixture.target(0, ReceiverSupply::None)).unwrap();
+    let target = binding
+        .transfers
+        .slice(query.transfers())
+        .unwrap()
+        .iter()
+        .find(|edge| {
+            edge.kind == TransferKind::ActualToFormal && fixture.value_name(edge.from) == "first"
+        })
+        .unwrap()
+        .to;
+    let cfg = fixture.icfg.get_cfg(target.function).unwrap();
+    let ExpressionKind::Formal(id) = cfg.operands.expressions[target.expression.0 as usize].kind
+    else {
+        panic!("binding did not end at a formal");
+    };
+    assert_eq!(id, FormalId(1));
+    let pdg =
+        ProgramDependenceGraph::build(cfg, fixture.sources[&fixture.callee].as_bytes()).unwrap();
+    let entry = pdg
+        .formal_definitions()
+        .find(|(formal, _)| *formal == id)
+        .unwrap()
+        .1;
+    let alias = pdg
+        .nodes
+        .values()
+        .find(|n| n.statement.defines("alias"))
+        .unwrap();
+    let returned = pdg
+        .nodes
+        .values()
+        .find(|n| n.statement.kind == crate::cfg::StatementKind::Return)
+        .unwrap();
+    assert!(pdg.data_deps.iter().any(|d| d.from == entry.id
+        && d.to == alias.id
+        && d.dep_type == crate::pdg::DataDepType::Flow));
+    assert!(pdg.data_deps.iter().any(|d| d.from == alias.id
+        && d.to == returned.id
+        && d.dep_type == crate::pdg::DataDepType::Flow));
+}

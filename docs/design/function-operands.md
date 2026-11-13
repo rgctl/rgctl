@@ -38,9 +38,11 @@ let result = call.result;
 ```
 
 These are syntax-role facts, not an assertion that every captured call executes.
-They do not yet add operand-specific local PDG edges, actual/formal transfers,
-return/result transfers, inferred Calls edges, or interprocedural taint. Those
-consumers must use shared native binding/dataflow analysis, not match names or
+The shared [invocation binder](call-bindings.md) consumes them for actual/formal,
+receiver and return transfers. Typed [formal entry definitions](formal-entry-definitions.md)
+bridge incoming formal IDs to local statement PDG nodes. Precise body-expression
+links, inferred Calls edges and interprocedural taint remain subsequent work.
+Consumers must use shared native binding/dataflow analysis, not match names or
 reparse statement text independently.
 
 ## Coverage
@@ -55,8 +57,8 @@ effects, callable capture and framework semantics remain separate work.
 
 ## Persistence and cache reuse
 
-Operand pools persist with the CFG in **RBCP v5**, retaining the existing indexed
-footer layout. CFG semantics revision is **2**; earlier records and index keys
+Operand pools persist with the CFG in **RBCP v6**, retaining the existing indexed
+footer layout. CFG semantics revision is **3**; earlier records and index keys
 must be rebuilt. Deserialization validates operand indices and ranges. Native
 tests exercise fresh trees, bincode round trips, mmap archive reads and malformed
 references.

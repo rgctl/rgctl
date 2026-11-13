@@ -16,6 +16,10 @@ use tree_sitter::{Node, Tree};
 #[path = "cfg_predicate_tests.rs"]
 mod predicate_tests;
 
+#[cfg(test)]
+#[path = "formal_entry_tests.rs"]
+mod formal_entry_tests;
+
 /// Maximum AST recursion depth for CFG expression walks (matches C++ extraction cap).
 const AST_WALK_MAX_DEPTH: usize = 2048;
 
@@ -179,6 +183,7 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "local_declaration_statement",
     "local_function_statement",
     "local_variable_declaration",
+    "lexical_declaration",
     "lock_statement",
     "logical_and_expression",
     "logical_or_expression",
@@ -873,11 +878,12 @@ fn build_cfg_from_function_node(
         source,
         function_name,
     );
-    let mut builder = CfgBuilder::new(&mut cfg, language);
-    builder.build_function(func_node, source)?;
     if let Some(body) = function_body_node(func_node, language) {
         cfg.operands = crate::operands::lower_function_operands(language, func_node, body, source)?;
     }
+    let mut builder = CfgBuilder::new(&mut cfg, language);
+    builder.seed_formal_definitions(func_node.start_position().row + 1);
+    builder.build_function(func_node, source)?;
     Ok(cfg)
 }
 
@@ -1039,6 +1045,26 @@ impl<'a> CfgBuilder<'a> {
             })
             .collect();
         (defined, used)
+    }
+
+    /// Formal values exist on entry, before any body definition can shadow them.
+    /// The typed ID bridges the operand/binding API to ordinary CFG/PDG analysis.
+    fn seed_formal_definitions(&mut self, line: usize) {
+        for index in 0..self.cfg.operands.formals.len() {
+            let formal = &self.cfg.operands.formals[index];
+            let Some(name) = self.cfg.operands.name(formal.name) else {
+                continue;
+            };
+            let name = name.to_owned();
+            let scoped = self.bind_local(&name);
+            self.add_statement_to_current(Statement {
+                kind: StatementKind::Parameter(crate::operands::FormalId(index as u32)),
+                line,
+                text: name,
+                defined_vars: smallvec::smallvec![DefVar::Local(scoped)],
+                used_vars: SmallVec::new(),
+            });
+        }
     }
 
     fn build_function(&mut self, func_node: Node, source: &[u8]) -> Result<()> {
@@ -1409,6 +1435,7 @@ impl<'a> CfgBuilder<'a> {
             | "var_declaration"
             | "const_declaration"
             | "variable_declaration"
+            | "lexical_declaration"
             | "local_declaration_statement"
             | "local_variable_declaration"
             | "declaration"
@@ -5797,8 +5824,8 @@ fn process(x: i32, y: i32, mut z: i32) -> i32 {
         let cfg = build_cfg_for_function("rust", code, "process").unwrap();
         assert_eq!(
             cfg.blocks.len(),
-            6,
-            "expected 6 blocks after empty contraction, got {}:\n{}",
+            7,
+            "expected formal entry plus 6 body blocks after empty contraction, got {}:\n{}",
             cfg.blocks.len(),
             cfg.to_dot()
         );
@@ -5966,7 +5993,11 @@ fn loop_example(n: i32) -> i32 {
     fn rust_block_ids(cfg: &ControlFlowGraph, needle: &str) -> Vec<BlockId> {
         cfg.blocks
             .values()
-            .filter(|b| b.statements.iter().any(|s| s.text.contains(needle)))
+            .filter(|b| {
+                b.statements.iter().any(|s| {
+                    !matches!(s.kind, StatementKind::Parameter(_)) && s.text.contains(needle)
+                })
+            })
             .map(|b| b.id)
             .collect()
     }

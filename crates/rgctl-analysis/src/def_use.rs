@@ -158,6 +158,8 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "subscript_expression",
     "super_formal_parameter",
     "test_pattern",
+    "this",
+    "self",
     "top_level_variable_declaration",
     "tuple_pattern",
     "tuple_struct_pattern",
@@ -934,6 +936,14 @@ fn collect_def_use_node<'a>(
                 if let Some(def) = field_access_def(node, source) {
                     used.insert(def.name());
                 }
+            }
+        }
+
+        // Language-defined receiver tokens are values, even though Java/ECMA
+        // `this` and Rust `self` are not ordinary identifier nodes.
+        "this" | "self" if !is_def_target => {
+            if let Ok(name) = node.utf8_text(source) {
+                used.insert(name.to_string());
             }
         }
 

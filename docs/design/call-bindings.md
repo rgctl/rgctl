@@ -32,8 +32,10 @@ possible target before its derived Calls edge has been added.
 
 Binding does not prove execution, establish target selection, validate the whole
 program or certify an upgrade. Existing statement slicing is not silently
-replaced by this API. Local use/definition edges, matched-context propagation,
-target discovery and taint consumption remain subsequent integration work.
+replaced by this API. Typed [formal entry definitions](formal-entry-definitions.md) now connect formal
+IDs to local statement-level PDG nodes. Precise body-expression/use links,
+matched-context propagation, target discovery and taint consumption remain
+subsequent integration work.
 
 ## Transfer semantics
 
