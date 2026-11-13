@@ -29,10 +29,12 @@ pub use communities::{COMMUNITIES_FILE, COMMUNITIES_SCHEMA_VERSION, CommunitiesP
 pub use dataflow_export::{DATAFLOW_INDEX_FILE, DataflowExportSummary};
 pub use export_context::DashboardExportContext;
 pub use manifest::{
-    AnalysisSection, DashboardManifest, MANIFEST_SCHEMA_VERSION, MetricsSection, SemanticSection,
-    ViewSection,
+    AnalysisSection, DashboardCapabilities, DashboardManifest, MANIFEST_SCHEMA_VERSION,
+    MetricsSection, SemanticSection, ViewSection,
 };
-pub use metagraph::{COMMUNITY_ONLY_THRESHOLD, METAGRAPH_FILE, MetagraphExport, MetagraphPayload};
+pub use metagraph::{
+    COMMUNITY_ONLY_THRESHOLD, METAGRAPH_FILE, MetagraphExport, MetagraphPayload, PackageAggregation,
+};
 pub use migration_export::{
     MIGRATION_GRAPH_FILE, MIGRATION_PLAN_FILE, MigrationExportSummary,
     export_default_migration_plan, export_migration_graph, write_migration_plan,
@@ -42,30 +44,34 @@ pub use mutations_export::{MUTATIONS_INDEX_FILE, MutationsExportSummary};
 pub use slice_export::{SLICE_INDEX_FILE, SliceExportSummary};
 pub use taint_export::{TAINT_INDEX_FILE, TaintExportSummary};
 
-use blast_export::{export_blast_bundle, load_columnar_uuid_indices};
-use bundle::{extract_static_assets, inject_manifest_bootstrap};
+use blast_export::{export_blast_bundle_with_graph, load_columnar_uuid_indices_from_graph};
+use bundle::{extract_static_assets, inject_manifest_bootstrap, selected_version};
 use dataflow_export::export_dataflow_index;
 use function_metrics_export::export_function_metrics;
 use manifest::DashboardManifest as Manifest;
 use metagraph::write_metagraph;
-use mutations_export::export_mutations_index;
+use mutations_export::export_mutations_index_with_analysis;
 use profile::profile_stage;
 use rgctl_analysis::storage::AnalysisStorage;
-use rgctl_graph::backend::MemoryBackend;
+use rgctl_graph::graph_source::GraphSource;
 use rgctl_graph::schema::{EdgeType, NodeType};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
-use taint_export::export_taint_bundle;
+use taint_export::export_taint_bundle_with_index;
+
+/// Bump when fingerprint inputs / hashing scheme changes (forces warm re-export).
+const EXPORT_FINGERPRINT_SCHEMA: u32 = 2;
 
 /// Write dashboard bundle: static UI, manifest, graph payload copy.
 pub fn export_dashboard_bundle(
-    backend: &MemoryBackend,
+    graph: GraphSource<'_>,
     repo_root: &Path,
     snapshot_path: &Path,
 ) -> Result<(), String> {
     export_dashboard_bundle_with_context(
-        backend,
+        graph,
         repo_root,
         snapshot_path,
         DashboardExportContext::default(),
@@ -74,22 +80,23 @@ pub fn export_dashboard_bundle(
 
 /// Write dashboard bundle using in-memory analysis from discover (avoids reloading results).
 pub fn export_dashboard_bundle_with_context(
-    backend: &MemoryBackend,
+    graph: GraphSource<'_>,
     repo_root: &Path,
     snapshot_path: &Path,
     ctx: DashboardExportContext<'_>,
 ) -> Result<(), String> {
-    export_dashboard_bundle_inner(backend, repo_root, snapshot_path, false, ctx)
+    let fingerprint = compute_export_fingerprint(graph, repo_root);
+    export_dashboard_bundle_inner(graph, repo_root, snapshot_path, false, ctx, fingerprint)
 }
 
 /// Export dashboard only when semantic content fingerprint is unchanged.
 pub fn export_dashboard_bundle_if_changed(
-    backend: &MemoryBackend,
+    graph: GraphSource<'_>,
     repo_root: &Path,
     snapshot_path: &Path,
 ) -> Result<bool, String> {
     export_dashboard_bundle_if_changed_with_context(
-        backend,
+        graph,
         repo_root,
         snapshot_path,
         DashboardExportContext::default(),
@@ -98,7 +105,7 @@ pub fn export_dashboard_bundle_if_changed(
 
 /// Export dashboard when fingerprint changed, with optional in-memory analysis.
 pub fn export_dashboard_bundle_if_changed_with_context(
-    backend: &MemoryBackend,
+    graph: GraphSource<'_>,
     repo_root: &Path,
     snapshot_path: &Path,
     ctx: DashboardExportContext<'_>,
@@ -110,7 +117,7 @@ pub fn export_dashboard_bundle_if_changed_with_context(
 
     let out_dir = bundle::default_dashboard_path(repo_root);
     let manifest_path = out_dir.join("manifest.json");
-    let fingerprint = compute_export_fingerprint(backend, repo_root);
+    let fingerprint = compute_export_fingerprint(graph, repo_root);
     let version = bundle::selected_version_tag();
     if manifest_path.is_file() {
         if let Ok(bytes) = fs::read_to_string(&manifest_path) {
@@ -130,19 +137,20 @@ pub fn export_dashboard_bundle_if_changed_with_context(
             }
         }
     }
-    export_dashboard_bundle_inner(backend, repo_root, snapshot_path, true, ctx)?;
+    export_dashboard_bundle_inner(graph, repo_root, snapshot_path, true, ctx, fingerprint)?;
     Ok(true)
 }
 
 fn export_dashboard_bundle_inner(
-    backend: &MemoryBackend,
+    graph: GraphSource<'_>,
     repo_root: &Path,
     snapshot_path: &Path,
     replace_out_dir: bool,
     ctx: DashboardExportContext<'_>,
+    export_fingerprint: String,
 ) -> Result<(), String> {
     let out_dir = bundle::default_dashboard_path(repo_root);
-    if replace_out_dir && out_dir.exists() {
+    let trash_handle = if replace_out_dir && out_dir.exists() {
         profile_stage("replace_out_dir", || {
             let trash = out_dir.with_file_name(format!(
                 "{}.trash.{}",
@@ -156,10 +164,14 @@ fn export_dashboard_bundle_inner(
                 let _ = fs::remove_dir_all(&trash);
             }
             fs::rename(&out_dir, &trash).map_err(|e| e.to_string())?;
-            let _ = fs::remove_dir_all(&trash);
-            Ok::<(), String>(())
-        })?;
-    }
+            // Unlink previous bundle off the critical path; join before return.
+            Ok::<_, String>(Some(std::thread::spawn(move || {
+                let _ = fs::remove_dir_all(&trash);
+            })))
+        })?
+    } else {
+        None
+    };
     fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
 
     profile_stage("extract_static_assets", || {
@@ -168,29 +180,25 @@ fn export_dashboard_bundle_inner(
 
     let (payload_stats_res, uuid_to_index_res) = profile_stage("payload_and_uuid", || {
         rayon::join(
-            || payload_stats(snapshot_path, backend),
-            || {
-                if snapshot_path.is_file() {
-                    load_columnar_uuid_indices(snapshot_path)
-                } else {
-                    Ok(HashMap::new())
-                }
-            },
+            || payload_stats(snapshot_path, graph),
+            || load_columnar_uuid_indices_from_graph(graph, snapshot_path),
         )
     });
     let (node_count, edge_count, digest) = payload_stats_res?;
     let uuid_to_index = uuid_to_index_res?;
 
-    let (export_fingerprint, metrics) = profile_stage("fingerprint_and_metrics", || {
-        rayon::join(
-            || compute_export_fingerprint(backend, repo_root),
-            || collect_metrics(backend),
-        )
-    });
+    let metrics = profile_stage("collect_metrics", || collect_metrics(graph, ctx.analysis));
 
-    let export = profile_stage("write_metagraph", || {
+    // Load analysis_index.bin once for cfg/slice, mutations, and taint exporters.
+    let analysis_index = profile_stage("load_analysis_index", || {
+        let storage = AnalysisStorage::new(repo_root.join(".rgctl/analysis"));
+        storage.load_analysis_index().ok()
+    });
+    let analysis_index_ref = analysis_index.as_ref();
+
+    let (export, package_agg) = profile_stage("write_metagraph", || {
         write_metagraph(
-            backend,
+            graph,
             snapshot_path,
             &out_dir,
             node_count,
@@ -199,14 +207,19 @@ fn export_dashboard_bundle_inner(
         )
     })?;
     let streamed = profile_stage("export_cfg_slice", || {
-        analysis_stream_export::export_cfg_slice_from_storage(backend, repo_root, &out_dir)
+        analysis_stream_export::export_cfg_slice_from_storage_with_index(
+            graph,
+            repo_root,
+            &out_dir,
+            analysis_index_ref,
+        )
     })?;
     let cfg_summary = streamed.cfg;
     let slice_summary = streamed.slice;
 
     let sidecars = profile_stage("export_sidecars", || {
         export_sidecars_parallel(SidecarJob {
-            backend,
+            graph,
             repo_root,
             snapshot_path,
             out_dir: &out_dir,
@@ -214,6 +227,8 @@ fn export_dashboard_bundle_inner(
             uuid_to_index: &uuid_to_index,
             node_count,
             dataflow_functions: streamed.dataflow,
+            package_agg: &package_agg,
+            analysis_index: analysis_index_ref,
         })
     })?;
     if let Some(ref graph) = sidecars.migration_graph {
@@ -260,6 +275,10 @@ fn export_dashboard_bundle_inner(
         copy_graph_payload(snapshot_path, &out_dir)
     })?;
 
+    if let Some(handle) = trash_handle {
+        let _ = handle.join();
+    }
+
     Ok(())
 }
 
@@ -276,7 +295,7 @@ fn copy_graph_payload(snapshot_path: &Path, out_dir: &Path) -> Result<(), String
 }
 
 struct SidecarJob<'a> {
-    backend: &'a MemoryBackend,
+    graph: GraphSource<'a>,
     repo_root: &'a Path,
     snapshot_path: &'a Path,
     out_dir: &'a Path,
@@ -284,6 +303,8 @@ struct SidecarJob<'a> {
     uuid_to_index: &'a HashMap<uuid::Uuid, u32>,
     node_count: u64,
     dataflow_functions: Vec<dataflow_export::DataflowFunctionEntry>,
+    package_agg: &'a PackageAggregation,
+    analysis_index: Option<&'a analysis_stream_export::AnalysisIndexMap>,
 }
 
 struct SidecarExport {
@@ -298,7 +319,7 @@ struct SidecarExport {
 /// Independent dashboard artifacts after CFG/slice. Rayon (not Tokio): CPU + many small files.
 fn export_sidecars_parallel(job: SidecarJob<'_>) -> Result<SidecarExport, String> {
     let SidecarJob {
-        backend,
+        graph,
         repo_root,
         snapshot_path,
         out_dir,
@@ -306,6 +327,8 @@ fn export_sidecars_parallel(job: SidecarJob<'_>) -> Result<SidecarExport, String
         uuid_to_index,
         node_count,
         dataflow_functions,
+        package_agg,
+        analysis_index,
     } = job;
     let dataflow_rows = dataflow_functions;
     let ((dataflow, mutations), (taint, (blast, (metrics, migration)))) = rayon::join(
@@ -318,19 +341,24 @@ fn export_sidecars_parallel(job: SidecarJob<'_>) -> Result<SidecarExport, String
                 },
                 || {
                     profile_stage("export_mutations", || {
-                        export_mutations_index(repo_root, out_dir)
+                        export_mutations_index_with_analysis(repo_root, out_dir, analysis_index)
                     })
                 },
             )
         },
         || {
             rayon::join(
-                || profile_stage("export_taint", || export_taint_bundle(repo_root, out_dir)),
+                || {
+                    profile_stage("export_taint", || {
+                        export_taint_bundle_with_index(repo_root, out_dir, analysis_index)
+                    })
+                },
                 || {
                     rayon::join(
                         || {
                             profile_stage("export_blast", || {
-                                export_blast_bundle(
+                                export_blast_bundle_with_graph(
+                                    Some(graph),
                                     repo_root,
                                     snapshot_path,
                                     out_dir,
@@ -342,20 +370,28 @@ fn export_sidecars_parallel(job: SidecarJob<'_>) -> Result<SidecarExport, String
                         || {
                             rayon::join(
                                 || {
-                                    profile_stage("export_function_metrics", || {
-                                        export_function_metrics(
-                                            snapshot_path,
-                                            out_dir,
-                                            node_count,
-                                            ctx,
-                                            uuid_to_index,
-                                        )
-                                    })
+                                    if selected_version() == BundleVersion::V1 {
+                                        profile_stage("export_function_metrics", || {
+                                            export_function_metrics(
+                                                snapshot_path,
+                                                out_dir,
+                                                node_count,
+                                                ctx,
+                                                uuid_to_index,
+                                            )
+                                        })
+                                    } else {
+                                        Ok(())
+                                    }
                                 },
                                 || {
                                     profile_stage("export_migration", || {
-                                        migration_export::export_migration_graph(
-                                            backend, repo_root, out_dir, ctx,
+                                        migration_export::export_migration_graph_with_aggregation(
+                                            graph,
+                                            repo_root,
+                                            out_dir,
+                                            ctx,
+                                            Some(package_agg),
                                         )
                                     })
                                 },
@@ -385,14 +421,22 @@ fn export_sidecars_parallel(job: SidecarJob<'_>) -> Result<SidecarExport, String
 
 fn payload_stats(
     snapshot_path: &Path,
-    backend: &MemoryBackend,
+    graph: GraphSource<'_>,
 ) -> Result<(u64, u64, String), String> {
+    if let Some(digest) = graph.snapshot_content_digest() {
+        return Ok((
+            graph.node_count() as u64,
+            graph.edge_count() as u64,
+            digest.to_string(),
+        ));
+    }
     if snapshot_path.is_file() {
-        let bytes = fs::read(snapshot_path).map_err(|e| e.to_string())?;
-        if bytes.len() >= 92 && &bytes[0..4] == b"RBGR" {
-            let node_count = u64::from_le_bytes(bytes[12..20].try_into().unwrap());
-            let edge_count = u64::from_le_bytes(bytes[20..28].try_into().unwrap());
-            let digest = std::str::from_utf8(&bytes[28..92])
+        let mut f = fs::File::open(snapshot_path).map_err(|e| e.to_string())?;
+        let mut header = [0u8; 92];
+        if f.read_exact(&mut header).is_ok() && &header[0..4] == b"RBGR" {
+            let node_count = u64::from_le_bytes(header[12..20].try_into().unwrap());
+            let edge_count = u64::from_le_bytes(header[20..28].try_into().unwrap());
+            let digest = std::str::from_utf8(&header[28..92])
                 .unwrap_or("")
                 .trim_end_matches('\0')
                 .to_string();
@@ -400,90 +444,103 @@ fn payload_stats(
         }
     }
     Ok((
-        backend.node_count() as u64,
-        backend.edge_count() as u64,
+        graph.node_count() as u64,
+        graph.edge_count() as u64,
         String::new(),
     ))
 }
 
-/// Hash graph topology + function body hashes + analysis index for incremental export skip.
-fn compute_export_fingerprint(backend: &MemoryBackend, repo_root: &Path) -> String {
+/// O(1) export fingerprint: schema + bundle version + snapshot `content_digest` + artifact
+/// file metadata (`len`, `modified`) — never clones/sorts Function nodes or deserializes
+/// `analysis_index.bin`.
+fn compute_export_fingerprint(graph: GraphSource<'_>, repo_root: &Path) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(&(backend.node_count() as u64).to_le_bytes());
-    hasher.update(&(backend.edge_count() as u64).to_le_bytes());
+    hasher.update(&EXPORT_FINGERPRINT_SCHEMA.to_le_bytes());
+    hasher.update(bundle::selected_version_tag().as_bytes());
+    hasher.update(&(graph.node_count() as u64).to_le_bytes());
+    hasher.update(&(graph.edge_count() as u64).to_le_bytes());
 
-    if let Ok(functions) = backend.collect_nodes_by_type(NodeType::Function) {
-        let mut refs: Vec<(&str, &str, &str)> = functions
-            .iter()
-            .filter_map(|f| {
-                Some((
-                    f.file_path.as_deref()?,
-                    f.name.as_str(),
-                    f.code_hash.as_deref()?,
-                ))
-            })
-            .collect();
-        refs.sort_by(|a, b| {
-            a.0.cmp(b.0)
-                .then_with(|| a.1.cmp(b.1))
-                .then_with(|| a.2.cmp(b.2))
-        });
-        for (path, name, hash) in refs {
-            hasher.update(path.as_bytes());
-            hasher.update(name.as_bytes());
-            hasher.update(hash.as_bytes());
-        }
-    }
-
-    let storage = AnalysisStorage::new(repo_root.join(".rgctl/analysis"));
-    if let Ok(index) = storage.load_analysis_index() {
-        hasher.update(&(index.len() as u64).to_le_bytes());
-        let mut keys: Vec<_> = index.keys().collect();
-        keys.sort();
-        for key in keys {
-            let entry = &index[key];
-            hasher.update(key.as_bytes());
-            hasher.update(entry.code_hash.as_bytes());
-            hasher.update(&(entry.flow_count as u64).to_le_bytes());
-            hasher.update(&(entry.vulnerable_count as u64).to_le_bytes());
-        }
-    }
-
-    let semantic_path = rgctl_analysis::SemanticIndex::default_path(repo_root);
-    if semantic_path.is_file() {
-        hasher.update(b"semantic_index_v1");
-        if let Ok(meta) = std::fs::metadata(&semantic_path) {
-            hasher.update(&meta.len().to_le_bytes());
-            if let Ok(modified) = meta.modified() {
-                if let Ok(secs) = modified.duration_since(std::time::UNIX_EPOCH) {
-                    hasher.update(&secs.as_secs().to_le_bytes());
-                }
+    if let Some(digest) = graph.snapshot_content_digest() {
+        hasher.update(b"snapshot_digest_v1");
+        hasher.update(digest.as_bytes());
+    } else if let Some(bytes) = graph.snapshot_content_digest_bytes() {
+        hasher.update(b"snapshot_digest_bytes_v1");
+        hasher.update(&bytes);
+    } else if let Some(backend) = graph.as_memory() {
+        // In-memory test graphs without a snapshot file: sample topology only (no Function clone/sort).
+        hasher.update(b"memory_fallback_v2");
+        hasher.update(&(backend.node_count() as u64).to_le_bytes());
+        hasher.update(&(backend.edge_count() as u64).to_le_bytes());
+        let mut sample = 0u64;
+        let _ = backend.for_each_node(|n| {
+            if sample < 64 {
+                hasher.update(n.id.as_bytes());
+                hasher.update(n.name.as_bytes());
+                sample += 1;
             }
-        }
+        });
     }
+
+    hash_file_meta(
+        &mut hasher,
+        b"analysis_index_v1",
+        &repo_root.join(".rgctl/analysis/analysis_index.bin"),
+    );
+    hash_file_meta(
+        &mut hasher,
+        b"semantic_index_v1",
+        &rgctl_analysis::SemanticIndex::default_path(repo_root),
+    );
+    hash_file_meta(
+        &mut hasher,
+        b"field_write_v1",
+        &rgctl_analysis::FieldWriteIndex::default_path(repo_root),
+    );
 
     hasher.finalize().to_hex().to_string()
 }
 
-fn collect_metrics(backend: &MemoryBackend) -> MetricsSection {
+fn hash_file_meta(hasher: &mut blake3::Hasher, tag: &[u8], path: &Path) {
+    hasher.update(tag);
+    if !path.is_file() {
+        hasher.update(&[0u8]);
+        return;
+    }
+    hasher.update(&[1u8]);
+    if let Ok(meta) = fs::metadata(path) {
+        hasher.update(&meta.len().to_le_bytes());
+        if let Ok(modified) = meta.modified() {
+            if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                hasher.update(&dur.as_secs().to_le_bytes());
+                hasher.update(&dur.subsec_nanos().to_le_bytes());
+            }
+        }
+    }
+}
+
+fn collect_metrics(
+    graph: GraphSource<'_>,
+    analysis: Option<&rgctl_analysis::AnalysisResults>,
+) -> MetricsSection {
     let mut function_count = 0usize;
     let mut class_count = 0usize;
     let mut complexity_sum = 0.0f64;
     let mut high_blast_radius_count = 0usize;
     let mut calls_count = 0usize;
+    let blast_scores = analysis.and_then(|a| a.blast_radius.as_ref());
 
-    let _ = backend.for_each_node(|n| {
+    let _ = graph.for_each_hot_node(|n| {
         if n.node_type == NodeType::Function {
             function_count += 1;
-            if let Some(v) = n.properties.get("cyclomatic") {
-                if let Ok(c) = v.parse::<f64>() {
-                    complexity_sum += c;
-                }
+            if let Some(c) = n.cyclomatic {
+                complexity_sum += c;
             }
-            if let Some(v) = n.properties.get("blast_radius_score") {
-                if let Ok(s) = v.parse::<f64>() {
-                    if s > 50.0 {
-                        high_blast_radius_count += 1;
+            if let (Some(results), Some(blast)) = (analysis, blast_scores) {
+                if let Some(compact_id) = results.get_compact_id(n.id) {
+                    if let Some(&score) = blast.scores.get(compact_id as usize) {
+                        if score > 50.0 {
+                            high_blast_radius_count += 1;
+                        }
                     }
                 }
             }
@@ -492,8 +549,25 @@ fn collect_metrics(backend: &MemoryBackend) -> MetricsSection {
         }
     });
 
-    let _ = backend.for_each_edge(|e| {
-        if e.edge_type == EdgeType::Calls {
+    // Fallback when AnalysisResults was not supplied: check cold properties on MemoryBackend.
+    if analysis.is_none() {
+        if let Some(backend) = graph.as_memory() {
+            let _ = backend.for_each_node(|n| {
+                if n.node_type == NodeType::Function {
+                    if let Some(v) = n.properties.get("blast_radius_score") {
+                        if let Ok(s) = v.parse::<f64>() {
+                            if s > 50.0 {
+                                high_blast_radius_count += 1;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    let _ = graph.for_each_edge_type(|edge_type| {
+        if edge_type == EdgeType::Calls {
             calls_count += 1;
         }
     });
@@ -510,19 +584,145 @@ fn collect_metrics(backend: &MemoryBackend) -> MetricsSection {
 fn semantic_section(repo_root: &Path) -> Option<manifest::SemanticSection> {
     use rgctl_analysis::SemanticIndex;
 
+    // Do **not** `SemanticIndex::load` here: on metasfresh the index is ~50 MiB and
+    // full bincode deserialize added ~2.4 s to save_dashboard. Manifest only needs
+    // presence + cheap file metadata; detailed counts stay optional until a sidecar
+    // meta format exists.
     let path = SemanticIndex::default_path(repo_root);
     if !path.is_file() {
         return None;
     }
-    let index = SemanticIndex::load(&path).ok()?;
-    if index.is_empty() {
+    let meta = std::fs::metadata(&path).ok()?;
+    if meta.len() == 0 {
         return None;
     }
     Some(manifest::SemanticSection {
         available: true,
-        functions_indexed: index.len(),
-        model_id: index.model_id,
-        dimensions: index.dimensions,
-        graph_digest: index.graph_digest,
+        functions_indexed: 0,
+        model_id: "semantic_index.bin".into(),
+        dimensions: 0,
+        graph_digest: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rgctl_graph::backend::MemoryBackend;
+    use tempfile::TempDir;
+
+    #[test]
+    fn v2_skips_function_metrics_file_when_sidecars_run() {
+        set_bundle_override(Some(BundleVersion::V2));
+        assert_eq!(selected_version(), BundleVersion::V2);
+        set_bundle_override(Some(BundleVersion::V1));
+        assert_eq!(selected_version(), BundleVersion::V1);
+        set_bundle_override(None);
+    }
+
+    /// Light mmap-backed export smoke when a local corpus snapshot is present.
+    #[test]
+    fn optional_mmap_backed_export_smoke() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../example/discourse");
+        let snapshot_path = root.join(".rgctl/graph.snapshot.bin");
+        if !snapshot_path.is_file() {
+            return;
+        }
+        let Ok(snapshot) = rgctl_graph::snapshot::MmappedGraphSnapshot::open(&snapshot_path) else {
+            return;
+        };
+        let tmp = TempDir::new().unwrap();
+        let fake_repo = tmp.path().join("repo");
+        let rgctl = fake_repo.join(".rgctl");
+        fs::create_dir_all(&rgctl).unwrap();
+        let fake_snap = rgctl.join("graph.snapshot.bin");
+        let _ = export_util::link_or_copy(&snapshot_path, &fake_snap);
+        if !fake_snap.is_file() {
+            return;
+        }
+        set_bundle_override(Some(BundleVersion::V2));
+        let result = export_dashboard_bundle(GraphSource::mmap(&snapshot), &fake_repo, &fake_snap);
+        set_bundle_override(None);
+        let Ok(()) = result else {
+            return;
+        };
+        let dash = bundle::default_dashboard_path(&fake_repo);
+        assert!(dash.join("manifest.json").is_file());
+        assert!(
+            !dash
+                .join(function_metrics_export::FUNCTION_METRICS_FILE)
+                .exists()
+        );
+        assert!(!dash.join(blast_export::BLAST_SNAPSHOT_BUNDLE_NAME).exists());
+        assert!(dash.join("metagraph.json").is_file());
+    }
+
+    #[test]
+    fn memory_graph_export_builds_without_snapshot_fails_cleanly() {
+        let tmp = TempDir::new().unwrap();
+        let backend = MemoryBackend::new();
+        let err = export_dashboard_bundle(
+            GraphSource::memory(&backend),
+            tmp.path(),
+            &tmp.path().join("missing.bin"),
+        )
+        .unwrap_err();
+        assert!(err.contains("graph snapshot not found"));
+    }
+
+    #[test]
+    fn payload_stats_and_collect_metrics_work_on_mmap_with_analysis() {
+        use rgctl_analysis::{AnalysisResults, BlastRadiusTable};
+        use rgctl_graph::backend::GraphBackend;
+        use rgctl_graph::columnar_snapshot::write_columnar_from_backend;
+        use rgctl_graph::schema::{Edge, Node};
+        use rgctl_graph::snapshot::MmappedGraphSnapshot;
+
+        let mut backend = MemoryBackend::new();
+        let fn_high = Node::new(NodeType::Function, "hot_fn");
+        let fn_low = Node::new(NodeType::Function, "cold_fn");
+        let cls = Node::new(NodeType::Class, "Service");
+        let id_high = fn_high.id;
+        let id_low = fn_low.id;
+        let id_cls = cls.id;
+        backend.insert_node(fn_high).unwrap();
+        backend.insert_node(fn_low).unwrap();
+        backend.insert_node(cls).unwrap();
+        backend
+            .insert_edge(Edge::new(id_high, id_low, EdgeType::Calls))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(id_cls, id_high, EdgeType::Contains))
+            .unwrap();
+
+        let tmp = TempDir::new().unwrap();
+        let snap_path = tmp.path().join("graph.snapshot.bin");
+        let expected_digest = write_columnar_from_backend(&backend, &snap_path).unwrap();
+        let snap = MmappedGraphSnapshot::open(&snap_path).unwrap();
+        let src = GraphSource::mmap(&snap);
+
+        let (nodes, edges, digest) =
+            payload_stats(&tmp.path().join("nonexistent.bin"), src).unwrap();
+        assert_eq!(nodes, 3);
+        assert_eq!(edges, 2);
+        assert_eq!(digest, expected_digest);
+
+        let (nodes_f, edges_f, digest_f) =
+            payload_stats(&snap_path, GraphSource::memory(&backend)).unwrap();
+        assert_eq!(nodes_f, 3);
+        assert_eq!(edges_f, 2);
+        assert_eq!(digest_f, expected_digest);
+
+        let mut results = AnalysisResults::new(vec![id_high, id_low, id_cls]);
+        let mut blast = BlastRadiusTable::with_capacity(3);
+        blast.scores[0] = 85.0;
+        blast.scores[1] = 12.0;
+        results.blast_radius = Some(blast);
+
+        let metrics = collect_metrics(src, Some(&results));
+        assert_eq!(metrics.function_count, 2);
+        assert_eq!(metrics.class_count, 1);
+        assert_eq!(metrics.calls_count, 1);
+        assert_eq!(metrics.high_blast_radius_count, 1);
+    }
 }

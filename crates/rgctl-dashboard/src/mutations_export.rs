@@ -3,7 +3,6 @@
 use rgctl_analysis::{FieldWriteIndex, FieldWriteKind};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::Path;
 
 pub const MUTATIONS_INDEX_FILE: &str = "mutations_index.json";
@@ -49,9 +48,20 @@ pub struct MutationsExportSummary {
     pub type_count: usize,
 }
 
+#[allow(dead_code)] // Public convenience wrapper; production path uses `_with_analysis`.
 pub fn export_mutations_index(
     repo_root: &Path,
     out_dir: &Path,
+) -> Result<MutationsExportSummary, String> {
+    export_mutations_index_with_analysis(repo_root, out_dir, None)
+}
+
+/// Same as [`export_mutations_index`]; `analysis_index` is accepted for the shared single-load
+/// export path (field-write index is still loaded from disk — mutations do not read analysis_index).
+pub fn export_mutations_index_with_analysis(
+    repo_root: &Path,
+    out_dir: &Path,
+    _analysis_index: Option<&crate::analysis_stream_export::AnalysisIndexMap>,
 ) -> Result<MutationsExportSummary, String> {
     let Some(index) = FieldWriteIndex::open_if_exists(repo_root).map_err(|e| e.to_string())? else {
         let empty = MutationsIndexPayload {
@@ -140,14 +150,14 @@ fn kind_label(kind: FieldWriteKind) -> &'static str {
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    fs::write(path, json).map_err(|e| e.to_string())
+    crate::export_util::write_json_compact(path, value)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rgctl_analysis::{FieldWrite, FieldWriteIndex, FieldWriteKind};
+    use std::fs;
     use tempfile::tempdir;
     use uuid::Uuid;
 

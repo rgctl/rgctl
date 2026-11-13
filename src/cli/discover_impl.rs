@@ -1351,8 +1351,10 @@ pub(crate) fn run_full_analysis(
     // Graph mmap snapshot was written early (before topology/analysis) to avoid
     // co-residency of PreparedGraphSnapshot with the live backend (#33).
 
+    // Only hydrate MemoryBackend when `-o <json>` needs a full CodeGraph serialize.
+    // Dashboard / migration read hot columns from MmappedGraphSnapshot (zero-copy).
     let mut hydrated: Option<rgctl_graph::code_graph::CodeGraph> = None;
-    let need_hydrate = write_json_graph || with_dashboard || export_migration_hints;
+    let need_hydrate = write_json_graph;
     if need_hydrate {
         hydrated = Some(rgctl_graph::code_graph::CodeGraph::open_snapshot(
             &snapshot_path,
@@ -1372,15 +1374,23 @@ pub(crate) fn run_full_analysis(
         }
     }
 
+    let mmap_for_export = if with_dashboard || export_migration_hints {
+        Some(rgctl_graph::snapshot::MmappedGraphSnapshot::open(
+            &snapshot_path,
+        )?)
+    } else {
+        None
+    };
+
     // Export static dashboard bundle only when requested (#31).
     let save_dashboard_start = Instant::now();
     let dashboard_dir = rgctl_graph::paths::artifact_path(store, "dashboard");
     let mut written_artifacts = DiscoverArtifacts::default();
     if with_dashboard {
         rgctl_dashboard::set_bundle_override(Some(rgctl_dashboard::BundleVersion::V2));
-        let graph = hydrated.as_ref().expect("hydrated for dashboard");
+        let snap = mmap_for_export.as_ref().expect("mmap for dashboard");
         match rgctl_dashboard::export_dashboard_bundle_if_changed_with_context(
-            graph.backend(),
+            rgctl_graph::GraphSource::mmap(snap),
             store,
             &snapshot_path,
             rgctl_dashboard::DashboardExportContext::with_analysis(&analysis_results),
@@ -1420,9 +1430,9 @@ pub(crate) fn run_full_analysis(
             .output
             .clone()
             .unwrap_or_else(|| rgctl_graph::paths::artifact_path(store, "migration_plan.json"));
-        let graph = hydrated.as_ref().expect("hydrated for migration");
+        let snap = mmap_for_export.as_ref().expect("mmap for migration");
         match rgctl_dashboard::write_migration_plan_from_repo(
-            graph.backend(),
+            rgctl_graph::GraphSource::mmap(snap),
             store,
             &plan_path,
             migration_preset,

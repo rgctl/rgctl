@@ -46,9 +46,10 @@ export function parseCfgRecordIndex(bytes: Uint8Array): Map<string, CfgRecordLoc
 export async function fetchCfgRecordBytes(
   dataUrl: string | URL,
   location: CfgRecordLocation,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<Uint8Array> {
   const end = location.offset + location.length - 1;
-  const res = await fetch(dataUrl, {
+  const res = await fetchImpl(dataUrl, {
     headers: { Range: `bytes=${location.offset}-${end}` },
   });
   if (!(res.ok || res.status === 206)) {

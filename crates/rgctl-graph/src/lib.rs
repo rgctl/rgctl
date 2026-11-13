@@ -19,6 +19,8 @@ pub mod cst_archive;
 pub mod export;
 /// Streaming compaction of columnar snapshots with a delta segment.
 pub mod graph_compactor;
+/// Read-only [`graph_source::GraphSource`] for dashboard / migration export (mmap or memory).
+pub mod graph_source;
 /// String interning for index keys.
 pub mod intern;
 /// Universal columnar graph structural invariants.
@@ -65,6 +67,7 @@ pub use export::{GraphSnapshot, export_json, export_json_to, import_json};
 pub use graph_compactor::{
     CompactStats, DeltaSegment, GraphCompactor, compact_repo_snapshot, compact_snapshot_file,
 };
+pub use graph_source::{DashboardGraphView, GraphSource, HotEdgeRef, HotNodeRef};
 pub use invariants::assert_graph_invariants;
 pub use lossless_content::{
     LOSSLESS_CONTENT_STORE_FILE, LosslessContentReader, LosslessContentWriter, LosslessFrame,
