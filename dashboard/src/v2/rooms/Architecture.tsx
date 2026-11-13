@@ -514,6 +514,10 @@ export function ArchitectureRoom({
         // A press anywhere on the map stops the drift. Reported by the scene rather than inferred here, because a
         // click on empty space is still a click, and the toggle has to keep telling the truth about it.
         created.onPressChange(() => setDrift(false));
+        // The scene also parks the drift when a level opens and restores it when the level closes. The toggle is the
+        // reader's only view of that state, so it follows what the scene actually did rather than what it was asked
+        // for last.
+        created.onDriftChangeReport(setDrift);
         created.onMemberPickChange((member) => pickMemberRef.current(member));
         created.onMemberOpen((member) => void openSymbolRef.current(member));
         created.onExplode((entry) => void expandRef.current(entry));
@@ -651,12 +655,19 @@ export function ArchitectureRoom({
               </div>
             </div>
           )}
-          <div className="pointer-events-none absolute left-2 top-2 flex gap-1">
-            <Chip tone={layer === "packages" ? "blue" : "zinc"}>
-              {layer === "packages" ? "namespace › package" : "communities (aggregated)"}
-            </Chip>
-            <Chip tone="zinc">{edges ? "coupling drawn" : "coupling hidden"}</Chip>
-          </div>
+          {/*
+            The layer chips describe the universe: which layer it is drawing and whether its coupling web is on.
+            Inside a level the universe is hidden, so they described something not on screen — the level's own
+            read-out says what is.
+          */}
+          {!expanded && (
+            <div className="pointer-events-none absolute left-2 top-2 flex gap-1">
+              <Chip tone={layer === "packages" ? "blue" : "zinc"}>
+                {layer === "packages" ? "namespace › package" : "communities (aggregated)"}
+              </Chip>
+              <Chip tone="zinc">{edges ? "coupling drawn" : "coupling hidden"}</Chip>
+            </div>
+          )}
           {hover && (
             <div className="pointer-events-none absolute bottom-2 left-2 max-w-[420px] rounded border border-white/12 bg-black/80 p-2">
               <div className="text-[11px] font-semibold text-zinc-100">{hover.title}</div>

@@ -124,6 +124,7 @@ export class UniverseScene {
   private onMemberPick: (member: MemberEntry | null) => void = () => {};
   private onMemberOpenRequest: (member: MemberEntry | null) => void = () => {};
   private onPress: () => void = () => {};
+  private onDriftChange: (on: boolean) => void = () => {};
 
   constructor(container: HTMLElement) {
     this.reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -188,6 +189,17 @@ export class UniverseScene {
    */
   onPressChange(fn: () => void): void {
     this.onPress = fn;
+  }
+
+  /**
+   * The drift stopping or starting *because of the scene* — opening a level parks it, closing restores it.
+   *
+   * Reported for the same reason as the press: the room's toggle is the truth the reader reads, so when the scene
+   * changes the rotation the room has to be told. It was not, and inside a level the toggle said `drift on` over a
+   * model that was holding still — verified by two screenshots three seconds apart being byte-identical.
+   */
+  onDriftChangeReport(fn: (on: boolean) => void): void {
+    this.onDriftChange = fn;
   }
 
   /**
@@ -589,7 +601,10 @@ export class UniverseScene {
     // inspecting and chasing.
     const autoRotate = this.controls.autoRotate;
     const autoRotateSpeed = this.controls.autoRotateSpeed;
-    this.controls.autoRotate = false;
+    if (autoRotate) {
+      this.controls.autoRotate = false;
+      this.onDriftChange(false);
+    }
 
     const cameraBefore = {
       position: this.camera.position.clone(),
@@ -807,6 +822,7 @@ export class UniverseScene {
     this.levelLines = null;
     this.controls.autoRotate = cameraBefore.autoRotate;
     this.controls.autoRotateSpeed = cameraBefore.autoRotateSpeed;
+    this.onDriftChange(cameraBefore.autoRotate);
     this.drill = null;
   }
 
