@@ -131,7 +131,7 @@ describe("colourForKind", () => {
   it("is stable and shared: the list and the level agree", () => {
     expect(colourForKind("Function")).toBe(colourForKind("function"));
     // The same call the scene makes for the instance colour.
-    expect(colourHexForKind("Function")).toBe(0x60a5fa);
+    expect(colourHexForKind("Function")).toBe(0x6999d4);
     expect(colourForKind("File")).toBe("#c99a3d");
   });
 

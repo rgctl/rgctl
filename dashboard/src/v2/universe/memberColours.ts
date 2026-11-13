@@ -18,6 +18,11 @@
  * read as one colour with two shades — the distinction existed in the table and not on the screen. Files are brown
  * now, which is both a colour nothing else uses and the warm end of the wheel where the cool structure kinds are not.
  *
+ * **Blue is the majority, so blue has to be quiet.** At full saturation the field of functions shouted over every
+ * accent in it — the whole point of colouring by kind is that the exceptions (a file, a type, a config key) are the
+ * things you notice. The function blue is a steel blue at about 55% saturation, which still reads as "blue" and
+ * still clears the visibility floor, and leaves the saturated colours for what is *not* a function.
+ *
  * **Fifteen hues do not fit.** Eight families on a wheel means roughly 40° each, and two of them were closer than
  * that once "visible" was a hard requirement: brown and the red used for data sat exactly 30° apart, which is the
  * same defect as the two greens in a different part of the wheel. The families are now spread by hue with no pair
@@ -32,7 +37,7 @@
 
 /** Kinds whose colour is worth naming, keyed by the engine's own `node_type_name`. */
 const KIND_COLOURS: Record<string, string> = {
-  function: "#60a5fa", // blue: the default case, a district is mostly functions
+  function: "#6999d4", // steel blue: the default case, a district is mostly functions
   class: "#a78bfa", // one violet family for everything that declares a type —
   struct: "#a78bfa",
   interface: "#a78bfa",

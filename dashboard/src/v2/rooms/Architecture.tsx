@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Panel, Unavailable, Chip } from "../shell";
 import { channelReport, loadArchitecture, scalesFor } from "../architecture";
-import { expandMembers } from "../expandEngine";
+import { expandMembers, MEMBER_EDGE_KINDS } from "../expandEngine";
 import { loadMemberIndices } from "../metagraphMembers";
 import { loadFunctions, type FunctionEntry } from "../data";
 import { STALE_CHUNK_MESSAGE, isStaleChunkError } from "../staleChunk";
@@ -684,6 +684,8 @@ export function ArchitectureRoom({
             </div>
           )}
 
+          {expanded && <LevelReadout stats={expanded} />}
+
           <div className="absolute bottom-2 right-2 flex gap-1">
             <Toggle on={layer === "packages"} onClick={() => setLayer("packages")}>namespace › package</Toggle>
             <Toggle on={layer === "communities"} onClick={() => setLayer("communities")}>communities</Toggle>
@@ -963,6 +965,56 @@ function Coverage({ view }: { view: ArchitectureView }) {
  * was when this was first added, leaving "how do I find the filter?" as a fair question. The control beside
  * Expand cannot be clipped, so the search lives in both places.
  */
+
+/**
+ * What the open level is, in the corner of the drawing.
+ *
+ * Its own component for one reason: this text was deleted by a refactor and **nothing failed** — the level still
+ * drew, the typecheck still passed, and only a screenshot showed it was gone. A component can be tested with a
+ * fabricated level; a fragment inside a 1,100-line render that needs a WASM-expanded district cannot.
+ *
+ * Every number here is a count the room can defend: drawn vs total (with the truncation rule when they differ),
+ * the member edges and their one kind, the aggregate coupling that leaves the level, and the measured open time.
+ * The two caveats — heights are constant, the universe is hidden — are stated rather than left to be discovered.
+ */
+export function LevelReadout({ stats }: { stats: LevelStats }) {
+  return (
+    <div
+      data-testid="level-readout"
+      className="absolute right-2 top-2 flex max-w-[340px] flex-col gap-0.5 rounded-md border border-sky-500/30 bg-[#0a1420]/95 px-2 py-1.5"
+    >
+      <span className="text-[11px] font-medium leading-none text-sky-100">{stats.title}</span>
+      <span className="text-[10px] leading-relaxed text-sky-200/80">
+        {stats.drawn.toLocaleString()} of {stats.members.toLocaleString()} members drawn
+        {stats.truncated ? " (largest by member count; the rest are not drawn)" : ""} ·{" "}
+        {stats.edges.toLocaleString()} member edges ({MEMBER_EDGE_KINDS})
+        {stats.boundary > 0 ? ` · ${stats.boundary} outgoing coupling edges fading outward` : ""} ·{" "}
+        {(stats.ms / 1000).toFixed(1)} s
+      </span>
+      <span className="text-[10px] leading-relaxed text-zinc-500">
+        the universe is hidden while this level is open — the arrow or esc returns to it, same angle
+      </span>
+      {!stats.measuredHeight && (
+        <span className="text-[10px] leading-relaxed text-amber-200/80">
+          heights are constant — this bundle reports no per-member complexity
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** What a level reports about itself, so `LevelReadout` can be tested without one. */
+export interface LevelStats {
+  title: string;
+  drawn: number;
+  members: number;
+  edges: number;
+  truncated: boolean;
+  ms: number;
+  measuredHeight: boolean;
+  boundary: number;
+}
+
 /**
  * The symbol a level opened, read beside it.
  *
