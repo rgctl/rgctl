@@ -216,6 +216,49 @@ fn push_named_symbol(
     ctx.symbols.push(sym);
 }
 
+fn collect_scala_supertypes(node: Node, source: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = Vec::new();
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.children(&mut cursor).collect();
+    for ch in children.into_iter().rev() {
+        stack.push(ch);
+    }
+    while let Some(cur) = stack.pop() {
+        let kind = cur.kind();
+        if matches!(
+            kind,
+            "type_arguments" | "arguments" | "template_body" | "block"
+        ) {
+            continue;
+        }
+        if kind == "stable_type_identifier" {
+            if let Ok(text) = cur.utf8_text(source) {
+                let simple = text.rsplit('.').next().unwrap_or(text).trim();
+                if !simple.is_empty() && !out.iter().any(|e| e == simple) {
+                    out.push(simple.to_string());
+                }
+            }
+            continue;
+        }
+        if kind == "type_identifier" {
+            if let Ok(text) = cur.utf8_text(source) {
+                let t = text.trim();
+                if !t.is_empty() && !out.iter().any(|e| e == t) {
+                    out.push(t.to_string());
+                }
+            }
+            continue;
+        }
+        let mut c = cur.walk();
+        let nested: Vec<_> = cur.children(&mut c).collect();
+        for ch in nested.into_iter().rev() {
+            stack.push(ch);
+        }
+    }
+    out
+}
+
 /// Single iterative DFS: symbols + deferred calls + complexity.
 pub fn extract_all_single_pass(
     _plugin: &Plugin,
@@ -575,15 +618,30 @@ pub fn extract_all_single_pass(
                     "extends_clause" | "derives_clause" => {
                         if let Some(from_type) = ctx.scopes.current_type() {
                             let from = from_type.qualified_prefix.clone();
-                            if let Some(base) = extract_name_from_node(node, source).ok().flatten()
+                            let from_is_interface = from_type.kind == ScopeKind::Interface;
+                            let same_file_interfaces: std::collections::HashSet<&str> = ctx
+                                .symbols
+                                .iter()
+                                .filter(|s| s.symbol_type == SymbolType::Interface)
+                                .map(|s| s.name.as_str())
+                                .collect();
+                            for (idx, base) in collect_scala_supertypes(node, source)
+                                .into_iter()
+                                .enumerate()
                             {
                                 let rel_ty = if kind == "derives_clause" {
+                                    RelationType::Implements
+                                } else if from_is_interface {
+                                    RelationType::Extends
+                                } else if same_file_interfaces.contains(base.as_str()) || idx > 0 {
+                                    // In Scala, a class has at most one superclass (always at idx == 0);
+                                    // `with Trait1 with Trait2` (idx > 0) or a known trait is `Implements`.
                                     RelationType::Implements
                                 } else {
                                     RelationType::Extends
                                 };
                                 let mut rel = Relation {
-                                    from,
+                                    from: from.clone(),
                                     to: base.clone(),
                                     relation_type: rel_ty,
                                     location: node_to_location(node, &file_path_str),
@@ -847,6 +905,42 @@ class Foo extends Serializable
             Some("(1L)"),
             "expected arguments metadata: {:?}",
             ann.metadata
+        );
+    }
+
+    #[test]
+    fn scala_extracts_extends_and_with_traits() {
+        let src = r#"
+trait AuditPolicy {
+  def auditWeight(): Int
+}
+class BaseLedger {
+  def baseFee(): Int = 5
+}
+class OrderLedger extends BaseLedger with AuditPolicy {
+  override def auditWeight(): Int = baseFee()
+}
+"#;
+        let plugin = Plugin::new().unwrap();
+        let path = PathBuf::from("ledger.scala");
+        let result = extract_all_single_pass(&plugin, &path, src.as_bytes()).unwrap();
+        assert!(
+            result.relations.iter().any(|r| {
+                r.from == "OrderLedger"
+                    && r.to == "BaseLedger"
+                    && r.relation_type == RelationType::Extends
+            }),
+            "expected OrderLedger -[Extends]-> BaseLedger, got {:?}",
+            result.relations
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                r.from == "OrderLedger"
+                    && r.to == "AuditPolicy"
+                    && r.relation_type == RelationType::Implements
+            }),
+            "expected OrderLedger -[Implements]-> AuditPolicy, got {:?}",
+            result.relations
         );
     }
 }

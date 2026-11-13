@@ -7,21 +7,23 @@ and [QE.md](./QE.md) for required-red policy (option B).
 ## Location
 
 ```text
-ecommerce-<lang>/correctness/expected-facts.json
+rgctl-tests/ecommerce-<lang>/correctness/expected-facts.json
+tests/fixtures/correctness_matrix/<lang>/correctness/expected-facts.json
 ```
 
-Projects without this file are skipped by the graph_correctness tests.
+Projects without this file are skipped by the `graph_correctness` tests. Every project executes inside an isolated `TempDir` sandbox (`-d <temp_db>`) so parallel runs never write `.rgctl` caches into tracked directories, and every snapshot is checked with `assert_graph_invariants` (`INV-1`..`INV-9`, including byte-span & container inequality `INV-8` and sibling `Function` span distinctness `INV-9`).
 
 ## Top-level fields
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `schema_version` | int | Currently `1` |
-| `language` | string | Language id (`java`, `rust`, …) |
-| `project` | string | Directory name (`ecommerce-java`, …) |
-| `graph` | object | Repo-level minimums |
+| `schema_version` | int | `2` for full 17-dimension harnesses (`1` remains supported) |
+| `language` | string | Language id (`java`, `rust`, `swift`, `hcl`, `markdown`, …) |
+| `project` | string | Directory name (`ecommerce-java`, `swift`, …) |
+| `graph` | object | Repo-level minimums, exact counts, `forbidden_edges`, and `expected_relations` |
 | `symbols` | object | Named expected-fact entries (keys are stable ids) |
-| `invariants` | object | Cross-feature checks (B1…) |
+| `invariants` | object | Cross-feature checks (`B1`..`B9`) |
+| `analytics` | object | Optional graph-analytics laws (`harmonic`, `hyperball`, `pagerank`, `betweenness`, `migration_plan.json`, Fast-Leiden `separate` & connectedness) |
 
 ## Severity
 
@@ -143,16 +145,18 @@ Omitted sections are skipped. Set `severity` to `unsupported` to record a dimens
 
 | Section | CLI | What we assert |
 |---------|-----|----------------|
+| `graph.expected_relations` | `relations <from> --edge <edge> --direction outgoing` | Asserts typed non-`Calls` edges (`references`, `depends-on`, `uses`, …) for structural languages (`sql`, `hcl`, `markdown`, `erb`) as well as general projects |
+| `match.entity_type` | `find --type <entity_type>` | Resolves non-function symbols (`table`, `class`, `module`, …) via structured `find` when `blast-radius`/`inspect` are function-scoped |
 | `match.discriminator` / `match.line` | `find` + `blast-radius`/`inspect --line` | One overload: qualified name or signature contains the discriminator, and the definition line matches when `find` returns `line` |
 | `identity.discriminator` | `blast-radius` target / `inspect` | The same fragment appears on the resolved node |
 | `mro.extends` / `implements` / `overrides` | `relations --edge extends\|implements\|overrides` | Owner (class, or the symbol when no class) has each named `Extends`/`Implements` target; the symbol has each named `Overrides` target |
 | `slice` | `rgctl -f json slice FILE --line N --variable V` | `must_contain` / `must_exclude` substrings. Default direction is `backward` |
 | `flows` | `rgctl -f json cpg flows FILE --line N --variable V --with-alias` | Same text checks. Default direction is `forward`; `with_alias` defaults to true |
 | `mutations` | `rgctl -f json cpg mutations --type NAME --exclude-ctors` | Text checks. `exclude_ctors` defaults to true. Optional `member` |
-| `taint` | `rgctl -f json security taint --sink S --source external` | Text checks plus optional `min_flows` against the `flows` array |
+| `taint` | `rgctl -f json security taint --sink S --source external` | Text checks plus optional `min_flows` against the `flows`/`paths` array (intra- and inter-procedural) |
 | `clones` | `rgctl -f json clones --mode exact\|bloom\|fragment --no-write` | `group_with` names share a group with this symbol; `not_grouped_with` names do not. Optional `seed`, `min_loc` (default 1) |
-| `semantic` | `semantic index --embedder vocab` then `semantic query --limit 3 --expand neighbors` | `top3_contains` is in the top 3 hit names. `neighbor_names` must appear in the neighbor expansion |
-| `review` | `review paths --synthetic-head worktree` | Sandbox-only edit: replace `find` with `replace` in `file`, then require `must_contain` names in the report. The tracked fixture is not modified |
+| `semantic` | `semantic index --embedder vocab` then `semantic query --limit 3 --expand neighbors` | `top3_contains` is in the top 3 hit names (optional `scope` path prefix via `--scope`). `neighbor_names` must appear in the neighbor expansion |
+| `review` | `review paths --synthetic-head worktree` | Sandbox-only edit: replace `find` with `replace` in `file` inside a `TempDir` copy with local git init, then require `must_contain` names in the report. The tracked fixture is never modified |
 
 ## `analytics`
 

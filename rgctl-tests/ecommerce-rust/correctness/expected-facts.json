@@ -427,14 +427,15 @@
     },
     "v2CloneExactA": {
       "match": {
-        "name": "v2_clone_exact_a"
+        "name": "v2_clone_exact",
+        "class": "V2CloneCarrierA"
       },
       "severity": "required",
       "unique": true,
       "clones": {
         "mode": "exact",
         "group_with": [
-          "v2_clone_exact_b"
+          "v2_clone_exact"
         ],
         "not_grouped_with": [
           "correctness_leaf"

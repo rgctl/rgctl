@@ -4,7 +4,9 @@ use super::args::{InspectLayer, OutputFormat, PdgEdgeLayer};
 use super::context::{CliContext, language_from_path};
 use super::inspect_output::{inspect_cfg_json, inspect_dom_json, inspect_pdg_json};
 use super::markup::markup_context_unsupported;
-use crate::analysis::{DominatorTree, ProgramDependenceGraph, build_cfg_for_function};
+use crate::analysis::{
+    DominatorTree, ParsedSourceFile, ProgramDependenceGraph, build_cfg_for_function,
+};
 use anyhow::Result;
 use rgctl_error::SymbolCandidate;
 use rgctl_graph::backend::{GraphBackend, MemoryBackend};
@@ -33,7 +35,20 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
     }
     let lang = language_from_path(Path::new(file));
     let display_name = node.name.as_str();
-    let mut cfg = build_cfg_for_function(&lang, &source, display_name)?;
+    let mut cfg = if let (Some(sl), Some(el)) = (node.start_line, node.end_line)
+        && sl > 0
+        && el >= sl
+    {
+        ParsedSourceFile::parse(&lang, source.as_bytes())?.build_cfg_for_node_span(
+            &lang,
+            source.as_bytes(),
+            display_name,
+            sl,
+            el,
+        )?
+    } else {
+        build_cfg_for_function(&lang, &source, display_name)?
+    };
     let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
     let dom = DominatorTree::build(&cfg);
 

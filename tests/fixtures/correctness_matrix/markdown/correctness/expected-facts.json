@@ -1,0 +1,67 @@
+{
+  "schema_version": 2,
+  "language": "markdown",
+  "project": "correctness-markdown",
+  "graph": {
+    "severity": "required",
+    "min_functions": 0,
+    "min_calls_edges": 0,
+    "expected_relations": [
+      {
+        "edge": "contains",
+        "from": "Architecture Overview",
+        "to": "Settlement Flow"
+      },
+      {
+        "edge": "references",
+        "from": "Settlement Flow",
+        "to": "Payment Pipeline"
+      }
+    ]
+  },
+  "symbols": {
+    "architectureOverview": {
+      "match": {
+        "name": "Architecture Overview",
+        "entity_type": "module"
+      },
+      "severity": "required",
+      "unique": true
+    },
+    "settlementFlow": {
+      "match": {
+        "name": "Settlement Flow",
+        "entity_type": "module"
+      },
+      "severity": "required",
+      "unique": true
+    },
+    "paymentPipeline": {
+      "match": {
+        "name": "Payment Pipeline",
+        "entity_type": "module"
+      },
+      "severity": "required",
+      "unique": true
+    },
+    "chargebackReconciliation": {
+      "match": {
+        "name": "Chargeback Reconciliation",
+        "entity_type": "module"
+      },
+      "severity": "required",
+      "unique": true,
+      "semantic": {
+        "query": "reconcile chargeback ledger",
+        "scope": "docs",
+        "expand_neighbors": false,
+        "top3_contains": "Chargeback Reconciliation"
+      }
+    }
+  },
+  "invariants": {
+    "B2_gql_calls_nonzero": {
+      "enabled": false
+    }
+  }
+}

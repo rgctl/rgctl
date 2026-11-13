@@ -344,7 +344,11 @@ pub fn push_call_relation_from(
         }
         "cpp" => {
             let qh = cpp_call_qualified_hint(node, source);
-            (None, qh)
+            if qh.is_some() {
+                (None, qh)
+            } else {
+                oop_call_type_hint(node, source, symbols, from_fn, &callee, true)
+            }
         }
         "python" => {
             let ty = python_call_type_hint(node, source, symbols, from_fn);
@@ -353,6 +357,12 @@ pub fn push_call_relation_from(
         }
         "java" => java_call_type_hint(node, source, symbols, from_fn, &callee),
         "ruby" => ruby_call_type_hint(node, source, from_fn, &callee),
+        "kotlin" | "groovy" | "scala" | "csharp" | "dart" => {
+            oop_call_type_hint(node, source, symbols, from_fn, &callee, true)
+        }
+        "typescript" | "javascript" | "php" => {
+            oop_call_type_hint(node, source, symbols, from_fn, &callee, false)
+        }
         _ => (None, None),
     };
 
@@ -386,7 +396,9 @@ pub fn push_call_relation_from(
         meta["unresolved"] = serde_json::Value::Bool(true);
     }
 
-    // Prefer a unique same-file match; if ambiguous, keep bare name and rely on hints.
+    // Prefer a unique same-file match unless an MRO type hint points to a different owner
+    // (otherwise an unrelated `Other.save` in the same file would hijack `this.save()`
+    // on `Impl extends Base` when `Base` lives in another file).
     let same_file_matches: Vec<_> = symbols
         .iter()
         .filter(|s| {
@@ -396,11 +408,16 @@ pub fn push_call_relation_from(
         })
         .collect();
     let local_target = match same_file_matches.as_slice() {
-        [only] => only
-            .qualified_name
-            .clone()
-            .unwrap_or_else(|| callee.clone()),
-        _ => to_qualified_hint.clone().unwrap_or_else(|| callee.clone()),
+        [only]
+            if to_type_hint.as_deref().is_none_or(|hint_ty| {
+                same_file_match_compatible_with_hint(only, symbols, hint_ty)
+            }) =>
+        {
+            only.qualified_name
+                .clone()
+                .unwrap_or_else(|| callee.clone())
+        }
+        _ => callee.clone(),
     };
 
     let (call_site_start_byte, call_site_byte_len) = call_site_span(node);
@@ -1001,6 +1018,235 @@ fn java_call_type_hint(
         }
     }
     (None, None)
+}
+
+fn same_file_match_compatible_with_hint(only: &Symbol, symbols: &[Symbol], hint_ty: &str) -> bool {
+    let Some(qn) = only.qualified_name.as_deref() else {
+        return true;
+    };
+    let Some((owner_prefix, _)) = qn
+        .rsplit_once("::")
+        .or_else(|| qn.rsplit_once('.'))
+        .or_else(|| qn.rsplit_once('#'))
+    else {
+        return true;
+    };
+    let owner_is_type = symbols.iter().any(|s| {
+        matches!(
+            s.symbol_type,
+            SymbolType::Class | SymbolType::Struct | SymbolType::Interface | SymbolType::Enum
+        ) && (s.qualified_name.as_deref() == Some(owner_prefix) || s.name == owner_prefix)
+    });
+    if !owner_is_type {
+        // Package/namespace-prefixed free function (`pkg.helper`), not an unrelated class method.
+        return true;
+    }
+    let owner_simple = owner_prefix
+        .rsplit(['.', ':', '\\', '#'])
+        .next()
+        .unwrap_or(owner_prefix);
+    let hint_simple = hint_ty
+        .rsplit(['.', ':', '\\', '#'])
+        .next()
+        .unwrap_or(hint_ty);
+    owner_simple == hint_simple || owner_prefix == hint_ty
+}
+
+/// Shared OOP receiver / implicit-`this` type hint for Kotlin, Groovy, Scala,
+/// C#, C++, Dart, TypeScript, JavaScript, and PHP.
+fn oop_call_type_hint(
+    call: Node,
+    source: &[u8],
+    symbols: &[Symbol],
+    from_fn: &Symbol,
+    callee: &str,
+    allow_implicit_this: bool,
+) -> (Option<String>, Option<String>) {
+    let head_end = {
+        let mut end = call.end_byte();
+        let mut c = call.walk();
+        for ch in call.children(&mut c) {
+            if matches!(
+                ch.kind(),
+                "arguments"
+                    | "argument_list"
+                    | "value_arguments"
+                    | "formal_parameters"
+                    | "lambda_literal"
+                    | "annotated_lambda"
+                    | "closure"
+                    | "block"
+            ) {
+                end = end.min(ch.start_byte());
+            }
+        }
+        end
+    };
+    let raw_slice = source
+        .get(call.start_byte()..head_end)
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let head = raw_slice
+        .split(['(', '{'])
+        .next()
+        .unwrap_or(raw_slice)
+        .trim();
+    if head.is_empty() || head.starts_with("new ") {
+        return (None, None);
+    }
+
+    let enclosing_owner = from_fn.qualified_name.as_deref().and_then(|qn| {
+        let (prefix, _) = qn
+            .rsplit_once("::")
+            .or_else(|| qn.rsplit_once('.'))
+            .or_else(|| qn.rsplit_once('#'))?;
+        let is_type = symbols.iter().any(|s| {
+            matches!(
+                s.symbol_type,
+                SymbolType::Class | SymbolType::Struct | SymbolType::Interface | SymbolType::Enum
+            ) && (s.qualified_name.as_deref() == Some(prefix)
+                || s.name
+                    == prefix
+                        .rsplit(['.', ':', '\\', '#'])
+                        .next()
+                        .unwrap_or(prefix))
+        });
+        is_type.then(|| prefix.to_string())
+    });
+
+    // Extract explicit receiver before `->`, `?.`, `::`, or `.`.
+    let recv = head
+        .rsplit_once("->")
+        .or_else(|| head.rsplit_once("?."))
+        .or_else(|| head.rsplit_once("::"))
+        .or_else(|| head.rsplit_once('.'))
+        .map(|(r, _)| r.trim());
+
+    match recv {
+        None => {
+            if allow_implicit_this && let Some(owner) = enclosing_owner {
+                let qh = format!("{owner}.{callee}");
+                return (Some(owner), Some(qh));
+            }
+            (None, None)
+        }
+        Some("this" | "$this" | "self" | "static") => {
+            if let Some(owner) = enclosing_owner {
+                let qh = format!("{owner}.{callee}");
+                return (Some(owner), Some(qh));
+            }
+            (None, None)
+        }
+        Some("super" | "base" | "parent") => {
+            if let Some(owner) = enclosing_owner {
+                return (Some(owner), Some(format!("super.{callee}")));
+            }
+            (None, None)
+        }
+        Some(r) => {
+            let clean_r = r.trim_start_matches('$').trim();
+            if clean_r.is_empty() {
+                return (None, None);
+            }
+            if let Some(param_ty) = from_fn
+                .parameters
+                .iter()
+                .find(|p| p.name.trim_start_matches('$') == clean_r)
+                .and_then(|p| p.param_type.as_deref())
+                .or_else(|| {
+                    from_fn
+                        .signature
+                        .as_deref()
+                        .and_then(|sig| infer_param_type_from_signature(sig, clean_r))
+                })
+            {
+                let simple = oop_simple_type_name(param_ty);
+                if !simple.is_empty() {
+                    let qh = format!("{simple}.{callee}");
+                    return (Some(simple), Some(qh));
+                }
+            }
+            if symbols.iter().any(|s| {
+                matches!(
+                    s.symbol_type,
+                    SymbolType::Class
+                        | SymbolType::Struct
+                        | SymbolType::Interface
+                        | SymbolType::Enum
+                        | SymbolType::Module
+                ) && (s.name == clean_r || s.qualified_name.as_deref() == Some(clean_r))
+            }) {
+                let simple = oop_simple_type_name(clean_r);
+                let qh = format!("{simple}.{callee}");
+                return (Some(simple), Some(qh));
+            }
+            (None, None)
+        }
+    }
+}
+
+/// Parse `name: Type` (Kotlin/Scala/TS/Swift/Rust) or `Type name` / `Type $name` (Java/C#/Dart/PHP/C++/Groovy)
+/// inside a declaration header signature when `Symbol.parameters` was left unpopulated.
+pub fn infer_param_type_from_signature<'a>(sig: &'a str, param_name: &str) -> Option<&'a str> {
+    let start = sig.find('(')?;
+    let end = sig.rfind(')')?;
+    if end <= start + 1 {
+        return None;
+    }
+    for raw_part in sig[start + 1..end].split(',') {
+        let part = raw_part.split('=').next().unwrap_or(raw_part).trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((lhs, rhs)) = part.split_once(':') {
+            // `app: App` or Swift `for app: App`
+            let lhs_ident = lhs
+                .split_whitespace()
+                .last()
+                .unwrap_or("")
+                .trim_start_matches('$');
+            if lhs_ident == param_name {
+                let ty = rhs.trim();
+                if !ty.is_empty() {
+                    return Some(ty);
+                }
+            }
+        } else {
+            let mut toks = part.split_whitespace().rev();
+            let name_tok = toks
+                .next()
+                .unwrap_or("")
+                .trim_start_matches(['$', '&', '*']);
+            if name_tok == param_name
+                && let Some(ty_tok) = toks.next()
+            {
+                let ty = ty_tok.trim_matches(['&', '*', '?']);
+                if !ty.is_empty()
+                    && !matches!(
+                        ty,
+                        "final" | "val" | "var" | "in" | "out" | "ref" | "params" | "required"
+                    )
+                {
+                    return Some(ty);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn oop_simple_type_name(ty: &str) -> String {
+    ty.trim()
+        .trim_start_matches(['&', '*', '?'])
+        .split(['<', '['])
+        .next()
+        .unwrap_or(ty)
+        .trim_end_matches(['?', '*', '&'])
+        .rsplit(['.', ':', '\\'])
+        .next()
+        .unwrap_or(ty)
+        .trim()
+        .to_string()
 }
 
 fn java_simple_type_name_str(ty: &str) -> String {

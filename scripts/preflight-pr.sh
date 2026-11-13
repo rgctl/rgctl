@@ -551,11 +551,21 @@ if [[ "$RUN_QE" -eq 1 ]]; then
     --test cross_feature_qe \
     --test graph_determinism_qe \
     --test stable_key_invariance_qe \
+    --test writeback_roundtrip_tier1 \
     --test columnar_zero_cold_touch_gate \
     --test e2e_workflow_equivalence \
     --test e2e_feature_contracts \
     --test inheritance_edges \
     --test cross_language_mro_and_di \
+    --test mainframe_plugins_correctness \
+    --test tier2_query_plugins_correctness \
+    --test groovy_cfg_analysis \
+    --test kotlin_cfg_analysis \
+    --test ruby_cfg_analysis \
+    --test groovy_taint \
+    --test kotlin_taint \
+    --test ruby_taint \
+    --test puppet_taint \
     --test c_depth_extraction \
     --test cpp_depth_extraction \
     --test csharp_depth_extraction \

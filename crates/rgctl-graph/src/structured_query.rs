@@ -133,6 +133,9 @@ pub struct EntityRow {
     /// Fully qualified name when present
     #[serde(skip_serializing_if = "Option::is_none")]
     pub qualified_name: Option<String>,
+    /// Declaration signature when present
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
     /// Node type (lowercase CLI form)
     #[serde(rename = "type")]
     pub node_type: String,
@@ -326,6 +329,7 @@ impl<'a> StructuredQuery<'a> {
         EntityRow {
             name: node.name.to_string(),
             qualified_name: node.qualified_name.as_ref().map(|s| s.to_string()),
+            signature: node.signature_text().map(str::to_string),
             node_type: node_type_cli(node.node_type),
             file: node.file_path.as_ref().map(|s| s.to_string()),
             line: node.start_line,

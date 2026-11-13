@@ -86,6 +86,8 @@ fn node_names(view: &GraphView) -> BTreeSet<String> {
 
 fn git(repo: &Path, args: &[&str]) {
     let status = Command::new("git")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -637,4 +639,542 @@ def get_db():
         !edges.is_empty(),
         "expected seedless ExposesRoute edges, got {v}"
     );
+}
+
+#[test]
+fn all_16_oop_trait_languages_mro_overrides_inherited_dispatch_and_unqualified_calls() {
+    use rgctl_graph::assert_graph_invariants;
+    use rgctl_languages::default_registry;
+    use rgctl_pipeline::{PipelineConfig, ProcessingPipeline};
+    use rgctl_registry::LanguageRegistry;
+    use std::sync::{Arc, OnceLock};
+
+    static REGISTRY: OnceLock<Arc<LanguageRegistry>> = OnceLock::new();
+    let registry = Arc::clone(REGISTRY.get_or_init(|| Arc::new(default_registry())));
+
+    struct OopCase {
+        lang: &'static str,
+        file: &'static str,
+        code: &'static str,
+        override_method: &'static str,
+        inherited_owner: &'static str,
+        inherited_method: &'static str,
+        helper_method: &'static str,
+    }
+
+    let cases = [
+        OopCase {
+            lang: "java",
+            file: "src/App.java",
+            code: r#"
+interface Repo {
+    default int inheritedSave(int x) { return x; }
+    int overrideMe(int x);
+}
+class Base {
+    public int inheritedSave(int x) { return x + 1; }
+    public int overrideMe(int x) { return x; }
+}
+public class Child extends Base implements Repo {
+    @Override
+    public int overrideMe(int x) { return x + 2; }
+    public int localHelper(int a, int b) { return a + b; }
+    public int run() {
+        int s = this.inheritedSave(42);
+        return localHelper(s, 7);
+    }
+}
+"#,
+            override_method: "overrideMe",
+            inherited_owner: "Base",
+            inherited_method: "inheritedSave",
+            helper_method: "localHelper",
+        },
+        OopCase {
+            lang: "kotlin",
+            file: "src/App.kt",
+            code: r#"
+interface Repo {
+    fun inheritedSave(x: Int): Int = x
+    fun overrideMe(x: Int): Int
+}
+open class Base {
+    open fun inheritedSave(x: Int): Int = x + 1
+    open fun overrideMe(x: Int): Int = x
+}
+class Child : Base(), Repo {
+    override fun overrideMe(x: Int): Int = x + 2
+    fun localHelper(a: Int, b: Int): Int = a + b
+    fun run(): Int {
+        val s = this.inheritedSave(42)
+        return localHelper(s, 7)
+    }
+}
+"#,
+            override_method: "overrideMe",
+            inherited_owner: "Base",
+            inherited_method: "inheritedSave",
+            helper_method: "localHelper",
+        },
+        OopCase {
+            lang: "groovy",
+            file: "src/App.groovy",
+            code: r#"
+interface Repo {
+    int overrideMe(int x)
+}
+class Base {
+    int inheritedSave(int x) { return x + 1 }
+    int overrideMe(int x) { return x }
+}
+class Child extends Base implements Repo {
+    int overrideMe(int x) { return x + 2 }
+    int localHelper(int a, int b) { return a + b }
+    int run() {
+        int s = this.inheritedSave(42)
+        return localHelper(s, 7)
+    }
+}
+"#,
+            override_method: "overrideMe",
+            inherited_owner: "Base",
+            inherited_method: "inheritedSave",
+            helper_method: "localHelper",
+        },
+        OopCase {
+            lang: "scala",
+            file: "src/App.scala",
+            code: r#"
+trait Repo {
+  def overrideMe(x: Int): Int
+}
+class Base {
+  def inheritedSave(x: Int): Int = x + 1
+  def overrideMe(x: Int): Int = x
+}
+class Child extends Base with Repo {
+  override def overrideMe(x: Int): Int = x + 2
+  def localHelper(a: Int, b: Int): Int = a + b
+  def run(): Int = {
+    val s = this.inheritedSave(42)
+    localHelper(s, 7)
+  }
+}
+"#,
+            override_method: "overrideMe",
+            inherited_owner: "Base",
+            inherited_method: "inheritedSave",
+            helper_method: "localHelper",
+        },
+        OopCase {
+            lang: "csharp",
+            file: "src/App.cs",
+            code: r#"
+public interface IRepo {
+    int OverrideMe(int x);
+}
+public class Base {
+    public virtual int InheritedSave(int x) { return x + 1; }
+    public virtual int OverrideMe(int x) { return x; }
+}
+public class Child : Base, IRepo {
+    public override int OverrideMe(int x) { return x + 2; }
+    public int LocalHelper(int a, int b) { return a + b; }
+    public int Run() {
+        int s = this.InheritedSave(42);
+        return LocalHelper(s, 7);
+    }
+}
+"#,
+            override_method: "OverrideMe",
+            inherited_owner: "Base",
+            inherited_method: "InheritedSave",
+            helper_method: "LocalHelper",
+        },
+        OopCase {
+            lang: "cpp",
+            file: "src/app.cpp",
+            code: r#"
+class Base {
+public:
+    virtual int inheritedSave(int x) { return x + 1; }
+    virtual int overrideMe(int x) { return x; }
+};
+class Child : public Base {
+public:
+    int overrideMe(int x) override { return x + 2; }
+    int localHelper(int a, int b) { return a + b; }
+    int run() {
+        int s = this->inheritedSave(42);
+        return localHelper(s, 7);
+    }
+};
+"#,
+            override_method: "overrideMe",
+            inherited_owner: "Base",
+            inherited_method: "inheritedSave",
+            helper_method: "localHelper",
+        },
+        OopCase {
+            lang: "python",
+            file: "app.py",
+            code: r#"
+class Base:
+    def inherited_save(self, x):
+        return x + 1
+    def override_me(self, x):
+        return x
+
+class Child(Base):
+    def override_me(self, x):
+        return x + 2
+    def local_helper(self, a, b):
+        return a + b
+    def run(self):
+        s = self.inherited_save(42)
+        return self.local_helper(s, 7)
+"#,
+            override_method: "override_me",
+            inherited_owner: "Base",
+            inherited_method: "inherited_save",
+            helper_method: "local_helper",
+        },
+        OopCase {
+            lang: "ruby",
+            file: "app.rb",
+            code: r#"
+class Base
+  def inherited_save(x)
+    x + 1
+  end
+  def override_me(x)
+    x
+  end
+end
+
+class Child < Base
+  def override_me(x)
+    x + 2
+  end
+  def local_helper(a, b)
+    a + b
+  end
+  def run
+    s = self.inherited_save(42)
+    local_helper(s, 7)
+  end
+end
+"#,
+            override_method: "override_me",
+            inherited_owner: "Base",
+            inherited_method: "inherited_save",
+            helper_method: "local_helper",
+        },
+        OopCase {
+            lang: "php",
+            file: "app.php",
+            code: r#"<?php
+interface Repo {
+    public function overrideMe(int $x): int;
+}
+class Base {
+    public function inheritedSave(int $x): int { return $x + 1; }
+    public function overrideMe(int $x): int { return $x; }
+}
+class Child extends Base implements Repo {
+    public function overrideMe(int $x): int { return $x + 2; }
+    public function localHelper(int $a, int $b): int { return $a + $b; }
+    public function run(): int {
+        $s = $this->inheritedSave(42);
+        return $this->localHelper($s, 7);
+    }
+}
+"#,
+            override_method: "overrideMe",
+            inherited_owner: "Base",
+            inherited_method: "inheritedSave",
+            helper_method: "localHelper",
+        },
+        OopCase {
+            lang: "typescript",
+            file: "app.ts",
+            code: r#"
+interface Repo {
+    overrideMe(x: number): number;
+}
+class Base {
+    inheritedSave(x: number): number { return x + 1; }
+    overrideMe(x: number): number { return x; }
+}
+class Child extends Base implements Repo {
+    overrideMe(x: number): number { return x + 2; }
+    localHelper(a: number, b: number): number { return a + b; }
+    run(): number {
+        const s = this.inheritedSave(42);
+        return this.localHelper(s, 7);
+    }
+}
+"#,
+            override_method: "overrideMe",
+            inherited_owner: "Base",
+            inherited_method: "inheritedSave",
+            helper_method: "localHelper",
+        },
+        OopCase {
+            lang: "javascript",
+            file: "app.js",
+            code: r#"
+class Base {
+    inheritedSave(x) { return x + 1; }
+    overrideMe(x) { return x; }
+}
+class Child extends Base {
+    overrideMe(x) { return x + 2; }
+    localHelper(a, b) { return a + b; }
+    run() {
+        const s = this.inheritedSave(42);
+        return this.localHelper(s, 7);
+    }
+}
+"#,
+            override_method: "overrideMe",
+            inherited_owner: "Base",
+            inherited_method: "inheritedSave",
+            helper_method: "localHelper",
+        },
+        OopCase {
+            lang: "dart",
+            file: "app.dart",
+            code: r#"
+abstract class Repo {
+  int overrideMe(int x);
+}
+class Base {
+  int inheritedSave(int x) => x + 1;
+  int overrideMe(int x) => x;
+}
+class Child extends Base implements Repo {
+  @override
+  int overrideMe(int x) => x + 2;
+  int localHelper(int a, int b) => a + b;
+  int run() {
+    var s = this.inheritedSave(42);
+    return localHelper(s, 7);
+  }
+}
+"#,
+            override_method: "overrideMe",
+            inherited_owner: "Base",
+            inherited_method: "inheritedSave",
+            helper_method: "localHelper",
+        },
+        OopCase {
+            lang: "swift",
+            file: "App.swift",
+            code: r#"
+protocol Repo {
+    func overrideMe(_ x: Int) -> Int
+}
+class Base {
+    func inheritedSave(_ x: Int) -> Int { return x + 1 }
+    func overrideMe(_ x: Int) -> Int { return x }
+}
+class Child: Base, Repo {
+    override func overrideMe(_ x: Int) -> Int { return x + 2 }
+    func localHelper(_ a: Int, _ b: Int) -> Int { return a + b }
+    func run() -> Int {
+        let s = self.inheritedSave(42)
+        return localHelper(s, 7)
+    }
+}
+"#,
+            override_method: "overrideMe",
+            inherited_owner: "Base",
+            inherited_method: "inheritedSave",
+            helper_method: "localHelper",
+        },
+        OopCase {
+            lang: "rust",
+            file: "src/lib.rs",
+            code: r#"
+pub trait Base {
+    fn inherited_save(&self, x: i32) -> i32 { x + 1 }
+    fn override_me(&self, x: i32) -> i32 { x }
+}
+pub struct Child;
+impl Base for Child {
+    fn override_me(&self, x: i32) -> i32 { x + 2 }
+}
+pub fn local_helper(a: i32, b: i32) -> i32 { a + b }
+impl Child {
+    pub fn run(&self) -> i32 {
+        let s = self.inherited_save(42);
+        local_helper(s, 7)
+    }
+}
+"#,
+            override_method: "override_me",
+            inherited_owner: "Base",
+            inherited_method: "inherited_save",
+            helper_method: "local_helper",
+        },
+        OopCase {
+            lang: "go",
+            file: "app.go",
+            code: r#"package app
+type Base struct{}
+func (b Base) InheritedSave(x int) int { return x + 1 }
+func (b Base) OverrideMe(x int) int { return x }
+
+type Child struct {
+    Base
+}
+func (c Child) OverrideMe(x int) int { return x + 2 }
+func localHelper(a int, b int) int { return a + b }
+func (c Child) Run() int {
+    s := c.InheritedSave(42)
+    return localHelper(s, 7)
+}
+"#,
+            override_method: "OverrideMe",
+            inherited_owner: "Base",
+            inherited_method: "InheritedSave",
+            helper_method: "localHelper",
+        },
+        OopCase {
+            lang: "elixir",
+            file: "lib/app.ex",
+            code: r#"
+defmodule Repo do
+  @callback override_me(integer()) :: integer()
+end
+
+defmodule Base do
+  def inherited_save(x), do: x + 1
+  defmacro __using__(_opts) do
+    quote do
+      import Base
+    end
+  end
+end
+
+defmodule Child do
+  @behaviour Repo
+  use Base
+  def override_me(x), do: x + 2
+  def local_helper(a, b), do: a + b
+  def run do
+    s = Base.inherited_save(42)
+    local_helper(s, 7)
+  end
+end
+"#,
+            override_method: "override_me",
+            inherited_owner: "Base",
+            inherited_method: "inherited_save",
+            helper_method: "local_helper",
+        },
+    ];
+
+    assert_eq!(
+        cases.len(),
+        16,
+        "must cover all 16 OOP/trait Tier-1 languages"
+    );
+
+    for case in &cases {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path();
+        write(repo, case.file, case.code);
+        fs::create_dir_all(repo.join(".rgctl")).unwrap();
+        let snap = repo.join(".rgctl").join(SNAPSHOT_FILE);
+        let pipeline = ProcessingPipeline::with_config(
+            Arc::clone(&registry),
+            PipelineConfig {
+                show_progress: false,
+                thread_count: Some(1),
+                facts_cache: false,
+                ..PipelineConfig::default()
+            },
+        );
+        pipeline
+            .process_repository_to_snapshot(repo, &snap, None)
+            .unwrap_or_else(|e| panic!("[{}] discover failed: {e}", case.lang));
+
+        let store = open_store(repo);
+        let col = store.mmap().columnar().expect("columnar");
+        assert_graph_invariants(col)
+            .unwrap_or_else(|e| panic!("[{}] invariant failure: {e}", case.lang));
+
+        let view = load_view(repo);
+
+        // 1. Type hierarchy (Extends or Implements from Child -> Base/Repo)
+        let has_hierarchy = has_edge(&view, "Child", "Base", "Extends")
+            || has_edge(&view, "Child", "Base", "Implements");
+        assert!(
+            has_hierarchy,
+            "[{}] expected Child -> Base Extends/Implements edge, edges={:?}",
+            case.lang,
+            view.edges
+                .iter()
+                .filter(|(_, _, e)| e == "Extends" || e == "Implements")
+                .collect::<Vec<_>>()
+        );
+
+        // 2. MRO Overrides edge
+        let has_override = view.edges.iter().any(|(f, t, e)| {
+            e == "Overrides"
+                && f.contains(case.override_method)
+                && t.contains(case.override_method)
+                && f != t
+        });
+        assert!(
+            has_override,
+            "[{}] expected Overrides edge on {}, overrides={:?}",
+            case.lang,
+            case.override_method,
+            view.edges
+                .iter()
+                .filter(|(_, _, e)| e == "Overrides")
+                .collect::<Vec<_>>()
+        );
+
+        // 3. Inherited dispatch from Child.run / Child.Run -> Base.inheritedSave
+        let run_targets: BTreeSet<String> = view
+            .edges
+            .iter()
+            .filter(|(f, _, e)| {
+                e == "Calls"
+                    && (f.ends_with(".run")
+                        || f.ends_with("#run")
+                        || f.ends_with("::run")
+                        || f.ends_with(".Run")
+                        || f == "run"
+                        || f == "Run")
+            })
+            .map(|(_, t, _)| t.clone())
+            .collect();
+
+        assert!(
+            run_targets
+                .iter()
+                .any(|t| t.contains(case.inherited_owner) && t.contains(case.inherited_method)),
+            "[{}] expected Child.run -> {}.{} inherited dispatch, got run_targets={run_targets:?}, all_calls={:?}",
+            case.lang,
+            case.inherited_owner,
+            case.inherited_method,
+            view.edges
+                .iter()
+                .filter(|(_, _, e)| e == "Calls")
+                .collect::<Vec<_>>()
+        );
+
+        // 4. Unqualified call with arguments inside module/class -> localHelper
+        assert!(
+            run_targets.iter().any(|t| t.contains(case.helper_method)),
+            "[{}] expected unqualified call with args to {}, got run_targets={run_targets:?}",
+            case.lang,
+            case.helper_method
+        );
+    }
 }

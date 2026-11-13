@@ -19,7 +19,9 @@ Language quality is proven at **four distances** from the plugin:
 
 Always start with unit + a small fixture. Do not open a Tier 1 PR with only “discover succeeds on one file.”
 
-**Tier-1 vs catalog:** Tier-1 deep-analysis languages (CFG/PDG + `*-ast-coverage.json` + single-pass `ScopeStack` / `KindDispatchTable` / `parse_with_pool`) are a subset of the ~60 plugins in [`languages.toml`](../languages.toml). New Tier-1 PRs must use single-pass `extract_all` and keep the coverage JSON in sync (`RGCTL_AST_COVERAGE_STRICT=1` fails on drift; `RGCTL_AST_COVERAGE_TRACK=1` records dispatch hits in depth tests). Cross-language MRO (`Overrides`) and DI/route edges are part of the Tier-1 parity bar where the language has inheritance / frameworks.
+**Tier-1 vs catalog (71-plugin × 17-dimension Correctness Matrix):** `rgctl` ships **71 active plugins** in `default_registry()` (`24` Tier-1 custom plugins with `*-ast-coverage.json` including `markdown`, `3` Mainframe custom line/card plugins `cobol`/`pli`/`jcl`, `39` Tier-2 `handler = "queries"` `tags.scm` plugins plus `3` standalone `rgctl-lang-{json,yaml,toml}` crates = `42` `tags.scm` crates, and `5` `rgctl-config-formats` plugins `yaml`/`json`/`toml`/`properties`/`xml`). New Tier-1 PRs must use single-pass `extract_all`, emit concrete byte spans (`start_byte`, `end_byte`, `name_rel_offset`), and keep the coverage JSON in sync (`RGCTL_AST_COVERAGE_STRICT=1` fails on drift; `RGCTL_AST_COVERAGE_TRACK=1` records dispatch hits in depth tests). Cross-language MRO (`Overrides`) and DI/route edges are part of the Tier-1 parity bar where the language has inheritance / frameworks.
+
+> **Deprecation rule (`rgctl gql`):** `rgctl gql` is **deprecated**. Never write new correctness/QE/integration tests or migrate existing tests to execute `rgctl gql`. Always assert via canonical structured JSON verbs (`rgctl -f json find`, `callers`, `callees`, `relations`, `inventory`, `blast-radius`, `inspect`, `slice`, `cpg`, `security`, `clones`, `semantic`, `review`) or typed Rust snapshot APIs (`ColumnarGraphSnapshot`, `GraphView`, `AnalysisResults`).
 
 ---
 
@@ -99,10 +101,16 @@ Add **all** of the following before calling the language “fully supported.” 
 
 | Suite | Command | Your language is covered when… |
 |-------|---------|--------------------------------|
-| Graph correctness + invariants | `cargo test --test graph_correctness` | `ecommerce-{id}` is in `PROJECTS` and has `expected-facts.json` (`assert_graph_invariants` runs on every project) |
-| Stable-key line-shift | `cargo test --test stable_key_invariance_qe` | Language id listed in `LANGS` in that file (prepend 15 comments/blanks → `diff_snapshots` adds/removes **0** nodes/edges). **Do not** put line numbers in `qualified_name` |
-| Extraction determinism | `cargo test --test graph_determinism_qe` | Prefer a multi-file fixture; counts (and ideally `content_digest`) stable across file order / thread count |
-| Cross-feature QE | `cargo test --test cross_feature_qe` | Collision / CALLS↔blast↔CFG agreement on shared fixtures (extend if you introduce ambiguity) |
+| 17-Dimension Graph Correctness + `INV-1..INV-9` | `cargo test --test graph_correctness` | Registered in `tests/graph_correctness.rs` (`rgctl-tests/ecommerce-{id}` or `tests/fixtures/correctness_matrix/{id}`) with `expected-facts.json` v2 (covers all 24 Tier-1 languages; runs in isolated `TempDir` sandboxes) |
+| Fast 6-Law In-Process Metamorphic Gate | `cargo test --test metamorphic_correctness_qe` | Listed in all 24 Tier-1 snippets (verifies Law 1 Mode Monotonicity, Law 2 Sibling Edit Isolation, Law 3 Cold vs Incremental `IncrementalUpdater` Equivalence, Law 4 Lazy vs `--with-cfg` CPG Equivalence across 22 CFG languages, Law 5 `diff_snapshots` Semantic Classification, Law 6 `content_digest` Bitwise Determinism, + multi-repo `merge`) |
+| Lossless Writeback Round-Trip | `cargo test --test writeback_roundtrip_tier1` | Listed in all 24 Tier-1 plugins (verifies Red-Green `NodeRow` spans, trivia preservation, and surgical identifier rename) |
+| Stable-Key Line-Shift | `cargo test --test stable_key_invariance_qe` | Listed in all 24 Tier-1 languages in `LANGS` (prepend 15 comments/blanks → `diff_snapshots` adds/removes **0** nodes/edges; **do not** put line numbers in `qualified_name`) |
+| 20-Language Taint & Sanitizer Matrix | `cargo test --test taint_analysis` | Covered in `taint_tier1_all_20_languages_intra_inter_and_sanitizer` (intra-procedural taint, dominating sanitizer suppression, and inter-procedural `InterproceduralSlicer` flow) |
+| 16-Language OOP/Trait MRO & Dispatch | `cargo test --test cross_language_mro_and_di` | Covered in `all_16_oop_trait_languages_mro_overrides_inherited_dispatch_and_unqualified_calls` (`Extends`/`Implements`/`Overrides`, inherited call dispatch, and unqualified intra-class calls) |
+| Mainframe Triad (`cobol`, `pli`, `jcl`) | `cargo test --test mainframe_plugins_correctness` | Paragraphs/procedures/job steps, COBOL `PROCEDURE DIVISION` `<entry>` callable linking, JCL `PEND` scoping, `DD DSN=` dataset `References`, + `INV-1..INV-9` |
+| Tier-2 `tags.scm` (42) + Config Formats (5) | `cargo test --test tier2_query_plugins_correctness` | All 39 `default_registry()` + 3 standalone `QueryLanguagePlugin` crates, `.m` ObjC/MATLAB disambiguation, all 5 `ConfigFormatPlugin`s (`UsesConfig`), concrete byte spans, + `INV-1..INV-9` |
+| Extraction determinism | `cargo test --test graph_determinism_qe` | Multi-file fixture; counts and `content_digest` stable across file order / thread count |
+| Cross-feature QE | `cargo test --test cross_feature_qe` | Collision / CALLS↔blast↔CFG agreement on shared fixtures |
 
 ---
 
@@ -150,7 +158,7 @@ Schema: [rgctl-tests/correctness/SCHEMA.md](../rgctl-tests/correctness/SCHEMA.md
 | `symbols.*.identity.canonical_fqn` | Must match what blast/inspect emit **today** |
 | `invariants.B*` | Enable B1/B2/B5… only when CFG/blast are wired for the language |
 
-After discover, `graph_correctness` also runs **`assert_graph_invariants`** (sorted unique nodes/edges, Calls endpoint legality, stable-key consistency, index bijection, digest, external stubs). If this fails, fix extraction or stub policy — do not weaken the checker for convenience.
+After discover, `graph_correctness` (along with the metamorphic, mainframe, and Tier-2 suites) runs **`assert_graph_invariants` (`INV-1`..`INV-9`)**: sorted unique nodes/edges (`INV-1`/`INV-2`), `Calls`/inheritance/`Contains` endpoint legality (`INV-3`), `StableNodeKey` consistency (`INV-4`), CSR/reverse-index bijection (`INV-5`), deterministic `content_digest` (`INV-6`), external-stub isolation (`INV-7`), byte-span & proper container inequality (`INV-8`: `0 <= start_byte <= end_byte <= file_byte_len`, reconstructed identifier span inside declaration span, and `(member.start_byte, member.end_byte) != (container.start_byte, container.end_byte)` while permitting out-of-line Go/Rust/C++/Ruby/C# methods), and sibling source-written `Function` span distinctness (`INV-9`, exempting synthetic/Lombok/macro-generated nodes). Always fail closed: if an invariant fails, fix the extractor or graph builder — never weaken or skip the invariant.
 
 ### Dashboard ecommerce
 

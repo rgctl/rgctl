@@ -275,6 +275,42 @@ fn push_function(
     true
 }
 
+fn collect_dart_type_targets(node: Node, source: &[u8], skip_mixins: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = Vec::new();
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.children(&mut cursor).collect();
+    for ch in children.into_iter().rev() {
+        stack.push(ch);
+    }
+    while let Some(cur) = stack.pop() {
+        let kind = cur.kind();
+        if kind == "type_arguments" || (skip_mixins && kind == "mixins") {
+            continue;
+        }
+        if kind == "type_identifier" {
+            if let Ok(text) = cur.utf8_text(source) {
+                let t = text.trim();
+                if !t.is_empty() && !out.iter().any(|existing| existing == t) {
+                    out.push(t.to_string());
+                }
+            }
+            continue;
+        }
+        let mut c = cur.walk();
+        let nested: Vec<_> = cur.children(&mut c).collect();
+        for ch in nested.into_iter().rev() {
+            stack.push(ch);
+        }
+    }
+    out
+}
+
+fn dart_class_has_interface_keyword(node: Node) -> bool {
+    let mut c = node.walk();
+    node.children(&mut c).any(|ch| ch.kind() == "interface")
+}
+
 fn import_uri(node: Node, source: &[u8]) -> Option<String> {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
@@ -355,14 +391,23 @@ pub fn extract_all_single_pass(
 
                 match kind {
                     "class_declaration" => {
+                        let is_iface = dart_class_has_interface_keyword(node);
                         pushed_scope = push_type_symbol(
                             &mut ctx,
                             node,
                             source,
                             &file_path_str,
-                            SymbolType::Class,
-                            "class",
-                            ScopeKind::Class,
+                            if is_iface {
+                                SymbolType::Interface
+                            } else {
+                                SymbolType::Class
+                            },
+                            if is_iface { "interface_class" } else { "class" },
+                            if is_iface {
+                                ScopeKind::Interface
+                            } else {
+                                ScopeKind::Class
+                            },
                         );
                     }
                     "enum_declaration" => {
@@ -607,6 +652,57 @@ pub fn extract_all_single_pass(
                             ctx.symbols.push(sym);
                         }
                     }
+                    "superclass" => {
+                        if let Some(owner) = ctx
+                            .scopes
+                            .current_type()
+                            .map(|t| t.qualified_prefix.clone())
+                        {
+                            for target in collect_dart_type_targets(node, source, true) {
+                                relations.push(Relation {
+                                    from: owner.clone(),
+                                    to: target.clone(),
+                                    relation_type: RelationType::Extends,
+                                    location: node_to_location(node, &file_path_str),
+                                    metadata: serde_json::json!({
+                                        "language": "dart",
+                                        "kind": "extends",
+                                    }),
+                                    to_qualified_hint: Some(target),
+                                    to_type_hint: None,
+                                    ..Default::default()
+                                });
+                            }
+                        }
+                    }
+                    "interfaces" | "mixins" => {
+                        if let Some(owner) = ctx
+                            .scopes
+                            .current_type()
+                            .map(|t| t.qualified_prefix.clone())
+                        {
+                            let meta_kind = if kind == "mixins" {
+                                "mixin"
+                            } else {
+                                "implements"
+                            };
+                            for target in collect_dart_type_targets(node, source, false) {
+                                relations.push(Relation {
+                                    from: owner.clone(),
+                                    to: target.clone(),
+                                    relation_type: RelationType::Implements,
+                                    location: node_to_location(node, &file_path_str),
+                                    metadata: serde_json::json!({
+                                        "language": "dart",
+                                        "kind": meta_kind,
+                                    }),
+                                    to_qualified_hint: Some(target),
+                                    to_type_hint: None,
+                                    ..Default::default()
+                                });
+                            }
+                        }
+                    }
                     _ => {}
                 }
 
@@ -768,6 +864,56 @@ class Outer {
             bar.qualified_name.as_deref(),
             Some("Foo.bar"),
             "method must be qualified under enclosing class"
+        );
+    }
+
+    #[test]
+    fn dart_extracts_extends_implements_and_mixins() {
+        let src = r#"
+abstract interface class OrderRepo {
+  void save();
+}
+mixin Auditable {
+  void audit() {}
+}
+class BaseLedger {
+  void save() {}
+}
+class OrderLedger extends BaseLedger with Auditable implements OrderRepo {
+  void run() {
+    save();
+  }
+}
+"#;
+        let plugin = Plugin::new().unwrap();
+        let path = PathBuf::from("ledger.dart");
+        let result = extract_all_single_pass(&plugin, &path, src.as_bytes()).unwrap();
+        assert!(
+            result.relations.iter().any(|r| {
+                r.relation_type == RelationType::Extends
+                    && r.from == "OrderLedger"
+                    && r.to == "BaseLedger"
+            }),
+            "expected OrderLedger Extends BaseLedger, got {:?}",
+            result.relations
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                r.relation_type == RelationType::Implements
+                    && r.from == "OrderLedger"
+                    && r.to == "Auditable"
+            }),
+            "expected OrderLedger Implements Auditable, got {:?}",
+            result.relations
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                r.relation_type == RelationType::Implements
+                    && r.from == "OrderLedger"
+                    && r.to == "OrderRepo"
+            }),
+            "expected OrderLedger Implements OrderRepo, got {:?}",
+            result.relations
         );
     }
 }

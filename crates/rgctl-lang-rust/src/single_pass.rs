@@ -186,44 +186,89 @@ pub fn extract_all_single_pass(
                 let mut pushed_scope = false;
                 match kind {
                     "function_item" => {
-                        let impl_ty = ctx.scopes.current_type().and_then(|f| {
-                            if f.kind == ScopeKind::Impl {
-                                f.name.clone()
-                            } else {
-                                None
-                            }
+                        let is_trait_default_method = node.parent().is_some_and(|p| {
+                            p.kind() == "declaration_list"
+                                && p.parent().is_some_and(|gp| gp.kind() == "trait_item")
                         });
-                        let sym = plugin.extract_function(
-                            node,
-                            source,
-                            &file_path_str,
-                            impl_ty.as_deref(),
-                        )?;
-                        let params = sym.parameters.len() as u32;
-                        let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
-                            as u32;
-                        let name = sym.name.clone();
-                        let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
-                        let scope_kind = if sym.symbol_type == SymbolType::Method {
-                            ScopeKind::Method
+                        if is_trait_default_method {
+                            let sb = u32::try_from(node.start_byte()).ok();
+                            let eb = u32::try_from(node.end_byte()).ok();
+                            let existing_idx = ctx
+                                .symbols
+                                .iter()
+                                .rposition(|s| s.start_byte == sb && s.end_byte == eb);
+                            let (name, qn, params) = if let Some(idx) = existing_idx {
+                                let s = &ctx.symbols[idx];
+                                (
+                                    s.name.clone(),
+                                    s.qualified_name.clone().unwrap_or_else(|| s.name.clone()),
+                                    s.parameters.len() as u32,
+                                )
+                            } else {
+                                let nm = node
+                                    .child_by_field_name("name")
+                                    .and_then(|n| n.utf8_text(source).ok())
+                                    .unwrap_or("fn")
+                                    .to_string();
+                                (nm.clone(), nm, 0)
+                            };
+                            let loc = ((node.end_position().row - node.start_position().row) + 1)
+                                .max(1) as u32;
+                            let depth = ctx.scopes.depth();
+                            let mut frame = ScopeFrame::new(
+                                ScopeKind::Method,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                depth,
+                            );
+                            frame.symbol_idx = existing_idx;
+                            frame.complexity.cyclomatic = 1;
+                            frame.complexity.param_count = params;
+                            frame.complexity.loc = loc;
+                            ctx.scopes.push(frame);
+                            pushed_scope = true;
                         } else {
-                            ScopeKind::Function
-                        };
-                        ctx.symbols.push(sym);
-                        ctx.enter_scope(
-                            scope_kind,
-                            Some(name),
-                            qn,
-                            node.start_byte(),
-                            node.end_byte(),
-                            true,
-                        );
-                        if let Some(f) = ctx.scopes.current_function_mut() {
-                            f.complexity.cyclomatic = 1;
-                            f.complexity.param_count = params;
-                            f.complexity.loc = loc;
+                            let impl_ty = ctx.scopes.current_type().and_then(|f| {
+                                if f.kind == ScopeKind::Impl {
+                                    f.name.clone()
+                                } else {
+                                    None
+                                }
+                            });
+                            let sym = plugin.extract_function(
+                                node,
+                                source,
+                                &file_path_str,
+                                impl_ty.as_deref(),
+                            )?;
+                            let params = sym.parameters.len() as u32;
+                            let loc = ((node.end_position().row - node.start_position().row) + 1)
+                                .max(1) as u32;
+                            let name = sym.name.clone();
+                            let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
+                            let scope_kind = if sym.symbol_type == SymbolType::Method {
+                                ScopeKind::Method
+                            } else {
+                                ScopeKind::Function
+                            };
+                            ctx.symbols.push(sym);
+                            ctx.enter_scope(
+                                scope_kind,
+                                Some(name),
+                                qn,
+                                node.start_byte(),
+                                node.end_byte(),
+                                true,
+                            );
+                            if let Some(f) = ctx.scopes.current_function_mut() {
+                                f.complexity.cyclomatic = 1;
+                                f.complexity.param_count = params;
+                                f.complexity.loc = loc;
+                            }
+                            pushed_scope = true;
                         }
-                        pushed_scope = true;
                     }
                     "struct_item" => {
                         let sym =

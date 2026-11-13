@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "language": "javascript",
   "project": "ecommerce-javascript",
   "graph": {
@@ -355,6 +355,116 @@
       "cfg": {
         "min_blocks": 2
       }
+    },
+    "v2LedgerBalance": {
+      "match": {
+        "name": "readBalance",
+        "class": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "v2FreeHelper"
+      ],
+      "mutations": {
+        "type": "V2OrderLedger",
+        "must_contain": [
+          "applyAdjustment"
+        ],
+        "must_exclude": [
+          "correctnessLeaf"
+        ]
+      }
+    },
+    "v2AuditWeightImpl": {
+      "match": {
+        "name": "auditWeight",
+        "class": "V2OrderLedger",
+        "discriminator": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "readBalance"
+      ],
+      "mro": {
+        "extends": [
+          "V2BaseLedger"
+        ],
+        "overrides": [
+          "auditWeight"
+        ]
+      }
+    },
+    "v2SliceFlowProbe": {
+      "match": {
+        "name": "v2SliceFlowProbe"
+      },
+      "severity": "required",
+      "unique": true,
+      "slice": {
+        "file": "src/correctness.js",
+        "line": 55,
+        "variable": "finalOut",
+        "must_contain": [
+          "seedInput",
+          "stepVal"
+        ],
+        "must_exclude": [
+          "999"
+        ]
+      },
+      "flows": {
+        "file": "src/correctness.js",
+        "line": 53,
+        "variable": "stepVal",
+        "must_contain": [
+          "aliasVal",
+          "finalOut"
+        ]
+      }
+    },
+    "v2CloneExactA": {
+      "match": {
+        "name": "v2CloneExact",
+        "class": "V2CloneCarrierA"
+      },
+      "severity": "required",
+      "unique": true,
+      "clones": {
+        "mode": "exact",
+        "group_with": [
+          "v2CloneExact"
+        ],
+        "not_grouped_with": [
+          "correctnessLeaf"
+        ]
+      }
+    },
+    "v2SemanticLedger": {
+      "match": {
+        "name": "reconcileChargebackLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "archiveChargebackAudit"
+      ],
+      "semantic": {
+        "query": "reconcile chargeback ledger",
+        "top3_contains": "reconcileChargebackLedger",
+        "neighbor_names": [
+          "archiveChargebackAudit"
+        ]
+      },
+      "review": {
+        "file": "src/correctness.js",
+        "find": "return 42;",
+        "replace": "return 43;",
+        "must_contain": [
+          "correctnessMid"
+        ]
+      }
     }
   },
   "invariants": {
@@ -417,5 +527,15 @@
         "correctnessLeaf"
       ]
     }
+  },
+  "analytics": {
+    "severity": "required",
+    "root": "correctnessRoot",
+    "mid": "correctnessMid",
+    "leaf": "correctnessLeaf",
+    "separate": [
+      "cliqueAlphaA",
+      "cliqueBetaA"
+    ]
   }
 }

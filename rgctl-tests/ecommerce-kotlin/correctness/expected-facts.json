@@ -1,13 +1,410 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "language": "kotlin",
   "project": "ecommerce-kotlin",
   "graph": {
     "severity": "required",
-    "min_functions": 1,
-    "min_calls_edges": 0,
-    "forbidden_edges": []
+    "min_functions": 15,
+    "min_calls_edges": 8,
+    "forbidden_edges": [
+      {
+        "from": "correctnessLeaf",
+        "to": "correctnessRoot",
+        "reason": "acyclic chain"
+      }
+    ]
   },
-  "symbols": {},
-  "invariants": {}
+  "symbols": {
+    "correctnessLeaf": {
+      "match": {
+        "name": "correctnessLeaf",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [],
+      "exact_callers": [
+        "correctnessMid"
+      ],
+      "blast": {
+        "exact_direct_callers": [
+          "correctnessMid"
+        ],
+        "must_include_impact": [
+          "correctnessMid",
+          "correctnessRoot"
+        ],
+        "min_impact_zone": 2
+      },
+      "cfg": {
+        "min_blocks": 2,
+        "must_have_return": true
+      },
+      "pdg": {
+        "min_nodes": 1
+      },
+      "dom": {
+        "must_cover_cfg": true
+      }
+    },
+    "correctnessMid": {
+      "match": {
+        "name": "correctnessMid",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "correctnessLeaf"
+      ],
+      "exact_callers": [
+        "correctnessRoot"
+      ],
+      "blast": {
+        "exact_direct_callers": [
+          "correctnessRoot"
+        ],
+        "min_impact_zone": 1
+      },
+      "cfg": {
+        "min_blocks": 2,
+        "statements_contain": [
+          "correctnessLeaf"
+        ]
+      },
+      "pdg": {
+        "min_nodes": 1
+      },
+      "dom": {
+        "must_cover_cfg": true
+      }
+    },
+    "correctnessRoot": {
+      "match": {
+        "name": "correctnessRoot",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "correctnessMid"
+      ],
+      "exact_callers": [],
+      "cfg": {
+        "min_blocks": 4,
+        "min_edges": 4,
+        "statements_contain": [
+          "correctnessMid"
+        ]
+      },
+      "pdg": {
+        "min_nodes": 2,
+        "min_edges": 1
+      },
+      "dom": {
+        "must_cover_cfg": true
+      }
+    },
+    "correctnessShared": {
+      "match": {
+        "name": "correctnessShared",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callers": [
+        "correctnessLeft",
+        "correctnessRight"
+      ],
+      "blast": {
+        "exact_direct_callers": [
+          "correctnessLeft",
+          "correctnessRight"
+        ],
+        "must_include_impact": [
+          "correctnessDiamond"
+        ],
+        "min_impact_zone": 3
+      }
+    },
+    "cfgForIn": {
+      "match": {
+        "name": "cfgForIn",
+        "class": "CfgFeatures"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "min_blocks": 3
+      }
+    },
+    "cfgTryCatch": {
+      "match": {
+        "name": "cfgTryCatch",
+        "class": "CfgFeatures"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "min_blocks": 3
+      }
+    },
+    "v2OverloadInt": {
+      "match": {
+        "name": "v2Overload",
+        "class": "V2OrderLedger",
+        "discriminator": "(x: Int"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "v2Overload",
+        "discriminator": "(x: Int",
+        "file_suffix": "CorrectnessHarness.kt",
+        "language": "kotlin"
+      },
+      "exact_callees": [
+        "v2FreeHelper"
+      ]
+    },
+    "v2OverloadStr": {
+      "match": {
+        "name": "v2Overload",
+        "class": "V2OrderLedger",
+        "discriminator": "String"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "v2Overload",
+        "discriminator": "String",
+        "file_suffix": "CorrectnessHarness.kt",
+        "language": "kotlin"
+      },
+      "exact_callees": [
+        "v2StringTarget"
+      ]
+    },
+    "v2LedgerBalance": {
+      "match": {
+        "name": "readBalance",
+        "class": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "v2FreeHelper"
+      ],
+      "mutations": {
+        "type": "V2OrderLedger",
+        "must_contain": [
+          "applyAdjustment"
+        ],
+        "must_exclude": [
+          "correctnessLeaf"
+        ]
+      }
+    },
+    "v2AuditWeightImpl": {
+      "match": {
+        "name": "auditWeight",
+        "class": "V2OrderLedger",
+        "discriminator": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "readBalance"
+      ],
+      "mro": {
+        "extends": [
+          "V2BaseLedger"
+        ],
+        "implements": [
+          "V2AuditPolicy"
+        ],
+        "overrides": [
+          "auditWeight"
+        ]
+      }
+    },
+    "v2SliceFlowProbe": {
+      "match": {
+        "name": "v2SliceFlowProbe",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "slice": {
+        "file": "src/main/kotlin/com/example/ecommerce/CorrectnessHarness.kt",
+        "line": 125,
+        "variable": "finalOut",
+        "must_contain": [
+          "seedInput",
+          "stepVal"
+        ],
+        "must_exclude": [
+          "999"
+        ]
+      },
+      "flows": {
+        "file": "src/main/kotlin/com/example/ecommerce/CorrectnessHarness.kt",
+        "line": 123,
+        "variable": "stepVal",
+        "must_contain": [
+          "aliasVal",
+          "finalOut"
+        ]
+      }
+    },
+    "v2TaintExec": {
+      "match": {
+        "name": "taintUnsafeExec",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "taint": {
+        "sink": "Runtime.getRuntime().exec",
+        "source": "external",
+        "min_flows": 1,
+        "must_contain": [
+          "taintUnsafeExec"
+        ]
+      }
+    },
+    "v2CloneExactA": {
+      "match": {
+        "name": "v2CloneExact",
+        "class": "V2CloneCarrierA"
+      },
+      "severity": "required",
+      "unique": true,
+      "clones": {
+        "mode": "exact",
+        "group_with": [
+          "v2CloneExact"
+        ],
+        "not_grouped_with": [
+          "correctnessLeaf"
+        ]
+      }
+    },
+    "v2SemanticLedger": {
+      "match": {
+        "name": "reconcileChargebackLedger",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "archiveChargebackAudit"
+      ],
+      "semantic": {
+        "query": "reconcile chargeback ledger",
+        "top3_contains": "reconcileChargebackLedger",
+        "neighbor_names": [
+          "archiveChargebackAudit"
+        ]
+      },
+      "review": {
+        "file": "src/main/kotlin/com/example/ecommerce/CorrectnessHarness.kt",
+        "find": "return 42",
+        "replace": "return 43",
+        "must_contain": [
+          "correctnessMid"
+        ]
+      }
+    },
+    "cfgWhen": {
+      "match": {
+        "name": "cfgWhen",
+        "class": "CfgFeatures"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "min_blocks": 4
+      }
+    }
+  },
+  "invariants": {
+    "B1_blast_vs_calls": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": [
+        "correctnessLeaf",
+        "correctnessMid",
+        "correctnessShared"
+      ]
+    },
+    "B2_gql_calls_nonzero": {
+      "enabled": true,
+      "severity": "required"
+    },
+    "B5_inspect_cfg": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": [
+        "correctnessRoot",
+        "correctnessMid",
+        "correctnessLeaf"
+      ]
+    },
+    "B6_cfg_vs_calls": {
+      "enabled": true,
+      "severity": "required",
+      "pairs": [
+        {
+          "symbol": "correctnessRoot",
+          "expected_callees": [
+            "correctnessMid"
+          ]
+        },
+        {
+          "symbol": "correctnessMid",
+          "expected_callees": [
+            "correctnessLeaf"
+          ]
+        }
+      ]
+    },
+    "B7_pdg_vs_cfg": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": [
+        "correctnessRoot",
+        "correctnessMid",
+        "correctnessLeaf"
+      ]
+    },
+    "B8_dom_vs_cfg": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": [
+        "correctnessRoot",
+        "correctnessMid",
+        "correctnessLeaf"
+      ]
+    },
+    "B9_canonical_identity": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": [
+        "correctnessRoot",
+        "correctnessMid",
+        "correctnessLeaf"
+      ]
+    }
+  },
+  "analytics": {
+    "severity": "required",
+    "root": "correctnessRoot",
+    "mid": "correctnessMid",
+    "leaf": "correctnessLeaf",
+    "separate": [
+      "cliqueAlphaA",
+      "cliqueBetaA"
+    ]
+  }
 }

@@ -83,16 +83,25 @@ pub fn v2_slice_flow_probe(seed_input: i32) -> i32 {
     final_out
 }
 
-pub fn v2_clone_exact_a(x: i32) -> i32 {
-    let step = x + 17;
-    let scaled = step * 3;
-    scaled - 5
+pub struct V2CloneCarrierA;
+pub struct V2CloneCarrierB;
+
+impl V2CloneCarrierA {
+    pub fn v2_clone_exact(x: i32) -> i32 {
+        let step = x + 17;
+        let scaled = step * 3;
+        let adjusted = scaled - 5;
+        adjusted + 1
+    }
 }
 
-pub fn v2_clone_exact_b(x: i32) -> i32 {
-    let step = x + 17;
-    let scaled = step * 3;
-    scaled - 5
+impl V2CloneCarrierB {
+    pub fn v2_clone_exact(x: i32) -> i32 {
+        let step = x + 17;
+        let scaled = step * 3;
+        let adjusted = scaled - 5;
+        adjusted + 1
+    }
 }
 
 pub fn archive_chargeback_audit() -> i32 {

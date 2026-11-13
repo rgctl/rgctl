@@ -141,7 +141,7 @@ fn try_fast_cached_lookup(
     }
 
     let lookup_db = MacroCallLookupDb::default_path(&ctx.repo);
-    if MacroCallLookupDb::is_valid_for_repo(&lookup_db, &ctx.repo)? {
+    if args.line.is_none() && MacroCallLookupDb::is_valid_for_repo(&lookup_db, &ctx.repo)? {
         if parsed.class_filter.is_none()
             && parsed.file_filter.is_none()
             && let Some(row) = MacroCallLookupDb::lookup(&lookup_db, &parsed.target_name)?
@@ -738,6 +738,7 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
         && args.policy_file.is_none()
         && !args.with_slices
         && !args.classify_boundary
+        && args.line.is_none()
     {
         let mut session = rgctl_service::Session::new(&ctx.repo);
         if !session.graph_ready() {

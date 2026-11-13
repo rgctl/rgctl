@@ -49,6 +49,17 @@ struct GraphSpec {
     exact_calls_edges: Option<usize>,
     #[serde(default)]
     forbidden_edges: Vec<ForbiddenEdge>,
+    #[serde(default)]
+    expected_relations: Vec<ExpectedRelation>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ExpectedRelation {
+    edge: String,
+    from: String,
+    to: String,
+    #[serde(default = "required_sev")]
+    severity: String,
 }
 
 #[allow(dead_code)]
@@ -167,6 +178,9 @@ struct MatchSpec {
     /// Optional path / file suffix filter (`path/to/file.ts::name` for inspect/blast).
     #[serde(default)]
     file: Option<String>,
+    /// Optional non-function entity type (`struct`, `module`, `variable`, `table`, `interface`).
+    #[serde(default)]
+    entity_type: Option<String>,
     /// Overload / signature fragment that must appear on the matched node (`(String)`, `int`).
     #[serde(default)]
     discriminator: Option<String>,
@@ -385,6 +399,9 @@ struct SemanticSpec {
     query: String,
     /// Symbol name that must appear in the top-3 vocab hits.
     top3_contains: String,
+    /// Optional semantic scope (`function` default, `docs` for Markdown headings, `all`).
+    #[serde(default)]
+    scope: Option<String>,
     #[serde(default = "true_bool")]
     expand_neighbors: bool,
     /// When set, every name must appear in `--expand neighbors` and no other requirement is implied.
@@ -448,9 +465,21 @@ impl GraphIndex {
                 .iter()
                 .copied()
                 .filter(|f| {
-                    f.get("file")
+                    f.get("qualified_name")
                         .and_then(|x| x.as_str())
-                        .is_some_and(|p| p.contains(hint))
+                        .is_some_and(|q| {
+                            q.starts_with(&format!("{hint}::"))
+                                || q.starts_with(&format!("{hint}."))
+                                || q.starts_with(&format!("{hint}#"))
+                                || q.contains(&format!("::{hint}::"))
+                                || q.contains(&format!(".{hint}."))
+                                || q.contains(&format!("\\{hint}::"))
+                                || q.contains(&format!("\\{hint}."))
+                                || q.contains(&format!("\\{hint}#"))
+                        })
+                        || f.get("file")
+                            .and_then(|x| x.as_str())
+                            .is_some_and(|p| p.contains(hint))
                 })
                 .collect();
             if !narrowed.is_empty() {
@@ -542,13 +571,20 @@ impl GraphIndex {
 }
 
 fn short_name(fqn: &str) -> String {
-    if let Some(i) = fqn.rfind("::") {
-        return fqn[i + 2..].to_string();
+    let head = fqn.split('(').next().unwrap_or(fqn);
+    if let Some(i) = head.rfind("::") {
+        return head[i + 2..].to_string();
     }
-    if let Some(i) = fqn.rfind('.') {
-        return fqn[i + 1..].to_string();
+    if let Some(i) = head.rfind('#') {
+        return head[i + 1..].to_string();
     }
-    fqn.to_string()
+    if let Some(i) = head.rfind('.') {
+        return head[i + 1..].to_string();
+    }
+    if let Some(i) = head.rfind('\\') {
+        return head[i + 1..].to_string();
+    }
+    head.to_string()
 }
 
 fn normalize_names(names: &[String]) -> Vec<String> {
@@ -1286,6 +1322,60 @@ pub fn run_project(
             format!("forbidden {} → {} present={hit}", fe.from, fe.to),
         ));
     }
+    for (i, er) in facts.graph.expected_relations.iter().enumerate() {
+        let doc = run_json(
+            bin,
+            &work,
+            &[
+                "-f",
+                "json",
+                "relations",
+                "--edge",
+                &er.edge,
+                "--limit",
+                "10000",
+            ],
+        );
+        let hit = doc
+            .as_ref()
+            .and_then(|d| d.get("edges"))
+            .and_then(|e| e.as_array())
+            .is_some_and(|rows| {
+                rows.iter().any(|row| {
+                    let s_blob = format!(
+                        "{} {} {}",
+                        row.pointer("/source/name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        row.pointer("/source/qualified_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        row.pointer("/source/file")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                    );
+                    let t_blob = format!(
+                        "{} {} {}",
+                        row.pointer("/target/name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        row.pointer("/target/qualified_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        row.pointer("/target/file")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                    );
+                    s_blob.contains(&er.from) && t_blob.contains(&er.to)
+                })
+            });
+        checks.push(check(
+            format!("graph.expected_relations[{i}]"),
+            &er.severity,
+            hit,
+            format!("edge={} from={} to={}", er.edge, er.from, er.to),
+        ));
+    }
 
     for (sid, entry) in &facts.symbols {
         checks.extend(check_symbol(sid, entry, bin, &work, &index));
@@ -1341,7 +1431,54 @@ fn check_symbol(
     let class = m.class.as_deref();
     let mut out = Vec::new();
 
-    let hits = index.find_matched(&m);
+    let typed_owned: Vec<Value> = if let Some(et) = m.entity_type.as_deref() {
+        run_json(
+            bin,
+            cwd,
+            &["-f", "json", "find", "--type", et, "--limit", "10000"],
+        )
+        .and_then(|doc| {
+            doc.get("entities").and_then(|e| e.as_array()).map(|rows| {
+                rows.iter()
+                    .map(entity_as_legacy)
+                    .filter(|f| {
+                        let exact_n =
+                            f.get("node").and_then(|x| x.as_str()) == Some(m.name.as_str());
+                        let exact_q = f
+                            .get("qualified_name")
+                            .and_then(|x| x.as_str())
+                            .is_some_and(|q| q == m.name || q.ends_with(&format!("#{}", m.name)));
+                        if !exact_n && !exact_q {
+                            return false;
+                        }
+                        if let Some(file_suf) = m.file.as_deref() {
+                            if !f
+                                .get("file")
+                                .and_then(|x| x.as_str())
+                                .is_some_and(|p| p.ends_with(file_suf) || p.contains(file_suf))
+                            {
+                                return false;
+                            }
+                        }
+                        if let Some(disc) = m.discriminator.as_deref().filter(|s| !s.is_empty()) {
+                            if !entity_blob(f).contains(disc) {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let hits: Vec<&Value> = if m.entity_type.is_some() {
+        typed_owned.iter().collect()
+    } else {
+        index.find_matched(&m)
+    };
     let exists_ok = if entry.unique {
         hits.len() == 1
     } else {
@@ -2098,7 +2235,8 @@ fn check_taint(sid: &str, spec: &TaintSpec, bin: &Path, cwd: &Path) -> Vec<Check
     let mut out = text_checks(sid, "taint", &spec.severity, &spec.text, &doc.to_string());
     if let Some(min) = spec.min_flows {
         let got = doc
-            .get("flows")
+            .get("paths")
+            .or_else(|| doc.get("flows"))
             .and_then(|v| v.as_array())
             .map(|rows| rows.len())
             .unwrap_or(0);
@@ -2178,9 +2316,11 @@ fn check_clones(
         return out;
     }
     for peer in &spec.group_with {
-        let ok = mine
-            .iter()
-            .any(|names| names.iter().any(|n| name_matches(n, peer)));
+        let same_name = name_matches(symbol, peer);
+        let ok = mine.iter().any(|names| {
+            let count = names.iter().filter(|n| name_matches(n, peer)).count();
+            if same_name { count >= 2 } else { count >= 1 }
+        });
         out.push(check(
             format!("symbol.{sid}.clones.group_with"),
             &spec.severity,
@@ -2206,13 +2346,11 @@ fn check_semantic(sid: &str, spec: &SemanticSpec, bin: &Path, cwd: &Path) -> Vec
     if spec.severity == "unsupported" {
         return vec![];
     }
-    if run_json(
-        bin,
-        cwd,
-        &["-f", "json", "semantic", "index", "--embedder", "vocab"],
-    )
-    .is_none()
-    {
+    let mut index_args = vec!["-f", "json", "semantic", "index", "--embedder", "vocab"];
+    if let Some(scope) = spec.scope.as_deref() {
+        index_args.extend(["--scope", scope]);
+    }
+    if run_json(bin, cwd, &index_args).is_none() {
         return vec![check(
             format!("symbol.{sid}.semantic"),
             &spec.severity,
@@ -2229,6 +2367,9 @@ fn check_semantic(sid: &str, spec: &SemanticSpec, bin: &Path, cwd: &Path) -> Vec
         "--limit",
         "3",
     ];
+    if let Some(scope) = spec.scope.as_deref() {
+        args.extend(["--scope", scope]);
+    }
     if spec.expand_neighbors {
         args.extend(["--expand", "neighbors"]);
     }
@@ -2367,7 +2508,10 @@ fn check_review(sid: &str, spec: &ReviewSpec, bin: &Path, cwd: &Path) -> Vec<Che
 fn git_sandbox(cwd: &Path, args: &[&str]) -> std::process::Output {
     Command::new("git")
         .current_dir(cwd)
+        .args(["-c", "commit.gpgsign=false"])
         .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "rgctl-test")
         .env("GIT_AUTHOR_EMAIL", "rgctl-test@example.com")
         .env("GIT_COMMITTER_NAME", "rgctl-test")
@@ -2654,7 +2798,14 @@ fn check_invariants(
                     .collect();
                 let ast_missing: Vec<_> = expect
                     .iter()
-                    .filter(|c| !texts.iter().any(|t| t.contains(&format!("{c}("))))
+                    .filter(|c| {
+                        !texts.iter().any(|t| {
+                            let trimmed = t.trim();
+                            trimmed == c.as_str()
+                                || trimmed.starts_with(&format!("{c} "))
+                                || t.contains(&format!("{c}("))
+                        })
+                    })
                     .cloned()
                     .collect();
                 out.push(check(
