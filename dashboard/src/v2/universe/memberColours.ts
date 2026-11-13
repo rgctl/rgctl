@@ -14,6 +14,15 @@
  * type-like kinds share a violet family (they are all declarations of a thing, and giving each its own hue made a
  * level look like confetti); the rest of the wheel is spent on the kinds that remain.
  *
+ * **No two greens.** `file` was a leaf green beside a teal `module`, and at nine pixels on a dark canvas the two
+ * read as one colour with two shades — the distinction existed in the table and not on the screen. Files are brown
+ * now, which is both a colour nothing else uses and the warm end of the wheel where the cool structure kinds are not.
+ *
+ * **Fifteen hues do not fit.** Eight families on a wheel means roughly 40° each, and two of them were closer than
+ * that once "visible" was a hard requirement: brown and the red used for data sat exactly 30° apart, which is the
+ * same defect as the two greens in a different part of the wheel. The families are now spread by hue with no pair
+ * under 30°, and a test holds that rather than trusting the table to stay well-spaced as kinds are added.
+ *
  * **No greys, and nothing dark.** An earlier version made files and imports cool and desaturated "so they recede",
  * which on a near-black canvas meant they did not recede — they disappeared, and the two of them were the same
  * grey as each other anyway. Every colour here is saturated and mid-to-light, because the only alternative to
@@ -31,19 +40,19 @@ const KIND_COLOURS: Record<string, string> = {
   typealias: "#a78bfa",
   annotation: "#a78bfa",
   module: "#2dd4bf", // teal: a namespace, one step above a file
-  file: "#4ade80", // leaf green: the leaf of the tree, and nothing else is green
-  import: "#facc15", // yellow: a dependency edge, the most common non-code node
-  dependency: "#facc15",
-  variable: "#fb923c", // orange: run-time data —
-  table: "#fb923c",
-  configkey: "#f87171", // red: configuration, which is neither code nor data
-  macro: "#f472b6", // pink: generated or expanded code —
+  file: "#c99a3d", // bronze: the leaf of the tree — and deliberately not the second green
+  import: "#a3e635", // olive: a dependency edge, the most common non-code node
+  dependency: "#a3e635",
+  variable: "#f87171", // red: run-time data, one family with config and tables —
+  table: "#f87171",
+  configkey: "#f87171",
+  macro: "#f472b6", // pink: generated or expanded code, one family with the unnamed kinds —
   job: "#f472b6",
   buildstep: "#f472b6",
 };
 
 /** Anything without an entry of its own: visible, and obviously not one of the named families. */
-export const OTHER_COLOUR = "#e879f9";
+export const OTHER_COLOUR = "#f472b6";
 
 /** The colour for a kind, keyed case-insensitively because the string crosses a JSON boundary. */
 export function colourForKind(kind: string | null | undefined): string {

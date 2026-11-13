@@ -25,6 +25,27 @@ function hsl(hex: string): { s: number; l: number } {
 const saturation = (hex: string) => hsl(hex).s;
 const lightness = (hex: string) => hsl(hex).l;
 
+/** Shortest distance around the colour wheel, in degrees. */
+function hueDistance(a: string, b: string): number {
+  const ha = hueOf(a);
+  const hb = hueOf(b);
+  const raw = Math.abs(ha - hb);
+  return Math.min(raw, 360 - raw);
+}
+
+function hueOf(hex: string): number {
+  const n = Number.parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255;
+  const g = ((n >> 8) & 255) / 255;
+  const b = (n & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  if (d === 0) return 0;
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return ((h * 60) % 360 + 360) % 360;
+}
+
 describe("isFunctionKind", () => {
   it("recognises the engine's own spelling, whatever its case", () => {
     expect(isFunctionKind("Function")).toBe(true);
@@ -111,7 +132,7 @@ describe("colourForKind", () => {
     expect(colourForKind("Function")).toBe(colourForKind("function"));
     // The same call the scene makes for the instance colour.
     expect(colourHexForKind("Function")).toBe(0x60a5fa);
-    expect(colourForKind("File")).toBe("#4ade80");
+    expect(colourForKind("File")).toBe("#c99a3d");
   });
 
   it("puts the type-like kinds in one family, so a level is not confetti", () => {
@@ -137,11 +158,27 @@ describe("colourForKind", () => {
     }
   });
 
-  it("tells the two most confusable pairs apart", () => {
-    // The reported defect in one assertion: these were the same grey.
+  it("tells the most confusable pairs apart", () => {
+    // The first reported defect in one assertion: these were the same grey.
     expect(colourForKind("File")).not.toBe(colourForKind("Import"));
     // And the pair a reader meets most often after functions must not be two blues.
     expect(colourForKind("Function")).not.toBe(colourForKind("Module"));
+    // The second report: `file` was a leaf green beside a teal `module`, and at nine pixels the two read as one
+    // colour in two shades. Hue separation is the rule, not "they are different hexes".
+    expect(hueDistance(colourForKind("File"), colourForKind("Module"))).toBeGreaterThan(30);
+    expect(hueDistance(colourForKind("Module"), colourForKind("Import"))).toBeGreaterThan(60);
+  });
+
+  it("keeps every pair of named families at least 30° of hue apart", () => {
+    const named = [
+      "Function", "Class", "Module", "File", "Import", "Variable", "Macro",
+    ].map((kind) => ({ kind, colour: colourForKind(kind) }));
+    for (let i = 0; i < named.length; i += 1) {
+      for (let j = i + 1; j < named.length; j += 1) {
+        const apart = hueDistance(named[i].colour, named[j].colour);
+        expect(apart, `${named[i].kind} vs ${named[j].kind}`).toBeGreaterThan(30);
+      }
+    }
   });
 
   it("keeps functions distinct from every family in the legend", () => {
