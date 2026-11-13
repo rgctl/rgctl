@@ -254,7 +254,7 @@ pub(crate) fn run_full_analysis(
         std::fs::create_dir_all(rgctl_graph::paths::artifact_dir(store))?;
         rgctl_graph::paths::ensure_rgctl_git_exclude(store);
         let (stats, digest) =
-            pipeline.process_repository_to_snapshot(root, &snapshot_path, Some(store))?;
+            pipeline.process_files_to_snapshot(root, &files, &snapshot_path, Some(store))?;
         if verbose {
             debug!(
                 path = %snapshot_path.display(),
@@ -992,9 +992,17 @@ pub(crate) fn run_full_analysis(
                 println!("{}", mem_monitor.report());
             }
         }
-        if verbose {
+        if verbose && !batch.skips.is_empty() {
+            info!(
+                target: "profile",
+                skipped = batch.skips.len(),
+                unsupported_language = batch.skip_unsupported_language,
+                missing_source = batch.skip_missing_source,
+                analysis_error = batch.skip_analysis_error,
+                "[profile] cfg skip summary"
+            );
             for skip in &batch.skips {
-                info!(
+                debug!(
                     target: "profile",
                     path = %skip.file_path,
                     symbol = %skip.symbol,

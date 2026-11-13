@@ -114,7 +114,10 @@ impl FileDiscoverer {
 
         for entry in walker.flatten() {
             let path = entry.path();
-            if !path.is_file() {
+            if !entry
+                .file_type()
+                .map_or_else(|| path.is_file(), |ft| ft.is_file())
+            {
                 continue;
             }
 
@@ -122,13 +125,13 @@ impl FileDiscoverer {
                 continue;
             }
 
-            if self.is_too_large(path)? {
-                continue;
-            }
-
             if let Some(ref languages) = self.config.languages
                 && !self.matches_language_filter(path, languages)
             {
+                continue;
+            }
+
+            if self.is_too_large_entry(&entry, path)? {
                 continue;
             }
 
@@ -163,17 +166,19 @@ impl FileDiscoverer {
         false
     }
 
-    fn is_too_large(&self, path: &Path) -> Result<bool> {
-        let metadata = path.metadata()?;
-        Ok(metadata.len() > self.config.max_file_size)
+    fn is_too_large_entry(&self, entry: &ignore::DirEntry, path: &Path) -> Result<bool> {
+        let len = match entry.metadata() {
+            Ok(meta) => meta.len(),
+            Err(_) => path.metadata()?.len(),
+        };
+        Ok(len > self.config.max_file_size)
     }
 
     fn is_binary(&self, path: &Path) -> Result<bool> {
         let mut file = File::open(path)?;
-        let mut buffer = vec![0u8; BINARY_SAMPLE_SIZE];
+        let mut buffer = [0u8; BINARY_SAMPLE_SIZE];
         let bytes_read = file.read(&mut buffer)?;
-        buffer.truncate(bytes_read);
-        Ok(buffer.contains(&0))
+        Ok(buffer[..bytes_read].contains(&0))
     }
 }
 
