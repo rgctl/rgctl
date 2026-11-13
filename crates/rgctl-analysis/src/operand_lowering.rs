@@ -476,6 +476,14 @@ impl<'a> Lowerer<'a> {
         } else if let Some((receiver, member)) = member_parts(node) {
             inputs.push(self.expression(receiver, depth + 1)?);
             ExpressionKind::Member(self.node_name(member)?)
+        } else if let Some((condition, consequence, alternative)) = conditional_parts(node) {
+            let condition = self.expression(condition, depth + 1)?;
+            inputs.push(self.expression(consequence, depth + 1)?);
+            inputs.push(self.expression(alternative, depth + 1)?);
+            ExpressionKind::Conditional { condition }
+        } else if let Some(value) = asserted_value(node) {
+            inputs.push(self.expression(value, depth + 1)?);
+            ExpressionKind::AssertedValue
         } else if matches!(kind, "composite_literal" | "struct_expression") {
             let type_node = node
                 .child_by_field_name("type")
@@ -737,5 +745,32 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
                 .collect()
         }
         _ => vec![],
+    }
+}
+
+// Only selected values flow through a conditional. Its condition remains a
+// separate native operand, preserving control/data distinctions for consumers.
+fn conditional_parts(node: Node<'_>) -> Option<(Node<'_>, Node<'_>, Node<'_>)> {
+    match node.kind() {
+        "ternary_expression" => Some((
+            node.child_by_field_name("condition")?,
+            node.child_by_field_name("consequence")?,
+            node.child_by_field_name("alternative")?,
+        )),
+        "conditional_expression" if node.named_child_count() == 3 => Some((
+            node.named_child(1)?,
+            node.named_child(0)?,
+            node.named_child(2)?,
+        )),
+        _ => None,
+    }
+}
+fn asserted_value(node: Node<'_>) -> Option<Node<'_>> {
+    match node.kind() {
+        "cast_expression" => node.child_by_field_name("value"),
+        "type_assertion_expression" => node.child_by_field_name("operand"),
+        "as_expression" | "non_null_expression" => node.named_child(0),
+        "type_assertion" => node.named_child(node.named_child_count().checked_sub(1)?),
+        _ => None,
     }
 }

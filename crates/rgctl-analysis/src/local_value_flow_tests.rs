@@ -502,3 +502,108 @@ fn conditional_factory_return_values_reach_the_callers_receiver() {
         expression: caller.operands.formals[0].value
     }));
 }
+
+#[test]
+fn conditional_value_branches_flow_but_the_condition_does_not() {
+    for (language, source) in [
+        (
+            "javascript",
+            "function consume(flag) { return flag ? new X() : new W(); }",
+        ),
+        (
+            "typescript",
+            "function consume(flag:boolean):Y { return flag ? new X() : new W(); }",
+        ),
+        (
+            "java",
+            "class Demo { static Y consume(boolean flag) { return flag ? new X() : new W(); } }",
+        ),
+        (
+            "python",
+            "def consume(flag):\n return X() if flag else W()\n",
+        ),
+    ] {
+        let (cfg, _, flow) = build(language, source);
+        let result = cfg.operands.returns[0]
+            .values
+            .slice(&cfg.operands.inputs)
+            .unwrap()[0];
+        for ty in ["X", "W"] {
+            assert!(
+                reaches(&flow, construction(&cfg, ty), result),
+                "{language} {ty}: {flow:?}"
+            );
+        }
+        assert!(
+            !reaches(&flow, cfg.operands.formals[0].value, result),
+            "condition is not the selected value: {language}"
+        );
+    }
+}
+
+#[test]
+fn successful_type_assertions_and_casts_preserve_only_the_operand_value() {
+    for (language, source) in [
+        (
+            "typescript",
+            "function consume(value:unknown):number { return (value as Y).execute(); }",
+        ),
+        (
+            "typescript",
+            "function consume(value:unknown):number { return (<Y>value).execute(); }",
+        ),
+        (
+            "typescript",
+            "function consume(value:Y|null):number { return value!.execute(); }",
+        ),
+        (
+            "java",
+            "class Demo { static int consume(Object value) { return ((Y)value).execute(); } }",
+        ),
+        (
+            "go",
+            "package demo\nfunc consume(value any) int {return value.(Y).Execute()}",
+        ),
+    ] {
+        let (cfg, _, flow) = build(language, source);
+        let receiver = cfg.operands.calls.iter().find_map(|c| c.receiver).unwrap();
+        assert!(
+            reaches(&flow, cfg.operands.formals[0].value, receiver),
+            "{language}: {source}: {flow:?}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_computation_does_not_become_a_value_alias() {
+    let (cfg, _, flow) = build(
+        "javascript",
+        "function consume(value) { return value + 1; }",
+    );
+    let result = cfg.operands.returns[0]
+        .values
+        .slice(&cfg.operands.inputs)
+        .unwrap()[0];
+    assert!(!reaches(&flow, cfg.operands.formals[0].value, result));
+}
+
+#[test]
+fn conditional_operands_round_trip_and_validate_control_references() {
+    let (cfg, _, _) = build(
+        "javascript",
+        "function consume(flag) { return flag ? new X() : new W(); }",
+    );
+    let encoded = bincode::serialize(&cfg).unwrap();
+    let mut restored: ControlFlowGraph = bincode::deserialize(&encoded).unwrap();
+    assert_eq!(restored.operands, cfg.operands);
+    let branch = restored
+        .operands
+        .expressions
+        .iter_mut()
+        .find(|e| matches!(e.kind, ExpressionKind::Conditional { .. }))
+        .unwrap();
+    branch.kind = ExpressionKind::Conditional {
+        condition: ExpressionId(u32::MAX),
+    };
+    assert!(!restored.operands.valid_references());
+}

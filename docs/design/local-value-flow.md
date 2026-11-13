@@ -99,3 +99,17 @@ records select a use before a definition with a deterministic ordering. This
 removes the previous arbitrary PDG-map choice between an entry and a body use.
 The new local query considers all recorded reads; it is not limited to that
 legacy helper's single representative criterion.
+
+## Conditional results and successful assertions
+
+Conditional operands retain the condition separately and only their selected
+value branches as `inputs`. Both branches supply possible origins to the result;
+no path-condition evaluation or branch exclusion is claimed. JavaScript,
+TypeScript and Java ternaries and Python conditional expressions share this role.
+Successful Java reference casts, Go type assertions and TypeScript `as`, angle
+assertions and non-null assertions preserve the operand origin. Assertion failure
+is not an alternate object value; exception/panic effects remain separate work.
+Ordinary arithmetic and other computations are not aliases of their children.
+
+These persisted expression roles use CFG semantics 5 and RBCP v8; prior procedural
+records are invalidated by the existing archive and source-revision guards.

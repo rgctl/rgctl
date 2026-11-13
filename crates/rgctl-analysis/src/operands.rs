@@ -101,6 +101,13 @@ pub enum ExpressionKind {
     Literal,
     /// Parentheses preserving an inner expression.
     Parenthesized,
+    /// Conditional selection; inputs are value alternatives, not the condition.
+    Conditional {
+        /// Boolean/truth-tested control expression; never a selected-value alias.
+        condition: ExpressionId,
+    },
+    /// Assertion or reference cast preserving the operand on a successful path.
+    AssertedValue,
     /// Other computation with ordered syntactic children.
     Computation,
     /// Unsupported, malformed or depth-limited expression.
@@ -308,6 +315,7 @@ impl FunctionOperands {
                     ExpressionKind::Formal(id) => (id.0 as usize) < self.formals.len(),
                     ExpressionKind::CallResult(id) => (id.0 as usize) < self.calls.len(),
                     ExpressionKind::Construction(id) => expr(id),
+                    ExpressionKind::Conditional { condition } => expr(condition),
                     _ => true,
                 }
         }) && self.local_slots.iter().all(|&id| name(id))

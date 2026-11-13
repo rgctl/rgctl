@@ -18,6 +18,10 @@ pub enum LocalTransferKind {
     LocalRead,
     /// Parentheses preserve their inner value.
     Parenthesized,
+    /// Either selected branch may supply the conditional result.
+    ConditionalAlternative,
+    /// Reference cast/assertion preserves its operand on the successful path.
+    AssertedValue,
 }
 
 /// Function-local expression transfer; qualify IDs with the enclosing callable.
@@ -245,14 +249,17 @@ impl LocalValueFlow {
             }
         }
         for (index, expression) in cfg.operands.expressions.iter().enumerate() {
-            if expression.kind != ExpressionKind::Parenthesized {
-                continue;
-            }
+            let kind = match expression.kind {
+                ExpressionKind::Parenthesized => LocalTransferKind::Parenthesized,
+                ExpressionKind::Conditional { .. } => LocalTransferKind::ConditionalAlternative,
+                ExpressionKind::AssertedValue => LocalTransferKind::AssertedValue,
+                _ => continue,
+            };
             for &from in expression.inputs.slice(&cfg.operands.inputs).unwrap_or(&[]) {
                 let edge = LocalValueTransfer {
                     from,
                     to: ExpressionId(index as u32),
-                    kind: LocalTransferKind::Parenthesized,
+                    kind,
                 };
                 if seen.insert(edge) {
                     if result.transfers.len() >= limits.max_transfers {
