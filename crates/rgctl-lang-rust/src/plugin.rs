@@ -547,13 +547,19 @@ impl RustPlugin {
 
             match node.kind() {
                 "function_item" => {
-                    let impl_ty = self.find_containing_impl_type(node, source);
-                    symbols.push(self.extract_function(
-                        node,
-                        source,
-                        &file_path_str,
-                        impl_ty.as_deref(),
-                    )?);
+                    let is_trait_default_method = node.parent().is_some_and(|p| {
+                        p.kind() == "declaration_list"
+                            && p.parent().is_some_and(|gp| gp.kind() == "trait_item")
+                    });
+                    if !is_trait_default_method {
+                        let impl_ty = self.find_containing_impl_type(node, source);
+                        symbols.push(self.extract_function(
+                            node,
+                            source,
+                            &file_path_str,
+                            impl_ty.as_deref(),
+                        )?);
+                    }
                 }
                 "struct_item" => {
                     symbols.push(self.extract_type_definition(

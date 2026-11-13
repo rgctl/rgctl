@@ -78,6 +78,7 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "const_declaration",
     "continue_expression",
     "continue_statement",
+    "control_structure_body",
     "control_transfer_statement",
     "debugger_statement",
     "dec_statement",
@@ -90,6 +91,7 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "defer_statement",
     "delete_statement",
     "dictionary_comprehension",
+    "do",
     "do_block",
     "do_group",
     "do_statement",
@@ -155,6 +157,7 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "is_pattern_expression",
     "join_clause",
     "join_into_clause",
+    "jump_expression",
     "labeled_expression",
     "labeled_statement",
     "lambda_expression",
@@ -773,24 +776,37 @@ fn find_function_by_name<'a>(
         return find_java_lambda_expression(node, idx);
     }
 
+    let mut found_with_body = None;
+    let mut found_bodiless = None;
+    let mut ambiguous_bodiless = false;
     let mut stack = vec![node];
-    let mut found = None;
     while let Some(node) = stack.pop() {
         if function_kinds.contains(&node.kind())
             && let Some(func_name) = callable_name_for_cfg(node, source, language)
             && func_name == name
         {
-            if found.is_some() {
-                return None;
+            if function_body_node(node, language).is_some() {
+                if found_with_body.is_some() {
+                    return None;
+                }
+                found_with_body = Some(node);
+            } else if found_bodiless.is_none() {
+                found_bodiless = Some(node);
+            } else {
+                ambiguous_bodiless = true;
             }
-            found = Some(node);
         }
         let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
             stack.push(child);
         }
     }
-    found
+    found_with_body.or(if ambiguous_bodiless {
+        None
+    } else {
+        found_bodiless
+    })
 }
 
 /// Nth direct `block` child of a Java `class_body` (instance initializer).
@@ -1165,8 +1181,8 @@ impl<'a> CfgBuilder<'a> {
             "if" | "unless" => self.visit_if(node, source),
             "while" | "until" => self.visit_while(node, source),
             "for" => self.visit_for(node, source),
-            "case" => self.visit_switch(node, source),
-            "begin_block" => self.visit_ruby_begin_block(node, source),
+            "case" | "case_match" => self.visit_switch(node, source),
+            "begin" | "begin_block" => self.visit_ruby_begin_block(node, source),
             "return" => self.visit_return(node, source),
             "next" => self.visit_continue(node, source),
             "break" => self.visit_break(node, source),
@@ -1292,6 +1308,18 @@ impl<'a> CfgBuilder<'a> {
             "co_yield_statement" | "co_yield_expression" => self.visit_co_yield(node, source),
             "yield_statement" => self.visit_yield_statement(node, source),
             "throw_statement" | "throw_expression" => self.visit_throw(node, source),
+            "jump_expression" => {
+                let text = node.utf8_text(source).unwrap_or("").trim_start();
+                if text.starts_with("throw") {
+                    self.visit_throw(node, source)
+                } else if text.starts_with("break") {
+                    self.visit_break(node, source)
+                } else if text.starts_with("continue") {
+                    self.visit_continue(node, source)
+                } else {
+                    self.visit_return(node, source)
+                }
+            }
             "co_await_expression" => self.visit_co_await(node, source),
             "await_expression" => self.visit_await_expression(node, source),
 
@@ -1370,6 +1398,18 @@ impl<'a> CfgBuilder<'a> {
             | "augmented_assignment"
             | "augmented_assignment_expression"
             | "compound_assignment_expr" => {
+                if self.language == "ruby"
+                    && let Some(rhs) = node.child_by_field_name("right")
+                    && matches!(
+                        rhs.kind(),
+                        "case" | "case_match" | "begin" | "if" | "unless"
+                    )
+                {
+                    self.visit_statement(rhs, source)?;
+                    if !self.flow_active {
+                        return Ok(());
+                    }
+                }
                 self.add_statement(node, source, StatementKind::Assignment)?;
                 Ok(())
             }
@@ -1389,13 +1429,28 @@ impl<'a> CfgBuilder<'a> {
             // C ternary `cond ? a : b`
             "conditional_expression" => self.visit_conditional_expression(node, source),
 
-            // Rust match / Python match-case
+            // Rust match / Python match-case / Scala match
             "match_expression" | "match_statement" => self.visit_match(node, source),
             "case_clause" => {
-                if let Some(body) = node.child_by_field_name("consequence") {
+                if let Some(body) = node
+                    .child_by_field_name("consequence")
+                    .or_else(|| node.child_by_field_name("body"))
+                {
                     self.visit_block(body, source)?;
                 } else {
-                    self.visit_block(node, source)?;
+                    let pattern_id = node.child_by_field_name("pattern").map(|n| n.id());
+                    let guard_id = node.child_by_field_name("guard").map(|n| n.id());
+                    let mut c = node.walk();
+                    for child in node.children(&mut c) {
+                        if !child.is_named()
+                            || Some(child.id()) == pattern_id
+                            || Some(child.id()) == guard_id
+                            || matches!(child.kind(), "case_pattern" | "guard")
+                        {
+                            continue;
+                        }
+                        self.visit_statement(child, source)?;
+                    }
                 }
                 Ok(())
             }
@@ -1487,23 +1542,44 @@ impl<'a> CfgBuilder<'a> {
             // Bash `elif_clause` — same shape as nested if.
             "elif_clause" => self.visit_if(node, source),
             // Bash pipelines / lists / redirects / negation — walk named children.
-            "pipeline"
-            | "list"
-            | "redirected_statement"
-            | "negated_command"
-            | "command"
-            | "command_substitution"
-            | "test_command"
-            | "declaration_command"
-            | "unset_command"
-            | "variable_assignment"
-            | "case_item" => {
+            "pipeline" | "list" | "redirected_statement" | "negated_command" | "case_item" => {
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     if child.is_named() {
                         self.visit_statement(child, source)?;
                     }
                 }
+                Ok(())
+            }
+
+            // Bash atomic statements: keep intact so statement text and def-use stay unified.
+            "declaration_command" => {
+                self.add_statement(node, source, StatementKind::Declaration)?;
+                Ok(())
+            }
+            "variable_assignment" | "unset_command" => {
+                self.add_statement(node, source, StatementKind::Assignment)?;
+                Ok(())
+            }
+            "test_command" => {
+                self.add_statement(node, source, StatementKind::Expression)?;
+                Ok(())
+            }
+            "command" => {
+                let cmd_name = node
+                    .child_by_field_name("name")
+                    .or_else(|| find_direct_child_kind(node, "command_name"))
+                    .and_then(|n| n.utf8_text(source).ok())
+                    .map(str::trim);
+                if cmd_name == Some("return") {
+                    self.visit_return(node, source)?;
+                } else {
+                    self.add_statement(node, source, StatementKind::FunctionCall)?;
+                }
+                Ok(())
+            }
+            "command_substitution" => {
+                self.add_statement(node, source, StatementKind::Expression)?;
                 Ok(())
             }
 
@@ -1559,6 +1635,7 @@ impl<'a> CfgBuilder<'a> {
             | "match_expression"
             | "return_statement"
             | "return_expression"
+            | "jump_expression"
             | "try_expression"
             | "await_expression"
             | "break_expression"
@@ -1652,10 +1729,14 @@ impl<'a> CfgBuilder<'a> {
                 | "for_statement"
                 | "return_expression"
                 | "return_statement"
+                | "jump_expression"
                 | "break_expression"
                 | "continue_expression"
                 | "macro_invocation"
                 | "conditional_expression" => self.visit_statement(node, source)?,
+                "case" | "case_match" | "begin" | "if" | "unless" if self.language == "ruby" => {
+                    self.visit_statement(node, source)?
+                }
                 _ => {
                     if is_setjmp_call(node, source) {
                         self.add_statement(node, source, StatementKind::Branch)?;
@@ -1804,6 +1885,25 @@ impl<'a> CfgBuilder<'a> {
     }
 
     fn visit_try_expression(&mut self, node: Node, source: &[u8]) -> Result<()> {
+        // Kotlin & Scala `try { ... } catch (...) { ... } finally { ... }` use AST kind
+        // `try_expression` rather than Rust's postfix `expr?` operator.
+        let has_catch_or_finally = {
+            let mut c = node.walk();
+            node.children(&mut c).any(|ch| {
+                matches!(
+                    ch.kind(),
+                    "catch_block" | "catch_clause" | "finally_block" | "finally_clause"
+                )
+            })
+        };
+        if has_catch_or_finally
+            || matches!(
+                self.language.to_ascii_lowercase().as_str(),
+                "kotlin" | "kt" | "kts" | "scala" | "sc"
+            )
+        {
+            return self.visit_try(node, source);
+        }
         if let Some(inner) = node.named_child(0) {
             self.visit_expr_for_control_flow(inner, source)?;
             if !self.flow_active {
@@ -1951,7 +2051,12 @@ impl<'a> CfgBuilder<'a> {
         }];
         self.finally_stack.push(dispose.clone());
 
-        if let Some(body) = node.child_by_field_name("body") {
+        if let Some(body) = node
+            .child_by_field_name("body")
+            .or_else(|| find_direct_child_kind(node, "statements"))
+            .or_else(|| find_direct_child_kind(node, "block"))
+            .or_else(|| find_direct_child_kind(node, "compound_statement"))
+        {
             self.visit_block(body, source)?;
         } else if let Some(block) = find_child_kind(node, "block") {
             self.visit_block(block, source)?;
@@ -1990,7 +2095,12 @@ impl<'a> CfgBuilder<'a> {
         }];
         self.finally_stack.push(exit_call.clone());
 
-        if let Some(body) = node.child_by_field_name("body") {
+        if let Some(body) = node
+            .child_by_field_name("body")
+            .or_else(|| find_direct_child_kind(node, "statements"))
+            .or_else(|| find_direct_child_kind(node, "block"))
+            .or_else(|| find_direct_child_kind(node, "compound_statement"))
+        {
             self.visit_block(body, source)?;
         } else if let Some(block) = find_child_kind(node, "block") {
             self.visit_block(block, source)?;
@@ -2138,21 +2248,92 @@ impl<'a> CfgBuilder<'a> {
     }
 
     fn visit_ruby_begin_block(&mut self, node: Node, source: &[u8]) -> Result<()> {
-        let mut rescue_handlers = Vec::new();
-        if let Some(begin) = find_child_kind(node, "begin") {
-            let mut c = begin.walk();
-            for child in begin.children(&mut c) {
-                if child.kind() == "rescue" {
-                    rescue_handlers.push(self.new_block());
-                }
+        let container = if node.kind() == "begin_block" {
+            find_child_kind(node, "begin").unwrap_or(node)
+        } else {
+            node
+        };
+        let mut rescue_nodes = Vec::new();
+        let mut ensure_node = None;
+        let mut else_node = None;
+        let mut body_stmts = Vec::new();
+        let mut c = container.walk();
+        for child in container.children(&mut c) {
+            if !child.is_named() {
+                continue;
+            }
+            match child.kind() {
+                "rescue" => rescue_nodes.push(child),
+                "ensure" => ensure_node = Some(child),
+                "else" => else_node = Some(child),
+                _ => body_stmts.push(child),
             }
         }
-        if !rescue_handlers.is_empty() {
-            self.try_catch_stack.push(rescue_handlers);
+        if rescue_nodes.is_empty() && ensure_node.is_none() {
+            self.visit_block(container, source)?;
+            return Ok(());
         }
-        self.visit_block(node, source)?;
-        if !self.try_catch_stack.is_empty() {
+
+        let rescue_entries: Vec<BlockId> = rescue_nodes.iter().map(|_| self.new_block()).collect();
+        if !rescue_entries.is_empty() {
+            self.try_catch_stack.push(rescue_entries.clone());
+        }
+        let try_block = self.new_block();
+        self.cfg
+            .add_edge(self.current_block, try_block, CfgEdgeType::Next);
+        self.current_block = try_block;
+        for &h in &rescue_entries {
+            self.cfg.add_edge(try_block, h, CfgEdgeType::Exception);
+        }
+        for stmt in body_stmts {
+            self.visit_statement(stmt, source)?;
+        }
+        if !rescue_entries.is_empty() {
             self.try_catch_stack.pop();
+        }
+        if self.flow_active
+            && let Some(else_b) = else_node
+        {
+            self.visit_block(else_b, source)?;
+        }
+        let try_reached_end = self.flow_active;
+        let try_end = self.current_block;
+        let merge = self.new_block();
+
+        for (i, rescue_node) in rescue_nodes.iter().enumerate() {
+            let handler = rescue_entries[i];
+            self.flow_active = true;
+            self.current_block = handler;
+            if let Some(body) = rescue_node
+                .child_by_field_name("body")
+                .or_else(|| find_direct_child_kind(*rescue_node, "then"))
+            {
+                self.visit_block(body, source)?;
+            } else {
+                let mut rc = rescue_node.walk();
+                for ch in rescue_node.children(&mut rc) {
+                    if ch.is_named() && !matches!(ch.kind(), "exceptions" | "exception_variable") {
+                        self.visit_statement(ch, source)?;
+                    }
+                }
+            }
+            if self.flow_active {
+                self.cfg
+                    .add_edge(self.current_block, merge, CfgEdgeType::Next);
+            }
+        }
+        if try_reached_end {
+            self.cfg.add_edge(try_end, merge, CfgEdgeType::Next);
+        }
+        self.flow_active = true;
+        self.current_block = merge;
+        if let Some(ensure_b) = ensure_node {
+            let mut ec = ensure_b.walk();
+            for ch in ensure_b.children(&mut ec) {
+                if ch.is_named() {
+                    self.visit_statement(ch, source)?;
+                }
+            }
         }
         Ok(())
     }
@@ -2449,13 +2630,40 @@ impl<'a> CfgBuilder<'a> {
 
         self.flow_active = true;
         self.current_block = true_block;
-        if let Some(consequence) = node
+        if (self.language == "bash" || self.language == "sh")
+            && matches!(node.kind(), "if_statement" | "elif_clause")
+        {
+            // Bash `if <cond>; then <stmt1>; <stmt2>; [elif|else|fi]`: visit all statements after `then`.
+            let mut saw_then = false;
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if !child.is_named() {
+                    if child.kind() == "then" {
+                        saw_then = true;
+                    }
+                    continue;
+                }
+                if !saw_then {
+                    continue;
+                }
+                if matches!(
+                    child.kind(),
+                    "else_clause"
+                        | "else_statement"
+                        | "elsif_statement"
+                        | "else_if_clause"
+                        | "elif_clause"
+                ) {
+                    break;
+                }
+                self.visit_statement(child, source)?;
+            }
+        } else if let Some(consequence) = node
             .child_by_field_name("consequence")
             .or_else(|| node.child_by_field_name("body"))
             .or_else(|| find_direct_child_kind(node, "block"))
             .or_else(|| find_direct_child_kind(node, "statements"))
             .or_else(|| find_direct_child_kind(node, "compound_statement"))
-            // Bash: then-arm is often a bare `command` after `then`.
             .or_else(|| {
                 let mut after_cond = false;
                 let mut cursor = node.walk();
@@ -2657,7 +2865,13 @@ impl<'a> CfgBuilder<'a> {
 
         let body = self.new_block();
         let exit = self.new_block();
-        if let Some(cond) = node.child_by_field_name("condition") {
+        let cond_node = node.child_by_field_name("condition").or_else(|| {
+            let mut c = node.walk();
+            node.children(&mut c).find(|ch| {
+                ch.is_named() && ch.kind() != "control_structure_body" && !is_block_like(ch.kind())
+            })
+        });
+        if let Some(cond) = cond_node {
             self.wire_condition(cond, source, body, exit)?;
         } else {
             self.add_statement_to_current(Statement {
@@ -2679,7 +2893,12 @@ impl<'a> CfgBuilder<'a> {
 
         self.flow_active = true;
         self.current_block = body;
-        if let Some(body_node) = node.child_by_field_name("body") {
+        if let Some(body_node) = node
+            .child_by_field_name("body")
+            .or_else(|| find_direct_child_kind(node, "control_structure_body"))
+            .or_else(|| find_direct_child_kind(node, "block"))
+            .or_else(|| find_direct_child_kind(node, "statements"))
+        {
             self.visit_block(body_node, source)?;
         }
         if self.flow_active {
@@ -2709,7 +2928,12 @@ impl<'a> CfgBuilder<'a> {
 
         self.flow_active = true;
         self.current_block = body;
-        if let Some(body_node) = node.child_by_field_name("body") {
+        if let Some(body_node) = node
+            .child_by_field_name("body")
+            .or_else(|| find_direct_child_kind(node, "control_structure_body"))
+            .or_else(|| find_direct_child_kind(node, "block"))
+            .or_else(|| find_direct_child_kind(node, "statements"))
+        {
             self.visit_block(body_node, source)?;
         }
         if self.flow_active {
@@ -2719,7 +2943,17 @@ impl<'a> CfgBuilder<'a> {
 
         self.flow_active = true;
         self.current_block = header;
-        if let Some(cond) = node.child_by_field_name("condition") {
+        let do_cond = node.child_by_field_name("condition").or_else(|| {
+            let mut c = node.walk();
+            node.children(&mut c)
+                .filter(|ch| {
+                    ch.is_named()
+                        && ch.kind() != "control_structure_body"
+                        && !is_block_like(ch.kind())
+                })
+                .last()
+        });
+        if let Some(cond) = do_cond {
             self.wire_condition(cond, source, body, exit)?;
         } else {
             self.add_statement_to_current(Statement {
@@ -2879,7 +3113,12 @@ impl<'a> CfgBuilder<'a> {
 
         self.flow_active = true;
         self.current_block = body;
-        if let Some(body_node) = node.child_by_field_name("body") {
+        if let Some(body_node) = node
+            .child_by_field_name("body")
+            .or_else(|| find_direct_child_kind(node, "control_structure_body"))
+            .or_else(|| find_direct_child_kind(node, "block"))
+            .or_else(|| find_direct_child_kind(node, "statements"))
+        {
             self.visit_block(body_node, source)?;
         }
         if self.flow_active {
@@ -2946,7 +3185,12 @@ impl<'a> CfgBuilder<'a> {
         });
         self.flow_active = true;
         self.current_block = body;
-        if let Some(body_node) = node.child_by_field_name("body") {
+        if let Some(body_node) = node
+            .child_by_field_name("body")
+            .or_else(|| find_direct_child_kind(node, "control_structure_body"))
+            .or_else(|| find_direct_child_kind(node, "block"))
+            .or_else(|| find_direct_child_kind(node, "statements"))
+        {
             self.visit_block(body_node, source)?;
         }
         if self.flow_active {
@@ -2999,7 +3243,12 @@ impl<'a> CfgBuilder<'a> {
         });
         self.flow_active = true;
         self.current_block = body;
-        if let Some(body_node) = node.child_by_field_name("body") {
+        if let Some(body_node) = node
+            .child_by_field_name("body")
+            .or_else(|| find_direct_child_kind(node, "control_structure_body"))
+            .or_else(|| find_direct_child_kind(node, "block"))
+            .or_else(|| find_direct_child_kind(node, "statements"))
+        {
             self.visit_block(body_node, source)?;
         }
         if self.flow_active {
@@ -3051,7 +3300,12 @@ impl<'a> CfgBuilder<'a> {
         });
         self.flow_active = true;
         self.current_block = body;
-        if let Some(body_node) = node.child_by_field_name("body") {
+        if let Some(body_node) = node
+            .child_by_field_name("body")
+            .or_else(|| find_direct_child_kind(node, "control_structure_body"))
+            .or_else(|| find_direct_child_kind(node, "block"))
+            .or_else(|| find_direct_child_kind(node, "statements"))
+        {
             self.visit_block(body_node, source)?;
         }
         if self.flow_active {
@@ -3095,7 +3349,12 @@ impl<'a> CfgBuilder<'a> {
         });
         self.flow_active = true;
         self.current_block = body;
-        if let Some(body_node) = node.child_by_field_name("body") {
+        if let Some(body_node) = node
+            .child_by_field_name("body")
+            .or_else(|| find_direct_child_kind(node, "control_structure_body"))
+            .or_else(|| find_direct_child_kind(node, "block"))
+            .or_else(|| find_direct_child_kind(node, "statements"))
+        {
             self.visit_block(body_node, source)?;
         }
         if self.flow_active {
@@ -3124,7 +3383,12 @@ impl<'a> CfgBuilder<'a> {
 
         self.flow_active = true;
         self.current_block = body;
-        if let Some(body_node) = node.child_by_field_name("body") {
+        if let Some(body_node) = node
+            .child_by_field_name("body")
+            .or_else(|| find_direct_child_kind(node, "control_structure_body"))
+            .or_else(|| find_direct_child_kind(node, "block"))
+            .or_else(|| find_direct_child_kind(node, "statements"))
+        {
             self.visit_block(body_node, source)?;
         }
         if self.flow_active {
@@ -3915,12 +4179,15 @@ impl<'a> CfgBuilder<'a> {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "match_block" {
+            if matches!(child.kind(), "match_block" | "case_block") {
                 let mut bc = child.walk();
                 for arm in child.children(&mut bc) {
                     if matches!(
                         arm.kind(),
-                        "match_arm" | "match_conditional_expression" | "match_default_expression"
+                        "match_arm"
+                            | "case_clause"
+                            | "match_conditional_expression"
+                            | "match_default_expression"
                     ) {
                         arms.push(arm);
                     }
@@ -3928,6 +4195,7 @@ impl<'a> CfgBuilder<'a> {
             } else if matches!(
                 child.kind(),
                 "match_arm"
+                    | "case_clause"
                     | "match_arm_pattern"
                     | "match_conditional_expression"
                     | "match_default_expression"
@@ -3956,8 +4224,12 @@ impl<'a> CfgBuilder<'a> {
             let body = self.new_block();
             let fail = self.new_block();
             let guard = arm
-                .child_by_field_name("pattern")
-                .and_then(|p| p.child_by_field_name("condition"));
+                .child_by_field_name("guard")
+                .map(|g| g.child_by_field_name("condition").unwrap_or(g))
+                .or_else(|| {
+                    arm.child_by_field_name("pattern")
+                        .and_then(|p| p.child_by_field_name("condition"))
+                });
             if let Some(guard) = guard {
                 // Pattern assumed matched; guard decides body vs next arm.
                 self.wire_condition(guard, source, body, fail)?;
@@ -3981,8 +4253,13 @@ impl<'a> CfgBuilder<'a> {
 
             self.flow_active = true;
             self.current_block = body;
-            if let Some(value) = arm.child_by_field_name("value") {
-                self.visit_statement(value, source)?;
+            if let Some(value) = arm
+                .child_by_field_name("value")
+                .or_else(|| arm.child_by_field_name("body"))
+                .or_else(|| arm.child_by_field_name("consequence"))
+                .or_else(|| arm.child_by_field_name("return_expression"))
+            {
+                self.visit_block(value, source)?;
             } else {
                 self.visit_block(arm, source)?;
             }
@@ -4346,6 +4623,10 @@ impl<'a> CfgBuilder<'a> {
 
     /// Lower switch/select case bodies.
     fn visit_case_body(&mut self, case: Node, source: &[u8]) -> Result<()> {
+        if is_block_like(case.kind()) {
+            self.visit_block(case, source)?;
+            return Ok(());
+        }
         if let Some(body) = case.child_by_field_name("body") {
             self.visit_block(body, source)?;
             return Ok(());
@@ -4473,6 +4754,47 @@ impl<'a> CfgBuilder<'a> {
                     self.visit_statement(child, source)?;
                 }
             }
+            "switch_entry" => {
+                // Swift: `case 1: stmts` / `default: stmts`
+                if let Some(stmts) = find_child_kind(case, "statements") {
+                    self.visit_block(stmts, source)?;
+                } else {
+                    let mut c = case.walk();
+                    for child in case.children(&mut c) {
+                        if !child.is_named() {
+                            continue;
+                        }
+                        if matches!(
+                            child.kind(),
+                            "switch_pattern" | "default_keyword" | "where_clause" | "where_keyword"
+                        ) {
+                            continue;
+                        }
+                        self.visit_statement(child, source)?;
+                    }
+                }
+            }
+            "switch_statement_case" | "switch_statement_default" | "switch_expression_case" => {
+                // Dart: `case 1: stmt1; stmt2;` / `default: stmt;` / `1 => expr`
+                if let Some(stmts) = find_child_kind(case, "statements") {
+                    self.visit_block(stmts, source)?;
+                } else {
+                    let mut after_sep = case.kind() == "switch_statement_default";
+                    let mut c = case.walk();
+                    for child in case.children(&mut c) {
+                        if !child.is_named() {
+                            if matches!(child.kind(), ":" | "=>") {
+                                after_sep = true;
+                            }
+                            continue;
+                        }
+                        if !after_sep {
+                            continue;
+                        }
+                        self.visit_statement(child, source)?;
+                    }
+                }
+            }
             _ => {
                 let mut cursor = case.walk();
                 for child in case.children(&mut cursor) {
@@ -4496,10 +4818,10 @@ impl<'a> CfgBuilder<'a> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             match child.kind() {
-                "finally_clause" => {
+                "finally_clause" | "finally_block" => {
                     finally_snapshot = Some(snapshot_block_stmts(child, source));
                 }
-                "except_clause" | "except_handler" | "catch_clause" => {
+                "except_clause" | "except_handler" | "catch_clause" | "catch_block" => {
                     catch_nodes.push(child);
                 }
                 _ => {}
@@ -4541,7 +4863,12 @@ impl<'a> CfgBuilder<'a> {
         for &h in &catch_entries {
             self.cfg.add_edge(try_block, h, CfgEdgeType::Exception);
         }
-        if let Some(body) = node.child_by_field_name("body") {
+        if let Some(body) = node
+            .child_by_field_name("body")
+            .or_else(|| find_direct_child_kind(node, "statements"))
+            .or_else(|| find_direct_child_kind(node, "block"))
+            .or_else(|| find_direct_child_kind(node, "compound_statement"))
+        {
             self.visit_block(body, source)?;
         }
         if !catch_entries.is_empty() {
@@ -4580,8 +4907,10 @@ impl<'a> CfgBuilder<'a> {
 
             if let Some(block) = catch_node.child_by_field_name("body") {
                 self.visit_block(block, source)?;
-            } else if catch_node.kind() == "catch_clause"
+            } else if matches!(catch_node.kind(), "catch_clause" | "catch_block")
                 && let Some(block) = find_child_kind(*catch_node, "block")
+                    .or_else(|| find_child_kind(*catch_node, "statements"))
+                    .or_else(|| find_child_kind(*catch_node, "case_block"))
             {
                 self.visit_block(block, source)?;
             }
@@ -4687,15 +5016,21 @@ fn snapshot_resource_closes(node: Node, source: &[u8]) -> Vec<DeferredCall> {
 
 fn snapshot_block_stmts(node: Node, source: &[u8]) -> Vec<DeferredCall> {
     let mut out = Vec::new();
-    let block = find_child_kind(node, "block").unwrap_or(node);
+    let block = find_child_kind(node, "block")
+        .or_else(|| find_child_kind(node, "statements"))
+        .unwrap_or(node);
     let mut stack = vec![block];
     while let Some(n) = stack.pop() {
         if matches!(
             n.kind(),
             "expression_statement"
                 | "method_invocation"
+                | "call_expression"
                 | "return_statement"
+                | "jump_expression"
                 | "local_variable_declaration"
+                | "property_declaration"
+                | "assignment"
                 | "throw_statement"
         ) {
             if let Ok(t) = n.utf8_text(source) {
@@ -4741,7 +5076,11 @@ fn split_condition_clause<'a>(cond: Node<'a>) -> (Option<Node<'a>>, Option<Node<
 fn is_switch_default_case(case: Node, source: &[u8]) -> bool {
     if matches!(
         case.kind(),
-        "default_case" | "default_statement" | "switch_default"
+        "default_case"
+            | "default_statement"
+            | "switch_default"
+            | "switch_statement_default"
+            | "else"
     ) {
         return true;
     }
@@ -4755,8 +5094,11 @@ fn is_switch_default_case(case: Node, source: &[u8]) -> bool {
     }
     let mut c = case.walk();
     for child in case.children(&mut c) {
-        // C# `switch_section`: bare `default` token (unnamed) or label nodes.
-        if child.kind() == "default" || child.kind() == "default_switch_label" {
+        // C# `switch_section` / Swift `switch_entry`: `default` or `default_keyword`.
+        if matches!(
+            child.kind(),
+            "default" | "default_keyword" | "default_switch_label"
+        ) {
             return true;
         }
         if matches!(child.kind(), "switch_label" | "default_label")
@@ -4821,6 +5163,19 @@ fn collect_switch_cases<'a>(node: Node<'a>, cases: &mut Vec<Node<'a>>) {
         if depth > AST_WALK_MAX_DEPTH {
             continue;
         }
+        if depth > 0
+            && matches!(
+                node.kind(),
+                "case"
+                    | "case_match"
+                    | "switch_statement"
+                    | "switch_expression"
+                    | "type_switch_statement"
+                    | "expression_switch_statement"
+            )
+        {
+            continue;
+        }
         match node.kind() {
             "expression_case"
             | "type_case"
@@ -4832,8 +5187,21 @@ fn collect_switch_cases<'a>(node: Node<'a>, cases: &mut Vec<Node<'a>>) {
             | "switch_section"
             | "switch_case"
             | "switch_default"
+            | "switch_entry"
+            | "switch_statement_case"
+            | "switch_statement_default"
+            | "switch_expression_case"
             | "switch_block_statement_group"
-            | "switch_rule" => cases.push(node),
+            | "switch_rule"
+            | "when"
+            | "in_clause" => cases.push(node),
+            "else"
+                if node
+                    .parent()
+                    .is_some_and(|p| matches!(p.kind(), "case" | "case_match")) =>
+            {
+                cases.push(node);
+            }
             _ => {
                 let mut cursor = node.walk();
                 let children: Vec<_> = node.children(&mut cursor).collect();
@@ -4871,13 +5239,18 @@ fn is_block_like(kind: &str) -> bool {
             | "statement_list"
             | "statements" // Swift function_body / if arms
             | "compound_statement"
+            | "control_structure_body" // Kotlin if / while / do-while / for / when arms
             | "source_file"
             | "function_body"
             | "block_expression"
             | "body_statement"
             | "begin_block"
+            | "do" // Ruby while/until/for body wrapper
             | "do_block"
             | "do_group" // Bash for/while `do … done`
+            | "case_block" // Scala match / catch `{ case ... => ... }`
+            | "then" // Ruby if/when `then` arm
+            | "else" // Ruby if/case `else` arm
             | "else_block" // Elixir if/else arms
             | "body" // HCL / Terraform block body
             | "program"
@@ -8972,6 +9345,130 @@ END;
             cfg.blocks.len()
         );
     }
+
+    #[test]
+    fn test_ruby_case_and_begin_rescue_cfg() {
+        let code = r#"
+class OrderHarness
+  def evaluate(mode, amount)
+    total = case mode
+            when 1
+              amount + 10
+            else
+              amount
+            end
+    begin
+      risky(total)
+    rescue StandardError => e
+      fallback(e)
+    ensure
+      cleanup()
+    end
+  end
+end
+"#;
+        let cfg = build_cfg_for_function("ruby", code, "evaluate").unwrap();
+        assert!(
+            cfg.blocks.len() >= 6,
+            "ruby case + begin/rescue/ensure should lower into multiple blocks, got {}",
+            cfg.blocks.len()
+        );
+        assert!(
+            cfg.edges
+                .iter()
+                .any(|e| matches!(e.edge_type, CfgEdgeType::IfTrue | CfgEdgeType::IfFalse)),
+            "expected conditional edges from Ruby case/when"
+        );
+        assert!(
+            cfg.edges
+                .iter()
+                .any(|e| matches!(e.edge_type, CfgEdgeType::Exception)),
+            "expected Exception edge from Ruby begin/rescue"
+        );
+    }
+
+    #[test]
+    fn test_swift_and_dart_switch_cfg() {
+        let swift_code = r#"
+func cfgSwitch(_ code: Int) -> Int {
+    switch code {
+    case 1:
+        return 10
+    case 2:
+        return 20
+    default:
+        return 0
+    }
+}
+"#;
+        let swift_cfg = build_cfg_for_function("swift", swift_code, "cfgSwitch").unwrap();
+        assert!(
+            swift_cfg.blocks.len() >= 4,
+            "swift switch should branch across entries, got {} blocks",
+            swift_cfg.blocks.len()
+        );
+
+        let dart_code = r#"
+class CfgFeatures {
+  int cfgSwitch(int code) {
+    switch (code) {
+      case 1:
+        return 10;
+      case 2:
+        return 20;
+      default:
+        return 0;
+    }
+  }
+}
+"#;
+        let dart_cfg = build_cfg_for_function("dart", dart_code, "cfgSwitch").unwrap();
+        assert!(
+            dart_cfg.blocks.len() >= 4,
+            "dart switch should branch across cases, got {} blocks",
+            dart_cfg.blocks.len()
+        );
+    }
+
+    #[test]
+    fn test_scala_match_and_try_catch_case_clause_cfg() {
+        let scala_code = r#"
+class CfgFeatures {
+  def cfgMatch(code: Int): Int = {
+    code match {
+      case 1 => 10
+      case x if x > 2 => 20
+      case _ => 0
+    }
+  }
+
+  def cfgTryCatch(code: Int): Int = {
+    try {
+      cfgMatch(code)
+    } catch {
+      case _: RuntimeException => -1
+    } finally {
+      val done = 1
+    }
+  }
+}
+"#;
+        let match_cfg = build_cfg_for_function("scala", scala_code, "cfgMatch").unwrap();
+        assert!(
+            match_cfg.blocks.len() >= 6,
+            "scala match should branch across case_clause arms, got {} blocks",
+            match_cfg.blocks.len()
+        );
+        let try_cfg = build_cfg_for_function("scala", scala_code, "cfgTryCatch").unwrap();
+        assert!(
+            try_cfg
+                .edges
+                .iter()
+                .any(|e| matches!(e.edge_type, CfgEdgeType::Exception)),
+            "scala try/catch should emit Exception edge"
+        );
+    }
+
     #[test]
     fn same_line_java_overloads_require_exact_byte_ranges() {
         let first = "int quote(int value) { if (value > 0) { return 1; } return 0; }";
@@ -9006,6 +9503,7 @@ END;
             .unwrap();
         assert!(branching.blocks.len() > straight.blocks.len());
     }
+
     #[test]
     fn tier1_name_only_cfg_refuses_same_named_methods() {
         for (language, source) in [
@@ -9032,6 +9530,7 @@ END;
             );
         }
     }
+
     #[test]
     fn java_name_only_cfg_refuses_overloads() {
         assert!(

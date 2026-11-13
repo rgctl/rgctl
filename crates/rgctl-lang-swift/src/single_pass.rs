@@ -3,7 +3,10 @@
 use crate::plugin::SwiftPlugin;
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::{extract_name_from_node, node_to_location};
+use rgctl_plugin_helpers::{
+    declaration_header_signature, extract_name_from_node, node_to_location, record_call_site_spans,
+    record_symbol_spans_from_source,
+};
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -36,6 +39,7 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("guard_statement", HandlerMask::CFG_STMT),
     ("if_statement", HandlerMask::CFG_STMT),
     ("import_declaration", HandlerMask::RELATION),
+    ("inheritance_specifier", HandlerMask::RELATION),
     ("init_declaration", HandlerMask::SYMBOL),
     ("lambda_literal", HandlerMask::SYMBOL),
     ("navigation_expression", HandlerMask::RELATION),
@@ -51,7 +55,6 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("try_expression", HandlerMask::CFG_STMT),
     ("typealias_declaration", HandlerMask::SYMBOL),
     ("while_statement", HandlerMask::CFG_STMT),
-    ("inheritance_specifier", HandlerMask::RELATION),
 ];
 
 const SWIFT_CALL_KINDS: &[&str] = &["call_expression"];
@@ -182,6 +185,139 @@ fn identifier_in(node: Node, source: &[u8]) -> Option<String> {
     None
 }
 
+fn inheritance_target_name(node: Node, source: &[u8]) -> Option<String> {
+    let mut stack = vec![node];
+    while let Some(cur) = stack.pop() {
+        if cur.kind() == "type_arguments" {
+            continue;
+        }
+        if matches!(cur.kind(), "type_identifier" | "simple_identifier") {
+            if let Ok(t) = cur.utf8_text(source) {
+                let cleaned = t.trim();
+                if !cleaned.is_empty() {
+                    return Some(cleaned.to_string());
+                }
+            }
+            continue;
+        }
+        let mut c = cur.walk();
+        let children: Vec<_> = cur.children(&mut c).collect();
+        for ch in children.into_iter().rev() {
+            stack.push(ch);
+        }
+    }
+    None
+}
+
+fn is_first_inheritance_specifier(parent: Node, spec: Node) -> bool {
+    let mut c = parent.walk();
+    for ch in parent.children(&mut c) {
+        if ch.kind() == "inheritance_specifier" {
+            return ch.id() == spec.id();
+        }
+    }
+    false
+}
+
+fn swift_call_type_hint(
+    call: Node,
+    source: &[u8],
+    symbols: &[Symbol],
+    from_fn: &Symbol,
+    callee: &str,
+) -> (Option<String>, Option<String>, bool) {
+    let enclosing_owner = from_fn.qualified_name.as_deref().and_then(|qn| {
+        let (prefix, _) = qn.rsplit_once('.')?;
+        let is_type = symbols.iter().any(|s| {
+            matches!(
+                s.symbol_type,
+                SymbolType::Class | SymbolType::Struct | SymbolType::Interface | SymbolType::Enum
+            ) && (s.qualified_name.as_deref() == Some(prefix) || s.name == prefix)
+        });
+        is_type.then(|| prefix.to_string())
+    });
+
+    let nav = call.child_by_field_name("function").or_else(|| {
+        let mut c = call.walk();
+        call.children(&mut c).find(|ch| {
+            matches!(
+                ch.kind(),
+                "navigation_expression" | "member_expression" | "simple_identifier" | "identifier"
+            )
+        })
+    });
+
+    let recv_text = nav.and_then(|n| {
+        if matches!(n.kind(), "navigation_expression" | "member_expression") {
+            n.child_by_field_name("target")
+                .or_else(|| n.named_child(0))
+                .and_then(|t| t.utf8_text(source).ok())
+                .map(str::trim)
+        } else {
+            None
+        }
+    });
+
+    match recv_text {
+        None => {
+            if let Some(owner) = enclosing_owner {
+                let qh = format!("{owner}.{callee}");
+                return (Some(owner), Some(qh), true);
+            }
+            (None, None, false)
+        }
+        Some("self" | "Self") => {
+            if let Some(owner) = enclosing_owner {
+                let qh = format!("{owner}.{callee}");
+                return (Some(owner), Some(qh), false);
+            }
+            (None, None, false)
+        }
+        Some("super") => {
+            if let Some(owner) = enclosing_owner {
+                return (Some(owner), Some(format!("super.{callee}")), false);
+            }
+            (None, None, false)
+        }
+        Some(r) => {
+            if let Some(ty) = from_fn
+                .signature
+                .as_deref()
+                .and_then(|sig| infer_param_type_from_signature(sig, r))
+            {
+                let simple = ty
+                    .split('<')
+                    .next()
+                    .unwrap_or(ty)
+                    .trim_matches(['?', '!', '&'])
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(ty)
+                    .trim();
+                if !simple.is_empty() {
+                    return (
+                        Some(simple.to_string()),
+                        Some(format!("{simple}.{callee}")),
+                        false,
+                    );
+                }
+            }
+            if symbols.iter().any(|s| {
+                matches!(
+                    s.symbol_type,
+                    SymbolType::Class
+                        | SymbolType::Struct
+                        | SymbolType::Interface
+                        | SymbolType::Enum
+                ) && (s.name == r || s.qualified_name.as_deref() == Some(r))
+            }) {
+                return (Some(r.to_string()), Some(format!("{r}.{callee}")), false);
+            }
+            (None, None, false)
+        }
+    }
+}
+
 fn type_decl_name(node: Node, source: &[u8]) -> Option<String> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -273,25 +409,27 @@ fn push_named_symbol(
         None => name.clone(),
     };
     let loc = ((node.end_position().row - node.start_position().row) + 1).max(1) as u32;
+    let mut sym = Symbol {
+        name: name.clone(),
+        symbol_type,
+        qualified_name: Some(qn.clone()),
+        location: node_to_location(node, file_path),
+        signature: declaration_header_signature(node, source),
+        return_type: None,
+        parameters: vec![],
+        fields: vec![],
+        modifiers: vec![],
+        documentation: None,
+        metadata: serde_json::json!({
+            "language": "swift",
+            "kind": kind_meta,
+        }),
+        ..Default::default()
+    };
+    record_symbol_spans_from_source(&mut sym, node, source);
     ctx.symbols
         .push(rgctl_plugin_helpers::callable_identity::symbol(
-            Symbol {
-                name: name.clone(),
-                symbol_type,
-                qualified_name: Some(qn.clone()),
-                location: node_to_location(node, file_path),
-                signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-                return_type: None,
-                parameters: vec![],
-                fields: vec![],
-                modifiers: vec![],
-                documentation: None,
-                metadata: serde_json::json!({
-                    "language": "swift",
-                    "kind": kind_meta,
-                }),
-                ..Default::default()
-            },
+            sym,
             node,
             source,
             rgctl_plugin_helpers::callable_identity::Policy::Swift,
@@ -377,24 +515,6 @@ pub fn extract_all_single_pass(
                 let mut pushed_scope = false;
 
                 match kind {
-                    "inheritance_specifier" => {
-                        if let (Some(owner), Some(parent)) = (
-                            ctx.scopes.current_type(),
-                            node.child_by_field_name("inherits_from"),
-                        ) {
-                            let parent = parent.utf8_text(source)?.to_string();
-                            relations.push(Relation {
-                                from: owner.qualified_prefix.clone(),
-                                to: rgctl_plugin_helpers::simple_type_name(&parent),
-                                relation_type: RelationType::Extends,
-                                location: node_to_location(node, &file_path_str),
-                                metadata: serde_json::json!({"language":"swift"}),
-                                to_qualified_hint: Some(parent),
-                                to_type_hint: None,
-                                ..Default::default()
-                            });
-                        }
-                    }
                     "class_declaration" => {
                         let (sym_ty, meta) = class_decl_symbol_type(node);
                         let scope = match sym_ty {
@@ -460,28 +580,27 @@ pub fn extract_all_single_pass(
                         };
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
+                        let mut sym = Symbol {
+                            name: name.clone(),
+                            symbol_type: SymbolType::Function,
+                            qualified_name: Some(qn.clone()),
+                            location: node_to_location(node, &file_path_str),
+                            signature: declaration_header_signature(node, source),
+                            return_type: None,
+                            parameters: vec![],
+                            fields: vec![],
+                            modifiers: vec![],
+                            documentation: None,
+                            metadata: serde_json::json!({
+                                "language": "swift",
+                                "kind": meta,
+                            }),
+                            ..Default::default()
+                        };
+                        record_symbol_spans_from_source(&mut sym, node, source);
                         ctx.symbols
                             .push(rgctl_plugin_helpers::callable_identity::symbol(
-                                Symbol {
-                                    name: name.clone(),
-                                    symbol_type: SymbolType::Function,
-                                    qualified_name: Some(qn.clone()),
-                                    location: node_to_location(node, &file_path_str),
-                                    signature: node
-                                        .utf8_text(source)
-                                        .ok()
-                                        .map(|s| s.trim().to_string()),
-                                    return_type: None,
-                                    parameters: vec![],
-                                    fields: vec![],
-                                    modifiers: vec![],
-                                    documentation: None,
-                                    metadata: serde_json::json!({
-                                        "language": "swift",
-                                        "kind": meta,
-                                    }),
-                                    ..Default::default()
-                                },
+                                sym,
                                 node,
                                 source,
                                 rgctl_plugin_helpers::callable_identity::Policy::Swift,
@@ -510,34 +629,30 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            ctx.symbols.push({
-                                let mut field_symbol = Symbol {
-                                    name,
-                                    symbol_type: SymbolType::Variable,
-                                    qualified_name: Some(qn),
-                                    location: node_to_location(node, &file_path_str),
-                                    signature: node
-                                        .utf8_text(source)
-                                        .ok()
-                                        .map(|s| s.trim().to_string()),
-                                    return_type: None,
-                                    parameters: vec![],
-                                    fields: vec![],
-                                    modifiers: vec![],
-                                    documentation: None,
-                                    metadata: serde_json::json!({
-                                        "language": "swift",
-                                        "kind": "property",
-                                    }),
-                                    ..Default::default()
-                                };
-                                rgctl_plugin_helpers::spans::field_symbol_spans(
-                                    &mut field_symbol,
-                                    node,
-                                    source,
-                                );
-                                field_symbol
-                            });
+                            let mut field_symbol = Symbol {
+                                name,
+                                symbol_type: SymbolType::Variable,
+                                qualified_name: Some(qn),
+                                location: node_to_location(node, &file_path_str),
+                                signature: declaration_header_signature(node, source),
+                                return_type: None,
+                                parameters: vec![],
+                                fields: vec![],
+                                modifiers: vec![],
+                                documentation: None,
+                                metadata: serde_json::json!({
+                                    "language": "swift",
+                                    "kind": "property",
+                                }),
+                                ..Default::default()
+                            };
+                            record_symbol_spans_from_source(&mut field_symbol, node, source);
+                            rgctl_plugin_helpers::spans::field_symbol_spans(
+                                &mut field_symbol,
+                                node,
+                                source,
+                            );
+                            ctx.symbols.push(field_symbol);
                         }
                     }
                     "typealias_declaration" | "associatedtype_declaration" => {
@@ -568,15 +683,12 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            ctx.symbols.push(Symbol {
+                            let mut sym = Symbol {
                                 name,
                                 symbol_type: SymbolType::Enum,
                                 qualified_name: Some(qn),
                                 location: node_to_location(node, &file_path_str),
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.trim().to_string()),
+                                signature: declaration_header_signature(node, source),
                                 return_type: None,
                                 parameters: vec![],
                                 fields: vec![],
@@ -587,7 +699,9 @@ pub fn extract_all_single_pass(
                                     "kind": "enum_entry",
                                 }),
                                 ..Default::default()
-                            });
+                            };
+                            record_symbol_spans_from_source(&mut sym, node, source);
+                            ctx.symbols.push(sym);
                         }
                     }
                     "protocol_function_declaration" => {
@@ -607,28 +721,27 @@ pub fn extract_all_single_pass(
                             Some(o) => format!("{o}.{name}"),
                             None => name.clone(),
                         };
+                        let mut sym = Symbol {
+                            name,
+                            symbol_type: SymbolType::Function,
+                            qualified_name: Some(qn),
+                            location: node_to_location(node, &file_path_str),
+                            signature: declaration_header_signature(node, source),
+                            return_type: None,
+                            parameters: vec![],
+                            fields: vec![],
+                            modifiers: vec![],
+                            documentation: None,
+                            metadata: serde_json::json!({
+                                "language": "swift",
+                                "kind": "protocol_function",
+                            }),
+                            ..Default::default()
+                        };
+                        record_symbol_spans_from_source(&mut sym, node, source);
                         ctx.symbols
                             .push(rgctl_plugin_helpers::callable_identity::symbol(
-                                Symbol {
-                                    name,
-                                    symbol_type: SymbolType::Function,
-                                    qualified_name: Some(qn),
-                                    location: node_to_location(node, &file_path_str),
-                                    signature: node
-                                        .utf8_text(source)
-                                        .ok()
-                                        .map(|s| s.trim().to_string()),
-                                    return_type: None,
-                                    parameters: vec![],
-                                    fields: vec![],
-                                    modifiers: vec![],
-                                    documentation: None,
-                                    metadata: serde_json::json!({
-                                        "language": "swift",
-                                        "kind": "protocol_function",
-                                    }),
-                                    ..Default::default()
-                                },
+                                sym,
                                 node,
                                 source,
                                 rgctl_plugin_helpers::callable_identity::Policy::Swift,
@@ -647,34 +760,30 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            ctx.symbols.push({
-                                let mut field_symbol = Symbol {
-                                    name,
-                                    symbol_type: SymbolType::Variable,
-                                    qualified_name: Some(qn),
-                                    location: node_to_location(node, &file_path_str),
-                                    signature: node
-                                        .utf8_text(source)
-                                        .ok()
-                                        .map(|s| s.trim().to_string()),
-                                    return_type: None,
-                                    parameters: vec![],
-                                    fields: vec![],
-                                    modifiers: vec![],
-                                    documentation: None,
-                                    metadata: serde_json::json!({
-                                        "language": "swift",
-                                        "kind": "protocol_property",
-                                    }),
-                                    ..Default::default()
-                                };
-                                rgctl_plugin_helpers::spans::field_symbol_spans(
-                                    &mut field_symbol,
-                                    node,
-                                    source,
-                                );
-                                field_symbol
-                            });
+                            let mut field_symbol = Symbol {
+                                name,
+                                symbol_type: SymbolType::Variable,
+                                qualified_name: Some(qn),
+                                location: node_to_location(node, &file_path_str),
+                                signature: declaration_header_signature(node, source),
+                                return_type: None,
+                                parameters: vec![],
+                                fields: vec![],
+                                modifiers: vec![],
+                                documentation: None,
+                                metadata: serde_json::json!({
+                                    "language": "swift",
+                                    "kind": "protocol_property",
+                                }),
+                                ..Default::default()
+                            };
+                            record_symbol_spans_from_source(&mut field_symbol, node, source);
+                            rgctl_plugin_helpers::spans::field_symbol_spans(
+                                &mut field_symbol,
+                                node,
+                                source,
+                            );
+                            ctx.symbols.push(field_symbol);
                         }
                     }
                     "lambda_literal" => {
@@ -695,28 +804,27 @@ pub fn extract_all_single_pass(
                         };
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
+                        let mut sym = Symbol {
+                            name: name.clone(),
+                            symbol_type: SymbolType::Function,
+                            qualified_name: Some(qn.clone()),
+                            location: node_to_location(node, &file_path_str),
+                            signature: None,
+                            return_type: None,
+                            parameters: vec![],
+                            fields: vec![],
+                            modifiers: vec![],
+                            documentation: None,
+                            metadata: serde_json::json!({
+                                "language": "swift",
+                                "kind": "lambda",
+                            }),
+                            ..Default::default()
+                        };
+                        record_symbol_spans_from_source(&mut sym, node, source);
                         ctx.symbols
                             .push(rgctl_plugin_helpers::callable_identity::symbol(
-                                Symbol {
-                                    name: name.clone(),
-                                    symbol_type: SymbolType::Function,
-                                    qualified_name: Some(qn.clone()),
-                                    location: node_to_location(node, &file_path_str),
-                                    signature: node
-                                        .utf8_text(source)
-                                        .ok()
-                                        .map(|s| s.trim().to_string()),
-                                    return_type: None,
-                                    parameters: vec![],
-                                    fields: vec![],
-                                    modifiers: vec![],
-                                    documentation: None,
-                                    metadata: serde_json::json!({
-                                        "language": "swift",
-                                        "kind": "lambda",
-                                    }),
-                                    ..Default::default()
-                                },
+                                sym,
                                 node,
                                 source,
                                 rgctl_plugin_helpers::callable_identity::Policy::Swift,
@@ -737,7 +845,7 @@ pub fn extract_all_single_pass(
                     }
                     "import_declaration" => {
                         if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
-                            ctx.symbols.push(Symbol {
+                            let mut sym = Symbol {
                                 name: name.clone(),
                                 symbol_type: SymbolType::Import,
                                 qualified_name: Some(name),
@@ -753,7 +861,81 @@ pub fn extract_all_single_pass(
                                     "kind": "import",
                                 }),
                                 ..Default::default()
-                            });
+                            };
+                            record_symbol_spans_from_source(&mut sym, node, source);
+                            ctx.symbols.push(sym);
+                        }
+                    }
+                    "inheritance_specifier" => {
+                        if let (Some(parent), Some(owner), Some(target)) = (
+                            node.parent(),
+                            ctx.scopes
+                                .current_type()
+                                .map(|t| t.qualified_prefix.clone()),
+                            inheritance_target_name(node, source),
+                        ) {
+                            match parent.kind() {
+                                "protocol_declaration" => {
+                                    relations.push(Relation {
+                                        from: owner,
+                                        to: target.clone(),
+                                        relation_type: RelationType::Extends,
+                                        location: node_to_location(node, &file_path_str),
+                                        metadata: serde_json::json!({
+                                            "language": "swift",
+                                            "kind": "protocol_inheritance",
+                                        }),
+                                        to_qualified_hint: Some(target),
+                                        to_type_hint: Some("interface".to_string()),
+                                        ..Default::default()
+                                    });
+                                }
+                                "class_declaration" => {
+                                    let (_, decl_meta) = class_decl_symbol_type(parent);
+                                    if decl_meta == "enum"
+                                        && matches!(
+                                            target.as_str(),
+                                            "Int"
+                                                | "String"
+                                                | "Double"
+                                                | "Float"
+                                                | "UInt"
+                                                | "Character"
+                                        )
+                                    {
+                                        // Raw-value backing type on an enum (`enum Code: Int`), not conformance.
+                                    } else {
+                                        let target_known_protocol = ctx.symbols.iter().any(|s| {
+                                            s.symbol_type == SymbolType::Interface
+                                                && (s.name == target
+                                                    || s.qualified_name.as_deref()
+                                                        == Some(target.as_str()))
+                                        });
+                                        let rel_ty = if matches!(decl_meta, "class" | "actor")
+                                            && is_first_inheritance_specifier(parent, node)
+                                            && !target_known_protocol
+                                        {
+                                            RelationType::Extends
+                                        } else {
+                                            RelationType::Implements
+                                        };
+                                        relations.push(Relation {
+                                            from: owner,
+                                            to: target.clone(),
+                                            relation_type: rel_ty,
+                                            location: node_to_location(node, &file_path_str),
+                                            metadata: serde_json::json!({
+                                                "language": "swift",
+                                                "kind": "inheritance",
+                                            }),
+                                            to_qualified_hint: Some(target),
+                                            to_type_hint: None,
+                                            ..Default::default()
+                                        });
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
                     }
                     _ => {}
@@ -865,6 +1047,8 @@ pub fn extract_all_single_pass(
             .qualified_name
             .clone()
             .unwrap_or_else(|| from_fn.name.clone());
+        let (to_type_hint, to_qualified_hint, inferred_owner) =
+            swift_call_type_hint(pending.node, source, &ctx.symbols, from_fn, &callee);
         let same_file: Vec<_> = ctx
             .symbols
             .iter()
@@ -875,22 +1059,39 @@ pub fn extract_all_single_pass(
             })
             .collect();
         let to = match same_file.as_slice() {
-            [only] => only
-                .qualified_name
-                .clone()
-                .unwrap_or_else(|| callee.clone()),
+            [only]
+                if to_type_hint.as_deref().is_none_or(|hint_ty| {
+                    let Some(qn) = only.qualified_name.as_deref() else {
+                        return true;
+                    };
+                    let Some((owner_prefix, _)) = qn.rsplit_once('.') else {
+                        return true;
+                    };
+                    owner_prefix == hint_ty
+                }) =>
+            {
+                only.qualified_name
+                    .clone()
+                    .unwrap_or_else(|| callee.clone())
+            }
             _ => callee.clone(),
         };
-        relations.push(Relation {
+        let mut metadata = serde_json::json!({ "language": "swift" });
+        if inferred_owner {
+            metadata["inferred_callable_owner"] = serde_json::Value::Bool(true);
+        }
+        let mut rel = Relation {
             from,
             to,
             relation_type: RelationType::Calls,
             location: node_to_location(pending.node, &file_path_str),
-            metadata: serde_json::json!({ "language": "swift" }),
-            to_qualified_hint: Some(callee),
-            to_type_hint: None,
+            metadata,
+            to_qualified_hint: to_qualified_hint.or(Some(callee)),
+            to_type_hint,
             ..Default::default()
-        });
+        };
+        record_call_site_spans(&mut rel, pending.node);
+        relations.push(rel);
         rgctl_plugin_helpers::callable_identity::call(
             pending.node,
             source,
@@ -984,8 +1185,8 @@ class Foo {
             .map(|r| r.to_qualified_hint.as_deref().unwrap_or(r.to.as_str()))
             .collect();
         assert!(
-            callees.iter().any(|c| *c == "baz"),
-            "expected callee baz, got {callees:?}"
+            callees.iter().any(|c| *c == "Foo.baz" || *c == "baz"),
+            "expected callee Foo.baz (or baz), got {callees:?}"
         );
         assert!(
             callees.iter().any(|c| *c == "fetch"),
@@ -1021,6 +1222,56 @@ class Foo {
         assert!(
             !props.iter().any(|p| *p == "Int" || *p == "String"),
             "must not extract type annotation as name, got {props:?}"
+        );
+    }
+
+    #[test]
+    fn swift_extracts_inheritance_and_protocol_conformance() {
+        let src = r#"
+protocol OrderRepo {
+  func save()
+}
+class BaseLedger {
+  func save() {}
+}
+class OrderLedger: BaseLedger, OrderRepo {
+  func run() {
+    self.save()
+  }
+}
+struct ValueLedger: OrderRepo {
+  func save() {}
+}
+"#;
+        let plugin = SwiftPlugin::new().unwrap();
+        let path = PathBuf::from("ledger.swift");
+        let result = extract_all_single_pass(&plugin, &path, src.as_bytes()).unwrap();
+        assert!(
+            result.relations.iter().any(|r| {
+                r.relation_type == RelationType::Extends
+                    && r.from == "OrderLedger"
+                    && r.to == "BaseLedger"
+            }),
+            "expected OrderLedger Extends BaseLedger, got {:?}",
+            result.relations
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                r.relation_type == RelationType::Implements
+                    && r.from == "OrderLedger"
+                    && r.to == "OrderRepo"
+            }),
+            "expected OrderLedger Implements OrderRepo, got {:?}",
+            result.relations
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                r.relation_type == RelationType::Implements
+                    && r.from == "ValueLedger"
+                    && r.to == "OrderRepo"
+            }),
+            "expected ValueLedger Implements OrderRepo, got {:?}",
+            result.relations
         );
     }
 }

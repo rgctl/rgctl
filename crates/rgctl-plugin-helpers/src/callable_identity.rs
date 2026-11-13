@@ -613,6 +613,7 @@ pub fn symbol(mut symbol: Symbol, node: Node<'_>, source: &[u8], policy: Policy)
                 patterns.join(",")
             )
             .into();
+            symbol.metadata["override_identity"] = format!("arity:{}", args.len()).into();
             symbol.metadata["arity"] = args.len().into();
         }
     }

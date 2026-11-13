@@ -258,6 +258,95 @@ pub fn record_call_site_spans(relation: &mut Relation, name_node: Node) {
     relation.call_site_byte_len = u16::try_from(name_node.end_byte() - name_node.start_byte()).ok();
 }
 
+fn is_body_container_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "function_body"
+            | "class_body"
+            | "enum_class_body"
+            | "protocol_body"
+            | "template_body"
+            | "block"
+            | "do_block"
+            | "compound_statement"
+    )
+}
+
+fn find_matching_name_node<'a>(
+    node: Node<'a>,
+    source: &[u8],
+    expected: &[u8],
+    depth: usize,
+) -> Option<Node<'a>> {
+    if expected.is_empty() || depth > 5 {
+        return None;
+    }
+    if let Some(name) = node.child_by_field_name("name")
+        && source.get(name.start_byte()..name.end_byte()) == Some(expected)
+    {
+        return Some(name);
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if is_body_container_kind(child.kind()) {
+            continue;
+        }
+        if source.get(child.start_byte()..child.end_byte()) == Some(expected)
+            && (child.child_count() == 0
+                || matches!(
+                    child.kind(),
+                    "dot_index_expression"
+                        | "method_index_expression"
+                        | "alias"
+                        | "object_reference"
+                        | "command_name"
+                        | "variable_list"
+                ))
+        {
+            return Some(child);
+        }
+        if let Some(found) = find_matching_name_node(child, source, expected, depth + 1) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Record declaration and identifier byte spans onto `symbol`, resolving the
+/// identifier child from `decl_node` header tokens matching `symbol.name` (no heap alloc).
+#[inline]
+pub fn record_symbol_spans_from_source(symbol: &mut Symbol, decl_node: Node, source: &[u8]) {
+    let name_node = find_matching_name_node(decl_node, source, symbol.name.as_bytes(), 0);
+    record_symbol_spans(symbol, decl_node, name_node);
+}
+
+/// Extract a compact declaration header signature without cloning multi-line or `{ ... }` bodies.
+pub fn declaration_header_signature(decl_node: Node, source: &[u8]) -> Option<String> {
+    let start = decl_node.start_byte();
+    let mut end = decl_node.end_byte();
+    let mut cursor = decl_node.walk();
+    for child in decl_node.children(&mut cursor) {
+        if is_body_container_kind(child.kind()) && child.start_byte() >= start {
+            end = end.min(child.start_byte());
+            break;
+        }
+    }
+    let slice = source.get(start..end)?;
+    let text = std::str::from_utf8(slice).ok()?;
+    let line = text.lines().next().unwrap_or(text);
+    let before_brace = line.split('{').next().unwrap_or(line).trim();
+    let trimmed = before_brace
+        .strip_suffix('=')
+        .map(str::trim_end)
+        .or_else(|| before_brace.strip_suffix(" do").map(str::trim_end))
+        .unwrap_or(before_brace);
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

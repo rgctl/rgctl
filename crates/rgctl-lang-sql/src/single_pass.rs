@@ -3,7 +3,10 @@
 use crate::plugin::Plugin;
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::{extract_name_from_node, node_to_location};
+use rgctl_plugin_helpers::{
+    extract_name_from_node, node_to_location, record_call_site_spans,
+    record_symbol_spans_from_source,
+};
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -133,31 +136,33 @@ fn object_name(node: Node, source: &[u8]) -> Option<String> {
 fn push_named_symbol(
     ctx: &mut SinglePassCtx,
     node: Node,
+    source: &[u8],
     name: String,
     symbol_type: SymbolType,
     file_path: &str,
     kind_label: &str,
-    source: &[u8],
 ) {
+    let mut sym = Symbol {
+        name: name.clone(),
+        symbol_type,
+        qualified_name: Some(name),
+        location: node_to_location(node, file_path),
+        signature: None,
+        return_type: None,
+        parameters: vec![],
+        fields: vec![],
+        modifiers: vec![],
+        documentation: None,
+        metadata: serde_json::json!({
+            "language": "sql",
+            "kind": kind_label,
+        }),
+        ..Default::default()
+    };
+    record_symbol_spans_from_source(&mut sym, node, source);
     ctx.symbols
         .push(rgctl_plugin_helpers::callable_identity::symbol(
-            Symbol {
-                name: name.clone(),
-                symbol_type,
-                qualified_name: Some(name),
-                location: node_to_location(node, file_path),
-                signature: None,
-                return_type: None,
-                parameters: vec![],
-                fields: vec![],
-                modifiers: vec![],
-                documentation: None,
-                metadata: serde_json::json!({
-                    "language": "sql",
-                    "kind": kind_label,
-                }),
-                ..Default::default()
-            },
+            sym,
             node,
             source,
             rgctl_plugin_helpers::callable_identity::Policy::Sql,
@@ -193,7 +198,7 @@ fn push_table_ref_call(
                     .qualified_name
                     .clone()
                     .unwrap_or_else(|| from_fn.name.clone());
-                relations.push(Relation {
+                let mut rel = Relation {
                     from,
                     to: name,
                     relation_type: RelationType::Calls,
@@ -206,7 +211,9 @@ fn push_table_ref_call(
                     to_qualified_hint: None,
                     to_type_hint: None,
                     ..Default::default()
-                });
+                };
+                record_call_site_spans(&mut rel, child);
+                relations.push(rel);
             }
         }
         // Nested object_reference under relation
@@ -218,7 +225,7 @@ fn push_table_ref_call(
                         .qualified_name
                         .clone()
                         .unwrap_or_else(|| from_fn.name.clone());
-                    relations.push(Relation {
+                    let mut rel = Relation {
                         from,
                         to: name,
                         relation_type: RelationType::Calls,
@@ -231,7 +238,9 @@ fn push_table_ref_call(
                         to_qualified_hint: None,
                         to_type_hint: None,
                         ..Default::default()
-                    });
+                    };
+                    record_call_site_spans(&mut rel, gc);
+                    relations.push(rel);
                 }
             }
         }
@@ -254,7 +263,7 @@ fn push_invocation_call(
         .qualified_name
         .clone()
         .unwrap_or_else(|| from_fn.name.clone());
-    relations.push(Relation {
+    let mut rel = Relation {
         from,
         to: name,
         relation_type: RelationType::Calls,
@@ -267,7 +276,9 @@ fn push_invocation_call(
         to_qualified_hint: None,
         to_type_hint: None,
         ..Default::default()
-    });
+    };
+    record_call_site_spans(&mut rel, node);
+    relations.push(rel);
 }
 
 /// Single iterative DFS: table/function/view symbols + soft from/join + case complexity.
@@ -356,11 +367,11 @@ pub fn extract_all_single_pass(
                             push_named_symbol(
                                 &mut ctx,
                                 node,
+                                source,
                                 name,
                                 symbol_type_for_ddl(kind),
                                 &file_path_str,
                                 kind,
-                                source,
                             );
                         }
                     }
@@ -372,11 +383,11 @@ pub fn extract_all_single_pass(
                             push_named_symbol(
                                 &mut ctx,
                                 node,
+                                source,
                                 name.clone(),
                                 SymbolType::Function,
                                 &file_path_str,
                                 "create_function",
-                                source,
                             );
                             ctx.enter_scope(
                                 ScopeKind::Function,

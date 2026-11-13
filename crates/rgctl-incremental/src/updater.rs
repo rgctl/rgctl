@@ -1036,8 +1036,41 @@ mod tests {
     use super::*;
     use crate::facts_key_for;
     use rgctl_graph::schema::NodeType;
+    use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn resolve_symbol_rejects_ambiguous_bare_names() {
+        let a = Node::new(NodeType::Function, "sibling_fn").with_file_path("a.rs");
+        let b = Node::new(NodeType::Function, "sibling_fn").with_file_path("b.rs");
+        let helper = Node::new(NodeType::Function, "helper").with_file_path("a.rs");
+        let index = HashMap::from([
+            (
+                SharedStr::from("sibling_fn"),
+                vec![
+                    Arc::new(RelationSymbol::from(&a)),
+                    Arc::new(RelationSymbol::from(&b)),
+                ],
+            ),
+            (
+                SharedStr::from("helper"),
+                vec![Arc::new(RelationSymbol::from(&helper))],
+            ),
+        ]);
+        assert_eq!(
+            resolve_symbol(&index, "sibling_fn", "a.rs", true, None),
+            Some(a.id)
+        );
+        assert_eq!(
+            resolve_symbol(&index, "sibling_fn", "c.rs", true, None),
+            None
+        );
+        assert_eq!(
+            resolve_symbol(&index, "helper", "missing.rs", true, None),
+            Some(helper.id)
+        );
+    }
 
     #[test]
     fn relation_rebuild_preserves_kinds_and_rejects_ambiguous_overloads() {

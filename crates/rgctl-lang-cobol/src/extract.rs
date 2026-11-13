@@ -71,6 +71,8 @@ fn extract(file_path: &Path, source: &[u8]) -> ExtractAllResult {
 
     let mut program: Option<String> = None;
     let mut program_idx: Option<usize> = None;
+    let mut entry_idx: Option<usize> = None;
+    let mut entry_linked_first_para = false;
     let mut in_procedure = false;
     let mut current_para: Option<String> = None;
     let mut current_para_idx: Option<usize> = None;
@@ -119,9 +121,11 @@ fn extract(file_path: &Path, source: &[u8]) -> ExtractAllResult {
             let prev_end = idx.max(1);
             close_span(&mut symbols, current_para_idx.take(), prev_end);
             close_span(&mut symbols, current_section_idx.take(), prev_end);
+            close_span(&mut symbols, entry_idx.take(), prev_end);
             close_span(&mut symbols, program_idx.take(), prev_end);
 
             program = Some(name.clone());
+            entry_linked_first_para = false;
             in_procedure = false;
             current_para = None;
             let sym_idx = symbols.len();
@@ -140,6 +144,21 @@ fn extract(file_path: &Path, source: &[u8]) -> ExtractAllResult {
 
         if upper_trim.contains("PROCEDURE DIVISION") {
             in_procedure = true;
+            if entry_idx.is_none()
+                && let Some(prog) = program.as_ref()
+            {
+                let sym_idx = symbols.len();
+                symbols.push(make_symbol(
+                    prog.clone(),
+                    SymbolType::Function,
+                    Some(format!("{prog}::<entry>")),
+                    &file,
+                    line_no,
+                    n.max(line_no),
+                    serde_json::json!({ "language": "cobol", "kind": "program-entry" }),
+                ));
+                entry_idx = Some(sym_idx);
+            }
             continue;
         }
         if (upper_trim.contains("DATA DIVISION")
@@ -195,6 +214,17 @@ fn extract(file_path: &Path, source: &[u8]) -> ExtractAllResult {
                 close_span(&mut symbols, current_para_idx.take(), prev_end);
                 close_span(&mut symbols, current_section_idx.take(), prev_end);
 
+                if !entry_linked_first_para && let Some(prog) = program.as_deref() {
+                    entry_linked_first_para = true;
+                    relations.push(make_call(
+                        prog,
+                        &sec,
+                        &file,
+                        line_no,
+                        serde_json::json!({ "language": "cobol", "kind": "program-fallthrough" }),
+                    ));
+                }
+
                 let qn = qualify(program.as_deref(), &sec);
                 current_para = Some(sec.clone());
                 let sym_idx = symbols.len();
@@ -213,6 +243,17 @@ fn extract(file_path: &Path, source: &[u8]) -> ExtractAllResult {
             if let Some(para) = match_paragraph(upper_trim) {
                 let prev_end = idx.max(1);
                 close_span(&mut symbols, current_para_idx.take(), prev_end);
+
+                if !entry_linked_first_para && let Some(prog) = program.as_deref() {
+                    entry_linked_first_para = true;
+                    relations.push(make_call(
+                        prog,
+                        &para,
+                        &file,
+                        line_no,
+                        serde_json::json!({ "language": "cobol", "kind": "program-fallthrough" }),
+                    ));
+                }
 
                 let qn = qualify(program.as_deref(), &para);
                 current_para = Some(para.clone());
@@ -277,9 +318,62 @@ fn extract(file_path: &Path, source: &[u8]) -> ExtractAllResult {
     let final_line = n.max(1);
     close_span(&mut symbols, current_para_idx, final_line);
     close_span(&mut symbols, current_section_idx, final_line);
+    close_span(&mut symbols, entry_idx, final_line);
     close_span(&mut symbols, program_idx, final_line);
 
+    populate_line_byte_spans(source, &mut symbols);
     ExtractAllResult::from_parts(symbols, relations)
+}
+
+fn populate_line_byte_spans(source: &[u8], symbols: &mut [Symbol]) {
+    let mut line_ranges: Vec<(u32, u32)> = Vec::new();
+    let mut start = 0usize;
+    for (idx, &b) in source.iter().enumerate() {
+        if b == b'\n' {
+            let mut end = idx;
+            if end > start && source[end - 1] == b'\r' {
+                end -= 1;
+            }
+            line_ranges.push((start as u32, end as u32));
+            start = idx + 1;
+        }
+    }
+    if start < source.len() || line_ranges.is_empty() {
+        let mut end = source.len();
+        if end > start && source[end - 1] == b'\r' {
+            end -= 1;
+        }
+        line_ranges.push((start as u32, end as u32));
+    }
+
+    for sym in symbols {
+        let sl = sym.location.start_line.max(1);
+        let el = sym.location.end_line.max(sl);
+        let Some(&(sb, _)) = line_ranges.get(sl - 1) else {
+            continue;
+        };
+        let eb = line_ranges
+            .get((el - 1).min(line_ranges.len().saturating_sub(1)))
+            .map(|&(_, e)| e)
+            .unwrap_or(sb)
+            .max(sb);
+        sym.start_byte = Some(sb);
+        sym.end_byte = Some(eb);
+        let needle = sym.name.as_bytes();
+        let hay = source.get(sb as usize..eb as usize).unwrap_or(&[]);
+        if !needle.is_empty()
+            && hay.len() >= needle.len()
+            && let Some(pos) = hay
+                .windows(needle.len())
+                .position(|w| w.eq_ignore_ascii_case(needle))
+        {
+            if let Ok(rel) = u16::try_from(pos) {
+                sym.name_rel_offset = Some(rel);
+            } else {
+                sym.name_span_overflow = Some((pos as u32, needle.len() as u32));
+            }
+        }
+    }
 }
 
 fn process_exec_block(

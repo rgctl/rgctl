@@ -144,16 +144,31 @@ impl ProcessingPipeline {
         let discoverer =
             FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
         let files = discoverer.discover(source_root)?;
+        let (mut stats, digest) =
+            self.process_files_to_snapshot(source_root, &files, snapshot_path, artifact_root)?;
+        stats.duration = start.elapsed();
+        Ok((stats, digest))
+    }
+
+    /// Extract a pre-discovered file list and write a columnar snapshot without re-walking `source_root`.
+    pub fn process_files_to_snapshot(
+        &self,
+        source_root: &Path,
+        files: &[std::path::PathBuf],
+        snapshot_path: &Path,
+        artifact_root: Option<&Path>,
+    ) -> Result<(PipelineStats, String)> {
+        let start = Instant::now();
         let files_discovered = files.len();
 
         let progress = self.make_progress(files_discovered);
         let store = artifact_root.unwrap_or(source_root);
         let facts = if self.config.facts_cache {
             let loaded = FactsCache::load(store);
-            // On cold huge repos (>10k files with no existing facts.bin), skip populating
+            // On cold large repos (>5k files with no existing facts.bin), skip populating
             // per-file JSON payloads during the initial full spill index so cold discover
-            // does not pay multi-hundred-MB JSON encode + disk write overhead.
-            if loaded.is_empty() && files_discovered > 10_000 {
+            // does not pay multi-hundred-MB JSON encode + disk write + Drop overhead.
+            if loaded.is_empty() && files_discovered > 5_000 {
                 None
             } else {
                 Some(Arc::new(loaded))
@@ -188,7 +203,7 @@ impl ProcessingPipeline {
             self.config.thread_count,
             &extractor,
             Arc::clone(&self.registry),
-            &files,
+            files,
             self.config.stream_channel_capacity,
             &mut builder,
             move || {

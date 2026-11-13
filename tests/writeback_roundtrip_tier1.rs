@@ -2,6 +2,7 @@
 
 use rgctl_graph::{
     CST_ARCHIVE_FILE, CstArchiveReader, LOSSLESS_CONTENT_STORE_FILE, LosslessContentReader,
+    SnapshotNodeStore, assert_graph_invariants,
 };
 use serde_json::Value;
 use std::fs;
@@ -14,87 +15,127 @@ struct LangFixture {
     source: &'static str,
 }
 
-/// Minimal fixtures for all 16 Tier-1 languages (comments / multibyte / macros where relevant).
+/// Two sibling symbols plus UTF-8 trivia for every Tier-1 language.
 const FIXTURES: &[LangFixture] = &[
     LangFixture {
         id: "c",
         filename: "mod.c",
-        source: "/* keep */\nint target_fn(void) { return 1; }\n",
+        source: "/* café */\nint target_fn(void) { return 1; }\nint sibling_fn(void) { return 2; }\n",
     },
     LangFixture {
         id: "cpp",
         filename: "mod.cpp",
-        source: "// shift\nint target_fn() { return 1; }\n",
+        source: "// café\nint target_fn() { return 1; }\nint sibling_fn() { return 2; }\n",
     },
     LangFixture {
         id: "csharp",
         filename: "Mod.cs",
-        source: "public class Mod {\n  // note\n  public static int TargetFn() { return 1; }\n}\n",
+        source: "public class Mod {\n  // café\n  public static int TargetFn() { return 1; }\n  public static int SiblingFn() { return 2; }\n}\n",
     },
     LangFixture {
         id: "go",
         filename: "mod.go",
-        source: "package main\n\n// comment\nfunc target_fn() int {\n\treturn 1\n}\n",
+        source: "package main\n\n// café\nfunc target_fn() int {\n\treturn 1\n}\n\nfunc sibling_fn() int {\n\treturn 2\n}\n",
     },
     LangFixture {
         id: "groovy",
         filename: "Mod.groovy",
-        source: "// groovy\ndef target_fn() { return 1 }\n",
+        source: "// café\ndef target_fn() { return 1 }\ndef sibling_fn() { return 2 }\n",
     },
     LangFixture {
         id: "java",
         filename: "Mod.java",
-        source: "public class Mod {\n  /** docs */\n  public static int target_fn() { return 1; }\n}\n",
+        source: "public class Mod {\n  /** café */\n  public static int target_fn() { return 1; }\n  public static int sibling_fn() { return 2; }\n}\n",
     },
     LangFixture {
         id: "javascript",
         filename: "mod.js",
-        source: "// js\nexport function target_fn() {\n  return 1;\n}\n",
+        source: "// café\nexport function target_fn() {\n  return 1;\n}\nexport function sibling_fn() {\n  return 2;\n}\n",
     },
     LangFixture {
         id: "kotlin",
         filename: "Mod.kt",
-        source: "// kt\nfun target_fn(): Int = 1\n",
+        source: "// café\nfun target_fn(): Int = 1\nfun sibling_fn(): Int = 2\n",
     },
     LangFixture {
         id: "markdown",
         filename: "doc.md",
-        source: "# Heading\n\nParagraph with café ☕ and `code`.\n",
+        source: "# Target Fn\n\nParagraph with café ☕ and `code`.\n\n# Sibling Fn\n",
     },
     LangFixture {
         id: "php",
         filename: "mod.php",
-        source: "<?php\n// php\nfunction target_fn() { return 1; }\n",
+        source: "<?php\n// café\nfunction target_fn() { return 1; }\nfunction sibling_fn() { return 2; }\n",
     },
     LangFixture {
         id: "puppet",
         filename: "mod.pp",
-        source: "# puppet\nclass target_fn {\n}\n",
+        source: "# café\nfunction target_fn() {\n  1\n}\nfunction sibling_fn() {\n  2\n}\n",
     },
     LangFixture {
         id: "erb",
         filename: "mod.html.erb",
-        source: "<p><%= @target_fn %></p>\n",
+        source: "<p><%= @target_fn %></p>\n<% sibling_fn = 1 %>\n<!-- café -->\n",
     },
     LangFixture {
         id: "python",
         filename: "mod.py",
-        source: "# py — café\ndef target_fn():\n    return 1\n",
+        source: "# py — café\ndef target_fn():\n    return 1\n\ndef sibling_fn():\n    return 2\n",
     },
     LangFixture {
         id: "ruby",
         filename: "mod.rb",
-        source: "# ruby\ndef target_fn\n  1\nend\n",
+        source: "# café\ndef target_fn\n  1\nend\ndef sibling_fn\n  2\nend\n",
     },
     LangFixture {
         id: "rust",
         filename: "mod.rs",
-        source: "// rust macro-ish\nmacro_rules! m { () => {}; }\npub fn target_fn() {\n    let x = 1;\n}\n",
+        source: "// café\nmacro_rules! m { () => {}; }\npub fn target_fn() {\n    let x = 1;\n}\npub fn sibling_fn() {\n    let y = 2;\n}\n",
     },
     LangFixture {
         id: "typescript",
         filename: "mod.ts",
-        source: "// ts\nexport function target_fn(): number {\n  return 1;\n}\n",
+        source: "// café\nexport function target_fn(): number {\n  return 1;\n}\nexport function sibling_fn(): number {\n  return 2;\n}\n",
+    },
+    LangFixture {
+        id: "swift",
+        filename: "Mod.swift",
+        source: "// café\nfunc target_fn() -> Int { return 1 }\nfunc sibling_fn() -> Int { return 2 }\n",
+    },
+    LangFixture {
+        id: "scala",
+        filename: "Mod.scala",
+        source: "// café\nclass Mod {\n  def target_fn(): Int = 1\n  def sibling_fn(): Int = 2\n}\n",
+    },
+    LangFixture {
+        id: "dart",
+        filename: "mod.dart",
+        source: "// café\nint target_fn() { return 1; }\nint sibling_fn() { return 2; }\n",
+    },
+    LangFixture {
+        id: "elixir",
+        filename: "mod.ex",
+        source: "# café\ndefmodule Mod do\n  def target_fn, do: 1\n  def sibling_fn, do: 2\nend\n",
+    },
+    LangFixture {
+        id: "lua",
+        filename: "mod.lua",
+        source: "-- café\nfunction target_fn()\n  return 1\nend\nfunction sibling_fn()\n  return 2\nend\n",
+    },
+    LangFixture {
+        id: "bash",
+        filename: "mod.sh",
+        source: "# café\ntarget_fn() { echo 1; }\nsibling_fn() { echo 2; }\n",
+    },
+    LangFixture {
+        id: "sql",
+        filename: "mod.sql",
+        source: "-- café\nCREATE FUNCTION target_fn() RETURNS INT LANGUAGE sql AS $$ SELECT 1; $$;\nCREATE FUNCTION sibling_fn() RETURNS INT LANGUAGE sql AS $$ SELECT 2; $$;\n",
+    },
+    LangFixture {
+        id: "hcl",
+        filename: "mod.tf",
+        source: "# café\nresource \"null_resource\" \"target_fn\" {\n}\nresource \"null_resource\" \"sibling_fn\" {\n}\n",
     },
 ];
 
@@ -206,7 +247,12 @@ fn writeback_roundtrip_all_tier1_languages() {
         cst_leaf_coverage_for_file(&cst, &rel, on_disk.len());
     }
 
-    // Name-span identity via structured find JSON (skip markdown headings without idents).
+    let store =
+        SnapshotNodeStore::open(&repo.join(".rgctl/graph.snapshot.bin")).expect("open snap");
+    assert_graph_invariants(store.columnar().expect("columnar"))
+        .expect("24-language lossless snapshot must satisfy INV-1..INV-9");
+
+    // Name-span identity via structured find JSON across all Function-emitting Tier-1 languages.
     let find = run_in(
         &repo,
         &["-f", "json", "find", "--type", "function", "--limit", "200"],
@@ -219,48 +265,66 @@ fn writeback_roundtrip_all_tier1_languages() {
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let mut checked = 0usize;
+    let mut checked_langs = std::collections::BTreeSet::new();
     for ent in &entities {
-        let Some(file) = ent.get("file").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some(name) = ent.get("name").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some(ns) = ent.get("name_start_byte").and_then(|v| v.as_u64()) else {
-            continue;
-        };
-        let Some(ne) = ent.get("name_end_byte").and_then(|v| v.as_u64()) else {
-            continue;
-        };
+        let file = ent
+            .get("file")
+            .and_then(|v| v.as_str())
+            .expect("function entity must have file");
+        let name = ent
+            .get("name")
+            .and_then(|v| v.as_str())
+            .expect("function entity must have name");
         let sb = ent.get("start_byte").and_then(|v| v.as_u64());
         let eb = ent.get("end_byte").and_then(|v| v.as_u64());
         assert!(
-            sb.is_some() && eb.is_some() && sb <= eb,
-            "expected start_byte and end_byte on hot-scan find entity {ent}"
+            sb.is_some() && eb.is_some() && sb < eb,
+            "expected non-empty start_byte and end_byte on find entity {ent}"
         );
-        if name == "<anonymous>" || name.is_empty() {
+        // Synthetic Puppet `cfg:*` hosts and ERB `erb:*` blocks have synthesized names.
+        if name == "<anonymous>"
+            || name.is_empty()
+            || name.starts_with("erb:")
+            || ent
+                .get("qualified_name")
+                .and_then(|v| v.as_str())
+                .is_some_and(|qn| qn.starts_with("cfg:"))
+        {
             continue;
         }
+        let ns = ent
+            .get("name_start_byte")
+            .and_then(|v| v.as_u64())
+            .unwrap_or_else(|| panic!("missing name_start_byte on {name} in {file}: {ent}"));
+        let ne = ent
+            .get("name_end_byte")
+            .and_then(|v| v.as_u64())
+            .unwrap_or_else(|| panic!("missing name_end_byte on {name} in {file}: {ent}"));
         let src_path = if Path::new(file).is_absolute() {
             PathBuf::from(file)
         } else {
             repo.join(file)
         };
-        let src = fs::read(&src_path).unwrap_or_default();
-        if (ne as usize) > src.len() || ns > ne {
-            continue;
-        }
+        let src = fs::read(&src_path).expect("read fixture source");
+        assert!(
+            ns <= ne && (ne as usize) <= src.len(),
+            "out-of-bounds name span {ns}..{ne} (len={}) for {name} in {file}",
+            src.len()
+        );
         let slice = &src[ns as usize..ne as usize];
         assert_eq!(
             slice,
             name.as_bytes(),
             "name span mismatch for {name} in {file}"
         );
-        checked += 1;
+        if let Some(lang_dir) = src_path.parent().and_then(|p| p.file_name()) {
+            checked_langs.insert(lang_dir.to_string_lossy().into_owned());
+        }
     }
-    assert!(
-        checked >= 8,
-        "expected several name-span checks, got {checked}"
+    assert_eq!(
+        checked_langs.len(),
+        21,
+        "expected exact name-span roundtrip across all 21 named-Function Tier-1 languages, got {}: {checked_langs:?}",
+        checked_langs.len()
     );
 }

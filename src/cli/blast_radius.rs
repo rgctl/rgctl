@@ -141,7 +141,7 @@ fn try_fast_cached_lookup(
     }
 
     let lookup_db = MacroCallLookupDb::default_path(&ctx.repo);
-    if MacroCallLookupDb::is_valid_for_repo(&lookup_db, &ctx.repo)? {
+    if args.line.is_none() && MacroCallLookupDb::is_valid_for_repo(&lookup_db, &ctx.repo)? {
         if parsed.class_filter.is_none()
             && parsed.file_filter.is_none()
             && let Some(row) = MacroCallLookupDb::lookup(&lookup_db, &parsed.target_name)?
@@ -483,9 +483,7 @@ pub(crate) fn build_lite_response(
 }
 
 fn is_constructor_node(n: &rgctl_graph::schema::Node) -> bool {
-    n.qualified_name
-        .as_deref()
-        .is_some_and(|qn| qn.ends_with(".<init>") || qn.ends_with("::<init>"))
+    rgctl_graph::is_same_name_constructor_node(n)
 }
 
 fn try_resolve_type_node_snapshot(
@@ -494,7 +492,17 @@ fn try_resolve_type_node_snapshot(
     line: Option<usize>,
 ) -> Result<Option<(rgctl_graph::schema::Node, Vec<Uuid>)>> {
     use rgctl_graph::schema::NodeType;
-    let nodes = store.find_nodes_by_name(&parsed.target_name)?;
+    let mut nodes = store.find_nodes_by_name(&parsed.target_name)?;
+    if let Some(ref ff) = parsed.file_filter {
+        let f = ff.replace('\\', "/");
+        nodes.retain(|n| {
+            n.file_path
+                .as_deref()
+                .unwrap_or("")
+                .replace('\\', "/")
+                .contains(&f)
+        });
+    }
     // If there is a non-constructor Function with the exact same name, let normal function resolution run.
     if nodes
         .iter()
@@ -510,13 +518,6 @@ fn try_resolve_type_node_snapshot(
                 && n.start_line != Some(l)
             {
                 return false;
-            }
-            if let Some(ref ff) = parsed.file_filter {
-                let p = n.file_path.as_deref().unwrap_or("").replace('\\', "/");
-                let f = ff.replace('\\', "/");
-                if !p.contains(&f) {
-                    return false;
-                }
             }
             true
         })
@@ -737,6 +738,7 @@ pub fn run(ctx: &CliContext, args: BlastRadiusArgs) -> Result<()> {
         && args.policy_file.is_none()
         && !args.with_slices
         && !args.classify_boundary
+        && args.line.is_none()
     {
         let mut session = rgctl_service::Session::new(&ctx.repo);
         if !session.graph_ready() {

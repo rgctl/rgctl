@@ -355,6 +355,7 @@ impl ErbPlugin {
         node: Node,
         source: &[u8],
         file_path: &str,
+        ordinals: &mut [usize; 4],
         symbols: &mut Vec<Symbol>,
         relations: &mut Vec<Relation>,
     ) {
@@ -392,15 +393,18 @@ impl ErbPlugin {
                     Self::jinja2_hint(&code, kind, tier)
                 };
 
-                let block_type = match kind {
-                    BlockKind::Output => "output",
-                    BlockKind::Code => "code",
-                    BlockKind::Comment => "comment",
-                    BlockKind::Graphql => "graphql",
+                let (block_type, slot) = match kind {
+                    BlockKind::Output => ("output", 0),
+                    BlockKind::Code => ("code", 1),
+                    BlockKind::Comment => ("comment", 2),
+                    BlockKind::Graphql => ("graphql", 3),
                 };
 
-                let line = node.start_position().row + 1;
-                let sym_name = format!("erb:{block_type}@L{line}");
+                // O(1) ordinal within this block kind, not the source line. Prepending
+                // trivia must not churn StableNodeKey (`erb:output#1`, not `@L{n}`).
+                ordinals[slot] += 1;
+                let ordinal = ordinals[slot];
+                let sym_name = format!("erb:{block_type}#{ordinal}");
 
                 let mut sym = Symbol {
                     name: sym_name.clone(),
@@ -435,7 +439,7 @@ impl ErbPlugin {
                     },
                     ..Default::default()
                 };
-                // Synthetic `erb:{kind}@L{n}` names — decl span only.
+                // Synthetic `erb:{kind}#{ordinal}` names — decl span only.
                 record_symbol_spans(&mut sym, node, None);
                 symbols.push(sym);
 
@@ -500,13 +504,14 @@ impl ErbPlugin {
         node: Node,
         source: &[u8],
         file_path: &str,
+        ordinals: &mut [usize; 4],
         symbols: &mut Vec<Symbol>,
         relations: &mut Vec<Relation>,
     ) {
-        self.collect_block_at(node, source, file_path, symbols, relations);
+        self.collect_block_at(node, source, file_path, ordinals, symbols, relations);
         let mut cursor = node.walk();
-        for child in node.children(&mut cursor).collect::<Vec<_>>() {
-            self.walk_blocks(child, source, file_path, symbols, relations);
+        for child in node.children(&mut cursor) {
+            self.walk_blocks(child, source, file_path, ordinals, symbols, relations);
         }
     }
 }
@@ -527,12 +532,14 @@ impl LanguagePlugin for ErbPlugin {
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let tree = self.parse(file_path, source)?;
         let path_str = file_path.to_string_lossy();
+        let mut ordinals = [0usize; 4];
         let mut symbols = Vec::new();
         let mut _rels = Vec::new();
         self.walk_blocks(
             tree.root_node(),
             source,
             &path_str,
+            &mut ordinals,
             &mut symbols,
             &mut _rels,
         );
@@ -547,12 +554,14 @@ impl LanguagePlugin for ErbPlugin {
     ) -> Result<Vec<Relation>> {
         let tree = self.parse(file_path, source)?;
         let path_str = file_path.to_string_lossy();
+        let mut ordinals = [0usize; 4];
         let mut _syms = Vec::new();
         let mut relations = Vec::new();
         self.walk_blocks(
             tree.root_node(),
             source,
             &path_str,
+            &mut ordinals,
             &mut _syms,
             &mut relations,
         );

@@ -28,7 +28,8 @@ pub use python::{
     python_simple_type_name, source_location as python_source_location,
 };
 pub use spans::{
-    compute_symbol_byte_spans, field_source_span, record_call_site_spans, record_symbol_spans,
+    compute_symbol_byte_spans, declaration_header_signature, field_source_span, field_symbol_spans,
+    record_call_site_spans, record_symbol_spans, record_symbol_spans_from_source,
 };
 pub use tree_sitter::{
     extract_name_from_node, extract_parameters_generic, extract_symbols_by_kinds, node_to_location,

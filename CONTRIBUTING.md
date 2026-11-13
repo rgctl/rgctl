@@ -93,6 +93,8 @@ Without `ci` (or `ci:lint` / `ci:test`), the Checks tab shows a single green **a
 
 ## Running tests
 
+> **Note (`rgctl gql` is deprecated):** Do **not** write new tests or correctness harnesses against `rgctl gql`. Always assert against canonical structured JSON verbs (`rgctl -f json find`, `callers`, `callees`, `relations`, `inventory`, `blast-radius`, `inspect`, `slice`, `cpg`, `security`, `clones`, `semantic`, `review`) or typed Rust graph/snapshot APIs.
+
 ```bash
 # Unit / integration (workspace)
 cargo test

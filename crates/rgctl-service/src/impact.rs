@@ -94,29 +94,25 @@ fn try_resolve_type_members(
     parsed: &rgctl_analysis::ParsedSymbol,
 ) -> Option<(Uuid, Vec<Uuid>)> {
     use rgctl_graph::schema::NodeType;
-    let nodes = backend.find_nodes_by_name(&parsed.target_name).ok()?;
-    if nodes.iter().any(|n| {
-        n.node_type == NodeType::Function
-            && !n
-                .qualified_name
+    let mut nodes = backend.find_nodes_by_name(&parsed.target_name).ok()?;
+    if let Some(ref ff) = parsed.file_filter {
+        let f = ff.replace('\\', "/");
+        nodes.retain(|n| {
+            n.file_path
                 .as_deref()
-                .is_some_and(|qn| qn.ends_with(".<init>") || qn.ends_with("::<init>"))
+                .unwrap_or("")
+                .replace('\\', "/")
+                .contains(&f)
+        });
+    }
+    if nodes.iter().any(|n| {
+        n.node_type == NodeType::Function && !rgctl_graph::is_same_name_constructor_node(n)
     }) {
         return None;
     }
     let mut type_candidates: Vec<_> = nodes
         .into_iter()
         .filter(|n| rgctl_graph::is_aggregate_container_type(n.node_type))
-        .filter(|n| {
-            if let Some(ref ff) = parsed.file_filter {
-                let p = n.file_path.as_deref().unwrap_or("").replace('\\', "/");
-                let f = ff.replace('\\', "/");
-                if !p.contains(&f) {
-                    return false;
-                }
-            }
-            true
-        })
         .collect();
     if type_candidates.len() != 1 {
         return None;

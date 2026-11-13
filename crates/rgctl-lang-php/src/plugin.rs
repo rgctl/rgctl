@@ -1916,6 +1916,12 @@ class C {
         assert!(symbols.iter().any(|s| s.name.starts_with("$Anonymous")));
         assert!(symbols.iter().any(|s| s.name == "m"));
         let all = plugin.extract_all(path, source).unwrap();
+        assert_eq!(
+            all.symbols.iter().filter(|s| s.name == "m").count(),
+            1,
+            "anonymous class method must be emitted once under $Anonymous, not duplicated on outer class: {:?}",
+            all.symbols
+        );
         let ann = all
             .relations
             .iter()

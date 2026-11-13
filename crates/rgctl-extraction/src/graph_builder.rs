@@ -23,10 +23,25 @@ struct LineSpan {
     id: Uuid,
 }
 
+#[derive(Debug, Clone)]
+struct OverloadedCallableSpan {
+    base_qn: String,
+    bare_name: String,
+    span: LineSpan,
+}
+
 /// Builds graph nodes and edges from extracted data.
 #[derive(Default)]
 pub struct GraphBuilder {
     symbol_index: HashMap<(String, NodeType), Uuid>,
+    /// First callable `(signature_hash, line_span)` for non-discriminated `symbol_index` keys.
+    ///
+    /// Tier-1 plugins carry canonical `identity_discriminator`; Tier-2 / synthetic
+    /// callables without one fall back to signature-hash disambiguation here.
+    callable_disc: HashMap<(String, NodeType), (u64, LineSpan)>,
+    /// Per-file line spans for non-discriminated overloaded callables.
+    /// Empty when callables carry `identity_discriminator` or have no same-file overloads.
+    overloaded_callables: FxHashMap<String, Vec<OverloadedCallableSpan>>,
     file_nodes: HashMap<String, Uuid>,
     /// Normalized path + component-boundary suffixes → file node id (O(1) lookup).
     file_path_lookup: HashMap<String, Uuid>,
@@ -228,6 +243,22 @@ impl GraphBuilder {
                         .push(node.id);
                 }
             }
+            // PHP namespace suffixes: `App\Service\AuthService` → `Service\AuthService`, `AuthService`.
+            if !is_field_member && qualified.contains('\\') {
+                let trimmed = qualified.trim_start_matches('\\');
+                let ns_parts: Vec<&str> = trimmed.split('\\').collect();
+                if ns_parts.len() >= 2 {
+                    for i in 1..ns_parts.len() {
+                        let suffix = ns_parts[i..].join("\\");
+                        if !suffix.is_empty() {
+                            self.symbols_by_suffix
+                                .entry(suffix)
+                                .or_default()
+                                .push(node.id);
+                        }
+                    }
+                }
+            }
             // Namespace-qualified callables also need bare suffixes without
             // the discriminator appended to symbol_index's logical key.
             // Without a discriminator, the key suffix loop below already adds them.
@@ -258,6 +289,11 @@ impl GraphBuilder {
                         .entry(method.to_string())
                         .or_default()
                         .push(node.id);
+                } else if qualified.ends_with("::<entry>") && !node.name.is_empty() {
+                    self.symbols_by_suffix
+                        .entry(node.name.to_string())
+                        .or_default()
+                        .push(node.id);
                 }
             }
         } else {
@@ -267,12 +303,14 @@ impl GraphBuilder {
                 .push(node.id);
         }
         // `symbol_key` is `file::name` or `file::a::b::…` / `file::Qualified.Name`.
+        // Strip internal `#field` partition tag before populating suffix lookup keys.
+        let clean_key = key.strip_suffix("#field").unwrap_or(key);
         // For unqualified `file::name` the bare-name insert above already covers
         // resolution — skip to avoid a duplicate push + alloc per C-like symbol.
-        match key.matches("::").count() {
+        match clean_key.matches("::").count() {
             0 => {}
             1 => {
-                if let Some((_, tail)) = key.split_once("::") {
+                if let Some((_, tail)) = clean_key.split_once("::") {
                     let duplicate_bare =
                         node.qualified_name.is_none() && tail == node.name.as_str();
                     if !duplicate_bare {
@@ -284,7 +322,7 @@ impl GraphBuilder {
                 }
             }
             _ => {
-                let parts: Vec<&str> = key.split("::").collect();
+                let parts: Vec<&str> = clean_key.split("::").collect();
                 for i in 1..parts.len() {
                     let suffix = parts[i..].join("::");
                     self.symbols_by_suffix
@@ -361,7 +399,9 @@ impl GraphBuilder {
             Node::new(NodeType::File, file_path.clone()).with_file_path(file_path.clone());
         if let Some(bytes) = source {
             let content_hash = hash_bytes(bytes);
-            node = node.with_property("content_hash".to_string(), content_hash.clone());
+            node = node
+                .with_byte_spans(Some(0), u32::try_from(bytes.len()).ok(), None, None, None)
+                .with_property("content_hash".to_string(), content_hash.clone());
             if bytes.len() > INLINE_BODY_MAX_BYTES
                 && let Some(store) = self.content_store.as_mut()
             {
@@ -451,7 +491,7 @@ impl GraphBuilder {
             ),
             symbol_type_to_node_type(symbol.symbol_type),
         );
-        if let Some(discriminator) = symbol
+        let has_identity_discriminator = if let Some(discriminator) = symbol
             .metadata
             .get("identity_discriminator")
             .and_then(|v| v.as_str())
@@ -459,7 +499,10 @@ impl GraphBuilder {
         {
             key.0.push('\u{1f}');
             key.0.push_str(discriminator);
-        }
+            true
+        } else {
+            false
+        };
         // C `#include` paths are per-translation-unit; dedupe globally by path string
         // so kernel-scale repos do not materialize one Import node per occurrence.
         if symbol.symbol_type == SymbolType::Import
@@ -471,8 +514,19 @@ impl GraphBuilder {
                 return id;
             }
         }
-        if let Some(id) = self.symbol_index.get(&key) {
-            return *id;
+        let mut qn_override: Option<String> = None;
+        let mut overloaded_base_qn: Option<String> = None;
+        if has_identity_discriminator {
+            if let Some(&id) = self.symbol_index.get(&key) {
+                return id;
+            }
+        } else if let Some(id) = self.resolve_overload_collision(
+            symbol,
+            &mut key,
+            &mut qn_override,
+            &mut overloaded_base_qn,
+        ) {
+            return id;
         }
 
         let start_byte = prep.and_then(|p| p.start_byte).or(symbol.start_byte);
@@ -501,8 +555,8 @@ impl GraphBuilder {
             name_span_overflow,
         );
 
-        if let Some(qn) = &symbol.qualified_name {
-            node = node.with_qualified_name(qn.clone());
+        if let Some(qn) = qn_override.as_deref().or(symbol.qualified_name.as_deref()) {
+            node = node.with_qualified_name(qn);
         }
         if let Some(sig) = &symbol.signature {
             node = node.with_signature(sig.clone());
@@ -617,6 +671,33 @@ impl GraphBuilder {
             node = node.with_identity_discriminator(discriminator);
         }
         let id = node.id;
+        if !has_identity_discriminator
+            && matches!(
+                symbol.symbol_type,
+                SymbolType::Function | SymbolType::Method
+            )
+        {
+            let span = LineSpan {
+                start: symbol.location.start_line,
+                end: symbol.location.end_line.max(symbol.location.start_line),
+                id,
+            };
+            self.callable_disc
+                .insert(key.clone(), (overload_disc(symbol), span));
+            if let Some(base_qn) = overloaded_base_qn {
+                let entries = self
+                    .overloaded_callables
+                    .entry(symbol.location.file.clone())
+                    .or_default();
+                if !entries.iter().any(|e| e.span.id == id) {
+                    entries.push(OverloadedCallableSpan {
+                        base_qn,
+                        bare_name: symbol.name.clone(),
+                        span,
+                    });
+                }
+            }
+        }
         if symbol.metadata["callable_role"] == "declaration" {
             self.declaration_ids.insert(id);
         }
@@ -749,6 +830,89 @@ impl GraphBuilder {
                 entry.push((method.clone(), id));
             }
         }
+    }
+
+    /// Keep a second callable that shares a qualified name when its signature differs.
+    ///
+    /// Returns the existing node id when this symbol is a duplicate. Otherwise
+    /// rewrites `key` / `qn_override` so the overload is stored beside the first.
+    fn resolve_overload_collision(
+        &mut self,
+        symbol: &Symbol,
+        key: &mut (String, NodeType),
+        qn_override: &mut Option<String>,
+        overloaded_base_qn: &mut Option<String>,
+    ) -> Option<Uuid> {
+        let existing = *self.symbol_index.get(key)?;
+        if !matches!(
+            symbol.symbol_type,
+            SymbolType::Function | SymbolType::Method
+        ) {
+            return Some(existing);
+        }
+        let disc = overload_disc(symbol);
+        if let Some(&(first_disc, first_span)) = self.callable_disc.get(key)
+            && first_disc != disc
+        {
+            let base = symbol
+                .qualified_name
+                .as_deref()
+                .unwrap_or(symbol.name.as_str());
+            let mut overloaded = format!("{base}({})", overload_params(symbol));
+            let mut next_key = (
+                symbol_key(&symbol.location.file, &symbol.name, Some(&overloaded)),
+                key.1,
+            );
+            if let Some(&id) = self.symbol_index.get(&next_key) {
+                if self.callable_disc.get(&next_key).map(|(d, _)| *d) == Some(disc) {
+                    return Some(id);
+                }
+                overloaded = format!("{overloaded}#{disc:x}");
+                next_key = (
+                    symbol_key(&symbol.location.file, &symbol.name, Some(&overloaded)),
+                    key.1,
+                );
+                if let Some(&id2) = self.symbol_index.get(&next_key) {
+                    return Some(id2);
+                }
+            }
+            let entries = self
+                .overloaded_callables
+                .entry(symbol.location.file.clone())
+                .or_default();
+            if !entries.iter().any(|e| e.span.id == first_span.id) {
+                entries.push(OverloadedCallableSpan {
+                    base_qn: base.to_string(),
+                    bare_name: symbol.name.clone(),
+                    span: first_span,
+                });
+            }
+            *overloaded_base_qn = Some(base.to_string());
+            *qn_override = Some(overloaded);
+            *key = next_key;
+            return None;
+        }
+        Some(existing)
+    }
+
+    fn resolve_overloaded_source(&self, from: &str, file: &str, line: usize) -> Option<Uuid> {
+        if line == 0 || self.overloaded_callables.is_empty() {
+            return None;
+        }
+        let entries = self.overloaded_callables.get(file)?;
+        entries
+            .iter()
+            .filter(|entry| {
+                entry.span.start <= line
+                    && line <= entry.span.end
+                    && (entry.base_qn == from
+                        || entry.bare_name == from
+                        || entry.base_qn.strip_suffix(from).is_some_and(|p| {
+                            p.ends_with('.') || p.ends_with("::") || p.ends_with('#')
+                        }))
+            })
+            .max_by_key(|entry| entry.span.start)
+            .map(|entry| entry.span.id)
     }
 
     /// Materialize `Symbol.fields` as Variable nodes contained by the owning type.
@@ -950,10 +1114,16 @@ impl GraphBuilder {
             return *id;
         }
 
-        let node = Node::new(NodeType::ConfigKey, key.key_path.clone())
+        let mut node = Node::new(NodeType::ConfigKey, key.key_path.clone())
             .with_file_path(key.location.file.clone())
             .with_property("value".to_string(), key.value.clone())
             .with_property("value_type".to_string(), format!("{:?}", key.value_type));
+        if key.location.start_line >= 1 {
+            node = node.with_location(
+                key.location.start_line,
+                key.location.end_line.max(key.location.start_line),
+            );
+        }
 
         let id = node.id;
         self.config_key_nodes.insert(lookup, id);
@@ -1144,7 +1314,8 @@ impl GraphBuilder {
     pub fn add_relation(&mut self, relation: &Relation) -> Result<()> {
         // Fast reject: unresolved cross-file C calls (no stub policy for Calls).
         // Still park when `from` resolves so cross-repo merge can recover.
-        if relation.relation_type == RelationType::Calls
+        let is_calls = relation.relation_type == RelationType::Calls;
+        if is_calls
             && relation.metadata.get("language").and_then(|v| v.as_str()) == Some("c")
             && !self.c_preferred_impl.contains_key(&relation.to)
             && !self.suffix_resolve_cache.contains_key(&relation.to)
@@ -1162,6 +1333,10 @@ impl GraphBuilder {
                     None,
                     Some(NodeType::Function),
                 );
+                if from_id.is_none() {
+                    from_id =
+                        self.unique_same_file_symbol(&relation.from, &relation.location.file, true);
+                }
                 if from_id.is_none() {
                     from_id = self
                         .symbols_by_qualified
@@ -1181,6 +1356,7 @@ impl GraphBuilder {
             }
         }
 
+        let expected_callable = is_calls.then_some(NodeType::Function);
         let exact_from = relation
             .metadata
             .get("from_identity_discriminator")
@@ -1188,34 +1364,42 @@ impl GraphBuilder {
         let mut from_id = if let Some(identity) = exact_from {
             self.resolve_callable_identity(&relation.from, &relation.location.file, identity)
         } else {
-            self.resolve_symbol_tracked_typed(
+            self.resolve_overloaded_source(
                 &relation.from,
                 &relation.location.file,
-                None,
-                None,
-                (relation.relation_type == RelationType::Calls).then_some(NodeType::Function),
+                relation.location.start_line,
             )
+            .or_else(|| {
+                self.resolve_symbol_tracked_typed(
+                    &relation.from,
+                    &relation.location.file,
+                    None,
+                    None,
+                    expected_callable,
+                )
+            })
         };
+        if from_id.is_none() && exact_from.is_none() {
+            // `relation.from` is always declared in `relation.location.file`; prefer the unique
+            // same-file symbol when container qualification (`Container::name`) missed Step 1 and
+            // multiple files across the repository share `relation.from`'s bare name.
+            from_id =
+                self.unique_same_file_symbol(&relation.from, &relation.location.file, is_calls);
+        }
         if from_id.is_none() && exact_from.is_none() {
             from_id = self
                 .symbols_by_qualified
                 .get(&relation.from)
-                .and_then(|ids| {
-                    self.unique_typed(
-                        ids,
-                        (relation.relation_type == RelationType::Calls)
-                            .then_some(NodeType::Function),
-                    )
-                });
+                .and_then(|ids| self.unique_typed(ids, expected_callable));
         }
-        if from_id.is_none() && exact_from.is_none() {
+        if from_id.is_none() && exact_from.is_none() && !is_calls {
             from_id = self.lookup_file_node(&relation.from, &relation.location.file);
         }
 
         let (to_type_hint, to_qualified_hint) = self.enrich_go_type_hints(relation);
 
-        let java_call = relation.relation_type == RelationType::Calls
-            && relation.metadata.get("language").and_then(|v| v.as_str()) == Some("java");
+        let java_call =
+            is_calls && relation.metadata.get("language").and_then(|v| v.as_str()) == Some("java");
         let target = to_qualified_hint
             .as_deref()
             .or(relation.to_qualified_hint.as_deref())
@@ -1230,7 +1414,7 @@ impl GraphBuilder {
             .and_then(|v| v.as_str());
         let unresolved_generic =
             relation.metadata.get("explicit_generic_arity").is_some() && explicit_to.is_none();
-        let mut scoped = if relation.relation_type == RelationType::Calls {
+        let mut scoped = if is_calls {
             self.resolve_scoped_callable(
                 target,
                 &relation.location.file,
@@ -1261,7 +1445,7 @@ impl GraphBuilder {
             scoped.flatten()
         };
         let signature_call = java_call
-            || relation.relation_type == RelationType::Calls
+            || is_calls
                 && relation
                     .metadata
                     .get("exact_callable_resolution")
@@ -1288,9 +1472,14 @@ impl GraphBuilder {
                     .as_deref()
                     .or(relation.to_qualified_hint.as_deref()),
                 to_type_hint.as_deref().or(relation.to_type_hint.as_deref()),
-                (relation.relation_type == RelationType::Calls).then_some(NodeType::Function),
+                expected_callable,
             )
         };
+        if to_id.is_none() && is_mainframe_relation(relation) {
+            // Same-file COBOL `PERFORM PARA` / PL/I `CALL PROC` / JCL `EXEC PROC=...` when
+            // multiple mainframe files in the repo share common paragraph/step names (`STEP1`).
+            to_id = self.unique_same_file_symbol(&relation.to, &relation.location.file, is_calls);
+        }
         if to_id.is_none() {
             if let Some(id) = self.lookup_file_node(&relation.to, &relation.location.file) {
                 to_id = Some(id);
@@ -1328,21 +1517,41 @@ impl GraphBuilder {
             // resolution is ambiguous invents phantom callers and inflates
             // Function counts on large Java repos.
             if from_id.is_some() && to_id.is_none() {
-                let qn = to_qualified_hint
-                    .as_deref()
-                    .or(relation.to_qualified_hint.as_deref());
-                to_id = Some(self.ensure_external_stub(
-                    &relation.to,
-                    qn,
-                    stub_node_type_for_target(relation),
-                ));
+                let md_url = (relation.metadata.get("kind").and_then(|v| v.as_str())
+                    == Some("markdown_link"))
+                .then(|| {
+                    relation
+                        .metadata
+                        .get("url")
+                        .and_then(|v| v.as_str())
+                        .map(|u| u.trim().trim_start_matches("./"))
+                        .filter(|u| !u.is_empty())
+                })
+                .flatten();
+                let stub_name = md_url.unwrap_or(&relation.to);
+                let qn = md_url.or_else(|| {
+                    to_qualified_hint
+                        .as_deref()
+                        .or(relation.to_qualified_hint.as_deref())
+                });
+                let target_nt = stub_node_type_for_target(relation);
+                let shadows_in_repo = match qn {
+                    Some(q) => {
+                        self.has_in_repo_qualified_candidate(q, target_nt)
+                            || (q == stub_name && self.has_in_repo_candidate(stub_name, target_nt))
+                    }
+                    None => self.has_in_repo_candidate(stub_name, target_nt),
+                };
+                if !shadows_in_repo {
+                    to_id = Some(self.ensure_external_stub(stub_name, qn, target_nt));
+                }
             }
         }
 
         // Calls must target callables only — never Class field stubs via fuzzy suffix.
         if relation.relation_type == RelationType::Calls
             && let Some(to) = to_id
-            && self.node_types.get(&to).copied() != Some(NodeType::Function)
+            && !self.is_callable_id(to)
         {
             to_id = None;
         }
@@ -1379,7 +1588,18 @@ impl GraphBuilder {
         }
 
         if let (Some(from), Some(to)) = (from_id, to_id) {
-            let edge_type = relation_type_to_edge_type(relation.relation_type);
+            let mut edge_type = relation_type_to_edge_type(relation.relation_type);
+            let target_is_interface_node =
+                self.node_types.get(&to).copied() == Some(NodeType::Interface);
+            if edge_type == EdgeType::Extends
+                && target_is_interface_node
+                && matches!(
+                    self.node_types.get(&from).copied(),
+                    Some(NodeType::Class | NodeType::Module)
+                )
+            {
+                edge_type = EdgeType::Implements;
+            }
             let mut edge = Edge::new(from, to, edge_type);
             if relation.relation_type == RelationType::Calls {
                 edge = edge.with_property(
@@ -1412,15 +1632,17 @@ impl GraphBuilder {
                         .as_deref()
                         .unwrap_or(relation.to.as_str()),
                 );
-                let is_iface = matches!(
-                    relation.relation_type,
-                    RelationType::Implements | RelationType::IncludesClass
-                ) || relation.to_type_hint.as_deref().is_some_and(|h| {
-                    matches!(
-                        h.to_ascii_lowercase().as_str(),
-                        "interface" | "trait" | "module" | "annotation"
+                let is_iface = target_is_interface_node
+                    || matches!(
+                        relation.relation_type,
+                        RelationType::Implements | RelationType::IncludesClass
                     )
-                });
+                    || relation.to_type_hint.as_deref().is_some_and(|h| {
+                        matches!(
+                            h.to_ascii_lowercase().as_str(),
+                            "interface" | "trait" | "module" | "annotation"
+                        )
+                    });
                 let prepend_front = relation
                     .metadata
                     .get("mixin")
@@ -1624,14 +1846,14 @@ impl GraphBuilder {
                 if let Some(id) = self
                     .symbols_by_qualified
                     .get(&key)
-                    .and_then(|ids| unique_resolved(ids))
+                    .and_then(|ids| self.unique_resolved_for(ids, true))
                 {
                     return Some(id);
                 }
                 if let Some(id) = self
                     .symbols_by_suffix
                     .get(&key)
-                    .and_then(|ids| unique_resolved(ids))
+                    .and_then(|ids| self.unique_resolved_for(ids, true))
                 {
                     return Some(id);
                 }
@@ -1735,6 +1957,35 @@ impl GraphBuilder {
         None
     }
 
+    fn has_in_repo_qualified_candidate(&self, qn: &str, target_nt: NodeType) -> bool {
+        self.symbols_by_qualified.get(qn).is_some_and(|ids| {
+            ids.iter().any(|id| {
+                !self.external_stub_ids.contains(id)
+                    && self.node_types.get(id).copied() == Some(target_nt)
+            })
+        })
+    }
+
+    fn has_in_repo_candidate(&self, name: &str, target_nt: NodeType) -> bool {
+        let check_key = |k: &str| -> bool {
+            self.symbols_by_suffix.get(k).is_some_and(|ids| {
+                ids.iter().any(|id| {
+                    !self.external_stub_ids.contains(id)
+                        && self.node_types.get(id).copied() == Some(target_nt)
+                })
+            })
+        };
+        if check_key(name) {
+            return true;
+        }
+        let simple = name
+            .rsplit(['.', '/', ':', '\\'])
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(name);
+        simple != name && check_key(simple)
+    }
+
     /// Create or reuse a stub node for an unresolved relation endpoint.
     ///
     /// External stubs are indexed under `symbols_by_qualified` / `symbol_index` only —
@@ -1757,7 +2008,7 @@ impl GraphBuilder {
         let simple = if is_route_stub {
             name
         } else {
-            name.rsplit(['.', '/', ':'])
+            name.rsplit(['.', '/', ':', '\\'])
                 .next()
                 .filter(|s| !s.is_empty())
                 .unwrap_or(name)
@@ -2154,10 +2405,48 @@ impl GraphBuilder {
             .map(|n| n.id)
     }
 
+    fn is_callable_id(&self, id: Uuid) -> bool {
+        self.node_types
+            .get(&id)
+            .copied()
+            .is_some_and(is_callable_kind)
+    }
+
+    fn matches_expected(&self, id: &Uuid, expected: Option<NodeType>) -> bool {
+        match expected {
+            None => true,
+            Some(NodeType::Function) => self.is_callable_id(*id),
+            Some(kind) => self.node_types.get(id) == Some(&kind),
+        }
+    }
+
+    fn unique_resolved_for(&self, ids: &[Uuid], calls_only: bool) -> Option<Uuid> {
+        self.unique_typed(ids, calls_only.then_some(NodeType::Function))
+    }
+
+    fn unique_same_file_symbol(&self, name: &str, file: &str, calls_only: bool) -> Option<Uuid> {
+        let ids = self.symbols_by_suffix.get(name)?;
+        let mut found: Option<Uuid> = None;
+        for &id in ids {
+            if self.symbol_files.get(&id).map(String::as_str) != Some(file) {
+                continue;
+            }
+            if calls_only && !self.is_callable_id(id) {
+                continue;
+            }
+            match found {
+                None => found = Some(id),
+                Some(prev) if prev == id => {}
+                Some(_) => return None,
+            }
+        }
+        found
+    }
+
     fn unique_typed(&self, ids: &[Uuid], expected: Option<NodeType>) -> Option<Uuid> {
         let mut result = None;
         for id in ids {
-            if expected.is_some_and(|kind| self.node_types.get(id) != Some(&kind)) {
+            if !self.matches_expected(id, expected) {
                 continue;
             }
             if result.is_some_and(|old| old != *id) {
@@ -2196,7 +2485,7 @@ impl GraphBuilder {
     /// Resolve a symbol name to its UUID with performance tracking.
     ///
     /// Ambiguous qualified-name or suffix matches return `None` (do not pick arbitrarily).
-    #[cfg(test)]
+    #[allow(dead_code)]
     fn resolve_symbol_tracked(
         &mut self,
         name: &str,
@@ -2227,9 +2516,15 @@ impl GraphBuilder {
             return Some(id);
         }
 
-        // 2. Try qualified hint direct lookup (O(1)); only if uniquely resolved
+        // 2. Try qualified hint direct lookup (O(1)); prefer same-file exact match first
         if let Some(hint) = qualified_hint {
             self.resolution_stats.qualified_hint_scans += 1;
+
+            if let Some(id) = self.exact_symbol(hint, file, expected) {
+                self.resolution_stats.qualified_hint_hits += 1;
+                self.resolution_stats.total_time += start.elapsed();
+                return Some(id);
+            }
 
             if let Some(id) = self
                 .symbols_by_qualified
@@ -2303,25 +2598,23 @@ impl GraphBuilder {
         // 4. Fallback: suffix index — `.c` preference map, then lazy cache, then live lookup.
         self.resolution_stats.fuzzy_scans += 1;
         let result = if qualified_hint.is_none() && type_hint.is_none() {
-            if let Some(id) = self
+            if let Some(&id) = self
                 .c_preferred_impl
                 .get(name)
-                .filter(|id| expected.is_none_or(|kind| self.node_types.get(id) == Some(&kind)))
+                .filter(|id| self.matches_expected(id, expected))
             {
-                Some(*id)
-            } else if let Some(id) = self
+                Some(id)
+            } else if let Some(&id) = self
                 .suffix_resolve_cache
                 .get(name)
                 .filter(|_| expected.is_none())
             {
-                Some(*id)
+                Some(id)
             } else {
                 let resolved = self.symbols_by_suffix.get(name).and_then(|ids| {
                     self.unique_typed(ids, expected).or_else(|| {
                         single_c_preferred_impl(ids, &self.symbol_files, &self.declaration_ids)
-                            .filter(|id| {
-                                expected.is_none_or(|kind| self.node_types.get(id) == Some(&kind))
-                            })
+                            .filter(|id| self.matches_expected(id, expected))
                     })
                 });
                 if let Some(id) = resolved.filter(|_| expected.is_none()) {
@@ -2514,6 +2807,90 @@ pub enum ConfigUsageKind {
 
 fn symbol_key(file: &str, name: &str, qualified: Option<&str>) -> String {
     format!("{file}::{}", qualified.unwrap_or(name))
+}
+
+fn is_callable_kind(kind: NodeType) -> bool {
+    matches!(
+        kind,
+        NodeType::Function
+            | NodeType::PuppetClass
+            | NodeType::PuppetDefinedType
+            | NodeType::PuppetNode
+            | NodeType::ChefRecipe
+            | NodeType::ChefResource
+            | NodeType::AnsibleTask
+            | NodeType::AnsibleHandler
+    )
+}
+
+fn overload_disc(symbol: &Symbol) -> u64 {
+    let mut hasher = blake3::Hasher::new();
+    if let Some(sig) = symbol.signature.as_deref() {
+        hasher.update(sig.as_bytes());
+    }
+    hasher.update(&[0]);
+    hasher.update(&(symbol.parameters.len() as u32).to_le_bytes());
+    for param in &symbol.parameters {
+        hasher.update(param.name.as_bytes());
+        hasher.update(&[0xfe]);
+        hasher.update(param.param_type.as_deref().unwrap_or("").as_bytes());
+        hasher.update(&[0xfe]);
+        hasher.update(param.default_value.as_deref().unwrap_or("").as_bytes());
+        hasher.update(&[0xff]);
+    }
+    hasher.update(symbol.return_type.as_deref().unwrap_or("").as_bytes());
+    let hash = hasher.finalize();
+    u64::from_le_bytes(hash.as_bytes()[..8].try_into().expect("8 bytes"))
+}
+
+fn overload_params(symbol: &Symbol) -> String {
+    if symbol
+        .parameters
+        .iter()
+        .any(|p| p.param_type.as_deref().is_some_and(|t| !t.is_empty()))
+    {
+        return symbol
+            .parameters
+            .iter()
+            .map(|param| {
+                param
+                    .param_type
+                    .as_deref()
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or("_")
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+    }
+    if let Some(sig) = symbol.signature.as_deref() {
+        let line = sig.lines().next().unwrap_or(sig).trim();
+        if let (Some(open), Some(close)) = (line.find('('), line.rfind(')'))
+            && open < close
+        {
+            let inner = line[open + 1..close].trim();
+            if !inner.is_empty() {
+                return inner.to_string();
+            }
+        }
+        if !line.is_empty() {
+            return line.to_string();
+        }
+    }
+    if !symbol.parameters.is_empty() {
+        return symbol
+            .parameters
+            .iter()
+            .map(|param| {
+                if param.name.is_empty() {
+                    "_"
+                } else {
+                    param.name.as_str()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+    }
+    format!("{:x}", overload_disc(symbol))
 }
 
 fn unique_matching(ids: &[Uuid], matches: impl Fn(&Uuid) -> bool) -> Option<Uuid> {
@@ -2775,6 +3152,13 @@ fn infer_import_binding_from_name(name: &str, cleaned_module: &str) -> Option<St
     None
 }
 
+fn is_mainframe_relation(relation: &Relation) -> bool {
+    matches!(
+        relation.metadata.get("language").and_then(|v| v.as_str()),
+        Some("cobol" | "pli" | "jcl")
+    )
+}
+
 fn relation_allows_external_stub(relation: &Relation) -> bool {
     match relation.relation_type {
         RelationType::Instantiates
@@ -3014,12 +3398,12 @@ fn compute_c3_mro(
     Some(result)
 }
 
-/// Rightmost type segment: `com.foo.Child` → `Child`, `pkg::Child` → `Child`.
+/// Rightmost type segment: `com.foo.Child` → `Child`, `pkg::Child` → `Child`, `App\Child` → `Child`.
 fn type_simple_name(name: &str) -> &str {
     name.split('<')
         .next()
         .unwrap_or(name)
-        .rsplit(['.', '/', ':'])
+        .rsplit(['.', '/', ':', '\\'])
         .next()
         .filter(|s| !s.is_empty())
         .unwrap_or(name)
@@ -3056,7 +3440,7 @@ fn method_simple_name<'a>(name: &'a str, qualified_hint: Option<&'a str>) -> &'a
     {
         return method;
     }
-    name.rsplit(['.', ':', '#'])
+    name.rsplit(['.', ':', '#', '\\'])
         .next()
         .filter(|s| !s.is_empty())
         .unwrap_or(name)
@@ -4590,6 +4974,294 @@ class Library {
         assert!(builder.edges.iter().any(|e| {
             e.from == owner.id && e.to == field.id && e.edge_type == EdgeType::Contains
         }));
+    }
+
+    #[test]
+    fn materialized_field_does_not_drop_same_named_method() {
+        let mut builder = GraphBuilder::new();
+        builder.set_materialize_fields(true);
+        let file_id = builder.ensure_file_node(Path::new("Mod.java"));
+        let mut class_sym = sample_symbol();
+        class_sym.name = "Mod".to_string();
+        class_sym.symbol_type = SymbolType::Class;
+        class_sym.qualified_name = Some("Mod".to_string());
+        class_sym.location.file = "Mod.java".to_string();
+        class_sym.fields = vec![rgctl_plugin_api::Field {
+            name: "status".to_string(),
+            field_type: Some("int".to_string()),
+            visibility: Some("public".to_string()),
+            source_span: None,
+        }];
+        builder.add_symbol(&class_sym, file_id);
+
+        let mut method = sample_symbol();
+        method.name = "status".to_string();
+        method.symbol_type = SymbolType::Method;
+        method.qualified_name = Some("Mod.status".to_string());
+        method.location.file = "Mod.java".to_string();
+        builder.add_symbol(&method, file_id);
+
+        assert!(
+            builder
+                .nodes()
+                .iter()
+                .any(|n| n.node_type == NodeType::Variable && n.name == "status"),
+            "field variable"
+        );
+        assert!(
+            builder
+                .nodes()
+                .iter()
+                .any(|n| n.node_type == NodeType::Function && n.name == "status"),
+            "same-named method must survive field materialization"
+        );
+    }
+
+    #[test]
+    fn same_qualified_name_overloads_both_survive() {
+        let mut builder = GraphBuilder::new();
+        let file_id = builder.ensure_file_node(Path::new("Service.java"));
+        let mut int_serve = sample_symbol();
+        int_serve.name = "serve".to_string();
+        int_serve.symbol_type = SymbolType::Function;
+        int_serve.qualified_name = Some("svc.Service.serve".to_string());
+        int_serve.location.file = "Service.java".to_string();
+        int_serve.signature = Some("int serve(int x)".to_string());
+        int_serve.parameters = vec![rgctl_plugin_api::Parameter {
+            name: "x".to_string(),
+            param_type: Some("int".to_string()),
+            default_value: None,
+        }];
+        let mut str_serve = int_serve.clone();
+        str_serve.signature = Some("String serve(String s)".to_string());
+        str_serve.parameters = vec![rgctl_plugin_api::Parameter {
+            name: "s".to_string(),
+            param_type: Some("String".to_string()),
+            default_value: None,
+        }];
+        builder.add_symbol(&int_serve, file_id);
+        builder.add_symbol(&str_serve, file_id);
+        builder.add_symbol(&str_serve, file_id);
+
+        let serves: Vec<_> = builder
+            .nodes()
+            .iter()
+            .filter(|n| n.node_type == NodeType::Function && n.name == "serve")
+            .collect();
+        assert_eq!(serves.len(), 2, "overload was dropped");
+        let qns: Vec<_> = serves
+            .iter()
+            .map(|n| n.qualified_name.as_deref().unwrap_or(""))
+            .collect();
+        assert!(qns.contains(&"svc.Service.serve"), "{qns:?}");
+        assert!(qns.iter().any(|qn| qn.contains("String")), "{qns:?}");
+    }
+
+    #[test]
+    fn overloaded_methods_attribute_outbound_calls_by_line_span() {
+        let mut builder = GraphBuilder::new();
+        let file_id = builder.ensure_file_node(Path::new("Service.java"));
+        let loc = |s: usize, e: usize| SourceLocation {
+            file: "Service.java".to_string(),
+            start_line: s,
+            end_line: e,
+            start_column: 0,
+            end_column: 0,
+        };
+
+        let mut helper_int = sample_symbol();
+        helper_int.name = "helperInt".to_string();
+        helper_int.symbol_type = SymbolType::Function;
+        helper_int.qualified_name = Some("svc.Service.helperInt".to_string());
+        helper_int.location = loc(2, 2);
+
+        let mut helper_str = helper_int.clone();
+        helper_str.name = "helperStr".to_string();
+        helper_str.qualified_name = Some("svc.Service.helperStr".to_string());
+        helper_str.location = loc(3, 3);
+
+        let mut int_serve = helper_int.clone();
+        int_serve.name = "serve".to_string();
+        int_serve.qualified_name = Some("svc.Service.serve".to_string());
+        int_serve.location = loc(5, 7);
+        int_serve.signature = Some("int serve(int x)".to_string());
+        int_serve.parameters = vec![rgctl_plugin_api::Parameter {
+            name: "x".to_string(),
+            param_type: Some("int".to_string()),
+            default_value: None,
+        }];
+
+        let mut str_serve = int_serve.clone();
+        str_serve.location = loc(9, 11);
+        str_serve.signature = Some("int serve(String s)".to_string());
+        str_serve.parameters = vec![rgctl_plugin_api::Parameter {
+            name: "s".to_string(),
+            param_type: Some("String".to_string()),
+            default_value: None,
+        }];
+
+        let id_helper_int = builder.add_symbol(&helper_int, file_id);
+        let id_helper_str = builder.add_symbol(&helper_str, file_id);
+        let id_int_serve = builder.add_symbol(&int_serve, file_id);
+        let id_str_serve = builder.add_symbol(&str_serve, file_id);
+        builder.build_resolution_indexes();
+
+        builder
+            .add_relation(&Relation {
+                from: "svc.Service.serve".to_string(),
+                to: "svc.Service.helperInt".to_string(),
+                relation_type: RelationType::Calls,
+                location: loc(6, 6),
+                ..Default::default()
+            })
+            .unwrap();
+        builder
+            .add_relation(&Relation {
+                from: "svc.Service.serve".to_string(),
+                to: "svc.Service.helperStr".to_string(),
+                relation_type: RelationType::Calls,
+                location: loc(10, 10),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let int_callees: Vec<Uuid> = builder
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Calls && e.from == id_int_serve)
+            .map(|e| e.to)
+            .collect();
+        let str_callees: Vec<Uuid> = builder
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Calls && e.from == id_str_serve)
+            .map(|e| e.to)
+            .collect();
+        assert_eq!(int_callees, vec![id_helper_int]);
+        assert_eq!(str_callees, vec![id_helper_str]);
+    }
+
+    #[test]
+    fn standalone_field_and_method_coexist_in_both_orders_and_calls_resolve() {
+        for field_first in [true, false] {
+            let mut builder = GraphBuilder::new();
+            let src = b"// Mod.java\nclass Mod { int status; int status() { return 1; } int caller() { return status(); } }\n";
+            let file_id = builder.ensure_file_node_with_source(Path::new("Mod.java"), Some(src));
+            let file_node = builder
+                .nodes()
+                .iter()
+                .find(|n| n.node_type == NodeType::File)
+                .unwrap();
+            assert_eq!(file_node.start_byte, Some(0));
+            assert_eq!(file_node.end_byte, Some(src.len() as u32));
+
+            let mut field_sym = sample_symbol();
+            field_sym.name = "status".to_string();
+            field_sym.symbol_type = SymbolType::Variable;
+            field_sym.qualified_name = Some("pkg.Mod.status".to_string());
+            field_sym.location.file = "Mod.java".to_string();
+
+            let mut method_sym = sample_symbol();
+            method_sym.name = "status".to_string();
+            method_sym.symbol_type = SymbolType::Method;
+            method_sym.qualified_name = Some("pkg.Mod.status".to_string());
+            method_sym.location.file = "Mod.java".to_string();
+
+            let mut caller_sym = sample_symbol();
+            caller_sym.name = "caller".to_string();
+            caller_sym.symbol_type = SymbolType::Method;
+            caller_sym.qualified_name = Some("pkg.Mod.caller".to_string());
+            caller_sym.location.file = "Mod.java".to_string();
+
+            let (field_id, method_id) = if field_first {
+                let f = builder.add_symbol(&field_sym, file_id);
+                let m = builder.add_symbol(&method_sym, file_id);
+                (f, m)
+            } else {
+                let m = builder.add_symbol(&method_sym, file_id);
+                let f = builder.add_symbol(&field_sym, file_id);
+                (f, m)
+            };
+            let caller_id = builder.add_symbol(&caller_sym, file_id);
+            assert_ne!(field_id, method_id, "field_first={field_first}");
+
+            builder.build_resolution_indexes();
+            builder
+                .add_relation(&Relation {
+                    from: "pkg.Mod.caller".to_string(),
+                    to: "status".to_string(),
+                    relation_type: RelationType::Calls,
+                    location: SourceLocation {
+                        file: "Mod.java".to_string(),
+                        start_line: 2,
+                        end_line: 2,
+                        start_column: 0,
+                        end_column: 0,
+                    },
+                    metadata: serde_json::json!({}),
+                    to_qualified_hint: Some("pkg.Mod.status".to_string()),
+                    to_type_hint: Some("Mod".to_string()),
+                    ..Default::default()
+                })
+                .unwrap();
+
+            assert!(
+                builder.edges.iter().any(|e| {
+                    e.edge_type == EdgeType::Calls && e.from == caller_id && e.to == method_id
+                }),
+                "Calls must resolve to method even when same-named field exists (field_first={field_first})"
+            );
+        }
+    }
+
+    #[test]
+    fn unresolved_markdown_anchor_link_uses_portable_url_not_host_temp_path() {
+        let mut builder = GraphBuilder::new();
+        let file_id = builder.ensure_file_node(Path::new("README.md"));
+        let mut heading = sample_symbol();
+        heading.name = "Overview".to_string();
+        heading.symbol_type = SymbolType::Module;
+        heading.qualified_name = Some("README.md#overview".to_string());
+        heading.location.file = "README.md".to_string();
+        heading.metadata = serde_json::json!({ "kind": "heading" });
+        builder.add_symbol(&heading, file_id);
+        builder.build_resolution_indexes();
+
+        builder
+            .add_relation(&Relation {
+                from: "README.md#overview".to_string(),
+                to: "/private/var/folders/xx/tmp.12345/README.md#missing-anchor".to_string(),
+                relation_type: RelationType::References,
+                location: SourceLocation {
+                    file: "README.md".to_string(),
+                    start_line: 3,
+                    end_line: 3,
+                    start_column: 0,
+                    end_column: 0,
+                },
+                metadata: serde_json::json!({
+                    "kind": "markdown_link",
+                    "url": "../README.md#missing-anchor",
+                }),
+                to_qualified_hint: Some(
+                    "/private/var/folders/xx/tmp.12345/README.md#missing-anchor".to_string(),
+                ),
+                to_type_hint: Some("module".to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let stub = builder
+            .nodes()
+            .iter()
+            .find(|n| n.properties.get("is_external_stub").map(String::as_str) == Some("true"))
+            .expect("portable markdown stub");
+        assert_eq!(stub.name.as_str(), "../README.md#missing-anchor");
+        assert_eq!(
+            stub.qualified_name.as_deref(),
+            Some("../README.md#missing-anchor")
+        );
+        assert!(!stub.name.contains("tmp.12345"));
     }
 
     #[test]

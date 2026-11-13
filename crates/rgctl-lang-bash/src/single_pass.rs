@@ -3,7 +3,10 @@
 use crate::plugin::Plugin;
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::{extract_name_from_node, node_to_location};
+use rgctl_plugin_helpers::{
+    extract_name_from_node, node_to_location, record_call_site_spans,
+    record_symbol_spans_from_source,
+};
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -196,7 +199,7 @@ fn flush_bash_call(
             .unwrap_or_else(|| pending.callee.clone()),
         _ => pending.callee.clone(),
     };
-    relations.push(Relation {
+    let mut rel = Relation {
         from,
         to: local_target,
         relation_type: RelationType::Calls,
@@ -205,7 +208,9 @@ fn flush_bash_call(
         to_qualified_hint: None,
         to_type_hint: None,
         ..Default::default()
-    });
+    };
+    record_call_site_spans(&mut rel, pending.node);
+    relations.push(rel);
 }
 
 /// Single iterative DFS: function symbols + command Calls + complexity.
@@ -279,22 +284,24 @@ pub fn extract_all_single_pass(
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
                         let qn = name.clone();
+                        let mut sym = Symbol {
+                            name: name.clone(),
+                            symbol_type: SymbolType::Function,
+                            qualified_name: Some(qn.clone()),
+                            location: node_to_location(node, &file_path_str),
+                            signature: None,
+                            return_type: None,
+                            parameters: vec![],
+                            fields: vec![],
+                            modifiers: vec![],
+                            documentation: None,
+                            metadata: serde_json::json!({ "language": "bash" }),
+                            ..Default::default()
+                        };
+                        record_symbol_spans_from_source(&mut sym, node, source);
                         ctx.symbols
                             .push(rgctl_plugin_helpers::callable_identity::symbol(
-                                Symbol {
-                                    name: name.clone(),
-                                    symbol_type: SymbolType::Function,
-                                    qualified_name: Some(qn.clone()),
-                                    location: node_to_location(node, &file_path_str),
-                                    signature: None,
-                                    return_type: None,
-                                    parameters: vec![],
-                                    fields: vec![],
-                                    modifiers: vec![],
-                                    documentation: None,
-                                    metadata: serde_json::json!({ "language": "bash" }),
-                                    ..Default::default()
-                                },
+                                sym,
                                 node,
                                 source,
                                 rgctl_plugin_helpers::callable_identity::Policy::Bash,
@@ -317,7 +324,7 @@ pub fn extract_all_single_pass(
 
                 if kind == "declaration_command" {
                     for name in declaration_var_names(node, source) {
-                        ctx.symbols.push(Symbol {
+                        let mut sym = Symbol {
                             name: name.clone(),
                             symbol_type: SymbolType::Variable,
                             qualified_name: Some(name),
@@ -333,7 +340,9 @@ pub fn extract_all_single_pass(
                                 "kind": "declaration_command"
                             }),
                             ..Default::default()
-                        });
+                        };
+                        record_symbol_spans_from_source(&mut sym, node, source);
+                        ctx.symbols.push(sym);
                     }
                 }
 

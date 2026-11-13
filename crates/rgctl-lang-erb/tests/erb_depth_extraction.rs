@@ -112,3 +112,25 @@ fn ast_coverage_all_declared_handlers_exercised() {
     let hotspots = tracker.unhandled_hotspots(10);
     eprintln!("erb unhandled hotspots: {hotspots:?}");
 }
+
+#[test]
+fn sibling_blocks_use_ordinal_identity() {
+    let source = b"<%= @a %>\n<%= @b %>\n";
+    let plugin = ErbPlugin::new().expect("plugin");
+    let out = plugin
+        .extract_all(Path::new("templates/pair.html.erb"), source)
+        .expect("extract_all");
+    let names: Vec<&str> = out.symbols.iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        names.iter().any(|n| n.contains("erb:output#1")),
+        "missing ordinal output: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n.contains("erb:output#2")),
+        "missing second ordinal output: {names:?}"
+    );
+    assert!(
+        names.iter().all(|n| !n.contains("@L")),
+        "line numbers must not be part of ERB identity: {names:?}"
+    );
+}

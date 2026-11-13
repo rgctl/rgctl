@@ -348,6 +348,9 @@ rgctl-lang-javascript = { workspace = true }
 rgctl-lang-typescript = { workspace = true }
 rgctl-lang-rust = { workspace = true }
 rgctl-lang-java = { workspace = true }
+rgctl-lang-json = { workspace = true }
+rgctl-lang-yaml = { workspace = true }
+rgctl-lang-toml = { workspace = true }
 rgctl-ast-coverage = { workspace = true }
 walkdir = { workspace = true }
 
@@ -565,6 +568,10 @@ name = "writeback_roundtrip_tier1"
 path = "tests/writeback_roundtrip_tier1.rs"
 
 [[test]]
+name = "metamorphic_correctness_qe"
+path = "tests/metamorphic_correctness_qe.rs"
+
+[[test]]
 name = "writeback_patch_integration"
 path = "tests/writeback_patch_integration.rs"
 
@@ -587,6 +594,14 @@ path = "tests/scale_perf_ci_gate.rs"
 [[test]]
 name = "docs_guides_cli_fact_check"
 path = "tests/docs_guides_cli_fact_check.rs"
+
+[[test]]
+name = "mainframe_plugins_correctness"
+path = "tests/mainframe_plugins_correctness.rs"
+
+[[test]]
+name = "tier2_query_plugins_correctness"
+path = "tests/tier2_query_plugins_correctness.rs"
 
 [[bench]]
 name = "parsing"

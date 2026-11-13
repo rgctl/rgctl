@@ -3,7 +3,7 @@
 use crate::single_pass::{extract_all_single_pass, groovy_ast_handlers};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result, complexity_from_metadata, parse_with_pool};
-use rgctl_plugin_helpers::record_symbol_spans;
+use rgctl_plugin_helpers::{declaration_header_signature, record_symbol_spans};
 use std::path::Path;
 use tree_sitter::Node;
 
@@ -230,6 +230,15 @@ impl GroovyPlugin {
         Some(symbol)
     }
 
+    pub(crate) fn anon_owner_qn(
+        node: Node,
+        source: &[u8],
+        package: Option<&str>,
+    ) -> Option<String> {
+        Self::enclosing_callable_qn(node, source, package)
+            .or_else(|| Self::enclosing_class(node, source).map(|c| Self::qualify(package, &c)))
+    }
+
     pub(crate) fn extract_lambda_symbol(
         &self,
         node: Node,
@@ -239,18 +248,14 @@ impl GroovyPlugin {
         idx: u32,
     ) -> Option<Symbol> {
         let name = format!("$lambda${idx}");
-        let owner = Self::enclosing_callable_qn(node, source, package)
-            .or_else(|| Self::enclosing_class(node, source).map(|c| Self::qualify(package, &c)));
+        let owner = Self::anon_owner_qn(node, source, package);
         let qn = owner.map(|o| format!("{o}.{name}"));
         let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: qn,
             location: Self::loc(file, node),
-            signature: node
-                .utf8_text(source)
-                .ok()
-                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            signature: declaration_header_signature(node, source),
             return_type: None,
             parameters: vec![],
             fields: vec![],
@@ -278,18 +283,14 @@ impl GroovyPlugin {
         idx: u32,
     ) -> Option<Symbol> {
         let name = format!("$closure${idx}");
-        let owner = Self::enclosing_callable_qn(node, source, package)
-            .or_else(|| Self::enclosing_class(node, source).map(|c| Self::qualify(package, &c)));
+        let owner = Self::anon_owner_qn(node, source, package);
         let qn = owner.map(|o| format!("{o}.{name}"));
         let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: qn,
             location: Self::loc(file, node),
-            signature: node
-                .utf8_text(source)
-                .ok()
-                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            signature: declaration_header_signature(node, source),
             return_type: None,
             parameters: vec![],
             fields: vec![],
@@ -563,10 +564,7 @@ impl GroovyPlugin {
             symbol_type: SymbolType::Function,
             qualified_name: Some(qn),
             location: Self::loc(file, node),
-            signature: node
-                .utf8_text(source)
-                .ok()
-                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            signature: declaration_header_signature(node, source),
             return_type: if is_ctor {
                 None
             } else {
@@ -607,10 +605,7 @@ impl GroovyPlugin {
             symbol_type: SymbolType::Function,
             qualified_name: Some(qn),
             location: Self::loc(file, node),
-            signature: node
-                .utf8_text(source)
-                .ok()
-                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            signature: declaration_header_signature(node, source),
             return_type: None,
             parameters: self.extract_parameters(node, source),
             fields: vec![],
@@ -1558,11 +1553,45 @@ mod tests {
             .extract_all(Path::new("OrderService.groovy"), src)
             .unwrap();
         assert!(
+            all.relations.iter().any(|r| {
+                r.relation_type == RelationType::Calls
+                    && r.from == "OrderService.findAll"
+                    && r.to == "OrderService.validate"
+            }),
+            "expected Calls from OrderService.findAll -> OrderService.validate: {:?}",
             all.relations
+        );
+        assert!(
+            !all.symbols.iter().any(|s| s.name.starts_with("$closure$")),
+            "method body blocks must not emit synthetic $closure symbols: {:?}",
+            all.symbols
+        );
+    }
+
+    #[test]
+    fn closure_ordinals_are_scoped_per_owner() {
+        let before = b"class Svc {\n  def a() { return 1 }\n  def b() { def c = { x -> x + 1 }; return c(2) }\n}\n";
+        let after = b"class Svc {\n  def a() { def k = { y -> y * 2 }; return k(1) }\n  def b() { def c = { x -> x + 1 }; return c(2) }\n}\n";
+        let plugin = GroovyPlugin::new().unwrap();
+        let sym_before = plugin
+            .extract_all(Path::new("Svc.groovy"), before)
+            .unwrap()
+            .symbols;
+        let sym_after = plugin
+            .extract_all(Path::new("Svc.groovy"), after)
+            .unwrap()
+            .symbols;
+        assert!(
+            sym_before
                 .iter()
-                .any(|r| r.relation_type == RelationType::Calls),
-            "expected Calls: {:?}",
-            all.relations
+                .any(|s| s.qualified_name.as_deref() == Some("Svc.b.$closure$1")),
+            "{sym_before:?}"
+        );
+        assert!(
+            sym_after
+                .iter()
+                .any(|s| s.qualified_name.as_deref() == Some("Svc.b.$closure$1")),
+            "adding closure in sibling Svc.a must not renumber Svc.b.$closure$1: {sym_after:?}"
         );
     }
 

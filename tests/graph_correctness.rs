@@ -98,11 +98,66 @@ const PROJECTS: &[ProjectSpec] = &[
         dir_name: "ecommerce-puppet",
         exclude: "spec,vendor",
     },
+    ProjectSpec {
+        id: "swift",
+        dir_name: "tests/fixtures/correctness_matrix/swift",
+        exclude: ".build",
+    },
+    ProjectSpec {
+        id: "scala",
+        dir_name: "tests/fixtures/correctness_matrix/scala",
+        exclude: "target",
+    },
+    ProjectSpec {
+        id: "dart",
+        dir_name: "tests/fixtures/correctness_matrix/dart",
+        exclude: ".dart_tool,build",
+    },
+    ProjectSpec {
+        id: "elixir",
+        dir_name: "tests/fixtures/correctness_matrix/elixir",
+        exclude: "_build,deps",
+    },
+    ProjectSpec {
+        id: "lua",
+        dir_name: "tests/fixtures/correctness_matrix/lua",
+        exclude: "",
+    },
+    ProjectSpec {
+        id: "bash",
+        dir_name: "tests/fixtures/correctness_matrix/bash",
+        exclude: "",
+    },
+    ProjectSpec {
+        id: "sql",
+        dir_name: "tests/fixtures/correctness_matrix/sql",
+        exclude: "",
+    },
+    ProjectSpec {
+        id: "hcl",
+        dir_name: "tests/fixtures/correctness_matrix/hcl",
+        exclude: ".terraform",
+    },
+    ProjectSpec {
+        id: "erb",
+        dir_name: "tests/fixtures/correctness_matrix/erb",
+        exclude: "",
+    },
+    ProjectSpec {
+        id: "markdown",
+        dir_name: "tests/fixtures/correctness_matrix/markdown",
+        exclude: "",
+    },
 ];
 
 fn assert_project(spec: &ProjectSpec) {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root = rgctl_tests_root();
-    let project_dir = root.join(spec.dir_name);
+    let project_dir = if spec.dir_name.contains('/') {
+        manifest.join(spec.dir_name)
+    } else {
+        root.join(spec.dir_name)
+    };
     let facts = project_dir.join("correctness").join("expected-facts.json");
     if !facts.is_file() {
         eprintln!(
@@ -197,4 +252,44 @@ fn correctness_groovy() {
 #[test]
 fn correctness_puppet() {
     assert_project(&PROJECTS[13]);
+}
+#[test]
+fn correctness_swift() {
+    assert_project(&PROJECTS[14]);
+}
+#[test]
+fn correctness_scala() {
+    assert_project(&PROJECTS[15]);
+}
+#[test]
+fn correctness_dart() {
+    assert_project(&PROJECTS[16]);
+}
+#[test]
+fn correctness_elixir() {
+    assert_project(&PROJECTS[17]);
+}
+#[test]
+fn correctness_lua() {
+    assert_project(&PROJECTS[18]);
+}
+#[test]
+fn correctness_bash() {
+    assert_project(&PROJECTS[19]);
+}
+#[test]
+fn correctness_sql() {
+    assert_project(&PROJECTS[20]);
+}
+#[test]
+fn correctness_hcl() {
+    assert_project(&PROJECTS[21]);
+}
+#[test]
+fn correctness_erb() {
+    assert_project(&PROJECTS[22]);
+}
+#[test]
+fn correctness_markdown() {
+    assert_project(&PROJECTS[23]);
 }

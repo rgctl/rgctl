@@ -378,7 +378,7 @@ pub fn run_call_neighbors(
             .call_neighbors(sym, incoming, depth, &filters)
             .map_err(|e| map_sq_err(ctx, e))?;
         for n in result.neighbors {
-            if seen.insert(n.name.clone()) {
+            if seen.insert(n.id.clone()) {
                 all_neighbors.push(n);
             }
         }

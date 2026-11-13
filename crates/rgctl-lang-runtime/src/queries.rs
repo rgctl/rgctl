@@ -8,7 +8,7 @@ use rgctl_plugin_api::Result;
 use rgctl_plugin_api::{
     Error, ExtractAllResult, Relation, RelationType, SourceLocation, Symbol, SymbolType,
 };
-use rgctl_plugin_helpers::node_to_location;
+use rgctl_plugin_helpers::{node_to_location, record_call_site_spans, record_symbol_spans};
 use std::path::Path;
 use tree_sitter::{Language, Node, Query, QueryCursor, StreamingIterator, Tree};
 
@@ -137,11 +137,13 @@ impl CaptureIndex {
 }
 
 #[derive(Debug)]
-struct PendingDef {
+struct PendingDef<'a> {
     name: String,
     symbol_type: SymbolType,
     location: SourceLocation,
     documentation: Option<String>,
+    span_node: Node<'a>,
+    name_node: Option<Node<'a>>,
 }
 
 fn is_definition_span_kind(kind: &str) -> bool {
@@ -269,11 +271,48 @@ fn is_inside_declaration_header(node: Node<'_>, source: &[u8]) -> bool {
     false
 }
 
+/// Expand `span` up to a tight assignment/binding parent when `@name` sits just outside
+/// `@definition.*` (e.g. `helper <- function(x) { ... }` in R or `name = expr` bindings).
+fn enclose_name_in_span<'a>(span: Node<'a>, name_node: Option<Node<'a>>) -> Node<'a> {
+    let Some(nn) = name_node else {
+        return span;
+    };
+    if span.start_byte() <= nn.start_byte() && nn.end_byte() <= span.end_byte() {
+        return span;
+    }
+    let mut cur = span;
+    for _ in 0..4 {
+        let Some(parent) = cur.parent() else {
+            break;
+        };
+        if matches!(
+            parent.kind(),
+            "translation_unit"
+                | "source_file"
+                | "program"
+                | "module"
+                | "block"
+                | "contract_body"
+                | "class_body"
+                | "declaration_list"
+        ) {
+            break;
+        }
+        if parent.start_byte() <= nn.start_byte() && nn.end_byte() <= parent.end_byte() {
+            return parent;
+        }
+        cur = parent;
+    }
+    span
+}
+
 #[derive(Debug)]
-struct PendingRef {
+struct PendingRef<'a> {
     role: CaptureRole,
     name: String,
     location: SourceLocation,
+    ref_node: Node<'a>,
+    name_node: Option<Node<'a>>,
 }
 
 /// Execute a precompiled tags query and emit a unified [`ExtractAllResult`].
@@ -294,6 +333,7 @@ pub fn extract_with_query(
 
     while let Some(m) = matches.next() {
         let mut name: Option<String> = None;
+        let mut name_capture_node: Option<Node> = None;
         let mut doc: Option<String> = None;
         let mut def_role: Option<SymbolType> = None;
         let mut def_node: Option<Node> = None;
@@ -312,6 +352,7 @@ pub fn extract_with_query(
                         let trimmed = text.trim();
                         if !trimmed.is_empty() {
                             name = Some(trimmed.to_string());
+                            name_capture_node = Some(node);
                         }
                     }
                 }
@@ -348,6 +389,8 @@ pub fn extract_with_query(
                 symbol_type: SymbolType::Import,
                 location: node_to_location(node, &file),
                 documentation: None,
+                span_node: node,
+                name_node: None,
             });
         }
 
@@ -364,12 +407,20 @@ pub fn extract_with_query(
                     .filter(|s| !s.is_empty())
             });
             if let Some(n) = resolved_name {
-                let span = definition_span_node(node);
+                let base_span = definition_span_node(node);
+                let span = enclose_name_in_span(base_span, name_capture_node);
+                let valid_name_node = name_capture_node.filter(|nn| {
+                    span.start_byte() <= nn.start_byte()
+                        && nn.end_byte() <= span.end_byte()
+                        && nn.end_byte() > nn.start_byte()
+                });
                 defs.push(PendingDef {
                     name: n,
                     symbol_type: st,
                     location: node_to_location(span, &file),
                     documentation: doc.take(),
+                    span_node: span,
+                    name_node: valid_name_node,
                 });
             }
         }
@@ -389,6 +440,8 @@ pub fn extract_with_query(
                     role,
                     name: n,
                     location: node_to_location(node, &file),
+                    ref_node: node,
+                    name_node: name_capture_node,
                 });
             }
         }
@@ -401,28 +454,34 @@ pub fn extract_with_query(
 
     let mut symbols: Vec<Symbol> = defs
         .into_iter()
-        .map(|d| Symbol {
-            name: d.name,
-            symbol_type: d.symbol_type,
-            qualified_name: None,
-            location: d.location,
-            signature: None,
-            return_type: None,
-            parameters: vec![],
-            fields: vec![],
-            modifiers: vec![],
-            documentation: d.documentation,
-            metadata: default_meta.clone(),
-            ..Default::default()
+        .map(|d| {
+            let mut sym = Symbol {
+                name: d.name,
+                symbol_type: d.symbol_type,
+                qualified_name: None,
+                location: d.location,
+                signature: None,
+                return_type: None,
+                parameters: vec![],
+                fields: vec![],
+                modifiers: vec![],
+                documentation: d.documentation,
+                metadata: default_meta.clone(),
+                ..Default::default()
+            };
+            record_symbol_spans(&mut sym, d.span_node, d.name_node);
+            sym
         })
         .collect();
 
-    // Stable order: definitions by start line then name (deterministic across workers).
+    // Stable order: definitions by start line/byte then name (deterministic across workers).
     symbols.sort_by(|a, b| {
         a.location
             .start_line
             .cmp(&b.location.start_line)
             .then(a.location.start_column.cmp(&b.location.start_column))
+            .then(a.start_byte.cmp(&b.start_byte))
+            .then(b.end_byte.cmp(&a.end_byte))
             .then(a.name.cmp(&b.name))
     });
     symbols.dedup_by(|a, b| {
@@ -434,7 +493,14 @@ pub fn extract_with_query(
 
     // Populate `qualified_name` (`Container::member`) from the innermost enclosing
     // type/module span so methods/fields in multiple classes/contracts in one file do not collide.
-    let containers: Vec<(String, usize, usize)> = symbols
+    struct ContainerSpan {
+        name: String,
+        start_line: usize,
+        end_line: usize,
+        start_byte: Option<u32>,
+        end_byte: Option<u32>,
+    }
+    let containers: Vec<ContainerSpan> = symbols
         .iter()
         .filter(|s| {
             matches!(
@@ -446,7 +512,13 @@ pub fn extract_with_query(
                     | SymbolType::Module
             )
         })
-        .map(|s| (s.name.clone(), s.location.start_line, s.location.end_line))
+        .map(|s| ContainerSpan {
+            name: s.name.clone(),
+            start_line: s.location.start_line,
+            end_line: s.location.end_line,
+            start_byte: s.start_byte,
+            end_byte: s.end_byte,
+        })
         .collect();
     if !containers.is_empty() {
         for sym in &mut symbols {
@@ -455,15 +527,29 @@ pub fn extract_with_query(
             }
             let s_start = sym.location.start_line;
             let s_end = sym.location.end_line;
-            let end_idx = containers.partition_point(|(_, c_start, _)| *c_start <= s_start);
-            if let Some((cname, _, _)) = containers[..end_idx]
+            let end_idx = containers.partition_point(|c| c.start_line <= s_start);
+            if let Some(container) = containers[..end_idx]
                 .iter()
-                .filter(|(cname, c_start, c_end)| {
-                    *c_end >= s_end && (*c_start < s_start || *c_end > s_end) && cname != &sym.name
+                .filter(|c| {
+                    if c.name == sym.name {
+                        return false;
+                    }
+                    if let (Some(cs), Some(ce), Some(ss), Some(se)) =
+                        (c.start_byte, c.end_byte, sym.start_byte, sym.end_byte)
+                    {
+                        cs <= ss && se <= ce && (cs < ss || se < ce)
+                    } else {
+                        c.end_line >= s_end && (c.start_line < s_start || c.end_line > s_end)
+                    }
                 })
-                .min_by_key(|(_, c_start, c_end)| c_end.saturating_sub(*c_start))
+                .min_by_key(|c| {
+                    c.end_byte
+                        .zip(c.start_byte)
+                        .map(|(e, s)| e.saturating_sub(s) as usize)
+                        .unwrap_or_else(|| c.end_line.saturating_sub(c.start_line))
+                })
             {
-                sym.qualified_name = Some(format!("{cname}::{}", sym.name));
+                sym.qualified_name = Some(format!("{}::{}", container.name, sym.name));
             }
         }
     }
@@ -492,12 +578,26 @@ pub fn extract_with_query(
         };
 
         let line = r.location.start_line;
+        let ref_sb = r.ref_node.start_byte() as u32;
+        let ref_eb = r.ref_node.end_byte() as u32;
         let end_idx = function_symbols.partition_point(|s| s.location.start_line <= line);
-        let from = function_symbols[..end_idx]
+        let caller_sym = function_symbols[..end_idx]
             .iter()
             .copied()
-            .filter(|s| line <= s.location.end_line)
-            .min_by_key(|s| s.location.end_line.saturating_sub(s.location.start_line))
+            .filter(|s| {
+                if let (Some(sb), Some(eb)) = (s.start_byte, s.end_byte) {
+                    sb <= ref_sb && ref_eb <= eb
+                } else {
+                    line <= s.location.end_line
+                }
+            })
+            .min_by_key(|s| {
+                s.end_byte
+                    .zip(s.start_byte)
+                    .map(|(eb, sb)| eb.saturating_sub(sb) as usize)
+                    .unwrap_or_else(|| s.location.end_line.saturating_sub(s.location.start_line))
+            });
+        let from = caller_sym
             .map(|s| {
                 if fn_name_counts.get(s.name.as_str()).copied().unwrap_or(0) > 1 {
                     s.qualified_name.clone().unwrap_or_else(|| s.name.clone())
@@ -507,16 +607,47 @@ pub fn extract_with_query(
             })
             .unwrap_or_else(|| file_fallback.to_string());
 
-        relations.push(Relation {
+        // When calling an intra-file / intra-container function whose symbol has a
+        // `Container::member` qualified_name, supply `to_qualified_hint` so multi-file
+        // repositories with common helper names resolve to the lexical target.
+        let to_qualified_hint = if relation_type == RelationType::Calls {
+            let caller_prefix = caller_sym
+                .and_then(|s| s.qualified_name.as_deref())
+                .and_then(|qn| qn.rsplit_once("::").map(|(p, _)| p));
+            let same_container_match = caller_prefix.and_then(|prefix| {
+                let expected_qn = format!("{prefix}::{}", r.name);
+                function_symbols
+                    .iter()
+                    .find(|s| s.qualified_name.as_deref() == Some(expected_qn.as_str()))
+                    .and_then(|s| s.qualified_name.clone())
+            });
+            same_container_match.or_else(|| {
+                let mut matches_iter = function_symbols
+                    .iter()
+                    .filter(|s| s.name == r.name && s.qualified_name.is_some());
+                let first = matches_iter.next()?;
+                if matches_iter.all(|other| other.qualified_name == first.qualified_name) {
+                    first.qualified_name.clone()
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
+        let mut rel = Relation {
             from,
             to: r.name,
             relation_type,
             location: r.location,
             metadata: default_meta.clone(),
-            to_qualified_hint: None,
+            to_qualified_hint,
             to_type_hint: None,
             ..Default::default()
-        });
+        };
+        record_call_site_spans(&mut rel, r.name_node.unwrap_or(r.ref_node));
+        relations.push(rel);
     }
 
     relations.sort_by(|a, b| {

@@ -138,16 +138,26 @@ impl SampledBetweenness {
     /// Estimate normalized betweenness using `pivot_count` sources on a flat index.
     pub fn compute_flat(index: &FlatGraphIndex, pivot_count: usize, seed: u64) -> Vec<f64> {
         let n = index.node_count;
-        if n == 0 {
-            return Vec::new();
-        }
-        let k = pivot_count.min(n);
-        if k == 0 {
+        if n == 0 || pivot_count == 0 {
             return vec![0.0; n];
         }
 
         let out_adj = index.build_out_csr();
-        let pivots = sample_pivot_indices(n, k, seed);
+        // Sources with out-degree 0 never reach another vertex and contribute
+        // identically zero to Brandes partial dependencies; restricting the
+        // sampling frame to active sources makes Brandes exact and deterministic
+        // whenever |active| <= pivot_count and strictly reduces variance otherwise.
+        let active_sources: Vec<usize> = (0..n)
+            .filter(|&u| !out_adj.neighbors(u).is_empty())
+            .collect();
+        if active_sources.is_empty() {
+            return vec![0.0; n];
+        }
+        let k = pivot_count.min(active_sources.len());
+        let pivots: Vec<usize> = sample_pivot_indices(active_sources.len(), k, seed)
+            .into_iter()
+            .map(|i| active_sources[i])
+            .collect();
 
         // Small graphs pay Rayon pool sync without enough work to amortize it.
         const PARALLEL_THRESHOLD: usize = 4_096;
@@ -188,7 +198,7 @@ impl SampledBetweenness {
         };
 
         let norm = if n > 2 {
-            (n as f64 / k as f64) / ((n - 1) as f64 * (n - 2) as f64)
+            (active_sources.len() as f64 / k as f64) / ((n - 1) as f64 * (n - 2) as f64)
         } else {
             0.0
         };
@@ -522,7 +532,7 @@ fn sample_pivot_indices(n: usize, k: usize, seed: u64) -> Vec<usize> {
         let mut rng = seed;
         for i in 0..k {
             rng = rng.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
-            let j = i + ((rng as usize) % (n - i));
+            let j = i + ((splitmix64(rng) as usize) % (n - i));
             indices.swap(i, j);
         }
         indices.truncate(k);
@@ -533,7 +543,7 @@ fn sample_pivot_indices(n: usize, k: usize, seed: u64) -> Vec<usize> {
     let mut pivots = Vec::with_capacity(k);
     while pivots.len() < k {
         rng = rng.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
-        let idx = (rng as usize) % n;
+        let idx = (splitmix64(rng) as usize) % n;
         if !chosen[idx] {
             chosen[idx] = true;
             pivots.push(idx);
@@ -635,7 +645,8 @@ mod tests {
         let mut backend = rgctl_graph::backend::MemoryBackend::new();
         let nodes: Vec<_> = (0..n)
             .map(|i| {
-                let node = Node::new(NodeType::Function, format!("n{i}"));
+                let mut node = Node::new(NodeType::Function, format!("n{i}"));
+                node.id = Uuid::from_u128((i as u128) + 1);
                 backend.insert_node(node.clone()).unwrap();
                 node
             })
@@ -790,15 +801,145 @@ mod tests {
     fn sampled_correlates_with_exact_on_small_graph() {
         let (view, _) = line_graph(40);
         let index = FlatGraphIndex::from_view(&view, &[EdgeType::Calls]);
-        let sampled = SampledBetweenness::compute_flat(&index, 16, 7);
         let exact_map = BetweennessCentrality::compute_unbounded(&view, &[EdgeType::Calls]);
         let mut exact = vec![0.0; index.node_count];
         for (idx, uuid) in view.index_uuid_iter() {
             exact[idx.index()] = exact_map.get(&uuid).copied().unwrap_or(0.0);
         }
 
-        let corr = spearman_correlation(&sampled, &exact);
-        assert!(corr > 0.7, "sampled/exact rank correlation too low: {corr}");
+        let mut corr_sum = 0.0;
+        for seed in 1..=20 {
+            let sampled = SampledBetweenness::compute_flat(&index, 16, seed);
+            let corr = spearman_correlation(&sampled, &exact);
+            assert!(
+                corr > 0.78,
+                "sampled/exact rank correlation too low for seed={seed}: {corr}"
+            );
+            corr_sum += corr;
+        }
+        let mean_corr = corr_sum / 20.0;
+        assert!(
+            mean_corr > 0.90,
+            "20-seed mean rank correlation too low: {mean_corr}"
+        );
+
+        // Verify Horvitz–Thompson unbiasedness: Monte Carlo average converges to exact Brandes.
+        let trials = 2_000u64;
+        let mut mc_mean = vec![0.0; index.node_count];
+        for seed in 1..=trials {
+            let sampled = SampledBetweenness::compute_flat(&index, 16, seed);
+            for (acc, &val) in mc_mean.iter_mut().zip(&sampled) {
+                *acc += val / (trials as f64);
+            }
+        }
+        for (i, (&est, &want)) in mc_mean.iter().zip(&exact).enumerate() {
+            assert!(
+                (est - want).abs() <= 5e-3,
+                "Horvitz-Thompson Monte Carlo bias at idx={i}: est={est} exact={want}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_out_degree_sink_padding_does_not_dilute_pivots() {
+        let mut backend = rgctl_graph::backend::MemoryBackend::new();
+        let line_nodes: Vec<_> = (0..40)
+            .map(|i| {
+                let mut node = Node::new(NodeType::Function, format!("n{i}"));
+                node.id = Uuid::from_u128((i as u128) + 1);
+                backend.insert_node(node.clone()).unwrap();
+                node
+            })
+            .collect();
+        for w in line_nodes.windows(2) {
+            backend
+                .insert_edge(Edge::new(w[0].id, w[1].id, EdgeType::Calls))
+                .unwrap();
+        }
+        for s in 0..200 {
+            let mut sink = Node::new(NodeType::Import, format!("imp_{s}"));
+            sink.id = Uuid::from_u128(1_000 + (s as u128));
+            backend.insert_node(sink).unwrap();
+        }
+
+        let view = PetGraphView::from_backend(&backend).unwrap();
+        let index = FlatGraphIndex::from_view(&view, &[EdgeType::Calls]);
+        assert_eq!(index.node_count, 240);
+
+        // |V_active| = 39 <= pivot_count = 64 -> k = 39 active pivots selected, exact match.
+        let sampled = SampledBetweenness::compute_flat(&index, 64, 42);
+        let exact_map = BetweennessCentrality::compute_unbounded(&view, &[EdgeType::Calls]);
+        for node in &line_nodes {
+            let flat_idx = view.uuid_to_index[&node.id].index();
+            let got = sampled[flat_idx];
+            let want = exact_map.get(&node.id).copied().unwrap_or(0.0);
+            assert!(
+                (got - want).abs() <= 1e-9,
+                "node {} sampled={got} != exact={want}",
+                node.name
+            );
+        }
+    }
+
+    #[test]
+    fn petgraph_view_and_sampled_betweenness_independent_of_insertion_order() {
+        let uuids: Vec<Uuid> = (0..32)
+            .map(|i| Uuid::from_u128((i as u128) + 100))
+            .collect();
+
+        let mut forward = rgctl_graph::backend::MemoryBackend::new();
+        for (i, &id) in uuids.iter().enumerate() {
+            let mut node = Node::new(NodeType::Function, format!("f{i}"));
+            node.id = id;
+            forward.insert_node(node).unwrap();
+        }
+        for w in uuids.windows(2) {
+            forward
+                .insert_edge(Edge::new(w[0], w[1], EdgeType::Calls))
+                .unwrap();
+        }
+
+        let mut reverse = rgctl_graph::backend::MemoryBackend::new();
+        for (i, &id) in uuids.iter().enumerate().rev() {
+            let mut node = Node::new(NodeType::Function, format!("f{i}"));
+            node.id = id;
+            reverse.insert_node(node).unwrap();
+        }
+        for w in uuids.windows(2).rev() {
+            reverse
+                .insert_edge(Edge::new(w[0], w[1], EdgeType::Calls))
+                .unwrap();
+        }
+
+        let view_fwd = PetGraphView::from_backend(&forward).unwrap();
+        let view_rev = PetGraphView::from_backend(&reverse).unwrap();
+        let order_fwd: Vec<Uuid> = view_fwd.index_uuid_iter().map(|(_, u)| u).collect();
+        let order_rev: Vec<Uuid> = view_rev.index_uuid_iter().map(|(_, u)| u).collect();
+        assert_eq!(order_fwd, order_rev);
+
+        let idx_fwd = FlatGraphIndex::from_view(&view_fwd, &[EdgeType::Calls]);
+        let idx_rev = FlatGraphIndex::from_view(&view_rev, &[EdgeType::Calls]);
+        let scores_fwd = SampledBetweenness::compute_flat(&idx_fwd, 12, 99);
+        let scores_rev = SampledBetweenness::compute_flat(&idx_rev, 12, 99);
+        assert_eq!(scores_fwd, scores_rev);
+    }
+
+    #[test]
+    fn sample_pivot_indices_avoids_power_of_two_low_bit_cycle() {
+        let pivots = sample_pivot_indices(40, 16, 7);
+        assert_eq!(pivots.len(), 16);
+        let mut uniq = pivots.clone();
+        uniq.sort_unstable();
+        uniq.dedup();
+        assert_eq!(uniq.len(), 16);
+        assert!(uniq.iter().all(|&x| x < 40));
+        // Without splitmix64, raw modulo-2^64 LCG `rng = a*rng + 1` alternates parity every step;
+        // verify consecutive steps are not locked into strict alternating parity `(p[t] & 1) != (p[t+1] & 1)`.
+        let has_same_adjacent_parity = pivots.windows(2).any(|w| (w[0] & 1) == (w[1] & 1));
+        assert!(
+            has_same_adjacent_parity,
+            "pivots exhibited strict period-2 parity alternation: {pivots:?}"
+        );
     }
 
     fn spearman_correlation(a: &[f64], b: &[f64]) -> f64 {
@@ -810,8 +951,17 @@ mod tests {
             let mut order: Vec<usize> = (0..vals.len()).collect();
             order.sort_by(|&i, &j| vals[i].partial_cmp(&vals[j]).unwrap());
             let mut ranks = vec![0.0; vals.len()];
-            for (rank_idx, &pos) in order.iter().enumerate() {
-                ranks[pos] = rank_idx as f64;
+            let mut start = 0;
+            while start < order.len() {
+                let mut end = start + 1;
+                while end < order.len() && (vals[order[end]] - vals[order[start]]).abs() <= 1e-12 {
+                    end += 1;
+                }
+                let avg_rank = (start + end - 1) as f64 / 2.0;
+                for &pos in &order[start..end] {
+                    ranks[pos] = avg_rank;
+                }
+                start = end;
             }
             ranks
         };

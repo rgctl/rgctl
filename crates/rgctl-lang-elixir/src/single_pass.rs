@@ -6,7 +6,10 @@
 use crate::plugin::Plugin;
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::node_to_location;
+use rgctl_plugin_helpers::{
+    declaration_header_signature, node_to_location, record_call_site_spans,
+    record_symbol_spans_from_source,
+};
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -137,6 +140,75 @@ fn import_target(node: Node, source: &[u8]) -> Option<String> {
     })
 }
 
+fn elixir_call_target(node: Node, source: &[u8]) -> Option<(Option<String>, String)> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "identifier" {
+            let h = child.utf8_text(source).ok()?.trim();
+            if !h.is_empty() {
+                return Some((None, h.to_string()));
+            }
+            return None;
+        }
+        if child.kind() == "dot" {
+            let left = child
+                .child_by_field_name("left")
+                .or_else(|| child.named_child(0))
+                .and_then(|n| n.utf8_text(source).ok())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let right = child
+                .child_by_field_name("right")
+                .or_else(|| child.named_child(1))
+                .and_then(|n| n.utf8_text(source).ok())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())?;
+            return Some((left, right.to_string()));
+        }
+        if child.is_named() {
+            break;
+        }
+    }
+    None
+}
+
+fn callback_function_name(node: Node, source: &[u8]) -> Option<String> {
+    let args = node.child_by_field_name("arguments").or_else(|| {
+        let mut c = node.walk();
+        node.children(&mut c).find(|ch| ch.kind() == "arguments")
+    })?;
+    let mut stack = vec![args];
+    while let Some(cur) = stack.pop() {
+        if cur.kind() == "binary_operator"
+            && let Some(left) = cur
+                .child_by_field_name("left")
+                .or_else(|| cur.named_child(0))
+        {
+            stack.push(left);
+            continue;
+        }
+        if cur.kind() == "call"
+            && let Some(h) = call_head(cur, source)
+        {
+            return Some(h.to_string());
+        }
+        if cur.kind() == "identifier" {
+            return cur.utf8_text(source).ok().map(str::to_string);
+        }
+        let mut c = cur.walk();
+        let children: Vec<_> = cur.children(&mut c).collect();
+        for ch in children.into_iter().rev() {
+            stack.push(ch);
+        }
+    }
+    None
+}
+
+fn is_module_attribute_call(node: Node) -> bool {
+    node.parent().is_some_and(|p| p.kind() == "unary_operator")
+}
+
 fn is_def_name_call(node: Node, source: &[u8]) -> bool {
     let Some(parent) = node.parent() else {
         return false;
@@ -172,6 +244,7 @@ pub fn extract_all_single_pass(
     let mut relations = Vec::new();
     let mut pending_calls: Vec<PendingCall<'_>> = Vec::new();
     let mut depth_warned = false;
+    let mut anon_idx: u32 = 0;
 
     let mut stack = vec![Visit::Pre(root, 0)];
 
@@ -250,10 +323,63 @@ pub fn extract_all_single_pass(
                                     }
                                 }
                             }
+                        } else if is_module_attribute_call(node) {
+                            if matches!(head, "behaviour" | "behavior") {
+                                if let (Some(enclosing_mod), Some(target)) = (
+                                    ctx.scopes
+                                        .current_module()
+                                        .map(|m| m.qualified_prefix.clone()),
+                                    import_target(node, source),
+                                ) {
+                                    relations.push(Relation {
+                                        from: enclosing_mod,
+                                        to: target.clone(),
+                                        relation_type: RelationType::Implements,
+                                        location: node_to_location(node, &file_path_str),
+                                        metadata: serde_json::json!({
+                                            "language": "elixir",
+                                            "kind": "behaviour",
+                                        }),
+                                        to_qualified_hint: Some(target),
+                                        to_type_hint: Some("interface".to_string()),
+                                        ..Default::default()
+                                    });
+                                }
+                            } else if matches!(head, "callback" | "macrocallback")
+                                && let Some(name) = callback_function_name(node, source)
+                            {
+                                let qn = ctx.scopes.qualified_name(&name);
+                                let attr_node = node.parent().unwrap_or(node);
+                                let mut sym = Symbol {
+                                    name,
+                                    symbol_type: SymbolType::Function,
+                                    qualified_name: Some(qn),
+                                    location: node_to_location(attr_node, &file_path_str),
+                                    signature: declaration_header_signature(attr_node, source),
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "elixir",
+                                        "kind": head,
+                                    }),
+                                    ..Default::default()
+                                };
+                                record_symbol_spans_from_source(&mut sym, attr_node, source);
+                                ctx.symbols
+                                    .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                        sym,
+                                        node,
+                                        source,
+                                        rgctl_plugin_helpers::callable_identity::Policy::Elixir,
+                                    ));
+                            }
                         } else if head == "defmodule" {
                             if let Some(name) = module_name(node, source) {
-                                let qn = name.clone();
-                                ctx.symbols.push(Symbol {
+                                let qn = ctx.scopes.qualified_name(&name);
+                                let mut sym = Symbol {
                                     name: name.clone(),
                                     symbol_type: SymbolType::Module,
                                     qualified_name: Some(qn.clone()),
@@ -269,7 +395,9 @@ pub fn extract_all_single_pass(
                                         "kind": "defmodule",
                                     }),
                                     ..Default::default()
-                                });
+                                };
+                                record_symbol_spans_from_source(&mut sym, node, source);
+                                ctx.symbols.push(sym);
                                 ctx.enter_scope(
                                     ScopeKind::Module,
                                     Some(name),
@@ -286,28 +414,27 @@ pub fn extract_all_single_pass(
                                 let loc = ((node.end_position().row - node.start_position().row)
                                     + 1)
                                 .max(1) as u32;
+                                let mut sym = Symbol {
+                                    name: name.clone(),
+                                    symbol_type: SymbolType::Function,
+                                    qualified_name: Some(qn.clone()),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: declaration_header_signature(node, source),
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "elixir",
+                                        "kind": head,
+                                    }),
+                                    ..Default::default()
+                                };
+                                record_symbol_spans_from_source(&mut sym, node, source);
                                 ctx.symbols
                                     .push(rgctl_plugin_helpers::callable_identity::symbol(
-                                        Symbol {
-                                            name: name.clone(),
-                                            symbol_type: SymbolType::Function,
-                                            qualified_name: Some(qn.clone()),
-                                            location: node_to_location(node, &file_path_str),
-                                            signature: node
-                                                .utf8_text(source)
-                                                .ok()
-                                                .map(|s| s.trim().to_string()),
-                                            return_type: None,
-                                            parameters: vec![],
-                                            fields: vec![],
-                                            modifiers: vec![],
-                                            documentation: None,
-                                            metadata: serde_json::json!({
-                                                "language": "elixir",
-                                                "kind": head,
-                                            }),
-                                            ..Default::default()
-                                        },
+                                        sym,
                                         node,
                                         source,
                                         rgctl_plugin_helpers::callable_identity::Policy::Elixir,
@@ -328,7 +455,27 @@ pub fn extract_all_single_pass(
                             }
                         } else if IMPORT_FORMS.contains(&head) {
                             if let Some(target) = import_target(node, source) {
-                                ctx.symbols.push(Symbol {
+                                if head == "use"
+                                    && let Some(enclosing_mod) = ctx
+                                        .scopes
+                                        .current_module()
+                                        .map(|m| m.qualified_prefix.clone())
+                                {
+                                    relations.push(Relation {
+                                        from: enclosing_mod,
+                                        to: target.clone(),
+                                        relation_type: RelationType::Extends,
+                                        location: node_to_location(node, &file_path_str),
+                                        metadata: serde_json::json!({
+                                            "language": "elixir",
+                                            "kind": "use",
+                                        }),
+                                        to_qualified_hint: Some(target.clone()),
+                                        to_type_hint: None,
+                                        ..Default::default()
+                                    });
+                                }
+                                let mut sym = Symbol {
                                     name: target.clone(),
                                     symbol_type: SymbolType::Import,
                                     qualified_name: Some(target),
@@ -344,7 +491,9 @@ pub fn extract_all_single_pass(
                                         "kind": head,
                                     }),
                                     ..Default::default()
-                                });
+                                };
+                                record_symbol_spans_from_source(&mut sym, node, source);
+                                ctx.symbols.push(sym);
                             }
                         } else if CFG_FORMS.contains(&head) {
                             if ctx.scopes.current_function().is_some() {
@@ -366,9 +515,9 @@ pub fn extract_all_single_pass(
                                 ));
                                 stack.push(Visit::LeaveGuard);
                             }
-                        } else if !head.is_empty()
-                            && !is_def_name_call(node, source)
+                        } else if !is_def_name_call(node, source)
                             && ctx.scopes.current_function().is_some()
+                            && elixir_call_target(node, source).is_some()
                         {
                             if let Some(frame) = ctx.scopes.current_function() {
                                 if let Some(idx) = frame.symbol_idx {
@@ -381,30 +530,32 @@ pub fn extract_all_single_pass(
                         }
                     }
                     "anonymous_function" => {
-                        let line = node.start_position().row + 1;
-                        let name = format!("<fn@{line}>");
-                        let qn = name.clone();
+                        anon_idx += 1;
+                        let name = format!("<fn#{anon_idx}>");
+                        let qn = ctx.scopes.qualified_name(&name);
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
+                        let mut sym = Symbol {
+                            name: name.clone(),
+                            symbol_type: SymbolType::Function,
+                            qualified_name: Some(qn.clone()),
+                            location: node_to_location(node, &file_path_str),
+                            signature: None,
+                            return_type: None,
+                            parameters: vec![],
+                            fields: vec![],
+                            modifiers: vec![],
+                            documentation: None,
+                            metadata: serde_json::json!({
+                                "language": "elixir",
+                                "kind": "anonymous_function",
+                            }),
+                            ..Default::default()
+                        };
+                        record_symbol_spans_from_source(&mut sym, node, source);
                         ctx.symbols
                             .push(rgctl_plugin_helpers::callable_identity::symbol(
-                                Symbol {
-                                    name: name.clone(),
-                                    symbol_type: SymbolType::Function,
-                                    qualified_name: Some(qn.clone()),
-                                    location: node_to_location(node, &file_path_str),
-                                    signature: None,
-                                    return_type: None,
-                                    parameters: vec![],
-                                    fields: vec![],
-                                    modifiers: vec![],
-                                    documentation: None,
-                                    metadata: serde_json::json!({
-                                        "language": "elixir",
-                                        "kind": "anonymous_function",
-                                    }),
-                                    ..Default::default()
-                                },
+                                sym,
                                 node,
                                 source,
                                 rgctl_plugin_helpers::callable_identity::Policy::Elixir,
@@ -539,33 +690,49 @@ pub fn extract_all_single_pass(
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
-        // Prefer identifier head as callee for Elixir `call` nodes.
-        let callee = call_head(pending.node, source)
-            .map(str::to_string)
-            .or_else(|| {
-                pending
-                    .node
-                    .utf8_text(source)
-                    .ok()
-                    .map(|s| s.trim().to_string())
-            });
-        let Some(callee) = callee.filter(|c| !c.is_empty()) else {
+        let Some((recv_mod, callee)) = elixir_call_target(pending.node, source) else {
             continue;
         };
         let from = from_fn
             .qualified_name
             .clone()
             .unwrap_or_else(|| from_fn.name.clone());
-        relations.push(Relation {
+        let enclosing_mod = from.rsplit_once('.').map(|(m, _)| m.to_string());
+        let (to_type_hint, to_qualified_hint) = match recv_mod {
+            Some(ref m) if m == "__MODULE__" => {
+                let qh = enclosing_mod.as_ref().map(|em| format!("{em}.{callee}"));
+                (enclosing_mod, qh)
+            }
+            Some(m)
+                if m.chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_uppercase() || c == ':') =>
+            {
+                let clean = m.trim_start_matches(':').to_string();
+                let qh = Some(format!("{clean}.{callee}"));
+                (Some(clean), qh)
+            }
+            Some(_) => (None, Some(callee.clone())),
+            None => {
+                let qh = enclosing_mod
+                    .as_ref()
+                    .map(|em| format!("{em}.{callee}"))
+                    .or_else(|| Some(callee.clone()));
+                (enclosing_mod, qh)
+            }
+        };
+        let mut rel = Relation {
             from,
-            to: callee.clone(),
+            to: callee,
             relation_type: RelationType::Calls,
             location: node_to_location(pending.node, &file_path_str),
             metadata: serde_json::json!({ "language": "elixir" }),
-            to_qualified_hint: Some(callee),
-            to_type_hint: None,
+            to_qualified_hint,
+            to_type_hint,
             ..Default::default()
-        });
+        };
+        record_call_site_spans(&mut rel, pending.node);
+        relations.push(rel);
         rgctl_plugin_helpers::callable_identity::call(
             pending.node,
             source,
@@ -641,6 +808,66 @@ end
             metrics.cyclomatic >= 2,
             "expected cyclomatic >= 2, got {}",
             metrics.cyclomatic
+        );
+    }
+
+    #[test]
+    fn elixir_extracts_behaviour_callback_use_and_remote_calls() {
+        let src = r#"
+defmodule OrderRepo do
+  @callback save(integer()) :: integer()
+end
+
+defmodule BaseLedger do
+  def save(x), do: x + 1
+end
+
+defmodule OrderLedger do
+  @behaviour OrderRepo
+  use BaseLedger
+
+  def run(x) do
+    BaseLedger.save(x)
+  end
+end
+"#;
+        let plugin = Plugin::new().unwrap();
+        let path = PathBuf::from("ledger.ex");
+        let result = extract_all_single_pass(&plugin, &path, src.as_bytes()).unwrap();
+        assert!(
+            result.symbols.iter().any(|s| {
+                s.symbol_type == SymbolType::Function
+                    && s.qualified_name.as_deref() == Some("OrderRepo.save")
+            }),
+            "expected @callback Function OrderRepo.save, got {:?}",
+            result.symbols
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                r.relation_type == RelationType::Implements
+                    && r.from == "OrderLedger"
+                    && r.to == "OrderRepo"
+            }),
+            "expected OrderLedger Implements OrderRepo, got {:?}",
+            result.relations
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                r.relation_type == RelationType::Extends
+                    && r.from == "OrderLedger"
+                    && r.to == "BaseLedger"
+            }),
+            "expected OrderLedger Extends BaseLedger via use, got {:?}",
+            result.relations
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                r.relation_type == RelationType::Calls
+                    && r.from == "OrderLedger.run"
+                    && r.to_qualified_hint.as_deref() == Some("BaseLedger.save")
+            }),
+            "expected remote call OrderLedger.run -> BaseLedger.save, got {:?}",
+            result.relations
         );
     }
 }

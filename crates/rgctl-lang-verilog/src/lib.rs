@@ -35,14 +35,30 @@ mod tests {
             QueryLanguagePlugin::from_config(&CONFIG, || tree_sitter_verilog::LANGUAGE.into())
                 .expect("compile");
         let source = br###"module adder;
+  task automatic helper();
+  endtask
+  function int compute(input int x);
+    helper();
+    return x + 1;
+  endfunction
 endmodule
 "###;
         let result = plugin
-            .extract_all(Path::new("adder.v"), source)
+            .extract_all(Path::new("adder.sv"), source)
             .expect("extract_all");
         assert!(
-            result.symbols.iter().any(|s| s.name.contains("adder")),
-            "expected symbol containing 'adder', got {:?}",
+            result.symbols.iter().any(|s| s.name == "adder"),
+            "expected symbol 'adder', got {:?}",
+            result.symbols
+        );
+        assert!(
+            result.symbols.iter().any(|s| s.name == "helper"),
+            "expected task 'helper', got {:?}",
+            result.symbols
+        );
+        assert!(
+            result.symbols.iter().any(|s| s.name == "compute"),
+            "expected function 'compute', got {:?}",
             result.symbols
         );
     }

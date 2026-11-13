@@ -3,7 +3,9 @@
 use crate::plugin::Plugin;
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::node_to_location;
+use rgctl_plugin_helpers::{
+    node_to_location, record_call_site_spans, record_symbol_spans_from_source,
+};
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -174,7 +176,7 @@ pub fn extract_all_single_pass(
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
                         let qn = name.clone();
-                        ctx.symbols.push(Symbol {
+                        let mut sym = Symbol {
                             name: name.clone(),
                             symbol_type,
                             qualified_name: Some(qn.clone()),
@@ -190,7 +192,9 @@ pub fn extract_all_single_pass(
                                 "block_type": block_type,
                             }),
                             ..Default::default()
-                        });
+                        };
+                        record_symbol_spans_from_source(&mut sym, node, source);
+                        ctx.symbols.push(sym);
                         // Treat blocks as function-like hosts so nested calls/conditionals attach.
                         ctx.enter_scope(
                             ScopeKind::Function,
@@ -274,7 +278,7 @@ pub fn extract_all_single_pass(
                     .qualified_name
                     .clone()
                     .unwrap_or_else(|| from_fn.name.clone());
-                relations.push(Relation {
+                let mut rel = Relation {
                     from,
                     to: callee,
                     relation_type: RelationType::Calls,
@@ -283,7 +287,9 @@ pub fn extract_all_single_pass(
                     to_qualified_hint: None,
                     to_type_hint: None,
                     ..Default::default()
-                });
+                };
+                record_call_site_spans(&mut rel, pending.node);
+                relations.push(rel);
             }
         }
     }

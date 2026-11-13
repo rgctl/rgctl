@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "language": "rust",
   "project": "ecommerce-rust",
   "graph": {
@@ -345,6 +345,127 @@
           "await"
         ]
       }
+    },
+    "v2LedgerBalance": {
+      "match": {
+        "name": "balance",
+        "class": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "balance",
+        "file_suffix": "correctness.rs",
+        "language": "rust"
+      },
+      "exact_callees": [
+        "v2_free_helper"
+      ],
+      "mutations": {
+        "type": "V2OrderLedger",
+        "must_contain": [
+          "apply_adjustment"
+        ],
+        "must_exclude": [
+          "correctness_leaf"
+        ]
+      }
+    },
+    "v2AuditWeightImpl": {
+      "match": {
+        "name": "audit_weight",
+        "class": "V2OrderLedger",
+        "discriminator": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "audit_weight",
+        "discriminator": "V2OrderLedger",
+        "file_suffix": "correctness.rs",
+        "language": "rust"
+      },
+      "exact_callees": [
+        "balance"
+      ],
+      "mro": {
+        "implements": [
+          "V2AuditPolicy"
+        ],
+        "overrides": [
+          "audit_weight"
+        ]
+      }
+    },
+    "v2SliceFlowProbe": {
+      "match": {
+        "name": "v2_slice_flow_probe"
+      },
+      "severity": "required",
+      "unique": true,
+      "slice": {
+        "file": "src/correctness.rs",
+        "line": 82,
+        "variable": "final_out",
+        "must_contain": [
+          "seed_input",
+          "step_val"
+        ],
+        "must_exclude": [
+          "999"
+        ]
+      },
+      "flows": {
+        "file": "src/correctness.rs",
+        "line": 80,
+        "variable": "step_val",
+        "must_contain": [
+          "alias_val",
+          "final_out"
+        ]
+      }
+    },
+    "v2CloneExactA": {
+      "match": {
+        "name": "v2_clone_exact",
+        "class": "V2CloneCarrierA"
+      },
+      "severity": "required",
+      "unique": true,
+      "clones": {
+        "mode": "exact",
+        "group_with": [
+          "v2_clone_exact"
+        ],
+        "not_grouped_with": [
+          "correctness_leaf"
+        ]
+      }
+    },
+    "v2SemanticLedger": {
+      "match": {
+        "name": "reconcile_chargeback_ledger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "archive_chargeback_audit"
+      ],
+      "semantic": {
+        "query": "reconcile chargeback ledger",
+        "top3_contains": "reconcile_chargeback_ledger",
+        "neighbor_names": [
+          "archive_chargeback_audit"
+        ]
+      },
+      "review": {
+        "file": "src/correctness.rs",
+        "find": "42\n}",
+        "replace": "43\n}",
+        "must_contain": [
+          "correctness_mid"
+        ]
+      }
     }
   },
   "invariants": {
@@ -406,5 +527,15 @@
         "correctnessShared"
       ]
     }
+  },
+  "analytics": {
+    "severity": "required",
+    "root": "correctness_root",
+    "mid": "correctness_mid",
+    "leaf": "correctness_leaf",
+    "separate": [
+      "clique_alpha_a",
+      "clique_beta_a"
+    ]
   }
 }

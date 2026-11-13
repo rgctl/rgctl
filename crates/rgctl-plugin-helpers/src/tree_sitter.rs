@@ -110,7 +110,21 @@ pub fn extract_name_from_node(node: Node, source: &[u8]) -> Result<Option<String
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "type_identifier" {
+        if matches!(
+            child.kind(),
+            "type_identifier"
+                | "annotation"
+                | "marker_annotation"
+                | "modifiers"
+                | "attribute"
+                | "attributes"
+                | "decorator"
+                | "decorators"
+                | "metadata"
+                | "visibility_modifier"
+                | "type_arguments"
+                | "type_parameters"
+        ) {
             continue;
         }
         if let Some(name) = extract_name_from_node(child, source)? {

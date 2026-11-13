@@ -289,11 +289,13 @@ pub fn extract_trait_symbols(
                 if let Some(method) = extract_trait_method(n, source, file_path, &trait_name, &qn) {
                     out.push(method);
                 }
+                continue;
             }
             "associated_type" => {
                 if let Some(at) = extract_associated_type(n, source, file_path, Some(&qn)) {
                     out.push(at);
                 }
+                continue;
             }
             _ => {}
         }

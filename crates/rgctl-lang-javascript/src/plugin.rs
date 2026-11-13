@@ -370,18 +370,86 @@ impl JavaScriptPlugin {
         Ok(())
     }
 
+    /// Stable export identity: binding names, never the declaration body.
+    fn export_binding_identity(node: Node, source: &[u8]) -> String {
+        let mut names = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "function_declaration"
+                | "generator_function_declaration"
+                | "generator_function"
+                | "function"
+                | "class_declaration"
+                | "class" => {
+                    if let Some(name) = child
+                        .child_by_field_name("name")
+                        .and_then(|n| n.utf8_text(source).ok())
+                    {
+                        names.push(name.to_string());
+                    } else {
+                        names.push("default".to_string());
+                    }
+                }
+                "lexical_declaration" | "variable_declaration" => {
+                    let mut decl_cursor = child.walk();
+                    for decl in child.children(&mut decl_cursor) {
+                        if decl.kind() == "variable_declarator"
+                            && let Some(name) = decl
+                                .child_by_field_name("name")
+                                .and_then(|n| n.utf8_text(source).ok())
+                        {
+                            names.push(name.to_string());
+                        }
+                    }
+                }
+                "export_clause" => {
+                    let mut clause = child.walk();
+                    for spec in child.children(&mut clause) {
+                        if spec.kind() != "export_specifier" {
+                            continue;
+                        }
+                        let name_node = spec
+                            .child_by_field_name("alias")
+                            .or_else(|| spec.child_by_field_name("name"));
+                        if let Some(name) = name_node.and_then(|n| n.utf8_text(source).ok()) {
+                            names.push(name.to_string());
+                        }
+                    }
+                }
+                "*" | "namespace_export" => names.push("*".to_string()),
+                _ => {}
+            }
+        }
+        if names.is_empty() {
+            let fallback = node
+                .utf8_text(source)
+                .ok()
+                .filter(|text| text.contains("default"))
+                .map(|_| "default")
+                .unwrap_or("clause");
+            names.push(fallback.to_string());
+        }
+        format!("export:{}", names.join(","))
+    }
+
     pub(crate) fn extract_export_symbol(
         &self,
         node: Node,
         source: &[u8],
         file_path: &str,
     ) -> Option<Symbol> {
-        let text = node.utf8_text(source).ok()?.trim().to_string();
-        if !text.starts_with("export") {
+        let raw = source
+            .get(node.start_byte()..node.end_byte())?
+            .trim_ascii_start();
+        if !raw.starts_with(b"export") {
             return None;
         }
+        // Identity is the exported binding, not the statement text. Inline
+        // `export function` bodies must not churn the stable key on an edit.
+        let name = Self::export_binding_identity(node, source);
         let mut symbol = Symbol {
-            name: text,
+            name,
             symbol_type: SymbolType::Import,
             qualified_name: None,
             location: source_location(node, file_path),
@@ -1204,6 +1272,16 @@ const api = { fetchAll: async () => 0 };
             .map(|s| s.name.as_str())
             .collect();
         assert_eq!(fns, vec!["gamma"], "unexpected functions: {fns:?}");
+        let exports: Vec<_> = symbols
+            .iter()
+            .filter(|s| s.symbol_type == SymbolType::Import)
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(exports, vec!["export:gamma"]);
+        assert!(
+            !exports.iter().any(|name| name.contains("return")),
+            "export identity must not include the function body: {exports:?}"
+        );
     }
 
     #[test]

@@ -337,6 +337,12 @@ fn collect_assignment_lhs<'a>(
     depth: usize,
     stack: &mut DefUseStack<'a>,
 ) {
+    if left.kind() == "directly_assignable_expression"
+        && let Some(inner) = left.named_child(0)
+    {
+        collect_assignment_lhs(inner, source, defined, used, depth + 1, stack);
+        return;
+    }
     if is_field_access_kind(left.kind()) {
         if let Some(def) = field_access_def(left, source) {
             defined.insert(def);
@@ -427,13 +433,33 @@ fn collect_def_use_node<'a>(
             }
         }
 
-        // Python
+        // Python / Ruby / Kotlin / Puppet
         "assignment" => {
-            if let Some(left) = node.child_by_field_name("left") {
-                collect_assignment_lhs(left, source, defined, used, depth, stack);
-            }
-            if let Some(right) = node.child_by_field_name("right") {
-                stack.push((right, false, depth + 1));
+            let left = node.child_by_field_name("left");
+            let right = node.child_by_field_name("right");
+            if left.is_some() || right.is_some() {
+                if let Some(left) = left {
+                    collect_assignment_lhs(left, source, defined, used, depth, stack);
+                }
+                if let Some(right) = right {
+                    stack.push((right, false, depth + 1));
+                }
+            } else {
+                // Grammars without left/right fields (e.g. tree-sitter-kotlin-ng, tree-sitter-puppet):
+                // first named child is LHS target, remaining named children are RHS expressions.
+                let mut cursor = node.walk();
+                let mut saw_lhs = false;
+                for child in node.children(&mut cursor) {
+                    if !child.is_named() {
+                        continue;
+                    }
+                    if !saw_lhs {
+                        saw_lhs = true;
+                        collect_assignment_lhs(child, source, defined, used, depth, stack);
+                    } else {
+                        stack.push((child, false, depth + 1));
+                    }
+                }
             }
         }
         "augmented_assignment" => {
@@ -445,30 +471,168 @@ fn collect_def_use_node<'a>(
                 stack.push((right, false, depth + 1));
             }
         }
-        // Bash: `NAME=value`, `declare/local/export …`, `unset NAME`
+        // Bash: `NAME=value`, `declare/local/export …`, `unset NAME`, `read -r NAME`
         "variable_assignment" => {
-            if let Some(name) = node.child_by_field_name("name").or_else(|| {
+            let name_node = node.child_by_field_name("name").or_else(|| {
                 let mut c = node.walk();
                 node.children(&mut c)
                     .find(|ch| ch.kind() == "variable_name")
-            }) {
+            });
+            if let Some(name) = name_node {
                 collect_pattern_defs(name, source, defined, depth + 1);
             }
             if let Some(value) = node.child_by_field_name("value") {
                 stack.push((value, false, depth + 1));
+            } else {
+                let name_id = name_node.map(|n| n.id());
+                let mut c = node.walk();
+                for ch in node.children(&mut c) {
+                    if ch.is_named() && Some(ch.id()) != name_id {
+                        stack.push((ch, false, depth + 1));
+                    }
+                }
             }
         }
         "declaration_command" | "unset_command" => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                if matches!(
-                    child.kind(),
-                    "variable_name" | "variable_assignment" | "word"
-                ) {
-                    if child.kind() == "variable_assignment" {
+                match child.kind() {
+                    "variable_assignment" => {
                         stack.push((child, false, depth + 1));
-                    } else {
+                    }
+                    "variable_name" => {
                         collect_pattern_defs(child, source, defined, depth + 1);
+                    }
+                    "word" => {
+                        if let Ok(t) = child.utf8_text(source) {
+                            let t = t.trim();
+                            if !t.is_empty()
+                                && !t.starts_with('-')
+                                && !matches!(
+                                    t,
+                                    "local"
+                                        | "declare"
+                                        | "export"
+                                        | "readonly"
+                                        | "typeset"
+                                        | "unset"
+                                )
+                            {
+                                defined.insert(DefVar::local(t));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "command" => {
+            let cmd_name = node
+                .child_by_field_name("name")
+                .or_else(|| {
+                    let mut c = node.walk();
+                    node.children(&mut c).find(|ch| ch.kind() == "command_name")
+                })
+                .and_then(|n| n.utf8_text(source).ok())
+                .map(str::trim);
+            if cmd_name == Some("read") {
+                let mut skip_next = false;
+                let mut define_next = false;
+                let mut c = node.walk();
+                for ch in node.children(&mut c) {
+                    if !ch.is_named() || ch.kind() == "command_name" {
+                        continue;
+                    }
+                    if let Ok(raw) = ch.utf8_text(source) {
+                        let tok = raw.trim();
+                        if skip_next {
+                            skip_next = false;
+                            continue;
+                        }
+                        if define_next {
+                            define_next = false;
+                            if !tok.is_empty() && !tok.starts_with('-') {
+                                defined.insert(DefVar::local(tok.trim_start_matches('$')));
+                            }
+                            continue;
+                        }
+                        if matches!(tok, "-p" | "-d" | "-n" | "-N" | "-t" | "-u") {
+                            skip_next = true;
+                            continue;
+                        }
+                        if tok == "-a" {
+                            define_next = true;
+                            continue;
+                        }
+                        if tok.starts_with('-') {
+                            continue;
+                        }
+                        if matches!(ch.kind(), "word" | "variable_name") && !tok.is_empty() {
+                            defined.insert(DefVar::local(tok.trim_start_matches('$')));
+                            continue;
+                        }
+                    }
+                    stack.push((ch, false, depth + 1));
+                }
+            } else {
+                let mut c = node.walk();
+                for ch in node.children(&mut c) {
+                    if ch.kind() != "command_name" {
+                        stack.push((ch, false, depth + 1));
+                    }
+                }
+            }
+        }
+        "simple_expansion" => {
+            let mut c = node.walk();
+            for ch in node.children(&mut c) {
+                if matches!(ch.kind(), "variable_name" | "special_variable_name")
+                    && let Ok(name) = ch.utf8_text(source)
+                {
+                    let trimmed = name.trim().trim_start_matches('$');
+                    if !trimmed.is_empty() {
+                        used.insert(trimmed.to_string());
+                    }
+                }
+            }
+        }
+        "arithmetic_expansion" => {
+            let mut arith_stack = vec![node];
+            while let Some(cur) = arith_stack.pop() {
+                match cur.kind() {
+                    "variable_name" | "identifier" => {
+                        if let Ok(name) = cur.utf8_text(source) {
+                            let trimmed = name.trim().trim_start_matches('$');
+                            if !trimmed.is_empty() {
+                                used.insert(trimmed.to_string());
+                            }
+                        }
+                    }
+                    "word" => {
+                        if let Ok(name) = cur.utf8_text(source) {
+                            let trimmed = name.trim().trim_start_matches('$');
+                            if trimmed
+                                .chars()
+                                .next()
+                                .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+                                && trimmed
+                                    .chars()
+                                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                            {
+                                used.insert(trimmed.to_string());
+                            }
+                        }
+                    }
+                    "simple_expansion" | "expansion" | "command_substitution" => {
+                        stack.push((cur, false, depth + 1));
+                    }
+                    _ => {
+                        let mut c = cur.walk();
+                        for ch in cur.children(&mut c) {
+                            if ch.is_named() {
+                                arith_stack.push(ch);
+                            }
+                        }
                     }
                 }
             }
@@ -491,13 +655,35 @@ fn collect_def_use_node<'a>(
             }
         }
 
-        // Go
+        // Go / Lua
         "short_var_declaration" | "assignment_statement" => {
-            if let Some(left) = node.child_by_field_name("left") {
-                collect_assignment_lhs(left, source, defined, used, depth, stack);
-            }
-            if let Some(right) = node.child_by_field_name("right") {
-                stack.push((right, false, depth + 1));
+            let left = node.child_by_field_name("left");
+            let right = node.child_by_field_name("right");
+            if left.is_some() || right.is_some() {
+                if let Some(left) = left {
+                    collect_assignment_lhs(left, source, defined, used, depth, stack);
+                }
+                if let Some(right) = right {
+                    stack.push((right, false, depth + 1));
+                }
+            } else {
+                // Lua `assignment_statement`: `variable_list` + `expression_list` children.
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if !child.is_named() {
+                        continue;
+                    }
+                    if child.kind() == "variable_list" {
+                        let mut vc = child.walk();
+                        for v in child.children(&mut vc) {
+                            if v.is_named() {
+                                collect_assignment_lhs(v, source, defined, used, depth + 1, stack);
+                            }
+                        }
+                    } else {
+                        stack.push((child, false, depth + 1));
+                    }
+                }
             }
         }
         // `var` / `var ( ... )` — children are var_spec / var_spec_list (no left/right fields).
@@ -532,8 +718,11 @@ fn collect_def_use_node<'a>(
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.is_named() {
-                    collect_pattern_defs(child, source, defined, depth + 1);
-                    stack.push((child, false, depth + 1));
+                    if is_def_target {
+                        collect_pattern_defs(child, source, defined, depth + 1);
+                    } else {
+                        stack.push((child, false, depth + 1));
+                    }
                 }
             }
         }
@@ -543,28 +732,67 @@ fn collect_def_use_node<'a>(
             }
         }
 
-        // C# / Java / JS / TS local declarations
+        // Kotlin local/member `val x = expr` / `var (a, b) = expr`
+        "property_declaration" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if !child.is_named() {
+                    continue;
+                }
+                match child.kind() {
+                    "variable_declaration" | "multi_variable_declaration" => {
+                        collect_pattern_defs(child, source, defined, depth + 1);
+                    }
+                    "modifiers" | "type_parameters" | "type_constraints" | "user_type"
+                    | "nullable_type" | "non_nullable_type" | "function_type" | "getter"
+                    | "setter" => {}
+                    _ => {
+                        stack.push((child, false, depth + 1));
+                    }
+                }
+            }
+        }
+
+        // C# / Java / JS / TS / Dart / Lua local declarations
         "variable_declaration"
         | "local_declaration_statement"
         | "local_variable_declaration"
+        | "top_level_variable_declaration"
         | "lexical_declaration"
         | "variable_declaration_list"
         | "resource" => {
+            let mut saw_declarator = false;
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.kind() == "variable_declarator" {
-                    if let Some(name) = child.child_by_field_name("name") {
+                    saw_declarator = true;
+                    let name = child.child_by_field_name("name");
+                    if let Some(name) = name {
                         collect_pattern_defs(name, source, defined, depth + 1);
                     }
-                    if let Some(value) = child.child_by_field_name("value") {
-                        stack.push((value, false, depth + 1));
+                    push_declarator_initializer(child, name, stack, depth);
+                } else if child.kind() == "variable_list" {
+                    saw_declarator = true;
+                    let mut vc = child.walk();
+                    for v in child.children(&mut vc) {
+                        if v.is_named() {
+                            collect_pattern_defs(v, source, defined, depth + 1);
+                        }
                     }
                 } else if matches!(
                     child.kind(),
-                    "variable_declaration" | "variable_declaration_list"
+                    "initialized_variable_definition"
+                        | "assignment_statement"
+                        | "variable_declaration"
+                        | "variable_declaration_list"
                 ) {
+                    saw_declarator = true;
                     stack.push((child, false, depth + 1));
                 }
+            }
+            // Kotlin `variable_declaration` (`for (x in xs)` / `val x: T`) has direct identifier children.
+            if !saw_declarator && kind == "variable_declaration" && is_def_target {
+                collect_pattern_defs(node, source, defined, depth + 1);
             }
             // try-with-resources: `resource` may expose name/value fields directly.
             if kind == "resource" {
@@ -576,13 +804,16 @@ fn collect_def_use_node<'a>(
                 }
             }
         }
-        "variable_declarator" => {
-            if let Some(name) = node.child_by_field_name("name") {
+        "variable_declarator" | "initialized_variable_definition" => {
+            let name = node.child_by_field_name("name").or_else(|| {
+                let mut c = node.walk();
+                node.children(&mut c)
+                    .find(|ch| ch.kind() == "identifier" || ch.kind() == "initialized_identifier")
+            });
+            if let Some(name) = name {
                 collect_pattern_defs(name, source, defined, depth + 1);
             }
-            if let Some(value) = node.child_by_field_name("value") {
-                stack.push((value, false, depth + 1));
-            }
+            push_declarator_initializer(node, name, stack, depth);
         }
         // Java pattern bindings (`instanceof` / `switch` `type_pattern`).
         "instanceof_expression" => {
@@ -688,21 +919,27 @@ fn collect_def_use_node<'a>(
 
         // Shared identifiers
         "identifier"
+        | "simple_identifier"
         | "shorthand_field_identifier"
         | "field_identifier"
         | "type_identifier"
-        | "variable_name" => {
+        | "variable_name"
+        | "variable" => {
             if is_def_target {
                 if let Ok(name) = node.utf8_text(source)
                     && (kind == "identifier"
+                        || kind == "simple_identifier"
                         || kind == "shorthand_field_identifier"
-                        || kind == "variable_name")
+                        || kind == "variable_name"
+                        || kind == "variable")
                 {
                     defined.insert(DefVar::local(name.trim_start_matches('$')));
                 }
             } else if (kind == "identifier"
+                || kind == "simple_identifier"
                 || kind == "shorthand_field_identifier"
-                || kind == "variable_name")
+                || kind == "variable_name"
+                || kind == "variable")
                 && let Ok(name) = node.utf8_text(source)
             {
                 used.insert(name.trim_start_matches('$').to_string());
@@ -732,10 +969,37 @@ fn collect_def_use_node<'a>(
     }
 }
 
+fn push_declarator_initializer<'a>(
+    decl: Node<'a>,
+    name_node: Option<Node<'a>>,
+    stack: &mut DefUseStack<'a>,
+    depth: usize,
+) {
+    if let Some(value) = decl
+        .child_by_field_name("value")
+        .or_else(|| decl.child_by_field_name("initializer"))
+    {
+        stack.push((value, false, depth + 1));
+        return;
+    }
+    let name_id = name_node.map(|n| n.id());
+    let mut cursor = decl.walk();
+    for child in decl.children(&mut cursor) {
+        if child.is_named() && Some(child.id()) != name_id && child.kind() != "type_annotation" {
+            stack.push((child, false, depth + 1));
+        }
+    }
+}
+
 fn is_binding_pattern(kind: &str) -> bool {
     matches!(
         kind,
         "identifier"
+            | "simple_identifier"
+            | "variable"
+            | "variable_name"
+            | "variable_declaration"
+            | "multi_variable_declaration"
             | "shorthand_field_identifier"
             | "tuple_pattern"
             | "tuple_struct_pattern"
@@ -787,9 +1051,31 @@ fn collect_pattern_defs(node: Node, source: &[u8], defined: &mut HashSet<DefVar>
         // `shorthand_property_identifier_pattern` is the binding in `const { a } = src`. It is a
         // leaf whose kind is not `identifier`, so without naming it here the name is never
         // recorded as defined.
-        "identifier" | "shorthand_field_identifier" | "shorthand_property_identifier_pattern" => {
+        "identifier"
+        | "simple_identifier"
+        | "variable"
+        | "variable_name"
+        | "shorthand_field_identifier"
+        | "shorthand_property_identifier_pattern" => {
             if let Ok(name) = node.utf8_text(source) {
-                defined.insert(DefVar::local(name));
+                defined.insert(DefVar::local(name.trim_start_matches('$')));
+            }
+        }
+        "variable_declaration" | "multi_variable_declaration" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.is_named()
+                    && !matches!(
+                        child.kind(),
+                        "user_type"
+                            | "nullable_type"
+                            | "non_nullable_type"
+                            | "function_type"
+                            | "type_annotation"
+                    )
+                {
+                    collect_pattern_defs(child, source, defined, depth + 1);
+                }
             }
         }
         "tuple_pattern"
@@ -1162,6 +1448,158 @@ class C {
         assert!(
             uses.iter().any(|u| u == "i"),
             "i++ should use i, got {uses:?}"
+        );
+    }
+
+    #[test]
+    fn test_csharp_local_declaration_extracts_initializer_uses() {
+        let source = r#"
+class C {
+  int M(int aliasVal) {
+    var finalOut = aliasVal * 2;
+    return finalOut;
+  }
+}
+"#;
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let decl = find_kind(tree.root_node(), "local_declaration_statement")
+            .expect("local_declaration_statement");
+        let (defs, uses) = extract_def_use(decl, source.as_bytes());
+        assert!(
+            defs_has(&defs, "finalOut"),
+            "var declaration should define finalOut, got {defs:?}"
+        );
+        assert!(
+            uses.iter().any(|u| u == "aliasVal"),
+            "var declaration initializer should use aliasVal, got {uses:?}"
+        );
+        assert!(
+            !uses.iter().any(|u| u == "finalOut"),
+            "declarator name must not be a use, got {uses:?}"
+        );
+    }
+
+    #[test]
+    fn test_kotlin_property_declaration_def_use() {
+        let source = r#"
+class C {
+  fun m(seed: Int): Int {
+    val aliasVal = seed + 1
+    return aliasVal
+  }
+}
+"#;
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_kotlin_ng::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let prop = find_kind(tree.root_node(), "property_declaration").expect("property");
+        let (defs, uses) = extract_def_use(prop, source.as_bytes());
+        assert!(
+            defs_has(&defs, "aliasVal"),
+            "val declaration should define aliasVal, got {defs:?}"
+        );
+        assert!(
+            uses.iter().any(|u| u == "seed"),
+            "val initializer should use seed, got {uses:?}"
+        );
+    }
+
+    #[test]
+    fn test_puppet_variable_assignment_def_use() {
+        let source = "$alias_val = $seed + 1\n";
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_puppet::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let assign = find_kind(tree.root_node(), "assignment").expect("assignment");
+        let (defs, uses) = extract_def_use(assign, source.as_bytes());
+        assert!(
+            defs_has(&defs, "alias_val"),
+            "puppet assignment should define alias_val, got {defs:?}"
+        );
+        assert!(
+            uses.iter().any(|u| u == "seed"),
+            "puppet assignment RHS should use seed, got {uses:?}"
+        );
+    }
+
+    #[test]
+    fn test_dart_local_variable_declaration_def_use() {
+        let source = "int f(int seedInput) { final stepVal = seedInput + 10; return stepVal; }\n";
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_dart::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let decl =
+            find_kind(tree.root_node(), "local_variable_declaration").expect("dart local_var");
+        let (defs, uses) = extract_def_use(decl, source.as_bytes());
+        assert!(
+            defs_has(&defs, "stepVal"),
+            "dart final decl should define stepVal, got {defs:?}"
+        );
+        assert!(
+            uses.iter().any(|u| u == "seedInput"),
+            "dart final decl should use seedInput, got {uses:?}"
+        );
+    }
+
+    #[test]
+    fn test_lua_variable_declaration_def_use() {
+        let source =
+            "function f(seed_input)\n  local step_val = seed_input + 10\n  return step_val\nend\n";
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_lua::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let decl = find_kind(tree.root_node(), "variable_declaration").expect("lua var_decl");
+        let (defs, uses) = extract_def_use(decl, source.as_bytes());
+        assert!(
+            defs_has(&defs, "step_val"),
+            "lua local decl should define step_val, got {defs:?}"
+        );
+        assert!(
+            !defs_has(&defs, "seed_input"),
+            "lua RHS seed_input must not be marked defined, got {defs:?}"
+        );
+        assert!(
+            uses.iter().any(|u| u == "seed_input"),
+            "lua local decl should use seed_input, got {uses:?}"
+        );
+    }
+
+    #[test]
+    fn test_bash_declaration_and_read_def_use() {
+        let source = "f() {\n  local step_val=$((seed_input + 10))\n  read -r raw_cmd\n  eval \"$raw_cmd\"\n}\n";
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_bash::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let decl = find_kind(tree.root_node(), "declaration_command").expect("bash decl");
+        let (defs, uses) = extract_def_use(decl, source.as_bytes());
+        assert!(
+            defs_has(&defs, "step_val") && !defs_has(&defs, "local"),
+            "bash local decl should define only step_val, got {defs:?}"
+        );
+        assert!(
+            uses.iter().any(|u| u == "seed_input"),
+            "bash arithmetic expansion should use seed_input, got {uses:?}"
+        );
+
+        let read_cmd = find_kind(tree.root_node(), "command").expect("bash read command");
+        let (rdefs, _) = extract_def_use(read_cmd, source.as_bytes());
+        assert!(
+            defs_has(&rdefs, "raw_cmd"),
+            "bash read -r raw_cmd should define raw_cmd, got {rdefs:?}"
         );
     }
 }

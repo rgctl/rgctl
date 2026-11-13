@@ -35,6 +35,8 @@ struct ExpectedFacts {
     symbols: std::collections::BTreeMap<String, SymbolEntry>,
     #[serde(default)]
     invariants: Invariants,
+    #[serde(default)]
+    analytics: Option<AnalyticsSpec>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -47,6 +49,17 @@ struct GraphSpec {
     exact_calls_edges: Option<usize>,
     #[serde(default)]
     forbidden_edges: Vec<ForbiddenEdge>,
+    #[serde(default)]
+    expected_relations: Vec<ExpectedRelation>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ExpectedRelation {
+    edge: String,
+    from: String,
+    to: String,
+    #[serde(default = "required_sev")]
+    severity: String,
 }
 
 #[allow(dead_code)]
@@ -64,7 +77,7 @@ struct Invariants {
     #[serde(rename = "B1_blast_vs_calls")]
     b1: InvariantSpec,
     #[serde(default)]
-    #[serde(rename = "B2_gql_calls_nonzero")]
+    #[serde(rename = "B2_gql_calls_nonzero", alias = "B2_calls_nonzero")]
     b2: InvariantSpec,
     #[serde(default)]
     #[serde(rename = "B5_inspect_cfg_present")]
@@ -129,6 +142,22 @@ struct SymbolEntry {
     dom: Option<DomSpec>,
     #[serde(default)]
     dominance: Option<DomSpec>,
+    #[serde(default)]
+    mro: Option<MroSpec>,
+    #[serde(default)]
+    slice: Option<SliceSpec>,
+    #[serde(default)]
+    flows: Option<FlowsSpec>,
+    #[serde(default)]
+    mutations: Option<MutationsSpec>,
+    #[serde(default)]
+    taint: Option<TaintSpec>,
+    #[serde(default)]
+    clones: Option<ClonesSpec>,
+    #[serde(default)]
+    semantic: Option<SemanticSpec>,
+    #[serde(default)]
+    review: Option<ReviewSpec>,
 }
 
 fn true_bool() -> bool {
@@ -149,6 +178,15 @@ struct MatchSpec {
     /// Optional path / file suffix filter (`path/to/file.ts::name` for inspect/blast).
     #[serde(default)]
     file: Option<String>,
+    /// Optional non-function entity type (`struct`, `module`, `variable`, `table`, `interface`).
+    #[serde(default)]
+    entity_type: Option<String>,
+    /// Overload / signature fragment that must appear on the matched node (`(String)`, `int`).
+    #[serde(default)]
+    discriminator: Option<String>,
+    /// 1-based definition line. Selects one overload when several share a short name.
+    #[serde(default)]
+    line: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -160,6 +198,9 @@ struct IdentitySpec {
     class_context: Option<String>,
     file_suffix: Option<String>,
     language: Option<String>,
+    /// Signature or arity fragment that must appear on the resolved identity (`(int)`, `(String)`).
+    #[serde(default)]
+    discriminator: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -238,6 +279,161 @@ struct IdomPair {
     immediate_dominator: i64,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct MroSpec {
+    #[serde(default = "required_sev")]
+    severity: String,
+    #[serde(default)]
+    extends: Vec<String>,
+    #[serde(default)]
+    implements: Vec<String>,
+    #[serde(default)]
+    overrides: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TextExpect {
+    #[serde(default)]
+    must_contain: Vec<String>,
+    #[serde(default)]
+    must_exclude: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SliceSpec {
+    #[serde(default = "required_sev")]
+    severity: String,
+    file: String,
+    line: usize,
+    variable: String,
+    #[serde(default)]
+    function: Option<String>,
+    #[serde(default = "backward_dir")]
+    direction: String,
+    #[serde(flatten)]
+    text: TextExpect,
+}
+
+fn backward_dir() -> String {
+    "backward".into()
+}
+
+#[derive(Debug, Deserialize)]
+struct FlowsSpec {
+    #[serde(default = "required_sev")]
+    severity: String,
+    file: String,
+    line: usize,
+    variable: String,
+    #[serde(default)]
+    function: Option<String>,
+    #[serde(default = "forward_dir")]
+    direction: String,
+    #[serde(default = "true_bool")]
+    with_alias: bool,
+    #[serde(flatten)]
+    text: TextExpect,
+}
+
+fn forward_dir() -> String {
+    "forward".into()
+}
+
+#[derive(Debug, Deserialize)]
+struct MutationsSpec {
+    #[serde(default = "required_sev")]
+    severity: String,
+    #[serde(rename = "type")]
+    type_name: String,
+    #[serde(default)]
+    member: Option<String>,
+    #[serde(default = "true_bool")]
+    exclude_ctors: bool,
+    #[serde(flatten)]
+    text: TextExpect,
+}
+
+#[derive(Debug, Deserialize)]
+struct TaintSpec {
+    #[serde(default = "required_sev")]
+    severity: String,
+    sink: String,
+    #[serde(default = "external_source")]
+    source: String,
+    #[serde(default)]
+    min_flows: Option<usize>,
+    #[serde(flatten)]
+    text: TextExpect,
+}
+
+fn external_source() -> String {
+    "external".into()
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClonesSpec {
+    #[serde(default = "required_sev")]
+    severity: String,
+    #[serde(default = "exact_mode")]
+    mode: String,
+    #[serde(default)]
+    seed: Option<String>,
+    #[serde(default)]
+    min_loc: Option<usize>,
+    /// Names that must share one clone group with this symbol.
+    #[serde(default)]
+    group_with: Vec<String>,
+    /// Names that must not share a clone group with this symbol.
+    #[serde(default)]
+    not_grouped_with: Vec<String>,
+}
+
+fn exact_mode() -> String {
+    "exact".into()
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticSpec {
+    #[serde(default = "required_sev")]
+    severity: String,
+    query: String,
+    /// Symbol name that must appear in the top-3 vocab hits.
+    top3_contains: String,
+    /// Optional semantic scope (`function` default, `docs` for Markdown headings, `all`).
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default = "true_bool")]
+    expand_neighbors: bool,
+    /// When set, every name must appear in `--expand neighbors` and no other requirement is implied.
+    #[serde(default)]
+    neighbor_names: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewSpec {
+    #[serde(default = "required_sev")]
+    severity: String,
+    /// Repo-relative file edited in the sandbox worktree.
+    file: String,
+    find: String,
+    replace: String,
+    /// Caller names that must appear in `review paths --synthetic-head worktree`.
+    #[serde(default)]
+    must_contain: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnalyticsSpec {
+    #[serde(default = "required_sev")]
+    severity: String,
+    root: String,
+    mid: String,
+    leaf: String,
+    /// Two symbol names that must sit in different Fast-Leiden communities.
+    #[serde(default)]
+    separate: Vec<String>,
+}
+
 struct GraphIndex {
     functions: Vec<Value>,
     calls: Vec<(Value, Value)>,
@@ -269,9 +465,21 @@ impl GraphIndex {
                 .iter()
                 .copied()
                 .filter(|f| {
-                    f.get("file")
+                    f.get("qualified_name")
                         .and_then(|x| x.as_str())
-                        .is_some_and(|p| p.contains(hint))
+                        .is_some_and(|q| {
+                            q.starts_with(&format!("{hint}::"))
+                                || q.starts_with(&format!("{hint}."))
+                                || q.starts_with(&format!("{hint}#"))
+                                || q.contains(&format!("::{hint}::"))
+                                || q.contains(&format!(".{hint}."))
+                                || q.contains(&format!("\\{hint}::"))
+                                || q.contains(&format!("\\{hint}."))
+                                || q.contains(&format!("\\{hint}#"))
+                        })
+                        || f.get("file")
+                            .and_then(|x| x.as_str())
+                            .is_some_and(|p| p.contains(hint))
                 })
                 .collect();
             if !narrowed.is_empty() {
@@ -281,63 +489,102 @@ impl GraphIndex {
         hits
     }
 
-    fn callees_of(&self, name: &str, class_hint: Option<&str>) -> Vec<String> {
-        let targets = self.find_functions(name, class_hint);
-        let files: BTreeSet<&str> = targets
+    fn find_matched(&self, m: &MatchSpec) -> Vec<&Value> {
+        let mut hits = self.find_functions(&m.name, m.class.as_deref());
+        if let Some(disc) = m.discriminator.as_deref().filter(|s| !s.is_empty()) {
+            hits.retain(|f| entity_blob(f).contains(disc));
+        }
+        if let Some(line) = m.line {
+            let any_line = hits
+                .iter()
+                .any(|f| f.get("line").and_then(|v| v.as_u64()).is_some());
+            if any_line {
+                hits.retain(|f| f.get("line").and_then(|v| v.as_u64()) == Some(line as u64));
+            }
+        }
+        hits
+    }
+
+    fn peers_of(&self, name: &str, hits: &[&Value], outgoing: bool) -> Vec<String> {
+        let ids: BTreeSet<&str> = hits
+            .iter()
+            .filter_map(|t| t.get("id").and_then(|v| v.as_str()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        let files: BTreeSet<&str> = hits
             .iter()
             .filter_map(|t| t.get("file").and_then(|f| f.as_str()))
             .collect();
+        let lines: BTreeSet<u64> = hits
+            .iter()
+            .filter_map(|t| t.get("line").and_then(|v| v.as_u64()))
+            .collect();
         let mut out = BTreeSet::new();
         for (caller, callee) in &self.calls {
-            if caller.get("node").and_then(|n| n.as_str()) != Some(name) {
-                continue;
-            }
-            if !files.is_empty() {
-                let cf = caller.get("file").and_then(|f| f.as_str()).unwrap_or("");
-                if !files.contains(cf) {
+            let (endpoint, other) = if outgoing {
+                (caller, callee)
+            } else {
+                (callee, caller)
+            };
+            if !ids.is_empty()
+                && let Some(eid) = endpoint
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+            {
+                if !ids.contains(eid) {
+                    continue;
+                }
+            } else {
+                if endpoint.get("node").and_then(|n| n.as_str()) != Some(name) {
+                    continue;
+                }
+                if !files.is_empty() {
+                    let cf = endpoint.get("file").and_then(|f| f.as_str()).unwrap_or("");
+                    if !files.contains(cf) {
+                        continue;
+                    }
+                }
+                if !lines.is_empty()
+                    && let Some(line) = endpoint.get("line").and_then(|v| v.as_u64())
+                    && !lines.contains(&line)
+                {
                     continue;
                 }
             }
-            if let Some(n) = callee.get("node").and_then(|n| n.as_str()) {
+            if let Some(n) = other.get("node").and_then(|n| n.as_str()) {
                 out.insert(n.to_string());
             }
         }
         out.into_iter().collect()
+    }
+
+    fn callees_of(&self, name: &str, class_hint: Option<&str>) -> Vec<String> {
+        let targets = self.find_functions(name, class_hint);
+        self.peers_of(name, &targets, true)
     }
 
     fn callers_of(&self, name: &str, class_hint: Option<&str>) -> Vec<String> {
         let targets = self.find_functions(name, class_hint);
-        let files: BTreeSet<&str> = targets
-            .iter()
-            .filter_map(|t| t.get("file").and_then(|f| f.as_str()))
-            .collect();
-        let mut out = BTreeSet::new();
-        for (caller, callee) in &self.calls {
-            if callee.get("node").and_then(|n| n.as_str()) != Some(name) {
-                continue;
-            }
-            if !files.is_empty() {
-                let cf = callee.get("file").and_then(|f| f.as_str()).unwrap_or("");
-                if !files.contains(cf) {
-                    continue;
-                }
-            }
-            if let Some(n) = caller.get("node").and_then(|n| n.as_str()) {
-                out.insert(n.to_string());
-            }
-        }
-        out.into_iter().collect()
+        self.peers_of(name, &targets, false)
     }
 }
 
 fn short_name(fqn: &str) -> String {
-    if let Some(i) = fqn.rfind("::") {
-        return fqn[i + 2..].to_string();
+    let head = fqn.split('(').next().unwrap_or(fqn);
+    if let Some(i) = head.rfind("::") {
+        return head[i + 2..].to_string();
     }
-    if let Some(i) = fqn.rfind('.') {
-        return fqn[i + 1..].to_string();
+    if let Some(i) = head.rfind('#') {
+        return head[i + 1..].to_string();
     }
-    fqn.to_string()
+    if let Some(i) = head.rfind('.') {
+        return head[i + 1..].to_string();
+    }
+    if let Some(i) = head.rfind('\\') {
+        return head[i + 1..].to_string();
+    }
+    head.to_string()
 }
 
 fn normalize_names(names: &[String]) -> Vec<String> {
@@ -411,33 +658,35 @@ fn symbol_candidates(m: &MatchSpec) -> Vec<String> {
 }
 
 fn run_blast(bin: &Path, cwd: &Path, m: &MatchSpec) -> Option<Value> {
+    let line = m.line.map(|n| n.to_string());
+    let attempt = |args: &[&str]| -> Option<Value> {
+        if let Some(line) = line.as_deref() {
+            let mut owned: Vec<&str> = args.to_vec();
+            owned.push("--line");
+            owned.push(line);
+            return run_json(bin, cwd, &owned);
+        }
+        run_json(bin, cwd, args)
+    };
     // Go fixtures disambiguate by source file (`class: "methods.go"`).
     if let Some(cls) = &m.class {
         if cls.ends_with(".go") || cls.contains('/') {
-            if let Some(v) = run_json(
-                bin,
-                cwd,
-                &["-f", "json", "blast-radius", &m.name, "--file", cls],
-            ) {
+            if let Some(v) = attempt(&["-f", "json", "blast-radius", &m.name, "--file", cls]) {
                 return Some(v);
             }
         }
     }
     if let Some(file) = &m.file {
-        if let Some(v) = run_json(
-            bin,
-            cwd,
-            &["-f", "json", "blast-radius", &m.name, "--file", file],
-        ) {
+        if let Some(v) = attempt(&["-f", "json", "blast-radius", &m.name, "--file", file]) {
             return Some(v);
         }
         let fqn = format!("{file}::{}", m.name);
-        if let Some(v) = run_json(bin, cwd, &["-f", "json", "blast-radius", &fqn]) {
+        if let Some(v) = attempt(&["-f", "json", "blast-radius", &fqn]) {
             return Some(v);
         }
     }
     for sym in symbol_candidates(m) {
-        if let Some(v) = run_json(bin, cwd, &["-f", "json", "blast-radius", &sym]) {
+        if let Some(v) = attempt(&["-f", "json", "blast-radius", &sym]) {
             return Some(v);
         }
     }
@@ -445,8 +694,17 @@ fn run_blast(bin: &Path, cwd: &Path, m: &MatchSpec) -> Option<Value> {
 }
 
 fn run_inspect(bin: &Path, cwd: &Path, m: &MatchSpec, layer: &str) -> Option<Value> {
+    let line = m.line.map(|n| n.to_string());
+    let attempt = |sym: &str| -> Option<Value> {
+        let mut args = vec!["-f", "json", "inspect", sym];
+        if let Some(line) = line.as_deref() {
+            args.extend(["--line", line]);
+        }
+        args.push(layer);
+        run_json(bin, cwd, &args)
+    };
     for sym in symbol_candidates(m) {
-        if let Some(v) = run_json(bin, cwd, &["-f", "json", "inspect", &sym, layer]) {
+        if let Some(v) = attempt(&sym) {
             return Some(v);
         }
     }
@@ -454,7 +712,7 @@ fn run_inspect(bin: &Path, cwd: &Path, m: &MatchSpec, layer: &str) -> Option<Val
     if let Some(cls) = &m.class {
         if !cls.ends_with(".go") && !cls.contains('/') {
             let fqn = format!("{cls}.{}", m.name);
-            if let Some(v) = run_json(bin, cwd, &["-f", "json", "inspect", &fqn, layer]) {
+            if let Some(v) = attempt(&fqn) {
                 return Some(v);
             }
         }
@@ -467,17 +725,13 @@ fn load_graph_index(bin: &Path, cwd: &Path) -> GraphIndex {
     if let Some(data) = run_json(
         bin,
         cwd,
-        &["-f", "json", "gql", "MATCH (n:Function) RETURN n"],
+        &[
+            "-f", "json", "find", "--type", "function", "--limit", "100000",
+        ],
     ) {
-        if let Some(rows) = data.get("rows").and_then(|r| r.as_array()) {
-            for row in rows {
-                if let Some(arr) = row.as_array() {
-                    if let Some(first) = arr.first() {
-                        functions.push(first.clone());
-                    }
-                } else if row.is_object() {
-                    functions.push(row.clone());
-                }
+        if let Some(entities) = data.get("entities").and_then(|rows| rows.as_array()) {
+            for entity in entities {
+                functions.push(entity_as_legacy(entity));
             }
         }
     }
@@ -488,32 +742,303 @@ fn load_graph_index(bin: &Path, cwd: &Path) -> GraphIndex {
         &[
             "-f",
             "json",
-            "gql",
-            "MATCH (a:Function)-[:CALLS]->(b:Function) RETURN a,b",
+            "relations",
+            "--edge",
+            "calls",
+            "--from-type",
+            "function",
+            "--to-type",
+            "function",
+            "--limit",
+            "100000",
         ],
     ) {
-        if let Some(rows) = data.get("rows").and_then(|r| r.as_array()) {
-            for row in rows {
-                let Some(arr) = row.as_array() else { continue };
-                if arr.len() < 2 {
+        if let Some(edges) = data.get("edges").and_then(|rows| rows.as_array()) {
+            for edge in edges {
+                let Some(source) = edge.get("source") else {
                     continue;
-                }
-                let mut a = None;
-                let mut b = None;
-                for cell in arr {
-                    match cell.get("binding").and_then(|x| x.as_str()) {
-                        Some("a") => a = Some(cell.clone()),
-                        Some("b") => b = Some(cell.clone()),
-                        _ => {}
-                    }
-                }
-                let a = a.unwrap_or_else(|| arr[0].clone());
-                let b = b.unwrap_or_else(|| arr[1].clone());
-                calls.push((a, b));
+                };
+                let Some(target) = edge.get("target") else {
+                    continue;
+                };
+                calls.push((entity_as_legacy(source), entity_as_legacy(target)));
             }
         }
     }
     GraphIndex { functions, calls }
+}
+
+fn caller_ids_from_doc(doc: &Value) -> BTreeSet<String> {
+    doc.get("callers")
+        .and_then(|c| c.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    row.get("id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| row.get("qualified_name").and_then(|v| v.as_str()))
+                        .or_else(|| row.get("name").and_then(|v| v.as_str()))
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn structured_query_checks(bin: &Path, cwd: &Path, index: &GraphIndex) -> Vec<CheckResult> {
+    // NOTE: `rgctl gql` is deprecated; all oracle & query-surface checks target canonical
+    // structured JSON verbs (`find`, `callers`, `callees`, `relations`, `inventory`, `blast-radius`).
+    let mut checks = Vec::new();
+    let inventory = run_json(
+        bin,
+        cwd,
+        &["-f", "json", "inventory", "--by", "import-prefix"],
+    );
+    let inv_ok = inventory.as_ref().is_some_and(|doc| {
+        schema_v2(doc)
+            && doc.get("by").and_then(|b| b.as_str()) == Some("import-prefix")
+            && doc.get("counts").and_then(|c| c.as_array()).is_some()
+    });
+    checks.push(check(
+        "query.inventory_import_prefix",
+        "required",
+        inv_ok,
+        "inventory --by import-prefix returns schema v2 counts",
+    ));
+
+    let ann_edges = run_json(
+        bin,
+        cwd,
+        &[
+            "-f",
+            "json",
+            "relations",
+            "--edge",
+            "annotated-with",
+            "--limit",
+            "5",
+        ],
+    );
+    let sample_ann = ann_edges
+        .as_ref()
+        .and_then(|d| d.get("edges"))
+        .and_then(|e| e.as_array())
+        .and_then(|rows| {
+            rows.iter().find_map(|r| {
+                r.get("target")
+                    .and_then(|t| t.get("name"))
+                    .and_then(|n| n.as_str())
+                    .filter(|s| !s.is_empty())
+            })
+        });
+    let ann_query = sample_ann.unwrap_or("Override");
+    let annotated = run_json(
+        bin,
+        cwd,
+        &[
+            "-f",
+            "json",
+            "find",
+            "--annotation",
+            ann_query,
+            "--show-attributes",
+        ],
+    );
+    let ann_ok = annotated.as_ref().is_some_and(|doc| {
+        if !schema_v2(doc) {
+            return false;
+        }
+        let empty = [];
+        let entities = doc
+            .get("entities")
+            .and_then(|e| e.as_array())
+            .map(Vec::as_slice)
+            .unwrap_or(&empty);
+        if sample_ann.is_some() {
+            !entities.is_empty()
+                && entities.iter().all(|row| {
+                    row.get("attributes")
+                        .and_then(|a| a.as_str())
+                        .is_some_and(|s| s.starts_with('@'))
+                })
+        } else {
+            doc.get("total").and_then(|t| t.as_u64()).is_some()
+        }
+    });
+    checks.push(check(
+        "query.find_annotation_attributes",
+        "required",
+        ann_ok,
+        format!("find --annotation {ann_query} --show-attributes"),
+    ));
+
+    fn non_self_callee((caller, callee): &(Value, Value)) -> Option<(&str, &str, &str)> {
+        if caller == callee {
+            return None;
+        }
+        let name = callee.get("node").and_then(|n| n.as_str())?;
+        let file = callee.get("file").and_then(|n| n.as_str())?;
+        if file == "<external>" {
+            return None;
+        }
+        let qn = callee
+            .get("qualified_name")
+            .and_then(|q| q.as_str())
+            .unwrap_or(file);
+        Some((name, file, qn))
+    }
+    let scoped = index
+        .calls
+        .iter()
+        .find_map(|pair| {
+            let (name, file, qn) = non_self_callee(pair)?;
+            name.to_ascii_lowercase()
+                .starts_with("correctness")
+                .then_some((name, file, qn))
+        })
+        .or_else(|| index.calls.iter().find_map(non_self_callee));
+    if let Some((name, file, qn)) = scoped {
+        let scope_prefix = qn
+            .rsplit_once("::")
+            .or_else(|| qn.rsplit_once('.'))
+            .or_else(|| qn.rsplit_once('#'))
+            .map(|(owner, _)| owner)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(file);
+        let all_doc = run_json(bin, cwd, &["-f", "json", "callers", name, "--file", file]);
+        let inside_doc = run_json(
+            bin,
+            cwd,
+            &[
+                "-f",
+                "json",
+                "callers",
+                name,
+                "--file",
+                file,
+                "--scope",
+                scope_prefix,
+                "--scope-mode",
+                "inside",
+            ],
+        );
+        let outside_doc = run_json(
+            bin,
+            cwd,
+            &[
+                "-f",
+                "json",
+                "callers",
+                name,
+                "--file",
+                file,
+                "--scope",
+                scope_prefix,
+                "--scope-mode",
+                "outside",
+            ],
+        );
+        let scope_ok = match (&all_doc, &inside_doc, &outside_doc) {
+            (Some(all), Some(ins), Some(out))
+                if schema_v2(all) && schema_v2(ins) && schema_v2(out) =>
+            {
+                let all_ids = caller_ids_from_doc(all);
+                let in_ids = caller_ids_from_doc(ins);
+                let out_ids = caller_ids_from_doc(out);
+                let union: BTreeSet<String> = in_ids.union(&out_ids).cloned().collect();
+                in_ids.is_disjoint(&out_ids) && union == all_ids && !all_ids.is_empty()
+            }
+            _ => false,
+        };
+        checks.push(check(
+            "query.callers_scope_outside",
+            "required",
+            scope_ok,
+            format!("callers {name} --file {file} --scope {scope_prefix} --scope-mode inside|outside partition"),
+        ));
+    }
+
+    let called_files_with_external: BTreeSet<&str> = index
+        .calls
+        .iter()
+        .filter_map(|(from, to)| {
+            let f1 = from.get("file").and_then(|f| f.as_str())?;
+            let f2 = to.get("file").and_then(|f| f.as_str())?;
+            (f1 != f2).then_some(f2)
+        })
+        .collect();
+
+    let mut container: Option<(String, String, bool)> = None;
+    let mut fallback_container: Option<(String, String)> = None;
+    for type_name in ["class", "struct", "interface", "module"] {
+        let Some(found) = run_json(
+            bin,
+            cwd,
+            &[
+                "-f", "json", "find", "--type", type_name, "--limit", "100000",
+            ],
+        ) else {
+            continue;
+        };
+        if let Some(rows) = found.get("entities").and_then(|r| r.as_array()) {
+            for row in rows {
+                let Some(name) = row.get("name").and_then(|n| n.as_str()) else {
+                    continue;
+                };
+                let Some(file) = row.get("file").and_then(|n| n.as_str()) else {
+                    continue;
+                };
+                if file == "<external>" {
+                    continue;
+                }
+                if fallback_container.is_none() && (file.contains("src/") || !file.ends_with(".md"))
+                {
+                    fallback_container = Some((name.to_string(), file.to_string()));
+                }
+                if called_files_with_external.contains(file)
+                    && matches!(type_name, "class" | "struct")
+                {
+                    container = Some((name.to_string(), file.to_string(), true));
+                    break;
+                }
+            }
+        }
+        if container.is_some() {
+            break;
+        }
+    }
+    if container.is_none()
+        && let Some((n, f)) = fallback_container
+    {
+        container = Some((n, f, false));
+    }
+    if let Some((name, file, _)) = container {
+        let callers = run_json(bin, cwd, &["-f", "json", "callers", &name, "--file", &file]);
+        let blast = run_json(
+            bin,
+            cwd,
+            &["-f", "json", "blast-radius", &name, "--file", &file],
+        );
+        checks.push(check(
+            "query.container_callers",
+            "required",
+            callers.as_ref().is_some_and(|doc| {
+                schema_v2(doc) && doc.get("callers").is_some_and(Value::is_array)
+            }),
+            format!("callers {name} --file {file}"),
+        ));
+        checks.push(check(
+            "query.container_blast_radius",
+            "required",
+            blast.as_ref().is_some_and(|v| {
+                v.get("target").is_some_and(|t| !t.is_null())
+                    || v.get("nodes").is_some_and(Value::is_array)
+            }),
+            format!("blast-radius {name} --file {file}"),
+        ));
+    }
+
+    checks
 }
 
 fn cfg_texts(cfg: &Value) -> Vec<String> {
@@ -564,6 +1089,59 @@ fn cfg_edge_kinds(cfg: &Value) -> Vec<String> {
     kinds
 }
 
+fn copy_fixture(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap();
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        if name == ".rgctl" || name == "target" || name == "node_modules" {
+            continue;
+        }
+        let target = dst.join(&name);
+        if entry.file_type().unwrap().is_dir() {
+            copy_fixture(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+fn entity_as_legacy(entity: &Value) -> Value {
+    let line = entity
+        .get("line")
+        .cloned()
+        .or_else(|| entity.get("start_line").cloned())
+        .unwrap_or(Value::Null);
+    serde_json::json!({
+        "id": entity.get("id").cloned().unwrap_or(Value::Null),
+        "node": entity.get("name").cloned().unwrap_or(Value::Null),
+        "file": entity.get("file").cloned().unwrap_or(Value::Null),
+        "qualified_name": entity.get("qualified_name").cloned().unwrap_or(Value::Null),
+        "line": line,
+        "signature": entity.get("signature").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn entity_blob(entity: &Value) -> String {
+    format!(
+        "{} {} {} {}",
+        entity.get("node").and_then(|v| v.as_str()).unwrap_or(""),
+        entity
+            .get("qualified_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+        entity
+            .get("signature")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+        entity.get("file").and_then(|v| v.as_str()).unwrap_or("")
+    )
+}
+
+fn schema_v2(value: &Value) -> bool {
+    value.get("schema_version").and_then(|v| v.as_i64()) == Some(2)
+}
+
 fn ensure_discover(bin: &Path, cwd: &Path, exclude: &str, clean: bool) -> CheckResult {
     let cache = cwd.join(".rgctl");
     if clean && cache.exists() {
@@ -579,6 +1157,36 @@ fn ensure_discover(bin: &Path, cwd: &Path, exclude: &str, clean: bool) -> CheckR
         "discover",
         "required",
         ok,
+        format!("exit={}", out.status.code().unwrap_or(-1)),
+    )
+}
+
+fn ensure_analytics_discover(bin: &Path, cwd: &Path, exclude: &str) -> CheckResult {
+    let cache = cwd.join(".rgctl");
+    if cache.exists() {
+        let _ = fs::remove_dir_all(&cache);
+    }
+    let out = Command::new(bin)
+        .current_dir(cwd)
+        .args([
+            "-f",
+            "json",
+            "discover",
+            ".",
+            "--with-cfg",
+            "--with-taint",
+            "--with-security",
+            "--with-harmonic",
+            "--export-migration-hints",
+            "-e",
+            exclude,
+        ])
+        .output()
+        .expect("spawn analytics discover");
+    check(
+        "analytics.discover",
+        "required",
+        out.status.success(),
         format!("exit={}", out.status.code().unwrap_or(-1)),
     )
 }
@@ -605,8 +1213,23 @@ pub fn run_project(
         serde_json::from_str(&fs::read_to_string(facts_path).expect("read facts"))
             .expect("parse expected-facts.json");
 
+    let sandbox = tempfile::TempDir::new().expect("correctness sandbox");
+    let work = sandbox.path().join("repo");
+    copy_fixture(project_dir, &work);
+
+    let needs_full_analytics = facts.analytics.is_some()
+        || facts
+            .symbols
+            .values()
+            .any(|s| s.taint.is_some() && s.severity != "unsupported");
     let mut checks = Vec::new();
-    let disc = ensure_discover(bin, project_dir, exclude, clean);
+    let disc = if needs_full_analytics {
+        let mut d = ensure_analytics_discover(bin, &work, exclude);
+        d.id = "discover".to_string();
+        d
+    } else {
+        ensure_discover(bin, &work, exclude, clean)
+    };
     let disc_failed = !disc.ok;
     checks.push(disc);
     if disc_failed {
@@ -616,12 +1239,13 @@ pub fn run_project(
         };
     }
 
-    let index = load_graph_index(bin, project_dir);
+    let index = load_graph_index(bin, &work);
+    checks.extend(structured_query_checks(bin, &work, &index));
 
     // Universal columnar structural invariants (INV-1…INV-7).
     {
         use rgctl_graph::{SNAPSHOT_FILE, SnapshotNodeStore, assert_graph_invariants};
-        let snap = project_dir.join(".rgctl").join(SNAPSHOT_FILE);
+        let snap = work.join(".rgctl").join(SNAPSHOT_FILE);
         let inv_check = match SnapshotNodeStore::open(&snap) {
             Ok(store) => match store.mmap().columnar() {
                 Some(col) => match assert_graph_invariants(col) {
@@ -629,19 +1253,14 @@ pub fn run_project(
                         "graph.assert_graph_invariants",
                         "required",
                         true,
-                        "INV-1..INV-7 ok",
+                        "INV-1..INV-9 ok",
                     ),
-                    Err(e) => {
-                        let msg = e.to_string();
-                        // INV-7 stub-shadowing still fires on some CommonJS fixtures
-                        // (e.g. ecommerce-javascript AppError); keep it visible as soft.
-                        let sev = if msg.contains("INV-7") {
-                            "soft"
-                        } else {
-                            "required"
-                        };
-                        check("graph.assert_graph_invariants", sev, false, msg)
-                    }
+                    Err(e) => check(
+                        "graph.assert_graph_invariants",
+                        "required",
+                        false,
+                        e.to_string(),
+                    ),
                 },
                 None => check(
                     "graph.assert_graph_invariants",
@@ -703,11 +1322,71 @@ pub fn run_project(
             format!("forbidden {} → {} present={hit}", fe.from, fe.to),
         ));
     }
+    for (i, er) in facts.graph.expected_relations.iter().enumerate() {
+        let doc = run_json(
+            bin,
+            &work,
+            &[
+                "-f",
+                "json",
+                "relations",
+                "--edge",
+                &er.edge,
+                "--limit",
+                "10000",
+            ],
+        );
+        let hit = doc
+            .as_ref()
+            .and_then(|d| d.get("edges"))
+            .and_then(|e| e.as_array())
+            .is_some_and(|rows| {
+                rows.iter().any(|row| {
+                    let s_blob = format!(
+                        "{} {} {}",
+                        row.pointer("/source/name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        row.pointer("/source/qualified_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        row.pointer("/source/file")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                    );
+                    let t_blob = format!(
+                        "{} {} {}",
+                        row.pointer("/target/name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        row.pointer("/target/qualified_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        row.pointer("/target/file")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                    );
+                    s_blob.contains(&er.from) && t_blob.contains(&er.to)
+                })
+            });
+        checks.push(check(
+            format!("graph.expected_relations[{i}]"),
+            &er.severity,
+            hit,
+            format!("edge={} from={} to={}", er.edge, er.from, er.to),
+        ));
+    }
 
     for (sid, entry) in &facts.symbols {
-        checks.extend(check_symbol(sid, entry, bin, project_dir, &index));
+        checks.extend(check_symbol(sid, entry, bin, &work, &index));
     }
-    checks.extend(check_invariants(&facts, bin, project_dir, &index));
+    checks.extend(check_invariants(&facts, bin, &work, &index));
+    if let Some(analytics) = &facts.analytics {
+        if !needs_full_analytics {
+            checks.push(ensure_analytics_discover(bin, &work, exclude));
+        }
+        checks.extend(check_analytics(analytics, &work));
+    }
 
     let required_failures = checks
         .iter()
@@ -736,6 +1415,11 @@ fn check_symbol(
             m.file = ident.file_suffix.clone();
         }
     }
+    if m.discriminator.is_none() {
+        if let Some(ident) = &entry.identity {
+            m.discriminator = ident.discriminator.clone();
+        }
+    }
     if m.name.is_empty() {
         return vec![check(
             format!("symbol.{sid}"),
@@ -747,7 +1431,54 @@ fn check_symbol(
     let class = m.class.as_deref();
     let mut out = Vec::new();
 
-    let hits = index.find_functions(&m.name, class);
+    let typed_owned: Vec<Value> = if let Some(et) = m.entity_type.as_deref() {
+        run_json(
+            bin,
+            cwd,
+            &["-f", "json", "find", "--type", et, "--limit", "10000"],
+        )
+        .and_then(|doc| {
+            doc.get("entities").and_then(|e| e.as_array()).map(|rows| {
+                rows.iter()
+                    .map(entity_as_legacy)
+                    .filter(|f| {
+                        let exact_n =
+                            f.get("node").and_then(|x| x.as_str()) == Some(m.name.as_str());
+                        let exact_q = f
+                            .get("qualified_name")
+                            .and_then(|x| x.as_str())
+                            .is_some_and(|q| q == m.name || q.ends_with(&format!("#{}", m.name)));
+                        if !exact_n && !exact_q {
+                            return false;
+                        }
+                        if let Some(file_suf) = m.file.as_deref() {
+                            if !f
+                                .get("file")
+                                .and_then(|x| x.as_str())
+                                .is_some_and(|p| p.ends_with(file_suf) || p.contains(file_suf))
+                            {
+                                return false;
+                            }
+                        }
+                        if let Some(disc) = m.discriminator.as_deref().filter(|s| !s.is_empty()) {
+                            if !entity_blob(f).contains(disc) {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let hits: Vec<&Value> = if m.entity_type.is_some() {
+        typed_owned.iter().collect()
+    } else {
+        index.find_matched(&m)
+    };
     let exists_ok = if entry.unique {
         hits.len() == 1
     } else {
@@ -762,16 +1493,22 @@ fn check_symbol(
     if hits.is_empty() {
         return out;
     }
+    if hits.len() == 1 && m.line.is_none() && m.discriminator.is_some() {
+        m.line = hits[0]
+            .get("line")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+    }
 
     if let Some(exact) = &entry.exact_callees {
         out.push(check_exact_set(
             &format!("symbol.{sid}.exact_callees"),
             sev,
-            &index.callees_of(&m.name, class),
+            &index.peers_of(&m.name, &hits, true),
             exact,
         ));
     } else if let Some(peers) = &entry.direct_callees {
-        let actual = index.callees_of(&m.name, class);
+        let actual = index.peers_of(&m.name, &hits, true);
         for peer in peers {
             let psev = peer.severity.as_str();
             out.push(check(
@@ -786,11 +1523,11 @@ fn check_symbol(
         out.push(check_exact_set(
             &format!("symbol.{sid}.exact_callers"),
             sev,
-            &index.callers_of(&m.name, class),
+            &index.peers_of(&m.name, &hits, false),
             exact,
         ));
     } else if let Some(peers) = &entry.direct_callers {
-        let actual = index.callers_of(&m.name, class);
+        let actual = index.peers_of(&m.name, &hits, false);
         for peer in peers {
             let psev = peer.severity.as_str();
             out.push(check(
@@ -899,6 +1636,7 @@ fn check_symbol(
         }
     }
 
+    out.extend(check_v2_dimensions(sid, entry, &m, bin, cwd));
     out
 }
 
@@ -1210,7 +1948,576 @@ fn check_identity(
             format!("want={want:?} got={got:?}"),
         ));
     }
+    if let Some(want) = &ident.discriminator {
+        let blob = target.map(|t| t.to_string()).unwrap_or_default();
+        let cfg_blob = cfg.map(|c| c.to_string()).unwrap_or_default();
+        let ok = blob.contains(want.as_str()) || cfg_blob.contains(want.as_str());
+        out.push(check(
+            format!("symbol.{sid}.identity.discriminator"),
+            sev,
+            ok,
+            format!("want discriminator {want:?} in blast/inspect identity"),
+        ));
+    }
     out
+}
+
+fn check_v2_dimensions(
+    sid: &str,
+    entry: &SymbolEntry,
+    m: &MatchSpec,
+    bin: &Path,
+    cwd: &Path,
+) -> Vec<CheckResult> {
+    let mut out = Vec::new();
+    if let Some(spec) = &entry.mro {
+        out.extend(check_mro(sid, spec, m, bin, cwd));
+    }
+    if let Some(spec) = &entry.slice {
+        out.extend(check_text_command(
+            sid,
+            "slice",
+            &spec.severity,
+            &spec.text,
+            bin,
+            cwd,
+            &slice_args(spec),
+        ));
+    }
+    if let Some(spec) = &entry.flows {
+        out.extend(check_text_command(
+            sid,
+            "flows",
+            &spec.severity,
+            &spec.text,
+            bin,
+            cwd,
+            &flows_args(spec),
+        ));
+    }
+    if let Some(spec) = &entry.mutations {
+        out.extend(check_text_command(
+            sid,
+            "mutations",
+            &spec.severity,
+            &spec.text,
+            bin,
+            cwd,
+            &mutation_args(spec),
+        ));
+    }
+    if let Some(spec) = &entry.taint {
+        out.extend(check_taint(sid, spec, bin, cwd));
+    }
+    if let Some(spec) = &entry.clones {
+        out.extend(check_clones(sid, &m.name, spec, bin, cwd));
+    }
+    if let Some(spec) = &entry.semantic {
+        out.extend(check_semantic(sid, spec, bin, cwd));
+    }
+    if let Some(spec) = &entry.review {
+        out.extend(check_review(sid, spec, bin, cwd));
+    }
+    out
+}
+
+fn slice_args(spec: &SliceSpec) -> Vec<String> {
+    let mut args = vec![
+        "-f".into(),
+        "json".into(),
+        "slice".into(),
+        spec.file.clone(),
+        "--line".into(),
+        spec.line.to_string(),
+        "--variable".into(),
+        spec.variable.clone(),
+        "--direction".into(),
+        spec.direction.clone(),
+    ];
+    if let Some(function) = &spec.function {
+        args.push("--function".into());
+        args.push(function.clone());
+    }
+    args
+}
+
+fn flows_args(spec: &FlowsSpec) -> Vec<String> {
+    let mut args = vec![
+        "-f".into(),
+        "json".into(),
+        "cpg".into(),
+        "flows".into(),
+        spec.file.clone(),
+        "--line".into(),
+        spec.line.to_string(),
+        "--variable".into(),
+        spec.variable.clone(),
+        "--direction".into(),
+        spec.direction.clone(),
+    ];
+    if spec.with_alias {
+        args.push("--with-alias".into());
+    }
+    if let Some(function) = &spec.function {
+        args.push("--function".into());
+        args.push(function.clone());
+    }
+    args
+}
+
+fn mutation_args(spec: &MutationsSpec) -> Vec<String> {
+    let mut args = vec![
+        "-f".into(),
+        "json".into(),
+        "cpg".into(),
+        "mutations".into(),
+        "--type".into(),
+        spec.type_name.clone(),
+    ];
+    if spec.exclude_ctors {
+        args.push("--exclude-ctors".into());
+    }
+    if let Some(member) = &spec.member {
+        args.push("--member".into());
+        args.push(member.clone());
+    }
+    args
+}
+
+fn check_text_command(
+    sid: &str,
+    kind: &str,
+    severity: &str,
+    text: &TextExpect,
+    bin: &Path,
+    cwd: &Path,
+    args: &[String],
+) -> Vec<CheckResult> {
+    if severity == "unsupported" {
+        return vec![];
+    }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let Some(doc) = run_json(bin, cwd, &refs) else {
+        return vec![check(
+            format!("symbol.{sid}.{kind}"),
+            severity,
+            false,
+            format!("{kind} command failed"),
+        )];
+    };
+    text_checks(sid, kind, severity, text, &doc.to_string())
+}
+
+fn text_checks(
+    sid: &str,
+    kind: &str,
+    severity: &str,
+    text: &TextExpect,
+    blob: &str,
+) -> Vec<CheckResult> {
+    let mut out = Vec::new();
+    for needle in &text.must_contain {
+        out.push(check(
+            format!("symbol.{sid}.{kind}.contains"),
+            severity,
+            blob.contains(needle),
+            format!("want {needle:?} in {kind} output"),
+        ));
+    }
+    for needle in &text.must_exclude {
+        out.push(check(
+            format!("symbol.{sid}.{kind}.excludes"),
+            severity,
+            !blob.contains(needle),
+            format!("want {needle:?} absent from {kind} output"),
+        ));
+    }
+    if text.must_contain.is_empty() && text.must_exclude.is_empty() {
+        out.push(check(
+            format!("symbol.{sid}.{kind}"),
+            severity,
+            true,
+            format!("{kind} command ok"),
+        ));
+    }
+    out
+}
+
+fn check_mro(sid: &str, spec: &MroSpec, m: &MatchSpec, bin: &Path, cwd: &Path) -> Vec<CheckResult> {
+    if spec.severity == "unsupported" {
+        return vec![];
+    }
+    let mut out = Vec::new();
+    let owner = m.class.as_deref().unwrap_or(m.name.as_str());
+    for (edge, from, names) in [
+        ("extends", owner, &spec.extends),
+        ("implements", owner, &spec.implements),
+        ("overrides", m.name.as_str(), &spec.overrides),
+    ] {
+        if names.is_empty() {
+            continue;
+        }
+        let doc = run_json(
+            bin,
+            cwd,
+            &[
+                "-f",
+                "json",
+                "relations",
+                "--edge",
+                edge,
+                "--limit",
+                "100000",
+            ],
+        );
+        let Some(doc) = doc else {
+            out.push(check(
+                format!("symbol.{sid}.mro.{edge}"),
+                &spec.severity,
+                false,
+                format!("relations --edge {edge} failed"),
+            ));
+            continue;
+        };
+        let edges = doc.get("edges").and_then(|v| v.as_array());
+        for name in names {
+            let ok = edges.is_some_and(|rows| {
+                rows.iter().any(|row| {
+                    let src = row
+                        .get("source")
+                        .and_then(|n| n.get("name").or_else(|| n.get("qualified_name")))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let dst = row
+                        .get("target")
+                        .and_then(|n| n.get("name").or_else(|| n.get("qualified_name")))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    name_matches(src, from) && name_matches(dst, name)
+                })
+            });
+            out.push(check(
+                format!("symbol.{sid}.mro.{edge}"),
+                &spec.severity,
+                ok,
+                format!("{from} -[{edge}]-> {name}"),
+            ));
+        }
+    }
+    out
+}
+
+fn check_taint(sid: &str, spec: &TaintSpec, bin: &Path, cwd: &Path) -> Vec<CheckResult> {
+    if spec.severity == "unsupported" {
+        return vec![];
+    }
+    let Some(doc) = run_json(
+        bin,
+        cwd,
+        &[
+            "-f",
+            "json",
+            "security",
+            "taint",
+            "--sink",
+            &spec.sink,
+            "--source",
+            &spec.source,
+        ],
+    ) else {
+        return vec![check(
+            format!("symbol.{sid}.taint"),
+            &spec.severity,
+            false,
+            "security taint failed",
+        )];
+    };
+    let mut out = text_checks(sid, "taint", &spec.severity, &spec.text, &doc.to_string());
+    if let Some(min) = spec.min_flows {
+        let got = doc
+            .get("paths")
+            .or_else(|| doc.get("flows"))
+            .and_then(|v| v.as_array())
+            .map(|rows| rows.len())
+            .unwrap_or(0);
+        out.push(check(
+            format!("symbol.{sid}.taint.min_flows"),
+            &spec.severity,
+            got >= min,
+            format!("flows={got} min={min}"),
+        ));
+    }
+    out
+}
+
+fn check_clones(
+    sid: &str,
+    symbol: &str,
+    spec: &ClonesSpec,
+    bin: &Path,
+    cwd: &Path,
+) -> Vec<CheckResult> {
+    if spec.severity == "unsupported" {
+        return vec![];
+    }
+    let min_loc = spec.min_loc.unwrap_or(1).to_string();
+    let mut args = vec![
+        "-f",
+        "json",
+        "clones",
+        "--mode",
+        spec.mode.as_str(),
+        "--no-write",
+        "--min-loc",
+        min_loc.as_str(),
+    ];
+    if let Some(seed) = &spec.seed {
+        args.push("--seed");
+        args.push(seed);
+    }
+    let Some(doc) = run_json(bin, cwd, &args) else {
+        return vec![check(
+            format!("symbol.{sid}.clones"),
+            &spec.severity,
+            false,
+            "clones command failed",
+        )];
+    };
+    let groups = doc
+        .get("groups")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let names_of = |group: &Value| -> Vec<String> {
+        group
+            .get("members")
+            .and_then(|v| v.as_array())
+            .map(|members| {
+                members
+                    .iter()
+                    .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mine: Vec<Vec<String>> = groups
+        .iter()
+        .map(names_of)
+        .filter(|names| names.iter().any(|n| name_matches(n, symbol)))
+        .collect();
+    let mut out = Vec::new();
+    if spec.group_with.is_empty() && spec.not_grouped_with.is_empty() {
+        out.push(check(
+            format!("symbol.{sid}.clones"),
+            &spec.severity,
+            true,
+            format!("clones {} groups={}", spec.mode, groups.len()),
+        ));
+        return out;
+    }
+    for peer in &spec.group_with {
+        let same_name = name_matches(symbol, peer);
+        let ok = mine.iter().any(|names| {
+            let count = names.iter().filter(|n| name_matches(n, peer)).count();
+            if same_name { count >= 2 } else { count >= 1 }
+        });
+        out.push(check(
+            format!("symbol.{sid}.clones.group_with"),
+            &spec.severity,
+            ok,
+            format!("{symbol} grouped with {peer} in mode {}", spec.mode),
+        ));
+    }
+    for peer in &spec.not_grouped_with {
+        let ok = !mine
+            .iter()
+            .any(|names| names.iter().any(|n| name_matches(n, peer)));
+        out.push(check(
+            format!("symbol.{sid}.clones.not_grouped_with"),
+            &spec.severity,
+            ok,
+            format!("{symbol} not grouped with {peer} in mode {}", spec.mode),
+        ));
+    }
+    out
+}
+
+fn check_semantic(sid: &str, spec: &SemanticSpec, bin: &Path, cwd: &Path) -> Vec<CheckResult> {
+    if spec.severity == "unsupported" {
+        return vec![];
+    }
+    let mut index_args = vec!["-f", "json", "semantic", "index", "--embedder", "vocab"];
+    if let Some(scope) = spec.scope.as_deref() {
+        index_args.extend(["--scope", scope]);
+    }
+    if run_json(bin, cwd, &index_args).is_none() {
+        return vec![check(
+            format!("symbol.{sid}.semantic"),
+            &spec.severity,
+            false,
+            "semantic index --embedder vocab failed",
+        )];
+    }
+    let mut args = vec![
+        "-f",
+        "json",
+        "semantic",
+        "query",
+        spec.query.as_str(),
+        "--limit",
+        "3",
+    ];
+    if let Some(scope) = spec.scope.as_deref() {
+        args.extend(["--scope", scope]);
+    }
+    if spec.expand_neighbors {
+        args.extend(["--expand", "neighbors"]);
+    }
+    let Some(doc) = run_json(bin, cwd, &args) else {
+        return vec![check(
+            format!("symbol.{sid}.semantic"),
+            &spec.severity,
+            false,
+            "semantic query failed",
+        )];
+    };
+    let top: Vec<String> = doc
+        .get("hits")
+        .and_then(|v| v.as_array())
+        .map(|hits| {
+            hits.iter()
+                .take(3)
+                .filter_map(|h| h.get("name").and_then(|n| n.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut out = vec![check(
+        format!("symbol.{sid}.semantic.top3"),
+        &spec.severity,
+        top.iter().any(|n| name_matches(n, &spec.top3_contains)),
+        format!("top3={top:?} want {}", spec.top3_contains),
+    )];
+    if spec.expand_neighbors && !spec.neighbor_names.is_empty() {
+        let neighbors: Vec<String> = doc
+            .pointer("/expansion/neighbors")
+            .and_then(|v| v.as_array())
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|n| n.get("name").and_then(|v| v.as_str()).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for name in &spec.neighbor_names {
+            out.push(check(
+                format!("symbol.{sid}.semantic.neighbor"),
+                &spec.severity,
+                neighbors.iter().any(|n| name_matches(n, name)),
+                format!("neighbors={neighbors:?} want {name}"),
+            ));
+        }
+    }
+    out
+}
+
+fn check_review(sid: &str, spec: &ReviewSpec, bin: &Path, cwd: &Path) -> Vec<CheckResult> {
+    if spec.severity == "unsupported" {
+        return vec![];
+    }
+    let path = cwd.join(&spec.file);
+    let Ok(original) = fs::read_to_string(&path) else {
+        return vec![check(
+            format!("symbol.{sid}.review"),
+            &spec.severity,
+            false,
+            format!("missing {}", spec.file),
+        )];
+    };
+    if !original.contains(&spec.find) {
+        return vec![check(
+            format!("symbol.{sid}.review"),
+            &spec.severity,
+            false,
+            format!("worktree file {} lacks {:?}", spec.file, spec.find),
+        )];
+    }
+    if !cwd.join(".git").exists() {
+        let _ = fs::write(cwd.join(".gitignore"), ".rgctl\n");
+        let init = git_sandbox(cwd, &["init"]);
+        let add = git_sandbox(cwd, &["add", "-A"]);
+        let commit = git_sandbox(cwd, &["commit", "-m", "facts-base"]);
+        if !init.status.success() || !add.status.success() || !commit.status.success() {
+            return vec![check(
+                format!("symbol.{sid}.review"),
+                &spec.severity,
+                false,
+                "sandbox git init/commit failed",
+            )];
+        }
+    }
+    let edited = original.replacen(&spec.find, &spec.replace, 1);
+    if fs::write(&path, &edited).is_err() {
+        return vec![check(
+            format!("symbol.{sid}.review"),
+            &spec.severity,
+            false,
+            format!("failed to edit {}", spec.file),
+        )];
+    }
+    let doc = run_json(
+        bin,
+        cwd,
+        &[
+            "-f",
+            "json",
+            "review",
+            "paths",
+            "--synthetic-head",
+            "worktree",
+        ],
+    );
+    let _ = fs::write(&path, &original);
+    let Some(doc) = doc else {
+        return vec![check(
+            format!("symbol.{sid}.review"),
+            &spec.severity,
+            false,
+            "review paths --synthetic-head worktree failed",
+        )];
+    };
+    let blob = doc.to_string();
+    let mut out = Vec::new();
+    for name in &spec.must_contain {
+        out.push(check(
+            format!("symbol.{sid}.review.paths"),
+            &spec.severity,
+            blob.contains(name),
+            format!("want {name} in review paths"),
+        ));
+    }
+    if spec.must_contain.is_empty() {
+        out.push(check(
+            format!("symbol.{sid}.review"),
+            &spec.severity,
+            true,
+            "review paths ok",
+        ));
+    }
+    out
+}
+
+fn git_sandbox(cwd: &Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
+        .current_dir(cwd)
+        .args(["-c", "commit.gpgsign=false"])
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "rgctl-test")
+        .env("GIT_AUTHOR_EMAIL", "rgctl-test@example.com")
+        .env("GIT_COMMITTER_NAME", "rgctl-test")
+        .env("GIT_COMMITTER_EMAIL", "rgctl-test@example.com")
+        .output()
+        .expect("spawn git")
 }
 
 fn check_pdg(sid: &str, ps: &PdgSpec, pdg: &Value) -> Vec<CheckResult> {
@@ -1393,7 +2700,7 @@ fn check_invariants(
                 continue;
             };
             let m = entry.match_spec();
-            let gql: BTreeSet<String> = index
+            let structured_callers: BTreeSet<String> = index
                 .callers_of(&m.name, m.class.as_deref())
                 .into_iter()
                 .map(|n| short_name(&n))
@@ -1420,10 +2727,10 @@ fn check_invariants(
                     out.push(check(
                         format!("invariant.B1.{sid}"),
                         &inv.b1.severity,
-                        gql == blast,
+                        structured_callers == blast,
                         format!(
-                            "gql_callers={:?} blast_callers={:?}",
-                            gql.iter().collect::<Vec<_>>(),
+                            "structured_callers={:?} blast_callers={:?}",
+                            structured_callers.iter().collect::<Vec<_>>(),
                             blast.iter().collect::<Vec<_>>()
                         ),
                     ));
@@ -1491,7 +2798,14 @@ fn check_invariants(
                     .collect();
                 let ast_missing: Vec<_> = expect
                     .iter()
-                    .filter(|c| !texts.iter().any(|t| t.contains(&format!("{c}("))))
+                    .filter(|c| {
+                        !texts.iter().any(|t| {
+                            let trimmed = t.trim();
+                            trimmed == c.as_str()
+                                || trimmed.starts_with(&format!("{c} "))
+                                || t.contains(&format!("{c}("))
+                        })
+                    })
                     .cloned()
                     .collect();
                 out.push(check(
@@ -1649,4 +2963,322 @@ fn check_invariants(
     }
 
     out
+}
+
+fn check_analytics(spec: &AnalyticsSpec, cwd: &Path) -> Vec<CheckResult> {
+    use rgctl::analysis::{
+        AnalysisResults, FlatGraphIndex, HarmonicCentrality, HyperBallHarmonic, PetGraphView,
+        default_behavioral_edges,
+    };
+    use rgctl_graph::{SNAPSHOT_FILE, SnapshotNodeStore};
+
+    let sev = spec.severity.as_str();
+    if sev == "unsupported" {
+        return vec![];
+    }
+    let mut out = Vec::new();
+    let snap = cwd.join(".rgctl").join(SNAPSHOT_FILE);
+    let store = match SnapshotNodeStore::open(&snap) {
+        Ok(store) => store,
+        Err(e) => {
+            return vec![check(
+                "analytics.snapshot",
+                sev,
+                false,
+                format!("open snapshot: {e}"),
+            )];
+        }
+    };
+    let Ok(view) = PetGraphView::from_snapshot_store(&store) else {
+        return vec![check("analytics.view", sev, false, "snapshot view failed")];
+    };
+    let analysis = AnalysisResults::load(&cwd.join(".rgctl/analysis_results.bin"));
+    let Ok(analysis) = analysis else {
+        return vec![check(
+            "analytics.results",
+            sev,
+            false,
+            "missing analysis_results.bin",
+        )];
+    };
+
+    let resolve = |name: &str| -> Option<uuid::Uuid> {
+        let nodes = store.mmap().columnar()?.find_nodes_by_name(name).ok()?;
+        let mut funcs: Vec<_> = nodes
+            .into_iter()
+            .filter(|n| n.node_type == rgctl_graph::schema::NodeType::Function)
+            .collect();
+        funcs.sort_by_key(|n| {
+            let path = n.file_path.as_deref().unwrap_or("");
+            usize::from(!path.contains("correctness"))
+        });
+        funcs.first().map(|n| n.id)
+    };
+
+    let (Some(root), Some(mid), Some(leaf)) =
+        (resolve(&spec.root), resolve(&spec.mid), resolve(&spec.leaf))
+    else {
+        return vec![check(
+            "analytics.symbols",
+            sev,
+            false,
+            format!("missing chain {} / {} / {}", spec.root, spec.mid, spec.leaf),
+        )];
+    };
+
+    let score = |id| analysis.get_centrality(id);
+    let (Some(root_c), Some(mid_c), Some(leaf_c)) = (score(root), score(mid), score(leaf)) else {
+        return vec![check(
+            "analytics.centrality",
+            sev,
+            false,
+            "centrality row missing for the chain",
+        )];
+    };
+    let near0 = |v: f32| v.abs() < 1e-4;
+    out.push(check(
+        "analytics.harmonic.order",
+        sev,
+        root_c.harmonic > mid_c.harmonic
+            && mid_c.harmonic > leaf_c.harmonic
+            && near0(leaf_c.harmonic),
+        format!(
+            "harmonic root={} mid={} leaf={}",
+            root_c.harmonic, mid_c.harmonic, leaf_c.harmonic
+        ),
+    ));
+    out.push(check(
+        "analytics.pagerank.order",
+        sev,
+        leaf_c.pagerank > mid_c.pagerank && mid_c.pagerank > root_c.pagerank,
+        format!(
+            "pagerank leaf={} mid={} root={}",
+            leaf_c.pagerank, mid_c.pagerank, root_c.pagerank
+        ),
+    ));
+    out.push(check(
+        "analytics.betweenness",
+        sev,
+        mid_c.betweenness > 0.0 && near0(root_c.betweenness) && near0(leaf_c.betweenness),
+        format!(
+            "betweenness root={} mid={} leaf={}",
+            root_c.betweenness, mid_c.betweenness, leaf_c.betweenness
+        ),
+    ));
+
+    let allowed = default_behavioral_edges();
+    let exact = HarmonicCentrality::compute(&view, allowed, 50_000);
+    let index = FlatGraphIndex::from_view(&view, allowed);
+    let hyper = HyperBallHarmonic::compute_flat(&index, 16);
+    let at = |id: uuid::Uuid| -> Option<usize> {
+        view.index_uuid_iter()
+            .find(|(_, uuid)| *uuid == id)
+            .map(|(idx, _)| idx.index())
+    };
+    let agreement = match (
+        exact.get(&root),
+        exact.get(&mid),
+        exact.get(&leaf),
+        at(root),
+        at(mid),
+        at(leaf),
+    ) {
+        (Some(er), Some(em), Some(el), Some(ri), Some(mi), Some(li)) => {
+            let exact_ok = *er > *em && *em > *el && el.abs() < 1e-6;
+            let hr = hyper.get(ri).copied().unwrap_or(0.0);
+            let hm = hyper.get(mi).copied().unwrap_or(0.0);
+            let hl = hyper.get(li).copied().unwrap_or(0.0);
+            let hyper_ok = hr > hm && hm > hl;
+            out.push(check(
+                "analytics.harmonic.hyperball",
+                sev,
+                exact_ok && hyper_ok,
+                format!("exact=({er},{em},{el}) hyper=({hr},{hm},{hl})"),
+            ));
+            true
+        }
+        _ => false,
+    };
+    if !agreement {
+        out.push(check(
+            "analytics.harmonic.hyperball",
+            sev,
+            false,
+            "exact or HyperBall scores missing for the chain",
+        ));
+    }
+
+    let plan_path = cwd.join(".rgctl/migration_plan.json");
+    let plan_ok = fs::read_to_string(&plan_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .is_some_and(|doc| json_has_positive_avg_harmonic(&doc));
+    out.push(check(
+        "analytics.migration_plan.avg_harmonic",
+        sev,
+        plan_ok,
+        "migration_plan.json avg_harmonic finite and > 0",
+    ));
+
+    if let Some(table) = analysis.community.as_ref() {
+        if spec.separate.len() == 2 {
+            let left = resolve(&spec.separate[0]).and_then(|id| analysis.get_community(id));
+            let right = resolve(&spec.separate[1]).and_then(|id| analysis.get_community(id));
+            let ok = match (left, right) {
+                (Some(a), Some(b)) => a != b,
+                _ => false,
+            };
+            out.push(check(
+                "analytics.communities.separate",
+                sev,
+                ok,
+                format!(
+                    "{:?} vs {:?} communities {left:?}/{right:?}",
+                    spec.separate[0], spec.separate[1]
+                ),
+            ));
+        }
+        let infra = table.infrastructure_community_id;
+        let (connected, conn_detail) =
+            match rgctl_analysis::community::build_community_neighbor_lists(&view, &store) {
+                Ok(neighbors) => {
+                    let mut groups: std::collections::HashMap<usize, Vec<usize>> =
+                        std::collections::HashMap::new();
+                    for (idx, id) in view.index_uuid_iter() {
+                        let Some(cid) = analysis.get_community(id) else {
+                            continue;
+                        };
+                        if Some(cid) == infra {
+                            continue;
+                        }
+                        groups.entry(cid).or_default().push(idx.index());
+                    }
+                    let mut disconn = None;
+                    for (cid, group) in &groups {
+                        if group.len() < 2 {
+                            continue;
+                        }
+                        let group_set: std::collections::HashSet<usize> =
+                            group.iter().copied().collect();
+                        let mut seen = std::collections::HashSet::from([group[0]]);
+                        let mut stack = vec![group[0]];
+                        while let Some(u) = stack.pop() {
+                            for &v in &neighbors[u] {
+                                if group_set.contains(&v) && seen.insert(v) {
+                                    stack.push(v);
+                                }
+                            }
+                        }
+                        if seen.len() != group.len() {
+                            disconn = Some(format!(
+                                "community {cid} (label={:?}) reached {}/{} members",
+                                table.label(*cid),
+                                seen.len(),
+                                group.len()
+                            ));
+                            break;
+                        }
+                    }
+                    match disconn {
+                        Some(msg) => (false, msg),
+                        None => (
+                            true,
+                            "each non-infrastructure community induces a connected subgraph on the community projection".to_string(),
+                        ),
+                    }
+                }
+                Err(e) => (false, format!("build_community_neighbor_lists failed: {e}")),
+            };
+        out.push(check(
+            "analytics.communities.connected",
+            sev,
+            connected,
+            conn_detail,
+        ));
+    } else {
+        out.push(check(
+            "analytics.communities",
+            sev,
+            false,
+            "community table missing",
+        ));
+    }
+    out
+}
+
+fn json_has_positive_avg_harmonic(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            if let Some(n) = map.get("avg_harmonic").and_then(|v| v.as_f64()) {
+                if n.is_finite() && n > 0.0 {
+                    return true;
+                }
+            }
+            map.values().any(json_has_positive_avg_harmonic)
+        }
+        Value::Array(rows) => rows.iter().any(json_has_positive_avg_harmonic),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod v2_schema {
+    use super::ExpectedFacts;
+
+    #[test]
+    fn v2_fields_deserialize() {
+        let raw = r#"{
+          "symbols": {
+            "over": {
+              "match": {"name": "process", "discriminator": "(int)", "line": 12},
+              "identity": {"discriminator": "(int)"},
+              "mro": {"overrides": ["process"]},
+              "slice": {"file": "src/A.java", "line": 4, "variable": "y", "must_exclude": ["99"]},
+              "flows": {"file": "src/A.java", "line": 4, "variable": "y", "must_contain": ["alias"]},
+              "mutations": {"type": "Order", "must_exclude": ["<init>"]},
+              "taint": {"sink": "sink", "min_flows": 1},
+              "clones": {"mode": "exact", "group_with": ["cloneA"], "not_grouped_with": ["sibling"]},
+              "semantic": {"query": "refund", "top3_contains": "processRefund", "neighbor_names": ["save"]},
+              "review": {"file": "src/A.java", "find": "a", "replace": "b", "must_contain": ["root"]}
+            }
+          },
+          "analytics": {
+            "root": "correctnessRoot",
+            "mid": "correctnessMid",
+            "leaf": "correctnessLeaf",
+            "separate": ["left", "right"]
+          }
+        }"#;
+        let facts: ExpectedFacts = serde_json::from_str(raw).expect("v2 facts");
+        let sym = facts.symbols.get("over").expect("symbol");
+        let matched = sym.match_spec();
+        assert_eq!(matched.discriminator.as_deref(), Some("(int)"));
+        assert_eq!(matched.line, Some(12));
+        assert_eq!(
+            sym.identity
+                .as_ref()
+                .and_then(|i| i.discriminator.as_deref()),
+            Some("(int)")
+        );
+        assert_eq!(
+            sym.mro.as_ref().map(|m| m.overrides.clone()),
+            Some(vec!["process".to_string()])
+        );
+        assert_eq!(
+            sym.slice.as_ref().map(|s| s.direction.as_str()),
+            Some("backward")
+        );
+        assert!(sym.flows.as_ref().is_some_and(|f| f.with_alias));
+        assert!(sym.mutations.as_ref().is_some_and(|m| m.exclude_ctors));
+        assert_eq!(sym.taint.as_ref().and_then(|t| t.min_flows), Some(1));
+        assert_eq!(sym.clones.as_ref().map(|c| c.mode.as_str()), Some("exact"));
+        assert!(sym.semantic.as_ref().is_some_and(|s| s.expand_neighbors));
+        assert_eq!(sym.review.as_ref().map(|r| r.find.as_str()), Some("a"));
+        let analytics = facts.analytics.as_ref().expect("analytics");
+        assert_eq!(analytics.root, "correctnessRoot");
+        assert_eq!(
+            analytics.separate,
+            ["left".to_string(), "right".to_string()]
+        );
+    }
 }

@@ -3,7 +3,10 @@
 use crate::plugin::Plugin;
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::{extract_name_from_node, node_to_location};
+use rgctl_plugin_helpers::{
+    declaration_header_signature, extract_name_from_node, node_to_location,
+    record_symbol_spans_from_source,
+};
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -129,7 +132,6 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("while_statement", HandlerMask::CFG_STMT),
     ("yield_each_statement", HandlerMask::CFG_STMT),
     ("yield_statement", HandlerMask::CFG_STMT),
-    ("superclass", HandlerMask::RELATION),
 ];
 
 const DART_CALL_KINDS: &[&str] = &[
@@ -188,25 +190,27 @@ fn push_type_symbol(
         Some(o) => format!("{o}.{name}"),
         None => name.clone(),
     };
+    let mut sym = Symbol {
+        name: name.clone(),
+        symbol_type,
+        qualified_name: Some(qn.clone()),
+        location: node_to_location(node, file_path),
+        signature: declaration_header_signature(node, source),
+        return_type: None,
+        parameters: vec![],
+        fields: vec![],
+        modifiers: vec![],
+        documentation: None,
+        metadata: serde_json::json!({
+            "language": "dart",
+            "kind": kind_meta,
+        }),
+        ..Default::default()
+    };
+    record_symbol_spans_from_source(&mut sym, node, source);
     ctx.symbols
         .push(rgctl_plugin_helpers::callable_identity::symbol(
-            Symbol {
-                name: name.clone(),
-                symbol_type,
-                qualified_name: Some(qn.clone()),
-                location: node_to_location(node, file_path),
-                signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-                return_type: None,
-                parameters: vec![],
-                fields: vec![],
-                modifiers: vec![],
-                documentation: None,
-                metadata: serde_json::json!({
-                    "language": "dart",
-                    "kind": kind_meta,
-                }),
-                ..Default::default()
-            },
+            sym,
             node,
             source,
             rgctl_plugin_helpers::callable_identity::Policy::Dart,
@@ -239,25 +243,31 @@ fn push_function(
         None => name.clone(),
     };
     let loc = ((node.end_position().row - node.start_position().row) + 1).max(1) as u32;
+    let mut sym = Symbol {
+        name: name.clone(),
+        symbol_type: SymbolType::Function,
+        qualified_name: Some(qn.clone()),
+        location: node_to_location(node, file_path),
+        signature: if kind_meta == "function_expression" {
+            None
+        } else {
+            declaration_header_signature(node, source)
+        },
+        return_type: None,
+        parameters: vec![],
+        fields: vec![],
+        modifiers: vec![],
+        documentation: None,
+        metadata: serde_json::json!({
+            "language": "dart",
+            "kind": kind_meta,
+        }),
+        ..Default::default()
+    };
+    record_symbol_spans_from_source(&mut sym, node, source);
     ctx.symbols
         .push(rgctl_plugin_helpers::callable_identity::symbol(
-            Symbol {
-                name: name.clone(),
-                symbol_type: SymbolType::Function,
-                qualified_name: Some(qn.clone()),
-                location: node_to_location(node, file_path),
-                signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-                return_type: None,
-                parameters: vec![],
-                fields: vec![],
-                modifiers: vec![],
-                documentation: None,
-                metadata: serde_json::json!({
-                    "language": "dart",
-                    "kind": kind_meta,
-                }),
-                ..Default::default()
-            },
+            sym,
             node,
             source,
             rgctl_plugin_helpers::callable_identity::Policy::Dart,
@@ -275,6 +285,42 @@ fn push_function(
         f.complexity.loc = loc;
     }
     true
+}
+
+fn collect_dart_type_targets(node: Node, source: &[u8], skip_mixins: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = Vec::new();
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.children(&mut cursor).collect();
+    for ch in children.into_iter().rev() {
+        stack.push(ch);
+    }
+    while let Some(cur) = stack.pop() {
+        let kind = cur.kind();
+        if kind == "type_arguments" || (skip_mixins && kind == "mixins") {
+            continue;
+        }
+        if kind == "type_identifier" {
+            if let Ok(text) = cur.utf8_text(source) {
+                let t = text.trim();
+                if !t.is_empty() && !out.iter().any(|existing| existing == t) {
+                    out.push(t.to_string());
+                }
+            }
+            continue;
+        }
+        let mut c = cur.walk();
+        let nested: Vec<_> = cur.children(&mut c).collect();
+        for ch in nested.into_iter().rev() {
+            stack.push(ch);
+        }
+    }
+    out
+}
+
+fn dart_class_has_interface_keyword(node: Node) -> bool {
+    let mut c = node.walk();
+    node.children(&mut c).any(|ch| ch.kind() == "interface")
 }
 
 fn import_uri(node: Node, source: &[u8]) -> Option<String> {
@@ -315,6 +361,7 @@ pub fn extract_all_single_pass(
     let mut relations = Vec::new();
     let mut pending_calls: Vec<PendingCall<'_>> = Vec::new();
     let mut depth_warned = false;
+    let mut lambda_idx: u32 = 0;
 
     let mut stack = vec![Visit::Pre(root, 0)];
 
@@ -355,32 +402,24 @@ pub fn extract_all_single_pass(
                 let mut pushed_scope = false;
 
                 match kind {
-                    "superclass" => {
-                        if let (Some(owner), Some(parent)) =
-                            (ctx.scopes.current_type(), node.child_by_field_name("type"))
-                        {
-                            let parent = parent.utf8_text(source)?.to_string();
-                            relations.push(Relation {
-                                from: owner.qualified_prefix.clone(),
-                                to: rgctl_plugin_helpers::simple_type_name(&parent),
-                                relation_type: RelationType::Extends,
-                                location: node_to_location(node, &file_path_str),
-                                metadata: serde_json::json!({"language":"dart"}),
-                                to_qualified_hint: Some(parent),
-                                to_type_hint: None,
-                                ..Default::default()
-                            });
-                        }
-                    }
                     "class_declaration" => {
+                        let is_iface = dart_class_has_interface_keyword(node);
                         pushed_scope = push_type_symbol(
                             &mut ctx,
                             node,
                             source,
                             &file_path_str,
-                            SymbolType::Class,
-                            "class",
-                            ScopeKind::Class,
+                            if is_iface {
+                                SymbolType::Interface
+                            } else {
+                                SymbolType::Class
+                            },
+                            if is_iface { "interface_class" } else { "class" },
+                            if is_iface {
+                                ScopeKind::Interface
+                            } else {
+                                ScopeKind::Class
+                            },
                         );
                     }
                     "enum_declaration" => {
@@ -435,15 +474,12 @@ pub fn extract_all_single_pass(
                     "type_alias" => {
                         if let Some(name) = extract_name_from_node(node, source).ok().flatten() {
                             let qn = name.clone();
-                            ctx.symbols.push(Symbol {
+                            let mut sym = Symbol {
                                 name: name.clone(),
                                 symbol_type: SymbolType::TypeAlias,
                                 qualified_name: Some(qn),
                                 location: node_to_location(node, &file_path_str),
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.trim().to_string()),
+                                signature: declaration_header_signature(node, source),
                                 return_type: None,
                                 parameters: vec![],
                                 fields: vec![],
@@ -454,7 +490,9 @@ pub fn extract_all_single_pass(
                                     "kind": "type_alias",
                                 }),
                                 ..Default::default()
-                            });
+                            };
+                            record_symbol_spans_from_source(&mut sym, node, source);
+                            ctx.symbols.push(sym);
                         }
                     }
                     "enum_constant" => {
@@ -467,31 +505,30 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            ctx.symbols.push({
-                                let mut field_symbol = Symbol {
-                                    name,
-                                    symbol_type: SymbolType::Variable,
-                                    qualified_name: Some(qn),
-                                    location: node_to_location(node, &file_path_str),
-                                    signature: None,
-                                    return_type: None,
-                                    parameters: vec![],
-                                    fields: vec![],
-                                    modifiers: vec![],
-                                    documentation: None,
-                                    metadata: serde_json::json!({
-                                        "language": "dart",
-                                        "kind": "enum_constant",
-                                    }),
-                                    ..Default::default()
-                                };
-                                rgctl_plugin_helpers::spans::field_symbol_spans(
-                                    &mut field_symbol,
-                                    node,
-                                    source,
-                                );
-                                field_symbol
-                            });
+                            let mut field_symbol = Symbol {
+                                name,
+                                symbol_type: SymbolType::Variable,
+                                qualified_name: Some(qn),
+                                location: node_to_location(node, &file_path_str),
+                                signature: None,
+                                return_type: None,
+                                parameters: vec![],
+                                fields: vec![],
+                                modifiers: vec![],
+                                documentation: None,
+                                metadata: serde_json::json!({
+                                    "language": "dart",
+                                    "kind": "enum_constant",
+                                }),
+                                ..Default::default()
+                            };
+                            record_symbol_spans_from_source(&mut field_symbol, node, source);
+                            rgctl_plugin_helpers::spans::field_symbol_spans(
+                                &mut field_symbol,
+                                node,
+                                source,
+                            );
+                            ctx.symbols.push(field_symbol);
                         }
                     }
                     "function_declaration"
@@ -538,34 +575,30 @@ pub fn extract_all_single_pass(
                                     Some(o) => format!("{o}.{name}"),
                                     None => name.clone(),
                                 };
-                                ctx.symbols.push({
-                                    let mut field_symbol = Symbol {
-                                        name,
-                                        symbol_type: SymbolType::Variable,
-                                        qualified_name: Some(qn),
-                                        location: node_to_location(node, &file_path_str),
-                                        signature: node
-                                            .utf8_text(source)
-                                            .ok()
-                                            .map(|s| s.trim().to_string()),
-                                        return_type: None,
-                                        parameters: vec![],
-                                        fields: vec![],
-                                        modifiers: vec![],
-                                        documentation: None,
-                                        metadata: serde_json::json!({
-                                            "language": "dart",
-                                            "kind": meta,
-                                        }),
-                                        ..Default::default()
-                                    };
-                                    rgctl_plugin_helpers::spans::field_symbol_spans(
-                                        &mut field_symbol,
-                                        node,
-                                        source,
-                                    );
-                                    field_symbol
-                                });
+                                let mut field_symbol = Symbol {
+                                    name,
+                                    symbol_type: SymbolType::Variable,
+                                    qualified_name: Some(qn),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: declaration_header_signature(node, source),
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "dart",
+                                        "kind": meta,
+                                    }),
+                                    ..Default::default()
+                                };
+                                record_symbol_spans_from_source(&mut field_symbol, node, source);
+                                rgctl_plugin_helpers::spans::field_symbol_spans(
+                                    &mut field_symbol,
+                                    node,
+                                    source,
+                                );
+                                ctx.symbols.push(field_symbol);
                             } else {
                                 pushed_scope = push_function(
                                     &mut ctx,
@@ -579,8 +612,8 @@ pub fn extract_all_single_pass(
                         }
                     }
                     "function_expression" => {
-                        let line = node.start_position().row + 1;
-                        let name = format!("<lambda@{line}>");
+                        lambda_idx += 1;
+                        let name = format!("<lambda#{lambda_idx}>");
                         pushed_scope = push_function(
                             &mut ctx,
                             node,
@@ -598,7 +631,7 @@ pub fn extract_all_single_pass(
                                 if parent.kind() == "import_or_export" {
                                     // handled by parent
                                 } else if let Some(uri) = import_uri(node, source) {
-                                    ctx.symbols.push(Symbol {
+                                    let mut sym = Symbol {
                                         name: uri.clone(),
                                         symbol_type: SymbolType::Import,
                                         qualified_name: Some(uri),
@@ -614,11 +647,13 @@ pub fn extract_all_single_pass(
                                             "kind": "import",
                                         }),
                                         ..Default::default()
-                                    });
+                                    };
+                                    record_symbol_spans_from_source(&mut sym, node, source);
+                                    ctx.symbols.push(sym);
                                 }
                             }
                         } else if let Some(uri) = import_uri(node, source) {
-                            ctx.symbols.push(Symbol {
+                            let mut sym = Symbol {
                                 name: uri.clone(),
                                 symbol_type: SymbolType::Import,
                                 qualified_name: Some(uri),
@@ -634,7 +669,60 @@ pub fn extract_all_single_pass(
                                     "kind": "import",
                                 }),
                                 ..Default::default()
-                            });
+                            };
+                            record_symbol_spans_from_source(&mut sym, node, source);
+                            ctx.symbols.push(sym);
+                        }
+                    }
+                    "superclass" => {
+                        if let Some(owner) = ctx
+                            .scopes
+                            .current_type()
+                            .map(|t| t.qualified_prefix.clone())
+                        {
+                            for target in collect_dart_type_targets(node, source, true) {
+                                relations.push(Relation {
+                                    from: owner.clone(),
+                                    to: target.clone(),
+                                    relation_type: RelationType::Extends,
+                                    location: node_to_location(node, &file_path_str),
+                                    metadata: serde_json::json!({
+                                        "language": "dart",
+                                        "kind": "extends",
+                                    }),
+                                    to_qualified_hint: Some(target),
+                                    to_type_hint: None,
+                                    ..Default::default()
+                                });
+                            }
+                        }
+                    }
+                    "interfaces" | "mixins" => {
+                        if let Some(owner) = ctx
+                            .scopes
+                            .current_type()
+                            .map(|t| t.qualified_prefix.clone())
+                        {
+                            let meta_kind = if kind == "mixins" {
+                                "mixin"
+                            } else {
+                                "implements"
+                            };
+                            for target in collect_dart_type_targets(node, source, false) {
+                                relations.push(Relation {
+                                    from: owner.clone(),
+                                    to: target.clone(),
+                                    relation_type: RelationType::Implements,
+                                    location: node_to_location(node, &file_path_str),
+                                    metadata: serde_json::json!({
+                                        "language": "dart",
+                                        "kind": meta_kind,
+                                    }),
+                                    to_qualified_hint: Some(target),
+                                    to_type_hint: None,
+                                    ..Default::default()
+                                });
+                            }
                         }
                     }
                     _ => {}
@@ -812,6 +900,56 @@ class Outer {
             bar.qualified_name.as_deref(),
             Some("Foo.bar"),
             "method must be qualified under enclosing class"
+        );
+    }
+
+    #[test]
+    fn dart_extracts_extends_implements_and_mixins() {
+        let src = r#"
+abstract interface class OrderRepo {
+  void save();
+}
+mixin Auditable {
+  void audit() {}
+}
+class BaseLedger {
+  void save() {}
+}
+class OrderLedger extends BaseLedger with Auditable implements OrderRepo {
+  void run() {
+    save();
+  }
+}
+"#;
+        let plugin = Plugin::new().unwrap();
+        let path = PathBuf::from("ledger.dart");
+        let result = extract_all_single_pass(&plugin, &path, src.as_bytes()).unwrap();
+        assert!(
+            result.relations.iter().any(|r| {
+                r.relation_type == RelationType::Extends
+                    && r.from == "OrderLedger"
+                    && r.to == "BaseLedger"
+            }),
+            "expected OrderLedger Extends BaseLedger, got {:?}",
+            result.relations
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                r.relation_type == RelationType::Implements
+                    && r.from == "OrderLedger"
+                    && r.to == "Auditable"
+            }),
+            "expected OrderLedger Implements Auditable, got {:?}",
+            result.relations
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                r.relation_type == RelationType::Implements
+                    && r.from == "OrderLedger"
+                    && r.to == "OrderRepo"
+            }),
+            "expected OrderLedger Implements OrderRepo, got {:?}",
+            result.relations
         );
     }
 }

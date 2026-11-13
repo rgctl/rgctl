@@ -1,0 +1,260 @@
+{
+  "schema_version": 2,
+  "language": "swift",
+  "project": "correctness-swift",
+  "graph": {
+    "severity": "required",
+    "min_functions": 18,
+    "min_calls_edges": 10,
+    "forbidden_edges": [
+      {
+        "from": "correctnessLeaf",
+        "to": "correctnessRoot"
+      }
+    ]
+  },
+  "symbols": {
+    "correctnessLeaf": {
+      "match": {
+        "name": "correctnessLeaf",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [],
+      "exact_callers": ["correctnessMid"],
+      "blast": {
+        "exact_direct_callers": ["correctnessMid"]
+      },
+      "cfg": {
+        "min_blocks": 1
+      },
+      "pdg": {
+        "exact_data_deps": 0
+      }
+    },
+    "correctnessMid": {
+      "match": {
+        "name": "correctnessMid",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": ["correctnessLeaf"],
+      "exact_callers": ["correctnessRoot"],
+      "blast": {
+        "exact_direct_callers": ["correctnessRoot"]
+      },
+      "cfg": {
+        "min_blocks": 3,
+        "statements_contain": ["correctnessLeaf"]
+      }
+    },
+    "correctnessRoot": {
+      "match": {
+        "name": "correctnessRoot",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": ["correctnessMid"],
+      "exact_callers": [],
+      "cfg": {
+        "min_blocks": 3,
+        "statements_contain": ["correctnessMid"]
+      }
+    },
+    "correctnessShared": {
+      "match": {
+        "name": "correctnessShared",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callers": ["correctnessLeft", "correctnessRight"],
+      "blast": {
+        "exact_direct_callers": ["correctnessLeft", "correctnessRight"]
+      }
+    },
+    "cfgSwitch": {
+      "match": {
+        "name": "cfgSwitch",
+        "class": "CfgFeatures"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "min_blocks": 3
+      }
+    },
+    "cfgForLoop": {
+      "match": {
+        "name": "cfgForLoop",
+        "class": "CfgFeatures"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "min_blocks": 3
+      }
+    },
+    "v2OverloadInt": {
+      "match": {
+        "name": "v2Overload",
+        "class": "V2OrderLedger",
+        "discriminator": "(x: Int"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "v2Overload",
+        "discriminator": "(x: Int",
+        "file_suffix": "CorrectnessHarness.swift",
+        "language": "swift"
+      },
+      "exact_callees": ["v2FreeHelper"]
+    },
+    "v2OverloadStr": {
+      "match": {
+        "name": "v2Overload",
+        "class": "V2OrderLedger",
+        "discriminator": "String"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "v2Overload",
+        "discriminator": "String",
+        "file_suffix": "CorrectnessHarness.swift",
+        "language": "swift"
+      },
+      "exact_callees": ["v2StringTarget"]
+    },
+    "v2AuditWeightImpl": {
+      "match": {
+        "name": "auditWeight",
+        "class": "V2OrderLedger",
+        "discriminator": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": ["readBalance"],
+      "mro": {
+        "extends": ["V2BaseLedger"],
+        "implements": ["V2AuditPolicy"],
+        "overrides": ["auditWeight"]
+      }
+    },
+    "v2SliceFlowProbe": {
+      "match": {
+        "name": "v2SliceFlowProbe",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "slice": {
+        "file": "src/CorrectnessHarness.swift",
+        "line": 49,
+        "variable": "finalOut",
+        "must_contain": ["seedInput", "stepVal"],
+        "must_exclude": ["999"]
+      },
+      "flows": {
+        "file": "src/CorrectnessHarness.swift",
+        "line": 47,
+        "variable": "stepVal",
+        "must_contain": ["aliasVal", "finalOut"]
+      }
+    },
+    "v2TaintExec": {
+      "match": {
+        "name": "taintUnsafeExec",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "taint": {
+        "sink": "sqlite3_exec",
+        "source": "external",
+        "min_flows": 1,
+        "must_contain": ["taintUnsafeExec"]
+      }
+    },
+    "v2CloneExactA": {
+      "match": {
+        "name": "v2CloneExact",
+        "class": "V2CloneCarrierA"
+      },
+      "severity": "required",
+      "unique": true,
+      "clones": {
+        "mode": "exact",
+        "group_with": ["v2CloneExact"],
+        "not_grouped_with": ["correctnessLeaf"]
+      }
+    },
+    "v2SemanticLedger": {
+      "match": {
+        "name": "reconcileChargebackLedger",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": ["archiveChargebackAudit"],
+      "semantic": {
+        "query": "reconcile chargeback ledger",
+        "top3_contains": "reconcileChargebackLedger",
+        "neighbor_names": ["archiveChargebackAudit"]
+      },
+      "review": {
+        "file": "src/CorrectnessHarness.swift",
+        "find": "return 42",
+        "replace": "return 43",
+        "must_contain": ["correctnessMid"]
+      }
+    }
+  },
+  "invariants": {
+    "B1_blast_vs_calls": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": ["correctnessLeaf", "correctnessMid", "correctnessShared"]
+    },
+    "B2_gql_calls_nonzero": {
+      "enabled": true,
+      "severity": "required"
+    },
+    "B5_inspect_cfg_present": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": ["correctnessRoot", "correctnessMid", "correctnessLeaf"]
+    },
+    "B6_cfg_calls_subset_of_calls_edges": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": ["correctnessRoot", "correctnessMid"]
+    },
+    "B7_pdg_lines_subset_cfg": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": ["correctnessRoot", "correctnessMid", "correctnessLeaf"]
+    },
+    "B8_dom_blocks_match_cfg": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": ["correctnessRoot", "correctnessMid", "correctnessLeaf"]
+    },
+    "B9_blast_target_name": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": ["correctnessRoot", "correctnessMid", "correctnessLeaf"]
+    }
+  },
+  "analytics": {
+    "severity": "required",
+    "root": "correctnessRoot",
+    "mid": "correctnessMid",
+    "leaf": "correctnessLeaf",
+    "separate": ["cliqueAlphaA", "cliqueBetaA"]
+  }
+}

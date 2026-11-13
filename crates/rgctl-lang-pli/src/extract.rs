@@ -281,7 +281,59 @@ fn extract(file_path: &Path, source: &[u8]) -> ExtractAllResult {
         }
     }
 
+    populate_line_byte_spans(source, &mut symbols);
     ExtractAllResult::from_parts(symbols, relations)
+}
+
+fn populate_line_byte_spans(source: &[u8], symbols: &mut [Symbol]) {
+    let mut line_ranges: Vec<(u32, u32)> = Vec::new();
+    let mut start = 0usize;
+    for (idx, &b) in source.iter().enumerate() {
+        if b == b'\n' {
+            let mut end = idx;
+            if end > start && source[end - 1] == b'\r' {
+                end -= 1;
+            }
+            line_ranges.push((start as u32, end as u32));
+            start = idx + 1;
+        }
+    }
+    if start < source.len() || line_ranges.is_empty() {
+        let mut end = source.len();
+        if end > start && source[end - 1] == b'\r' {
+            end -= 1;
+        }
+        line_ranges.push((start as u32, end as u32));
+    }
+
+    for sym in symbols {
+        let sl = sym.location.start_line.max(1);
+        let el = sym.location.end_line.max(sl);
+        let Some(&(sb, _)) = line_ranges.get(sl - 1) else {
+            continue;
+        };
+        let eb = line_ranges
+            .get((el - 1).min(line_ranges.len().saturating_sub(1)))
+            .map(|&(_, e)| e)
+            .unwrap_or(sb)
+            .max(sb);
+        sym.start_byte = Some(sb);
+        sym.end_byte = Some(eb);
+        let needle = sym.name.as_bytes();
+        let hay = source.get(sb as usize..eb as usize).unwrap_or(&[]);
+        if !needle.is_empty()
+            && hay.len() >= needle.len()
+            && let Some(pos) = hay
+                .windows(needle.len())
+                .position(|w| w.eq_ignore_ascii_case(needle))
+        {
+            if let Ok(rel) = u16::try_from(pos) {
+                sym.name_rel_offset = Some(rel);
+            } else {
+                sym.name_span_overflow = Some((pos as u32, needle.len() as u32));
+            }
+        }
+    }
 }
 
 /// Strip single-line and multi-line `/* ... */` comments into `out` while preserving

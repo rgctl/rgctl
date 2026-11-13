@@ -3,7 +3,10 @@
 use crate::plugin::Plugin;
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::{extract_name_from_node, node_to_location};
+use rgctl_plugin_helpers::{
+    declaration_header_signature, extract_name_from_node, node_to_location, record_call_site_spans,
+    record_symbol_spans_from_source,
+};
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -143,25 +146,27 @@ fn push_type_symbol(
         Some(o) => format!("{o}.{name}"),
         None => name.clone(),
     };
+    let mut sym = Symbol {
+        name: name.clone(),
+        symbol_type,
+        qualified_name: Some(qn.clone()),
+        location: node_to_location(node, file_path),
+        signature: declaration_header_signature(node, source),
+        return_type: None,
+        parameters: vec![],
+        fields: vec![],
+        modifiers: vec![],
+        documentation: None,
+        metadata: serde_json::json!({
+            "language": "scala",
+            "kind": kind_meta,
+        }),
+        ..Default::default()
+    };
+    record_symbol_spans_from_source(&mut sym, node, source);
     ctx.symbols
         .push(rgctl_plugin_helpers::callable_identity::symbol(
-            Symbol {
-                name: name.clone(),
-                symbol_type,
-                qualified_name: Some(qn.clone()),
-                location: node_to_location(node, file_path),
-                signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-                return_type: None,
-                parameters: vec![],
-                fields: vec![],
-                modifiers: vec![],
-                documentation: None,
-                metadata: serde_json::json!({
-                    "language": "scala",
-                    "kind": kind_meta,
-                }),
-                ..Default::default()
-            },
+            sym,
             node,
             source,
             rgctl_plugin_helpers::callable_identity::Policy::Scala,
@@ -196,29 +201,74 @@ fn push_named_symbol(
         Some(o) => format!("{o}.{name}"),
         None => name.clone(),
     };
+    let mut sym = Symbol {
+        name,
+        symbol_type,
+        qualified_name: Some(qn),
+        location: node_to_location(node, file_path),
+        signature: declaration_header_signature(node, source),
+        return_type: None,
+        parameters: vec![],
+        fields: vec![],
+        modifiers: vec![],
+        documentation: None,
+        metadata: serde_json::json!({
+            "language": "scala",
+            "kind": kind_meta,
+        }),
+        ..Default::default()
+    };
+    record_symbol_spans_from_source(&mut sym, node, source);
     ctx.symbols
         .push(rgctl_plugin_helpers::callable_identity::symbol(
-            Symbol {
-                name,
-                symbol_type,
-                qualified_name: Some(qn),
-                location: node_to_location(node, file_path),
-                signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-                return_type: None,
-                parameters: vec![],
-                fields: vec![],
-                modifiers: vec![],
-                documentation: None,
-                metadata: serde_json::json!({
-                    "language": "scala",
-                    "kind": kind_meta,
-                }),
-                ..Default::default()
-            },
+            sym,
             node,
             source,
             rgctl_plugin_helpers::callable_identity::Policy::Scala,
         ));
+}
+
+fn collect_scala_supertypes(node: Node, source: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = Vec::new();
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.children(&mut cursor).collect();
+    for ch in children.into_iter().rev() {
+        stack.push(ch);
+    }
+    while let Some(cur) = stack.pop() {
+        let kind = cur.kind();
+        if matches!(
+            kind,
+            "type_arguments" | "arguments" | "template_body" | "block"
+        ) {
+            continue;
+        }
+        if kind == "stable_type_identifier" {
+            if let Ok(text) = cur.utf8_text(source) {
+                let simple = text.rsplit('.').next().unwrap_or(text).trim();
+                if !simple.is_empty() && !out.iter().any(|e| e == simple) {
+                    out.push(simple.to_string());
+                }
+            }
+            continue;
+        }
+        if kind == "type_identifier" {
+            if let Ok(text) = cur.utf8_text(source) {
+                let t = text.trim();
+                if !t.is_empty() && !out.iter().any(|e| e == t) {
+                    out.push(t.to_string());
+                }
+            }
+            continue;
+        }
+        let mut c = cur.walk();
+        let nested: Vec<_> = cur.children(&mut c).collect();
+        for ch in nested.into_iter().rev() {
+            stack.push(ch);
+        }
+    }
+    out
 }
 
 /// Single iterative DFS: symbols + deferred calls + complexity.
@@ -350,28 +400,27 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
+                            let mut sym = Symbol {
+                                name: name.clone(),
+                                symbol_type: SymbolType::Function,
+                                qualified_name: Some(qn.clone()),
+                                location: node_to_location(node, &file_path_str),
+                                signature: declaration_header_signature(node, source),
+                                return_type: None,
+                                parameters: vec![],
+                                fields: vec![],
+                                modifiers: vec![],
+                                documentation: None,
+                                metadata: serde_json::json!({
+                                    "language": "scala",
+                                    "kind": "given",
+                                }),
+                                ..Default::default()
+                            };
+                            record_symbol_spans_from_source(&mut sym, node, source);
                             ctx.symbols
                                 .push(rgctl_plugin_helpers::callable_identity::symbol(
-                                    Symbol {
-                                        name: name.clone(),
-                                        symbol_type: SymbolType::Function,
-                                        qualified_name: Some(qn.clone()),
-                                        location: node_to_location(node, &file_path_str),
-                                        signature: node
-                                            .utf8_text(source)
-                                            .ok()
-                                            .map(|s| s.trim().to_string()),
-                                        return_type: None,
-                                        parameters: vec![],
-                                        fields: vec![],
-                                        modifiers: vec![],
-                                        documentation: None,
-                                        metadata: serde_json::json!({
-                                            "language": "scala",
-                                            "kind": "given",
-                                        }),
-                                        ..Default::default()
-                                    },
+                                    sym,
                                     node,
                                     source,
                                     rgctl_plugin_helpers::callable_identity::Policy::Scala,
@@ -389,28 +438,27 @@ pub fn extract_all_single_pass(
                             // Anonymous given — still enter a function-like scope for calls.
                             let name = format!("given${}", ctx.symbols.len());
                             let qn = name.clone();
+                            let mut sym = Symbol {
+                                name: name.clone(),
+                                symbol_type: SymbolType::Function,
+                                qualified_name: Some(qn.clone()),
+                                location: node_to_location(node, &file_path_str),
+                                signature: declaration_header_signature(node, source),
+                                return_type: None,
+                                parameters: vec![],
+                                fields: vec![],
+                                modifiers: vec![],
+                                documentation: None,
+                                metadata: serde_json::json!({
+                                    "language": "scala",
+                                    "kind": "given",
+                                }),
+                                ..Default::default()
+                            };
+                            record_symbol_spans_from_source(&mut sym, node, source);
                             ctx.symbols
                                 .push(rgctl_plugin_helpers::callable_identity::symbol(
-                                    Symbol {
-                                        name: name.clone(),
-                                        symbol_type: SymbolType::Function,
-                                        qualified_name: Some(qn.clone()),
-                                        location: node_to_location(node, &file_path_str),
-                                        signature: node
-                                            .utf8_text(source)
-                                            .ok()
-                                            .map(|s| s.trim().to_string()),
-                                        return_type: None,
-                                        parameters: vec![],
-                                        fields: vec![],
-                                        modifiers: vec![],
-                                        documentation: None,
-                                        metadata: serde_json::json!({
-                                            "language": "scala",
-                                            "kind": "given",
-                                        }),
-                                        ..Default::default()
-                                    },
+                                    sym,
                                     node,
                                     source,
                                     rgctl_plugin_helpers::callable_identity::Policy::Scala,
@@ -448,32 +496,31 @@ pub fn extract_all_single_pass(
                             };
                             let loc = ((node.end_position().row - node.start_position().row) + 1)
                                 .max(1) as u32;
+                            let mut sym = Symbol {
+                                name: name.clone(),
+                                symbol_type: SymbolType::Function,
+                                qualified_name: Some(qn.clone()),
+                                location: node_to_location(node, &file_path_str),
+                                signature: declaration_header_signature(node, source),
+                                return_type: None,
+                                parameters: vec![],
+                                fields: vec![],
+                                modifiers: vec![],
+                                documentation: None,
+                                metadata: serde_json::json!({
+                                    "language": "scala",
+                                    "kind": if kind == "function_declaration" {
+                                        "function_decl"
+                                    } else {
+                                        "function"
+                                    },
+                                }),
+                                ..Default::default()
+                            };
+                            record_symbol_spans_from_source(&mut sym, node, source);
                             ctx.symbols
                                 .push(rgctl_plugin_helpers::callable_identity::symbol(
-                                    Symbol {
-                                        name: name.clone(),
-                                        symbol_type: SymbolType::Function,
-                                        qualified_name: Some(qn.clone()),
-                                        location: node_to_location(node, &file_path_str),
-                                        signature: node
-                                            .utf8_text(source)
-                                            .ok()
-                                            .map(|s| s.trim().to_string()),
-                                        return_type: None,
-                                        parameters: vec![],
-                                        fields: vec![],
-                                        modifiers: vec![],
-                                        documentation: None,
-                                        metadata: serde_json::json!({
-                                            "language": "scala",
-                                            "kind": if kind == "function_declaration" {
-                                                "function_decl"
-                                            } else {
-                                                "function"
-                                            },
-                                        }),
-                                        ..Default::default()
-                                    },
+                                    sym,
                                     node,
                                     source,
                                     rgctl_plugin_helpers::callable_identity::Policy::Scala,
@@ -511,28 +558,27 @@ pub fn extract_all_single_pass(
                         };
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
+                        let mut sym = Symbol {
+                            name: name.clone(),
+                            symbol_type: SymbolType::Function,
+                            qualified_name: Some(qn.clone()),
+                            location: node_to_location(node, &file_path_str),
+                            signature: None,
+                            return_type: None,
+                            parameters: vec![],
+                            fields: vec![],
+                            modifiers: vec![],
+                            documentation: None,
+                            metadata: serde_json::json!({
+                                "language": "scala",
+                                "kind": "lambda",
+                            }),
+                            ..Default::default()
+                        };
+                        record_symbol_spans_from_source(&mut sym, node, source);
                         ctx.symbols
                             .push(rgctl_plugin_helpers::callable_identity::symbol(
-                                Symbol {
-                                    name: name.clone(),
-                                    symbol_type: SymbolType::Function,
-                                    qualified_name: Some(qn.clone()),
-                                    location: node_to_location(node, &file_path_str),
-                                    signature: node
-                                        .utf8_text(source)
-                                        .ok()
-                                        .map(|s| s.trim().to_string()),
-                                    return_type: None,
-                                    parameters: vec![],
-                                    fields: vec![],
-                                    modifiers: vec![],
-                                    documentation: None,
-                                    metadata: serde_json::json!({
-                                        "language": "scala",
-                                        "kind": "lambda",
-                                    }),
-                                    ..Default::default()
-                                },
+                                sym,
                                 node,
                                 source,
                                 rgctl_plugin_helpers::callable_identity::Policy::Scala,
@@ -584,7 +630,7 @@ pub fn extract_all_single_pass(
                                 .ok()
                                 .map(|s| s.trim().trim_start_matches(keyword).trim().to_string())
                                 .unwrap_or(name);
-                            ctx.symbols.push(Symbol {
+                            let mut sym = Symbol {
                                 name: full.clone(),
                                 symbol_type: SymbolType::Import,
                                 qualified_name: Some(full),
@@ -600,25 +646,38 @@ pub fn extract_all_single_pass(
                                     "kind": keyword,
                                 }),
                                 ..Default::default()
-                            });
+                            };
+                            record_symbol_spans_from_source(&mut sym, node, source);
+                            ctx.symbols.push(sym);
                         }
                     }
                     "extends_clause" | "derives_clause" => {
                         if let Some(from_type) = ctx.scopes.current_type() {
                             let from = from_type.qualified_prefix.clone();
-                            if let Some(base) = node
-                                .child_by_field_name("type")
-                                .and_then(|n| n.utf8_text(source).ok())
-                                .map(str::to_owned)
-                                .or_else(|| extract_name_from_node(node, source).ok().flatten())
+                            let from_is_interface = from_type.kind == ScopeKind::Interface;
+                            let same_file_interfaces: std::collections::HashSet<&str> = ctx
+                                .symbols
+                                .iter()
+                                .filter(|s| s.symbol_type == SymbolType::Interface)
+                                .map(|s| s.name.as_str())
+                                .collect();
+                            for (idx, base) in collect_scala_supertypes(node, source)
+                                .into_iter()
+                                .enumerate()
                             {
                                 let rel_ty = if kind == "derives_clause" {
+                                    RelationType::Implements
+                                } else if from_is_interface {
+                                    RelationType::Extends
+                                } else if same_file_interfaces.contains(base.as_str()) || idx > 0 {
+                                    // In Scala, a class has at most one superclass (always at idx == 0);
+                                    // `with Trait1 with Trait2` (idx > 0) or a known trait is `Implements`.
                                     RelationType::Implements
                                 } else {
                                     RelationType::Extends
                                 };
-                                relations.push(Relation {
-                                    from,
+                                let mut rel = Relation {
+                                    from: from.clone(),
                                     to: base.clone(),
                                     relation_type: rel_ty,
                                     location: node_to_location(node, &file_path_str),
@@ -629,7 +688,9 @@ pub fn extract_all_single_pass(
                                     to_qualified_hint: Some(base),
                                     to_type_hint: None,
                                     ..Default::default()
-                                });
+                                };
+                                record_call_site_spans(&mut rel, node);
+                                relations.push(rel);
                             }
                         }
                     }
@@ -894,6 +955,42 @@ class Foo extends Serializable
             Some("(1L)"),
             "expected arguments metadata: {:?}",
             ann.metadata
+        );
+    }
+
+    #[test]
+    fn scala_extracts_extends_and_with_traits() {
+        let src = r#"
+trait AuditPolicy {
+  def auditWeight(): Int
+}
+class BaseLedger {
+  def baseFee(): Int = 5
+}
+class OrderLedger extends BaseLedger with AuditPolicy {
+  override def auditWeight(): Int = baseFee()
+}
+"#;
+        let plugin = Plugin::new().unwrap();
+        let path = PathBuf::from("ledger.scala");
+        let result = extract_all_single_pass(&plugin, &path, src.as_bytes()).unwrap();
+        assert!(
+            result.relations.iter().any(|r| {
+                r.from == "OrderLedger"
+                    && r.to == "BaseLedger"
+                    && r.relation_type == RelationType::Extends
+            }),
+            "expected OrderLedger -[Extends]-> BaseLedger, got {:?}",
+            result.relations
+        );
+        assert!(
+            result.relations.iter().any(|r| {
+                r.from == "OrderLedger"
+                    && r.to == "AuditPolicy"
+                    && r.relation_type == RelationType::Implements
+            }),
+            "expected OrderLedger -[Implements]-> AuditPolicy, got {:?}",
+            result.relations
         );
     }
 }
