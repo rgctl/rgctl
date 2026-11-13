@@ -55,6 +55,20 @@ pub struct AnalysisIndexEntry {
     pub vulnerable_count: usize,
 }
 
+/// Display metadata stored at the beginning of a function analysis payload.
+///
+/// Field order matches the first three fields of [`FunctionAnalysis`], allowing
+/// bincode prefix reads without decoding CFG, PDG, dominance or taint data.
+#[derive(Debug, Deserialize)]
+pub struct FunctionAnalysisMetadata {
+    /// Exact graph function UUID.
+    pub function_id: Uuid,
+    /// Display name of the function.
+    pub function_name: String,
+    /// Source path of the function.
+    pub file_path: String,
+}
+
 /// Analysis results for a single function.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionAnalysis {
@@ -604,6 +618,39 @@ impl AnalysisStorage {
         Ok(paths)
     }
 
+    /// Read display metadata without deserializing graph-analysis payloads.
+    ///
+    /// Cache keys are opaque identity/hash keys, not encoded names or paths.
+    /// Pack and binary records support prefix reads; legacy JSON skips unknown
+    /// payload fields through serde's normal struct decoding.
+    pub fn load_function_metadata(
+        &self,
+        function_id: Uuid,
+    ) -> Result<Option<FunctionAnalysisMetadata>> {
+        let metadata: FunctionAnalysisMetadata = if let Some(reader) = self.pack_reader.get()?
+            && let Some(bytes) = reader.record_bytes(function_id)?
+        {
+            bincode::deserialize_from(bytes)
+                .map_err(|e| Error::SerdeError(format!("analysis metadata decode: {e}")))?
+        } else if self.bin_path(function_id).is_file() {
+            let file = std::io::BufReader::new(fs::File::open(self.bin_path(function_id))?);
+            bincode::deserialize_from(file)
+                .map_err(|e| Error::SerdeError(format!("analysis metadata decode: {e}")))?
+        } else if self.json_path(function_id).is_file() {
+            let file = std::io::BufReader::new(fs::File::open(self.json_path(function_id))?);
+            serde_json::from_reader(file)
+                .map_err(|e| Error::SerdeError(format!("analysis metadata JSON decode: {e}")))?
+        } else {
+            return Ok(None);
+        };
+        if metadata.function_id != function_id {
+            return Err(Error::SerdeError(
+                "analysis metadata function UUID mismatch".into(),
+            ));
+        }
+        Ok(Some(metadata))
+    }
+
     /// Load analysis for a function by ID (pack preferred, then per-function bincode, JSON fallback).
     pub fn load_function(&self, function_id: Uuid) -> Result<Option<FunctionAnalysis>> {
         if let Some(reader) = self.pack_reader.get()?
@@ -919,6 +966,9 @@ mod tests {
 
         let loaded = storage.load_function(id).unwrap().unwrap();
         assert_eq!(loaded.function_name, "legacy");
+        let metadata = storage.load_function_metadata(id).unwrap().unwrap();
+        assert_eq!(metadata.function_name, "legacy");
+        assert_eq!(metadata.file_path, "src/Legacy.java");
     }
 
     #[test]
@@ -995,6 +1045,38 @@ mod tests {
                 .as_deref(),
             Some("after")
         );
+    }
+
+    #[test]
+    fn display_metadata_reads_binary_and_pack_prefix_without_analysis_payload() {
+        for packed in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let storage = AnalysisStorage::new(tmp.path());
+            let id = Uuid::new_v4();
+            let analysis = sample_analysis(id, "score", "hash");
+            // The full record deliberately lacks its analysis tail. Display
+            // metadata must not need to deserialize CFG/PDG to get its header.
+            let mut bytes = bincode::serialize(&analysis).unwrap();
+            let prefix_len =
+                bincode::serialized_size(&(id, &analysis.function_name, &analysis.file_path))
+                    .unwrap() as usize;
+            bytes.truncate(prefix_len);
+            if packed {
+                let pack = storage.open_pack_writer().unwrap();
+                storage
+                    .save_preencoded_no_index_packed(id, &bytes, &pack)
+                    .unwrap();
+                AnalysisStorage::finish_pack(pack).unwrap();
+            } else {
+                storage.ensure_dir().unwrap();
+                fs::write(storage.bin_path(id), &bytes).unwrap();
+            }
+            let metadata = storage.load_function_metadata(id).unwrap().unwrap();
+            assert_eq!(metadata.function_id, id);
+            assert_eq!(metadata.function_name, analysis.function_name);
+            assert_eq!(metadata.file_path, analysis.file_path);
+            assert!(storage.load_function(id).is_err());
+        }
     }
 
     #[test]
