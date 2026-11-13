@@ -9,6 +9,22 @@ import { describe, expect, it } from "vitest";
 import { compareMembers, isFunctionKind, nonFunctionReason, shortKind } from "../rooms/memberKind";
 import { KIND_LEGEND, OTHER_COLOUR, colourForKind, colourHexForKind } from "../universe/memberColours";
 
+/** HSL saturation and lightness of a `#rrggbb`, for the "no greys, nothing dark" assertions. */
+function hsl(hex: string): { s: number; l: number } {
+  const n = Number.parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255;
+  const g = ((n >> 8) & 255) / 255;
+  const b = (n & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  return { s, l };
+}
+const saturation = (hex: string) => hsl(hex).s;
+const lightness = (hex: string) => hsl(hex).l;
+
 describe("isFunctionKind", () => {
   it("recognises the engine's own spelling, whatever its case", () => {
     expect(isFunctionKind("Function")).toBe(true);
@@ -94,8 +110,8 @@ describe("colourForKind", () => {
   it("is stable and shared: the list and the level agree", () => {
     expect(colourForKind("Function")).toBe(colourForKind("function"));
     // The same call the scene makes for the instance colour.
-    expect(colourHexForKind("Function")).toBe(0x8fd0ff);
-    expect(colourForKind("File")).toBe("#94a3b8");
+    expect(colourHexForKind("Function")).toBe(0x60a5fa);
+    expect(colourForKind("File")).toBe("#4ade80");
   });
 
   it("puts the type-like kinds in one family, so a level is not confetti", () => {
@@ -104,9 +120,28 @@ describe("colourForKind", () => {
     expect(colours.size).toBe(1);
   });
 
-  it("gives an unnamed kind a dull colour rather than inventing a bright one", () => {
+  it("gives an unnamed kind a colour of its own rather than a grey", () => {
+    // Not grey and not black: on a near-black canvas those are not "quiet", they are invisible — which is what the
+    // file/import greys were, and they were the same grey as each other as well.
     expect(colourForKind("SomethingNew")).toBe(OTHER_COLOUR);
     expect(colourForKind(null)).toBe(OTHER_COLOUR);
+    expect(saturation(OTHER_COLOUR)).toBeGreaterThan(0.3);
+  });
+
+  it("uses no grey for any kind, and never a dark one", () => {
+    for (const kind of ["Function", "Class", "Struct", "Interface", "Enum", "TypeAlias", "Annotation", "Module",
+      "File", "Import", "Dependency", "Variable", "ConfigKey", "Table", "Macro", "Job", "BuildStep", "Other"]) {
+      const colour = colourForKind(kind);
+      expect(saturation(colour), `${kind} ${colour} is grey`).toBeGreaterThan(0.3);
+      expect(lightness(colour), `${kind} ${colour} is too dark`).toBeGreaterThan(0.45);
+    }
+  });
+
+  it("tells the two most confusable pairs apart", () => {
+    // The reported defect in one assertion: these were the same grey.
+    expect(colourForKind("File")).not.toBe(colourForKind("Import"));
+    // And the pair a reader meets most often after functions must not be two blues.
+    expect(colourForKind("Function")).not.toBe(colourForKind("Module"));
   });
 
   it("keeps functions distinct from every family in the legend", () => {

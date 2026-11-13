@@ -12,33 +12,38 @@
  *
  * Hue discipline: blue is the default for "a function" because that is what a district is mostly made of; the
  * type-like kinds share a violet family (they are all declarations of a thing, and giving each its own hue made a
- * level look like confetti); structures of the repository — files, modules, imports — are cool and desaturated, so
- * they recede; run-time data (variables, config keys) is warm, so it stands out against the cool majority.
+ * level look like confetti); the rest of the wheel is spent on the kinds that remain.
+ *
+ * **No greys, and nothing dark.** An earlier version made files and imports cool and desaturated "so they recede",
+ * which on a near-black canvas meant they did not recede — they disappeared, and the two of them were the same
+ * grey as each other anyway. Every colour here is saturated and mid-to-light, because the only alternative to
+ * being seen is not being seen: a box that cannot be told apart from its neighbour is not a fact the picture is
+ * carrying.
  */
 
 /** Kinds whose colour is worth naming, keyed by the engine's own `node_type_name`. */
 const KIND_COLOURS: Record<string, string> = {
-  function: "#8fd0ff", // the default case: a district is mostly functions
-  class: "#c084fc", // type-like kinds share a family —
-  struct: "#c084fc",
-  interface: "#c084fc",
-  enum: "#c084fc",
-  typealias: "#c084fc",
-  annotation: "#c084fc",
-  module: "#5eead4", // repository structure: cool, receding
-  file: "#94a3b8",
-  import: "#64748b",
-  dependency: "#64748b",
-  variable: "#fbbf24", // run-time data: warm, stands out
-  configkey: "#fb923c",
-  table: "#fbbf24",
-  macro: "#a3e635",
-  job: "#a3e635",
-  buildstep: "#a3e635",
+  function: "#60a5fa", // blue: the default case, a district is mostly functions
+  class: "#a78bfa", // one violet family for everything that declares a type —
+  struct: "#a78bfa",
+  interface: "#a78bfa",
+  enum: "#a78bfa",
+  typealias: "#a78bfa",
+  annotation: "#a78bfa",
+  module: "#2dd4bf", // teal: a namespace, one step above a file
+  file: "#4ade80", // leaf green: the leaf of the tree, and nothing else is green
+  import: "#facc15", // yellow: a dependency edge, the most common non-code node
+  dependency: "#facc15",
+  variable: "#fb923c", // orange: run-time data —
+  table: "#fb923c",
+  configkey: "#f87171", // red: configuration, which is neither code nor data
+  macro: "#f472b6", // pink: generated or expanded code —
+  job: "#f472b6",
+  buildstep: "#f472b6",
 };
 
-/** Anything without an entry of its own. Deliberately dull: an unnamed kind should not compete for attention. */
-export const OTHER_COLOUR = "#7c8794";
+/** Anything without an entry of its own: visible, and obviously not one of the named families. */
+export const OTHER_COLOUR = "#e879f9";
 
 /** The colour for a kind, keyed case-insensitively because the string crosses a JSON boundary. */
 export function colourForKind(kind: string | null | undefined): string {
@@ -47,6 +52,9 @@ export function colourForKind(kind: string | null | undefined): string {
 
 /**
  * The legend, as the room states it: one entry per family, in the order they appear in a level's list.
+ *
+ * Six families, not fifteen kinds: the list carries each row's exact kind, and the legend's job is only to say what
+ * the colours on the boxes mean.
  *
  * Named by family rather than by kind because fifteen entries do not fit beside a drawing, and "violet = a type
  * declaration" is the fact a reader needs; the list itself carries the exact kind of each row.
