@@ -1792,6 +1792,7 @@ mod tests {
     fn field_annotation_does_not_leak_injects_onto_regular_method_params() {
         let mut class_sym = empty_sym("OrderController", "OrderController", SymbolType::Class);
         class_sym.fields.push(rgctl_plugin_api::Field {
+            source_span: None,
             name: "svc".into(),
             field_type: Some("OrderService".into()),
             visibility: Some("private".into()),

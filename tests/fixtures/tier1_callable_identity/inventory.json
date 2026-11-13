@@ -1,0 +1,122 @@
+[
+  {
+    "language": "c",
+    "file": "c/example.c",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "cpp",
+    "file": "cpp/example.cpp",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "csharp",
+    "file": "csharp/example.cs",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "go",
+    "file": "go/example.go",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "groovy",
+    "file": "groovy/example.groovy",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "java",
+    "file": "java/Example.java",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "javascript",
+    "file": "javascript/example.js",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "kotlin",
+    "file": "kotlin/example.kt",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "markdown",
+    "file": "markdown/example.md",
+    "semantics": "declarative/template; no callable overload model"
+  },
+  {
+    "language": "php",
+    "file": "php/example.php",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "puppet",
+    "file": "puppet/example.pp",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "erb",
+    "file": "erb/example.erb",
+    "semantics": "declarative/template; no callable overload model"
+  },
+  {
+    "language": "python",
+    "file": "python/example.py",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "ruby",
+    "file": "ruby/example.rb",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "rust",
+    "file": "rust/example.rs",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "typescript",
+    "file": "typescript/example.ts",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "swift",
+    "file": "swift/example.swift",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "scala",
+    "file": "scala/example.scala",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "dart",
+    "file": "dart/example.dart",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "elixir",
+    "file": "elixir/example.ex",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "lua",
+    "file": "lua/example.lua",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "bash",
+    "file": "bash/example.sh",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "sql",
+    "file": "sql/example.sql",
+    "semantics": "callable identity and owner/override isolation"
+  },
+  {
+    "language": "hcl",
+    "file": "hcl/example.tf",
+    "semantics": "declarative/template; no callable overload model"
+  }
+]

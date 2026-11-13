@@ -214,21 +214,11 @@ fn export_one(
     let cfg = analysis.cfg.as_ref()?;
     let pdg = analysis.pdg.as_ref()?;
 
-    let (parsed_name, parsed_path) = parse_stable_key(&entry.stable_key);
-    let record_name = if analysis.function_name.is_empty() {
-        parsed_name?
-    } else {
-        analysis.function_name.clone()
-    };
-    let record_path = if analysis.file_path.is_empty() {
-        parsed_path
-    } else {
-        Some(analysis.file_path.clone())
-    };
+    let record_path = (!analysis.file_path.is_empty()).then(|| analysis.file_path.clone());
 
     let (name, file_path) = resolve_function_meta(
         &entry.function_id,
-        &record_name,
+        &analysis.function_name,
         &record_path,
         repo_root,
         backend,
@@ -309,13 +299,6 @@ fn export_one(
     })
 }
 
-fn parse_stable_key(key: &str) -> (Option<String>, Option<String>) {
-    let mut parts = key.split('\x1f');
-    let file = parts.next().map(str::to_string);
-    let name = parts.next().map(str::to_string);
-    (name, file)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,6 +331,34 @@ mod tests {
         assert!(out.path().join("slice_index.json").is_file());
         assert!(out.path().join("cfg_index.json").is_file());
         assert!(out.path().join("cfg_pdg.archive.bin").is_file());
+    }
+
+    #[test]
+    fn missing_display_metadata_never_treats_identity_keys_as_names_or_paths() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        let out = tmp.path().join("dashboard");
+        std::fs::create_dir_all(&out).unwrap();
+        let code = "fn add(a: i32) -> i32 { a + 1 }";
+        let cfg = build_cfg_for_function("rust", code, "add").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+        let id = Uuid::new_v4();
+        AnalysisStorage::new(repo.join(".rgctl/analysis"))
+            .save_function(&FunctionAnalysis {
+                function_id: id,
+                function_name: String::new(),
+                file_path: String::new(),
+                code_hash: Some("hash".into()),
+                cfg: Some(Arc::new(cfg)),
+                pdg: Some(Arc::new(pdg)),
+                dominance: None,
+                taint: None,
+            })
+            .unwrap();
+        let result = export_cfg_slice_from_storage(&MemoryBackend::new(), &repo, &out).unwrap();
+        assert_eq!(result.dataflow.len(), 1);
+        assert_eq!(result.dataflow[0].name, id.to_string());
+        assert_eq!(result.dataflow[0].file_path, None);
     }
 
     #[test]
@@ -384,6 +395,8 @@ mod tests {
         assert!(result.cfg.available);
         assert_eq!(result.dataflow.len(), 1);
         assert_eq!(result.dataflow[0].function_id, id.to_string());
+        assert_eq!(result.dataflow[0].name, "add");
+        assert_eq!(result.dataflow[0].file_path.as_deref(), Some("src/lib.rs"));
         assert!(out.join("slice").join(format!("{id}.json")).is_file());
         assert!(out.join("slice_index.json").is_file());
         assert!(out.join("cfg_index.json").is_file());

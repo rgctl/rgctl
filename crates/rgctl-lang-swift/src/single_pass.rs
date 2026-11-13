@@ -51,6 +51,7 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("try_expression", HandlerMask::CFG_STMT),
     ("typealias_declaration", HandlerMask::SYMBOL),
     ("while_statement", HandlerMask::CFG_STMT),
+    ("inheritance_specifier", HandlerMask::RELATION),
 ];
 
 const SWIFT_CALL_KINDS: &[&str] = &["call_expression"];
@@ -272,23 +273,29 @@ fn push_named_symbol(
         None => name.clone(),
     };
     let loc = ((node.end_position().row - node.start_position().row) + 1).max(1) as u32;
-    ctx.symbols.push(Symbol {
-        name: name.clone(),
-        symbol_type,
-        qualified_name: Some(qn.clone()),
-        location: node_to_location(node, file_path),
-        signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-        return_type: None,
-        parameters: vec![],
-        fields: vec![],
-        modifiers: vec![],
-        documentation: None,
-        metadata: serde_json::json!({
-            "language": "swift",
-            "kind": kind_meta,
-        }),
-        ..Default::default()
-    });
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            Symbol {
+                name: name.clone(),
+                symbol_type,
+                qualified_name: Some(qn.clone()),
+                location: node_to_location(node, file_path),
+                signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+                return_type: None,
+                parameters: vec![],
+                fields: vec![],
+                modifiers: vec![],
+                documentation: None,
+                metadata: serde_json::json!({
+                    "language": "swift",
+                    "kind": kind_meta,
+                }),
+                ..Default::default()
+            },
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Swift,
+        ));
     if let Some(scope_kind) = enter {
         let is_fn = scope_kind.is_function_like();
         ctx.enter_scope(
@@ -370,6 +377,24 @@ pub fn extract_all_single_pass(
                 let mut pushed_scope = false;
 
                 match kind {
+                    "inheritance_specifier" => {
+                        if let (Some(owner), Some(parent)) = (
+                            ctx.scopes.current_type(),
+                            node.child_by_field_name("inherits_from"),
+                        ) {
+                            let parent = parent.utf8_text(source)?.to_string();
+                            relations.push(Relation {
+                                from: owner.qualified_prefix.clone(),
+                                to: rgctl_plugin_helpers::simple_type_name(&parent),
+                                relation_type: RelationType::Extends,
+                                location: node_to_location(node, &file_path_str),
+                                metadata: serde_json::json!({"language":"swift"}),
+                                to_qualified_hint: Some(parent),
+                                to_type_hint: None,
+                                ..Default::default()
+                            });
+                        }
+                    }
                     "class_declaration" => {
                         let (sym_ty, meta) = class_decl_symbol_type(node);
                         let scope = match sym_ty {
@@ -435,23 +460,32 @@ pub fn extract_all_single_pass(
                         };
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
-                        ctx.symbols.push(Symbol {
-                            name: name.clone(),
-                            symbol_type: SymbolType::Function,
-                            qualified_name: Some(qn.clone()),
-                            location: node_to_location(node, &file_path_str),
-                            signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-                            return_type: None,
-                            parameters: vec![],
-                            fields: vec![],
-                            modifiers: vec![],
-                            documentation: None,
-                            metadata: serde_json::json!({
-                                "language": "swift",
-                                "kind": meta,
-                            }),
-                            ..Default::default()
-                        });
+                        ctx.symbols
+                            .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                Symbol {
+                                    name: name.clone(),
+                                    symbol_type: SymbolType::Function,
+                                    qualified_name: Some(qn.clone()),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: node
+                                        .utf8_text(source)
+                                        .ok()
+                                        .map(|s| s.trim().to_string()),
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "swift",
+                                        "kind": meta,
+                                    }),
+                                    ..Default::default()
+                                },
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Swift,
+                            ));
                         ctx.enter_scope(
                             ScopeKind::Function,
                             Some(name),
@@ -476,25 +510,33 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            ctx.symbols.push(Symbol {
-                                name,
-                                symbol_type: SymbolType::Variable,
-                                qualified_name: Some(qn),
-                                location: node_to_location(node, &file_path_str),
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.trim().to_string()),
-                                return_type: None,
-                                parameters: vec![],
-                                fields: vec![],
-                                modifiers: vec![],
-                                documentation: None,
-                                metadata: serde_json::json!({
-                                    "language": "swift",
-                                    "kind": "property",
-                                }),
-                                ..Default::default()
+                            ctx.symbols.push({
+                                let mut field_symbol = Symbol {
+                                    name,
+                                    symbol_type: SymbolType::Variable,
+                                    qualified_name: Some(qn),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: node
+                                        .utf8_text(source)
+                                        .ok()
+                                        .map(|s| s.trim().to_string()),
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "swift",
+                                        "kind": "property",
+                                    }),
+                                    ..Default::default()
+                                };
+                                rgctl_plugin_helpers::spans::field_symbol_spans(
+                                    &mut field_symbol,
+                                    node,
+                                    source,
+                                );
+                                field_symbol
                             });
                         }
                     }
@@ -565,23 +607,32 @@ pub fn extract_all_single_pass(
                             Some(o) => format!("{o}.{name}"),
                             None => name.clone(),
                         };
-                        ctx.symbols.push(Symbol {
-                            name,
-                            symbol_type: SymbolType::Function,
-                            qualified_name: Some(qn),
-                            location: node_to_location(node, &file_path_str),
-                            signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-                            return_type: None,
-                            parameters: vec![],
-                            fields: vec![],
-                            modifiers: vec![],
-                            documentation: None,
-                            metadata: serde_json::json!({
-                                "language": "swift",
-                                "kind": "protocol_function",
-                            }),
-                            ..Default::default()
-                        });
+                        ctx.symbols
+                            .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                Symbol {
+                                    name,
+                                    symbol_type: SymbolType::Function,
+                                    qualified_name: Some(qn),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: node
+                                        .utf8_text(source)
+                                        .ok()
+                                        .map(|s| s.trim().to_string()),
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "swift",
+                                        "kind": "protocol_function",
+                                    }),
+                                    ..Default::default()
+                                },
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Swift,
+                            ));
                     }
                     "protocol_property_declaration" => {
                         if let Some(name) = property_decl_name(node, source)
@@ -596,25 +647,33 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            ctx.symbols.push(Symbol {
-                                name,
-                                symbol_type: SymbolType::Variable,
-                                qualified_name: Some(qn),
-                                location: node_to_location(node, &file_path_str),
-                                signature: node
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(|s| s.trim().to_string()),
-                                return_type: None,
-                                parameters: vec![],
-                                fields: vec![],
-                                modifiers: vec![],
-                                documentation: None,
-                                metadata: serde_json::json!({
-                                    "language": "swift",
-                                    "kind": "protocol_property",
-                                }),
-                                ..Default::default()
+                            ctx.symbols.push({
+                                let mut field_symbol = Symbol {
+                                    name,
+                                    symbol_type: SymbolType::Variable,
+                                    qualified_name: Some(qn),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: node
+                                        .utf8_text(source)
+                                        .ok()
+                                        .map(|s| s.trim().to_string()),
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "swift",
+                                        "kind": "protocol_property",
+                                    }),
+                                    ..Default::default()
+                                };
+                                rgctl_plugin_helpers::spans::field_symbol_spans(
+                                    &mut field_symbol,
+                                    node,
+                                    source,
+                                );
+                                field_symbol
                             });
                         }
                     }
@@ -636,23 +695,32 @@ pub fn extract_all_single_pass(
                         };
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
-                        ctx.symbols.push(Symbol {
-                            name: name.clone(),
-                            symbol_type: SymbolType::Function,
-                            qualified_name: Some(qn.clone()),
-                            location: node_to_location(node, &file_path_str),
-                            signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
-                            return_type: None,
-                            parameters: vec![],
-                            fields: vec![],
-                            modifiers: vec![],
-                            documentation: None,
-                            metadata: serde_json::json!({
-                                "language": "swift",
-                                "kind": "lambda",
-                            }),
-                            ..Default::default()
-                        });
+                        ctx.symbols
+                            .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                Symbol {
+                                    name: name.clone(),
+                                    symbol_type: SymbolType::Function,
+                                    qualified_name: Some(qn.clone()),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: node
+                                        .utf8_text(source)
+                                        .ok()
+                                        .map(|s| s.trim().to_string()),
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({
+                                        "language": "swift",
+                                        "kind": "lambda",
+                                    }),
+                                    ..Default::default()
+                                },
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Swift,
+                            ));
                         ctx.enter_scope(
                             ScopeKind::Function,
                             Some(name),
@@ -776,6 +844,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -822,7 +891,20 @@ pub fn extract_all_single_pass(
             to_type_hint: None,
             ..Default::default()
         });
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Swift,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Swift,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

@@ -279,20 +279,26 @@ pub fn extract_all_single_pass(
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
                         let qn = name.clone();
-                        ctx.symbols.push(Symbol {
-                            name: name.clone(),
-                            symbol_type: SymbolType::Function,
-                            qualified_name: Some(qn.clone()),
-                            location: node_to_location(node, &file_path_str),
-                            signature: None,
-                            return_type: None,
-                            parameters: vec![],
-                            fields: vec![],
-                            modifiers: vec![],
-                            documentation: None,
-                            metadata: serde_json::json!({ "language": "bash" }),
-                            ..Default::default()
-                        });
+                        ctx.symbols
+                            .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                Symbol {
+                                    name: name.clone(),
+                                    symbol_type: SymbolType::Function,
+                                    qualified_name: Some(qn.clone()),
+                                    location: node_to_location(node, &file_path_str),
+                                    signature: None,
+                                    return_type: None,
+                                    parameters: vec![],
+                                    fields: vec![],
+                                    modifiers: vec![],
+                                    documentation: None,
+                                    metadata: serde_json::json!({ "language": "bash" }),
+                                    ..Default::default()
+                                },
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Bash,
+                            ));
                         ctx.enter_scope(
                             ScopeKind::Function,
                             Some(name),
@@ -406,8 +412,22 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         flush_bash_call(&pending, &ctx.symbols, file_path, &mut relations);
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Bash,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Bash,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

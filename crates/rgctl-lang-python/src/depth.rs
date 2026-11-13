@@ -39,9 +39,12 @@ pub fn push_field(
     seen: &mut HashSet<String>,
     name: String,
     field_type: Option<String>,
+    declaration: Node,
+    source: &[u8],
 ) {
     if seen.insert(name.clone()) {
         fields.push(Field {
+            source_span: rgctl_plugin_helpers::field_source_span(declaration, source, &name),
             name,
             field_type,
             visibility: None,
@@ -405,5 +408,11 @@ pub fn extract_lambda_symbol(
         ..Default::default()
     };
     record_symbol_spans(&mut sym, node, name_node);
+    sym = rgctl_plugin_helpers::callable_identity::symbol(
+        sym,
+        node,
+        source,
+        rgctl_plugin_helpers::callable_identity::Policy::Python,
+    );
     Some(sym)
 }

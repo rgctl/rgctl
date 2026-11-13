@@ -221,6 +221,7 @@ impl ProcessingPipeline {
         let pass2_start = Instant::now();
         extractor.populate_pass2(&tails, &mut builder)?;
         let pass2_elapsed = pass2_start.elapsed();
+        rgctl_extraction::callable_resolution::save(store, &mut builder)?;
         builder.log_resolution_stats();
         let nodes_created = builder.node_count();
         let edges_created = builder.edge_count();
@@ -231,6 +232,7 @@ impl ProcessingPipeline {
         let spill_start = Instant::now();
         let finished = builder.finish_spill()?;
         let digest = write_columnar_from_spill(finished, snapshot_path)?;
+        rgctl_extraction::callable_resolution::mark_current(store)?;
         if !annotation_args.is_empty()
             && let Some(parent) = snapshot_path.parent()
         {
@@ -390,6 +392,7 @@ impl ProcessingPipeline {
         let pass2_start = Instant::now();
         extractor.populate_pass2(&tails, &mut builder)?;
         let pass2_elapsed = pass2_start.elapsed();
+        rgctl_extraction::callable_resolution::save(root, &mut builder)?;
         if let Some(store) = builder.take_content_store() {
             store.save()?;
         }

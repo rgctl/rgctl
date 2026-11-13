@@ -314,16 +314,20 @@ pub fn build_cfg_for_function(
 ) -> Result<ControlFlowGraph> {
     let bytes = source.as_bytes();
     let tree = parse_language(language, bytes)?;
-    let function_kinds = function_kinds_for(language)?;
-    let func_node = find_function_by_name(
-        tree.root_node(),
-        bytes,
-        function_name,
-        function_kinds,
-        language,
-    )
-    .ok_or_else(|| Error::NotFound(format!("function '{function_name}' not found")))?;
-    build_cfg_from_function_node(language, func_node, bytes, function_name)
+    build_cfg_for_function_in_tree(language, &tree, bytes, function_name)
+}
+
+/// Prove the source-level name selection used by name-only CFG construction,
+/// without constructing blocks/edges. Archive coverage alone is not proof of
+/// uniqueness: a partial archive may hold just one of several source overloads.
+pub(crate) fn validate_unique_function_name(
+    language: &str,
+    source: &str,
+    function_name: &str,
+) -> Result<()> {
+    let bytes = source.as_bytes();
+    let tree = parse_language(language, bytes)?;
+    unique_function_node(language, &tree, bytes, function_name).map(|_| ())
 }
 
 /// Parsed source file with function name / span → byte index (one tree-sitter parse per file).
@@ -333,8 +337,6 @@ pub struct ParsedSourceFile {
     locations: HashMap<String, FunctionLocation>,
     /// All locations for a bare name (overloads).
     locations_by_name: HashMap<String, Vec<FunctionLocation>>,
-    /// Exact span key `(start_line, end_line, name)` → location.
-    locations_by_span: HashMap<(usize, usize, String), FunctionLocation>,
 }
 
 impl ParsedSourceFile {
@@ -345,7 +347,6 @@ impl ParsedSourceFile {
             tree,
             locations: index.by_name_first,
             locations_by_name: index.by_name,
-            locations_by_span: index.by_span,
         })
     }
 
@@ -360,13 +361,22 @@ impl ParsedSourceFile {
             || self.locations_by_name.contains_key(function_name)
     }
 
-    /// Build CFG for a named function using the cached parse tree (first match by name).
+    /// Build CFG for a uniquely named function using the cached parse tree.
     pub fn build_cfg(
         &self,
         language: &str,
         source: &[u8],
         function_name: &str,
     ) -> Result<ControlFlowGraph> {
+        if self
+            .locations_by_name
+            .get(function_name)
+            .is_some_and(|locations| locations.len() > 1)
+        {
+            return Err(Error::NotFound(format!(
+                "ambiguous function '{function_name}': exact source span required"
+            )));
+        }
         if let Some(loc) = self.locations.get(function_name)
             && let Some(func_node) =
                 seek_function_node(&self.tree, language, loc.start_byte, loc.end_byte)?
@@ -400,23 +410,12 @@ impl ParsedSourceFile {
         start_line: usize,
         end_line: usize,
     ) -> Option<Node<'_>> {
-        let key = (start_line, end_line, function_name.to_string());
-        if let Some(loc) = self.locations_by_span.get(&key) {
-            // Language is not threaded here; callers that need kind validation use
-            // [`seek_function_node`] / [`build_cfg_for_byte_range`] directly.
-            if let Some(func_node) = self
-                .tree
-                .root_node()
-                .named_descendant_for_byte_range(loc.start_byte, loc.end_byte)
-            {
-                return Some(func_node);
-            }
-        }
-        if let Some(locs) = self.locations_by_name.get(function_name)
-            && let Some(loc) = locs
-                .iter()
-                .find(|l| l.start_line == start_line)
-                .or_else(|| locs.first())
+        let locations = self.locations_by_name.get(function_name)?;
+        let mut matching = locations
+            .iter()
+            .filter(|loc| loc.start_line == start_line && loc.end_line == end_line);
+        if let Some(loc) = matching.next()
+            && matching.next().is_none()
         {
             return self
                 .tree
@@ -509,7 +508,6 @@ pub struct FunctionLocation {
 struct FunctionLocationIndex {
     by_name_first: HashMap<String, FunctionLocation>,
     by_name: HashMap<String, Vec<FunctionLocation>>,
-    by_span: HashMap<(usize, usize, String), FunctionLocation>,
 }
 
 /// Build a CFG for a named function in an already-parsed tree (no re-parse).
@@ -519,16 +517,25 @@ pub fn build_cfg_for_function_in_tree(
     source: &[u8],
     function_name: &str,
 ) -> Result<ControlFlowGraph> {
+    let func_node = unique_function_node(language, tree, source, function_name)?;
+    build_cfg_from_function_node(language, func_node, source, function_name)
+}
+
+fn unique_function_node<'tree>(
+    language: &str,
+    tree: &'tree Tree,
+    source: &[u8],
+    function_name: &str,
+) -> Result<Node<'tree>> {
     let function_kinds = function_kinds_for(language)?;
-    let func_node = find_function_by_name(
+    find_function_by_name(
         tree.root_node(),
         source,
         function_name,
         function_kinds,
         language,
     )
-    .ok_or_else(|| Error::NotFound(format!("function '{function_name}' not found")))?;
-    build_cfg_from_function_node(language, func_node, source, function_name)
+    .ok_or_else(|| Error::NotFound(format!("function '{function_name}' not found")))
 }
 
 /// Parse a source file once and index function names to source byte spans.
@@ -549,7 +556,6 @@ fn index_function_locations_full(
     let mut index = FunctionLocationIndex {
         by_name_first: HashMap::new(),
         by_name: HashMap::new(),
-        by_span: HashMap::new(),
     };
     collect_function_locations(
         tree.root_node(),
@@ -581,8 +587,6 @@ fn collect_function_locations(
             };
             out.by_name.entry(func_name.clone()).or_default().push(loc);
             out.by_name_first.entry(func_name.clone()).or_insert(loc);
-            out.by_span
-                .insert((loc.start_line, loc.end_line, func_name), loc);
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -752,23 +756,41 @@ fn find_function_by_name<'a>(
     if let Some(pos) = name.rfind("$lambda$")
         && let Ok(idx) = name[pos + "$lambda$".len()..].parse::<usize>()
     {
+        if language == "java" {
+            let mut stack = vec![node];
+            let mut count = 0;
+            while let Some(current) = stack.pop() {
+                if current.kind() == "lambda_expression" {
+                    count += 1;
+                }
+                let mut cursor = current.walk();
+                stack.extend(current.named_children(&mut cursor));
+            }
+            if count > 1 {
+                return None;
+            }
+        }
         return find_java_lambda_expression(node, idx);
     }
 
     let mut stack = vec![node];
+    let mut found = None;
     while let Some(node) = stack.pop() {
         if function_kinds.contains(&node.kind())
             && let Some(func_name) = callable_name_for_cfg(node, source, language)
             && func_name == name
         {
-            return Some(node);
+            if found.is_some() {
+                return None;
+            }
+            found = Some(node);
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             stack.push(child);
         }
     }
-    None
+    found
 }
 
 /// Nth direct `block` child of a Java `class_body` (instance initializer).
@@ -8948,6 +8970,77 @@ END;
             cfg.blocks.len() >= 2,
             "sql function should produce CFG, got {}",
             cfg.blocks.len()
+        );
+    }
+    #[test]
+    fn same_line_java_overloads_require_exact_byte_ranges() {
+        let first = "int quote(int value) { if (value > 0) { return 1; } return 0; }";
+        let second = "int quote(String value) { return 2; }";
+        let source = format!("class Library {{ {first} {second} }}");
+        let parsed = ParsedSourceFile::parse("java", source.as_bytes()).unwrap();
+        assert!(parsed.function_node_for_span("quote", 1, 1).is_none());
+        assert!(
+            parsed
+                .build_cfg("java", source.as_bytes(), "quote")
+                .is_err()
+        );
+        let first_start = source.find(first).unwrap();
+        let second_start = source.find(second).unwrap();
+        let branching = parsed
+            .build_cfg_for_byte_range(
+                "java",
+                source.as_bytes(),
+                "quote",
+                first_start,
+                first_start + first.len(),
+            )
+            .unwrap();
+        let straight = parsed
+            .build_cfg_for_byte_range(
+                "java",
+                source.as_bytes(),
+                "quote",
+                second_start,
+                second_start + second.len(),
+            )
+            .unwrap();
+        assert!(branching.blocks.len() > straight.blocks.len());
+    }
+    #[test]
+    fn tier1_name_only_cfg_refuses_same_named_methods() {
+        for (language, source) in [
+            (
+                "cpp",
+                "class A { int quote(int x) {return x;} int quote(double x) {return 2;} };",
+            ),
+            (
+                "csharp",
+                "class A { int quote(int x) {return x;} int quote(string x) {return 2;} }",
+            ),
+            (
+                "typescript",
+                "class A { quote(x:number){return x;} } class B { quote(x:string){return 2;} }",
+            ),
+            (
+                "python",
+                "class A:\n def quote(self, x):\n  return x\nclass B:\n def quote(self, x):\n  return 2\n",
+            ),
+        ] {
+            assert!(
+                build_cfg_for_function(language, source, "quote").is_err(),
+                "{language}: name-only lookup picked an arbitrary body"
+            );
+        }
+    }
+    #[test]
+    fn java_name_only_cfg_refuses_overloads() {
+        assert!(
+            build_cfg_for_function(
+                "java",
+                "class A { int quote(int x) {return x;} int quote(String x) {return 2;} }",
+                "quote"
+            )
+            .is_err()
         );
     }
 }

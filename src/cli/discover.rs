@@ -18,6 +18,8 @@ pub struct DiscoverArgs {
     pub with_security: bool,
     /// CFG / dominators / PDG. Default off.
     pub with_cfg: bool,
+    /// Materialize fields without requiring CFG analysis.
+    pub with_fields: bool,
     /// Discover-time taint (implies CFG pass). Default off.
     pub with_taint: bool,
     /// Extra taint rule pack path (file or directory).
@@ -155,7 +157,34 @@ pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
     }
 
     if let Some(files) = &args.files {
-        return run_files_update(ctx, &path, files.clone(), &args);
+        let wants_fields = args.full
+            || args.with_fields
+            || args.with_cfg
+            || args.with_taint
+            || args.with_dfg_loops
+            || args.with_ast_skeleton;
+        let field_mode_ready = !wants_fields
+            || super::pipeline_status::read_digest_marker(
+                Path::new(&path),
+                super::pipeline_status::MATERIALIZED_FIELDS_DIGEST_FILE,
+            )
+            .is_some_and(|digest| {
+                rgctl_graph::SnapshotNodeStore::open_from_repo(Path::new(&path)).is_ok_and(
+                    |snapshot| {
+                        snapshot
+                            .content_digest()
+                            .is_ok_and(|current| current == digest)
+                    },
+                )
+            });
+        if field_mode_ready
+            && rgctl_extraction::callable_resolution::semantics_current(Path::new(&path))
+        {
+            return run_files_update(ctx, &path, files.clone(), &args);
+        }
+        tracing::info!(
+            "Extraction semantics or field mode changed; rebuilding the source graph before incremental updates"
+        );
     }
 
     if args.with_universe {
@@ -193,7 +222,7 @@ pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
             migration_preset: &args.migration_preset,
             migration_order: &args.migration_order,
             db_path: &ctx.db,
-            force_materialize_fields: false,
+            force_materialize_fields: args.with_fields,
             force_reindex: false,
             emit_cli_summary: true,
             artifact_root: args.artifact_root.as_deref(),

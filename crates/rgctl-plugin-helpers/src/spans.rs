@@ -1,6 +1,7 @@
 //! Red-Green byte-span helpers for Tier-1 lossless write-back.
 //!
-//! Zero heap allocations on the hot path: only scalar `u32`/`u16` field writes.
+//! Symbol/call-site recording writes scalar fields without allocating. Field
+//! spans travel in worker-owned metadata until graph member materialization.
 
 use rgctl_plugin_api::{Relation, Symbol};
 use tree_sitter::Node;
@@ -57,6 +58,196 @@ pub fn record_symbol_spans(symbol: &mut Symbol, decl_node: Node, name_node: Opti
                 symbol.name_token_len = u16::try_from(token_len).ok();
             }
         }
+    }
+}
+
+/// Locate a field's name within its already parsed declaration, preserving sigils
+/// and quotes outside the identifier span. No source parse or file read occurs.
+pub fn field_source_span(
+    declaration: Node,
+    source: &[u8],
+    name: &str,
+) -> Option<rgctl_plugin_api::FieldSourceSpan> {
+    // A record's type name and body are not component declarations. Restrict
+    // the search before considering same-spelled identifiers elsewhere.
+    let search_root = if declaration.kind() == "record_declaration" {
+        declaration.child_by_field_name("parameters")?
+    } else {
+        declaration
+    };
+    let mut stack = vec![search_root];
+    let mut candidate = None;
+    while let Some(node) = stack.pop() {
+        // Attributes/decorators describe a declaration; their identifiers are
+        // never its binding, even when both have exactly the same spelling.
+        if node.id() != declaration.id()
+            && (matches!(
+                node.kind(),
+                "annotation"
+                    | "marker_annotation"
+                    | "decorator"
+                    | "decorators"
+                    | "attribute_list"
+                    | "attribute_specifier"
+                    | "attribute_specifier_sequence"
+                    | "annotations"
+            ) || node.kind() == "attribute"
+                && node
+                    .utf8_text(source)
+                    .is_ok_and(|text| text.starts_with('@')))
+        {
+            continue;
+        }
+        let mut priority = match node.kind() {
+            "field_identifier" | "property_identifier" | "private_property_identifier" => 0,
+            "identifier" | "name" | "simple_identifier" | "variable_name" | "variable"
+            | "instance_variable" | "class_variable" | "simple_symbol" | "string" | "atom"
+            | "quoted_atom" | "keyword" => 1,
+            "type_identifier" | "qualified_type" => 2,
+            _ => 3,
+        };
+        if node.parent().is_some_and(|parent| {
+            matches!(
+                parent.kind(),
+                "variable_declarator"
+                    | "field_declaration"
+                    | "property_declaration"
+                    | "public_field_definition"
+                    | "formal_parameter"
+                    | "class_parameter"
+                    | "parameter"
+                    | "property_promotion_parameter"
+                    | "assignment"
+                    | "pair"
+            ) && ["name", "left", "key"].iter().any(|field| {
+                parent
+                    .child_by_field_name(field)
+                    .is_some_and(|binding| binding.id() == node.id())
+            })
+        }) {
+            priority = 0;
+        }
+        let mut ancestor = node;
+        while ancestor.id() != declaration.id() {
+            let Some(parent) = ancestor.parent() else {
+                break;
+            };
+            if parent
+                .child_by_field_name("type")
+                .is_some_and(|ty| ty.id() == ancestor.id())
+            {
+                priority = priority.max(2);
+                break;
+            }
+            ancestor = parent;
+        }
+        if priority < 3
+            && let Ok(raw) = node.utf8_text(source)
+        {
+            let normalized = raw
+                .trim()
+                .trim_matches(&['$', '@', ':', '\'', '"', '`'][..]);
+            if (raw == name || normalized == name)
+                && candidate
+                    .as_ref()
+                    .is_none_or(|(best, _, _)| priority < *best)
+            {
+                let offset = if raw == name { 0 } else { raw.find(name)? };
+                candidate = Some((priority, node, offset));
+                if priority == 0 {
+                    break;
+                }
+            }
+        }
+        if node.id() != declaration.id()
+            && matches!(
+                node.kind(),
+                "block"
+                    | "class_body"
+                    | "declaration_list"
+                    | "function_body"
+                    | "argument_list"
+                    | "arguments"
+                    | "type_arguments"
+                    | "type_annotation"
+            )
+        {
+            continue;
+        }
+        if matches!(node.kind(), "attribute" | "member_expression")
+            && let Some(property) = node
+                .child_by_field_name("attribute")
+                .or_else(|| node.child_by_field_name("property"))
+        {
+            stack.push(property);
+            continue;
+        }
+        // Initializers may reference a later declarator with the same name.
+        // Those uses are not declaration bindings (for example `a = self.b, b`).
+        let initializer_nodes = ["value", "right", "default_value", "initializer"]
+            .map(|field| node.child_by_field_name(field));
+        for i in (0..node.named_child_count()).rev() {
+            if let Some(child) = node.named_child(i)
+                && !initializer_nodes
+                    .iter()
+                    .flatten()
+                    .any(|initializer| initializer.id() == child.id())
+            {
+                stack.push(child);
+            }
+        }
+    }
+    let (_, identifier, offset) = candidate?;
+    let mut owner = declaration;
+    // Constructor/record field parameters have their own declaration spans.
+    if matches!(
+        declaration.kind(),
+        "record_declaration" | "primary_constructor" | "class_parameters" | "parameter_list"
+    ) {
+        let mut parent = identifier.parent();
+        while let Some(node) = parent {
+            if matches!(
+                node.kind(),
+                "formal_parameter"
+                    | "class_parameter"
+                    | "parameter"
+                    | "property_promotion_parameter"
+            ) {
+                owner = node;
+                break;
+            }
+            if node.id() == declaration.id() {
+                break;
+            }
+            parent = node.parent();
+        }
+    }
+    let start = u32::try_from(owner.start_byte()).ok()?;
+    let end = u32::try_from(owner.end_byte()).ok()?;
+    let relative = u32::try_from(identifier.start_byte().checked_add(offset)?)
+        .ok()?
+        .checked_sub(start)?;
+    let length = u32::try_from(name.len()).ok()?;
+    let overflow = relative >= u32::from(u16::MAX) || length >= u32::from(u16::MAX);
+    Some(rgctl_plugin_api::FieldSourceSpan {
+        start_byte: start,
+        end_byte: end,
+        name_rel_offset: (!overflow).then_some(relative as u16),
+        name_token_len: u16::try_from(length).ok(),
+        name_span_overflow: overflow.then_some((relative, length)),
+        start_line: u32::try_from(owner.start_position().row + 1).ok()?,
+        end_line: u32::try_from(owner.end_position().row + 1).ok()?,
+    })
+}
+
+/// Attach dedicated byte spans to a directly emitted field/property symbol.
+pub fn field_symbol_spans(symbol: &mut Symbol, declaration: Node, source: &[u8]) {
+    if let Some(span) = field_source_span(declaration, source, &symbol.name) {
+        symbol.start_byte = Some(span.start_byte);
+        symbol.end_byte = Some(span.end_byte);
+        symbol.name_rel_offset = span.name_rel_offset;
+        symbol.name_token_len = span.name_token_len;
+        symbol.name_span_overflow = span.name_span_overflow;
     }
 }
 

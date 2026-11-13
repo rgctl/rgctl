@@ -1,0 +1,196 @@
+[
+  {
+    "language": "c",
+    "file": "c/example.c",
+    "fields": [
+      "value",
+      "other"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "cpp",
+    "file": "cpp/example.cpp",
+    "fields": [
+      "value",
+      "other"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "csharp",
+    "file": "csharp/example.cs",
+    "fields": [
+      "value",
+      "Thing"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "go",
+    "file": "go/example.go",
+    "fields": [
+      "value",
+      "other"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "groovy",
+    "file": "groovy/example.groovy",
+    "fields": [
+      "value"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "java",
+    "file": "java/Example.java",
+    "fields": [
+      "value"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "javascript",
+    "file": "javascript/example.js",
+    "fields": [
+      "value",
+      "other"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "kotlin",
+    "file": "kotlin/example.kt",
+    "fields": [
+      "seed",
+      "value"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "php",
+    "file": "php/example.php",
+    "fields": [
+      "value"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "puppet",
+    "file": "puppet/example.pp",
+    "fields": [
+      "value"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "python",
+    "file": "python/example.py",
+    "fields": [
+      "value",
+      "other",
+      "self"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "ruby",
+    "file": "ruby/example.rb",
+    "fields": [
+      "value",
+      "other"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "rust",
+    "file": "rust/example.rs",
+    "fields": [
+      "value"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "typescript",
+    "file": "typescript/example.ts",
+    "fields": [
+      "value"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "swift",
+    "file": "swift/example.swift",
+    "fields": [
+      "value"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "scala",
+    "file": "scala/example.scala",
+    "fields": [
+      "value"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "dart",
+    "file": "dart/example.dart",
+    "fields": [
+      "value"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "sql",
+    "file": "sql/example.sql",
+    "fields": [
+      "value"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "elixir",
+    "file": "elixir/example.ex",
+    "fields": [
+      "value"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "lua",
+    "file": "lua/example.lua",
+    "fields": [
+      "value",
+      "other"
+    ],
+    "applicability": "source-backed members/columns"
+  },
+  {
+    "language": "bash",
+    "file": "bash/example.sh",
+    "fields": [],
+    "applicability": "No class/record/table field model; configuration, shell variables, or template/text content use separate models."
+  },
+  {
+    "language": "hcl",
+    "file": "hcl/example.tf",
+    "fields": [],
+    "applicability": "No class/record/table field model; configuration, shell variables, or template/text content use separate models."
+  },
+  {
+    "language": "markdown",
+    "file": "markdown/example.md",
+    "fields": [],
+    "applicability": "No class/record/table field model; configuration, shell variables, or template/text content use separate models."
+  },
+  {
+    "language": "erb",
+    "file": "erb/example.erb",
+    "fields": [],
+    "applicability": "No class/record/table field model; configuration, shell variables, or template/text content use separate models."
+  }
+]

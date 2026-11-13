@@ -60,7 +60,7 @@
     "formal_parameters": "AstSkeleton",
     "function_declaration": "Symbol",
     "function_expression": "Symbol",
-    "function_signature": "SkipTypeToken",
+    "function_signature": "Symbol",
     "function_type": "SkipTypeToken",
     "generator_function": "Symbol",
     "generator_function_declaration": "Symbol",

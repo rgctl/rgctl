@@ -328,6 +328,9 @@ fn sources_unchanged(
     languages: Option<&str>,
     exclude: Option<&str>,
 ) -> bool {
+    if !rgctl_extraction::callable_resolution::semantics_current(store) {
+        return false;
+    }
     let mut discovery = DiscoveryConfig::default();
     if let Some(langs) = languages {
         discovery.languages = Some(

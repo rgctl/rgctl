@@ -184,6 +184,10 @@ pub enum Commands {
         )]
         with_cfg: bool,
 
+        /// Materialize source fields as graph nodes with identifier byte spans, without CFG/PDG.
+        #[arg(long = "with-fields", help_heading = "Pipeline features")]
+        with_fields: bool,
+
         /// Discover-time taint analysis (requires CFG/PDG; implies CFG pass if needed).
         /// Off by default. On-demand: `slice ... --taint`.
         #[arg(long = "with-taint", help_heading = "Pipeline features")]
@@ -1698,6 +1702,7 @@ impl Cli {
                 verbose: _,
                 with_security,
                 with_cfg,
+                with_fields,
                 with_taint,
                 taint_rules,
                 scip,
@@ -1746,6 +1751,7 @@ impl Cli {
                         exclude: join_exclude_patterns(&exclude),
                         with_security,
                         with_cfg,
+                        with_fields,
                         with_taint,
                         taint_rules,
                         scip,

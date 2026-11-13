@@ -523,36 +523,78 @@ pub struct EnsureCfgPdgOpts<'a> {
 /// Load CFG/PDG from the archive when present; otherwise build on demand (byte-range seek
 /// when spans are given) and optionally append the record to `.rgctl/analysis/cfg_pdg.archive.bin`.
 pub fn ensure_cfg_pdg_for_source(opts: EnsureCfgPdgOpts<'_>) -> Result<CfgPdgRecord> {
-    use crate::cfg_builder::{build_cfg_for_byte_range, build_cfg_for_function};
+    use crate::cfg_builder::{
+        build_cfg_for_byte_range, build_cfg_for_function, validate_unique_function_name,
+    };
     use rgctl_graph::code_index::hash_code;
 
     let file_key = opts.file_path.unwrap_or("");
     let code_hash = hash_code(opts.source);
-    let function_id = opts
-        .function_id
-        .unwrap_or_else(|| stable_record_uuid(file_key, opts.function_name, &code_hash));
+    let name_only = opts.function_id.is_none() && opts.start_byte.is_none();
+    // Legacy initializer ordinals are not owner-qualified identities. Preserve
+    // their existing full-build selection/failure behavior rather than treating
+    // that historical mapping as general source-name uniqueness evidence.
+    let prepared_legacy_cfg = if name_only && opts.function_name.starts_with("<initblock>") {
+        Some(build_cfg_for_function(
+            opts.language,
+            opts.source,
+            opts.function_name,
+        )?)
+    } else {
+        None
+    };
+    let needs_name_proof = name_only && prepared_legacy_cfg.is_none();
+    let function_id = opts.function_id.unwrap_or_else(|| {
+        stable_record_uuid(
+            file_key,
+            &format!(
+                "{}:{:?}:{:?}",
+                opts.function_name, opts.start_byte, opts.end_byte
+            ),
+            &code_hash,
+        )
+    });
 
     let archive_path = CfgPdgArchive::default_path(opts.repo_root);
     if archive_path.is_file()
         && let Ok(view) = CfgPdgArchiveMmap::open(&archive_path)
     {
         if let Ok(Some(record)) = view.load_record(function_id) {
-            return Ok(record);
+            if record.code_hash == code_hash
+                && (!name_only || record.function_name == opts.function_name)
+            {
+                if needs_name_proof {
+                    validate_unique_function_name(opts.language, opts.source, opts.function_name)?;
+                }
+                return Ok(record);
+            }
         }
         // Discover `--with-cfg` keys by graph node Uuid; on-demand path uses a
         // stable content hash. Fall back to (file, name, hash) match.
-        if let Some(record) =
-            find_record_by_stable_key(&view, file_key, opts.function_name, &code_hash)
+        if name_only
+            && let Some(record) =
+                find_record_by_stable_key(&view, file_key, opts.function_name, &code_hash)
         {
+            if needs_name_proof {
+                validate_unique_function_name(opts.language, opts.source, opts.function_name)?;
+            }
             return Ok(record);
         }
     }
 
-    let cfg = match (opts.start_byte, opts.end_byte) {
-        (Some(start), Some(end)) => {
-            build_cfg_for_byte_range(opts.language, opts.source, opts.function_name, start, end)?
+    let cfg = if let Some(cfg) = prepared_legacy_cfg {
+        cfg
+    } else {
+        match (opts.start_byte, opts.end_byte) {
+            (Some(start), Some(end)) => build_cfg_for_byte_range(
+                opts.language,
+                opts.source,
+                opts.function_name,
+                start,
+                end,
+            )?,
+            _ => build_cfg_for_function(opts.language, opts.source, opts.function_name)?,
         }
-        _ => build_cfg_for_function(opts.language, opts.source, opts.function_name)?,
     };
     let pdg = ProgramDependenceGraph::build(&cfg, opts.source.as_bytes())?;
     let record = CfgPdgRecord {
@@ -594,7 +636,10 @@ fn find_record_by_stable_key(
     // Prefer O(log F) TOC hit when a stable alias was written (v3 + file_path).
     if !file_key.is_empty() {
         let alias = stable_record_uuid(file_key, function_name, code_hash);
-        if let Ok(Some(record)) = view.load_record(alias) {
+        if let Ok(Some(record)) = view.load_record(alias)
+            && record.function_name == function_name
+            && record.code_hash == code_hash
+        {
             return Some(record);
         }
     }
@@ -1067,5 +1112,119 @@ mod tests {
         })
         .unwrap();
         assert_eq!(loaded.function_id, graph_id);
+    }
+    fn name_only_opts<'a>(root: &'a Path, source: &'a str, name: &'a str) -> EnsureCfgPdgOpts<'a> {
+        EnsureCfgPdgOpts {
+            repo_root: root,
+            language: "java",
+            source,
+            function_name: name,
+            file_path: Some("Example.java"),
+            start_byte: None,
+            end_byte: None,
+            function_id: None,
+            persist: false,
+        }
+    }
+
+    fn java_span_record(source: &str, snippet: &str, name: &str, id: Uuid) -> CfgPdgRecord {
+        let start = source.find(snippet).unwrap();
+        let cfg = crate::cfg_builder::build_cfg_for_byte_range(
+            "java",
+            source,
+            name,
+            start,
+            start + snippet.len(),
+        )
+        .unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes()).unwrap();
+        CfgPdgRecord {
+            function_id: id,
+            code_hash: hash_code(source),
+            function_name: name.into(),
+            file_path: Some("Example.java".into()),
+            cfg: Arc::new(cfg),
+            pdg: Arc::new(pdg),
+        }
+    }
+
+    fn write_single_record(root: &Path, record: CfgPdgRecord) {
+        let mut archive = CfgPdgArchive::default();
+        archive.insert(record);
+        archive
+            .write_to_path(&CfgPdgArchive::default_path(root))
+            .unwrap();
+    }
+
+    #[test]
+    fn name_only_warm_hit_reuses_unique_record_without_appending() {
+        let dir = TempDir::new().unwrap();
+        let snippet = "int quote(int value) { return value; }";
+        let source = format!("class Example {{ {snippet} }}");
+        let id = Uuid::from_u128(4242);
+        write_single_record(dir.path(), java_span_record(&source, snippet, "quote", id));
+        let path = CfgPdgArchive::default_path(dir.path());
+        let before = std::fs::read(&path).unwrap();
+        let mut opts = name_only_opts(dir.path(), &source, "quote");
+        opts.persist = true;
+        let record = ensure_cfg_pdg_for_source(opts).unwrap();
+        assert_eq!(record.function_id, id);
+        assert_eq!(record.code_hash, hash_code(&source));
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+
+    #[test]
+    fn name_only_partial_archive_cannot_hide_source_overloads_or_other_owners() {
+        let snippet = "int quote(int value) { return value; }";
+        for source in [
+            format!("class Example {{ {snippet} int quote(String value) {{ return 2; }} }}"),
+            format!("class First {{ {snippet} }} class Second {{ {snippet} }}"),
+        ] {
+            for primary_hit in [false, true] {
+                let dir = TempDir::new().unwrap();
+                // A predictable primary UUID is also insufficient uniqueness evidence.
+                let id = if primary_hit {
+                    stable_record_uuid("Example.java", "quote:None:None", &hash_code(&source))
+                } else {
+                    Uuid::from_u128(73)
+                };
+                write_single_record(dir.path(), java_span_record(&source, snippet, "quote", id));
+                let archive =
+                    CfgPdgArchiveMmap::open(&CfgPdgArchive::default_path(dir.path())).unwrap();
+                assert_eq!(archive.len(), 1, "only one source declaration is cached");
+                assert!(
+                    ensure_cfg_pdg_for_source(name_only_opts(dir.path(), &source, "quote"))
+                        .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn name_only_stable_alias_must_revalidate_payload_source_hash() {
+        let dir = TempDir::new().unwrap();
+        let before_snippet = "int quote() { return 1; }";
+        let before = format!("class Example {{ {before_snippet} }}");
+        let after = "class Example { int quote() { return 2; } }";
+        // A stale payload under the requested alias must not bypass the hash check.
+        let alias = stable_record_uuid("Example.java", "quote", &hash_code(after));
+        write_single_record(
+            dir.path(),
+            java_span_record(&before, before_snippet, "quote", alias),
+        );
+        let result = ensure_cfg_pdg_for_source(name_only_opts(dir.path(), after, "quote")).unwrap();
+        assert_eq!(result.code_hash, hash_code(after));
+        assert_ne!(result.function_id, alias);
+    }
+
+    #[test]
+    fn name_only_cache_cannot_supply_a_function_missing_from_source() {
+        let dir = TempDir::new().unwrap();
+        let snippet = "int quote() { return 1; }";
+        let source = format!("class Example {{ {snippet} }}");
+        let mut record = java_span_record(&source, snippet, "quote", Uuid::from_u128(99));
+        record.function_name = "missing".into();
+        write_single_record(dir.path(), record);
+        assert!(ensure_cfg_pdg_for_source(name_only_opts(dir.path(), &source, "missing")).is_err());
     }
 }

@@ -498,6 +498,7 @@ pub fn extract_all_single_pass(
         .filter(|s| s.symbol_type == SymbolType::Function)
         .collect();
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         push_php_call_relation(
             pending.node,
             source,
@@ -506,6 +507,13 @@ pub fn extract_all_single_pass(
             &function_symbols,
             &import_map,
             &mut relations,
+        );
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Php,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
         );
     }
 
@@ -517,6 +525,12 @@ pub fn extract_all_single_pass(
         "php",
         source,
         Some(root),
+        &mut ctx.symbols,
+        &mut relations,
+    );
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Php,
         &mut ctx.symbols,
         &mut relations,
     );

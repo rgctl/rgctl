@@ -561,6 +561,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -572,6 +573,13 @@ pub fn extract_all_single_pass(
             from_fn,
             "csharp",
             &mut relations,
+        );
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Csharp,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
         );
     }
 
@@ -588,6 +596,12 @@ pub fn extract_all_single_pass(
         "csharp",
         source,
         Some(root),
+        &mut ctx.symbols,
+        &mut relations,
+    );
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Csharp,
         &mut ctx.symbols,
         &mut relations,
     );

@@ -55,6 +55,7 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("formal_parameters", HandlerMask::AST_SKELETON),
     ("function_declaration", HandlerMask::SYMBOL),
     ("function_expression", HandlerMask::SYMBOL),
+    ("function_signature", HandlerMask::SYMBOL),
     ("generator_function", HandlerMask::SYMBOL),
     ("generator_function_declaration", HandlerMask::SYMBOL),
     ("if_statement", HandlerMask::CFG_STMT),
@@ -227,6 +228,26 @@ pub fn extract_all_single_pass(
                 }
 
                 match kind {
+                    "function_signature" => {
+                        ctx.symbols
+                            .push(plugin.extract_function(node, source, &file_path_str)?)
+                    }
+                    "method_signature"
+                        if node.parent().is_some_and(|p| p.kind() == "class_body") =>
+                    {
+                        if let Some(owner) = ctx
+                            .scopes
+                            .current_type()
+                            .map(|f| f.qualified_prefix.clone())
+                        {
+                            ctx.symbols.push(plugin.extract_method_signature(
+                                node,
+                                source,
+                                &file_path_str,
+                                &owner,
+                            )?);
+                        }
+                    }
                     "class_declaration" | "abstract_class_declaration" => {
                         let sym = plugin.extract_class(node, source, &file_path_str)?;
                         let name = sym.name.clone();
@@ -480,6 +501,7 @@ pub fn extract_all_single_pass(
         .collect();
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -504,12 +526,25 @@ pub fn extract_all_single_pass(
                 &mut relations,
             );
         }
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Typescript,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
 
     rgctl_plugin_helpers::apply_framework_catalog(
         "typescript",
         source,
         Some(root),
+        &mut ctx.symbols,
+        &mut relations,
+    );
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Typescript,
         &mut ctx.symbols,
         &mut relations,
     );
