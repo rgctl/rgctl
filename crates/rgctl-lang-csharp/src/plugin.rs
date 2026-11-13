@@ -153,6 +153,12 @@ impl CSharpPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, Some(name_node));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Csharp,
+        );
         Ok(symbol)
     }
 
@@ -197,6 +203,12 @@ impl CSharpPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Csharp,
+        );
         Ok(symbol)
     }
 
@@ -232,6 +244,12 @@ impl CSharpPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Csharp,
+        );
         Ok(symbol)
     }
 
@@ -324,6 +342,12 @@ impl CSharpPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Csharp,
+        );
         Ok(symbol)
     }
 
@@ -393,6 +417,11 @@ impl CSharpPlugin {
                         }
                         if let Some(name_node) = declarator.child_by_field_name("name") {
                             fields.push(Field {
+                                source_span: rgctl_plugin_helpers::field_source_span(
+                                    child,
+                                    source,
+                                    name_node.utf8_text(source)?,
+                                ),
                                 name: name_node.utf8_text(source)?.to_string(),
                                 field_type: field_type.clone(),
                                 visibility: visibility.clone(),
@@ -410,6 +439,9 @@ impl CSharpPlugin {
                         .and_then(|n| type_text(n, source));
                     if let Some(name) = name {
                         fields.push(Field {
+                            source_span: rgctl_plugin_helpers::field_source_span(
+                                child, source, &name,
+                            ),
                             name,
                             field_type,
                             visibility: field_visibility(child, source),
@@ -428,6 +460,9 @@ impl CSharpPlugin {
                             .child_by_field_name("type")
                             .and_then(|n| type_text(n, source));
                         fields.push(Field {
+                            source_span: rgctl_plugin_helpers::field_source_span(
+                                child, source, &name,
+                            ),
                             name,
                             field_type,
                             visibility,
@@ -445,6 +480,11 @@ impl CSharpPlugin {
                             }
                             if let Some(name_node) = declarator.child_by_field_name("name") {
                                 fields.push(Field {
+                                    source_span: rgctl_plugin_helpers::field_source_span(
+                                        child,
+                                        source,
+                                        name_node.utf8_text(source)?,
+                                    ),
                                     name: name_node.utf8_text(source)?.to_string(),
                                     field_type: field_type.clone(),
                                     visibility: visibility.clone(),
@@ -470,6 +510,9 @@ impl CSharpPlugin {
                         });
                     if let Some(name) = name {
                         fields.push(Field {
+                            source_span: rgctl_plugin_helpers::field_source_span(
+                                child, source, &name,
+                            ),
                             name,
                             field_type: None,
                             visibility: None,
@@ -528,6 +571,12 @@ impl CSharpPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Csharp,
+        );
         Ok(symbol)
     }
 

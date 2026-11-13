@@ -168,6 +168,12 @@ impl JavaScriptPlugin {
             node,
             node.child_by_field_name("name"),
         );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Javascript,
+        );
         Ok(symbol)
     }
 
@@ -285,6 +291,9 @@ impl JavaScriptPlugin {
                     if let Some(name) = name {
                         if seen.insert(name.clone()) {
                             fields.push(Field {
+                                source_span: rgctl_plugin_helpers::field_source_span(
+                                    child, source, &name,
+                                ),
                                 name,
                                 field_type: None,
                                 visibility: None,
@@ -343,6 +352,9 @@ impl JavaScriptPlugin {
                             {
                                 if seen.insert(name.clone()) {
                                     fields.push(Field {
+                                        source_span: rgctl_plugin_helpers::field_source_span(
+                                            node, source, &name,
+                                        ),
                                         name,
                                         field_type: None,
                                         visibility: None,

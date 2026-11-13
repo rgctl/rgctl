@@ -180,6 +180,12 @@ impl TypeScriptPlugin {
             node,
             node.child_by_field_name("name"),
         );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Typescript,
+        );
         Ok(symbol)
     }
 
@@ -434,6 +440,12 @@ impl TypeScriptPlugin {
             node,
             node.child_by_field_name("name"),
         );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Typescript,
+        );
         Ok(symbol)
     }
 
@@ -570,6 +582,7 @@ impl TypeScriptPlugin {
 
                 if let Some(name) = name {
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                         name,
                         field_type,
                         visibility,
@@ -691,6 +704,9 @@ impl TypeScriptPlugin {
                     };
                     if let Some(member) = member.filter(|s| !s.is_empty() && s != ",") {
                         fields.push(Field {
+                            source_span: rgctl_plugin_helpers::field_source_span(
+                                child, source, &member,
+                            ),
                             name: member,
                             field_type: None,
                             visibility: None,
@@ -817,6 +833,7 @@ impl TypeScriptPlugin {
 
                 if let Some(name) = name {
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                         name,
                         field_type,
                         visibility: None,

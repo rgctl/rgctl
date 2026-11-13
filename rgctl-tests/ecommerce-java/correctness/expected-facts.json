@@ -246,7 +246,8 @@
       "severity": "required",
       "blast": {
         "exact_direct_callers": [
-          "checkout"
+          "checkout",
+          "clearCart"
         ],
         "min_score": 0.1
       }

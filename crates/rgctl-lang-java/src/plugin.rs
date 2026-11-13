@@ -9,6 +9,7 @@
 use crate::single_pass::{extract_all_single_pass, java_ast_handlers};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
+use rgctl_plugin_helpers::callable_identity::{self, Policy};
 use rgctl_plugin_helpers::{ComplexityCalculator, record_call_site_spans, record_symbol_spans};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -576,7 +577,12 @@ impl JavaPlugin {
 
     /// Populate `type_params` / `throws` / `receiver_type` metadata keys on an
     /// existing metadata object for a method/constructor-shaped node.
-    fn apply_callable_metadata(&self, node: Node, source: &[u8], metadata: &mut serde_json::Value) {
+    fn apply_callable_metadata(
+        &self,
+        node: Node,
+        source: &[u8],
+        metadata: &mut serde_json::Value,
+    ) -> Result<()> {
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
@@ -586,6 +592,7 @@ impl JavaPlugin {
         if let Some(rt) = self.receiver_type_text(node, source) {
             metadata["receiver_type"] = serde_json::Value::String(rt);
         }
+        Ok(())
     }
 
     // ---------------------------------------------------------------
@@ -715,14 +722,25 @@ impl JavaPlugin {
     /// relations pass (each with a fresh `ExtractCtx`/counter) so both agree
     /// on `N` for `Owner.$lambda$N`, since both walk the tree in the same
     /// document order.
-    fn lambda_index(&self, node: Node, source: &[u8], ctx: &ExtractCtx) -> (Option<String>, usize) {
+    fn lambda_index(
+        &self,
+        node: Node,
+        source: &[u8],
+        ctx: &ExtractCtx,
+    ) -> Result<(Option<String>, usize)> {
         let owner = self
             .find_containing_callable_qn(node, source, ctx)
             .or_else(|| {
                 self.find_containing_type_name(node, source, ctx)
                     .map(|o| ctx.qualify_type(&o))
             });
-        let key = owner.clone().unwrap_or_else(|| "<unknown>".to_string());
+        let key = format!(
+            "{}\u{1f}{}",
+            owner.as_deref().unwrap_or("<unknown>"),
+            callable_identity::java::enclosing_discriminator(node, source)?
+                .as_deref()
+                .unwrap_or("")
+        );
         let idx = {
             let mut counters = ctx.lambda_counters.borrow_mut();
             let counter = counters.entry(key).or_insert(0);
@@ -730,7 +748,7 @@ impl JavaPlugin {
             *counter += 1;
             current
         };
-        (owner, idx)
+        Ok((owner, idx))
     }
 
     // ---------------------------------------------------------------
@@ -763,7 +781,7 @@ impl JavaPlugin {
         let parameters = self.extract_parameters(node, source)?;
 
         let mut metadata = serde_json::json!({ "language": "java" });
-        self.apply_callable_metadata(node, source, &mut metadata);
+        self.apply_callable_metadata(node, source, &mut metadata)?;
 
         let mut symbol = Symbol {
             name,
@@ -780,7 +798,7 @@ impl JavaPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, Some(name_node));
-        Ok(symbol)
+        callable_identity::try_symbol(symbol, node, source, Policy::Java)
     }
 
     pub(crate) fn extract_constructor(
@@ -815,7 +833,7 @@ impl JavaPlugin {
             "language": "java",
             "is_constructor": true,
         });
-        self.apply_callable_metadata(node, source, &mut metadata);
+        self.apply_callable_metadata(node, source, &mut metadata)?;
 
         let mut symbol = Symbol {
             name,
@@ -832,7 +850,7 @@ impl JavaPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, Some(name_node));
-        Ok(symbol)
+        callable_identity::try_symbol(symbol, node, source, Policy::Java)
     }
 
     /// `compact_constructor_declaration` (records): `record Point(int x, int y) { public Point { ... } }`.
@@ -870,7 +888,8 @@ impl JavaPlugin {
             location: source_location(node, file_path),
             signature: Some(first_line_text(node, source)?),
             return_type: None,
-            parameters: vec![],
+            parameters: self
+                .extract_parameters(self.find_enclosing_type_node(node).unwrap_or(node), source)?,
             fields: vec![],
             modifiers,
             documentation: None,
@@ -882,7 +901,7 @@ impl JavaPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, Some(name_node));
-        Ok(symbol)
+        callable_identity::try_symbol(symbol, node, source, Policy::Java)
     }
 
     pub(crate) fn extract_static_initializer(
@@ -1070,7 +1089,9 @@ impl JavaPlugin {
                     && let Some(name_node) = field_child.child_by_field_name("name")
                 {
                     let name = name_node.utf8_text(source)?.to_string();
+
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                         name,
                         field_type: field_type.clone(),
                         visibility: visibility.clone(),
@@ -1113,7 +1134,9 @@ impl JavaPlugin {
                     Some(args) => Some(format!("enum_constant{args}")),
                     None => Some("enum_constant".to_string()),
                 };
+
                 fields.push(Field {
+                    source_span: rgctl_plugin_helpers::field_source_span(child, source, name),
                     name: name.to_string(),
                     field_type: None,
                     visibility,
@@ -1152,7 +1175,9 @@ impl JavaPlugin {
                     && let Some(name_node) = decl.child_by_field_name("name")
                 {
                     let name = name_node.utf8_text(source)?.to_string();
+
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                         name,
                         field_type: field_type.clone(),
                         visibility: None,
@@ -1170,6 +1195,7 @@ impl JavaPlugin {
         Ok(params
             .into_iter()
             .map(|p| Field {
+                source_span: rgctl_plugin_helpers::field_source_span(record_node, source, &p.name),
                 name: p.name,
                 field_type: p.param_type,
                 visibility: None,
@@ -1198,6 +1224,7 @@ impl JavaPlugin {
 
         let modifiers = self.collect_keyword_modifiers(node, source);
 
+        let mut metadata = serde_json::json!({ "language": "java" });
         let fields = match symbol_type {
             SymbolType::Class => self.extract_class_fields(node, source)?,
             SymbolType::Enum => self.extract_enum_fields(node, source)?,
@@ -1209,7 +1236,6 @@ impl JavaPlugin {
 
         let qualified_name = Some(self.type_node_qualified_name(node, source, ctx));
 
-        let mut metadata = serde_json::json!({ "language": "java" });
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
@@ -1643,6 +1669,7 @@ impl JavaPlugin {
             let class_sym = &mut symbols[class_idx];
             if !class_sym.fields.iter().any(|f| f.name == "log") {
                 class_sym.fields.push(Field {
+                    source_span: None,
                     name: "log".into(),
                     field_type: Some("Logger".into()),
                     visibility: Some("private static final".into()),
@@ -1672,10 +1699,10 @@ impl JavaPlugin {
         let name = name_node.utf8_text(source)?.to_string();
 
         let modifiers = self.collect_keyword_modifiers(node, source);
-        let fields = self.extract_record_fields(node, source)?;
         let qualified_name = Some(self.type_node_qualified_name(node, source, ctx));
 
         let mut metadata = serde_json::json!({ "language": "java", "is_record": true });
+        let fields = self.extract_record_fields(node, source)?;
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
@@ -1760,7 +1787,7 @@ impl JavaPlugin {
         file_path: &str,
         ctx: &ExtractCtx,
     ) -> Result<Symbol> {
-        let (owner, idx) = self.lambda_index(node, source, ctx);
+        let (owner, idx) = self.lambda_index(node, source, ctx)?;
         let name = format!("$lambda${idx}");
         let qualified_name = owner.map(|o| format!("{o}.{name}"));
 
@@ -1775,11 +1802,13 @@ impl JavaPlugin {
             fields: vec![],
             modifiers: vec![],
             documentation: None,
-            metadata: serde_json::json!({ "language": "java", "is_lambda": true }),
+            metadata: serde_json::json!({
+                "language": "java", "is_lambda": true,
+            }),
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
-        Ok(symbol)
+        callable_identity::try_symbol(symbol, node, source, Policy::Java)
     }
 
     pub(crate) fn extract_package_symbol(
@@ -2261,6 +2290,10 @@ impl LanguagePlugin for JavaPlugin {
         Some(tree_sitter_java::LANGUAGE.into())
     }
 
+    fn cache_fingerprint(&self) -> Option<&[u8]> {
+        Some(b"java-shared-callable-identity-v1")
+    }
+
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let tree =
             parse_with_pool("java", tree_sitter_java::LANGUAGE.into(), source).map_err(|e| {
@@ -2297,6 +2330,7 @@ impl LanguagePlugin for JavaPlugin {
             &mut sym_copy,
             &mut relations,
         );
+        callable_identity::finish(Policy::Java, &mut sym_copy, &mut relations);
         Ok(relations)
     }
 
@@ -3283,7 +3317,7 @@ impl JavaPlugin {
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         if node.kind() == "lambda_expression" {
-            let (owner, idx) = self.lambda_index(node, source, ctx);
+            let (owner, idx) = self.lambda_index(node, source, ctx)?;
             if let Some(from) = owner {
                 let to = format!("{from}.$lambda${idx}");
                 relations.push(Relation {
@@ -3291,7 +3325,11 @@ impl JavaPlugin {
                     to,
                     relation_type: RelationType::Calls,
                     location: source_location(node, &file_path.to_string_lossy()),
-                    metadata: serde_json::json!({ "language": "java", "is_lambda_call": true }),
+                    metadata: serde_json::json!({
+                        "language": "java", "is_lambda_call": true,
+                        "from_identity_discriminator": callable_identity::java::enclosing_discriminator(node, source)?,
+                        "to_identity_discriminator": callable_identity::java::enclosing_discriminator(node, source)?,
+                    }),
                     to_qualified_hint: None,
                     to_type_hint: None,
                     ..Default::default()
@@ -3654,6 +3692,9 @@ impl JavaPlugin {
                     s.name == callee
                         && s.symbol_type == SymbolType::Function
                         && s.location.file == file_path.to_string_lossy()
+                        && to_qualified_hint
+                            .as_deref()
+                            .is_none_or(|hint| s.qualified_name.as_deref() == Some(hint))
                 })
                 .collect();
             let local_target = match same_file_matches.as_slice() {
@@ -3666,16 +3707,26 @@ impl JavaPlugin {
                     .unwrap_or_else(|| callee.to_string()),
             };
 
+            let metadata = serde_json::json!({ "language": "java" });
+            let relation_start = relations.len();
             relations.push(Relation {
                 from,
                 to: local_target,
                 relation_type: RelationType::Calls,
                 location: source_location(node, &file_path.to_string_lossy()),
-                metadata: serde_json::json!({ "language": "java" }),
+                metadata,
                 to_qualified_hint,
                 to_type_hint,
                 ..Default::default()
             });
+            callable_identity::call_with_local_types(
+                node,
+                source,
+                Policy::Java,
+                Some(from_fn),
+                &mut relations[relation_start..],
+                |name| self.find_local_variable_type(node, name, source),
+            );
         }
     }
 
@@ -4023,6 +4074,101 @@ mod tests {
         plugin
             .extract_relations(Path::new(file), source, &symbols)
             .unwrap()
+    }
+
+    #[test]
+    fn lambda_identity_is_scoped_to_the_owning_overload() {
+        let symbols = symbols_of(
+            br#"class Library {
+            Runnable quote(int value) { return () -> intHelper(); }
+            Runnable quote(String value) { return () -> stringHelper(); }
+        }"#,
+            "Library.java",
+        );
+        let lambdas: Vec<_> = symbols
+            .iter()
+            .filter(|s| s.metadata["is_lambda"] == true)
+            .collect();
+        assert_eq!(lambdas.len(), 2);
+        assert_eq!(lambdas[0].name, "$lambda$0");
+        assert_eq!(lambdas[1].name, "$lambda$0");
+        assert_eq!(lambdas[0].metadata["identity_discriminator"], "(int)");
+        assert_eq!(lambdas[1].metadata["identity_discriminator"], "(String)");
+    }
+
+    #[test]
+    fn callable_identity_tracks_types_not_names_locations_or_bodies() {
+        let original = include_bytes!(
+            "../../../tests/fixtures/tier1_identity_dependencies/java/dependencies/library/baseline/demo/Library.java"
+        );
+        let candidate = include_bytes!(
+            "../../../tests/fixtures/tier1_identity_dependencies/java/dependencies/library/candidate/demo/Library.java"
+        );
+        let before = symbols_of(original, "Library.java");
+        let changed = symbols_of(candidate, "Library.java");
+        let shifted = format!(
+            "\n\n{}",
+            std::str::from_utf8(candidate)
+                .expect("fixture UTF-8")
+                .replace("int value", "final int renamed")
+                .replace("value + 1", "renamed + 2")
+        );
+        let after = symbols_of(shifted.as_bytes(), "Library.java");
+        for symbols in [&before, &changed, &after] {
+            let methods: Vec<_> = symbols.iter().filter(|s| s.name == "quote").collect();
+            assert_eq!(methods.len(), 2);
+            assert_eq!(methods[0].qualified_name, methods[1].qualified_name);
+            assert_eq!(methods[0].metadata["identity_discriminator"], "(int)");
+            assert_eq!(methods[1].metadata["identity_discriminator"], "(String)");
+        }
+    }
+
+    #[test]
+    fn callable_identity_normalizes_arrays_varargs_and_record_constructors() {
+        let symbols = symbols_of(
+            br#"class Arrays {
+            void first(@A String /* type */ [] values) {}
+            void second(String values[]) {}
+            void third(String... values) {}
+            void receiver(Arrays this, int value) {}
+            Arrays(int value) {}
+            Arrays(String value) {}
+        }
+        record Point(int x, String y) { Point {} }
+        "#,
+            "Arrays.java",
+        );
+        for name in ["first", "second", "third"] {
+            let method = symbols
+                .iter()
+                .find(|s| s.name == name)
+                .expect("array method");
+            assert_eq!(
+                method.metadata["identity_discriminator"], "(String[])",
+                "{name}"
+            );
+        }
+        let receiver = symbols
+            .iter()
+            .find(|s| s.name == "receiver")
+            .expect("receiver");
+        assert_eq!(receiver.metadata["identity_discriminator"], "(int)");
+        let constructors: Vec<_> = symbols
+            .iter()
+            .filter(|s| s.name == "Arrays")
+            .filter(|s| s.symbol_type == SymbolType::Function)
+            .collect();
+        assert_eq!(constructors.len(), 2);
+        assert_eq!(constructors[0].metadata["identity_discriminator"], "(int)");
+        assert_eq!(
+            constructors[1].metadata["identity_discriminator"],
+            "(String)"
+        );
+        let compact = symbols
+            .iter()
+            .find(|s| s.metadata["is_compact_constructor"] == true)
+            .expect("compact constructor");
+        assert_eq!(compact.metadata["identity_discriminator"], "(int,String)");
     }
 
     // ---------------------------------------------------------------

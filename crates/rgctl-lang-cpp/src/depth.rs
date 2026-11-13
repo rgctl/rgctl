@@ -25,6 +25,7 @@ pub fn extract_enumerator_fields(enum_node: Node, source: &[u8]) -> Vec<Field> {
             .and_then(|n| text(n, source));
         if let Some(name) = name {
             fields.push(Field {
+                source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                 name,
                 field_type: None,
                 visibility: None,
@@ -343,6 +344,12 @@ pub fn extract_lambda_expression(
         ..Default::default()
     };
     record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+    symbol = rgctl_plugin_helpers::callable_identity::symbol(
+        symbol,
+        node,
+        source,
+        rgctl_plugin_helpers::callable_identity::Policy::Cpp,
+    );
     Some(symbol)
 }
 

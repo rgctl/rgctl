@@ -164,7 +164,13 @@ fn push_type_symbol(
         ..Default::default()
     };
     record_symbol_spans_from_source(&mut sym, node, source);
-    ctx.symbols.push(sym);
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            sym,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Scala,
+        ));
     ctx.enter_scope(
         scope_kind,
         Some(name),
@@ -213,7 +219,13 @@ fn push_named_symbol(
         ..Default::default()
     };
     record_symbol_spans_from_source(&mut sym, node, source);
-    ctx.symbols.push(sym);
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            sym,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Scala,
+        ));
 }
 
 fn collect_scala_supertypes(node: Node, source: &[u8]) -> Vec<String> {
@@ -406,7 +418,13 @@ pub fn extract_all_single_pass(
                                 ..Default::default()
                             };
                             record_symbol_spans_from_source(&mut sym, node, source);
-                            ctx.symbols.push(sym);
+                            ctx.symbols
+                                .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                    sym,
+                                    node,
+                                    source,
+                                    rgctl_plugin_helpers::callable_identity::Policy::Scala,
+                                ));
                             ctx.enter_scope(
                                 ScopeKind::Function,
                                 Some(name),
@@ -438,7 +456,13 @@ pub fn extract_all_single_pass(
                                 ..Default::default()
                             };
                             record_symbol_spans_from_source(&mut sym, node, source);
-                            ctx.symbols.push(sym);
+                            ctx.symbols
+                                .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                    sym,
+                                    node,
+                                    source,
+                                    rgctl_plugin_helpers::callable_identity::Policy::Scala,
+                                ));
                             ctx.enter_scope(
                                 ScopeKind::Function,
                                 Some(name),
@@ -494,7 +518,13 @@ pub fn extract_all_single_pass(
                                 ..Default::default()
                             };
                             record_symbol_spans_from_source(&mut sym, node, source);
-                            ctx.symbols.push(sym);
+                            ctx.symbols
+                                .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                    sym,
+                                    node,
+                                    source,
+                                    rgctl_plugin_helpers::callable_identity::Policy::Scala,
+                                ));
                             ctx.enter_scope(
                                 ScopeKind::Function,
                                 Some(name),
@@ -546,7 +576,13 @@ pub fn extract_all_single_pass(
                             ..Default::default()
                         };
                         record_symbol_spans_from_source(&mut sym, node, source);
-                        ctx.symbols.push(sym);
+                        ctx.symbols
+                            .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                sym,
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Scala,
+                            ));
                         ctx.enter_scope(
                             ScopeKind::Function,
                             Some(name),
@@ -779,6 +815,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -791,7 +828,20 @@ pub fn extract_all_single_pass(
             "scala",
             &mut relations,
         );
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Scala,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Scala,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

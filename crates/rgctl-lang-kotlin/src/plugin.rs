@@ -252,6 +252,7 @@ impl KotlinPlugin {
                     });
                 if let Some(name) = name {
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(node, source, &name),
                         name,
                         field_type: None,
                         visibility: None,
@@ -293,6 +294,7 @@ impl KotlinPlugin {
                         .and_then(|n| n.utf8_text(source).ok())
                         .map(|s| s.trim().to_string());
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(node, source, &name),
                         name,
                         field_type,
                         visibility: None,
@@ -337,6 +339,9 @@ impl KotlinPlugin {
         if is_primary {
             for p in &parameters {
                 fields.push(Field {
+                    source_span: rgctl_plugin_helpers::field_source_span(
+                        ctor_node, source, &p.name,
+                    ),
                     name: p.name.clone(),
                     field_type: p.param_type.clone(),
                     visibility: None,
@@ -368,6 +373,12 @@ impl KotlinPlugin {
             &mut symbol,
             ctor_node,
             ctor_node.child_by_field_name("name"),
+        );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            ctor_node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Kotlin,
         );
         symbols.push(symbol);
         // Attach primary-ctor fields onto the class symbol if we already emitted it —
@@ -413,6 +424,9 @@ impl KotlinPlugin {
                     source,
                 ) {
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(
+                            child, source, &p.name,
+                        ),
                         name: p.name,
                         field_type: p.param_type,
                         visibility: None,
@@ -445,6 +459,12 @@ impl KotlinPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Kotlin,
+        );
         symbols.push(symbol);
 
         let mut c2 = node.walk();
@@ -513,6 +533,12 @@ impl KotlinPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Kotlin,
+        );
         Some(symbol)
     }
 
@@ -556,6 +582,12 @@ impl KotlinPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Kotlin,
+        );
         Some(symbol)
     }
 
@@ -633,6 +665,12 @@ impl KotlinPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Kotlin,
+        );
         Some(symbol)
     }
 

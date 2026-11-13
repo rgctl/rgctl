@@ -73,6 +73,12 @@ impl CppPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, function_name_node(node));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Cpp,
+        );
         Ok(Some(symbol))
     }
 
@@ -113,6 +119,12 @@ impl CppPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Cpp,
+        );
         Ok(symbol)
     }
 
@@ -696,6 +708,7 @@ fn walk_cpp_calls(
                             let callee = func.utf8_text(source).ok().unwrap_or("").trim();
                             if !callee.is_empty() {
                                 last.to_qualified_hint = Some(format!("{scope}::{callee}"));
+                                last.metadata["inferred_callable_owner"] = true.into();
                             }
                         } else if let Some(hint) = last.to_qualified_hint.clone() {
                             if let Some(enriched) = enrich_cpp_namespace_hint(&hint, scope) {
@@ -838,6 +851,7 @@ pub(crate) fn extract_type_fields(type_node: Node, source: &[u8]) -> Result<Vec<
             };
             if let Some(name) = name_from_declarator(declarator, source) {
                 fields.push(Field {
+                    source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                     name,
                     field_type: field_type.clone(),
                     visibility: None,

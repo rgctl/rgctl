@@ -1,0 +1,1 @@
+class Box { int value; }

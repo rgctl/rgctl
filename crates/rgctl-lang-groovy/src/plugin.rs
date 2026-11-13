@@ -221,6 +221,12 @@ impl GroovyPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        );
         Some(symbol)
     }
 
@@ -259,6 +265,12 @@ impl GroovyPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        );
         Some(symbol)
     }
 
@@ -288,6 +300,12 @@ impl GroovyPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        );
         Some(symbol)
     }
 
@@ -329,6 +347,12 @@ impl GroovyPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        );
         Some(symbol)
     }
 
@@ -556,6 +580,12 @@ impl GroovyPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        );
         Some(symbol)
     }
 
@@ -588,6 +618,12 @@ impl GroovyPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        );
         Some(symbol)
     }
 
@@ -1013,6 +1049,12 @@ impl GroovyPlugin {
                         ..Default::default()
                     };
                     record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                    symbol = rgctl_plugin_helpers::callable_identity::symbol(
+                        symbol,
+                        node,
+                        source,
+                        rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+                    );
                     symbols.push(symbol);
                 }
                 "method_declaration" | "function_definition" => {
@@ -1088,6 +1130,12 @@ impl GroovyPlugin {
                         ..Default::default()
                     };
                     record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                    symbol = rgctl_plugin_helpers::callable_identity::symbol(
+                        symbol,
+                        node,
+                        source,
+                        rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+                    );
                     symbols.push(symbol);
                 }
                 "constructor_declaration" | "compact_constructor_declaration" => {
@@ -1116,6 +1164,12 @@ impl GroovyPlugin {
                         ..Default::default()
                     };
                     record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                    symbol = rgctl_plugin_helpers::callable_identity::symbol(
+                        symbol,
+                        node,
+                        source,
+                        rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+                    );
                     symbols.push(symbol);
                 }
                 "import_declaration" => {

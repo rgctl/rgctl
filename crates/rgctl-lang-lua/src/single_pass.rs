@@ -39,7 +39,7 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("parameters", HandlerMask::AST_SKELETON),
     ("repeat_statement", HandlerMask::CFG_STMT),
     ("return_statement", HandlerMask::CFG_STMT),
-    ("table_constructor", HandlerMask::AST_SKELETON),
+    ("table_constructor", HandlerMask::SYMBOL),
     ("unary_expression", HandlerMask::CFG_STMT),
     ("variable_declaration", HandlerMask::AST_SKELETON),
     ("while_statement", HandlerMask::CFG_STMT),
@@ -99,7 +99,13 @@ fn push_function_symbol(
         ..Default::default()
     };
     record_symbol_spans_from_source(&mut sym, node, source);
-    ctx.symbols.push(sym);
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            sym,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Lua,
+        ));
     ctx.enter_scope(
         ScopeKind::Function,
         Some(name),
@@ -195,6 +201,10 @@ pub fn extract_all_single_pass(
     let mut ctx = SinglePassCtx::new(dispatch);
     let mut relations = Vec::new();
     let mut pending_calls: Vec<PendingCall<'_>> = Vec::new();
+    // Source-order ordinals distinguish separate lexical local bindings with
+    // the same name. Cache by assignment/slot so nested tables reuse an owner.
+    let mut local_table_owners = std::collections::HashMap::<(usize, usize), String>::new();
+    let mut local_table_ordinals = std::collections::HashMap::<String, usize>::new();
     let mut depth_warned = false;
 
     let mut stack = vec![Visit::Pre(root, 0)];
@@ -236,6 +246,120 @@ pub fn extract_all_single_pass(
                 let mut pushed_scope = false;
 
                 match kind {
+                    "table_constructor" => {
+                        let mut current = node;
+                        let mut owner = None;
+                        let mut path = Vec::new();
+                        while let Some(parent) = current.parent() {
+                            match parent.kind() {
+                                "field" => {
+                                    // Only a named table value has a stable member owner;
+                                    // array entries and computed keys cannot inherit it.
+                                    let Some(key) = parent.child_by_field_name("name") else {
+                                        break;
+                                    };
+                                    if key.kind() != "identifier" {
+                                        break;
+                                    }
+                                    if let Ok(name) = key.utf8_text(source) {
+                                        path.push(name.to_owned());
+                                    }
+                                }
+                                "table_constructor" | "parenthesized_expression" => {}
+                                "expression_list" => {
+                                    let Some(assignment) = parent
+                                        .parent()
+                                        .filter(|n| n.kind() == "assignment_statement")
+                                    else {
+                                        break;
+                                    };
+                                    let mut expressions = parent.walk();
+                                    let position = parent
+                                        .named_children(&mut expressions)
+                                        .filter(|n| n.kind() != "comment")
+                                        .position(|n| n.id() == current.id());
+                                    let Some(position) = position else {
+                                        break;
+                                    };
+                                    let mut children = assignment.walk();
+                                    let lhs = assignment
+                                        .named_children(&mut children)
+                                        .find(|n| n.kind() == "variable_list");
+                                    owner = lhs.and_then(|lhs| {
+                                        let mut names = lhs.walk();
+                                        lhs.children_by_field_name("name", &mut names)
+                                            .nth(position)
+                                            .and_then(|n| n.utf8_text(source).ok())
+                                            .map(str::to_owned)
+                                    });
+                                    if assignment
+                                        .parent()
+                                        .is_some_and(|n| n.kind() == "variable_declaration")
+                                        && let Some(local) = owner.as_mut()
+                                    {
+                                        let owner_key = (assignment.id(), position);
+                                        if let Some(previous) = local_table_owners.get(&owner_key) {
+                                            *local = previous.clone();
+                                        } else {
+                                            let base = if let Some(frame) =
+                                                ctx.scopes.current_function()
+                                            {
+                                                format!("{}.{}", frame.qualified_prefix, local)
+                                            } else {
+                                                local.clone()
+                                            };
+                                            let ordinal = local_table_ordinals
+                                                .entry(base.clone())
+                                                .or_default();
+                                            *local = if *ordinal == 0 {
+                                                base
+                                            } else {
+                                                format!("{base}#local{}", *ordinal + 1)
+                                            };
+                                            *ordinal += 1;
+                                            local_table_owners.insert(owner_key, local.clone());
+                                        }
+                                    }
+                                    break;
+                                }
+                                // Do not attribute tables returned by a function or
+                                // passed to a call to an unrelated outer assignment.
+                                _ => break,
+                            }
+                            current = parent;
+                        }
+                        if let Some(mut owner) = owner {
+                            for component in path.iter().rev() {
+                                owner.push('.');
+                                owner.push_str(component);
+                            }
+                            let mut cursor = node.walk();
+                            for member in node
+                                .named_children(&mut cursor)
+                                .filter(|n| n.kind() == "field")
+                            {
+                                if let Some(key) = member.child_by_field_name("name")
+                                    && key.kind() == "identifier"
+                                    && let Ok(name) = key.utf8_text(source)
+                                {
+                                    let mut symbol = Symbol {
+                                        name: name.into(),
+                                        symbol_type: SymbolType::Variable,
+                                        qualified_name: Some(format!("{owner}.{name}")),
+                                        location: node_to_location(member, &file_path_str),
+                                        metadata: serde_json::json!({"language":"lua","kind":"field"}),
+                                        ..Default::default()
+                                    };
+                                    rgctl_plugin_helpers::spans::field_symbol_spans(
+                                        &mut symbol,
+                                        member,
+                                        source,
+                                    );
+                                    ctx.symbols.push(symbol);
+                                }
+                            }
+                        }
+                    }
                     "function_declaration" => {
                         if let Some(name) = lua_function_decl_name(node, source) {
                             pushed_scope =
@@ -313,6 +437,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -325,7 +450,20 @@ pub fn extract_all_single_pass(
             "lua",
             &mut relations,
         );
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Lua,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Lua,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }
@@ -334,6 +472,85 @@ pub fn extract_all_single_pass(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn table_members_follow_their_matching_assignment_and_local_function_scope() {
+        let source = "local a,b = {x=1}, {y=2, nested={z=3}}\nfunction first() local config={value=1} end\nfunction second() local config={value=2} end\n";
+        let plugin = Plugin::new().unwrap();
+        let result =
+            extract_all_single_pass(&plugin, Path::new("fields.lua"), source.as_bytes()).unwrap();
+        let fields: std::collections::BTreeSet<_> = result
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.metadata["kind"] == "field")
+            .map(|symbol| symbol.qualified_name.as_deref().unwrap())
+            .collect();
+        assert_eq!(
+            fields,
+            std::collections::BTreeSet::from([
+                "a.x",
+                "b.y",
+                "b.nested",
+                "b.nested.z",
+                "first.config.value",
+                "second.config.value"
+            ])
+        );
+        for field in result
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.metadata["kind"] == "field")
+        {
+            let start =
+                field.start_byte.unwrap() as usize + field.name_rel_offset.unwrap() as usize;
+            let end = start
+                + field
+                    .name_token_len
+                    .map(usize::from)
+                    .unwrap_or(field.name.len());
+            assert_eq!(&source[start..end], field.name);
+        }
+    }
+
+    #[test]
+    fn separate_lexical_locals_and_unequal_assignments_do_not_alias_table_fields() {
+        let source = "function f() do local config={value=1, nested={leaf=1}} end do local config={value=2} end end\nlocal a,b = {one=1}\nlocal c = {two=2}, {discarded=3}\n";
+        let plugin = Plugin::new().unwrap();
+        let result =
+            extract_all_single_pass(&plugin, Path::new("fields.lua"), source.as_bytes()).unwrap();
+        let fields: std::collections::BTreeSet<_> = result
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.metadata["kind"] == "field")
+            .map(|symbol| symbol.qualified_name.as_deref().unwrap())
+            .collect();
+        assert_eq!(
+            fields,
+            std::collections::BTreeSet::from([
+                "f.config.value",
+                "f.config.nested",
+                "f.config.nested.leaf",
+                "f.config#local2.value",
+                "a.one",
+                "c.two"
+            ])
+        );
+    }
+
+    #[test]
+    fn unrelated_returned_and_argument_tables_do_not_inherit_assignment_owners() {
+        let source = "local a = factory({argument=1})\nlocal b = {make=function() return {returned=1} end}\nlocal c = {{array_member=1}}\n";
+        let plugin = Plugin::new().unwrap();
+        let result =
+            extract_all_single_pass(&plugin, Path::new("fields.lua"), source.as_bytes()).unwrap();
+        let fields: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.metadata["kind"] == "field")
+            .collect();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].qualified_name.as_deref(), Some("b.make"));
+    }
 
     #[test]
     fn lua_extracts_function_call_and_complexity() {

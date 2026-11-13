@@ -92,6 +92,12 @@ impl CPlugin {
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, function_name_node(node));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::C,
+        );
         Ok(Some(symbol))
     }
 
@@ -474,6 +480,7 @@ pub(crate) fn extract_struct_fields(struct_node: Node, source: &[u8]) -> Result<
             };
             if let Some(name) = name_from_declarator(declarator, source) {
                 fields.push(Field {
+                    source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                     name,
                     field_type: field_type.clone(),
                     visibility: None,

@@ -331,6 +331,7 @@ pub fn push_call_relation_from(
         .clone()
         .unwrap_or_else(|| from_fn.name.clone());
 
+    let mut inferred_owner = false;
     let (to_type_hint, to_qualified_hint) = match language {
         "go" => {
             let ty = go_call_type_hint(node, source, symbols, from_fn);
@@ -339,7 +340,7 @@ pub fn push_call_relation_from(
         }
         "rust" => {
             let ty = rust_call_type_hint(node, source, symbols, from_fn);
-            let qh = ty.as_ref().map(|t| format!("{t}.{callee}"));
+            let qh = ty.as_ref().map(|t| format!("{t}::{callee}"));
             (ty, qh)
         }
         "cpp" => {
@@ -347,7 +348,10 @@ pub fn push_call_relation_from(
             if qh.is_some() {
                 (None, qh)
             } else {
-                oop_call_type_hint(node, source, symbols, from_fn, &callee, true)
+                let (ty, qh, inferred) =
+                    oop_call_type_hint(node, source, symbols, from_fn, &callee, true, "::");
+                inferred_owner = inferred;
+                (ty, qh)
             }
         }
         "python" => {
@@ -358,15 +362,24 @@ pub fn push_call_relation_from(
         "java" => java_call_type_hint(node, source, symbols, from_fn, &callee),
         "ruby" => ruby_call_type_hint(node, source, from_fn, &callee),
         "kotlin" | "groovy" | "scala" | "csharp" | "dart" => {
-            oop_call_type_hint(node, source, symbols, from_fn, &callee, true)
+            let (ty, qh, inferred) =
+                oop_call_type_hint(node, source, symbols, from_fn, &callee, true, ".");
+            inferred_owner = inferred;
+            (ty, qh)
         }
         "typescript" | "javascript" | "php" => {
-            oop_call_type_hint(node, source, symbols, from_fn, &callee, false)
+            let (ty, qh, inferred) =
+                oop_call_type_hint(node, source, symbols, from_fn, &callee, false, ".");
+            inferred_owner = inferred;
+            (ty, qh)
         }
         _ => (None, None),
     };
 
     let mut meta = serde_json::json!({ "language": language });
+    if inferred_owner {
+        meta["inferred_callable_owner"] = serde_json::Value::Bool(true);
+    }
     if language == "cpp" && cpp_call_is_operator(node, source) {
         meta["is_operator"] = serde_json::Value::Bool(true);
     }
@@ -1061,7 +1074,8 @@ fn oop_call_type_hint(
     from_fn: &Symbol,
     callee: &str,
     allow_implicit_this: bool,
-) -> (Option<String>, Option<String>) {
+    member_sep: &str,
+) -> (Option<String>, Option<String>, bool) {
     let head_end = {
         let mut end = call.end_byte();
         let mut c = call.walk();
@@ -1092,7 +1106,7 @@ fn oop_call_type_hint(
         .unwrap_or(raw_slice)
         .trim();
     if head.is_empty() || head.starts_with("new ") {
-        return (None, None);
+        return (None, None, false);
     }
 
     let enclosing_owner = from_fn.qualified_name.as_deref().and_then(|qn| {
@@ -1125,28 +1139,28 @@ fn oop_call_type_hint(
     match recv {
         None => {
             if allow_implicit_this && let Some(owner) = enclosing_owner {
-                let qh = format!("{owner}.{callee}");
-                return (Some(owner), Some(qh));
+                let qh = format!("{owner}{member_sep}{callee}");
+                return (Some(owner), Some(qh), true);
             }
-            (None, None)
+            (None, None, false)
         }
         Some("this" | "$this" | "self" | "static") => {
             if let Some(owner) = enclosing_owner {
-                let qh = format!("{owner}.{callee}");
-                return (Some(owner), Some(qh));
+                let qh = format!("{owner}{member_sep}{callee}");
+                return (Some(owner), Some(qh), false);
             }
-            (None, None)
+            (None, None, false)
         }
         Some("super" | "base" | "parent") => {
             if let Some(owner) = enclosing_owner {
-                return (Some(owner), Some(format!("super.{callee}")));
+                return (Some(owner), Some(format!("super.{callee}")), false);
             }
-            (None, None)
+            (None, None, false)
         }
         Some(r) => {
             let clean_r = r.trim_start_matches('$').trim();
             if clean_r.is_empty() {
-                return (None, None);
+                return (None, None, false);
             }
             if let Some(param_ty) = from_fn
                 .parameters
@@ -1162,8 +1176,8 @@ fn oop_call_type_hint(
             {
                 let simple = oop_simple_type_name(param_ty);
                 if !simple.is_empty() {
-                    let qh = format!("{simple}.{callee}");
-                    return (Some(simple), Some(qh));
+                    let qh = format!("{simple}{member_sep}{callee}");
+                    return (Some(simple), Some(qh), false);
                 }
             }
             if symbols.iter().any(|s| {
@@ -1177,10 +1191,10 @@ fn oop_call_type_hint(
                 ) && (s.name == clean_r || s.qualified_name.as_deref() == Some(clean_r))
             }) {
                 let simple = oop_simple_type_name(clean_r);
-                let qh = format!("{simple}.{callee}");
-                return (Some(simple), Some(qh));
+                let qh = format!("{simple}{member_sep}{callee}");
+                return (Some(simple), Some(qh), false);
             }
-            (None, None)
+            (None, None, false)
         }
     }
 }

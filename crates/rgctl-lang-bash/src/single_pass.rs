@@ -299,7 +299,13 @@ pub fn extract_all_single_pass(
                             ..Default::default()
                         };
                         record_symbol_spans_from_source(&mut sym, node, source);
-                        ctx.symbols.push(sym);
+                        ctx.symbols
+                            .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                sym,
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Bash,
+                            ));
                         ctx.enter_scope(
                             ScopeKind::Function,
                             Some(name),
@@ -415,8 +421,22 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         flush_bash_call(&pending, &ctx.symbols, file_path, &mut relations);
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Bash,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Bash,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

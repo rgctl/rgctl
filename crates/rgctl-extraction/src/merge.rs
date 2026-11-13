@@ -6,7 +6,7 @@ use rgctl_graph::backend::MemoryBackend;
 use rgctl_graph::paths::{ARTIFACT_DIR_NAME, artifact_dir};
 use rgctl_graph::schema::{Edge, EdgeType, Node, NodeType};
 use rgctl_graph::snapshot::{MmappedGraphSnapshot, SNAPSHOT_FILE};
-use rgctl_graph::stable_key::deterministic_node_id;
+use rgctl_graph::stable_key::deterministic_node_id_with_discriminator;
 use rgctl_graph::write_columnar_from_backend;
 use rgctl_plugin_api::RelationType;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -238,11 +238,12 @@ fn namespace_node(mut node: Node, repo_name: &str) -> (Uuid, Node) {
         node.file_path = Some(namespaced.into());
     }
     if node.file_path.is_some() {
-        node.id = deterministic_node_id(
+        node.id = deterministic_node_id_with_discriminator(
             node.file_path.as_deref(),
             node.name.as_ref(),
             node.node_type,
             node.qualified_name.as_deref(),
+            node.identity_discriminator(),
         );
     }
     (old_id, node)
@@ -282,6 +283,24 @@ impl CrossRepoExportIndex {
                 .entry(qn.clone())
                 .or_default()
                 .push((repo_idx, node.id));
+
+            if node.node_type == NodeType::Function
+                && node.get_property("callable_role") != Some("declaration")
+                && node.get_property("superseded_definition") != Some("true")
+            {
+                let identity = node.identity_discriminator().unwrap_or("");
+                let keys = std::iter::once(format!("{qn}\u{1f}{identity}")).chain(
+                    node.get_property("parameter_identity")
+                        .or_else(|| (!identity.is_empty()).then_some(identity))
+                        .map(|arguments| format!("{qn}\u{1f}args:{arguments}")),
+                );
+                for key in keys {
+                    let ids = index.by_qualified.entry(key).or_default();
+                    if !ids.contains(&(repo_idx, node.id)) {
+                        ids.push((repo_idx, node.id));
+                    }
+                }
+            }
 
             if is_route_node(node) || qn.starts_with("route::") {
                 index
@@ -323,6 +342,14 @@ impl CrossRepoExportIndex {
             if cross.len() > 1 {
                 return ResolveOutcome::Ambiguous;
             }
+        }
+
+        if rec
+            .to_qualified_hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains('\u{1f}'))
+        {
+            return ResolveOutcome::Unresolved;
         }
 
         let simple = simple_name(&rec.to_name).to_string();
@@ -672,6 +699,44 @@ mod tests {
     use super::*;
     use crate::parked_relations::save_parked_relations;
     use rgctl_graph::schema::Node;
+
+    #[test]
+    fn merge_preserves_callable_evidence_and_never_falls_back_to_another_overload() {
+        let int = Node::new(NodeType::Function, "quote")
+            .with_qualified_name("Library.quote")
+            .with_identity_discriminator("(int)");
+        let string = Node::new(NodeType::Function, "quote")
+            .with_qualified_name("Library.quote")
+            .with_identity_discriminator("(string)");
+        let index = CrossRepoExportIndex::build(
+            &[int.clone(), string.clone()],
+            &HashMap::from([(int.id, 1), (string.id, 1)]),
+            &["caller".into(), "library".into()],
+        );
+        let mut record = ParkedRelationRecord {
+            from_node_id: Uuid::new_v4(),
+            from_qualified_name: "caller".into(),
+            from_file: "main.cs".into(),
+            to_name: "quote".into(),
+            to_qualified_hint: None,
+            to_type_hint: None,
+            import_module_hint: None,
+            relation_type: rgctl_plugin_api::RelationType::Calls,
+            call_site_line: 1,
+            stub_node_id: None,
+        };
+        for hint in ["Library.quote\u{1f}(int)", "Library.quote\u{1f}args:(int)"] {
+            record.to_qualified_hint = Some(hint.into());
+            assert!(
+                matches!(index.resolve_parked(&record, 0), ResolveOutcome::Resolved(id) if id == int.id)
+            );
+        }
+        record.to_qualified_hint = Some("Library.quote\u{1f}(bool)".into());
+        assert!(matches!(
+            index.resolve_parked(&record, 0),
+            ResolveOutcome::Unresolved
+        ));
+    }
 
     #[test]
     fn normalize_acme_billing_user() {

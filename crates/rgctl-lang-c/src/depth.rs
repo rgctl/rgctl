@@ -25,6 +25,7 @@ pub fn extract_enumerator_fields(enum_node: Node, source: &[u8]) -> Vec<Field> {
             .and_then(|n| text(n, source));
         if let Some(name) = name {
             fields.push(Field {
+                source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                 name,
                 field_type: None,
                 visibility: None,

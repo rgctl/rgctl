@@ -234,6 +234,12 @@ impl PhpPlugin {
             node,
             node.child_by_field_name("name"),
         );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Php,
+        );
         Ok(Some(symbol))
     }
 
@@ -297,6 +303,12 @@ impl PhpPlugin {
             node,
             node.child_by_field_name("name"),
         );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Php,
+        );
         Ok(Some(symbol))
     }
 
@@ -333,6 +345,12 @@ impl PhpPlugin {
             ..Default::default()
         };
         rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, None);
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Php,
+        );
         Ok(Some(symbol))
     }
 
@@ -507,6 +525,9 @@ impl PhpPlugin {
                                 visibility = visibility.map(|v| format!("{v} hooks"));
                             }
                             fields.push(Field {
+                                source_span: rgctl_plugin_helpers::field_source_span(
+                                    child, source, &name,
+                                ),
                                 name,
                                 field_type: field_type.clone(),
                                 visibility,
@@ -531,6 +552,9 @@ impl PhpPlugin {
                     {
                         if let Ok(name) = name_node.utf8_text(source) {
                             fields.push(Field {
+                                source_span: rgctl_plugin_helpers::field_source_span(
+                                    child, source, name,
+                                ),
                                 name: name.to_string(),
                                 field_type: None,
                                 visibility: vis.clone(),
@@ -581,6 +605,7 @@ impl PhpPlugin {
             let visibility = visibility_modifiers(child, source).join(" ");
             if let Some(name) = name {
                 fields.push(Field {
+                    source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                     name,
                     field_type,
                     visibility: if visibility.is_empty() {
@@ -832,6 +857,7 @@ impl PhpPlugin {
                 continue;
             }
             class_sym.fields.push(Field {
+                source_span: rgctl_plugin_helpers::field_source_span(node, source, &name),
                 name,
                 field_type: None,
                 visibility: vis,

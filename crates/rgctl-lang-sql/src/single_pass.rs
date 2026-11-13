@@ -160,7 +160,13 @@ fn push_named_symbol(
         ..Default::default()
     };
     record_symbol_spans_from_source(&mut sym, node, source);
-    ctx.symbols.push(sym);
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            sym,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Sql,
+        ));
 }
 
 fn symbol_type_for_ddl(kind: &str) -> SymbolType {
@@ -466,6 +472,12 @@ pub fn extract_all_single_pass(
             }
         }
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Sql,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

@@ -726,6 +726,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -747,6 +748,7 @@ pub fn extract_all_single_pass(
                             let callee = func.utf8_text(source).ok().unwrap_or("").trim();
                             if !callee.is_empty() {
                                 rel.to_qualified_hint = Some(format!("{scope}::{callee}"));
+                                rel.metadata["inferred_callable_owner"] = true.into();
                             }
                         } else if let Some(hint) = rel.to_qualified_hint.clone() {
                             if let Some(enriched) = enrich_cpp_namespace_hint(&hint, scope) {
@@ -757,7 +759,20 @@ pub fn extract_all_single_pass(
                 }
             }
         }
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Cpp,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Cpp,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

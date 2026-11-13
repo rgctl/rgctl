@@ -524,6 +524,12 @@ fn extract_trait_method(
         ..Default::default()
     };
     rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+    symbol = rgctl_plugin_helpers::callable_identity::symbol(
+        symbol,
+        node,
+        source,
+        rgctl_plugin_helpers::callable_identity::Policy::Rust,
+    );
     Some(symbol)
 }
 

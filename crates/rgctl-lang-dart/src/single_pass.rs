@@ -208,7 +208,13 @@ fn push_type_symbol(
         ..Default::default()
     };
     record_symbol_spans_from_source(&mut sym, node, source);
-    ctx.symbols.push(sym);
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            sym,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Dart,
+        ));
     ctx.enter_scope(
         scope_kind,
         Some(name),
@@ -259,7 +265,13 @@ fn push_function(
         ..Default::default()
     };
     record_symbol_spans_from_source(&mut sym, node, source);
-    ctx.symbols.push(sym);
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            sym,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Dart,
+        ));
     ctx.enter_scope(
         ScopeKind::Function,
         Some(name),
@@ -493,7 +505,7 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            let mut sym = Symbol {
+                            let mut field_symbol = Symbol {
                                 name,
                                 symbol_type: SymbolType::Variable,
                                 qualified_name: Some(qn),
@@ -510,8 +522,13 @@ pub fn extract_all_single_pass(
                                 }),
                                 ..Default::default()
                             };
-                            record_symbol_spans_from_source(&mut sym, node, source);
-                            ctx.symbols.push(sym);
+                            record_symbol_spans_from_source(&mut field_symbol, node, source);
+                            rgctl_plugin_helpers::spans::field_symbol_spans(
+                                &mut field_symbol,
+                                node,
+                                source,
+                            );
+                            ctx.symbols.push(field_symbol);
                         }
                     }
                     "function_declaration"
@@ -558,7 +575,7 @@ pub fn extract_all_single_pass(
                                     Some(o) => format!("{o}.{name}"),
                                     None => name.clone(),
                                 };
-                                let mut sym = Symbol {
+                                let mut field_symbol = Symbol {
                                     name,
                                     symbol_type: SymbolType::Variable,
                                     qualified_name: Some(qn),
@@ -575,8 +592,13 @@ pub fn extract_all_single_pass(
                                     }),
                                     ..Default::default()
                                 };
-                                record_symbol_spans_from_source(&mut sym, node, source);
-                                ctx.symbols.push(sym);
+                                record_symbol_spans_from_source(&mut field_symbol, node, source);
+                                rgctl_plugin_helpers::spans::field_symbol_spans(
+                                    &mut field_symbol,
+                                    node,
+                                    source,
+                                );
+                                ctx.symbols.push(field_symbol);
                             } else {
                                 pushed_scope = push_function(
                                     &mut ctx,
@@ -770,6 +792,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -782,7 +805,20 @@ pub fn extract_all_single_pass(
             "dart",
             &mut relations,
         );
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Dart,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Dart,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

@@ -85,8 +85,9 @@ pub use snapshot_diff::{
 };
 pub use stable_key::{
     MmapNodeKey, NAMESPACE_RGCTL, NodeRowRef, StableNodeKey, deterministic_node_id,
-    extension_digest, node_row_ref, node_scope_path_at, stable_key_from_facets,
-    stable_key_from_node, stable_key_from_row, stable_key_to_uuid,
+    deterministic_node_id_with_discriminator, extension_digest, node_row_ref, node_scope_path_at,
+    stable_key_from_facets, stable_key_from_facets_with_discriminator, stable_key_from_node,
+    stable_key_from_row, stable_key_to_uuid,
 };
 pub use structural_sketch::{
     MIN_TOKEN_LEN, TOKEN_BLOOM_BITS, TOKEN_BLOOM_WORDS, TokenBloom, bloom_jaccard, bloom_popcount,

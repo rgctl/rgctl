@@ -359,10 +359,7 @@ impl MacroCallIndex {
 
     /// Returns true when the on-disk graph matches the index fingerprint.
     pub fn is_valid_for_graph_file(&self, graph_db_path: &Path) -> Result<bool> {
-        if !self.graph_fingerprint.matches_graph_file(graph_db_path)? {
-            return Ok(false);
-        }
-        Ok(true)
+        self.graph_fingerprint.matches_graph_file(graph_db_path)
     }
 
     /// Returns true when the repository graph matches the index fingerprint.

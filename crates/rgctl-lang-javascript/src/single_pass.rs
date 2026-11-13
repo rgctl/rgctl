@@ -346,6 +346,7 @@ pub fn extract_all_single_pass(
 
     // Flush calls (forward-ref safe). Prefer shared helper; enrich JS unresolved.
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -370,6 +371,13 @@ pub fn extract_all_single_pass(
                 &mut relations,
             );
         }
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Javascript,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
 
     ctx.symbols.extend(extract_cjs_require_symbols(
@@ -383,6 +391,12 @@ pub fn extract_all_single_pass(
         "javascript",
         source,
         Some(root),
+        &mut ctx.symbols,
+        &mut relations,
+    );
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Javascript,
         &mut ctx.symbols,
         &mut relations,
     );

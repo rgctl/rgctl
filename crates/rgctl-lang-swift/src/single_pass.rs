@@ -225,7 +225,7 @@ fn swift_call_type_hint(
     symbols: &[Symbol],
     from_fn: &Symbol,
     callee: &str,
-) -> (Option<String>, Option<String>) {
+) -> (Option<String>, Option<String>, bool) {
     let enclosing_owner = from_fn.qualified_name.as_deref().and_then(|qn| {
         let (prefix, _) = qn.rsplit_once('.')?;
         let is_type = symbols.iter().any(|s| {
@@ -262,22 +262,22 @@ fn swift_call_type_hint(
         None => {
             if let Some(owner) = enclosing_owner {
                 let qh = format!("{owner}.{callee}");
-                return (Some(owner), Some(qh));
+                return (Some(owner), Some(qh), true);
             }
-            (None, None)
+            (None, None, false)
         }
         Some("self" | "Self") => {
             if let Some(owner) = enclosing_owner {
                 let qh = format!("{owner}.{callee}");
-                return (Some(owner), Some(qh));
+                return (Some(owner), Some(qh), false);
             }
-            (None, None)
+            (None, None, false)
         }
         Some("super") => {
             if let Some(owner) = enclosing_owner {
-                return (Some(owner), Some(format!("super.{callee}")));
+                return (Some(owner), Some(format!("super.{callee}")), false);
             }
-            (None, None)
+            (None, None, false)
         }
         Some(r) => {
             if let Some(ty) = from_fn
@@ -295,7 +295,11 @@ fn swift_call_type_hint(
                     .unwrap_or(ty)
                     .trim();
                 if !simple.is_empty() {
-                    return (Some(simple.to_string()), Some(format!("{simple}.{callee}")));
+                    return (
+                        Some(simple.to_string()),
+                        Some(format!("{simple}.{callee}")),
+                        false,
+                    );
                 }
             }
             if symbols.iter().any(|s| {
@@ -307,9 +311,9 @@ fn swift_call_type_hint(
                         | SymbolType::Enum
                 ) && (s.name == r || s.qualified_name.as_deref() == Some(r))
             }) {
-                return (Some(r.to_string()), Some(format!("{r}.{callee}")));
+                return (Some(r.to_string()), Some(format!("{r}.{callee}")), false);
             }
-            (None, None)
+            (None, None, false)
         }
     }
 }
@@ -423,7 +427,13 @@ fn push_named_symbol(
         ..Default::default()
     };
     record_symbol_spans_from_source(&mut sym, node, source);
-    ctx.symbols.push(sym);
+    ctx.symbols
+        .push(rgctl_plugin_helpers::callable_identity::symbol(
+            sym,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Swift,
+        ));
     if let Some(scope_kind) = enter {
         let is_fn = scope_kind.is_function_like();
         ctx.enter_scope(
@@ -588,7 +598,13 @@ pub fn extract_all_single_pass(
                             ..Default::default()
                         };
                         record_symbol_spans_from_source(&mut sym, node, source);
-                        ctx.symbols.push(sym);
+                        ctx.symbols
+                            .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                sym,
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Swift,
+                            ));
                         ctx.enter_scope(
                             ScopeKind::Function,
                             Some(name),
@@ -613,7 +629,7 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            let mut sym = Symbol {
+                            let mut field_symbol = Symbol {
                                 name,
                                 symbol_type: SymbolType::Variable,
                                 qualified_name: Some(qn),
@@ -630,8 +646,13 @@ pub fn extract_all_single_pass(
                                 }),
                                 ..Default::default()
                             };
-                            record_symbol_spans_from_source(&mut sym, node, source);
-                            ctx.symbols.push(sym);
+                            record_symbol_spans_from_source(&mut field_symbol, node, source);
+                            rgctl_plugin_helpers::spans::field_symbol_spans(
+                                &mut field_symbol,
+                                node,
+                                source,
+                            );
+                            ctx.symbols.push(field_symbol);
                         }
                     }
                     "typealias_declaration" | "associatedtype_declaration" => {
@@ -718,7 +739,13 @@ pub fn extract_all_single_pass(
                             ..Default::default()
                         };
                         record_symbol_spans_from_source(&mut sym, node, source);
-                        ctx.symbols.push(sym);
+                        ctx.symbols
+                            .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                sym,
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Swift,
+                            ));
                     }
                     "protocol_property_declaration" => {
                         if let Some(name) = property_decl_name(node, source)
@@ -733,7 +760,7 @@ pub fn extract_all_single_pass(
                                 Some(o) => format!("{o}.{name}"),
                                 None => name.clone(),
                             };
-                            let mut sym = Symbol {
+                            let mut field_symbol = Symbol {
                                 name,
                                 symbol_type: SymbolType::Variable,
                                 qualified_name: Some(qn),
@@ -750,8 +777,13 @@ pub fn extract_all_single_pass(
                                 }),
                                 ..Default::default()
                             };
-                            record_symbol_spans_from_source(&mut sym, node, source);
-                            ctx.symbols.push(sym);
+                            record_symbol_spans_from_source(&mut field_symbol, node, source);
+                            rgctl_plugin_helpers::spans::field_symbol_spans(
+                                &mut field_symbol,
+                                node,
+                                source,
+                            );
+                            ctx.symbols.push(field_symbol);
                         }
                     }
                     "lambda_literal" => {
@@ -790,7 +822,13 @@ pub fn extract_all_single_pass(
                             ..Default::default()
                         };
                         record_symbol_spans_from_source(&mut sym, node, source);
-                        ctx.symbols.push(sym);
+                        ctx.symbols
+                            .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                sym,
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Swift,
+                            ));
                         ctx.enter_scope(
                             ScopeKind::Function,
                             Some(name),
@@ -988,6 +1026,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -1008,7 +1047,7 @@ pub fn extract_all_single_pass(
             .qualified_name
             .clone()
             .unwrap_or_else(|| from_fn.name.clone());
-        let (to_type_hint, to_qualified_hint) =
+        let (to_type_hint, to_qualified_hint, inferred_owner) =
             swift_call_type_hint(pending.node, source, &ctx.symbols, from_fn, &callee);
         let same_file: Vec<_> = ctx
             .symbols
@@ -1037,19 +1076,36 @@ pub fn extract_all_single_pass(
             }
             _ => callee.clone(),
         };
+        let mut metadata = serde_json::json!({ "language": "swift" });
+        if inferred_owner {
+            metadata["inferred_callable_owner"] = serde_json::Value::Bool(true);
+        }
         let mut rel = Relation {
             from,
             to,
             relation_type: RelationType::Calls,
             location: node_to_location(pending.node, &file_path_str),
-            metadata: serde_json::json!({ "language": "swift" }),
+            metadata,
             to_qualified_hint: to_qualified_hint.or(Some(callee)),
             to_type_hint,
             ..Default::default()
         };
         record_call_site_spans(&mut rel, pending.node);
         relations.push(rel);
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Swift,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Swift,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }
