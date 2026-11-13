@@ -50,6 +50,12 @@ export interface Manifest {
   metrics?: { function_count?: number; class_count?: number; calls_count?: number };
   view?: { community_count?: number; metanode_count?: number };
   semantic?: { available?: boolean; functions_indexed?: number; model_id?: string };
+  /** How detail payloads are stored (archive vs per-file). */
+  capabilities?: {
+    slice_detail_archive?: boolean;
+  };
+  slice_record_index_path?: string | null;
+  slice_record_data_path?: string | null;
   /** Pipeline phases; the only honest source of "coverage" in the bundle today. */
   phases?: Record<string, string>;
 }

@@ -1,4 +1,4 @@
-import{u as e}from"./index-CUyKrpTp.js";const c=`export REPO="$PWD"   # repository root after discover
+import{u as e}from"./index-DdfSxHeV.js";const c=`export REPO="$PWD"   # repository root after discover
 
 # Fast index (graph, blast scores, metrics)
 rgctl discover .

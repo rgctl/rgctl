@@ -1,12 +1,13 @@
 //! Export community-level migration graph for the dashboard bundle.
 
 use crate::export_context::{DashboardExportContext, resolve_analysis};
+use crate::export_util::write_json_compact;
+use crate::metagraph::PackageAggregation;
 use rgctl_analysis::{
     MigrationGraphPayload, MigrationOrderMode, MigrationPlanPayload, MigrationWeights,
     build_migration_graph, compute_migration_plan,
 };
-use rgctl_graph::backend::MemoryBackend;
-use std::fs;
+use rgctl_graph::graph_source::GraphSource;
 use std::path::Path;
 
 pub const MIGRATION_GRAPH_FILE: &str = "migration_graph.json";
@@ -20,11 +21,27 @@ pub struct MigrationExportSummary {
 }
 
 pub fn export_migration_graph(
-    backend: &MemoryBackend,
+    graph: GraphSource<'_>,
     repo_root: &Path,
     out_dir: &Path,
     ctx: DashboardExportContext<'_>,
 ) -> Result<(MigrationExportSummary, Option<MigrationGraphPayload>), String> {
+    export_migration_graph_with_aggregation(graph, repo_root, out_dir, ctx, None)
+}
+
+/// Like [`export_migration_graph`], but reuses a precomputed migration payload from
+/// [`PackageAggregation`] (shared node/edge scan with metagraph) when present.
+pub fn export_migration_graph_with_aggregation(
+    graph: GraphSource<'_>,
+    repo_root: &Path,
+    out_dir: &Path,
+    ctx: DashboardExportContext<'_>,
+    package_agg: Option<&PackageAggregation>,
+) -> Result<(MigrationExportSummary, Option<MigrationGraphPayload>), String> {
+    if let Some(precomputed) = package_agg.and_then(|a| a.migration.clone()) {
+        return write_migration_payload(out_dir, precomputed);
+    }
+
     let results = match resolve_analysis(&ctx, repo_root) {
         Ok(cow) => cow,
         Err(_) => {
@@ -33,13 +50,19 @@ pub fn export_migration_graph(
         }
     };
 
-    let Some(graph) = build_migration_graph(backend, &results) else {
+    let Some(payload) = build_migration_graph(graph, &results) else {
         write_empty_graph(out_dir)?;
         return Ok((MigrationExportSummary::default(), None));
     };
 
-    let json = serde_json::to_string_pretty(&graph).map_err(|e| e.to_string())?;
-    fs::write(out_dir.join(MIGRATION_GRAPH_FILE), json).map_err(|e| e.to_string())?;
+    write_migration_payload(out_dir, payload)
+}
+
+fn write_migration_payload(
+    out_dir: &Path,
+    graph: MigrationGraphPayload,
+) -> Result<(MigrationExportSummary, Option<MigrationGraphPayload>), String> {
+    write_json_compact(&out_dir.join(MIGRATION_GRAPH_FILE), &graph)?;
 
     let summary = MigrationExportSummary {
         available: true,
@@ -63,22 +86,18 @@ pub fn export_default_migration_plan(
 }
 
 pub fn write_migration_plan(plan: &MigrationPlanPayload, path: &Path) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(plan).map_err(|e| e.to_string())?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    fs::write(path, json).map_err(|e| e.to_string())
+    write_json_compact(path, plan)
 }
 
 pub fn write_migration_plan_from_repo(
-    backend: &MemoryBackend,
+    graph: GraphSource<'_>,
     repo_root: &Path,
     output: &Path,
     preset: &str,
     order_mode: MigrationOrderMode,
 ) -> Result<MigrationPlanPayload, String> {
     write_migration_plan_from_repo_with_context(
-        backend,
+        graph,
         repo_root,
         output,
         preset,
@@ -88,7 +107,7 @@ pub fn write_migration_plan_from_repo(
 }
 
 pub fn write_migration_plan_from_repo_with_context(
-    backend: &MemoryBackend,
+    graph: GraphSource<'_>,
     repo_root: &Path,
     output: &Path,
     preset: &str,
@@ -96,10 +115,10 @@ pub fn write_migration_plan_from_repo_with_context(
     ctx: DashboardExportContext<'_>,
 ) -> Result<MigrationPlanPayload, String> {
     let results = resolve_analysis(&ctx, repo_root)?;
-    let graph = build_migration_graph(backend, &results)
+    let mig = build_migration_graph(graph, &results)
         .ok_or_else(|| "migration graph unavailable (run discover first)".to_string())?;
     let weights = MigrationWeights::from_preset(preset);
-    let plan = compute_migration_plan(&graph, preset, weights, order_mode);
+    let plan = compute_migration_plan(&mig, preset, weights, order_mode);
     write_migration_plan(&plan, output)?;
     Ok(plan)
 }
@@ -112,6 +131,5 @@ fn write_empty_graph(out_dir: &Path) -> Result<(), String> {
         communities: Vec::new(),
         edges: Vec::new(),
     };
-    let json = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
-    fs::write(out_dir.join(MIGRATION_GRAPH_FILE), json).map_err(|e| e.to_string())
+    write_json_compact(&out_dir.join(MIGRATION_GRAPH_FILE), &payload)
 }
