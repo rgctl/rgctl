@@ -6,7 +6,8 @@
  * file's *name is its path*, and sorting by name put those paths first — and each one is pinned here.
  */
 import { describe, expect, it } from "vitest";
-import { compareMembers, isFunctionKind, nonFunctionReason } from "../rooms/memberKind";
+import { compareMembers, isFunctionKind, nonFunctionReason, shortKind } from "../rooms/memberKind";
+import { KIND_LEGEND, OTHER_COLOUR, colourForKind, colourHexForKind } from "../universe/memberColours";
 
 describe("isFunctionKind", () => {
   it("recognises the engine's own spelling, whatever its case", () => {
@@ -63,5 +64,54 @@ describe("compareMembers", () => {
       { name: "alpha", kind: "Function" },
     ];
     expect([...fns].sort(compareMembers).map((r) => r.name)).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("shortKind", () => {
+  it("uses the short word where there is one", () => {
+    expect(shortKind("Function")).toBe("func");
+    expect(shortKind("Variable")).toBe("var");
+    expect(shortKind("TypeAlias")).toBe("type");
+  });
+
+  it("keeps the words that fit whole", () => {
+    for (const kind of ["module", "struct", "import", "config"]) {
+      expect(shortKind(kind), kind).toBe(kind);
+    }
+  });
+
+  it("never returns a fragment of a longer word", () => {
+    // The reported defect: `FUNCTION` rendered as `FUNCTI…`, three quarters of a word and no `func`.
+    expect(shortKind("Dependency")).toBe("dep");
+    expect(shortKind("PuppetFact")).toBe("fact");
+    // Anything unmapped is cut at six with an ellipsis, which is at least honest about being cut.
+    expect(shortKind("SomethingLong")).toBe("someth…");
+    expect(shortKind("")).toBe("node");
+  });
+});
+
+describe("colourForKind", () => {
+  it("is stable and shared: the list and the level agree", () => {
+    expect(colourForKind("Function")).toBe(colourForKind("function"));
+    // The same call the scene makes for the instance colour.
+    expect(colourHexForKind("Function")).toBe(0x8fd0ff);
+    expect(colourForKind("File")).toBe("#94a3b8");
+  });
+
+  it("puts the type-like kinds in one family, so a level is not confetti", () => {
+    const types = ["Class", "Struct", "Interface", "Enum", "TypeAlias", "Annotation"];
+    const colours = new Set(types.map((k) => colourForKind(k)));
+    expect(colours.size).toBe(1);
+  });
+
+  it("gives an unnamed kind a dull colour rather than inventing a bright one", () => {
+    expect(colourForKind("SomethingNew")).toBe(OTHER_COLOUR);
+    expect(colourForKind(null)).toBe(OTHER_COLOUR);
+  });
+
+  it("keeps functions distinct from every family in the legend", () => {
+    const legend = KIND_LEGEND.map((e) => e.colour);
+    expect(new Set(legend).size).toBe(legend.length);
+    expect(legend).toContain(colourForKind("function"));
   });
 });

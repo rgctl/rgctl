@@ -24,7 +24,8 @@ import { loadMemberIndices } from "../metagraphMembers";
 import { loadFunctions, type FunctionEntry } from "../data";
 import { STALE_CHUNK_MESSAGE, isStaleChunkError } from "../staleChunk";
 import { shouldRestoreLevel } from "./levelRestore";
-import { compareMembers, nonFunctionReason } from "./memberKind";
+import { compareMembers, nonFunctionReason, shortKind } from "./memberKind";
+import { KIND_LEGEND, colourForKind } from "../universe/memberColours";
 import { SymbolReader } from "./SymbolReader";
 import type { ArchitectureState, ArchitectureView, Metagraph, PackageNode } from "../architectureTypes";
 import type { HoverEntry, MemberEntry, UniverseLayer, UniverseScene } from "../universe/UniverseScene";
@@ -1073,6 +1074,22 @@ function Members({
         aria-label="Filter the level's members by name"
         className="mb-1.5 w-full rounded border border-white/10 bg-black/40 px-2 py-1 text-[11px] text-zinc-200 placeholder:text-zinc-600 focus:border-sky-400/60 focus:outline-none"
       />
+      {/*
+        The legend is not decoration: colour is the only channel that says *what* a box is, and an unexplained colour
+        is a puzzle. Six families rather than fifteen kinds, because the exact kind is on every row.
+      */}
+      <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        {KIND_LEGEND.map((entry) => (
+          <span key={entry.label} className="flex items-center gap-1 text-[9.5px] leading-none text-zinc-500">
+            <span
+              aria-hidden
+              className="inline-block h-2 w-2 rounded-[1px]"
+              style={{ backgroundColor: entry.colour }}
+            />
+            {entry.label}
+          </span>
+        ))}
+      </div>
       <ul className="max-h-[46vh] overflow-y-auto">
         {rows.map((node) => {
           const selected = node.index === selectedIndex;
@@ -1087,8 +1104,15 @@ function Members({
                   selected ? "bg-amber-400/12 text-amber-100" : "text-zinc-300 hover:bg-white/[0.05]"
                 }`}
               >
-                <span className="w-[52px] shrink-0 truncate text-[9.5px] uppercase tracking-wide text-zinc-500">
-                  {node.kind}
+                {/*
+                  Six characters and the kind's own colour, the same colour the box has in the level. The caption was
+                  `FUNCTI…` before — three quarters of a word in a column wide enough to crowd the name it labels.
+                */}
+                <span
+                  className="w-[42px] shrink-0 truncate font-mono text-[9.5px] leading-none"
+                  style={{ color: colourForKind(node.kind) }}
+                >
+                  {shortKind(node.kind)}
                 </span>
                 <span className="truncate font-mono text-[11px]">{node.name}</span>
                 {/*

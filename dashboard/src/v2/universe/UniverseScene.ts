@@ -30,6 +30,7 @@ import {
 } from "../architectureLayers";
 import type { ArchitectureView, CommunityGroup, PackageNode } from "../architectureTypes";
 import { frameLevel, UNIVERSE_FOG } from "./framing";
+import { colourHexForKind } from "./memberColours";
 
 export type UniverseLayer = "packages" | "communities";
 
@@ -578,7 +579,7 @@ export class UniverseScene {
     subjectId: number,
     members: Array<{ index: number; complexity: number; name?: string; nodeTypeName?: string; filePath?: string | null }>,
     edges: Array<{ source: number; target: number }>,
-    options: { color?: THREE.Color; maxHeight?: number } = {},
+    options: { maxHeight?: number } = {},
   ): { drawn: number; edges: number; measuredHeight: boolean; boundary: number } {
     this.collapse();
     const seat = this.solids.get(subjectId);
@@ -628,8 +629,15 @@ export class UniverseScene {
      */
     const tallest = measured ? slot * 2.4 : slot * 1.1;
     const geometry = new THREE.BoxGeometry(1, 1, 1);
+    /**
+     * White, because the colour now comes per instance.
+     *
+     * A level holds every node kind in the package, and drawing them all in one blue left the picture unable to
+     * answer its own first question. `InstancedMesh` carries a colour per instance, and the material multiplies it —
+     * so the base is white and each member's own kind colour is what lands on screen, at no extra draw call.
+     */
     const material = new THREE.MeshStandardMaterial({
-      color: options.color ?? new THREE.Color(0x8fd0ff),
+      color: 0xffffff,
       roughness: 0.5,
       metalness: 0.15,
     });
@@ -639,6 +647,7 @@ export class UniverseScene {
     const positions = new Map<number, THREE.Vector3>();
     const matrix = new THREE.Matrix4();
     const scale = new THREE.Vector3();
+    const tint = new THREE.Color();
     members.forEach((member, i) => {
       // Sunflower: the room's own placement primitive, used at this level too.
       const radius = spread * Math.sqrt((i + 0.5) / count);
@@ -653,9 +662,13 @@ export class UniverseScene {
       scale.set(slot * 0.55, memberHeight, slot * 0.55);
       matrix.compose(new THREE.Vector3(x, memberHeight / 2, z), new THREE.Quaternion(), scale);
       instanced.setMatrixAt(i, matrix);
+      // Predictable, not decorative: the same kind is the same colour in every district, on every render, and in
+      // the list beside the drawing (`memberColours.ts` holds the table).
+      instanced.setColorAt(i, tint.set(colourHexForKind(member.nodeTypeName)));
       positions.set(member.index, new THREE.Vector3(x, memberHeight, z));
     });
     instanced.instanceMatrix.needsUpdate = true;
+    if (instanced.instanceColor) instanced.instanceColor.needsUpdate = true;
     group.add(instanced);
 
     // Member edges inside the district.

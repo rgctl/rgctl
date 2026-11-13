@@ -55,3 +55,31 @@ export function nonFunctionReason(kind: string | null | undefined, name: string)
   const label = (kind ?? "").trim() || "node";
   return `${name} is a ${label} node, not a function — there is no function body to open. The level draws every node the package contains; the source and CFG views are for functions.`;
 }
+
+/**
+ * A kind's name in the space of one list column: short, stable, and never a truncated fragment of a longer word.
+ *
+ * `FUNCTION` did not fit, so it rendered as `FUNCTI…` — the reader got three quarters of a word, no `func`, and a
+ * column wide enough that it pushed the name it was labelling. Two rules: kinds with an obvious short word get it
+ * (`func`, `var`), and anything else longer than six characters is cut at six with an ellipsis. Six, because
+ * `module`, `struct`, `import` and `config` all fit and are the longest words worth keeping whole.
+ */
+const SHORT_KINDS: Record<string, string> = {
+  function: "func",
+  variable: "var",
+  configkey: "config",
+  typealias: "type",
+  interface: "iface",
+  annotation: "annot",
+  dependency: "dep",
+  buildstep: "build",
+  puppetfact: "fact",
+};
+
+/** The column caption for a kind. Never wider than six characters. */
+export function shortKind(kind: string | null | undefined): string {
+  const key = (kind ?? "").trim().toLowerCase();
+  if (key === "") return "node";
+  const short = SHORT_KINDS[key] ?? key;
+  return short.length > 6 ? `${short.slice(0, 6)}…` : short;
+}
