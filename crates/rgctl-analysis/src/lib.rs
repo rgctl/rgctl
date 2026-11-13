@@ -11,6 +11,7 @@ pub mod blast_radius_scc;
 pub mod blast_slice_handoff;
 pub mod boundary;
 pub mod calendar_policy;
+pub mod call_bindings;
 pub mod callgraph;
 pub mod centrality;
 pub mod centrality_approx;
