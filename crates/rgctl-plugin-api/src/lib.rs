@@ -573,7 +573,7 @@ pub trait LanguagePlugin: Send + Sync {
         {
             return true;
         }
-        if path_obj
+        path_obj
             .file_name()
             .and_then(|n| n.to_str())
             .is_some_and(|name| {
@@ -581,10 +581,6 @@ pub trait LanguagePlugin: Send + Sync {
                     .iter()
                     .any(|ext| name.eq_ignore_ascii_case(ext))
             })
-        {
-            return true;
-        }
-        false
     }
 }
 
