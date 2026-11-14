@@ -57,6 +57,10 @@ export interface Metagraph {
   mode?: string;
   community_only?: boolean;
   threshold_community_only?: number;
+  /** Nodes of a structure kind left out because their path is a generated bundle. Absent on older bundles. */
+  excluded_generated?: number;
+  /** Nodes left out because the kind is not structure. Absent on older bundles. */
+  excluded_kind?: number;
   /** The graph's own node count — the denominator coverage is measured against. */
   source_node_count?: number;
   nodes: MetaNode[];
@@ -128,6 +132,15 @@ export interface CommunityGroup {
 export interface Coverage {
   /** Nodes the exported structure accounts for. */
   covered: number;
+  /**
+   * Structure-kind nodes left out because they live under a generated bundle path.
+   *
+   * `null` on a bundle written before the producer counted it, which is a *different* claim from zero: "this
+   * export did not say" is not "none were excluded".
+   */
+  excludedGenerated: number | null;
+  /** Nodes left out because the kind is not structure (imports, variables, config keys, …); `null` as above. */
+  excludedKind: number | null;
   /** The graph's own node count. */
   declared: number;
   uncovered: number;

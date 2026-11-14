@@ -141,13 +141,23 @@ describe("coverage comes from whichever evidence exists", () => {
       nodes: NODES.map((n) => ({ ...n, member_indices: [n.id] })),
     };
     expect(coverageOf(withIndices, SUMMARY)).toEqual({
-      covered: NODES.length, declared: 40000, uncovered: 40000 - NODES.length, source: "member_indices",
+      covered: NODES.length,
+      declared: 40000,
+      uncovered: 40000 - NODES.length,
+      excludedGenerated: null,
+      excludedKind: null,
+      source: "member_indices",
     });
   });
 
   it("falls back to the summary's member counts", () => {
     expect(coverageOf(METAGRAPH, SUMMARY)).toEqual({
-      covered: 26185, declared: 40000, uncovered: 13815, source: "member_count",
+      covered: 26185,
+      declared: 40000,
+      uncovered: 13815,
+      excludedGenerated: null,
+      excludedKind: null,
+      source: "member_count",
     });
   });
 
@@ -264,5 +274,30 @@ describe("the composed view", () => {
     const { height, footprint } = scalesFor(view);
     expect(height(view.remainder?.size ?? 0)).toBeGreaterThan(0);
     expect(footprint(0)).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The two reasons a node is missing, and the case where the bundle does not say.
+ *
+ * One total hid both: "this repository ships compiled bundles" and "an import is not a place in the architecture"
+ * are different decisions, and the room can only report them if the producer counts them where it makes the
+ * decision. A bundle written before that counting must say *nothing* rather than implying zero.
+ */
+describe("coverage names its exclusions", () => {
+  it("carries the producer's two counts through", () => {
+    const withBreakdown = { ...METAGRAPH, excluded_generated: 11240, excluded_kind: 37460 };
+    expect(coverageOf(withBreakdown, SUMMARY)).toMatchObject({
+      excludedGenerated: 11240,
+      excludedKind: 37460,
+    });
+  });
+
+  it("distinguishes 'not stated' from zero", () => {
+    expect(coverageOf({ ...METAGRAPH, excluded_generated: 0, excluded_kind: 0 }, SUMMARY)).toMatchObject({
+      excludedGenerated: 0,
+      excludedKind: 0,
+    });
+    expect(coverageOf(METAGRAPH, SUMMARY)).toMatchObject({ excludedGenerated: null, excludedKind: null });
   });
 });

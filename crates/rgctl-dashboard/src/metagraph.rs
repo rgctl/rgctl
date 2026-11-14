@@ -35,6 +35,12 @@ pub struct MetagraphPayload {
     pub community_only: bool,
     pub threshold_community_only: u64,
     pub source_node_count: u64,
+    /// Structure-kind nodes left out because they live under a generated bundle path (`dist/`, `node_modules/`, …).
+    #[serde(default)]
+    pub excluded_generated: u64,
+    /// Nodes left out because the kind is not structure at all: imports, variables, config keys, dependencies, …
+    #[serde(default)]
+    pub excluded_kind: u64,
     /// Bundle-relative path to the member-index sidecar, when membership was exported out of line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub members_path: Option<String>,
@@ -148,16 +154,43 @@ fn is_generated_bundle_path(file_path: &str) -> bool {
         || slash_path.contains("/target/")
 }
 
-/// Node types included in package metagraph buckets (code + doc structure).
-fn is_metagraph_member_hot(node: &HotNodeRef<'_>) -> bool {
+/// Why a node is, or is not, part of the exported structure.
+///
+/// Two exclusions that used to be one `false`, and are not the same fact: a node can be a perfectly good structure
+/// kind living in a build output directory, or it can be something the model does not consider structure at all.
+/// Coverage used to report only the total of both, so "two thirds of the graph is not drawn" could not say whether
+/// the bundles were being counted or the imports were.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MemberDecision {
+    /// Counted in a package bucket.
+    Member,
+    /// A structure kind under a generated bundle path (`dist/`, `node_modules/`, `target/`, …).
+    GeneratedBundle,
+    /// Not a structure kind: imports, variables, config keys, dependencies, …
+    NotStructure,
+}
+
+fn classify_metagraph_member(node: &HotNodeRef<'_>) -> MemberDecision {
     if !node.file_path.is_empty() && is_generated_bundle_path(node.file_path) {
-        return false;
+        return MemberDecision::GeneratedBundle;
     }
     match node.node_type {
-        NodeType::Function | NodeType::Class | NodeType::File => true,
-        NodeType::Module => module_kind_allowed(node.module_kind),
-        _ => false,
+        NodeType::Function | NodeType::Class | NodeType::File => MemberDecision::Member,
+        NodeType::Module => {
+            if module_kind_allowed(node.module_kind) {
+                MemberDecision::Member
+            } else {
+                MemberDecision::NotStructure
+            }
+        }
+        _ => MemberDecision::NotStructure,
     }
+}
+
+/// Node types included in package metagraph buckets (code + doc structure).
+#[cfg_attr(not(test), allow(dead_code))]
+fn is_metagraph_member_hot(node: &HotNodeRef<'_>) -> bool {
+    classify_metagraph_member(node) == MemberDecision::Member
 }
 
 #[cfg(test)]
@@ -215,6 +248,9 @@ pub fn write_metagraph(
     let mut meta_key_labels: Vec<String> = Vec::new();
     let mut mig_keys: HashMap<String, u32> = HashMap::new();
     let mut mig_key_labels: Vec<String> = Vec::new();
+    // Coverage's two exclusions, counted where the decision is made rather than inferred later.
+    let mut excluded_generated: u64 = 0;
+    let mut excluded_kind: u64 = 0;
     let include_member_indices = source_node_count < COMMUNITY_ONLY_THRESHOLD;
 
     let (modularity, detected_communities) = if analysis.is_some() {
@@ -294,8 +330,16 @@ pub fn write_metagraph(
             }
         }
 
-        if !is_metagraph_member_hot(&n) {
-            return;
+        match classify_metagraph_member(&n) {
+            MemberDecision::Member => {}
+            MemberDecision::GeneratedBundle => {
+                excluded_generated += 1;
+                return;
+            }
+            MemberDecision::NotStructure => {
+                excluded_kind += 1;
+                return;
+            }
         }
         let key = *meta_keys.entry(label.clone()).or_insert_with(|| {
             let id = meta_key_labels.len() as u32;
@@ -557,6 +601,8 @@ pub fn write_metagraph(
         community_only,
         threshold_community_only: COMMUNITY_ONLY_THRESHOLD,
         source_node_count,
+        excluded_generated,
+        excluded_kind,
         members_path: None,
         members_total: None,
         members_format: None,

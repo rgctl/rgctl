@@ -917,7 +917,26 @@ function Coverage({ view }: { view: ArchitectureView }) {
           The exported structure accounts for <b className="text-zinc-100">{coverage.covered.toLocaleString()}</b> of{" "}
           <b className="text-zinc-100">{coverage.declared.toLocaleString()}</b> nodes —{" "}
           {(coverage.covered / Math.max(1, coverage.declared) * 100).toFixed(1)}%. The remaining{" "}
-          {coverage.uncovered.toLocaleString()} are not in it and are not drawn. Evidence:{" "}
+          {coverage.uncovered.toLocaleString()} are not in it and are not drawn, and the bundle says why:{" "}
+          {/*
+            Two exclusions, named. They are different decisions — "this repository ships compiled bundles, and we do
+            not draw build output" vs "an import is not a place in the architecture" — and one total hid both. A
+            bundle written before the producer counted them says so instead of implying zero.
+          */}
+          {coverage.excludedGenerated !== null && coverage.excludedKind !== null ? (
+            <>
+              <b className="text-zinc-100">{coverage.excludedGenerated.toLocaleString()}</b> sit in generated bundle
+              paths (<code className="text-zinc-400">dist/</code>, <code className="text-zinc-400">node_modules/</code>
+              , <code className="text-zinc-400">target/</code>), and{" "}
+              <b className="text-zinc-100">{coverage.excludedKind.toLocaleString()}</b> are not structure kinds —
+              imports, variables, config keys and dependencies are in the graph but are not part of this map;{" "}
+            </>
+          ) : (
+            <span className="text-amber-200/80">
+              the two reasons for that are not in this bundle (it predates them being counted);{" "}
+            </span>
+          )}
+          Evidence:{" "}
           <code className="text-zinc-400">{coverage.source}</code>
           {coverage.source === "member_count"
             ? " (per-node membership is elided above 50,000 nodes, so the summary's counts are the only accounting in the bundle)"

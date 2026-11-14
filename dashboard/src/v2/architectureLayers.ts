@@ -160,19 +160,44 @@ export function aggregateCommunities(
  */
 export function coverageOf(metagraph: Metagraph, summary: CommunitySummary | null): Coverage | null {
   const declared = metagraph.source_node_count ?? 0;
+  // The producer's own accounting of *why* a node is missing. Read rather than reconstructed here: the room cannot
+  // tell a file under `dist/` from an import without re-scanning the graph it does not have.
+  const excludedGenerated = typeof metagraph.excluded_generated === "number" ? metagraph.excluded_generated : null;
+  const excludedKind = typeof metagraph.excluded_kind === "number" ? metagraph.excluded_kind : null;
   const withIndices = metagraph.nodes.filter((n) => Array.isArray(n.member_indices));
   if (withIndices.length > 0) {
     const covered = withIndices.reduce((n, node) => n + (node.member_indices?.length ?? 0), 0);
-    return { covered, declared, uncovered: Math.max(0, declared - covered), source: "member_indices" };
+    return {
+      covered,
+      declared,
+      uncovered: Math.max(0, declared - covered),
+      excludedGenerated,
+      excludedKind,
+      source: "member_indices",
+    };
   }
   // Out-of-line membership: the sidecar's own declared total, not a sum over nodes that carry no arrays.
   if (typeof metagraph.members_total === "number" && metagraph.members_total > 0) {
     const covered = metagraph.members_total;
-    return { covered, declared, uncovered: Math.max(0, declared - covered), source: "member_count" };
+    return {
+      covered,
+      declared,
+      uncovered: Math.max(0, declared - covered),
+      excludedGenerated,
+      excludedKind,
+      source: "member_count",
+    };
   }
   if (summary && summary.communities.some((c) => typeof c.member_count === "number")) {
     const covered = summary.communities.reduce((n, c) => n + (c.member_count ?? 0), 0);
-    return { covered, declared, uncovered: Math.max(0, declared - covered), source: "member_count" };
+    return {
+      covered,
+      declared,
+      uncovered: Math.max(0, declared - covered),
+      excludedGenerated,
+      excludedKind,
+      source: "member_count",
+    };
   }
   return null;
 }
