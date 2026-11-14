@@ -286,6 +286,52 @@ fn spa_fallback_serves_the_shell_for_client_routes_only() {
         api.status().is_success(),
         "api/status should answer for itself"
     );
+
+    // A bundle's data has fixed URLs and every repository serves the same names on the same origin, so a cached
+    // copy is another repository's numbers. `serve` sent `Last-Modified` and nothing else, which browsers treat as
+    // "fresh for a few minutes": open a second repo on the same port and the room reports the first one's counts.
+    for path in ["/manifest.json", "/metagraph.json"] {
+        let response = client
+            .get(format!("{base}{path}"))
+            .send()
+            .unwrap_or_else(|e| panic!("GET {path}: {e}"));
+        let cache = response
+            .headers()
+            .get(reqwest::header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert_eq!(
+            cache, "no-cache",
+            "{path} must not be heuristically cacheable"
+        );
+    }
+
+    // Content-hashed assets are the opposite case: their URL *is* their identity, so a year is correct.
+    if let Ok(entries) = std::fs::read_dir(repo.join(".rgctl/dashboard/assets")) {
+        if let Some(script) = entries.flatten().find(|e| {
+            e.path()
+                .extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|ext| ext == "js")
+        }) {
+            let response = client
+                .get(format!(
+                    "{base}/assets/{}",
+                    script.file_name().to_string_lossy()
+                ))
+                .send()
+                .expect("GET hashed asset");
+            let cache = response
+                .headers()
+                .get(reqwest::header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            assert!(
+                cache.contains("immutable"),
+                "a content-hashed asset should be immutable-cacheable, got {cache:?}"
+            );
+        }
+    }
 }
 
 /// A bundle data directory named after a room must not hijack that room's URL.
