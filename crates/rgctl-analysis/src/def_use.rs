@@ -432,6 +432,26 @@ fn collect_def_use_node<'a>(
                 stack.push((right, false, depth + 1));
             }
         }
+        // Elixir match/assignment operator: `q = expr` (`binary_operator` with operator `=`)
+        "binary_operator" => {
+            let op = node
+                .child_by_field_name("operator")
+                .and_then(|o| o.utf8_text(source).ok())
+                .map(str::trim);
+            if op == Some("=") {
+                if let Some(left) = node.child_by_field_name("left") {
+                    collect_assignment_lhs(left, source, defined, used, depth, stack);
+                }
+                if let Some(right) = node.child_by_field_name("right") {
+                    stack.push((right, false, depth + 1));
+                }
+            } else {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    stack.push((child, false, depth + 1));
+                }
+            }
+        }
 
         // Python / Ruby / Kotlin / Puppet
         "assignment" => {

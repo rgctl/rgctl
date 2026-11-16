@@ -1094,17 +1094,88 @@ pub enum VulnCommands {
         #[arg(long = "osv", value_name = "PATH")]
         osv: std::path::PathBuf,
     },
-    /// Reachability pipeline → OpenVEX (triage → deps → package/callers → taint)
-    Analyze {
-        /// Path to OSV JSON file
-        #[arg(long = "osv", value_name = "PATH")]
-        osv: std::path::PathBuf,
+    /// Fetch matching OSV advisories from OSV API into `.rgctl/osv/` for repo dependencies
+    Fetch {
+        /// OSV API base URL [default: $RGCTL_OSV_API_URL or https://api.osv.dev]
+        #[arg(long = "osv-api-url", value_name = "URL")]
+        osv_api_url: Option<String>,
+        /// Output directory for hydrated OSV JSON files [default: <repo>/.rgctl/osv]
+        #[arg(long = "output-dir", value_name = "DIR")]
+        output_dir: Option<std::path::PathBuf>,
         /// JAR/WAR roots (opt-in)
         #[arg(long = "include-jars", value_name = "DIR", num_args = 1..)]
         include_jars: Vec<std::path::PathBuf>,
         /// node_modules roots (opt-in)
         #[arg(long = "include-node-modules", value_name = "DIR", num_args = 1..)]
         include_node_modules: Vec<std::path::PathBuf>,
+        /// CycloneDX or SPDX JSON SBOM to include in queried dependencies
+        #[arg(long = "sbom", value_name = "PATH")]
+        sbom: Option<std::path::PathBuf>,
+        /// HTTP request timeout in seconds
+        #[arg(long = "timeout-secs", default_value_t = 15)]
+        timeout_secs: u64,
+    },
+    /// Reachability pipeline → OpenVEX / SARIF (triage → deps → package/callers → lazy PDG taint)
+    Analyze {
+        /// Path to OSV JSON file or directory of OSV JSON files (local override: zero network calls)
+        #[arg(long = "osv", value_name = "PATH")]
+        osv: Option<std::path::PathBuf>,
+        /// Enrich an upstream scanner report (Trivy, Grype, OSV-Scanner JSON; zero network calls)
+        #[arg(long = "from-report", value_name = "PATH")]
+        from_report: Option<std::path::PathBuf>,
+        /// CycloneDX or SPDX JSON SBOM to merge into dependency inventory
+        #[arg(long = "sbom", value_name = "PATH")]
+        sbom: Option<std::path::PathBuf>,
+        /// Offline mode: evaluate existing `.rgctl/osv/` cache with zero network calls
+        #[arg(long = "offline", default_value_t = false)]
+        offline: bool,
+        /// OSV API base URL when fetching advisories over network
+        #[arg(long = "osv-api-url", value_name = "URL")]
+        osv_api_url: Option<String>,
+        /// JAR/WAR roots (opt-in)
+        #[arg(long = "include-jars", value_name = "DIR", num_args = 1..)]
+        include_jars: Vec<std::path::PathBuf>,
+        /// node_modules roots (opt-in)
+        #[arg(long = "include-node-modules", value_name = "DIR", num_args = 1..)]
+        include_node_modules: Vec<std::path::PathBuf>,
+        /// Build/use `.rgctl/dep_stubs.bin` to stitch transitive calls across JARs and vendor caches
+        #[arg(long = "with-dep-stubs", default_value_t = false)]
+        with_dep_stubs: bool,
+        /// Elevate inconclusive call-graph-reachable sinks (and unspecified-symbol advisories
+        /// with non-zero import hits) from under_investigation to exploitable.
+        /// Suitable for fail-closed CI gating.
+        #[arg(long = "strict-reachability", default_value_t = false)]
+        strict_reachability: bool,
+    },
+    /// Whole-repo batch vulnerability reachability scan (fetches OSV feed unless locally overridden)
+    Scan {
+        /// Local OSV JSON file or directory override (bypasses network fetch)
+        #[arg(long = "osv", value_name = "PATH")]
+        osv: Option<std::path::PathBuf>,
+        /// Upstream scanner report override: Trivy, Grype, or OSV-Scanner JSON (bypasses network fetch)
+        #[arg(long = "from-report", value_name = "PATH")]
+        from_report: Option<std::path::PathBuf>,
+        /// CycloneDX or SPDX JSON SBOM to merge into dependency inventory
+        #[arg(long = "sbom", value_name = "PATH")]
+        sbom: Option<std::path::PathBuf>,
+        /// Offline mode: evaluate existing `.rgctl/osv/` cache with zero network calls
+        #[arg(long = "offline", default_value_t = false)]
+        offline: bool,
+        /// OSV API base URL [default: $RGCTL_OSV_API_URL or https://api.osv.dev]
+        #[arg(long = "osv-api-url", value_name = "URL")]
+        osv_api_url: Option<String>,
+        /// JAR/WAR roots (opt-in)
+        #[arg(long = "include-jars", value_name = "DIR", num_args = 1..)]
+        include_jars: Vec<std::path::PathBuf>,
+        /// node_modules roots (opt-in)
+        #[arg(long = "include-node-modules", value_name = "DIR", num_args = 1..)]
+        include_node_modules: Vec<std::path::PathBuf>,
+        /// Build/use `.rgctl/dep_stubs.bin` to stitch transitive calls across JARs and vendor caches
+        #[arg(long = "with-dep-stubs", default_value_t = false)]
+        with_dep_stubs: bool,
+        /// Fail-closed escalation: promote under_investigation findings to exploitable
+        #[arg(long = "strict-reachability", default_value_t = false)]
+        strict_reachability: bool,
     },
 }
 
@@ -1695,7 +1766,7 @@ impl Cli {
 
         let verbose = matches!(self.command, Commands::Discover { verbose: true, .. });
         let format = self.format.clone().unwrap_or_default();
-        let quiet_json = format == OutputFormat::Json && !verbose;
+        let quiet_json = matches!(format, OutputFormat::Json | OutputFormat::Sarif) && !verbose;
         let discover_json =
             matches!(self.command, Commands::Discover { .. }) && format == OutputFormat::Json;
         init_logging(verbose, discover_json);
@@ -2686,14 +2757,7 @@ impl Cli {
                     force,
                 },
             ),
-            Commands::Vuln { action } => match action {
-                VulnCommands::Triage { osv } => vuln_deps::run_vuln_triage(&ctx, osv),
-                VulnCommands::Analyze {
-                    osv,
-                    include_jars,
-                    include_node_modules,
-                } => vuln_deps::run_vuln_analyze(&ctx, osv, include_jars, include_node_modules),
-            },
+            Commands::Vuln { action } => vuln_deps::dispatch_vuln_command(&ctx, action),
             Commands::Deps { action } => match action {
                 DepsCommands::Check {
                     osv,
@@ -2702,14 +2766,7 @@ impl Cli {
                 } => vuln_deps::run_deps_check(&ctx, osv, include_jars, include_node_modules),
             },
             Commands::Security { action } => match action {
-                SecurityCommands::Vuln { action } => match action {
-                    VulnCommands::Triage { osv } => vuln_deps::run_vuln_triage(&ctx, osv),
-                    VulnCommands::Analyze {
-                        osv,
-                        include_jars,
-                        include_node_modules,
-                    } => vuln_deps::run_vuln_analyze(&ctx, osv, include_jars, include_node_modules),
-                },
+                SecurityCommands::Vuln { action } => vuln_deps::dispatch_vuln_command(&ctx, action),
                 SecurityCommands::Deps { action } => match action {
                     DepsCommands::Check {
                         osv,
@@ -2828,7 +2885,9 @@ fn command_label_for(command: &Commands) -> &'static str {
         Commands::Completions { .. } => "completions",
         Commands::Vuln { action } => match action {
             VulnCommands::Triage { .. } => "vuln triage",
+            VulnCommands::Fetch { .. } => "vuln fetch",
             VulnCommands::Analyze { .. } => "vuln analyze",
+            VulnCommands::Scan { .. } => "vuln scan",
         },
         Commands::Deps { action } => match action {
             DepsCommands::Check { .. } => "deps check",
@@ -2836,7 +2895,9 @@ fn command_label_for(command: &Commands) -> &'static str {
         Commands::Security { action } => match action {
             SecurityCommands::Vuln { action } => match action {
                 VulnCommands::Triage { .. } => "security vuln triage",
+                VulnCommands::Fetch { .. } => "security vuln fetch",
                 VulnCommands::Analyze { .. } => "security vuln analyze",
+                VulnCommands::Scan { .. } => "security vuln scan",
             },
             SecurityCommands::Deps { action } => match action {
                 DepsCommands::Check { .. } => "security deps check",

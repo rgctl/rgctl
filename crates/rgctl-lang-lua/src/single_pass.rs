@@ -121,6 +121,25 @@ fn push_function_symbol(
     true
 }
 
+fn extract_lua_require_module(node: Node, source: &[u8]) -> Option<String> {
+    let callee = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+        .map(str::trim)?;
+    if callee != "require" {
+        return None;
+    }
+    let args = node.child_by_field_name("arguments")?;
+    let raw = args.utf8_text(source).ok()?.trim();
+    let inner = raw
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim()
+        .trim_matches(['"', '\''])
+        .trim();
+    (!inner.is_empty()).then(|| inner.to_string())
+}
+
 /// `function foo()` / `function M.foo()` / `function M:bar()` name field.
 fn lua_function_decl_name(node: Node, source: &[u8]) -> Option<String> {
     let name_node = node.child_by_field_name("name").or_else(|| {
@@ -379,6 +398,19 @@ pub fn extract_all_single_pass(
                 }
 
                 if LUA_CALL_KINDS.contains(&kind) {
+                    if let Some(mod_name) = extract_lua_require_module(node, source) {
+                        let mut imp = Symbol {
+                            name: mod_name.clone(),
+                            symbol_type: SymbolType::Import,
+                            qualified_name: Some(mod_name),
+                            location: node_to_location(node, &file_path_str),
+                            signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
+                            metadata: serde_json::json!({ "language": "lua" }),
+                            ..Default::default()
+                        };
+                        record_symbol_spans_from_source(&mut imp, node, source);
+                        ctx.symbols.push(imp);
+                    }
                     if let Some(frame) = ctx.scopes.current_function() {
                         if let Some(idx) = frame.symbol_idx {
                             pending_calls.push(PendingCall {

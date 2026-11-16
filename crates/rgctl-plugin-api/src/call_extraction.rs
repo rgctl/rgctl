@@ -163,9 +163,12 @@ pub fn callee_name(root: Node, source: &[u8]) -> Option<String> {
             | "selector_expression"
             | "attribute"
             | "member_expression"
-            | "member_access_expression" => {
+            | "member_access_expression"
+            | "dot_index_expression"
+            | "method_index_expression" => {
                 if let Some(n) = node
                     .child_by_field_name("field")
+                    .or_else(|| node.child_by_field_name("method"))
                     .or_else(|| node.child_by_field_name("attribute"))
                     .or_else(|| node.child_by_field_name("property"))
                     .or_else(|| node.child_by_field_name("name"))
@@ -373,6 +376,7 @@ pub fn push_call_relation_from(
             inferred_owner = inferred;
             (ty, qh)
         }
+        "lua" => lua_call_type_hint(node, source, &callee),
         _ => (None, None),
     };
 
@@ -578,6 +582,37 @@ fn cpp_name_component_text(node: Node, source: &[u8]) -> Option<String> {
             .ok()
             .map(str::trim)
             .map(str::to_string),
+    }
+}
+
+fn lua_call_type_hint(call: Node, source: &[u8], callee: &str) -> (Option<String>, Option<String>) {
+    let Some(name_node) = call.child_by_field_name("name") else {
+        return (None, None);
+    };
+    match name_node.kind() {
+        "dot_index_expression" => {
+            let Some(tbl) = name_node
+                .child_by_field_name("table")
+                .and_then(|t| t.utf8_text(source).ok())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                return (None, None);
+            };
+            (Some(tbl.to_string()), Some(format!("{tbl}.{callee}")))
+        }
+        "method_index_expression" => {
+            let Some(tbl) = name_node
+                .child_by_field_name("table")
+                .and_then(|t| t.utf8_text(source).ok())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                return (None, None);
+            };
+            (Some(tbl.to_string()), Some(format!("{tbl}:{callee}")))
+        }
+        _ => (None, None),
     }
 }
 

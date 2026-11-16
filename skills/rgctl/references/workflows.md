@@ -388,43 +388,54 @@ Exit code 1 means violations. Parse JSON for violation details. Prefer `review c
 
 # Vuln / deps / reachability workflow
 
-**When:** OSV / CVE impact — “are we affected?”, “is it reachable?”, OpenVEX. Prefer slash command **`/rgctl:vuln`** for the full triage report.
+**When:** OSV / CVE impact — “are we affected?”, “scan the whole repo for reachable CVEs”, “enrich Trivy/Grype”, OpenVEX PURLs, or SARIF 2.1.0. Prefer slash command **`/rgctl:vuln`** (`rgctl-vuln`) for the full triage report.
 
-**Index for vuln scans (required before analyze reachability):**
+**Index prerequisites:**
 
 ```bash
-cd "$REPO" && rgctl discover . --with-cfg
-# Prefer both when you need PDG-backed sink-first confidence:
-cd "$REPO" && rgctl discover . --with-cfg --with-taint
+# Recommended staged full pipeline (graph + CFG/PDG + taint + Universe + semantic):
+cd "$REPO" && rgctl discover . --full
+
+# Or minimal CI index (`vuln scan` and `vuln analyze` lazily hydrate single-function CFG/PDG per call site):
+cd "$REPO" && rgctl discover .
+
+# Optional: build `.rgctl/dep_stubs.bin` to stitch App -> WrapperJar -> VulnerableSink:
+cd "$REPO" && rgctl discover . --full --with-dep-stubs
 ```
 
-- Run **`--with-cfg`** for any vulnerability scan that may reach sink-first taint, blast classify, or `vuln analyze` exploitability beyond deps-only.
-- Add **`--with-taint`** when you need discover-time / PDG-backed taint confidence. Without CFG, `cfg_available=false`: deps / package / callers still work, but empty taint paths are **not** PDG proof.
-- If `.rgctl/` exists from a plain `discover` (no CFG), **re-discover with `--with-cfg`** before analyze — do not treat the warm index as sufficient for reachability/VEX.
+### Mode A: Whole-repo scan, network fetch & local overrides (`vuln fetch` / `vuln scan`)
 
-**Primary pipeline (v0.4.22+):** `vuln analyze` populates `.sink_taint.call_sites` (`caller`, `target_method`, `file`, `line`; omitted when empty, so use `.sink_taint.call_sites // []`) from the graph **and** `.rgctl/parked_relations.bin`, plus `.sink_taint.paths[]` (`from`, `to`, `hops`). That eliminates the older manual `find --package` / `callers --package` chain unless you are debugging empty sites.
+```bash
+# 1. Hydrate `.rgctl/osv/*.json` from live OSV (`POST api.osv.dev/v1/querybatch`):
+rgctl -f json vuln fetch
+
+# 2. Single-mmap + Rayon parallel batch reachability (online default, or zero-network under `--offline` / `--osv` / `--from-report`):
+rgctl -f json vuln scan --offline --include-jars lib --with-dep-stubs > .rgctl/vuln-scan.json
+
+# 3. Enrich Trivy / Grype / OSV-Scanner JSON + optional CycloneDX/SPDX SBOM (zero network):
+rgctl -f json vuln scan --from-report trivy.json --sbom bom.cdx.json > .rgctl/vuln-scan.json
+
+# 4. Export SARIF 2.1.0 (`codeFlows` / `threadFlows`) for GitHub Code Scanning:
+rgctl -f sarif vuln scan --offline --strict-reachability -o .rgctl/findings.sarif
+```
+
+### Mode B: Single-advisory triage (`vuln triage` → `deps check` → `vuln analyze`)
 
 | Step | Command |
 |------|---------|
-| P−1 Index | `rgctl discover . --with-cfg` (+ `--with-taint` for PDG confidence) |
-| P0 Normalize OSV | `rgctl -f json vuln triage --osv ./advisory.json` |
-| P1 Deps match | `rgctl -r "$REPO" -f json deps check --osv ./advisory.json` (+ `--include-jars lib`) |
-| P2 Orchestrated VEX | `rgctl -r "$REPO" -f json vuln analyze --osv ./advisory.json --include-jars lib` → read `(.sink_taint.call_sites // [])[]` / `.paths[]` |
+| P0 Normalize OSV | `rgctl -f json vuln triage --osv ./advisory.json` (`ranges[]` with `fixed` & `last_affected`, `symbol_coverage`) |
+| P1 Deps match | `rgctl -r "$REPO" -f json deps check --osv ./advisory.json [--include-jars lib] [--sbom bom.cdx.json]` |
+| P2 Reachability + VEX | `rgctl -r "$REPO" -f json vuln analyze --osv ./advisory.json [--include-jars lib] [--with-dep-stubs] [--strict-reachability]` |
 | P3 Optional deepen | `slice FILE --line N --variable V --with-alias` or `blast-radius` on a hit caller |
 
-**Debug-only (when call_sites empty and you need to probe):**
+**4-State Epistemic Verdict Matrix:**
+- `not_affected` (`component_not_present`) — package absent or version outside all `VersionInterval`s.
+- `not_exploitable` (`vulnerable_code_not_in_execute_path`) — `SymbolCoverage::Explicit` with 0 call sites across graph, `parked_relations.bin`, and `dep_stubs.bin` (or `SymbolCoverage::Unspecified` with 0 imports).
+- `not_exploitable` (`inline_mitigations_already_exist`) — all call sites proven mitigated via constant literals, dominating PDG sanitizers, or unsatisfied `.rgctl/vuln-rules.d/*.yaml` trigger rule.
+- `under_investigation` — `SymbolCoverage::Unspecified` with $\ge 1$ imports, or inconclusive call-site dataflow (escalates to `exploitable` / `Status::Affected` when `--strict-reachability` is passed).
+- `exploitable` (`affected`) — proven untrusted→sink taint path (or strict escalation).
 
-| Step | Command |
-|------|---------|
-| Package imports | `find --package '<coords>' --type import --limit 40` |
-| Facade callers | `callers <Symbol> --package '<coords>' --methods readValue,… --limit 40` |
-| Sink-first taint | `taint --sink ObjectMapper.readValue --source external` |
-
-**Verdicts:** deps `not_affected` | `affected_candidate`. Analyze `exploitability`: `not_affected` | `not_exploitable` | `exploitable` | `under_investigation`. OpenVEX statuses map accordingly; unresolved sinks alone MUST NOT force `not_affected` without caller evidence. With `cfg_available=false`, prefer wording grounded in caller/deps evidence — not “PDG confirmed no path.”
-
-**Honesty:** OSV `versions[]` may be backport series; short Maven groups use the resolver table (no silent wrong guess). Bundled JAR / `node_modules` scans are **opt-in**. Zero imports ≠ library absent when `bundled_presence` / deps match. **Xalan dual path:** `xalan:*` resolves to Apache packages **and** JDK JAXP aliases (`javax.xml.transform`, `com.sun.org.apache.xalan.internal`) with `runtime_bundled=true` — Maven absence alone does not mean no XSLT engine.
-
-**Multi-language:** same CLI; Maven/npm/Cargo/Go/PyPI/(NuGet/Ruby/Composer stubs) resolver; Java/Jakarta + Python web boundary catalogs; declarative taint packs (`TaintRuleSet` overlays for OSV methods — no hardcoded `detect_*`).
+**Tier-1 coverage:** All 20 taint-enabled Tier-1 languages (`java`, `kotlin`, `groovy`, `scala`, `rust`, `go`, `typescript`, `javascript`, `python`, `csharp`, `php`, `ruby`, `dart`, `elixir`, `swift`, `c`, `cpp`, `puppet`, `lua`, `bash`), 16 lockfile/manifest formats, 14 ecosystem `VersionEngine` comparators (incl. full PEP 440, Maven qualifiers, SemVer), canonical `pkg:` PURLs in OpenVEX, and Xalan dual-path JAXP alias resolution.
 
 
 ---

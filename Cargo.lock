@@ -3852,17 +3852,25 @@ dependencies = [
 name = "rgctl-security"
 version = "0.4.27"
 dependencies = [
+ "axum",
+ "bincode",
  "openvex",
  "osv",
+ "rayon",
  "regex",
+ "reqwest",
  "rgctl-analysis",
  "rgctl-error",
  "rgctl-extraction",
  "rgctl-graph",
+ "rgctl-plugin-api",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
+ "uuid",
  "walkdir",
  "zip",
 ]

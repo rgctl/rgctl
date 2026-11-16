@@ -49,10 +49,23 @@ struct GraphSpec {
     min_calls_edges: Option<usize>,
     exact_functions: Option<usize>,
     exact_calls_edges: Option<usize>,
+    min_parked_calls: Option<usize>,
     #[serde(default)]
     forbidden_edges: Vec<ForbiddenEdge>,
     #[serde(default)]
     expected_relations: Vec<ExpectedRelation>,
+    #[serde(default)]
+    expected_parked_calls: Vec<ExpectedParkedCall>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ExpectedParkedCall {
+    from: String,
+    to: String,
+    #[serde(default)]
+    hint_contains: Option<String>,
+    #[serde(default = "required_sev")]
+    severity: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1315,6 +1328,96 @@ pub fn run_project(
             ),
         };
         checks.push(inv_check);
+
+        // Universal `parked_relations.bin` structural & hint validity invariant across Tier-1 harnesses.
+        let parked_path = work
+            .join(".rgctl")
+            .join(rgctl_extraction::PARKED_RELATIONS_FILE);
+        if parked_path.is_file() {
+            match (
+                rgctl_extraction::load_parked_relations(&parked_path),
+                SnapshotNodeStore::open(&snap),
+            ) {
+                (Ok(records), Ok(store)) => {
+                    let call_recs: Vec<_> = records
+                        .iter()
+                        .filter(|r| r.relation_type == rgctl_plugin_api::RelationType::Calls)
+                        .collect();
+                    let bad = call_recs.iter().find(|r| {
+                        r.to_name.trim().is_empty()
+                            || r.from_file.trim().is_empty()
+                            || r.from_qualified_name.trim().is_empty()
+                            || r.call_site_line == 0
+                            || store.get_node(r.from_node_id).ok().flatten().is_none()
+                    });
+                    let detail = match bad {
+                        Some(b) => format!(
+                            "invalid parked Calls record: from={} to={} file={} line={}",
+                            b.from_qualified_name, b.to_name, b.from_file, b.call_site_line
+                        ),
+                        None => format!(
+                            "parked_relations ok (total={} calls={})",
+                            records.len(),
+                            call_recs.len()
+                        ),
+                    };
+                    checks.push(check(
+                        "graph.parked_relations_invariants",
+                        "required",
+                        bad.is_none(),
+                        detail,
+                    ));
+                    if let Some(min_p) = facts.graph.min_parked_calls {
+                        checks.push(check(
+                            "graph.min_parked_calls",
+                            facts.graph.severity.as_str(),
+                            call_recs.len() >= min_p,
+                            format!("parked_calls={} min={min_p}", call_recs.len()),
+                        ));
+                    }
+                    for (idx, exp) in facts.graph.expected_parked_calls.iter().enumerate() {
+                        let matched = call_recs.iter().any(|r| {
+                            let from_ok = r.from_qualified_name.contains(&exp.from);
+                            let to_ok = r.to_name.contains(&exp.to)
+                                || r.to_qualified_hint
+                                    .as_deref()
+                                    .is_some_and(|h| h.contains(&exp.to));
+                            let hint_ok = exp.hint_contains.as_ref().is_none_or(|hc| {
+                                r.to_qualified_hint
+                                    .as_deref()
+                                    .is_some_and(|h| h.contains(hc))
+                                    || r.to_type_hint.as_deref().is_some_and(|t| t.contains(hc))
+                                    || r.import_module_hint
+                                        .as_deref()
+                                        .is_some_and(|i| i.contains(hc))
+                            });
+                            from_ok && to_ok && hint_ok
+                        });
+                        checks.push(check(
+                            format!("graph.expected_parked_calls[{idx}]"),
+                            exp.severity.as_str(),
+                            matched,
+                            format!(
+                                "want parked call {} -> {} (hint={:?})",
+                                exp.from, exp.to, exp.hint_contains
+                            ),
+                        ));
+                    }
+                }
+                (Err(e), _) => checks.push(check(
+                    "graph.parked_relations_invariants",
+                    "required",
+                    false,
+                    format!("load parked_relations.bin: {e}"),
+                )),
+                (_, Err(e)) => checks.push(check(
+                    "graph.parked_relations_invariants",
+                    "required",
+                    false,
+                    format!("open snapshot for parked check: {e}"),
+                )),
+            }
+        }
     }
 
     let gsev = facts.graph.severity.as_str();

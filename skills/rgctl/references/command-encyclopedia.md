@@ -22,7 +22,9 @@ Prefer the **Canonical** column in examples and agent workflows. Aliases/façade
 | Impact | `blast-radius` | — |
 | Hotspots / churn | `metrics` (`--pagerank`, `--churn`, …) | — |
 | Exact / bloom / fragment clones | `clones` (`--mode fragment --seed`) | — (not `semantic query`) |
-| OSV → OpenVEX | `vuln analyze` | `security vuln analyze` |
+| OSV feed fetch | `vuln fetch` | `security vuln fetch` |
+| OSV repo batch scan | `vuln scan` (`-f json\|sarif`, `--offline`, `--from-report`) | `security vuln scan` |
+| OSV → OpenVEX / SARIF | `vuln analyze` (`-f json\|sarif`, `--strict-reachability`) | `security vuln analyze` |
 | Dep match | `deps check` | `security deps check` |
 | Sink taint CLI | `taint` | `security taint` |
 | CI policy | `check` | — |
@@ -681,17 +683,23 @@ rgctl cpg export --format graphson --output cpg.json [--path-contains src/] \
 
 ## vuln analyze
 
-**Command:** `rgctl -f json vuln analyze --osv PATH [--include-jars DIR]`
+**Commands:**
+- `rgctl -f json vuln fetch [--osv-api-url URL] [--sbom PATH] [--include-jars DIR] [--include-node-modules DIR]`
+- `rgctl [-f json|sarif] vuln scan [--osv FILE|DIR] [--from-report PATH] [--sbom PATH] [--offline] [--strict-reachability] [--with-dep-stubs] [--include-jars DIR] [--include-node-modules DIR]`
+- `rgctl [-f json|sarif] vuln analyze --osv FILE|DIR [--from-report PATH] [--sbom PATH] [--strict-reachability] [--with-dep-stubs] [--include-jars DIR] [--include-node-modules DIR]`
+- `rgctl -f json vuln triage --osv FILE`
+- `rgctl -f json deps check --osv FILE [--sbom PATH] [--include-jars DIR] [--include-node-modules DIR]`
 
-**Purpose:** Orchestrated OSV → deps match → sink-first reachability → OpenVEX. Prefer after `discover . --with-cfg`.
+**Purpose:** Live OSV feed hydration (`POST /v1/querybatch` → `.rgctl/osv/*.json`), zero-network local overrides (`--offline`, `--osv`, `--from-report`), single-mmap + Rayon parallel batch reachability (`vuln scan`), lazy per-call-site CFG/PDG taint verification, canonical `pkg:` PURL OpenVEX v0.2.0, and SARIF 2.1.0 (`-f sarif` with `codeFlows` / `threadFlows`). Works on plain `discover` snapshots (lazy per-call-site CFG/PDG) or `discover --full`.
 
-**Key fields:** `.deps_verdict`, `.exploitability`, `.openvex.statements[].status`, and `.sink_taint`:
-- `.sink_taint.call_sites // []` — `{caller, target_method, file, line}` (graph + parked external calls; key omitted when empty)
-- `.sink_taint.paths[]` — `{from, to, hops}` upstream entry → sink summaries
+**Key fields (`vuln analyze` / `vuln scan.results[]`):** `.deps_verdict`, `.exploitability`, `.openvex.statements[]` (`status`, `justification`, canonical `pkg:` `products`), and `.sink_taint`:
+- `.sink_taint.call_sites // []` — `{caller, target_method, file, line}` (graph + `parked_relations.bin` + optional `dep_stubs.bin`)
+- `.sink_taint.paths[]` — `{from, to, hops}` proven untrusted→sink taint paths (incl. stitched wrapper chains)
+- `.sink_taint.caller_chains // []` — `{from, to, hops}` structural `BlastRadiusEngine` upstream chains
 
-**Pitfalls:** Empty paths with `cfg_available=false` is not PDG proof of safe. Prefer `/rgctl:vuln` for the full triage protocol. Related: `vuln triage`, `deps check`.
+**Pitfalls:** `SymbolCoverage::Unspecified` + imported package returns `under_investigation` (never false-negative `not_exploitable`); pass `--strict-reachability` to escalate `under_investigation` → `exploitable` in fail-closed CI. Local overrides (`--offline`, `--osv`, `--from-report`) guarantee zero outbound HTTP traffic. Prefer `/rgctl:vuln` for the full triage protocol.
 
-**Agent should report:** exploitability + OpenVEX status + concrete `file:line` call sites — not the full envelope.
+**Agent should report:** exploitability + OpenVEX status/justification + canonical PURLs + concrete `file:line` call sites — not the full envelope.
 
 ---
 

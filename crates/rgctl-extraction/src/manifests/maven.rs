@@ -12,8 +12,37 @@ pub fn extract(path: &Path, source: &[u8]) -> Vec<DependencyDeclaration> {
         return Vec::new();
     };
 
+    let root = doc.root_element();
     let mut props: HashMap<String, String> = HashMap::new();
-    if let Some(props_el) = find_child_deep(doc.root_element(), "properties") {
+    // Seed built-in Maven coordinates from <parent> then <project> (task 3.1).
+    if let Some(parent_el) = root
+        .children()
+        .find(|n| n.is_element() && n.tag_name().name() == "parent")
+    {
+        if let Some(pv) = child_text(parent_el, "version") {
+            props.insert("project.version".into(), pv.clone());
+            props.insert("pom.version".into(), pv.clone());
+            props.insert("project.parent.version".into(), pv);
+        }
+        if let Some(pg) = child_text(parent_el, "groupId") {
+            props.insert("project.groupId".into(), pg.clone());
+            props.insert("pom.groupId".into(), pg.clone());
+            props.insert("project.parent.groupId".into(), pg);
+        }
+    }
+    if let Some(v) = child_text(root, "version") {
+        props.insert("project.version".into(), v.clone());
+        props.insert("pom.version".into(), v);
+    }
+    if let Some(g) = child_text(root, "groupId") {
+        props.insert("project.groupId".into(), g.clone());
+        props.insert("pom.groupId".into(), g);
+    }
+    if let Some(props_el) = root
+        .children()
+        .find(|n| n.is_element() && n.tag_name().name() == "properties")
+        .or_else(|| find_child_deep(root, "properties"))
+    {
         for child in props_el.children().filter(|n| n.is_element()) {
             let name = child.tag_name().name().to_string();
             if let Some(val) = child.text().map(str::trim).filter(|s| !s.is_empty()) {
@@ -23,13 +52,7 @@ pub fn extract(path: &Path, source: &[u8]) -> Vec<DependencyDeclaration> {
     }
 
     let mut out = Vec::new();
-    collect_deps(
-        doc.root_element(),
-        path,
-        &props,
-        &mut out,
-        /*in_dep_mgmt*/ false,
-    );
+    collect_deps(root, path, &props, &mut out, /*in_dep_mgmt*/ false);
     out
 }
 
@@ -112,10 +135,21 @@ fn child_text(node: roxmltree::Node<'_, '_>, name: &str) -> Option<String> {
 
 fn resolve_props(s: &str, props: &HashMap<String, String>) -> String {
     let mut out = s.to_string();
-    // Single-pass ${key} substitution from this POM's <properties>.
-    for (k, v) in props {
-        let needle = format!("${{{k}}}");
-        out = out.replace(&needle, v);
+    // Bounded multi-pass ${key} substitution so chained properties (`<a>1.0</a><b>${a}</b>`) resolve.
+    for _ in 0..4 {
+        if !out.contains("${") {
+            break;
+        }
+        let prev = out.clone();
+        for (k, v) in props {
+            let needle = format!("${{{k}}}");
+            if out.contains(&needle) {
+                out = out.replace(&needle, v);
+            }
+        }
+        if out == prev {
+            break;
+        }
     }
     out
 }
@@ -162,5 +196,48 @@ mod tests {
             .unwrap();
         assert_eq!(bom.version_requirement.as_deref(), Some("2.16.12.Final"));
         assert_eq!(bom.scope.as_deref(), Some("import"));
+    }
+
+    #[test]
+    fn interpolates_project_parent_and_chained_properties() {
+        let src = r#"
+<project>
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>parent-pom</artifactId>
+    <version>3.1.4</version>
+  </parent>
+  <artifactId>child</artifactId>
+  <properties>
+    <base.jackson>2.13.5</base.jackson>
+    <jackson.version>${base.jackson}</jackson.version>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>sibling-lib</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+  </dependencies>
+</project>
+"#;
+        let decls = extract(Path::new("pom.xml"), src.as_bytes());
+        let sibling = decls
+            .iter()
+            .find(|d| d.name == "com.example:sibling-lib")
+            .unwrap();
+        assert_eq!(sibling.version_requirement.as_deref(), Some("3.1.4"));
+        assert!(!sibling.unresolved);
+        let jackson = decls
+            .iter()
+            .find(|d| d.name == "com.fasterxml.jackson.core:jackson-databind")
+            .unwrap();
+        assert_eq!(jackson.version_requirement.as_deref(), Some("2.13.5"));
+        assert!(!jackson.unresolved);
     }
 }

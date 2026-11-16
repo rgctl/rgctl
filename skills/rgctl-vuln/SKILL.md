@@ -1,113 +1,147 @@
 ---
 name: rgctl-vuln
 description: >-
-  Triage an OSV/CVE with rgctl vuln (triage → deps check → analyze): package
-  match, parked call-site reachability (.sink_taint), OpenVEX status, and a
-  short CVE Reachability report. Use when asked about a CVE, OSV advisory,
-  exploitability, or OpenVEX for this repo.
+  Triage an OSV/CVE or scan an entire repo with rgctl vuln (fetch / scan /
+  triage → deps check → analyze): OSV network feed + offline/report overrides,
+  lockfile version matching, parked & transitive call-site reachability,
+  OpenVEX PURLs, SARIF 2.1.0, and a concise CVE Reachability report. Use when
+  asked about a CVE, OSV advisory, scanner report (Trivy/Grype/OSV-Scanner),
+  exploitability, or OpenVEX/SARIF for this repo.
 rgctl-managed: true
 ---
 
 # rgctl-vuln (`/rgctl:vuln`)
 
-End-to-end OSV/CVE reachability and OpenVEX triage via **`vuln triage`**, **`deps check`**, and **`vuln analyze`**. No forge posts; no `serve` / `--watch`.
+End-to-end OSV/CVE reachability, whole-repo vulnerability scanning, and OpenVEX/SARIF generation via **`vuln fetch`**, **`vuln scan`**, **`vuln triage`**, **`deps check`**, and **`vuln analyze`**. No forge posts; no `serve` / `--watch`.
 
-Bound stdout on large repos: keep `--depth` small on follow-up `blast-radius` probes and `--limit` on `find`/`callers`; project JSON with `jq` (do not paste full analyze envelopes into chat).
+Bound stdout on large repos: keep `--depth` small on follow-up `blast-radius` probes and `--limit` on `find`/`callers`; project JSON with `jq` (do not paste full analyze/scan envelopes into chat).
 
 ## When to Use
 
-- User asks whether the repo is affected by a CVE / OSV advisory.
-- User wants OpenVEX status, exploitability, or concrete `file:line` call sites to a vulnerable sink.
-- User has an OSV JSON path (file or directory) or a CVE id with a local advisory fixture.
+- User asks whether the repo is affected by a CVE / OSV advisory or wants a full repo vulnerability scan (`rgctl vuln scan`).
+- User wants to enrich a Trivy, Grype, or OSV-Scanner JSON report (`--from-report`) or CycloneDX/SPDX SBOM (`--sbom`) with reachability proofs.
+- User wants OpenVEX v0.2.0 (`pkg:` PURLs), SARIF 2.1.0 (`-f sarif`), or concrete `file:line` call sites to a vulnerable sink.
+- User wants a fail-closed CI gate (`--strict-reachability`) or air-gapped evaluation (`--offline`, `--osv <file|dir>`).
 
 ## Prerequisites
 
-- Work in the repo root (`REPO_PATH`, default `.`).
-- OSV input: `--osv <path>` (file or directory of OSV JSON).
-- CFG archive for reachability: `discover . --with-cfg` (add `--with-taint` when PDG-backed confidence is required).
+- Index the repo once with `rgctl discover . --full` (recommended staged pipeline: graph + CFG/PDG + taint + semantic; or `rgctl -r "$REPO" discover --full` without positional `.`) if `.rgctl/graph.snapshot.bin` is missing. Plain `rgctl discover .` also works in fast CI — `vuln analyze` and `vuln scan` lazily build single-function CFG/PDG per discovered call site on demand.
+- Add `--with-dep-stubs` (`discover . --full --with-dep-stubs` or directly on `vuln scan` / `vuln analyze`) when wrapper JARs or `node_modules`/`vendor` packages sit between first-party code and vulnerable sinks.
+- Lockfiles across all Tier-1 ecosystems (`Cargo.lock`, `go.sum`, `gradle.lockfile`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `requirements.txt`, `packages.lock.json`, `composer.lock`, `Gemfile.lock`, `pubspec.lock`, `mix.lock`, `Package.resolved`, `Puppetfile.lock`, `vcpkg.json`, `conan.lock`, `*.rockspec`) are scanned automatically.
+- Local override flags (`--osv <file|dir>`, `--from-report <path>`, `--offline`) guarantee **zero outbound network requests**.
 
 Do **not** start `rgctl serve` or `rgctl serve --watch` for this skill.
 
-## Steps
+## Workflows
 
-### Step 0: CFG readiness
+### Mode A: Whole-Repo Scan or Scanner Report Enrichment (`vuln fetch` / `vuln scan`)
 
 ```bash
 cd "${REPO_PATH:-.}"
-OSV_PATH="${osv_path:?set osv_path to OSV JSON file or directory}"
-JARS_FLAG=""
-# Add when lib/ or shaded JARs exist:
-# JARS_FLAG="--include-jars lib"
+test -f .rgctl/graph.snapshot.bin || rgctl -f json discover .
 
-rgctl -f json cpg status
-# If CFG missing / cfg_available will be false on analyze:
-# rgctl discover . --with-cfg
-# Optional PDG confidence: rgctl discover . --with-cfg --with-taint
+# 1a. Live OSV network scan (queries api.osv.dev/v1/querybatch & caches .rgctl/osv/*.json):
+rgctl -f json vuln scan > .rgctl/vuln-scan.json
+
+# 1b. Two-step fetch then air-gapped offline scan (+ optional JAR bytecode call-stub stitching):
+rgctl -f json vuln fetch
+rgctl -f json vuln scan --offline --include-jars lib --with-dep-stubs > .rgctl/vuln-scan.json
+
+# 1c. Enrich Trivy / Grype / OSV-Scanner JSON + optional CycloneDX/SPDX SBOM (zero network):
+rgctl -f json vuln scan --from-report trivy.json --sbom bom.cdx.json > .rgctl/vuln-scan.json
+
+# 1d. Emit SARIF 2.1.0 (with codeFlows/threadFlows) for GitHub Code Scanning:
+rgctl -f sarif vuln scan --offline -o .rgctl/findings.sarif
 ```
 
-### Step 1: Normalize advisory (`vuln triage`)
+Summarize counts (`jq '.counts' .rgctl/vuln-scan.json`) and inspect `exploitable` / `under_investigation` items (`jq '.results[] | select(.exploitability == "exploitable" or .exploitability == "under_investigation")'`).
+
+---
+
+### Mode B: Single-Advisory Deep Triage (`vuln triage` → `deps check` → `vuln analyze`)
+
+#### Step 1: Normalize advisory (`vuln triage`)
 
 ```bash
-rgctl -f json vuln triage --osv "${OSV_PATH}" \
-  > "${REPO_PATH:-.}/.rgctl/vuln-triage.json"
+OSV_PATH="${osv_path:?set osv_path to OSV JSON file}"
+rgctl -f json vuln triage --osv "${OSV_PATH}" > .rgctl/vuln-triage.json
 ```
 
-Extract package coordinates, version ranges, and affected sink methods. Summarize — do not dump raw JSON.
+Inspect `packages[].ranges[]` (`fixed` exclusive vs `last_affected` inclusive bounds) and `packages[].symbol_coverage` (`{"coverage":"explicit","symbols":[...]}` vs `{"coverage":"unspecified"}`).
 
-### Step 2: Deps / shaded JAR match (`deps check`)
+#### Step 2: Lockfile, manifest & bundled JAR match (`deps check`)
 
 ```bash
-rgctl -f json deps check --osv "${OSV_PATH}" ${JARS_FLAG} \
-  > "${REPO_PATH:-.}/.rgctl/vuln-deps.json"
+JARS_FLAG="" # e.g. "--include-jars lib" when bundled JARs/WARs exist
+rgctl -f json deps check --osv "${OSV_PATH}" ${JARS_FLAG} > .rgctl/vuln-deps.json
 ```
 
-Report `not_affected` vs `affected_candidate`. Zero Maven imports ≠ absent when `bundled_presence` / JAR match is true.
+Report `not_affected` vs `affected_candidate` and `matched[]` (`in_range`, `is_direct`, `provenance`).
 
-### Step 3: Reachability + OpenVEX (`vuln analyze`)
+#### Step 3: Reachability + OpenVEX / SARIF (`vuln analyze`)
 
 ```bash
-rgctl -f json vuln analyze --osv "${OSV_PATH}" ${JARS_FLAG} \
-  > "${REPO_PATH:-.}/.rgctl/vuln-analyze.json"
+# Default reachability (add --with-dep-stubs to stitch App -> WrapperJar -> VulnerableJar;
+# add --strict-reachability for fail-closed CI gating):
+rgctl -f json vuln analyze --osv "${OSV_PATH}" ${JARS_FLAG} > .rgctl/vuln-analyze.json
 ```
 
-Read (prefer `jq` projections):
+Key JSON fields (`jq` projections):
 
 | Field | Meaning |
 |-------|---------|
-| `.deps_verdict` | Deps-layer match |
+| `.deps_verdict` | `not_affected` \| `affected_candidate` |
 | `.exploitability` | `not_affected` \| `not_exploitable` \| `exploitable` \| `under_investigation` |
-| `.openvex.statements[0].status` | OpenVEX status |
-| `.sink_taint.call_sites // []` | `{caller, target_method, file, line}` from graph + parked relations (key omitted when empty) |
-| `.sink_taint.paths[]` | `{from, to, hops}` upstream entry → sink |
+| `.openvex.statements[0].status` | `not_affected` \| `affected` \| `under_investigation` |
+| `.openvex.statements[0].justification` | `component_not_present` \| `vulnerable_code_not_in_execute_path` \| `inline_mitigations_already_exist` |
+| `.openvex.statements[0].products[]` | Canonical PURL (`pkg:maven/group/art@ver`, `pkg:npm/...`, `pkg:cargo/...`, etc.) |
+| `.sink_taint.call_sites // []` | `{caller, target_method, file, line}` from graph + `parked_relations.bin` + optional `dep_stubs.bin` |
+| `.sink_taint.paths[]` | Proven untrusted→sink taint paths (including stitched wrapper chains) |
+| `.sink_taint.caller_chains // []` | Structural upstream caller / `BlastRadiusEngine` chains |
 
-`vuln analyze` already links parked external calls into `.sink_taint.call_sites` / `.paths` (note: `call_sites` uses `skip_serializing_if` and is omitted when 0 sites match — use `.sink_taint.call_sites // []` in `jq`) — do **not** re-run a full `find --package` / `callers --package` chain unless debugging empty sites.
+**Epistemic Verdict Ladder:**
+- `SymbolCoverage::Unspecified` + package imported → `under_investigation` (never false-negative `not_exploitable`; escalates to `exploitable` under `--strict-reachability`).
+- `SymbolCoverage::Unspecified` + zero imports → `not_exploitable`.
+- `SymbolCoverage::Explicit` + 0 callers → `not_exploitable (vulnerable_code_not_in_execute_path)`.
+- `SymbolCoverage::Explicit` + callers + proven PDG taint → `exploitable`.
+- `SymbolCoverage::Explicit` + callers + constant literals / dominating sanitizers / unsatisfied `.rgctl/vuln-rules.d/*.yaml` trigger rule → `not_exploitable (inline_mitigations_already_exist)`.
+- `SymbolCoverage::Explicit` + callers + inconclusive dataflow → `under_investigation` (or `exploitable` with `--strict-reachability`).
 
-### Step 4: Optional slice + report
+#### Step 4: Optional slice + CVE Reachability Report
 
-On a hit call site (`file` + `line`), optional verification:
+For a hit call site (`file` + `line`), optionally inspect statement dataflow:
 
 ```bash
 rgctl -f json slice "<file>" --line <line> --variable <var> --with-alias
 ```
 
-Then emit a **CVE Reachability & OpenVEX** report:
+Emit a concise **CVE Reachability & OpenVEX** report:
 
 ```markdown
 ## Verdict: <exploitability> — <one sentence>
 
 ## Advisory
+- OSV ID, affected package, `symbol_coverage` (explicit/unspecified), version intervals
+
 ## Deps match
+- verdict, direct vs transitive (`is_direct`), lockfile/SBOM provenance
+
 ## Call sites (file:line)
+- from `.sink_taint.call_sites // []`
+
 ## Paths (entry → sink)
-## OpenVEX
+- from `.sink_taint.paths[]` and `.sink_taint.caller_chains // []`
+
+## OpenVEX / SARIF
+- status, justification, canonical `pkg:` PURL products
+
 ## Follow-ups
 ```
 
-Cite exact `file:line` from `(.sink_taint.call_sites // [])[]`. When `call_sites` is absent/empty, state honestly that 0 direct sink call sites were found. Empty paths with `cfg_available=false` is **not** PDG proof of safe.
-
 ## Gotchas
 
-- Always `-f json`; parse stdout; never `2>/dev/null`.
-- Prefer `--with-cfg` before analyze for exploitability beyond deps-only.
-- Unresolved sinks alone MUST NOT force `not_affected` without caller evidence.
-- Scratch JSON under `{repo}/.rgctl/`; keep chat summaries short.
+- Always pass `-f json` (or `-f sarif`) and parse stdout; never scrape stderr.
+- Never use deprecated `rgctl gql`; use structured verbs (`vuln`, `deps`, `slice`, `blast-radius`, `find`, `callers`).
+- Local overrides (`--osv`, `--from-report`, `--offline`) strictly prevent outbound HTTP calls.
+- Use `--with-dep-stubs` when third-party wrapper JARs (including Gradle/shaded JARs without `META-INF/maven/pom.xml`) or `node_modules`/`vendor` packages sit between first-party code and the vulnerable sink.
+- Conditional CVEs (e.g. feature-flag-gated vulnerabilities) can be codified in `{repo}/.rgctl/vuln-rules.d/*.yaml`.

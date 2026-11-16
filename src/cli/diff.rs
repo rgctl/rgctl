@@ -98,7 +98,10 @@ pub fn run(ctx: &CliContext, args: DiffArgs) -> Result<()> {
 
     match ctx.format {
         OutputFormat::Json => ctx.emit_json_value(&serde_json::to_value(&response)?)?,
-        OutputFormat::Text | OutputFormat::Graphviz | OutputFormat::Mermaid => {
+        OutputFormat::Text
+        | OutputFormat::Graphviz
+        | OutputFormat::Mermaid
+        | OutputFormat::Sarif => {
             println!(
                 "diff: digest_equal={} changed={} added={} removed={} (wall={:.3}s)",
                 response.digest_equal,

@@ -72,7 +72,7 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
                 OutputFormat::Graphviz => {
                     ctx.emit(&cfg_to_dot(&cfg))?;
                 }
-                OutputFormat::Text => {
+                OutputFormat::Text | OutputFormat::Sarif => {
                     println!(
                         "CFG for {}: {} blocks, {} edges",
                         display_name,

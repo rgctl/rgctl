@@ -64,7 +64,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
                      `callers <new_sym>`, `review paths --synthetic-head worktree`)
 ```
 
-**Prerequisite (once per repo):** `discover` (and `semantic index` when using search). `rgctl slice` / `cpg flows` build single-function CFG/PDG lazily (no upfront `--with-cfg`). Reserve `discover --with-cfg` for `taint --sink`, `cpg mutations`, and batch `inspect`.
+**Prerequisite (once per repo):** `discover . --full` (staged full pipeline: graph + CFG/PDG + taint + Universe + semantic) or plain `discover .` (`slice`, `cpg flows`, `vuln scan`, and `vuln analyze` build single-function CFG/PDG lazily without upfront `--with-cfg`). Reserve `--with-cfg` / `--full` for standalone `taint --sink`, `cpg mutations`, and batch `inspect`.
 
 ## What to Do When Invoked
 
@@ -72,7 +72,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 2. **Step 0** — Ensure `.rgctl/graph.snapshot.bin` exists (`rgctl -f json status` → `rgctl discover .` if missing)
 3. **Fast path (existing index)** — Do **not** re-run full discover for ordinary questions. Route via workflow table; use CLI `-f json`.
    - **Staleness:** If `index_current` is `false`, run **`rgctl update`** once — works with or without `serve --watch` (under watch, update enqueues for the sole writer; do not stop serve). Do **not** loop full `discover` for dirty working trees.
-   - **Exception — vuln / OSV / OpenVEX:** if reachability, sink-first taint, or `vuln analyze` is in scope and CFG was not built (`cpg status` / missing CFG archive), re-run `discover . --with-cfg` (add `--with-taint` for PDG-backed confidence) before P4–P6
+   - **Vuln / OSV / OpenVEX / SARIF:** route to **`/rgctl:vuln`** (`vuln fetch`, `vuln scan`, `vuln analyze`); lazy per-call-site CFG/PDG runs automatically on plain snapshots (use `--with-cfg` / `--full` only for standalone `taint --sink`).
 4. **Natural-language routing** — Map utterance with workflow table. Do not ask user to rephrase into CLI unless disambiguation required
 5. **Summarize** — Report key facts, not raw JSON dumps
 6. **Continuous sync** — Multi-wave edits → `rgctl serve --watch` or `rgctl update` between waves; verify with graph queries after edits
@@ -106,6 +106,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 - `--with-universe` — Build universe dashboard bundle
 - `--export-migration-hints` — Write `.rgctl/migration_plan.json` (primary migration deliverable)
 - `--with-security --with-taint` — Security scanning
+- `--with-dep-stubs` — Transitive `.jar`/`.war` bytecode & vendor call stubs (`.rgctl/dep_stubs.bin`)
 - `--with-harmonic` — Harmonic centrality (used with migration ranking)
 - `-l cobol,pli,jcl,apex,pascal,perl,ada,matlab` — legacy/mainframe migration languages when those sources are present
 
@@ -170,8 +171,9 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | Temporal PR policy / CI gate | `review check --policy-file policy.json` (alias: `pr-check`) |
 | Policy check (full codebase) | `check --policy-file policy.json` |
 | Policy check (one symbol) | `blast-radius <Symbol> --policy-file policy.json` |
-| **OSV / CVE / OpenVEX triage** | **`/rgctl:vuln`** → skill `rgctl-vuln` |
-| OSV CLI-only | `discover . --with-cfg` then `vuln triage` → `deps check` → `vuln analyze` |
+| **OSV / CVE / OpenVEX / SARIF** | **`/rgctl:vuln`** → skill `rgctl-vuln` |
+| OSV whole-repo scan / fetch | `vuln fetch` · `vuln scan [--offline \| --from-report trivy.json] [--with-dep-stubs] [--strict-reachability] [-f json\|sarif]` |
+| OSV single advisory | `vuln triage` → `deps check` → `vuln analyze --osv FILE [--include-jars lib] [--strict-reachability]` |
 
 **High-ceremony slash commands** (keep palette ≤3): **`/rgctl:review`**, **`/rgctl:vuln`**, **`/rgctl:migrate`**. Atomic lookups (`find`, `callers`, `blast-radius`, `slice`, …) stay in this meta-skill — never as slash commands.
 
@@ -179,7 +181,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 
 **CLI-only PR family:** `review paths` for call-path JSON; `review check` / `pr-check` for policy gates. Do not treat paths JSON as pass/fail.
 
-**Vuln scans:** prefer **`/rgctl:vuln`**. Index with `--with-cfg` before analyze; read `.sink_taint.call_sites[]` / `.paths[]` from `vuln analyze` (no redundant manual caller chain unless debugging).
+**Vuln scans:** prefer **`/rgctl:vuln`**. `vuln scan` and `vuln analyze` lazily hydrate per-call-site CFG/PDG (no upfront `--with-cfg` needed), enforce zero outbound HTTP under `--offline` / `--osv` / `--from-report`, and emit canonical `pkg:` PURL OpenVEX + SARIF 2.1.0 (`-f sarif`).
 
 **See:** Blast Radius Guide / CI Policy Guide (product docs), vuln workflow in [references/workflows.md](references/workflows.md)
 
@@ -253,8 +255,8 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | `status` shows `index_current=false` | Run `rgctl update` once (works under `serve --watch` via queue); do **not** full rediscover |
 | blast-radius / callers empty for a file that exists on disk | `rgctl update --files <path>` once, retry query; then fall back to reading source |
 | `slice` / `cpg flows` fails | Confirm `--line` is inside a function body; retry (lazy append). Reserve rediscover `--with-cfg` for mutations/taint/inspect |
-| inspect / `cpg mutations` / sink-first taint fails | Re-discover with `--with-cfg` |
-| vuln analyze / sink-first taint weak (`cfg_available=false`) | Re-discover with `--with-cfg` (add `--with-taint` for PDG confidence) |
+| inspect / `cpg mutations` / standalone `taint --sink` fails | Re-discover with `--with-cfg` (or `--full`) |
+| wrapper JAR / transitive call chain missed in `vuln` | Add `--with-dep-stubs` (`.rgctl/dep_stubs.bin`) and `--include-jars lib` |
 | semantic query fails | `semantic index` |
 | Ambiguous symbol | Add `--file` / `--class` / `--line` (inspect/cpg/blast-radius/find/callers); read `candidates` + `recovery_command` under `-f json` |
 | `check` exit 1 | Report violations (JSON still on stdout) |
@@ -272,6 +274,7 @@ All paths under **`{repo}/.rgctl/`**:
 | `migration_plan.json` | Migration roadmap (`--export-migration-hints`) |
 | `dashboard/` | Dashboard bundle |
 | `analysis/` | CFG/PDG archives |
+| `osv/` · `dep_stubs.bin` · `vuln-rules.d/` | Hydrated OSV cache (`vuln fetch`), transitive call stubs (`--with-dep-stubs`), conditional CVE rules |
 | `clones*.json` | Clone group sidecar caches (`clones.json`, `clones.bloom.json`, `clones.fragment.json`) |
 
 ## Usage Globals
