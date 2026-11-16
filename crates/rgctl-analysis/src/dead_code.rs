@@ -182,42 +182,120 @@ impl<'a> DeadCodeAnalyzer<'a> {
     pub fn analyze(&self) -> Result<DeadCodeReport> {
         let n = self.view.node_count();
         let mut analyzable = vec![false; n];
+        let mut candidate_roots = vec![false; n];
+        let mut framework_annotations: Vec<usize> = Vec::new();
+
+        // Pass 1: single scan collecting analyzable nodes, root candidates,
+        // and framework annotation indices. On columnar v2 snapshots this is
+        // zero-cold-touch (hot `NodeRow` columns only — no `NodeExtension`
+        // bincode deserializations, no per-node `HashMap` index lookups since
+        // the dense PetGraph index equals the columnar row index). Legacy v1
+        // snapshots fall back to `for_each_node_seq`.
+        if let Some(col) = self.store.columnar() {
+            for i in 0..col.node_count() {
+                let nt = col.node_type_at(i)?;
+                if nt == NodeType::Annotation {
+                    let ann_name = col.node_name_str(i)?.to_ascii_lowercase();
+                    if is_framework_annotation(&ann_name) {
+                        framework_annotations.push(i);
+                    }
+                    continue;
+                }
+                if !is_analyzable_type(nt) {
+                    continue;
+                }
+                let name = col.node_name_str(i)?;
+                let file_path = col.node_file_path_str(i)?;
+                if self.should_exclude(name, file_path) {
+                    continue;
+                }
+                // External stubs carry `file_path == "<external>"` (INV-7).
+                let role = classify_node_role(name, file_path, file_path == Some("<external>"));
+                if role == NodeRole::ExternalIntrinsic {
+                    continue;
+                }
+                if !self.include_tests && role == NodeRole::Test {
+                    continue;
+                }
+                let qualified_name = if self.entry_points.is_empty() {
+                    None
+                } else {
+                    col.node_qualified_name_str(i)?
+                };
+                analyzable[i] = true;
+                candidate_roots[i] = self.is_root_candidate(name, qualified_name, file_path);
+            }
+        } else {
+            self.store.for_each_node_seq(|node| {
+                if node.node_type == NodeType::Annotation {
+                    let ann_name = node.name.as_str().to_ascii_lowercase();
+                    if is_framework_annotation(&ann_name) {
+                        if let Some(idx) = self.view.get_index(node.id) {
+                            framework_annotations.push(idx.index());
+                        }
+                    }
+                    return;
+                }
+                if !is_analyzable_type(node.node_type) {
+                    return;
+                }
+                let name = node.name.as_str();
+                let file_path = node.file_path.as_ref().map(|p| p.as_str());
+                if self.should_exclude(name, file_path) {
+                    return;
+                }
+                // External stubs carry `file_path == "<external>"`, plus the
+                // legacy `is_external_stub` property marker (INV-7).
+                let is_external_stub = file_path == Some("<external>")
+                    || node.get_property("is_external_stub") == Some("true");
+                let role = classify_node_role(name, file_path, is_external_stub);
+                if role == NodeRole::ExternalIntrinsic {
+                    return;
+                }
+                if !self.include_tests && role == NodeRole::Test {
+                    return;
+                }
+                let Some(idx) = self.view.get_index(node.id) else {
+                    return;
+                };
+                analyzable[idx.index()] = true;
+                candidate_roots[idx.index()] =
+                    self.is_root_candidate(name, node.qualified_name.as_deref(), file_path);
+            })?;
+        }
+
+        // Framework entry points: nodes with an incoming `AnnotatedWith` edge
+        // from a framework annotation.
+        let mut is_framework_entry = vec![false; n];
+        for ann in framework_annotations {
+            for neighbor in self
+                .view
+                .incoming_filtered(NodeIndex::new(ann), &[EdgeType::AnnotatedWith])
+            {
+                let ni = neighbor.index();
+                if ni < n {
+                    is_framework_entry[ni] = true;
+                }
+            }
+        }
+
         let mut root_indices: Vec<NodeIndex> = Vec::new();
-
-        let framework_entry_indices = self.collect_framework_entry_indices();
-
-        // Single pass: collect analyzable nodes and roots.
-        self.store.for_each_node_seq(|node| {
-            if !is_analyzable_type(node.node_type) {
-                return;
+        for i in 0..n {
+            if !analyzable[i] {
+                continue;
             }
-
-            let name = node.name.as_str();
-            let file_path = node.file_path.as_ref().map(|p| p.as_str());
-
-            if self.should_exclude(name, file_path) {
-                return;
-            }
-
-            let role = classify_node_role(name, file_path, node.labels.iter().any(|l| l == "stub"));
-
-            if role == NodeRole::ExternalIntrinsic {
-                return;
-            }
-            if !self.include_tests && role == NodeRole::Test {
-                return;
-            }
-
-            let Some(idx) = self.view.get_index(node.id) else {
-                return;
-            };
-
-            analyzable[idx.index()] = true;
-
-            if self.is_entry_point(node, idx, &framework_entry_indices) {
+            let idx = NodeIndex::new(i);
+            if candidate_roots[i]
+                || is_framework_entry[i]
+                || self
+                    .view
+                    .outgoing_filtered(idx, &[EdgeType::ExposesRoute])
+                    .next()
+                    .is_some()
+            {
                 root_indices.push(idx);
             }
-        })?;
+        }
 
         let total_symbols = analyzable.iter().filter(|&&a| a).count();
         let entry_point_count = root_indices.len();
@@ -226,15 +304,38 @@ impl<'a> DeadCodeAnalyzer<'a> {
 
         let reachable_symbols = (0..n).filter(|&i| analyzable[i] && reachable[i]).count();
 
+        // Pass 3: classify unreachable nodes. CSR edge prechecks (inbound
+        // reference edges, import outbound references) run *before* any cold
+        // `Node` materialization so external imports and unreachable internal
+        // cycles never pay the bincode decode.
         let mut findings: Vec<DeadCodeFinding> = Vec::new();
         for (i, &is_analyzable) in analyzable.iter().enumerate() {
             if !is_analyzable || reachable[i] {
                 continue;
             }
             let idx = NodeIndex::new(i);
-            if let Some(uid) = self.view.get_uuid(idx) {
+            if self
+                .view
+                .incoming_filtered(idx, REFERENCE_EDGE_TYPES)
+                .next()
+                .is_some()
+            {
+                continue;
+            }
+            if let Some(col) = self.store.columnar() {
+                if col.node_type_at(i)? == NodeType::Import && !self.has_outbound_reference(idx) {
+                    continue;
+                }
+                let node = col.materialize_node_at(i)?;
+                if let Some(finding) = self.classify_finding(&node) {
+                    findings.push(finding);
+                }
+            } else if let Some(uid) = self.view.get_uuid(idx) {
                 if let Ok(Some(node)) = self.store.get_node(uid) {
-                    if let Some(finding) = self.classify_finding(&node, idx) {
+                    if node.node_type == NodeType::Import && !self.has_outbound_reference(idx) {
+                        continue;
+                    }
+                    if let Some(finding) = self.classify_finding(&node) {
                         findings.push(finding);
                     }
                 }
@@ -260,80 +361,31 @@ impl<'a> DeadCodeAnalyzer<'a> {
         })
     }
 
-    fn is_entry_point(
+    /// Cheap root predicates evaluated during Pass 1: language-level
+    /// entry-point names and user-configured entry-point patterns.
+    fn is_root_candidate(
         &self,
-        node: &Node,
-        idx: NodeIndex,
-        framework_entry_indices: &[bool],
+        name: &str,
+        qualified_name: Option<&str>,
+        file_path: Option<&str>,
     ) -> bool {
-        if self.is_configured_entry_point(node) {
-            return true;
-        }
-
-        let name = node.name.as_str();
         if name == "main" || name.ends_with("::main") || name == "__init__" {
             return true;
         }
-
-        if self
-            .view
-            .outgoing_filtered(idx, &[EdgeType::ExposesRoute])
-            .next()
-            .is_some()
-        {
-            return true;
-        }
-
-        if idx.index() < framework_entry_indices.len() && framework_entry_indices[idx.index()] {
-            return true;
-        }
-
-        false
+        self.is_configured_entry_point(name, qualified_name, file_path)
     }
 
-    /// Pre-collect which NodeIndices are framework entry points by scanning
-    /// Annotation nodes once, then walking their incoming AnnotatedWith edges.
-    fn collect_framework_entry_indices(&self) -> Vec<bool> {
-        let n = self.view.node_count();
-        let mut is_entry = vec![false; n];
-
-        let mut annotation_indices: Vec<NodeIndex> = Vec::new();
-        for (idx, uid) in self.view.index_uuid_iter() {
-            if let Ok(Some(node)) = self.store.get_node(uid) {
-                if node.node_type == NodeType::Annotation {
-                    let ann_name = node.name.as_str().to_lowercase();
-                    if is_framework_annotation(&ann_name) {
-                        annotation_indices.push(idx);
-                    }
-                }
-            }
-        }
-
-        for ann_idx in &annotation_indices {
-            for neighbor in self
-                .view
-                .incoming_filtered(*ann_idx, &[EdgeType::AnnotatedWith])
-            {
-                if neighbor.index() < n {
-                    is_entry[neighbor.index()] = true;
-                }
-            }
-        }
-
-        is_entry
-    }
-
-    fn is_configured_entry_point(&self, node: &Node) -> bool {
+    fn is_configured_entry_point(
+        &self,
+        name: &str,
+        qualified_name: Option<&str>,
+        file_path: Option<&str>,
+    ) -> bool {
         if self.entry_points.is_empty() {
             return false;
         }
-        let name = node.name.as_str();
-        let qn = node
-            .qualified_name
-            .as_ref()
-            .map(|q| q.as_str())
-            .unwrap_or("");
-        let fp = node.file_path.as_ref().map(|f| f.as_str()).unwrap_or("");
+        let qn = qualified_name.unwrap_or("");
+        let fp = file_path.unwrap_or("");
         self.entry_points.iter().any(|pat| {
             name == pat
                 || qn.contains(pat)
@@ -368,37 +420,31 @@ impl<'a> DeadCodeAnalyzer<'a> {
         visited
     }
 
-    /// Classify an unreachable node into a finding using CSR for inbound-edge checks.
-    fn classify_finding(&self, node: &Node, idx: NodeIndex) -> Option<DeadCodeFinding> {
-        let has_non_structural_inbound = self
-            .view
-            .incoming_filtered(idx, REFERENCE_EDGE_TYPES)
+    /// Whether an import node has at least one outbound
+    /// `Uses`/`References`/`Calls` edge (i.e. it resolves to an internal
+    /// symbol). Checked against the CSR before any cold node materialization.
+    fn has_outbound_reference(&self, idx: NodeIndex) -> bool {
+        self.view
+            .outgoing_filtered(
+                idx,
+                &[EdgeType::Uses, EdgeType::References, EdgeType::Calls],
+            )
             .next()
-            .is_some();
+            .is_some()
+    }
 
-        if has_non_structural_inbound {
-            return None;
-        }
-
+    /// Classify an unreachable node into a finding.
+    ///
+    /// CSR edge prechecks (non-structural inbound edges, import outbound
+    /// references) run in `analyze` *before* the node is materialized, so
+    /// they are not repeated here.
+    fn classify_finding(&self, node: &Node) -> Option<DeadCodeFinding> {
         let (kind, confidence, reason) = match node.node_type {
-            NodeType::Import => {
-                let has_outbound_ref = self
-                    .view
-                    .outgoing_filtered(
-                        idx,
-                        &[EdgeType::Uses, EdgeType::References, EdgeType::Calls],
-                    )
-                    .next()
-                    .is_some();
-                if !has_outbound_ref {
-                    return None;
-                }
-                (
-                    DeadCodeKind::UnusedImport,
-                    DeadCodeConfidence::High,
-                    "Import resolves to an internal symbol but has no references".to_string(),
-                )
-            }
+            NodeType::Import => (
+                DeadCodeKind::UnusedImport,
+                DeadCodeConfidence::High,
+                "Import resolves to an internal symbol but has no references".to_string(),
+            ),
             NodeType::Function => {
                 let vis = node.properties.get("visibility");
                 let is_public = matches!(vis, Some(v) if v == "public" || v == "pub");
@@ -504,12 +550,10 @@ fn confidence_order(c: &DeadCodeConfidence) -> u8 {
 }
 
 fn glob_matches(pattern: &str, text: &str) -> bool {
-    if !pattern.contains('*') {
+    let Some((prefix, suffix)) = pattern.split_once('*') else {
         return text == pattern;
-    }
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.len() == 2 {
-        let (prefix, suffix) = (parts[0], parts[1]);
+    };
+    if !suffix.contains('*') {
         return text.starts_with(prefix) && text.ends_with(suffix);
     }
     text.contains(pattern.trim_matches('*'))

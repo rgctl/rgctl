@@ -46,6 +46,7 @@ const GROUPS: &[(&str, &[&str])] = &[
             "communities",
             "clones",
             "cpg",
+            "dead-code",
         ],
     ),
     ("Security", &["vuln", "deps", "security"]),

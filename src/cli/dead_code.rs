@@ -3,7 +3,15 @@
 use super::context::CliContext;
 use super::dead_code_output;
 use anyhow::{Result, bail};
-use rgctl_analysis::dead_code::DeadCodeAnalyzer;
+use rgctl_analysis::dead_code::{DeadCodeAnalyzer, DeadCodeConfidence};
+
+fn confidence_str(c: DeadCodeConfidence) -> &'static str {
+    match c {
+        DeadCodeConfidence::High => "high",
+        DeadCodeConfidence::Medium => "medium",
+        DeadCodeConfidence::Low => "low",
+    }
+}
 
 pub struct DeadCodeArgs {
     pub confidence: Option<String>,
@@ -31,10 +39,9 @@ pub fn run(ctx: &CliContext, args: DeadCodeArgs) -> Result<()> {
 
     if let Some(conf) = &args.confidence {
         let keep: Vec<_> = conf.split(',').map(|s| s.trim().to_lowercase()).collect();
-        report.findings.retain(|f| {
-            let f_conf = format!("{:?}", f.confidence).to_lowercase();
-            keep.iter().any(|k| k == &f_conf)
-        });
+        report
+            .findings
+            .retain(|f| keep.iter().any(|k| k == confidence_str(f.confidence)));
         report.summary.dead_symbols = report.findings.len();
     }
 
