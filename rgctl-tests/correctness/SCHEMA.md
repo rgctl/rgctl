@@ -227,6 +227,15 @@ the expected `kind` / `confidence` / `file` suffix, and must never flag the
 checker re-runs with `--entry-point <name>` and requires every `must_contain`
 symbol to become reachable (un-flagged) with a grown `summary.entry_points`.
 
+The analyzer is **root-only**: a symbol is reported only when it is
+unreachable *and* has no incoming reference edges (`Calls` / `Uses` /
+`References` / …). Unreachable symbols that are still referenced by other
+unreachable symbols — e.g. downstream helpers of a dead root, or an isolated
+mutual-recursion cycle (`A ↔ B` with no external caller) — are intentionally
+suppressed to keep helper noise out of the report. Reporting whole dead cycles
+requires SCC root condensation and is future work; fixtures must not rely on
+cycle members being flagged.
+
 ```json
 {
   "dead_code": {

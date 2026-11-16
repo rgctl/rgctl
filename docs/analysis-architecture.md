@@ -143,6 +143,10 @@ rgctl cpg status -f json
 rgctl cpg calls --function <symbol> -f json
 rgctl cpg mutations --field <field_name> -f json
 rgctl cpg flows --file <path> --line 42 --variable x --direction forward -f json
+
+# Dead-code detection via graph reachability (root-only, zero-cold-touch)
+rgctl dead-code -f json
+rgctl dead-code --confidence high,medium --entry-point main -f json
 ```
 
 ### 4.2 Implementation Map
@@ -157,6 +161,7 @@ rgctl cpg flows --file <path> --line 42 --variable x --direction forward -f json
 | **CFG, Dominance & PDG** | [`cfg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg.rs), [`dominance.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/dominance.rs), [`dataflow.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/dataflow.rs), [`pdg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/pdg.rs) | `CfgAnalyzer`, `DominanceAnalyzer`, `DataflowAnalyzer`, `PdgBuilder` |
 | **v3 CPG Archive & Lazy Builder** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `CfgPdgArchiveMmap`, `CfgPdgRecord`, `TocEntry`, `ensure_cfg_pdg_for_source` |
 | **Slicing & Taint** | [`slicing.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/slicing.rs), [`interprocedural_slicing.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/interprocedural_slicing.rs), [`taint.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/taint.rs) | `BackwardSlicer`, `ForwardSlicer`, `InterproceduralCFG`, `TaintAnalyzer` |
+| **Dead-Code Reachability** | `crates/rgctl-analysis/src/dead_code.rs` (`rgctl dead-code`) | `DeadCodeAnalyzer`, `DeadCodeReport`, `is_framework_annotation` |
 
 ---
 

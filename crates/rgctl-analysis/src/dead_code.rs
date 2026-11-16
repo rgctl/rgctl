@@ -523,22 +523,60 @@ impl<'a> DeadCodeAnalyzer<'a> {
     }
 }
 
+/// Framework / lifecycle annotation names that mark a symbol as externally
+/// invoked (by a DI container, web framework, scheduler, message broker, or
+/// test runner) and therefore a reachability root.
+///
+/// Matching is anchored on the annotation's *simple* name (the last segment
+/// of a possibly qualified name, with any leading `@` stripped) instead of a
+/// raw substring scan, so look-alike annotations (e.g. `@TestVisible`,
+/// `@BeanFactory`) do not accidentally mark symbols as framework entry
+/// points.
+const FRAMEWORK_ANNOTATIONS: &[&str] = &[
+    // Spring
+    "restcontroller",
+    "controller",
+    "controlleradvice",
+    "service",
+    "component",
+    "bean",
+    "repository",
+    "configuration",
+    "springbootapplication",
+    "autowired",
+    "scheduled",
+    "eventlistener",
+    // Jakarta / Java EE
+    "messagedriven",
+    "stateless",
+    "stateful",
+    "singleton",
+    // DI / generic entry points
+    "inject",
+    "export",
+];
+
 fn is_framework_annotation(name: &str) -> bool {
-    name.contains("endpoint")
-        || name.contains("controller")
-        || name.contains("service")
-        || name.contains("component")
-        || name.contains("bean")
-        || name.contains("inject")
-        || name.contains("requestmapping")
-        || name.contains("getmapping")
-        || name.contains("postmapping")
-        || name.contains("putmapping")
-        || name.contains("deletemapping")
-        || name.contains("restcontroller")
-        || name.contains("springbootapplication")
-        || name.contains("test")
-        || name.contains("export")
+    // Strip a leading `@` and any qualifier (`org.springframework…`,
+    // `Module::sub`, `#member`) to get the simple annotation name.
+    let simple = name
+        .trim_start_matches('@')
+        .rsplit(['.', ':', '#', '/'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if simple.is_empty() {
+        return false;
+    }
+    FRAMEWORK_ANNOTATIONS.contains(&simple.as_str())
+        // Spring mapping verbs: `@RequestMapping`, `@GetMapping`,
+        // `@PatchMapping`, …
+        || simple.ends_with("mapping")
+        // JUnit family: `@Test`, `@ParameterizedTest`, `@RepeatedTest`, …
+        || simple.ends_with("test")
+        // Framework endpoint annotations: `@Endpoint`,
+        // `@ControllerEndpoint`, `@RestControllerEndpoint`, …
+        || simple.ends_with("endpoint")
 }
 
 fn confidence_order(c: &DeadCodeConfidence) -> u8 {
@@ -771,5 +809,85 @@ mod tests {
         assert!(!glob_matches("*.rs", "main.py"));
         assert!(glob_matches("foo", "foo"));
         assert!(!glob_matches("foo", "bar"));
+    }
+
+    #[test]
+    fn framework_annotation_matching_is_anchored() {
+        // Exact simple names (case-insensitive).
+        assert!(is_framework_annotation("RestController"));
+        assert!(is_framework_annotation("Service"));
+        assert!(is_framework_annotation("Bean"));
+        assert!(is_framework_annotation("Inject"));
+        assert!(is_framework_annotation("Export"));
+        // Qualified names resolve to their last segment.
+        assert!(is_framework_annotation(
+            "org.springframework.stereotype.Service"
+        ));
+        assert!(is_framework_annotation("jakarta.inject.Inject"));
+        // Mapping verbs via the `mapping` suffix rule.
+        assert!(is_framework_annotation("RequestMapping"));
+        assert!(is_framework_annotation("GetMapping"));
+        assert!(is_framework_annotation("PatchMapping"));
+        // JUnit family via the `test` suffix rule.
+        assert!(is_framework_annotation("Test"));
+        assert!(is_framework_annotation("ParameterizedTest"));
+        // Endpoint annotations via the `endpoint` suffix rule.
+        assert!(is_framework_annotation("Endpoint"));
+        assert!(is_framework_annotation("RestControllerEndpoint"));
+        // Lifecycle / DI annotations from the expanded list.
+        assert!(is_framework_annotation("Autowired"));
+        assert!(is_framework_annotation("Scheduled"));
+        assert!(is_framework_annotation("EventListener"));
+        assert!(is_framework_annotation("MessageDriven"));
+        assert!(is_framework_annotation("Stateless"));
+    }
+
+    #[test]
+    fn lookalike_annotations_are_not_framework_entries() {
+        // Substring look-alikes must NOT match (anchored simple-name check).
+        assert!(!is_framework_annotation("TestVisible"));
+        assert!(!is_framework_annotation("TestConfiguration"));
+        assert!(!is_framework_annotation("BeanFactory"));
+        assert!(!is_framework_annotation("ServiceLocator"));
+        assert!(!is_framework_annotation("ExportedResource"));
+        assert!(!is_framework_annotation("InjectionUtils"));
+        assert!(!is_framework_annotation("EndpointProvider"));
+        assert!(!is_framework_annotation(""));
+        assert!(!is_framework_annotation("@"));
+    }
+
+    #[test]
+    fn lookalike_annotation_does_not_create_entry_point() {
+        // `@TestVisible` shares a substring with `@Test` but is not a test
+        // runner entry point: the annotated class and its method must stay
+        // in the dead-code report.
+        let mut backend = MemoryBackend::new();
+        let class = Node::new(NodeType::Class, "MyInternal").with_file_path("src/internal.rs");
+        let annotation = Node::new(NodeType::Annotation, "TestVisible");
+        let method = Node::new(NodeType::Function, "helper").with_file_path("src/internal.rs");
+
+        let class_id = class.id;
+        let ann_id = annotation.id;
+        let method_id = method.id;
+
+        backend.insert_node(class).unwrap();
+        backend.insert_node(annotation).unwrap();
+        backend.insert_node(method).unwrap();
+        backend
+            .insert_edge(Edge::new(class_id, ann_id, EdgeType::AnnotatedWith))
+            .unwrap();
+        backend
+            .insert_edge(Edge::new(class_id, method_id, EdgeType::Contains))
+            .unwrap();
+
+        let (store, path) = temp_snapshot(&backend);
+
+        let report = DeadCodeAnalyzer::new(&store).unwrap().analyze().unwrap();
+        assert!(
+            report.findings.iter().any(|f| f.symbol_name == "helper"),
+            "@TestVisible must not make the class a framework entry point"
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 }
