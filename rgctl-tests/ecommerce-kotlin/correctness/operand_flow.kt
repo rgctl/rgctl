@@ -26,3 +26,7 @@ fun operand_callable_field(box: OperandCallable, callback: (Int) -> Int, value: 
 
 suspend fun operand_deferred_source(value: Any): Any { return value }
 suspend fun operand_await(value: Any): Any { return operand_deferred_source(value) }
+
+fun operand_computed(box: Array<(Int)->Int>, key: Int, value: Int): Int { return box[key](value) }
+class OperandConstructed(val slot: Int)
+fun operand_construct(value: Int): OperandConstructed { return OperandConstructed(value) }

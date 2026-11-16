@@ -49,6 +49,7 @@ impl<C: InterproceduralCfgAccess + ?Sized> Query<'_, C> {
             self.diagnostic(OriginDiagnostic::InvalidValue(candidate.value));
             return;
         }
+        self.diagnose_lookup_selector(candidate.value);
         if let Some(requirement) = candidate.requirement {
             self.load(requirement.value.function);
             if !self.valid(requirement.value) {
@@ -120,6 +121,9 @@ impl<C: InterproceduralCfgAccess + ?Sized> Query<'_, C> {
         self.output.callable_values.push(binding);
         // A new possible function can arrive after its origin reached consumers.
         // Replay those consumers without inventing new value-alias edges.
+        self.replay_callable_origin(origin);
+    }
+    pub(super) fn replay_callable_origin(&mut self, origin: OriginId) {
         for at in self
             .callables
             .origin_values
@@ -313,7 +317,7 @@ impl<C: InterproceduralCfgAccess + ?Sized> Query<'_, C> {
             }
         }
     }
-    fn callable_target(
+    pub(super) fn callable_target(
         &mut self,
         call: CallRef,
         binding: CallableValue,

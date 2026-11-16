@@ -1,0 +1,142 @@
+[
+  {
+    "language": "c",
+    "file": "rgctl-tests/ecommerce-c/correctness/operand_flow.c",
+    "computed_mode": "element",
+    "constructor_mode": "not_native",
+    "constructor_body": null
+  },
+  {
+    "language": "cpp",
+    "file": "rgctl-tests/ecommerce-cpp/correctness/operand_flow.cpp",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": "OperandConstructed"
+  },
+  {
+    "language": "csharp",
+    "file": "rgctl-tests/ecommerce-csharp/correctness/operand_flow.cs",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": "OperandConstructed"
+  },
+  {
+    "language": "java",
+    "file": "rgctl-tests/ecommerce-java/correctness/operand_flow.java",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": "OperandConstructed"
+  },
+  {
+    "language": "groovy",
+    "file": "rgctl-tests/ecommerce-groovy/correctness/operand_flow.groovy",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": "OperandConstructed"
+  },
+  {
+    "language": "go",
+    "file": "rgctl-tests/ecommerce-go/correctness/operand_flow.go",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": null
+  },
+  {
+    "language": "javascript",
+    "file": "rgctl-tests/ecommerce-javascript/correctness/operand_flow.js",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": "constructor"
+  },
+  {
+    "language": "typescript",
+    "file": "rgctl-tests/ecommerce-typescript/correctness/operand_flow.ts",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": "constructor"
+  },
+  {
+    "language": "kotlin",
+    "file": "rgctl-tests/ecommerce-kotlin/correctness/operand_flow.kt",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": null
+  },
+  {
+    "language": "php",
+    "file": "rgctl-tests/ecommerce-php/correctness/operand_flow.php",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": "__construct"
+  },
+  {
+    "language": "puppet",
+    "file": "rgctl-tests/ecommerce-puppet/correctness/operand_flow.pp",
+    "computed_mode": "element",
+    "constructor_mode": "not_native",
+    "constructor_body": null
+  },
+  {
+    "language": "python",
+    "file": "rgctl-tests/ecommerce-python/correctness/operand_flow.py",
+    "computed_mode": "getattr",
+    "constructor_mode": "native",
+    "constructor_body": "__init__"
+  },
+  {
+    "language": "ruby",
+    "file": "rgctl-tests/ecommerce-ruby/correctness/operand_flow.rb",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": "initialize"
+  },
+  {
+    "language": "rust",
+    "file": "rgctl-tests/ecommerce-rust/correctness/operand_flow.rs",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": null
+  },
+  {
+    "language": "swift",
+    "file": "tests/fixtures/correctness_matrix/swift/correctness/operand_flow.swift",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": "init"
+  },
+  {
+    "language": "scala",
+    "file": "tests/fixtures/correctness_matrix/scala/correctness/operand_flow.scala",
+    "computed_mode": "named",
+    "constructor_mode": "native",
+    "constructor_body": null
+  },
+  {
+    "language": "dart",
+    "file": "tests/fixtures/correctness_matrix/dart/correctness/operand_flow.dart",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": "OperandConstructed"
+  },
+  {
+    "language": "elixir",
+    "file": "tests/fixtures/correctness_matrix/elixir/correctness/operand_flow.ex",
+    "computed_mode": "element",
+    "constructor_mode": "native",
+    "constructor_body": null
+  },
+  {
+    "language": "lua",
+    "file": "tests/fixtures/correctness_matrix/lua/correctness/operand_flow.lua",
+    "computed_mode": "element",
+    "constructor_mode": "not_native",
+    "constructor_body": null
+  },
+  {
+    "language": "bash",
+    "file": "tests/fixtures/correctness_matrix/bash/correctness/operand_flow.sh",
+    "computed_mode": "element",
+    "constructor_mode": "not_native",
+    "constructor_body": null
+  }
+]

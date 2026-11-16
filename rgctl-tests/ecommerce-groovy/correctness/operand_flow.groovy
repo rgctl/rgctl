@@ -18,3 +18,7 @@ class OperandCallback { static int operand_callback(Closure callback, int value)
 
 class OperandBoundCaller { static int operand_bound(Closure callback, OperandBound box, int value) { return callback(value); } }
 class OperandBound { int operand_bound_target(int value) { return value; } }
+
+class OperandLookup { static int operand_computed(Closure[] box, int key, int value) { Closure selected = box[key]; return selected(value); } }
+class OperandConstructed { OperandConstructed(Object value) {} }
+class OperandConstructFactory { static OperandConstructed operand_construct(Object value) { return new OperandConstructed(value); } }

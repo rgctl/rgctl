@@ -176,6 +176,9 @@ pub enum BindingDiagnostic {
     KeywordSpread,
     /// Named/rest/fallthrough convention is not modeled for this language.
     UnsupportedConvention,
+    /// ECMA constructors may replace the instance by returning an object. Native
+    /// value facts retain possible returns without proving the runtime object test.
+    ConservativeConstructorReturn,
     /// The per-invocation transfer expansion budget was reached.
     LimitReached,
 }
@@ -691,8 +694,16 @@ impl Binder<'_> {
     }
 
     fn bind_return_values(&mut self, cfg: &ControlFlowGraph) -> Result<()> {
-        if self.limited || self.target.receiver == ReceiverSupply::Constructed {
+        if self.limited {
             return Ok(());
+        }
+        if self.target.receiver == ReceiverSupply::Constructed {
+            if !ecma(self.callee.language) {
+                return Ok(());
+            }
+            if self.callee.returns.iter().any(|r| r.values.len > 0) {
+                self.record_binding_diagnostic(BindingDiagnostic::ConservativeConstructorReturn);
+            }
         }
         if self
             .caller

@@ -21,3 +21,8 @@ DeferredTask operand_await(Item value) { co_return co_await operand_deferred_sou
 
 Generator operand_yield(Item value, Item terminal) { co_yield value; co_return terminal; }
 Generator operand_generator(Item value, Item terminal) { return operand_yield(value, terminal); }
+
+using OperandLookupCallback = int (*)(int);
+int operand_computed(OperandLookupCallback* box, int key, int value) { return box[key](value); }
+struct OperandConstructed { int slot; explicit OperandConstructed(int value) : slot(value) {} };
+OperandConstructed* operand_construct(int value) { return new OperandConstructed(value); }

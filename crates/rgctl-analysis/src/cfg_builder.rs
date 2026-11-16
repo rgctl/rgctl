@@ -605,6 +605,15 @@ fn collect_function_locations(
             };
             out.by_name.entry(func_name.clone()).or_default().push(loc);
             out.by_name_first.entry(func_name.clone()).or_insert(loc);
+            if ecma_constructor_owner(node, source, language).is_some()
+                && func_name != "constructor"
+            {
+                out.by_name
+                    .entry("constructor".into())
+                    .or_default()
+                    .push(loc);
+                out.by_name_first.entry("constructor".into()).or_insert(loc);
+            }
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -620,7 +629,10 @@ fn parse_language(language: &str, source: &[u8]) -> Result<Tree> {
 /// Resolve the Function name CFG should look up, matching language-plugin naming.
 fn callable_name_for_cfg(node: Node<'_>, source: &[u8], language: &str) -> Option<String> {
     match language {
-        "javascript" | "js" | "typescript" | "ts" => ecmascript_function_symbol_name(node, source),
+        "swift" if node.kind() == "init_declaration" => Some("init".to_owned()),
+        "javascript" | "js" | "typescript" | "ts" => ecma_constructor_owner(node, source, language)
+            .map(str::to_owned)
+            .or_else(|| ecmascript_function_symbol_name(node, source)),
         "lua" if node.kind() == "function_declaration" => node
             .child_by_field_name("name")
             .and_then(|name| name.utf8_text(source).ok())
@@ -656,6 +668,30 @@ fn callable_name_for_cfg(node: Node<'_>, source: &[u8], language: &str) -> Optio
         }
         _ => extract_name_from_node(node, source).ok().flatten(),
     }
+}
+
+// Match the plugin's constructor Function name (the enclosing class), while
+// retaining the source spelling as a legacy name-only lookup alias. The native
+// method -> class_body -> class path has fixed depth; do not walk ancestors.
+fn ecma_constructor_owner<'source>(
+    node: Node<'_>,
+    source: &'source [u8],
+    language: &str,
+) -> Option<&'source str> {
+    if !matches!(language, "javascript" | "js" | "typescript" | "ts")
+        || node.kind() != "method_definition"
+        || node.child_by_field_name("name")?.utf8_text(source).ok()? != "constructor"
+    {
+        return None;
+    }
+    let body = node.parent()?;
+    if body.kind() != "class_body" {
+        return None;
+    }
+    body.parent()?
+        .child_by_field_name("name")?
+        .utf8_text(source)
+        .ok()
 }
 
 /// Elixir `def`/`defp`/… calls: name is the first argument call/identifier, not `def`.
@@ -802,7 +838,9 @@ fn find_function_by_name<'a>(
     while let Some(node) = stack.pop() {
         if function_kinds.contains(&node.kind())
             && let Some(func_name) = callable_name_for_cfg(node, source, language)
-            && func_name == name
+            && (func_name == name
+                || (name == "constructor"
+                    && ecma_constructor_owner(node, source, language).is_some()))
         {
             if function_body_node(node, language).is_some() {
                 if found_with_body.is_some() {

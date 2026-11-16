@@ -19,7 +19,8 @@
 //! - **v11**: explicit instance-member stores.
 //! - **v12**: aggregate identities and element stores/loads.
 //! - **v13**: native callable operand and dynamic command roles.
-//! - **v14** (current): native deferred, generator and channel roles.
+//! - **v14**: native deferred, generator and channel roles.
+//! - **v15** (current): computed invocation receiver semantics.
 
 use crate::cfg::ControlFlowGraph;
 use crate::hash_maps::FxHashMap;
@@ -42,8 +43,8 @@ static NEXT_ARCHIVE_TMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Magic bytes for CFG/PDG archive files (`RBCP`).
 pub const ARCHIVE_MAGIC: [u8; 4] = *b"RBCP";
-/// Current archive format (v14 = deferred handoff operands).
-pub const ARCHIVE_VERSION: u32 = 14;
+/// Current archive format (v15 = computed invocation receivers).
+pub const ARCHIVE_VERSION: u32 = 15;
 /// Legacy monolithic bincode payload.
 pub const ARCHIVE_VERSION_V1: u32 = 1;
 /// Legacy header-TOC format.

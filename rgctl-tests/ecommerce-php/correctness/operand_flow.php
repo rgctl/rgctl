@@ -24,3 +24,8 @@ class OperandBound { function operand_bound_target($value) { return $value; } }
 function operand_yield($value, $terminal) { yield $value; return $terminal; }
 function operand_generator($value, $terminal) { $iterator = operand_yield($value, $terminal); return $iterator->current(); }
 function operand_generator_return($value, $terminal) { $iterator = operand_yield($value, $terminal); $iterator->current(); $iterator->next(); return $iterator->getReturn(); }
+
+function operand_computed($box, $key, $value) { return $box[$key]($value); }
+class OperandConstructed { public function __construct($value) {} }
+function operand_construct($value) { return new OperandConstructed($value); }
+function operand_constructor_alias($Factory, $value) { return new $Factory($value); }

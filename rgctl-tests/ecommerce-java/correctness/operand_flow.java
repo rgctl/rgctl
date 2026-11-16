@@ -17,3 +17,7 @@ class OperandBoundCaller { static int operand_bound(java.util.function.Function<
 class OperandBound { int operand_bound_target(int value) { return value; } }
 
 class OperandCallbackOther { static String operand_callback_other(java.util.function.Function<Integer,Integer> callback, int value) { return callback.toString(); } }
+
+class OperandLookup { static int operand_computed(java.util.function.Function<Integer,Integer>[] box, int key, int value) { return box[key].apply(value); } }
+class OperandConstructed { OperandConstructed(int value) {} }
+class OperandConstructFactory { static OperandConstructed operand_construct(int value) { return new OperandConstructed(value); } }

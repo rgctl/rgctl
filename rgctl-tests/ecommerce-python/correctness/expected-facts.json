@@ -100,6 +100,50 @@
   ]
   },
   "symbols": {
+    "tier1_lookup_constructor_body": {
+      "match": {
+        "name": "__init__",
+        "file": "correctness/operand_flow.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2
+      }
+    },
+    "tier1_lookup_operand_not_getattr": {
+      "match": {
+        "name": "operand_not_getattr",
+        "file": "correctness/operand_flow.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_returns": 1
+      }
+    },
+    "tier1_lookup_operand_computed": {
+      "match": {
+        "name": "operand_computed",
+        "file": "correctness/operand_flow.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_returns": 1
+      }
+    },
+    "tier1_lookup_operand_construct": {
+      "match": {
+        "name": "operand_construct",
+        "file": "correctness/operand_flow.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_returns": 1
+      }
+    },
     "operand_await": {
       "match": {
         "name": "operand_await"

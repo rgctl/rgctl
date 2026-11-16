@@ -30,3 +30,7 @@ class OperandGenerator {
  static System.Collections.Generic.IEnumerable<object> operand_yield(object value, object terminal) { yield return value; yield break; }
  static object operand_generator(object value, object terminal) { var iterator = operand_yield(value, terminal).GetEnumerator(); iterator.MoveNext(); return iterator.Current; }
 }
+
+class OperandLookup { static int operand_computed(System.Func<int,int>[] box, int key, int value) { return box[key](value); } }
+class OperandConstructed { public OperandConstructed(int value) {} }
+class OperandConstructFactory { static OperandConstructed operand_construct(int value) { return new OperandConstructed(value); } }

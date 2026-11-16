@@ -39,3 +39,7 @@ func operand_channel_send(ch chan any, value any) { ch <- value }
 func operand_channel(value any) any { ch := make(chan any, 1); go operand_channel_send(ch, value); selected, ok := <-ch; if ok { return selected }; return nil }
 
 func operand_channel_isolation(value any, other any) any { left := make(chan any, 1); right := make(chan any, 1); left <- value; right <- other; return <-left }
+
+func operand_computed(box []func(int) int, key int, value int) int { return box[key](value) }
+type OperandConstructed struct { Slot int }
+func operand_construct(value int) OperandConstructed { return OperandConstructed{Slot: value} }

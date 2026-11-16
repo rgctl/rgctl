@@ -60,3 +60,19 @@ def operand_delegated_factory(value, terminal):
  return operand_delegated(value, terminal)
 def operand_not_generator(value):
  return next([value])
+
+def operand_computed(box, key, value):
+ return getattr(box, key)(value)
+class OperandConstructed:
+ def __init__(self, value):
+  self.slot = value
+def operand_construct(value):
+ return OperandConstructed(value)
+def operand_constructor_alias(Factory, value):
+ alias = Factory
+ return alias(value)
+def operand_constructor_registry(Factory, value):
+ registry = [Factory]
+ return registry[0](value)
+def operand_not_getattr(box, key):
+ return box.getattr(key)

@@ -8,3 +8,5 @@ operand_sparse_caller() { operand_sparse "ignored" "$1"; }
 operand_element() { local items=("$1"); operand_sink "${items[0]}"; }
 
 operand_callback() { "$1" "$2"; }
+
+operand_computed() { "${box[$1]}" "$2"; }

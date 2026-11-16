@@ -31,3 +31,13 @@ async function operand_await(value: object): Promise<object> { return await oper
 
 function* operand_yield(value: object, terminal: object): Generator<object, object, unknown> { yield value; return terminal; }
 function operand_generator(value: object, terminal: object): object { const iterator = operand_yield(value, terminal); const step = iterator.next(); return step.value; }
+
+function operand_computed(box: Record<string,(value: number)=>number>, key: string, value: number): number { return box[key](value); }
+class OperandConstructed { constructor(public slot: number) {} }
+function operand_construct(value: number): OperandConstructed { return new OperandConstructed(value); }
+function operand_prototype(): OperandConstructed { return Object.create(OperandConstructed.prototype); }
+function operand_constructor_alias(Factory: new(value: number)=>OperandConstructed, value: number): OperandConstructed { const alias = Factory; return new alias(value); }
+function operand_constructor_registry(Factory: new(value: number)=>OperandConstructed, value: number): OperandConstructed { const registry = [Factory]; return new registry[0](value); }
+function operand_not_constructor(Factory: any) { return Factory.toString(); }
+function operand_returning_constructor(value: any): any { return value; }
+function operand_construct_return(value: any): any { return new (operand_returning_constructor as any)(value); }

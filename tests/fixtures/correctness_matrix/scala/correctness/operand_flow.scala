@@ -14,3 +14,7 @@ object OperandCallback { def operand_callback(callback: Int => Int, value: Int):
 
 object OperandBoundCaller { def operand_bound(callback: Int => Int, box: OperandBound, value: Int): Int = { return callback(value) } }
 class OperandBound { def operand_bound_target(value: Int): Int = { return value } }
+
+object OperandLookup { def operand_computed(box: OperandCallbacks, value: Int): Int = { return box.slot(value) } }
+class OperandConstructed(val slot: Int)
+object OperandConstructFactory { def operand_construct(value: Int): OperandConstructed = { return new OperandConstructed(value) } }

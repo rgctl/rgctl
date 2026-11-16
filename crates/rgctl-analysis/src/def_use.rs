@@ -1045,7 +1045,17 @@ fn collect_def_use_node<'a>(
                 || kind == "simple_identifier"
                 || kind == "shorthand_field_identifier"
                 || kind == "variable_name"
-                || kind == "variable")
+                || kind == "variable"
+                // Go's native grammar can parse callbacks[key](value) as a
+                // generic type conversion. Preserve the possible value head
+                // without treating unrelated type annotations as local reads.
+                || (kind == "type_identifier"
+                    && node.parent().is_some_and(|parent| {
+                        parent.kind() == "generic_type"
+                            && parent.parent().is_some_and(|call| {
+                                call.kind() == "type_conversion_expression"
+                            })
+                    })))
                 && let Ok(name) = node.utf8_text(source)
             {
                 used.insert(name.trim_start_matches('$').to_string());

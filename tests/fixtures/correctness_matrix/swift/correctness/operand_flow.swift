@@ -22,3 +22,8 @@ class OperandBound { func operand_bound_target(_ value: Int) -> Int { return val
 
 func operand_deferred_source(_ value: Item) async -> Item { return value }
 func operand_await(_ value: Item) async -> Item { return await operand_deferred_source(value) }
+
+func operand_computed(_ box: [(Int)->Int], _ key: Int, _ value: Int) -> Int { return box[key](value) }
+class OperandConstructed { var slot: Int; required init(_ value: Int) { self.slot = value } }
+func operand_construct(_ value: Int) -> OperandConstructed { return OperandConstructed(value) }
+func operand_constructor_alias(_ factory: OperandConstructed.Type, _ value: Int) -> OperandConstructed { return factory.init(value) }

@@ -38,3 +38,5 @@ function operand_callable_field(box, callback, value)
  box.callback = callback
  return box.callback(value)
 end
+
+function operand_computed(box, key, value) return box[key](value) end

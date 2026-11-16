@@ -304,3 +304,84 @@ need further models. Empty or partial results must not establish no impact.
 New persisted roles and operands use CFG semantics 11 and RBCP v14. Capture
 reuses the current native tree and worker pipeline; query extensions remain lazy
 and bounded rather than constructing a whole-repository heap.
+
+## Computed lookup and constructor values
+
+`callable_member_values` streams exact native named/indexed member facts and the
+conservative Python `getattr` convention. Each fact retains its value, receiver,
+named member (if present), and exact computed selector expression (if present).
+The enumeration uses persisted operands rather than source parsing or another AST
+walk. Channel receives are not index selectors, Puppet resource references with a
+static resource type are not collection reads, and arbitrary receiver methods
+named `getattr` are not Python builtin lookup.
+
+A resolver supplies compatible canonical `CallableCandidate` alternatives. The
+existing receiver-origin requirement gates those candidates; unknown keys retain
+all compatible methods. `UnknownMemberSelector` remains explicit for computed
+candidates, including literal selectors: this layer does not perform constant
+folding or claim a closed selector set. Scalar and aggregate callbacks use the
+same bounded callable engine, without a global method-name join.
+
+`build_with_values` accepts `ConstructorCandidate` inputs at exact native
+class/type references. Opaque constructor origins flow through local, argument,
+return, field and aggregate transfers. An invocation of a reached constructor
+introduces its possible canonical instance type at the result. When a canonical
+explicit body is supplied, its invocation binds a constructed receiver and
+ordinary arguments separately. `ConstructorValue` and `ConstructionEvidence`
+remain separate from function values and instance origins. A missing body does
+not fabricate an implementation, and unresolved invocation evidence remains.
+
+Go/Rust composite literals and Elixir structs construct from their native type
+operands without inventing constructor calls. Ruby class-object `new` and Swift
+metatype `init` conventions use their native receivers; unrelated class-object
+methods do not construct instances. ECMA `Object.create(Type.prototype)` creates
+a possible instance from a reached constructor reference without invoking its
+constructor body. Source spelling and resolver-provided canonical identities
+remain conservative premises, not proof against shadowing or monkey patching.
+
+Ordinary generative constructor returns do not alias the instance. ECMA is an
+exception: an explicit returned object may replace the instance. Its canonical
+binder retains possible returned origins as well as the possible new instance,
+with `ConservativeConstructorReturn` because the runtime object test is not
+proven. Factory-function calls use the ordinary callable/return model. Custom
+factory constructors, proxies, descriptors, reflective construction and all
+initializer side effects are not established by this model.
+
+### Tier 1 qualification
+
+`tests/fixtures/native_lookup_cases.json` enumerates all 20 procedural languages
+and points to canonical `correctness/operand_flow.*` sources. Public native API
+tests exercise these same sources, and correctness JSON checks persisted facts.
+
+- Native indexed/computed callable values are exercised in C, C++, C#, Java,
+  Groovy, Go, JavaScript, TypeScript, Kotlin, PHP, Puppet, Ruby, Rust, Swift, Dart,
+  Elixir, Lua and Bash. Python exercises `getattr`; Scala exercises named members.
+  Scala indexing is an ordinary `apply`-call protocol in the native grammar, so
+  this layer does not reinterpret arbitrary calls as collection/member reads.
+- Native construction is exercised in C++, C#, Java, Groovy, Go, JavaScript,
+  TypeScript, Kotlin, PHP, Python, Ruby, Rust, Swift, Scala, Dart and Elixir.
+  C/Puppet/Lua/Bash have no corresponding native nominal constructor in this
+  model; their supported functions/resources/tables/commands retain their
+  existing contracts. SQL/HCL and ERB/Markdown keep the non-procedural boundary.
+- Explicit constructor-body receiver/argument separation is exercised in C++,
+  C#, Java, Groovy, JavaScript, TypeScript, PHP, Python, Ruby, Swift and Dart.
+  Kotlin/Scala primary initialization and the Go/Rust/Elixir structural forms do
+  not introduce a separate explicit constructor body in these fixtures.
+- Aliases, constructor registries and ECMA prototypes retain canonical evidence.
+  Negative controls cover incompatible receiver origins, unrelated class methods,
+  invalid references, absent constructor candidates and exhausted work budgets.
+
+Go's native grammar can parse `callbacks[key](value)` as a generic type conversion.
+The possible indexed invocation and scoped value-head read are retained, with an
+explicit `InvocationShape` diagnostic. Genuine generic type conversions are not
+proven function calls, and unrelated type annotations do not become local reads.
+C/C++ pointer-return declarators retain the nearest native function parameters;
+Swift initializer lookup matches the plugin's canonical `init` name; ECMA
+constructor CFG lookup/indexing matches the plugin's class name while retaining
+the source `constructor` alias; Dart
+constructor signatures retain their parameters.
+
+State stays lazy and query-local, with bounded work, constructors, evidence and
+transfers. Contexts and memory keys still merge. Empty or partial results cannot
+establish no impact. Native receiver/lowering changes use CFG semantics 12 and
+RBCP v15; existing per-file native parsing and streamed persistence are reused.

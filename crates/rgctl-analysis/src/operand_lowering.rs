@@ -399,6 +399,31 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    fn declarator_parameters<'tree>(
+        &mut self,
+        function: Node<'tree>,
+    ) -> Result<Option<Node<'tree>>> {
+        let mut next = function.child_by_field_name("declarator");
+        let mut parameters = None;
+        for _ in 0..EXPRESSION_DEPTH_LIMIT {
+            let Some(node) = next else {
+                return Ok(parameters);
+            };
+            if let Some(list) = node.child_by_field_name("parameters") {
+                parameters = Some(list);
+            }
+            next = node.child_by_field_name("declarator").or_else(|| {
+                (node.kind() == "parenthesized_declarator")
+                    .then(|| node.named_child(0))
+                    .flatten()
+            });
+        }
+        if let Some(node) = next {
+            self.diagnostic(node, OperandDiagnosticKind::DepthLimit)?;
+        }
+        Ok(parameters)
+    }
+
     fn parameters(&mut self, function: Node<'_>) -> Result<()> {
         let language = self.facts.language;
         if matches!(
@@ -542,14 +567,11 @@ impl<'a> Lowerer<'a> {
             self.diagnostic(function, OperandDiagnosticKind::ReturnConvention)?;
             return Ok(());
         }
+        let declarator_parameters = self.declarator_parameters(function)?;
         let parameters = function
             .child_by_field_name("parameters")
             .or_else(|| function.child_by_field_name("parameter"))
-            .or_else(|| {
-                function
-                    .child_by_field_name("declarator")
-                    .and_then(|n| n.child_by_field_name("parameters"))
-            })
+            .or(declarator_parameters)
             .or_else(|| {
                 function
                     .child_by_field_name("signature")
@@ -579,9 +601,9 @@ impl<'a> Lowerer<'a> {
             function
                 .child_by_field_name("signature")
                 .and_then(|n| {
-                    native_operand_children(n)
-                        .into_iter()
-                        .find(|n| n.kind() == "function_signature")
+                    native_operand_children(n).into_iter().find(|n| {
+                        matches!(n.kind(), "function_signature" | "constructor_signature")
+                    })
                 })
                 .and_then(|n| n.child_by_field_name("parameters"))
         });
@@ -906,7 +928,9 @@ impl<'a> Lowerer<'a> {
             ExpressionKind::Unknown
         } else if let Some(kind) = self.deferred_operand_kind(node, depth, &mut inputs)? {
             kind
-        } else if let Some(base) = native_element_base(node) {
+        } else if let Some(base) =
+            native_element_base(node).or_else(|| go_indexed_type_base(node, self.facts.language))
+        {
             inputs.push(self.expression(base, depth + 1)?);
             for child in native_operand_children(node)
                 .into_iter()
@@ -928,7 +952,12 @@ impl<'a> Lowerer<'a> {
                 | "method_invocation"
                 | "object_creation_expression"
                 | "new_expression"
-        ) {
+                | "instance_expression"
+        ) || go_indexed_invocation(node, self.facts.language)
+        {
+            if go_indexed_invocation(node, self.facts.language) {
+                self.diagnostic(node, OperandDiagnosticKind::InvocationShape)?;
+            }
             ExpressionKind::CallResult(self.call(node, id, depth + 1)?)
         } else if matches!(
             kind,
@@ -946,6 +975,9 @@ impl<'a> Lowerer<'a> {
                 | "variable_name"
                 | "variable"
                 | "word"
+        ) || matches!(
+            (self.facts.language, kind),
+            (OperandLanguage::Ruby, "constant") | (OperandLanguage::Elixir, "alias")
         ) {
             ExpressionKind::Name(self.node_name(node)?)
         } else if kind == "object"
@@ -977,7 +1009,8 @@ impl<'a> Lowerer<'a> {
         } else if matches!(
             kind,
             "array" | "list" | "tuple" | "tuple_expression" | "dictionary" | "set" | "map"
-        ) {
+        ) && native_struct_constructor(node, self.facts.language).is_none()
+        {
             let members = if kind == "map" {
                 native_operand_children(node)
                     .into_iter()
@@ -1017,10 +1050,13 @@ impl<'a> Lowerer<'a> {
         } else if let Some(value) = asserted_value(node) {
             inputs.push(self.expression(value, depth + 1)?);
             ExpressionKind::AssertedValue
-        } else if matches!(kind, "composite_literal" | "struct_expression") {
+        } else if matches!(kind, "composite_literal" | "struct_expression")
+            || native_struct_constructor(node, self.facts.language).is_some()
+        {
             let type_node = node
                 .child_by_field_name("type")
-                .or_else(|| node.child_by_field_name("name"));
+                .or_else(|| node.child_by_field_name("name"))
+                .or_else(|| native_struct_constructor(node, self.facts.language));
             if let Some(type_node) = type_node {
                 let type_value = self.expression(type_node, depth + 1)?;
                 inputs.push(type_value);
@@ -1154,7 +1190,10 @@ impl<'a> Lowerer<'a> {
 
     fn call(&mut self, node: Node<'_>, result: ExpressionId, depth: usize) -> Result<CallSiteId> {
         let id = CallSiteId(checked_operand_index(self.facts.calls.len())?);
-        let kind = if matches!(node.kind(), "new_expression" | "object_creation_expression") {
+        let kind = if matches!(
+            node.kind(),
+            "new_expression" | "object_creation_expression" | "instance_expression"
+        ) {
             InvocationKind::Construction
         } else {
             InvocationKind::Call
@@ -1189,7 +1228,9 @@ impl<'a> Lowerer<'a> {
                 callee_node
                     .and_then(member_parts)
                     .map(|(receiver, _)| receiver)
-            });
+            })
+            .or_else(|| callee_node.and_then(native_element_base))
+            .or_else(|| callee_node.and_then(|n| go_indexed_type_base(n, self.facts.language)));
         let receiver = receiver_node
             .map(|n| self.expression(n, depth))
             .transpose()?;
@@ -1234,7 +1275,9 @@ impl<'a> Lowerer<'a> {
                             .find(|n| n.kind() == "value_arguments")
                     })
             });
-        let actuals = if node.kind() == "command" {
+        let actuals = if go_indexed_invocation(node, self.facts.language) {
+            node.child_by_field_name("operand").into_iter().collect()
+        } else if node.kind() == "command" {
             let mut cursor = node.walk();
             node.children_by_field_name("argument", &mut cursor)
                 .collect()
@@ -1317,6 +1360,29 @@ impl<'a> Lowerer<'a> {
         });
         Ok(())
     }
+}
+
+fn go_indexed_invocation(node: Node<'_>, language: OperandLanguage) -> bool {
+    language == OperandLanguage::Go
+        && node.kind() == "type_conversion_expression"
+        && node
+            .child_by_field_name("type")
+            .is_some_and(|n| n.kind() == "generic_type")
+}
+fn go_indexed_type_base(node: Node<'_>, language: OperandLanguage) -> Option<Node<'_>> {
+    if language != OperandLanguage::Go || node.kind() != "generic_type" {
+        return None;
+    }
+    node.child_by_field_name("type")
+        .or_else(|| node.named_child(0))
+}
+fn native_struct_constructor(node: Node<'_>, language: OperandLanguage) -> Option<Node<'_>> {
+    if language != OperandLanguage::Elixir || node.kind() != "map" {
+        return None;
+    }
+    node.named_children(&mut node.walk())
+        .find(|n| n.kind() == "struct")
+        .and_then(|n| n.named_child(0))
 }
 
 fn member_parts(node: Node<'_>) -> Option<(Node<'_>, Node<'_>)> {
@@ -1613,6 +1679,11 @@ fn initializer_after_equals(node: Node<'_>) -> Option<Node<'_>> {
 }
 
 pub(crate) fn native_element_base(node: Node<'_>) -> Option<Node<'_>> {
+    if node.kind() == "resource_reference"
+        && node.named_child(0).is_some_and(|n| n.kind() == "variable")
+    {
+        return node.named_child(0);
+    }
     if node.kind() == "call_expression" {
         let suffix = node
             .named_children(&mut node.walk())

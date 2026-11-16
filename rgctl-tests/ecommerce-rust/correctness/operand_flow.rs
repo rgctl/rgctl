@@ -15,3 +15,7 @@ impl OperandBound { fn operand_bound_target(&self, value: i32) -> i32 { return v
 
 async fn operand_deferred_source(value: Item) -> Item { return value; }
 async fn operand_await(value: Item) -> Item { return operand_deferred_source(value).await; }
+
+fn operand_computed(box_value: [fn(i32)->i32; 2], key: usize, value: i32) -> i32 { return box_value[key](value); }
+struct OperandConstructed { slot: i32 }
+fn operand_construct(value: i32) -> OperandConstructed { return OperandConstructed { slot: value }; }

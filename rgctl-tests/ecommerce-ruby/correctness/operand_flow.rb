@@ -56,3 +56,21 @@ end
 def operand_callback_other(callback, value)
  return callback.object_id
 end
+
+def operand_computed(box, key, value)
+ return box[key].call(value)
+end
+class OperandConstructed
+ def initialize(value)
+  @slot = value
+ end
+end
+def operand_construct(value)
+ return OperandConstructed.new(value)
+end
+def operand_constructor_alias(factory, value)
+ return factory.new(value)
+end
+def operand_not_constructor(factory)
+ return factory.to_s
+end

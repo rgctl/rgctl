@@ -39,6 +39,40 @@
   ]
   },
   "symbols": {
+    "tier1_lookup_constructor_body": {
+      "match": {
+        "name": "OperandConstructed",
+        "file": "correctness/operand_flow.groovy"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2
+      }
+    },
+    "tier1_lookup_operand_computed": {
+      "match": {
+        "name": "operand_computed",
+        "file": "correctness/operand_flow.groovy"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_returns": 1,
+        "operand_min_elements": 1
+      }
+    },
+    "tier1_lookup_operand_construct": {
+      "match": {
+        "name": "operand_construct",
+        "file": "correctness/operand_flow.groovy"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_returns": 1
+      }
+    },
     "operand_callback": {
       "match": {
         "name": "operand_callback"

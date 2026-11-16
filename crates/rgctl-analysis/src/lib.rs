@@ -312,4 +312,6 @@ pub mod value_origins;
 #[cfg(test)]
 mod tier1_deferred_tests;
 #[cfg(test)]
+mod tier1_lookup_tests;
+#[cfg(test)]
 mod tier1_operand_tests;

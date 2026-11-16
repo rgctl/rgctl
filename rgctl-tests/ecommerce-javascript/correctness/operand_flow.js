@@ -36,3 +36,13 @@ function* operand_empty_generator(terminal) { return terminal; }
 function operand_empty_factory(terminal) { return operand_empty_generator(terminal); }
 function* operand_delegated(value, terminal) { yield* [value]; return terminal; }
 function operand_delegated_factory(value, terminal) { return operand_delegated(value, terminal); }
+
+function operand_computed(box, key, value) { return box[key](value); }
+class OperandConstructed { constructor(value) { this.slot = value; } }
+function operand_construct(value) { return new OperandConstructed(value); }
+function operand_prototype() { return Object.create(OperandConstructed.prototype); }
+function operand_constructor_alias(Factory, value) { const alias = Factory; return new alias(value); }
+function operand_constructor_registry(Factory, value) { const registry = [Factory]; return new registry[0](value); }
+function operand_not_constructor(Factory) { return Factory.toString(); }
+function operand_returning_constructor(value) { return value; }
+function operand_construct_return(value) { return new operand_returning_constructor(value); }

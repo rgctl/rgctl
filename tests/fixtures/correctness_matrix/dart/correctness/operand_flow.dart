@@ -24,3 +24,7 @@ Object operand_generator(Object value, Object terminal) { final iterator = opera
 
 Iterable<Object> operand_empty_generator(Object terminal) sync* { return; }
 Object operand_empty_factory(Object terminal) { return operand_empty_generator(terminal); }
+
+int operand_computed(List<int Function(int)> box, int key, int value) { return box[key](value); }
+class OperandConstructed { late int slot; OperandConstructed(int value) { this.slot = value; } }
+OperandConstructed operand_construct(int value) { return OperandConstructed(value); }

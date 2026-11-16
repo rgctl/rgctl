@@ -1158,3 +1158,106 @@ fn go_channel_sends_reach_received_values_without_typing_the_channel_as_an_eleme
             .all(|o| output.seeds[o.0 as usize].type_id.is_none())
     );
 }
+
+#[test]
+fn constructor_values_flow_through_registry_elements_and_prototypes() {
+    for (language, caller, method) in [
+        (
+            "python",
+            "def exercise():\n registry={'x':X}\n value=registry['x']()\n return value.execute()\n",
+            "class X:\n def execute(self):\n  return 100\n",
+        ),
+        (
+            "javascript",
+            "function exercise(){const value=Object.create(X.prototype);return value.execute();}",
+            "class X{execute(){return 100;}}",
+        ),
+    ] {
+        let f = Fixture::new(language, &[("exercise", caller), ("execute", method)]);
+        let cfg = f.fixture_cfg(0);
+        let index = cfg
+            .operands
+            .expressions
+            .iter()
+            .position(
+                |e| matches!(e.kind,ExpressionKind::Name(n) if cfg.operands.operand_name(n)==Some("X")),
+            )
+            .unwrap();
+        let constructor = ConstructorCandidate {
+            value: ValueRef {
+                function: f.ids[0],
+                expression: ExpressionId(index as u32),
+            },
+            type_id: Uuid::from_u128(100),
+            callee: None,
+        };
+        let target = f.target(0, "execute", 1, ReceiverSupply::Member);
+        let output = OriginAnalysis::build_with_values(
+            &f.icfg,
+            &[],
+            &[],
+            &[member(target, 100)],
+            &[],
+            &[constructor],
+            Default::default(),
+        );
+        assert!(
+            output.receiver_targets.iter().any(|r| r.target == target),
+            "{language}: {output:?}"
+        );
+        assert!(!output.construction_evidence.is_empty());
+    }
+}
+
+#[test]
+fn computed_member_values_and_getattr_keep_all_compatible_method_candidates() {
+    for (language, caller, method) in [
+        (
+            "javascript",
+            "function exercise(){const value=new X();const key=globalThis.method;return value[key]();}",
+            "class X{execute(){return 100;}}",
+        ),
+        (
+            "python",
+            "def exercise():\n value=X()\n return getattr(value,'execute')()\n",
+            "class X:\n def execute(self):\n  return 100\n",
+        ),
+    ] {
+        let f = Fixture::new(language, &[("exercise", caller), ("execute", method)]);
+        let fact = callable_member_values(&f.fixture_cfg(0).operands)
+            .find(|v| v.member.is_none())
+            .unwrap();
+        let receiver = ValueRef {
+            function: f.ids[0],
+            expression: fact.receiver,
+        };
+        let callable = CallableCandidate {
+            value: ValueRef {
+                function: f.ids[0],
+                expression: fact.value,
+            },
+            callee: f.ids[1],
+            receiver: ReceiverSupply::BoundValue(receiver),
+            requirement: Some(OriginRequirement {
+                value: receiver,
+                type_id: Uuid::from_u128(100),
+            }),
+        };
+        let output = OriginAnalysis::build_with_values(
+            &f.icfg,
+            &[seed(f.allocation(0, "X"), 100)],
+            &[],
+            &[],
+            &[callable],
+            &[],
+            Default::default(),
+        );
+        assert!(
+            output
+                .callable_targets
+                .iter()
+                .any(|r| r.target.call.caller == f.ids[0] && r.target.callee == f.ids[1]),
+            "{language}: {output:?}"
+        );
+    }
+}
