@@ -141,6 +141,10 @@ pub enum ExpressionKind {
         /// Declared result position; consumers may conservatively merge slots.
         position: u32,
     },
+    /// Aggregate value; inputs are its explicit possible elements, not aliases.
+    Collection,
+    /// Element read; first input is the container, remaining inputs are selectors.
+    Element,
     /// Other computation with ordered syntactic children.
     Computation,
     /// Unsupported, malformed or depth-limited expression.
@@ -313,6 +317,15 @@ pub struct FieldWriteFact {
     pub value: ExpressionId,
 }
 
+/// Explicit store into an aggregate element. Keys are conservatively merged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElementWriteFact {
+    /// Container expression.
+    pub container: ExpressionId,
+    /// Stored element value, distinct from the container identity.
+    pub value: ExpressionId,
+}
+
 /// Pooled per-function native syntax facts, persisted with the CFG.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FunctionOperands {
@@ -344,6 +357,8 @@ pub struct FunctionOperands {
     pub assignment_values: Vec<AssignmentValueFact>,
     /// Explicit native instance-member stores, preserving receiver identity.
     pub field_writes: Vec<FieldWriteFact>,
+    /// Explicit indexed aggregate stores.
+    pub element_writes: Vec<ElementWriteFact>,
     /// Scoped native local keys, indexed by LocalSlotId.
     pub local_slots: Vec<OperandNameId>,
     /// Exact local read occurrences and CFG positions.
@@ -379,6 +394,10 @@ impl FunctionOperands {
             .assignment_values
             .iter()
             .all(|a| a.target.start < a.target.end && expr(a.value))
+            && self
+                .element_writes
+                .iter()
+                .all(|w| expr(w.container) && expr(w.value))
             && self
                 .field_writes
                 .iter()

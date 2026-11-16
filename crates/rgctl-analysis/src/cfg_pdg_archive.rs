@@ -15,8 +15,9 @@
 //! - **v7**: exact local expression/statement and read/write bindings.
 //! - **v8**: typed conditional values and successful assertions.
 //! - **v9**: projected multi-value assignment operands.
-//! - **v10** : sparse positional and unsupported-pattern slot semantics.
-//! - **v11** (current): explicit instance-member stores.
+//! - **v10**: sparse positional and unsupported-pattern slot semantics.
+//! - **v11**: explicit instance-member stores.
+//! - **v12** (current): aggregate identities and element stores/loads.
 
 use crate::cfg::ControlFlowGraph;
 use crate::hash_maps::FxHashMap;
@@ -39,8 +40,8 @@ static NEXT_ARCHIVE_TMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Magic bytes for CFG/PDG archive files (`RBCP`).
 pub const ARCHIVE_MAGIC: [u8; 4] = *b"RBCP";
-/// Current archive format (v11 = instance-member store operands).
-pub const ARCHIVE_VERSION: u32 = 11;
+/// Current archive format (v12 = aggregate element operands).
+pub const ARCHIVE_VERSION: u32 = 12;
 /// Legacy monolithic bincode payload.
 pub const ARCHIVE_VERSION_V1: u32 = 1;
 /// Legacy header-TOC format.

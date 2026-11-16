@@ -26,8 +26,9 @@ pub struct OriginId(pub u32);
 pub struct OriginSeed {
     /// Native producer (allocation or another explicitly modeled source).
     pub value: ValueRef,
-    /// Canonical possible type UUID, supplied by graph/type resolution.
-    pub type_id: Uuid,
+    /// Canonical possible type from graph resolution, or no nominal type for an
+    /// opaque aggregate identity. Missing type never selects a member target.
+    pub type_id: Option<Uuid>,
 }
 /// Type-compatible canonical member target; becomes a call only when its receiver carries that type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -58,6 +59,13 @@ pub struct ReceiverTarget {
 pub enum OriginTransferCause {
     /// Native scoped local transfer.
     Local(LocalTransferKind),
+    /// A possible stored element reaches an indexed read on the same aggregate.
+    Element {
+        /// Opaque aggregate or object origin, distinct from the stored value.
+        container: OriginId,
+        /// Exact indexed read.
+        read: ValueRef,
+    },
     /// A stored value reaches a named member read on the same possible object.
     Field {
         /// Possible object allocation/provider origin used for the store/load join.
@@ -249,12 +257,7 @@ impl OriginAnalysis {
                 query.diagnostic(OriginDiagnostic::InvalidValue(seed.value));
                 continue;
             }
-            let Ok(index) = u32::try_from(query.output.seeds.len()) else {
-                query.limit();
-                break;
-            };
-            query.output.seeds.push(seed);
-            query.fact(seed.value, OriginId(index));
+            query.seed(seed);
         }
         query.run();
         query.finish()
@@ -284,10 +287,11 @@ struct Query<'a, C: InterproceduralCfgAccess + ?Sized> {
     edge_pairs: HashSet<(ValueRef, ValueRef)>,
     facts: HashMap<ValueRef, HashSet<OriginId>>,
     queue: VecDeque<(ValueRef, OriginId)>,
+    seed_ids: HashMap<OriginSeed, OriginId>,
     field_names: HashMap<String, u32>,
     field_accesses: HashMap<ValueRef, Vec<FieldAccess>>,
-    field_stores: HashMap<(OriginId, u32), HashSet<ValueRef>>,
-    field_loads: HashMap<(OriginId, u32), HashSet<ValueRef>>,
+    field_stores: HashMap<(OriginId, MemoryMember), HashSet<ValueRef>>,
+    field_loads: HashMap<(OriginId, MemoryMember), HashSet<ValueRef>>,
     field_access_count: usize,
     field_slot_count: usize,
     fact_count: usize,
@@ -319,6 +323,7 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
             edge_pairs: HashSet::new(),
             facts: HashMap::new(),
             queue: VecDeque::new(),
+            seed_ids: HashMap::new(),
             field_names: HashMap::new(),
             field_accesses: HashMap::new(),
             field_stores: HashMap::new(),
@@ -462,6 +467,27 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
             }
         }
     }
+    fn seed(&mut self, seed: OriginSeed) {
+        if self.limited {
+            return;
+        }
+        if let Some(&origin) = self.seed_ids.get(&seed) {
+            self.fact(seed.value, origin);
+            return;
+        }
+        if self.output.seeds.len() >= self.limits.max_facts {
+            self.limit();
+            return;
+        }
+        let Ok(index) = u32::try_from(self.output.seeds.len()) else {
+            self.limit();
+            return;
+        };
+        let origin = OriginId(index);
+        self.seed_ids.insert(seed, origin);
+        self.output.seeds.push(seed);
+        self.fact(seed.value, origin);
+    }
     fn fact(&mut self, value: ValueRef, origin: OriginId) {
         if self.limited || self.facts.get(&value).is_some_and(|s| s.contains(&origin)) {
             return;
@@ -588,6 +614,21 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
                 }
                 continue;
             }
+            if matches!(transfer.kind, TransferKind::RestElement { .. }) {
+                self.seed(OriginSeed {
+                    value: transfer.to,
+                    type_id: None,
+                });
+                if let BindingSource::Expression(from) = transfer.from {
+                    self.memory_access(transfer.to, MemoryMember::Element, from, true);
+                } else {
+                    self.diagnostic(OriginDiagnostic::ImplicitValue {
+                        target,
+                        kind: transfer.kind,
+                    });
+                }
+                continue;
+            }
             let supported =
                 matches!(
                     transfer.kind,
@@ -636,7 +677,9 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
                 self.bind_field(access, origin)
             }
             let calls = self.receivers.get(&value).cloned().unwrap_or_default();
-            let type_id = self.output.seeds[origin.0 as usize].type_id;
+            let Some(type_id) = self.output.seeds[origin.0 as usize].type_id else {
+                continue;
+            };
             for call in calls {
                 let candidates = self.members.get(&call).cloned().unwrap_or_default();
                 let mut matched = false;
@@ -719,9 +762,14 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum MemoryMember {
+    Field(u32),
+    Element,
+}
 #[derive(Debug, Clone, Copy)]
 struct FieldAccess {
-    member: u32,
+    member: MemoryMember,
     value: ValueRef,
     store: bool,
 }
@@ -759,6 +807,72 @@ impl<C: InterproceduralCfgAccess + ?Sized> Query<'_, C> {
                 );
             }
         }
+        for (index, expression) in cfg.operands.expressions.iter().enumerate() {
+            if self.limited {
+                break;
+            }
+            let value = ValueRef {
+                function,
+                expression: ExpressionId(index as u32),
+            };
+            match expression.kind {
+                ExpressionKind::Collection => {
+                    self.seed(OriginSeed {
+                        value,
+                        type_id: None,
+                    });
+                    for &element in expression.inputs.slice(&cfg.operands.inputs).unwrap_or(&[]) {
+                        self.memory_access(
+                            value,
+                            MemoryMember::Element,
+                            ValueRef {
+                                function,
+                                expression: element,
+                            },
+                            true,
+                        );
+                        if self.limited {
+                            break;
+                        }
+                    }
+                }
+                ExpressionKind::Element => {
+                    if let Some(&base) = expression
+                        .inputs
+                        .slice(&cfg.operands.inputs)
+                        .and_then(|s| s.first())
+                    {
+                        self.memory_access(
+                            ValueRef {
+                                function,
+                                expression: base,
+                            },
+                            MemoryMember::Element,
+                            value,
+                            false,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        for write in &cfg.operands.element_writes {
+            if self.limited {
+                break;
+            }
+            self.memory_access(
+                ValueRef {
+                    function,
+                    expression: write.container,
+                },
+                MemoryMember::Element,
+                ValueRef {
+                    function,
+                    expression: write.value,
+                },
+                true,
+            );
+        }
         for write in &cfg.operands.field_writes {
             if self.limited {
                 break;
@@ -789,6 +903,22 @@ impl<C: InterproceduralCfgAccess + ?Sized> Query<'_, C> {
         }
         let next = self.field_names.len() as u32;
         let member = *self.field_names.entry(name.to_owned()).or_insert(next);
+        self.memory_access(base, MemoryMember::Field(member), value, store);
+    }
+    fn memory_access(
+        &mut self,
+        base: ValueRef,
+        member: MemoryMember,
+        value: ValueRef,
+        store: bool,
+    ) {
+        if self.limited {
+            return;
+        }
+        if self.field_access_count >= self.limits.max_transfers {
+            self.limit();
+            return;
+        }
         let access = FieldAccess {
             member,
             value,
@@ -842,7 +972,13 @@ impl<C: InterproceduralCfgAccess + ?Sized> Query<'_, C> {
                 self.edge(
                     access.value,
                     read,
-                    OriginTransferCause::Field { object, read },
+                    match access.member {
+                        MemoryMember::Field(_) => OriginTransferCause::Field { object, read },
+                        MemoryMember::Element => OriginTransferCause::Element {
+                            container: object,
+                            read,
+                        },
+                    },
                 );
             }
         } else {
@@ -874,9 +1010,15 @@ impl<C: InterproceduralCfgAccess + ?Sized> Query<'_, C> {
                 self.edge(
                     write,
                     access.value,
-                    OriginTransferCause::Field {
-                        object,
-                        read: access.value,
+                    match access.member {
+                        MemoryMember::Field(_) => OriginTransferCause::Field {
+                            object,
+                            read: access.value,
+                        },
+                        MemoryMember::Element => OriginTransferCause::Element {
+                            container: object,
+                            read: access.value,
+                        },
                     },
                 );
             }

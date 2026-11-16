@@ -127,3 +127,31 @@ initialization, descriptors, computed properties, collections and reflective
 state still require their respective facts/models. These tests do not establish
 complete heap, alias or lifecycle semantics. Stored field operands require CFG
 semantics 8 and RBCP v11; previous records are rejected by revision guards.
+
+## Aggregate elements and variadic packing
+
+`OriginSeed.type_id` is optional: opaque aggregate identities have no nominal
+type, while instance origins retain their canonical type UUID. An untyped
+aggregate never selects a member candidate. Literal sequence/map values and
+native variadic formal containers introduce bounded query-local opaque origins.
+Their values flow through the same local and invocation transfers as other
+origins, without equating the container with its stored values.
+
+Native `Collection`, `Element` and `ElementWriteFact` operands supply explicit
+literal members, indexed reads and stores. All keys/indices currently merge in
+one element slot per possible container origin. This deliberately retains
+alternatives and can over-warn across different keys or array positions. Map
+keys are not treated as element values. Variadic `RestElement` transfers populate
+the formal's element slot; they do not propagate an actual X into the entire
+rest container. Unknown spreads remain diagnosed. Go multi-return projections continue to route
+return values by their declared result position, separately from container slots.
+
+`OriginTransferCause::Element` records the possible container and exact read.
+Element and named-field slots are distinct. Both share the existing bounded
+memory-access, slot and work budgets. Indexed assignment reads the container and
+selector rather than defining a new container variable; native def/use lowering
+now preserves that distinction for supported indexed forms.
+
+Persisted aggregate operands require CFG semantics 9 and RBCP v12. Contexts and
+keys merge; no precise index exclusion, complete container API semantics,
+iteration, comprehension, or mutation-order proof is claimed.

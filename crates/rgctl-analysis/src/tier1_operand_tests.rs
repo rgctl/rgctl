@@ -76,7 +76,7 @@ fn check(language: &str) {
                 function: node.id,
                 expression: value,
             },
-            type_id: Uuid::from_u128(5),
+            type_id: Some(Uuid::from_u128(5)),
         };
         let result = OriginAnalysis::build(&icfg, &[seed], &[], &[], OriginLimits::default());
         assert!(
@@ -105,7 +105,7 @@ fn check(language: &str) {
                     function: node.id,
                     expression: f.value,
                 },
-                type_id: Uuid::from_u128(10 + i as u128),
+                type_id: Some(Uuid::from_u128(10 + i as u128)),
             })
             .collect();
         assert_eq!(seeds.len(), 3, "{language}: choice formals");
@@ -131,7 +131,7 @@ fn check(language: &str) {
             .collect();
         assert_eq!(
             types,
-            [Uuid::from_u128(11), Uuid::from_u128(12)]
+            [Some(Uuid::from_u128(11)), Some(Uuid::from_u128(12))]
                 .into_iter()
                 .collect(),
             "{language}: condition must not become a selected result: {result:#?}"
@@ -187,7 +187,7 @@ fn check(language: &str) {
             function: caller.id,
             expression: seed_expression,
         },
-        type_id: Uuid::from_u128(3),
+        type_id: Some(Uuid::from_u128(3)),
     };
     let output = OriginAnalysis::build(&icfg, &[seed], &[target], &[], OriginLimits::default());
     for (function, expression) in [(caller.id, argument), (callee.id, callee_formal)] {
@@ -262,7 +262,7 @@ fn go_multi_return_slots_do_not_mix_and_type_switch_alias_keeps_its_origin() {
             function,
             expression,
         },
-        type_id: Uuid::from_u128(tag),
+        type_id: Some(Uuid::from_u128(tag)),
     });
     let target = InvocationTarget {
         call: CallRef {
@@ -287,7 +287,7 @@ fn go_multi_return_slots_do_not_mix_and_type_switch_alias_keeps_its_origin() {
         assert_eq!(origins.len(), 1, "{result:#?}");
         assert_eq!(
             result.seeds[origins[0].0 as usize].type_id,
-            Uuid::from_u128(12)
+            Some(Uuid::from_u128(12))
         );
     }
 }
@@ -361,7 +361,7 @@ fn sparse_shell_formals_keep_their_actual_argument_positions() {
             function: from.id,
             expression,
         },
-        type_id: Uuid::from_u128(tag),
+        type_id: Some(Uuid::from_u128(tag)),
     });
     let target = InvocationTarget {
         call: CallRef {
@@ -379,7 +379,7 @@ fn sparse_shell_formals_keep_their_actual_argument_positions() {
     assert_eq!(origins.len(), 1, "{result:#?}");
     assert_eq!(
         result.seeds[origins[0].0 as usize].type_id,
-        Uuid::from_u128(10)
+        Some(Uuid::from_u128(10))
     );
 }
 

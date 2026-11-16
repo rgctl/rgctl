@@ -78,7 +78,7 @@ impl Fixture {
 fn seed(value: ValueRef, type_id: u128) -> OriginSeed {
     OriginSeed {
         value,
-        type_id: Uuid::from_u128(type_id),
+        type_id: Some(Uuid::from_u128(type_id)),
     }
 }
 fn member(target: InvocationTarget, type_id: u128) -> MemberCandidate {
@@ -282,7 +282,7 @@ fn recursion_reaches_a_bounded_fixed_point() {
     );
 }
 #[test]
-fn rest_membership_is_diagnosed_instead_of_aliasing_container_and_element() {
+fn rest_membership_does_not_alias_container_and_element() {
     let f = Fixture::new(
         "javascript",
         &[
@@ -303,7 +303,7 @@ fn rest_membership_is_diagnosed_instead_of_aliasing_container_and_element() {
         Default::default(),
     );
     assert!(!output.receiver_targets.iter().any(|r| r.target == execute));
-    assert!(output.diagnostics.iter().any(|d| matches!(
+    assert!(!output.diagnostics.iter().any(|d| matches!(
         d,
         OriginDiagnostic::UnsupportedTransfer {
             kind: TransferKind::RestElement { .. },
@@ -569,7 +569,11 @@ fn instance_stores_cross_constructor_and_method_boundaries() {
                 ("execute", method),
             ],
         );
-        assert_eq!(f.fixture_cfg(1).operands.field_writes.len(), 1, "{language}");
+        assert_eq!(
+            f.fixture_cfg(1).operands.field_writes.len(),
+            1,
+            "{language}"
+        );
         let run = f.target(0, "run", 2, ReceiverSupply::Member);
         let execute = f.target(2, "execute", 3, ReceiverSupply::Member);
         let output = OriginAnalysis::build(
@@ -624,7 +628,7 @@ fn named_fields_do_not_alias_the_container_or_a_different_member() {
         !output
             .origins(f.allocation(0, "Box"))
             .iter()
-            .any(|o| output.seeds[o.0 as usize].type_id == Uuid::from_u128(100))
+            .any(|o| output.seeds[o.0 as usize].type_id == Some(Uuid::from_u128(100)))
     );
 }
 
@@ -745,4 +749,186 @@ fn parameter_properties_and_keyed_struct_values_supply_member_reads() {
             "{language}: {output:?}"
         );
     }
+}
+
+#[test]
+fn variadic_members_reach_indexed_receivers_without_aliasing_the_rest_container() {
+    for (language, caller, callee, method) in [
+        (
+            "java",
+            "class App{static int exercise(){return consume(new X());}}",
+            "class App{static int consume(Y... values){return values[0].execute();}}",
+            "class X{int execute(){return 100;}}",
+        ),
+        (
+            "javascript",
+            "function exercise(){return consume(new X());}",
+            "function consume(...values){return values[0].execute();}",
+            "class X{execute(){return 100;}}",
+        ),
+        (
+            "typescript",
+            "function exercise():number{return consume(new X());}",
+            "function consume(...values:Y[]):number{return values[0].execute();}",
+            "class X{execute():number{return 100;}}",
+        ),
+        (
+            "python",
+            "def exercise():\n return consume(X())\n",
+            "def consume(*values: Y):\n return values[0].execute()\n",
+            "class X:\n def execute(self):\n  return 100\n",
+        ),
+        (
+            "go",
+            "package demo\nfunc exercise()int{return consume(X{})}",
+            "package demo\nfunc consume(values ...Y)int{return values[0].Execute()}",
+            "package demo\nfunc(x X)Execute()int{return 100}",
+        ),
+    ] {
+        let f = Fixture::new(
+            language,
+            &[
+                ("exercise", caller),
+                ("consume", callee),
+                (
+                    if language == "go" {
+                        "Execute"
+                    } else {
+                        "execute"
+                    },
+                    method,
+                ),
+            ],
+        );
+        let target = f.target(
+            1,
+            if language == "go" {
+                "Execute"
+            } else {
+                "execute"
+            },
+            2,
+            ReceiverSupply::Member,
+        );
+        let output = OriginAnalysis::build(
+            &f.icfg,
+            &[seed(f.allocation(0, "X"), 100)],
+            &[f.target(0, "consume", 1, ReceiverSupply::None)],
+            &[member(target, 100)],
+            Default::default(),
+        );
+        assert!(
+            output.receiver_targets.iter().any(|r| r.target == target),
+            "{language}: {output:?}"
+        );
+        let formal = f.fixture_cfg(1).operands.formals[0].value;
+        assert!(
+            output
+                .origins(ValueRef {
+                    function: f.ids[1],
+                    expression: formal
+                })
+                .iter()
+                .all(|o| output.seeds[o.0 as usize].type_id.is_none()),
+            "{language}: container became X"
+        );
+    }
+}
+
+#[test]
+fn explicit_collection_elements_reach_reads_with_conservative_key_merging() {
+    for (language, caller, method) in [
+        (
+            "javascript",
+            "function exercise(){const values=[new X(),new W()];return values[0].execute();}",
+            "class X{execute(){return 100;}}",
+        ),
+        (
+            "python",
+            "def exercise():\n values={'selected':X(),'other':W()}\n return values['selected'].execute()\n",
+            "class X:\n def execute(self):\n  return 100\n",
+        ),
+        (
+            "go",
+            "package demo\nfunc exercise()int{values:=map[string]Y{\"selected\":X{}};return values[\"selected\"].Execute()}",
+            "package demo\nfunc(x X)Execute()int{return 100}",
+        ),
+        (
+            "go",
+            "package demo\nfunc exercise()int{values:=[]Y{X{}};return values[0].Execute()}",
+            "package demo\nfunc(x X)Execute()int{return 100}",
+        ),
+        (
+            "go",
+            "package demo\nfunc exercise()int{values:=[1]Y{X{}};return values[0].Execute()}",
+            "package demo\nfunc(x X)Execute()int{return 100}",
+        ),
+    ] {
+        let method_name = if language == "go" {
+            "Execute"
+        } else {
+            "execute"
+        };
+        let f = Fixture::new(language, &[("exercise", caller), (method_name, method)]);
+        let target = f.target(0, method_name, 1, ReceiverSupply::Member);
+        let output = OriginAnalysis::build(
+            &f.icfg,
+            &[seed(f.allocation(0, "X"), 100)],
+            &[],
+            &[member(target, 100)],
+            Default::default(),
+        );
+        assert!(
+            output.receiver_targets.iter().any(|r| r.target == target),
+            "{language}: {caller}: {output:?}"
+        );
+        assert!(
+            output
+                .transfers
+                .iter()
+                .any(|t| matches!(t.cause, OriginTransferCause::Element { .. }))
+        );
+    }
+}
+
+#[test]
+fn indexed_updates_preserve_container_identity_and_replay_existing_values() {
+    let f = Fixture::new(
+        "javascript",
+        &[
+            (
+                "exercise",
+                "function exercise(){const values=[];values[0]=new X();return values[0].execute();}",
+            ),
+            ("execute", "class X{execute(){return 100;}}"),
+        ],
+    );
+    let target = f.target(0, "execute", 1, ReceiverSupply::Member);
+    let output = OriginAnalysis::build(
+        &f.icfg,
+        &[seed(f.allocation(0, "X"), 100)],
+        &[],
+        &[member(target, 100)],
+        Default::default(),
+    );
+    assert!(
+        output.receiver_targets.iter().any(|r| r.target == target),
+        "{output:?}"
+    );
+    let aggregate = f
+        .fixture_cfg(0)
+        .operands
+        .expressions
+        .iter()
+        .position(|e| e.kind == ExpressionKind::Collection)
+        .unwrap();
+    assert!(
+        output
+            .origins(ValueRef {
+                function: f.ids[0],
+                expression: ExpressionId(aggregate as u32)
+            })
+            .iter()
+            .all(|o| output.seeds[o.0 as usize].type_id.is_none())
+    );
 }

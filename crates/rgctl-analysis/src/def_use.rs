@@ -365,6 +365,15 @@ fn collect_assignment_lhs<'a>(
             defined.insert(def);
         }
         collect_field_access_base_uses(left, source, used, stack, depth);
+    } else if matches!(
+        left.kind(),
+        "subscript_expression" | "subscript" | "index_expression" | "array_access"
+    ) {
+        // Indexed assignment mutates an element, not the variable holding the
+        // container. Both container and selector are reads at this position.
+        for child in left.named_children(&mut left.walk()) {
+            stack.push((child, false, depth + 1));
+        }
     } else if left.kind() == "instance_variable" {
         if let Ok(name) = left.utf8_text(source) {
             defined.insert(DefVar::Field {

@@ -139,6 +139,14 @@ pub(crate) fn lower_function_operands(
                         member,
                         value,
                     });
+                } else if let Some(container) = element_base(target)
+                    && lowerer.field_write_nodes.insert(target.id())
+                {
+                    let container = lowerer.expression(container, 0)?;
+                    lowerer
+                        .facts
+                        .element_writes
+                        .push(ElementWriteFact { container, value });
                 }
             }
         }
@@ -514,6 +522,19 @@ impl<'a> Lowerer<'a> {
         let mut keyword_only = false;
         let mut positional_start = self.facts.formals.len();
         for param in nodes {
+            // Python wraps annotated *args/**kwargs in a typed_parameter.
+            // Bind its splat pattern; the annotation is not a formal value.
+            let param = if language == OperandLanguage::Python && param.kind() == "typed_parameter"
+            {
+                param
+                    .named_child(0)
+                    .filter(|n| {
+                        matches!(n.kind(), "list_splat_pattern" | "dictionary_splat_pattern")
+                    })
+                    .unwrap_or(param)
+            } else {
+                param
+            };
             match param.kind() {
                 "positional_separator" => {
                     for formal in &mut self.facts.formals[positional_start..] {
@@ -729,6 +750,27 @@ impl<'a> Lowerer<'a> {
                 | "word"
         ) {
             ExpressionKind::Name(self.node_name(node)?)
+        } else if let Some(base) = element_base(node) {
+            inputs.push(self.expression(base, depth + 1)?);
+            for child in native_operand_children(node)
+                .into_iter()
+                .filter(|n| n.id() != base.id())
+            {
+                inputs.push(self.expression(child, depth + 1)?);
+            }
+            ExpressionKind::Element
+        } else if matches!(kind, "array" | "list" | "tuple" | "dictionary" | "set") {
+            for child in native_operand_children(node) {
+                let value = if matches!(child.kind(), "pair" | "key_value_pair") {
+                    child.child_by_field_name("value")
+                } else {
+                    Some(child)
+                };
+                if let Some(value) = value {
+                    inputs.push(self.expression(value, depth + 1)?);
+                }
+            }
+            ExpressionKind::Collection
         } else if let Some((receiver, member)) = member_parts(node) {
             inputs.push(self.expression(receiver, depth + 1)?);
             ExpressionKind::Member(self.node_name(member)?)
@@ -784,7 +826,29 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 }
-                ExpressionKind::Construction(type_value)
+                if self.facts.language == OperandLanguage::Go
+                    && matches!(
+                        type_node.kind(),
+                        "array_type" | "slice_type" | "implicit_length_array_type" | "map_type"
+                    )
+                {
+                    inputs.clear();
+                    if let Some(body) = node.child_by_field_name("body") {
+                        for element in native_operand_children(body) {
+                            let value = if element.kind() == "keyed_element" {
+                                element.child_by_field_name("value")
+                            } else {
+                                Some(element)
+                            };
+                            if let Some(value) = value.and_then(|n| n.named_child(0)) {
+                                inputs.push(self.expression(value, depth + 1)?);
+                            }
+                        }
+                    }
+                    ExpressionKind::Collection
+                } else {
+                    ExpressionKind::Construction(type_value)
+                }
             } else {
                 self.diagnostic(node, OperandDiagnosticKind::InvocationShape)?;
                 ExpressionKind::Unknown
@@ -1283,4 +1347,17 @@ fn initializer_after_equals(node: Node<'_>) -> Option<Node<'_>> {
     } else {
         None
     }
+}
+
+fn element_base(node: Node<'_>) -> Option<Node<'_>> {
+    if !matches!(
+        node.kind(),
+        "subscript_expression" | "subscript" | "index_expression" | "array_access"
+    ) {
+        return None;
+    }
+    node.child_by_field_name("object")
+        .or_else(|| node.child_by_field_name("value"))
+        .or_else(|| node.child_by_field_name("operand"))
+        .or_else(|| node.child_by_field_name("array"))
 }
