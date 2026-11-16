@@ -603,6 +603,10 @@ path = "tests/mainframe_plugins_correctness.rs"
 name = "tier2_query_plugins_correctness"
 path = "tests/tier2_query_plugins_correctness.rs"
 
+[[test]]
+name = "tier1_vuln_reachability_correctness"
+path = "tests/tier1_vuln_reachability_correctness.rs"
+
 [[bench]]
 name = "parsing"
 harness = false

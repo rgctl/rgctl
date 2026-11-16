@@ -1408,10 +1408,63 @@ rgctl -r "$REPO" -f json find --package 'com.fasterxml.jackson.core:jackson-data
 rgctl -r "$REPO" -f json callers ObjectMapper --methods readValue,writeValueAsString
 rgctl -r "$REPO" -f json blast-radius <Symbol> --classify-boundary
 rgctl -r "$REPO" -f json taint --sink ObjectMapper.readValue --source external   # needs discover --with-cfg
-rgctl -r "$REPO" -f json vuln analyze --osv ./advisory.json --include-jars lib
+rgctl -r "$REPO" -f json vuln analyze --osv ./advisory.json --include-jars lib   # lazy per-call-site PDG (no --with-cfg needed)
+rgctl -r "$REPO" -f json vuln analyze --osv ./advisory.json --strict-reachability  # fail-closed CI gate
+rgctl -r "$REPO" -f sarif vuln analyze --osv ./advisory.json -o findings.sarif     # SARIF 2.1.0 output
 ```
 
-`deps check` verdict: `not_affected` | `affected_candidate`. Analyze `exploitability`: `not_affected` | `not_exploitable` | `exploitable` | `under_investigation`. Bundled JAR / `node_modules` scans are **opt-in**. Sink-first requires CFG artifacts.
+`deps check` verdict: `not_affected` | `affected_candidate`. Analyze `exploitability`: `not_affected` | `not_exploitable` | `exploitable` | `under_investigation`. Bundled JAR / `node_modules` scans are **opt-in**. `vuln analyze` lazily hydrates CFG/PDG per matched call site — **`discover --with-cfg` is no longer required for `vuln analyze`** (it reuses the archive if present, builds lazily otherwise; standalone `taint --sink` still requires `--with-cfg`).
+
+### New fields (vuln-reachability-tier1-overhaul)
+
+| Field | Location | Description |
+|---|---|---|
+| `packages[].symbol_coverage` | `vuln triage` | `{"coverage": "explicit", "symbols": [...]}` or `{"coverage": "unspecified"}`. Explicit when OSV provides method/function names; unspecified otherwise. Never emit `not_exploitable` from an unspecified advisory when the package IS imported. |
+| `packages[].ranges[]` | `vuln triage` | Multi-interval version ranges: `[{"introduced": "1.0.0", "upper": {"kind": "fixed", "version": "1.2.5"}}, ...]`. Replaces single `introduced`/`fixed` fields (backward-compat single-range fields still present). `LastAffected` upper bounds are inclusive. |
+| `packages[].introduced` / `packages[].fixed` | `vuln triage` | Backward-compat: first range's bounds. Prefer `ranges[]` for multi-branch advisories. |
+| `--strict-reachability` | `vuln analyze` CLI flag | Elevates `under_investigation` verdicts (call-graph-reachable sinks with inconclusive PDG, or unspecified-symbol advisories with non-zero import hits) to `exploitable` for fail-closed CI gating. |
+| `-f sarif` | `vuln analyze` output format | Emits SARIF 2.1.0 JSON with `codeFlows`/`threadFlows` listing `file:line` for each call site. Consumable by GitHub Code Scanning and other SARIF-compatible tools. |
+| `sink_taint.caller_chains[]` | `vuln analyze` | Structural upstream caller / `BlastRadiusEngine` chains reaching matched sink call sites (omitted when empty), distinct from `sink_taint.paths[]` (proven external→sink PDG taint flows). |
+| `sink_taint.all_sites_mitigated` | `vuln analyze` | `true` when every discovered call site passes constant literals or is dominated by inline sanitizers along all PDG paths (`InlineMitigationsAlreadyExist`). |
+| `openvex.statements[].products[]` | `vuln analyze` | Now canonical Package URLs: `pkg:maven/com.example/lib@2.13.5`, `pkg:npm/express@4.18.2`, `pkg:cargo/serde@1.0`, etc. Downstream VEX processors and SBOM tools can correlate these directly. |
+
+### Epistemic verdict ladder
+
+| Condition | Default verdict | With `--strict-reachability` |
+|---|---|---|
+| Package not present / version not in range | `not_affected` | (unchanged) |
+| `SymbolCoverage::Unspecified` + `import_hits == 0` | `not_exploitable` | (unchanged) |
+| `SymbolCoverage::Unspecified` + `import_hits > 0` | `under_investigation` | `exploitable` |
+| `SymbolCoverage::Explicit` + 0 callers (direct dep) | `not_exploitable` | (unchanged) |
+| `SymbolCoverage::Explicit` + callers + proven taint | `exploitable` | (unchanged) |
+| `SymbolCoverage::Explicit` + callers + constant/sanitizer | `not_exploitable` (InlineMitigationsAlreadyExist) | (unchanged) |
+| `SymbolCoverage::Explicit` + callers + inconclusive PDG | `under_investigation` | `exploitable` |
+
+### Lockfile support (Tier-1)
+
+`deps check` now automatically reads pinned lockfiles alongside declared manifests:
+
+| Lockfile | Ecosystem |
+|---|---|
+| `Cargo.lock` | crates.io |
+| `go.sum` | Go |
+| `gradle.lockfile` | Maven (Gradle) |
+| `Package.resolved` | SwiftPM |
+| `vcpkg.json` | vcpkg (C/C++) |
+| `conan.lock` | Conan (C/C++) |
+| `package-lock.json` v2/v3 | npm |
+| `pnpm-lock.yaml` | npm (pnpm) |
+| `yarn.lock` v1/Berry | npm (Yarn) |
+| `uv.lock`, `poetry.lock` | PyPI |
+| `Pipfile.lock` | PyPI |
+| `requirements.txt` (pinned) | PyPI |
+| `packages.lock.json` | NuGet |
+| `composer.lock` | Packagist |
+| `Gemfile.lock` | RubyGems |
+| `pubspec.lock` | Pub (Dart) |
+| `mix.lock` | Hex (Elixir) |
+| `Puppetfile.lock` | Puppet Forge |
+| `*.rockspec` | LuaRocks |
 
 Human guide: [Vulnerability and OSV Supply-Chain Analysis](https://rgctl.io/docs/guides/vulnerability-and-osv-analysis/) · [Agent pack](https://rgctl.io/docs/guides/agent-skill/) · skill workflow `vuln`.
 
@@ -1867,7 +1920,10 @@ Without `-f json`, discover remains human-readable text progress (unchanged).
 | `.rgctl/analysis_results.bin` | Always | Columnar analysis tables |
 | `.rgctl/dashboard/` | When export succeeds | Static dashboard bundle (`index.html`, `manifest.json`, …) |
 | `.rgctl/graph.db` / `.rgctl/graph.json` | `--write-json-graph` only | Legacy full graph JSON |
-| `.rgctl/analysis/cfg_pdg.archive.bin` | `--with-cfg` / `--with-taint`, or lazy append from `slice` / `cpg flows` | CFG + PDG archive (v3 TOC) |
+| `.rgctl/analysis/cfg_pdg.archive.bin` | `--with-cfg` / `--with-taint`, or lazy append from `slice` / `cpg flows` / `vuln analyze` | CFG + PDG archive (v3 TOC) |
+| `.rgctl/osv/*.json` | `rgctl vuln fetch` or network `rgctl vuln scan` (never on `discover`) | Hydrated OSV v1.6 JSON advisories |
+| `.rgctl/dep_stubs.bin` | `rgctl vuln analyze|scan --with-dep-stubs` (never on `discover`) | Compact JVM `.class` & vendor call-stub index for transitive sink stitching |
+| `.rgctl/vuln-rules.d/*.yaml` | User-supplied declarative conditional CVE rules | Required trigger predicates (`required_patterns`, `missing_verdict`) |
 | `.rgctl/analysis/*.json` | `--with-cfg` or `--with-taint` | Per-function analysis storage (taint, CFG, PDG) |
 | `.rgctl/dashboard/taint_index.json` | `--with-cfg` or `--with-taint` | Dashboard taint catalog (see [json-api.md](json-api.md) §12) |
 
@@ -2214,6 +2270,32 @@ See [json-api.md §18](json-api.md#18-install). Source: `src/cli/install_output.
 | `writes[].host` | string | `"claude"`, `"codex"`, or `"cursor"` |
 | `writes[].path` | string | Absolute dest path |
 | `writes[].status` | string | `created` / `unchanged` / `overwritten` / `skipped_exists` |
+
+---
+
+## 12b. `vuln` & `deps` — OSV Fetch, Reachability, OpenVEX & SARIF 2.1.0
+
+**Source:** `crates/rgctl-security/`, `src/cli/vuln_deps.rs`. Never runs on `discover`.
+
+```bash
+rgctl -f json vuln fetch [--osv-api-url URL] [--output-dir DIR] [--sbom PATH]
+rgctl -f json vuln triage --osv PATH
+rgctl -f json deps check --osv PATH [--include-jars DIR] [--include-node-modules DIR]
+rgctl -f json vuln analyze [--osv FILE_OR_DIR] [--from-report PATH] [--sbom PATH] \
+  [--offline] [--with-dep-stubs] [--strict-reachability]
+rgctl -f json vuln scan [--osv FILE_OR_DIR] [--from-report PATH] [--sbom PATH] \
+  [--offline] [--osv-api-url URL] [--with-dep-stubs] [--strict-reachability]
+rgctl -f sarif vuln scan --offline -o results.sarif
+```
+
+| Subcommand / Flag | `schema_version` | Primary fields |
+|-------------------|-----------------:|----------------|
+| `vuln fetch` | `1` (`u32`) | `command: "vuln fetch"`, `api_url`, `output_dir`, `packages_queried`, `advisories_matched`, `advisory_ids[]`, `cached_files[]` |
+| `vuln triage` | `1` (`u32`) | `id`, `aliases[]`, `packages[].ranges[]` (`introduced`, `upper: {kind: "fixed"\|"last_affected"\|"open", version?}`), `packages[].symbol_coverage` (`explicit` \| `unspecified`) |
+| `deps check` | `1` (`u32`) | `verdict` (`not_affected` \| `affected_candidate`), `checked[]`, `matched[]` (`ecosystem`, `name`, `version`, `provenance`, `in_range`, `is_direct`) |
+| `vuln analyze` (single `--osv <file>`) | `"1"` (`string`) | `osv_id`, `deps_verdict`, `exploitability` (`not_affected` \| `not_exploitable` \| `exploitable` \| `under_investigation`), `phases[]`, `sink_taint?` (`call_sites[]`, `caller_chains[]`, `paths[]`, `all_sites_mitigated?`, `cfg_available`), `openvex` (canonical `pkg:` PURLs in `statements[].products[]`) |
+| `vuln scan` (and batch `vuln analyze`) | `"1"` (`string`) | `command`, `counts` (`total`, `exploitable`, `under_investigation`, `not_exploitable`, `not_affected`), `results[]` (sorted by `osv_id`), `openvex` (merged multi-statement OpenVEX v0.2.0) |
+| `-f sarif` (`vuln analyze` / `vuln scan`) | SARIF `"2.1.0"` | `runs[0].tool.driver.rules[]`, `runs[0].results[]` (`ruleId`, `level`, `locations[]`, `codeFlows[].threadFlows[].locations[]`) |
 
 ---
 

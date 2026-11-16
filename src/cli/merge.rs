@@ -42,7 +42,10 @@ fn emit_report(ctx: &CliContext, report: &MergeReport) -> Result<()> {
             });
             ctx.emit_json_value(&payload)?;
         }
-        OutputFormat::Text | OutputFormat::Graphviz | OutputFormat::Mermaid => {
+        OutputFormat::Text
+        | OutputFormat::Graphviz
+        | OutputFormat::Mermaid
+        | OutputFormat::Sarif => {
             let text = format!(
                 "Merged {} repos → {} nodes, {} edges\n\
                  parked evaluated: {}\n\

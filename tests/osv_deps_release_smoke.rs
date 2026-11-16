@@ -148,3 +148,71 @@ fn release_deps_npm_fixture() {
     assert_eq!(v["command"], "deps check");
     assert_eq!(v["verdict"], "affected_candidate");
 }
+
+#[test]
+#[ignore = "requires release binary"]
+fn release_vuln_fetch_against_localhost_mock_osv_server() {
+    use axum::{
+        Json, Router,
+        extract::Path as AxumPath,
+        routing::{get, post},
+    };
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let app = Router::new()
+        .route(
+            "/v1/querybatch",
+            post(|| async {
+                Json(serde_json::json!({
+                    "results": [{ "vulns": [{ "id": "GHSA-smoke-0001" }] }]
+                }))
+            }),
+        )
+        .route(
+            "/v1/vulns/{id}",
+            get(|AxumPath(id): AxumPath<String>| async move {
+                Json(serde_json::json!({
+                    "id": id,
+                    "modified": "2026-01-01T00:00:00Z",
+                    "affected": [{
+                        "package": {"ecosystem": "npm", "name": "lodash"},
+                        "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "4.17.21"}]}]
+                    }]
+                }))
+            }),
+        );
+    let (addr, fut) = rt.block_on(async {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let a = l.local_addr().unwrap();
+        (a, async move {
+            let _ = axum::serve(l, app).await;
+        })
+    });
+    rt.spawn(fut);
+    let api_url = format!("http://{addr}");
+
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("package-lock.json"),
+        r#"{"name":"app","lockfileVersion":3,"packages":{"node_modules/lodash":{"version":"4.17.20"}}}"#,
+    )
+    .unwrap();
+
+    let fetched = run_json(&[
+        "-r",
+        tmp.path().to_str().unwrap(),
+        "-f",
+        "json",
+        "vuln",
+        "fetch",
+        "--osv-api-url",
+        &api_url,
+    ]);
+    assert_eq!(fetched["command"], "vuln fetch");
+    assert_eq!(fetched["advisories_matched"], 1);
+    assert!(tmp.path().join(".rgctl/osv/GHSA-smoke-0001.json").is_file());
+}

@@ -9,6 +9,8 @@ pub enum OutputFormat {
     Json,
     Graphviz,
     Mermaid,
+    /// SARIF 2.1.0 (Static Analysis Results Interchange Format). Supported by `vuln analyze/scan`.
+    Sarif,
 }
 
 /// Slice traversal direction.

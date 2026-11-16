@@ -348,6 +348,11 @@ impl<'a> TaintAnalyzer<'a> {
         variable: &str,
     ) -> Vec<Sanitizer> {
         let sink_block = self.pdg.nodes[&sink].block;
+        let sink_line = self.pdg.nodes[&sink].statement.line;
+        let source_line = path
+            .first()
+            .and_then(|id| self.pdg.nodes.get(id))
+            .map_or(0, |n| n.statement.line);
         let mut sanitizers = Vec::new();
         for node_id in path {
             if let Some(san) = self.sanitizers.get(node_id) {
@@ -370,6 +375,50 @@ impl<'a> TaintAnalyzer<'a> {
                         sanitizers.push(Sanitizer::TypeCast("boolean".into()));
                     }
                     _ => {}
+                }
+            }
+        }
+        // Also check dominating in-order reassignments (`q = escape(q)`) when non-SSA PDG keeps a
+        // direct `source -> sink` edge alongside `source -> sanitizer -> sink`.
+        let mut candidate_vars: Vec<String> = Vec::new();
+        if !variable.is_empty() {
+            candidate_vars.push(variable.to_string());
+        }
+        if let Some(src_node) = path.first().and_then(|id| self.pdg.nodes.get(id)) {
+            for dv in &src_node.defined_vars {
+                if !candidate_vars.contains(dv) {
+                    candidate_vars.push(dv.clone());
+                }
+            }
+            if candidate_vars.is_empty()
+                && let Some(sink_node) = self.pdg.nodes.get(&sink)
+            {
+                for uv in src_node.used_vars.intersection(&sink_node.used_vars) {
+                    candidate_vars.push(uv.clone());
+                }
+            }
+        }
+        if !candidate_vars.is_empty() {
+            for (&san_id, san) in &self.sanitizers {
+                if path.contains(&san_id) {
+                    continue;
+                }
+                let Some(node) = self.pdg.nodes.get(&san_id) else {
+                    continue;
+                };
+                let precedes_sink = if node.block == sink_block {
+                    node.statement.line < sink_line
+                } else {
+                    node.statement.line <= sink_line
+                };
+                if candidate_vars
+                    .iter()
+                    .any(|v| self.node_affects_variable(node, v))
+                    && node.statement.line >= source_line
+                    && precedes_sink
+                    && self.dom_tree.dominates(node.block, sink_block)
+                {
+                    sanitizers.push(san.clone());
                 }
             }
         }

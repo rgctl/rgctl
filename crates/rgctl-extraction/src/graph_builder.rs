@@ -770,15 +770,19 @@ impl GraphBuilder {
         let stripped_wildcard = module
             .strip_suffix(".*")
             .or_else(|| module.strip_suffix("::*"))
+            .or_else(|| module.strip_suffix("\\*"))
             .unwrap_or(&module);
         if stripped_wildcard.len() < module.len() {
             by_file.insert("*".to_string(), stripped_wildcard.to_string());
-        } else if let Some(tail) = module.rsplit(['.', '/', ':']).next() {
-            let tail = tail.trim();
-            if !tail.is_empty() && tail != "*" {
-                by_file
-                    .entry(tail.to_string())
-                    .or_insert_with(|| module.clone());
+        } else {
+            let module_no_ext = strip_import_extension(&module);
+            if let Some(tail) = module_no_ext.rsplit(['.', '/', ':', '\\']).next() {
+                let tail = tail.trim();
+                if !tail.is_empty() && tail != "*" {
+                    by_file
+                        .entry(tail.to_string())
+                        .or_insert_with(|| module.clone());
+                }
             }
         }
     }
@@ -2172,16 +2176,23 @@ impl GraphBuilder {
         if let Some(module) = by_file.get(to_name) {
             return Some(module.clone());
         }
-        if let Some(hint) = to_type_hint
-            && let Some(module) = by_file.get(hint)
-        {
-            return Some(module.clone());
+        if let Some(hint) = to_type_hint {
+            if let Some(module) = by_file.get(hint) {
+                return Some(module.clone());
+            }
+            let simple_hint = type_simple_name(hint);
+            if simple_hint != hint
+                && let Some(module) = by_file.get(simple_hint)
+            {
+                return Some(module.clone());
+            }
         }
-        // `UserService.charge` / `UserService::charge` → bind on receiver prefix.
-        let prefix = to_name
-            .split(['.', ':'])
+        // `UserService.charge` / `UserService::charge` / `Vendor\Client::charge` → bind on receiver prefix.
+        let clean_target = to_name.trim_start_matches('\\');
+        let prefix = clean_target
+            .split(['.', ':', '\\'])
             .next()
-            .filter(|s| !s.is_empty() && *s != to_name);
+            .filter(|s| !s.is_empty() && *s != clean_target);
         if let Some(prefix) = prefix
             && let Some(module) = by_file.get(prefix)
         {
@@ -3081,8 +3092,14 @@ fn clean_import_module_text(raw: &str) -> String {
     if let Some((_, rhs)) = s.split_once('=') {
         s = rhs.trim();
     }
-    // `module:binding` (ECMAScript/Python helper convention, not Rust `::`)
-    if !s.contains("::")
+    s = s.trim_matches(['"', '\'', '<', '>']).trim();
+    // `module:binding` (ECMAScript/Python helper convention, not Rust `::` or Dart/URL schemes `package:` / `dart:` / `https:`)
+    let is_uri_scheme = s.starts_with("package:")
+        || s.starts_with("dart:")
+        || s.starts_with("http://")
+        || s.starts_with("https://");
+    if !is_uri_scheme
+        && !s.contains("::")
         && let Some((module, _)) = s.split_once(':')
         && !module.is_empty()
     {
@@ -3119,8 +3136,14 @@ fn infer_import_binding_from_name(name: &str, cleaned_module: &str) -> Option<St
             return Some(alias.to_string());
         }
     }
-    // ECMAScript/Python `module:binding` / `module:* as alias` (skip Rust `::`)
-    if !trimmed.contains("::")
+    // ECMAScript/Python `module:binding` / `module:* as alias` (skip Rust `::` and Dart/URL schemes)
+    let trimmed_unquoted = trimmed.trim_matches(['"', '\'']);
+    let is_uri_scheme = trimmed_unquoted.starts_with("package:")
+        || trimmed_unquoted.starts_with("dart:")
+        || trimmed_unquoted.starts_with("http://")
+        || trimmed_unquoted.starts_with("https://");
+    if !is_uri_scheme
+        && !trimmed.contains("::")
         && let Some((_, rest)) = trimmed.split_once(':')
     {
         let rest = rest.trim();
@@ -3396,6 +3419,22 @@ fn compute_c3_mro(
     visiting.remove(name);
     memo.insert(name.to_string(), result.clone());
     Some(result)
+}
+
+/// Strip known source/header file extensions from import paths (e.g. `package:foo/client.dart` →
+/// `package:foo/client`, `openssl/ssl.h` → `openssl/ssl`) before extracting the trailing binding stem.
+fn strip_import_extension(module: &str) -> &str {
+    for ext in [
+        ".dart", ".hpp", ".hxx", ".hh", ".h", ".cpp", ".cc", ".c", ".php", ".rb", ".lua", ".sh",
+        ".mjs", ".cjs", ".tsx", ".ts", ".jsx", ".js", ".py", ".exs", ".ex", ".pp",
+    ] {
+        if let Some(stripped) = module.strip_suffix(ext)
+            && !stripped.is_empty()
+        {
+            return stripped;
+        }
+    }
+    module
 }
 
 /// Rightmost type segment: `com.foo.Child` → `Child`, `pkg::Child` → `Child`, `App\Child` → `Child`.
@@ -5915,5 +5954,66 @@ class Library {
         assert_eq!(field.end_byte, Some(120));
         assert_eq!(field.name_rel_offset, Some(4));
         assert_eq!(field.name_token_len, Some(6));
+    }
+
+    #[test]
+    fn parked_relation_import_module_hint_binds_php_dart_and_c_headers() {
+        let mut builder = GraphBuilder::new();
+        for (file, imp_name, _call_target) in [
+            ("app.php", r"Vendor\Vuln\Client", r"Client::deserialize"),
+            ("app.dart", "package:vuln_pub/client.dart", "client.parse"),
+            ("app.c", "openssl/ssl.h", "ssl.read"),
+        ] {
+            let fid = builder.ensure_file_node(Path::new(file));
+            let mut fn_sym = sample_symbol();
+            fn_sym.name = "entry".into();
+            fn_sym.qualified_name = Some(format!("{file}::entry"));
+            fn_sym.location.file = file.into();
+            builder.add_symbol(&fn_sym, fid);
+
+            let mut imp_sym = sample_symbol();
+            imp_sym.name = imp_name.into();
+            imp_sym.qualified_name = Some(imp_name.into());
+            imp_sym.symbol_type = SymbolType::Import;
+            imp_sym.location.file = file.into();
+            imp_sym.signature = None;
+            builder.add_symbol(&imp_sym, fid);
+        }
+        builder.build_resolution_indexes();
+        for (file, _, call_target) in [
+            ("app.php", r"Vendor\Vuln\Client", r"Client::deserialize"),
+            ("app.dart", "package:vuln_pub/client.dart", "client.parse"),
+            ("app.c", "openssl/ssl.h", "ssl.read"),
+        ] {
+            builder
+                .add_relation(&Relation {
+                    from: format!("{file}::entry"),
+                    to: call_target.into(),
+                    relation_type: RelationType::Calls,
+                    location: SourceLocation {
+                        file: file.into(),
+                        start_line: 4,
+                        end_line: 4,
+                        start_column: 0,
+                        end_column: 10,
+                    },
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let parked = builder.take_parked_relations();
+        assert_eq!(parked.len(), 3);
+        assert_eq!(
+            parked[0].import_module_hint.as_deref(),
+            Some(r"Vendor\Vuln\Client")
+        );
+        assert_eq!(
+            parked[1].import_module_hint.as_deref(),
+            Some("package:vuln_pub/client.dart")
+        );
+        assert_eq!(
+            parked[2].import_module_hint.as_deref(),
+            Some("openssl/ssl.h")
+        );
     }
 }

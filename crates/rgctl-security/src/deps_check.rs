@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::adapters::{BundledScanOpts, DepHit, scan_jars, scan_manifests, scan_node_modules};
+use crate::adapters::{
+    BundledScanOpts, DepHit, scan_jars, scan_node_modules, scan_repo_dependencies,
+};
 use crate::error::SecurityError;
 use crate::osv::{OsvPackageTriage, OsvTriage, triage_osv_path};
 use crate::version::engine_for_ecosystem;
@@ -22,6 +24,8 @@ pub struct DepsMatch {
     pub version: Option<String>,
     pub provenance: String,
     pub in_range: bool,
+    #[serde(default)]
+    pub is_direct: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,8 +54,17 @@ pub fn deps_check(
     opts: &DepsCheckOpts,
 ) -> Result<DepsCheckResult, SecurityError> {
     let triage = triage_osv_path(osv_path)?;
-    let mut checked = vec!["manifests".to_string()];
-    let mut inventory = scan_manifests(repo)?;
+    deps_check_for_triage(repo, triage, opts)
+}
+
+/// Run dependency check using an already-parsed [`OsvTriage`] in a single pruned filesystem walk.
+pub fn deps_check_for_triage(
+    repo: &Path,
+    triage: OsvTriage,
+    opts: &DepsCheckOpts,
+) -> Result<DepsCheckResult, SecurityError> {
+    let mut checked = vec!["manifests".to_string(), "lockfiles".to_string()];
+    let mut inventory = scan_repo_dependencies(repo)?;
 
     let mut bundled = BundledScanOpts::with_defaults();
     if let Some(n) = opts.max_jars {
@@ -71,9 +84,19 @@ pub fn deps_check(
         inventory.extend(scan_node_modules(repo, &bundled)?);
     }
 
+    deps_check_against_inventory(triage, &inventory, checked)
+}
+
+/// Evaluate an already-parsed [`OsvTriage`] against a pre-scanned [`DepHit`] inventory
+/// without walking the filesystem again (used by batch `vuln scan`).
+pub fn deps_check_against_inventory(
+    triage: OsvTriage,
+    inventory: &[DepHit],
+    checked: Vec<String>,
+) -> Result<DepsCheckResult, SecurityError> {
     let mut matched = Vec::new();
     for pkg in &triage.packages {
-        matched.extend(match_package(pkg, &inventory)?);
+        matched.extend(match_package(pkg, inventory)?);
     }
 
     let verdict = if matched.iter().any(|m| m.in_range) {
@@ -93,6 +116,24 @@ pub fn deps_check(
     })
 }
 
+fn is_direct_provenance(provenance: &str) -> bool {
+    let fname = Path::new(provenance)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(provenance);
+    matches!(
+        fname,
+        "pom.xml"
+            | "Cargo.toml"
+            | "package.json"
+            | "go.mod"
+            | "build.gradle"
+            | "build.gradle.kts"
+            | "vcpkg.json"
+            | "requirements.txt"
+    ) || fname.ends_with(".rockspec")
+}
+
 fn match_package(
     pkg: &OsvPackageTriage,
     inventory: &[DepHit],
@@ -105,6 +146,7 @@ fn match_package(
         if !names_match(&target, &hit_name) {
             continue;
         }
+        let direct = is_direct_provenance(&hit.provenance) && !hit.provenance.contains("jar:");
         let Some(ver) = hit.version.as_deref() else {
             out.push(DepsMatch {
                 ecosystem: hit.ecosystem.clone(),
@@ -112,6 +154,7 @@ fn match_package(
                 version: None,
                 provenance: hit.provenance.clone(),
                 in_range: false,
+                is_direct: direct,
             });
             continue;
         };
@@ -123,17 +166,18 @@ fn match_package(
                 version: Some(ver.to_string()),
                 provenance: hit.provenance.clone(),
                 in_range: false,
+                is_direct: direct,
             });
             continue;
         }
-        let in_range =
-            engine.in_vulnerable_range(ver, pkg.introduced.as_deref(), pkg.fixed.as_deref())?;
+        let in_range = engine.in_any_vulnerable_range(ver, &pkg.ranges, &pkg.listed_versions)?;
         out.push(DepsMatch {
             ecosystem: hit.ecosystem.clone(),
             name: hit.name.clone(),
             version: Some(ver.to_string()),
             provenance: hit.provenance.clone(),
             in_range,
+            is_direct: direct,
         });
     }
     Ok(out)
@@ -144,6 +188,8 @@ fn normalize_name(ecosystem: &str, name: &str) -> String {
     let n = name.trim().to_string();
     if eco.starts_with("maven") || eco == "gradle" {
         n.replace('/', ":")
+    } else if eco.starts_with("puppet") {
+        n.replace('/', "-")
     } else {
         n
     }

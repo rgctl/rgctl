@@ -49,10 +49,21 @@ pub struct SinkFirstTaintResult {
     /// Discovered call-site coordinates (`caller`, `target_method`, `file`, `line`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub call_sites: Vec<SinkCallSite>,
-    /// Exploitable path summaries (empty when none).
+    /// Structural upstream caller / blast-radius chains reaching the call sites.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caller_chains: Vec<SinkPathSummary>,
+    /// True when every discovered call site is mitigated by constant-literal arguments
+    /// or dominating sanitizers along all PDG def-use paths.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub all_sites_mitigated: bool,
+    /// Exploitable taint path summaries (empty when no untrusted→sink PDG flow is proven).
     pub paths: Vec<SinkPathSummary>,
-    /// True when CFG/PDG archive was available.
+    /// True when CFG/PDG archive or lazy per-call-site CPG hydration was available.
     pub cfg_available: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// One sink-first path summary.
@@ -128,6 +139,8 @@ pub fn build_sink_first_result_with_sites(
         honesty,
         sink_callers,
         call_sites,
+        caller_chains: Vec::new(),
+        all_sites_mitigated: false,
         paths: path_summaries,
         cfg_available,
     }
@@ -142,11 +155,12 @@ pub fn rules_with_osv_overlays(
     if let Some(langs) = languages {
         set = set.scoped(langs);
     }
-    // Overlay short method names and FQNs.
+    // Overlay short method names and FQNs across `.`, `::`, and `\`.
     let mut needles = Vec::new();
     for m in affected_methods {
         needles.push(m.clone());
-        if let Some(short) = m.rsplit('.').next()
+        if let Some(short) = m.rsplit(['.', ':', '\\']).next()
+            && !short.is_empty()
             && short != m.as_str()
         {
             needles.push(short.to_string());

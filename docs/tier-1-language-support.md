@@ -464,6 +464,30 @@ Copy into your PR description. For the **testing** half (paths, asserts, command
 
 Layer F golden coverage lives in `crates/rgctl-analysis/src/field_write.rs` (`*_cfg_captures_field_write_and_query`) and `field_write_locals.rs` (20 general-purpose Tier-1 visitors). Update this table when promoting a language or when F tests regress.
 
+### Vulnerability reachability lockfile coverage (vuln-reachability-tier1-overhaul)
+
+The table below shows lockfile parsing coverage per ecosystem. Lockfiles are automatically scanned by `rgctl deps check` and `rgctl vuln analyze` to provide pinned version matching beyond top-level manifests.
+
+| Ecosystem | Lockfile(s) | VersionEngine | OSV Symbol Conventions |
+|-----------|-------------|---------------|------------------------|
+| Rust | `Cargo.lock` | ✅ crates.io SemVer | RustSec `affects.functions` |
+| Go | `go.sum` | ✅ Go SemVer (v prefix) | `imports[].symbols` |
+| Java/Kotlin/Groovy/Scala | `gradle.lockfile` + BOM/property `pom.xml` | ✅ Maven | `affected_methods`, `affected_classes`, `symbols` |
+| Swift | `Package.resolved` v1/v2 | ✅ SwiftPM SemVer | — |
+| C/C++ | `vcpkg.json`, `conan.lock` | ✅ Conan/vcpkg | — |
+| JS/TS | `package-lock.json` v2/v3, `pnpm-lock.yaml`, `yarn.lock` v1/Berry | ✅ npm SemVer | `imports[].symbols` (Go-convention) |
+| Python | `uv.lock`, `poetry.lock`, `Pipfile.lock`, pinned `requirements.txt` | ✅ PyPI (PEP 440 normalized) | `affects.functions` (RustSec-convention) |
+| C# | `packages.lock.json` | ✅ NuGet | — |
+| PHP | `composer.lock` | ✅ Packagist | — |
+| Ruby/ERB | `Gemfile.lock` | ✅ RubyGems | — |
+| Dart | `pubspec.lock` | ✅ Pub | — |
+| Elixir | `mix.lock` | ✅ Hex | — |
+| Puppet | `Puppetfile.lock` | ✅ Puppet Forge | — |
+| Lua | `*.rockspec` | ✅ LuaRocks | `affected_methods` / `symbols` |
+| Bash/SQL/HCL/Markdown | — (no canonical lockfile; pair Bash with `--sbom` / `--from-report`) | — | Structural-only (`structural_only_language_honesty`) |
+
+End-to-end `-f json` / `-f sarif` reachability across all **20 taint-enabled Tier-1 languages** (plus `vuln fetch`, `vuln scan`, `--with-dep-stubs` `.rgctl/dep_stubs.bin` JVM `.class` bytecode stitching, and `.rgctl/vuln-rules.d/*.yaml` declarative trigger rules) is gated by `cargo test --test tier1_vuln_reachability_correctness` (zero `rgctl gql`).
+
 ---
 
 ## 9. Getting help

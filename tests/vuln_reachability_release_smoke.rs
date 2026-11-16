@@ -94,6 +94,33 @@ fn release_vuln_analyze_coolstore_ab() {
         status == "not_affected" || status == "under_investigation",
         "unexpected openvex status {status}"
     );
+    let purl = b["openvex"]["statements"][0]["products"][0]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        purl.starts_with("pkg:maven/com.fasterxml.jackson.core/jackson-databind"),
+        "expected canonical Maven PURL in OpenVEX products, got {purl:?}"
+    );
+
+    // SARIF 2.1.0 release smoke (`-f sarif`)
+    let sarif_out = Command::new(&bin)
+        .args([
+            "-r",
+            cool.to_str().unwrap(),
+            "-f",
+            "sarif",
+            "vuln",
+            "analyze",
+            "--osv",
+            jackson.to_str().unwrap(),
+            "--include-jars",
+            cool.join("lib").to_str().unwrap(),
+        ])
+        .output()
+        .expect("spawn sarif");
+    assert!(sarif_out.status.success());
+    let sarif_json: Value = serde_json::from_slice(&sarif_out.stdout).expect("valid SARIF 2.1.0");
+    assert_eq!(sarif_json["version"], "2.1.0");
 
     // boundary flag smoke (symbol may miss; flag must parse)
     let _ = Command::new(&bin)
