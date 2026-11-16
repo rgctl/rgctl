@@ -23,10 +23,25 @@ struct LineSpan {
     id: Uuid,
 }
 
+#[derive(Debug, Clone)]
+struct OverloadedCallableSpan {
+    base_qn: String,
+    bare_name: String,
+    span: LineSpan,
+}
+
 /// Builds graph nodes and edges from extracted data.
 #[derive(Default)]
 pub struct GraphBuilder {
-    symbol_index: HashMap<String, Uuid>,
+    symbol_index: HashMap<(String, NodeType), Uuid>,
+    /// First callable `(signature_hash, line_span)` for non-discriminated `symbol_index` keys.
+    ///
+    /// Tier-1 plugins carry canonical `identity_discriminator`; Tier-2 / synthetic
+    /// callables without one fall back to signature-hash disambiguation here.
+    callable_disc: HashMap<(String, NodeType), (u64, LineSpan)>,
+    /// Per-file line spans for non-discriminated overloaded callables.
+    /// Empty when callables carry `identity_discriminator` or have no same-file overloads.
+    overloaded_callables: FxHashMap<String, Vec<OverloadedCallableSpan>>,
     file_nodes: HashMap<String, Uuid>,
     /// Normalized path + component-boundary suffixes → file node id (O(1) lookup).
     file_path_lookup: HashMap<String, Uuid>,
@@ -81,6 +96,16 @@ pub struct GraphBuilder {
     mro_cache: HashMap<String, Vec<String>>,
     /// Unresolved / external-stub relations parked for cross-repo merge.
     parked_relations: Vec<ParkedRelationRecord>,
+    declaration_ids: FxHashSet<Uuid>,
+    callable_parameters: HashMap<Uuid, String>,
+    /// Shared dispatch contracts, available even when graph nodes spill to disk.
+    method_identities: HashMap<Uuid, String>,
+    /// Type members cannot be selected as free functions by lexical fallback.
+    member_method_ids: FxHashSet<Uuid>,
+    method_override_owners: HashMap<Uuid, String>,
+    signature_families: FxHashSet<Uuid>,
+    unresolved_calls: usize,
+    callable_resolution_samples: Vec<Relation>,
     /// `file_path → (imported_symbol_or_alias → module_source_path)` from Import symbols.
     file_imports_index: FxHashMap<String, FxHashMap<String, String>>,
     /// External stub node UUIDs (`O(1)` membership test in `park_relation_if_needed`).
@@ -218,6 +243,36 @@ impl GraphBuilder {
                         .push(node.id);
                 }
             }
+            // PHP namespace suffixes: `App\Service\AuthService` → `Service\AuthService`, `AuthService`.
+            if !is_field_member && qualified.contains('\\') {
+                let trimmed = qualified.trim_start_matches('\\');
+                let ns_parts: Vec<&str> = trimmed.split('\\').collect();
+                if ns_parts.len() >= 2 {
+                    for i in 1..ns_parts.len() {
+                        let suffix = ns_parts[i..].join("\\");
+                        if !suffix.is_empty() {
+                            self.symbols_by_suffix
+                                .entry(suffix)
+                                .or_default()
+                                .push(node.id);
+                        }
+                    }
+                }
+            }
+            // Namespace-qualified callables also need bare suffixes without
+            // the discriminator appended to symbol_index's logical key.
+            // Without a discriminator, the key suffix loop below already adds them.
+            if !is_field_member && node.identity_discriminator().is_some() {
+                for (offset, _) in qualified.match_indices("::") {
+                    let suffix = &qualified[offset + 2..];
+                    if !suffix.is_empty() {
+                        self.symbols_by_suffix
+                            .entry(suffix.to_owned())
+                            .or_default()
+                            .push(node.id);
+                    }
+                }
+            }
             // Ruby method QN uses `#` / `.` (e.g. `OrderDTO#mark_processed`, `OrderService.build`).
             if !is_field_member {
                 if let Some((_, method)) = qualified.rsplit_once('#')
@@ -234,6 +289,11 @@ impl GraphBuilder {
                         .entry(method.to_string())
                         .or_default()
                         .push(node.id);
+                } else if qualified.ends_with("::<entry>") && !node.name.is_empty() {
+                    self.symbols_by_suffix
+                        .entry(node.name.to_string())
+                        .or_default()
+                        .push(node.id);
                 }
             }
         } else {
@@ -243,12 +303,14 @@ impl GraphBuilder {
                 .push(node.id);
         }
         // `symbol_key` is `file::name` or `file::a::b::…` / `file::Qualified.Name`.
+        // Strip internal `#field` partition tag before populating suffix lookup keys.
+        let clean_key = key.strip_suffix("#field").unwrap_or(key);
         // For unqualified `file::name` the bare-name insert above already covers
         // resolution — skip to avoid a duplicate push + alloc per C-like symbol.
-        match key.matches("::").count() {
+        match clean_key.matches("::").count() {
             0 => {}
             1 => {
-                if let Some((_, tail)) = key.split_once("::") {
+                if let Some((_, tail)) = clean_key.split_once("::") {
                     let duplicate_bare =
                         node.qualified_name.is_none() && tail == node.name.as_str();
                     if !duplicate_bare {
@@ -260,7 +322,7 @@ impl GraphBuilder {
                 }
             }
             _ => {
-                let parts: Vec<&str> = key.split("::").collect();
+                let parts: Vec<&str> = clean_key.split("::").collect();
                 for i in 1..parts.len() {
                     let suffix = parts[i..].join("::");
                     self.symbols_by_suffix
@@ -337,7 +399,9 @@ impl GraphBuilder {
             Node::new(NodeType::File, file_path.clone()).with_file_path(file_path.clone());
         if let Some(bytes) = source {
             let content_hash = hash_bytes(bytes);
-            node = node.with_property("content_hash".to_string(), content_hash.clone());
+            node = node
+                .with_byte_spans(Some(0), u32::try_from(bytes.len()).ok(), None, None, None)
+                .with_property("content_hash".to_string(), content_hash.clone());
             if bytes.len() > INLINE_BODY_MAX_BYTES
                 && let Some(store) = self.content_store.as_mut()
             {
@@ -419,35 +483,80 @@ impl GraphBuilder {
         body: Option<&str>,
         prep: Option<&SymbolPass1Prep>,
     ) -> Uuid {
-        let mut key = symbol_key(
-            &symbol.location.file,
-            &symbol.name,
-            symbol.qualified_name.as_deref(),
+        let mut key = (
+            symbol_key(
+                &symbol.location.file,
+                &symbol.name,
+                symbol.qualified_name.as_deref(),
+            ),
+            symbol_type_to_node_type(symbol.symbol_type),
         );
+        let has_identity_discriminator = if let Some(discriminator) = symbol
+            .metadata
+            .get("identity_discriminator")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+        {
+            key.0.push('\u{1f}');
+            key.0.push_str(discriminator);
+            true
+        } else {
+            false
+        };
         // C `#include` paths are per-translation-unit; dedupe globally by path string
         // so kernel-scale repos do not materialize one Import node per occurrence.
         if symbol.symbol_type == SymbolType::Import
             && symbol.metadata.get("kind").and_then(|v| v.as_str()) == Some("include")
         {
-            key = format!("c_include::{}", symbol.name);
+            key.0 = format!("c_include::{}", symbol.name);
             if let Some(&id) = self.symbol_index.get(&key) {
                 self.add_edge(file_id, id, EdgeType::Uses);
                 return id;
             }
         }
-        if let Some(id) = self.symbol_index.get(&key) {
-            return *id;
+        let mut qn_override: Option<String> = None;
+        let mut overloaded_base_qn: Option<String> = None;
+        if has_identity_discriminator {
+            if let Some(&id) = self.symbol_index.get(&key) {
+                return id;
+            }
+        } else if let Some(id) = self.resolve_overload_collision(
+            symbol,
+            &mut key,
+            &mut qn_override,
+            &mut overloaded_base_qn,
+        ) {
+            return id;
         }
+
+        let start_byte = prep.and_then(|p| p.start_byte).or(symbol.start_byte);
+        let end_byte = prep.and_then(|p| p.end_byte).or(symbol.end_byte);
+        let name_rel_offset = prep
+            .and_then(|p| p.name_rel_offset)
+            .or(symbol.name_rel_offset);
+        let name_token_len = prep
+            .and_then(|p| p.name_token_len)
+            .or(symbol.name_token_len);
+        let name_span_overflow = prep
+            .and_then(|p| p.name_span_overflow)
+            .or(symbol.name_span_overflow);
 
         let mut node = Node::new(
             symbol_type_to_node_type(symbol.symbol_type),
             symbol.name.clone(),
         )
         .with_file_path(symbol.location.file.clone())
-        .with_location(symbol.location.start_line, symbol.location.end_line);
+        .with_location(symbol.location.start_line, symbol.location.end_line)
+        .with_byte_spans(
+            start_byte,
+            end_byte,
+            name_rel_offset,
+            name_token_len,
+            name_span_overflow,
+        );
 
-        if let Some(qn) = &symbol.qualified_name {
-            node = node.with_qualified_name(qn.clone());
+        if let Some(qn) = qn_override.as_deref().or(symbol.qualified_name.as_deref()) {
+            node = node.with_qualified_name(qn);
         }
         if let Some(sig) = &symbol.signature {
             node = node.with_signature(sig.clone());
@@ -515,7 +624,27 @@ impl GraphBuilder {
         }
         if let Some(obj) = symbol.metadata.as_object() {
             for (k, v) in obj {
-                if k == rgctl_plugin_api::COMPLEXITY_META_KEY {
+                if k == rgctl_plugin_api::COMPLEXITY_META_KEY
+                    || matches!(
+                        k.as_str(),
+                        "source_start_byte" | "source_end_byte" | "identity_discriminator"
+                    )
+                {
+                    continue;
+                }
+                // The canonical identity is stored by with_identity_discriminator
+                // below. Dispatch identity only needs its own property when it
+                // differs; an explicit empty value intentionally blocks fallback.
+                if k == "override_identity"
+                    && v.as_str().is_some_and(|dispatch| {
+                        !dispatch.is_empty()
+                            && symbol
+                                .metadata
+                                .get("identity_discriminator")
+                                .and_then(|value| value.as_str())
+                                == Some(dispatch)
+                    })
+                {
                     continue;
                 }
                 let prop_val = match v {
@@ -533,10 +662,57 @@ impl GraphBuilder {
             }
         }
 
+        if let Some(discriminator) = symbol
+            .metadata
+            .get("identity_discriminator")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+        {
+            node = node.with_identity_discriminator(discriminator);
+        }
         let id = node.id;
+        if !has_identity_discriminator
+            && matches!(
+                symbol.symbol_type,
+                SymbolType::Function | SymbolType::Method
+            )
+        {
+            let span = LineSpan {
+                start: symbol.location.start_line,
+                end: symbol.location.end_line.max(symbol.location.start_line),
+                id,
+            };
+            self.callable_disc
+                .insert(key.clone(), (overload_disc(symbol), span));
+            if let Some(base_qn) = overloaded_base_qn {
+                let entries = self
+                    .overloaded_callables
+                    .entry(symbol.location.file.clone())
+                    .or_default();
+                if !entries.iter().any(|e| e.span.id == id) {
+                    entries.push(OverloadedCallableSpan {
+                        base_qn,
+                        bare_name: symbol.name.clone(),
+                        span,
+                    });
+                }
+            }
+        }
+        if symbol.metadata["callable_role"] == "declaration" {
+            self.declaration_ids.insert(id);
+        }
+        if symbol.metadata["callable_role"] == "implementation"
+            && symbol.metadata["superseded_definition"] != true
+            && let Some(parameters) = symbol
+                .metadata
+                .get("parameter_identity")
+                .and_then(|v| v.as_str())
+        {
+            self.callable_parameters.insert(id, parameters.to_owned());
+        }
         self.symbol_index.insert(key.clone(), id);
         self.symbol_files.insert(id, symbol.location.file.clone());
-        self.index_symbol_resolution(&key, &node);
+        self.index_symbol_resolution(&key.0, &node);
         self.index_type_method(symbol, id);
         self.index_import_binding(symbol);
         self.commit_node(node);
@@ -615,6 +791,28 @@ impl GraphBuilder {
         ) {
             return;
         }
+        if symbol.metadata["superseded_definition"] == true {
+            return;
+        }
+        if let Some(identity) = symbol
+            .metadata
+            .get("override_identity")
+            .or_else(|| symbol.metadata.get("identity_discriminator"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            self.method_identities.insert(id, identity.to_owned());
+        }
+        if let Some(owner) = symbol
+            .metadata
+            .get("override_owner")
+            .and_then(|v| v.as_str())
+        {
+            self.method_override_owners.insert(id, owner.to_owned());
+        }
+        if symbol.metadata["language"] == "typescript" {
+            self.signature_families.insert(id);
+        }
         let Some(qn) = symbol.qualified_name.as_deref() else {
             return;
         };
@@ -634,6 +832,89 @@ impl GraphBuilder {
         }
     }
 
+    /// Keep a second callable that shares a qualified name when its signature differs.
+    ///
+    /// Returns the existing node id when this symbol is a duplicate. Otherwise
+    /// rewrites `key` / `qn_override` so the overload is stored beside the first.
+    fn resolve_overload_collision(
+        &mut self,
+        symbol: &Symbol,
+        key: &mut (String, NodeType),
+        qn_override: &mut Option<String>,
+        overloaded_base_qn: &mut Option<String>,
+    ) -> Option<Uuid> {
+        let existing = *self.symbol_index.get(key)?;
+        if !matches!(
+            symbol.symbol_type,
+            SymbolType::Function | SymbolType::Method
+        ) {
+            return Some(existing);
+        }
+        let disc = overload_disc(symbol);
+        if let Some(&(first_disc, first_span)) = self.callable_disc.get(key)
+            && first_disc != disc
+        {
+            let base = symbol
+                .qualified_name
+                .as_deref()
+                .unwrap_or(symbol.name.as_str());
+            let mut overloaded = format!("{base}({})", overload_params(symbol));
+            let mut next_key = (
+                symbol_key(&symbol.location.file, &symbol.name, Some(&overloaded)),
+                key.1,
+            );
+            if let Some(&id) = self.symbol_index.get(&next_key) {
+                if self.callable_disc.get(&next_key).map(|(d, _)| *d) == Some(disc) {
+                    return Some(id);
+                }
+                overloaded = format!("{overloaded}#{disc:x}");
+                next_key = (
+                    symbol_key(&symbol.location.file, &symbol.name, Some(&overloaded)),
+                    key.1,
+                );
+                if let Some(&id2) = self.symbol_index.get(&next_key) {
+                    return Some(id2);
+                }
+            }
+            let entries = self
+                .overloaded_callables
+                .entry(symbol.location.file.clone())
+                .or_default();
+            if !entries.iter().any(|e| e.span.id == first_span.id) {
+                entries.push(OverloadedCallableSpan {
+                    base_qn: base.to_string(),
+                    bare_name: symbol.name.clone(),
+                    span: first_span,
+                });
+            }
+            *overloaded_base_qn = Some(base.to_string());
+            *qn_override = Some(overloaded);
+            *key = next_key;
+            return None;
+        }
+        Some(existing)
+    }
+
+    fn resolve_overloaded_source(&self, from: &str, file: &str, line: usize) -> Option<Uuid> {
+        if line == 0 || self.overloaded_callables.is_empty() {
+            return None;
+        }
+        let entries = self.overloaded_callables.get(file)?;
+        entries
+            .iter()
+            .filter(|entry| {
+                entry.span.start <= line
+                    && line <= entry.span.end
+                    && (entry.base_qn == from
+                        || entry.bare_name == from
+                        || entry.base_qn.strip_suffix(from).is_some_and(|p| {
+                            p.ends_with('.') || p.ends_with("::") || p.ends_with('#')
+                        }))
+            })
+            .max_by_key(|entry| entry.span.start)
+            .map(|entry| entry.span.id)
+    }
+
     /// Materialize `Symbol.fields` as Variable nodes contained by the owning type.
     ///
     /// Enables hybrid CPG member queries without waiting for per-language Variable
@@ -649,7 +930,10 @@ impl GraphBuilder {
             .unwrap_or_else(|| symbol.name.clone());
         for field in &symbol.fields {
             let field_qn = format!("{owner_qn}.{}", field.name);
-            let key = symbol_key(&symbol.location.file, &field.name, Some(field_qn.as_str()));
+            let key = (
+                symbol_key(&symbol.location.file, &field.name, Some(field_qn.as_str())),
+                NodeType::Variable,
+            );
             if self.symbol_index.contains_key(&key) {
                 continue;
             }
@@ -660,6 +944,25 @@ impl GraphBuilder {
                 .with_label("field".to_string())
                 .with_property("member_of".to_string(), symbol.name.clone())
                 .with_property("owner_qualified_name".to_string(), owner_qn.clone());
+            if let Some(fqn) = symbol
+                .metadata
+                .get("field_type_fqns")
+                .and_then(|v| v.get(&field.name))
+                .and_then(|v| v.as_str())
+            {
+                node = node.with_property("field_type_fqn".into(), fqn.to_owned());
+            }
+            if let Some(span) = field.source_span {
+                node = node
+                    .with_byte_spans(
+                        Some(span.start_byte),
+                        Some(span.end_byte),
+                        span.name_rel_offset,
+                        span.name_token_len,
+                        span.name_span_overflow,
+                    )
+                    .with_location(span.start_line as usize, span.end_line as usize);
+            }
             if let Some(ty) = &field.field_type {
                 node = node.with_property("field_type".to_string(), ty.clone());
                 let simple = go_simple_type_from_str(ty);
@@ -674,7 +977,7 @@ impl GraphBuilder {
             }
             let field_id = node.id;
             self.symbol_index.insert(key.clone(), field_id);
-            self.index_symbol_resolution(&key, &node);
+            self.index_symbol_resolution(&key.0, &node);
             self.commit_node(node);
             self.add_edge(field_id, file_id, EdgeType::DefinedIn);
             self.add_edge(file_id, field_id, EdgeType::Contains);
@@ -689,11 +992,23 @@ impl GraphBuilder {
         if self.spill.is_some() {
             return;
         }
-        let key = symbol_key(
-            &symbol.location.file,
-            &symbol.name,
-            symbol.qualified_name.as_deref(),
+        let mut key = (
+            symbol_key(
+                &symbol.location.file,
+                &symbol.name,
+                symbol.qualified_name.as_deref(),
+            ),
+            symbol_type_to_node_type(symbol.symbol_type),
         );
+        if let Some(discriminator) = symbol
+            .metadata
+            .get("identity_discriminator")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+        {
+            key.0.push('\u{1f}');
+            key.0.push_str(discriminator);
+        }
         if let Some(id) = self.symbol_index.get(&key)
             && let Some(node) = self.nodes.iter_mut().find(|n| n.id == *id)
         {
@@ -725,7 +1040,7 @@ impl GraphBuilder {
         // Rebuild suffix from symbol_index only if somehow empty (legacy / partial path).
         if self.symbols_by_suffix.is_empty() && !self.symbol_index.is_empty() {
             for key in self.symbol_index.keys() {
-                let parts: Vec<&str> = key.split("::").collect();
+                let parts: Vec<&str> = key.0.split("::").collect();
                 for i in 1..parts.len() {
                     let suffix = parts[i..].join("::");
                     if let Some(uuid) = self.symbol_index.get(key) {
@@ -738,6 +1053,31 @@ impl GraphBuilder {
             }
         }
 
+        self.member_method_ids.clear();
+        for (owner, methods) in &self.type_methods {
+            if self
+                .symbols_by_qualified
+                .get(owner)
+                .or_else(|| self.symbols_by_suffix.get(owner))
+                .is_some_and(|ids| {
+                    ids.iter().any(|id| {
+                        matches!(
+                            self.node_types.get(id),
+                            Some(
+                                NodeType::Class
+                                    | NodeType::Struct
+                                    | NodeType::Interface
+                                    | NodeType::Enum
+                                    | NodeType::Annotation
+                            )
+                        )
+                    })
+                })
+            {
+                self.member_method_ids
+                    .extend(methods.iter().map(|(_, id)| *id));
+            }
+        }
         self.build_c_preferred_impl();
 
         self.indexes_built = true;
@@ -759,7 +1099,9 @@ impl GraphBuilder {
             if unique_resolved(ids).is_some() {
                 continue;
             }
-            if let Some(id) = single_c_preferred_impl(ids, &self.symbol_files) {
+            if let Some(id) =
+                single_c_preferred_impl(ids, &self.symbol_files, &self.declaration_ids)
+            {
                 self.c_preferred_impl.insert(suffix.clone(), id);
             }
         }
@@ -772,10 +1114,16 @@ impl GraphBuilder {
             return *id;
         }
 
-        let node = Node::new(NodeType::ConfigKey, key.key_path.clone())
+        let mut node = Node::new(NodeType::ConfigKey, key.key_path.clone())
             .with_file_path(key.location.file.clone())
             .with_property("value".to_string(), key.value.clone())
             .with_property("value_type".to_string(), format!("{:?}", key.value_type));
+        if key.location.start_line >= 1 {
+            node = node.with_location(
+                key.location.start_line,
+                key.location.end_line.max(key.location.start_line),
+            );
+        }
 
         let id = node.id;
         self.config_key_nodes.insert(lookup, id);
@@ -783,6 +1131,175 @@ impl GraphBuilder {
         self.add_edge(id, file_id, EdgeType::DefinedIn);
         self.add_edge(file_id, id, EdgeType::Contains);
         id
+    }
+
+    /// Resolve only the supplied canonical identity. Do not fall back to a
+    /// different overload if the exact identity is absent or ambiguous.
+    fn resolve_callable_identity(
+        &self,
+        name: &str,
+        file: &str,
+        discriminator: &str,
+    ) -> Option<Uuid> {
+        let key = if discriminator.is_empty() {
+            format!("{file}::{name}")
+        } else {
+            format!("{file}::{name}\u{1f}{discriminator}")
+        };
+        let lookup = (key, NodeType::Function);
+        self.symbol_index.get(&lookup).copied().or_else(|| {
+            self.symbols_by_suffix
+                .get(&lookup.0[file.len() + 2..])
+                .and_then(|ids| self.unique_typed(ids, Some(NodeType::Function)))
+        })
+    }
+
+    // Argument tuples are evidence, not canonical identities: qualifiers,
+    // generic arity and implementation roles may distinguish the same tuple.
+    fn resolve_argument_identity(
+        &self,
+        name: &str,
+        file: &str,
+        arguments: &str,
+        free_only: bool,
+    ) -> Option<Option<Uuid>> {
+        let candidates = self
+            .symbols_by_qualified
+            .get(name)
+            .filter(|ids| {
+                ids.iter().any(|id| {
+                    self.node_types.get(id) == Some(&NodeType::Function)
+                        && (!free_only || !self.member_method_ids.contains(id))
+                })
+            })
+            .or_else(|| self.symbols_by_suffix.get(name))?;
+        let mut known = false;
+        let mut global = None;
+        let mut local = None;
+        let mut global_ambiguous = false;
+        let mut local_ambiguous = false;
+        for id in candidates {
+            if free_only && self.member_method_ids.contains(id) {
+                continue;
+            }
+            if let Some(parameters) = self.callable_parameters.get(id) {
+                known = true;
+                if parameters != arguments {
+                    continue;
+                }
+                if global.is_some_and(|old| old != *id) {
+                    global_ambiguous = true;
+                } else {
+                    global = Some(*id);
+                }
+                if self.symbol_files.get(id).is_some_and(|path| path == file) {
+                    if local.is_some_and(|old| old != *id) {
+                        local_ambiguous = true;
+                    } else {
+                        local = Some(*id);
+                    }
+                }
+            }
+        }
+        known.then_some(if local_ambiguous {
+            None
+        } else if local.is_some() {
+            local
+        } else if global_ambiguous {
+            None
+        } else {
+            global
+        })
+    }
+
+    /// Resolve a signature-aware call within its receiver/lexical owner before
+    /// considering any speculative bare-name fallback. `Some(None)` means a
+    /// known family was ambiguous or incompatible and must not be bypassed.
+    fn resolve_scoped_callable(
+        &self,
+        name: &str,
+        file: &str,
+        identity: Option<&str>,
+        arguments: Option<&str>,
+        inherited_overloads: bool,
+        free_only: bool,
+    ) -> Option<Option<Uuid>> {
+        let direct = |name: &str| {
+            let candidates = self
+                .symbols_by_qualified
+                .get(name)
+                .filter(|ids| {
+                    ids.iter().any(|id| {
+                        self.node_types.get(id) == Some(&NodeType::Function)
+                            && (!free_only || !self.member_method_ids.contains(id))
+                    })
+                })
+                .or_else(|| self.symbols_by_suffix.get(name))?;
+            let eligible = |id: &Uuid| {
+                self.node_types.get(id) == Some(&NodeType::Function)
+                    && (!free_only || !self.member_method_ids.contains(id))
+            };
+            if !candidates.iter().any(eligible) {
+                return None;
+            }
+            if let Some(identity) = identity {
+                return Some(
+                    self.resolve_callable_identity(name, file, identity)
+                        .filter(eligible),
+                );
+            }
+            if let Some(arguments) = arguments {
+                // Non-overloaded declarations need no argument-type proof.
+                // Literal spellings (e.g. Rust int vs i32) are only hints.
+                if let Some(id) = unique_matching(candidates, eligible)
+                    && !self.method_identities.contains_key(&id)
+                    && !self.declaration_ids.contains(&id)
+                {
+                    return Some(Some(id));
+                }
+                return Some(
+                    self.resolve_argument_identity(name, file, arguments, free_only)
+                        .unwrap_or_else(|| {
+                            self.resolve_callable_identity(name, file, arguments)
+                                .filter(eligible)
+                        }),
+                );
+            }
+            Some(unique_matching(candidates, eligible))
+        };
+        let local = direct(name);
+        if local.is_some_and(|found| found.is_some())
+            || local.is_some()
+                && !(inherited_overloads && arguments.is_some() && identity.is_none())
+        {
+            return local;
+        }
+        let Some((owner, method)) = split_owner_method(name) else {
+            return local;
+        };
+        if !self.inheritance_bases.contains_key(type_simple_name(owner)) {
+            return local;
+        }
+        let chain = compute_mro_chain(owner, &self.inheritance_bases);
+        let mut key = String::with_capacity(name.len());
+        for ancestor in chain.iter().skip(1) {
+            for separator in [".", "::", "#"] {
+                key.clear();
+                key.push_str(ancestor);
+                key.push_str(separator);
+                key.push_str(method);
+                if let Some(found) = direct(&key) {
+                    if found.is_some()
+                        || !inherited_overloads
+                        || arguments.is_none()
+                        || identity.is_some()
+                    {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        local
     }
 
     /// Add a relation between symbols when endpoints resolve.
@@ -797,27 +1314,34 @@ impl GraphBuilder {
     pub fn add_relation(&mut self, relation: &Relation) -> Result<()> {
         // Fast reject: unresolved cross-file C calls (no stub policy for Calls).
         // Still park when `from` resolves so cross-repo merge can recover.
-        if relation.relation_type == RelationType::Calls
+        let is_calls = relation.relation_type == RelationType::Calls;
+        if is_calls
             && relation.metadata.get("language").and_then(|v| v.as_str()) == Some("c")
             && !self.c_preferred_impl.contains_key(&relation.to)
             && !self.suffix_resolve_cache.contains_key(&relation.to)
         {
             let can_resolve = self.symbols_by_suffix.get(&relation.to).is_some_and(|ids| {
-                unique_resolved(ids).is_some()
-                    || single_c_preferred_impl(ids, &self.symbol_files).is_some()
+                self.unique_typed(ids, Some(NodeType::Function)).is_some()
+                    || single_c_preferred_impl(ids, &self.symbol_files, &self.declaration_ids)
+                        .is_some()
             });
             if !can_resolve {
-                let mut from_id = self.resolve_symbol_tracked(
+                let mut from_id = self.resolve_symbol_tracked_typed(
                     &relation.from,
                     &relation.location.file,
                     None,
                     None,
+                    Some(NodeType::Function),
                 );
+                if from_id.is_none() {
+                    from_id =
+                        self.unique_same_file_symbol(&relation.from, &relation.location.file, true);
+                }
                 if from_id.is_none() {
                     from_id = self
                         .symbols_by_qualified
                         .get(&relation.from)
-                        .and_then(|ids| unique_resolved(ids));
+                        .and_then(|ids| self.unique_typed(ids, Some(NodeType::Function)));
                 }
                 if let Some(from) = from_id {
                     self.park_relation_if_needed(
@@ -832,28 +1356,130 @@ impl GraphBuilder {
             }
         }
 
-        let mut from_id =
-            self.resolve_symbol_tracked(&relation.from, &relation.location.file, None, None);
-        if from_id.is_none() {
+        let expected_callable = is_calls.then_some(NodeType::Function);
+        let exact_from = relation
+            .metadata
+            .get("from_identity_discriminator")
+            .and_then(|v| v.as_str());
+        let mut from_id = if let Some(identity) = exact_from {
+            self.resolve_callable_identity(&relation.from, &relation.location.file, identity)
+        } else {
+            self.resolve_overloaded_source(
+                &relation.from,
+                &relation.location.file,
+                relation.location.start_line,
+            )
+            .or_else(|| {
+                self.resolve_symbol_tracked_typed(
+                    &relation.from,
+                    &relation.location.file,
+                    None,
+                    None,
+                    expected_callable,
+                )
+            })
+        };
+        if from_id.is_none() && exact_from.is_none() {
+            // `relation.from` is always declared in `relation.location.file`; prefer the unique
+            // same-file symbol when container qualification (`Container::name`) missed Step 1 and
+            // multiple files across the repository share `relation.from`'s bare name.
+            from_id =
+                self.unique_same_file_symbol(&relation.from, &relation.location.file, is_calls);
+        }
+        if from_id.is_none() && exact_from.is_none() {
             from_id = self
                 .symbols_by_qualified
                 .get(&relation.from)
-                .and_then(|ids| unique_resolved(ids));
+                .and_then(|ids| self.unique_typed(ids, expected_callable));
         }
-        if from_id.is_none() {
+        if from_id.is_none() && exact_from.is_none() && !is_calls {
             from_id = self.lookup_file_node(&relation.from, &relation.location.file);
         }
 
         let (to_type_hint, to_qualified_hint) = self.enrich_go_type_hints(relation);
 
-        let mut to_id = self.resolve_symbol_tracked(
-            &relation.to,
-            &relation.location.file,
-            to_qualified_hint
-                .as_deref()
-                .or(relation.to_qualified_hint.as_deref()),
-            to_type_hint.as_deref().or(relation.to_type_hint.as_deref()),
-        );
+        let java_call =
+            is_calls && relation.metadata.get("language").and_then(|v| v.as_str()) == Some("java");
+        let target = to_qualified_hint
+            .as_deref()
+            .or(relation.to_qualified_hint.as_deref())
+            .unwrap_or(&relation.to);
+        let explicit_to = relation
+            .metadata
+            .get("to_identity_discriminator")
+            .and_then(|v| v.as_str());
+        let argument_to = relation
+            .metadata
+            .get("argument_identity_discriminator")
+            .and_then(|v| v.as_str());
+        let unresolved_generic =
+            relation.metadata.get("explicit_generic_arity").is_some() && explicit_to.is_none();
+        let mut scoped = if is_calls {
+            self.resolve_scoped_callable(
+                target,
+                &relation.location.file,
+                explicit_to,
+                argument_to,
+                java_call,
+                false,
+            )
+        } else {
+            None
+        };
+        // Only a helper-inferred owner may fall back to the unqualified name.
+        // Explicit receiver hints and known-but-incompatible families are final.
+        let inferred_owner = relation.metadata["inferred_callable_owner"] == true;
+        if scoped.is_none() && inferred_owner && explicit_to.is_none() {
+            scoped = self.resolve_scoped_callable(
+                &relation.to,
+                &relation.location.file,
+                None,
+                argument_to,
+                java_call,
+                true,
+            );
+        }
+        let exact_id = if unresolved_generic {
+            None
+        } else {
+            scoped.flatten()
+        };
+        let signature_call = java_call
+            || is_calls
+                && relation
+                    .metadata
+                    .get("exact_callable_resolution")
+                    .and_then(|v| v.as_bool())
+                    == Some(true);
+        let ambiguous_java = signature_call
+            && self
+                .symbols_by_qualified
+                .get(target)
+                .or_else(|| self.symbols_by_suffix.get(target))
+                .is_some_and(|ids| self.unique_typed(ids, Some(NodeType::Function)).is_none());
+        let mut to_id = if exact_id.is_some() {
+            exact_id
+        } else if explicit_to.is_some()
+            || ambiguous_java
+            || signature_call && (argument_to.is_some() || scoped == Some(None))
+        {
+            None
+        } else {
+            self.resolve_symbol_tracked_typed(
+                &relation.to,
+                &relation.location.file,
+                to_qualified_hint
+                    .as_deref()
+                    .or(relation.to_qualified_hint.as_deref()),
+                to_type_hint.as_deref().or(relation.to_type_hint.as_deref()),
+                expected_callable,
+            )
+        };
+        if to_id.is_none() && is_mainframe_relation(relation) {
+            // Same-file COBOL `PERFORM PARA` / PL/I `CALL PROC` / JCL `EXEC PROC=...` when
+            // multiple mainframe files in the repo share common paragraph/step names (`STEP1`).
+            to_id = self.unique_same_file_symbol(&relation.to, &relation.location.file, is_calls);
+        }
         if to_id.is_none() {
             if let Some(id) = self.lookup_file_node(&relation.to, &relation.location.file) {
                 to_id = Some(id);
@@ -866,26 +1492,66 @@ impl GraphBuilder {
             }
         }
 
+        // Signature text can contain namespace separators (for example Rust
+        // trait names). A suffix candidate must still satisfy the typed edge.
+        if is_inheritance_relation(relation.relation_type)
+            && let Some(to) = to_id
+            && !matches!(
+                self.node_types.get(&to),
+                Some(
+                    NodeType::Class
+                        | NodeType::Struct
+                        | NodeType::Enum
+                        | NodeType::Interface
+                        | NodeType::Module
+                        | NodeType::Annotation
+                        | NodeType::TypeAlias
+                )
+            )
+        {
+            to_id = None;
+        }
+
         if relation_allows_external_stub(relation) {
             // Only stub unresolved *targets*. Stubbing missing `from` when
             // resolution is ambiguous invents phantom callers and inflates
             // Function counts on large Java repos.
             if from_id.is_some() && to_id.is_none() {
-                let qn = to_qualified_hint
-                    .as_deref()
-                    .or(relation.to_qualified_hint.as_deref());
-                to_id = Some(self.ensure_external_stub(
-                    &relation.to,
-                    qn,
-                    stub_node_type_for_target(relation),
-                ));
+                let md_url = (relation.metadata.get("kind").and_then(|v| v.as_str())
+                    == Some("markdown_link"))
+                .then(|| {
+                    relation
+                        .metadata
+                        .get("url")
+                        .and_then(|v| v.as_str())
+                        .map(|u| u.trim().trim_start_matches("./"))
+                        .filter(|u| !u.is_empty())
+                })
+                .flatten();
+                let stub_name = md_url.unwrap_or(&relation.to);
+                let qn = md_url.or_else(|| {
+                    to_qualified_hint
+                        .as_deref()
+                        .or(relation.to_qualified_hint.as_deref())
+                });
+                let target_nt = stub_node_type_for_target(relation);
+                let shadows_in_repo = match qn {
+                    Some(q) => {
+                        self.has_in_repo_qualified_candidate(q, target_nt)
+                            || (q == stub_name && self.has_in_repo_candidate(stub_name, target_nt))
+                    }
+                    None => self.has_in_repo_candidate(stub_name, target_nt),
+                };
+                if !shadows_in_repo {
+                    to_id = Some(self.ensure_external_stub(stub_name, qn, target_nt));
+                }
             }
         }
 
         // Calls must target callables only — never Class field stubs via fuzzy suffix.
         if relation.relation_type == RelationType::Calls
             && let Some(to) = to_id
-            && self.node_types.get(&to).copied() != Some(NodeType::Function)
+            && !self.is_callable_id(to)
         {
             to_id = None;
         }
@@ -911,8 +1577,29 @@ impl GraphBuilder {
             );
         }
 
+        if signature_call && (from_id.is_none() || to_id.is_none()) {
+            self.unresolved_calls += 1;
+            if self.callable_resolution_samples.len() < crate::callable_resolution::DIAGNOSTIC_LIMIT
+            {
+                let mut sample = relation.clone();
+                sample.metadata["resolution_reason"]="No unique canonical callable matched the available source evidence; no name-only overload fallback was applied".into();
+                self.callable_resolution_samples.push(sample);
+            }
+        }
+
         if let (Some(from), Some(to)) = (from_id, to_id) {
-            let edge_type = relation_type_to_edge_type(relation.relation_type);
+            let mut edge_type = relation_type_to_edge_type(relation.relation_type);
+            let target_is_interface_node =
+                self.node_types.get(&to).copied() == Some(NodeType::Interface);
+            if edge_type == EdgeType::Extends
+                && target_is_interface_node
+                && matches!(
+                    self.node_types.get(&from).copied(),
+                    Some(NodeType::Class | NodeType::Module)
+                )
+            {
+                edge_type = EdgeType::Implements;
+            }
             let mut edge = Edge::new(from, to, edge_type);
             if relation.relation_type == RelationType::Calls {
                 edge = edge.with_property(
@@ -945,15 +1632,17 @@ impl GraphBuilder {
                         .as_deref()
                         .unwrap_or(relation.to.as_str()),
                 );
-                let is_iface = matches!(
-                    relation.relation_type,
-                    RelationType::Implements | RelationType::IncludesClass
-                ) || relation.to_type_hint.as_deref().is_some_and(|h| {
-                    matches!(
-                        h.to_ascii_lowercase().as_str(),
-                        "interface" | "trait" | "module" | "annotation"
+                let is_iface = target_is_interface_node
+                    || matches!(
+                        relation.relation_type,
+                        RelationType::Implements | RelationType::IncludesClass
                     )
-                });
+                    || relation.to_type_hint.as_deref().is_some_and(|h| {
+                        matches!(
+                            h.to_ascii_lowercase().as_str(),
+                            "interface" | "trait" | "module" | "annotation"
+                        )
+                    });
                 let prepend_front = relation
                     .metadata
                     .get("mixin")
@@ -1157,14 +1846,14 @@ impl GraphBuilder {
                 if let Some(id) = self
                     .symbols_by_qualified
                     .get(&key)
-                    .and_then(|ids| unique_resolved(ids))
+                    .and_then(|ids| self.unique_resolved_for(ids, true))
                 {
                     return Some(id);
                 }
                 if let Some(id) = self
                     .symbols_by_suffix
                     .get(&key)
-                    .and_then(|ids| unique_resolved(ids))
+                    .and_then(|ids| self.unique_resolved_for(ids, true))
                 {
                     return Some(id);
                 }
@@ -1200,18 +1889,48 @@ impl GraphBuilder {
             }
             for (method, child_id) in methods {
                 for ancestor in chain.iter().skip(1) {
-                    let ancestor_id = self
-                        .type_methods
-                        .get(ancestor)
-                        .and_then(|ms| unique_method_id(ms, &method));
-                    let Some(ancestor_id) = ancestor_id else {
-                        continue;
-                    };
-                    if ancestor_id == child_id {
+                    if self
+                        .method_override_owners
+                        .get(&child_id)
+                        .is_some_and(|owner| {
+                            owner != ancestor && type_simple_name(owner) != ancestor
+                        })
+                    {
                         continue;
                     }
-                    edges.push(Edge::new(child_id, ancestor_id, EdgeType::Overrides));
-                    break; // nearest ancestor only
+                    let Some(methods) = self.type_methods.get(ancestor) else {
+                        continue;
+                    };
+                    let identity = self.method_identities.get(&child_id);
+                    let mut candidates: Vec<_> = methods
+                        .iter()
+                        .filter(|(name, id)| {
+                            name == &method && self.method_identities.get(id) == identity
+                        })
+                        .map(|(_, id)| *id)
+                        .collect();
+                    // A paired declaration must not hide its runtime body.
+                    if candidates
+                        .iter()
+                        .any(|id| !self.declaration_ids.contains(id))
+                    {
+                        candidates.retain(|id| !self.declaration_ids.contains(id));
+                    }
+                    if candidates.len() != 1
+                        && !(self.signature_families.contains(&child_id)
+                            && !candidates.is_empty()
+                            && candidates
+                                .iter()
+                                .all(|id| self.signature_families.contains(id)))
+                    {
+                        continue;
+                    }
+                    for ancestor_id in candidates {
+                        if ancestor_id != child_id {
+                            edges.push(Edge::new(child_id, ancestor_id, EdgeType::Overrides));
+                        }
+                    }
+                    break; // nearest ancestor with a matching dispatch contract
                 }
             }
         }
@@ -1238,6 +1957,35 @@ impl GraphBuilder {
         None
     }
 
+    fn has_in_repo_qualified_candidate(&self, qn: &str, target_nt: NodeType) -> bool {
+        self.symbols_by_qualified.get(qn).is_some_and(|ids| {
+            ids.iter().any(|id| {
+                !self.external_stub_ids.contains(id)
+                    && self.node_types.get(id).copied() == Some(target_nt)
+            })
+        })
+    }
+
+    fn has_in_repo_candidate(&self, name: &str, target_nt: NodeType) -> bool {
+        let check_key = |k: &str| -> bool {
+            self.symbols_by_suffix.get(k).is_some_and(|ids| {
+                ids.iter().any(|id| {
+                    !self.external_stub_ids.contains(id)
+                        && self.node_types.get(id).copied() == Some(target_nt)
+                })
+            })
+        };
+        if check_key(name) {
+            return true;
+        }
+        let simple = name
+            .rsplit(['.', '/', ':', '\\'])
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(name);
+        simple != name && check_key(simple)
+    }
+
     /// Create or reuse a stub node for an unresolved relation endpoint.
     ///
     /// External stubs are indexed under `symbols_by_qualified` / `symbol_index` only —
@@ -1260,7 +2008,7 @@ impl GraphBuilder {
         let simple = if is_route_stub {
             name
         } else {
-            name.rsplit(['.', '/', ':'])
+            name.rsplit(['.', '/', ':', '\\'])
                 .next()
                 .filter(|s| !s.is_empty())
                 .unwrap_or(name)
@@ -1270,11 +2018,33 @@ impl GraphBuilder {
             .unwrap_or(name)
             .to_string();
 
+        let compatible = |id: &Uuid| {
+            let Some(kind) = self.node_types.get(id) else {
+                return false;
+            };
+            if matches!(
+                node_type,
+                NodeType::Class | NodeType::Interface | NodeType::Annotation
+            ) {
+                matches!(
+                    kind,
+                    NodeType::Class
+                        | NodeType::Struct
+                        | NodeType::Enum
+                        | NodeType::Interface
+                        | NodeType::Module
+                        | NodeType::Annotation
+                        | NodeType::TypeAlias
+                )
+            } else {
+                *kind == node_type
+            }
+        };
         // Prefer an existing unique resolution (another stub or late symbol).
         if let Some(id) = self
             .symbols_by_qualified
             .get(&qn)
-            .and_then(|ids| unique_resolved(ids))
+            .and_then(|ids| unique_matching(ids, compatible))
         {
             return id;
         }
@@ -1284,7 +2054,7 @@ impl GraphBuilder {
             if let Some(id) = self
                 .symbols_by_suffix
                 .get(name)
-                .and_then(|ids| unique_resolved(ids))
+                .and_then(|ids| unique_matching(ids, compatible))
             {
                 return id;
             }
@@ -1292,14 +2062,14 @@ impl GraphBuilder {
                 && let Some(id) = self
                     .symbols_by_suffix
                     .get(simple)
-                    .and_then(|ids| unique_resolved(ids))
+                    .and_then(|ids| unique_matching(ids, compatible))
             {
                 return id;
             }
         }
 
         const STUB_FILE: &str = "<external>";
-        let key = symbol_key(STUB_FILE, simple, Some(qn.as_str()));
+        let key = (symbol_key(STUB_FILE, simple, Some(qn.as_str())), node_type);
         if let Some(&id) = self.symbol_index.get(&key) {
             self.external_stub_ids.insert(id);
             return id;
@@ -1352,6 +2122,27 @@ impl GraphBuilder {
         let import_module_hint =
             self.lookup_import_module_hint(file_path, &relation.to, to_type_hint.as_deref());
 
+        let identity = relation
+            .metadata
+            .get("to_identity_discriminator")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+            .or_else(|| {
+                relation
+                    .metadata
+                    .get("argument_identity_discriminator")
+                    .and_then(|v| v.as_str())
+                    .map(|arguments| format!("args:{arguments}"))
+            });
+        let to_qualified_hint = identity
+            .map(|identity| {
+                format!(
+                    "{}\u{1f}{identity}",
+                    to_qualified_hint.as_deref().unwrap_or(&relation.to)
+                )
+            })
+            .or(to_qualified_hint);
+
         self.parked_relations.push(ParkedRelationRecord {
             from_node_id: from_id,
             from_qualified_name: relation.from.clone(),
@@ -1400,7 +2191,36 @@ impl GraphBuilder {
         by_file.get("*").cloned()
     }
 
-    /// Drain parked relations accumulated during graph build.
+    /// Bounded diagnostic evidence for missing or ambiguous canonical calls.
+    pub fn take_callable_resolution_report(
+        &mut self,
+    ) -> crate::callable_resolution::CallableResolutionReport {
+        let unresolved_calls = std::mem::take(&mut self.unresolved_calls);
+        let mut samples = std::mem::take(&mut self.callable_resolution_samples);
+        samples.sort_by(|a, b| {
+            (
+                &a.location.file,
+                a.location.start_line,
+                a.location.start_column,
+                &a.from,
+                &a.to,
+            )
+                .cmp(&(
+                    &b.location.file,
+                    b.location.start_line,
+                    b.location.start_column,
+                    &b.from,
+                    &b.to,
+                ))
+        });
+        crate::callable_resolution::CallableResolutionReport {
+            schema_version: 1,
+            unresolved_calls,
+            samples_truncated: unresolved_calls > samples.len(),
+            samples,
+        }
+    }
+
     pub fn take_parked_relations(&mut self) -> Vec<ParkedRelationRecord> {
         std::mem::take(&mut self.parked_relations)
     }
@@ -1585,9 +2405,87 @@ impl GraphBuilder {
             .map(|n| n.id)
     }
 
+    fn is_callable_id(&self, id: Uuid) -> bool {
+        self.node_types
+            .get(&id)
+            .copied()
+            .is_some_and(is_callable_kind)
+    }
+
+    fn matches_expected(&self, id: &Uuid, expected: Option<NodeType>) -> bool {
+        match expected {
+            None => true,
+            Some(NodeType::Function) => self.is_callable_id(*id),
+            Some(kind) => self.node_types.get(id) == Some(&kind),
+        }
+    }
+
+    fn unique_resolved_for(&self, ids: &[Uuid], calls_only: bool) -> Option<Uuid> {
+        self.unique_typed(ids, calls_only.then_some(NodeType::Function))
+    }
+
+    fn unique_same_file_symbol(&self, name: &str, file: &str, calls_only: bool) -> Option<Uuid> {
+        let ids = self.symbols_by_suffix.get(name)?;
+        let mut found: Option<Uuid> = None;
+        for &id in ids {
+            if self.symbol_files.get(&id).map(String::as_str) != Some(file) {
+                continue;
+            }
+            if calls_only && !self.is_callable_id(id) {
+                continue;
+            }
+            match found {
+                None => found = Some(id),
+                Some(prev) if prev == id => {}
+                Some(_) => return None,
+            }
+        }
+        found
+    }
+
+    fn unique_typed(&self, ids: &[Uuid], expected: Option<NodeType>) -> Option<Uuid> {
+        let mut result = None;
+        for id in ids {
+            if !self.matches_expected(id, expected) {
+                continue;
+            }
+            if result.is_some_and(|old| old != *id) {
+                return None;
+            }
+            result = Some(*id);
+        }
+        result
+    }
+
+    fn exact_symbol(&self, name: &str, file: &str, expected: Option<NodeType>) -> Option<Uuid> {
+        let mut lookup = (
+            format!("{file}::{name}"),
+            expected.unwrap_or(NodeType::Function),
+        );
+        if expected.is_some() {
+            return self.symbol_index.get(&lookup).copied();
+        }
+        let candidates = self
+            .symbols_by_qualified
+            .get(name)
+            .or_else(|| self.symbols_by_suffix.get(name))?;
+        let mut result = None;
+        for id in candidates {
+            lookup.1 = *self.node_types.get(id)?;
+            if let Some(id) = self.symbol_index.get(&lookup) {
+                if result.is_some_and(|old| old != *id) {
+                    return None;
+                }
+                result = Some(*id);
+            }
+        }
+        result
+    }
+
     /// Resolve a symbol name to its UUID with performance tracking.
     ///
     /// Ambiguous qualified-name or suffix matches return `None` (do not pick arbitrarily).
+    #[allow(dead_code)]
     fn resolve_symbol_tracked(
         &mut self,
         name: &str,
@@ -1595,27 +2493,43 @@ impl GraphBuilder {
         qualified_hint: Option<&str>,
         type_hint: Option<&str>,
     ) -> Option<Uuid> {
+        self.resolve_symbol_tracked_typed(name, file, qualified_hint, type_hint, None)
+    }
+
+    fn resolve_symbol_tracked_typed(
+        &mut self,
+        name: &str,
+        file: &str,
+        qualified_hint: Option<&str>,
+        type_hint: Option<&str>,
+        expected: Option<NodeType>,
+    ) -> Option<Uuid> {
         use std::time::Instant;
 
         let start = Instant::now();
         self.resolution_stats.total_calls += 1;
 
         // 1. Try exact match in current file
-        let qualified = format!("{file}::{name}");
-        if let Some(id) = self.symbol_index.get(&qualified) {
+        if let Some(id) = self.exact_symbol(name, file, expected) {
             self.resolution_stats.hashmap_hits += 1;
             self.resolution_stats.total_time += start.elapsed();
-            return Some(*id);
+            return Some(id);
         }
 
-        // 2. Try qualified hint direct lookup (O(1)); only if uniquely resolved
+        // 2. Try qualified hint direct lookup (O(1)); prefer same-file exact match first
         if let Some(hint) = qualified_hint {
             self.resolution_stats.qualified_hint_scans += 1;
+
+            if let Some(id) = self.exact_symbol(hint, file, expected) {
+                self.resolution_stats.qualified_hint_hits += 1;
+                self.resolution_stats.total_time += start.elapsed();
+                return Some(id);
+            }
 
             if let Some(id) = self
                 .symbols_by_qualified
                 .get(hint)
-                .and_then(|ids| unique_resolved(ids))
+                .and_then(|ids| self.unique_typed(ids, expected))
             {
                 self.resolution_stats.qualified_hint_hits += 1;
                 self.resolution_stats.total_time += start.elapsed();
@@ -1625,7 +2539,7 @@ impl GraphBuilder {
             if let Some(id) = self
                 .symbols_by_suffix
                 .get(hint)
-                .and_then(|ids| unique_resolved(ids))
+                .and_then(|ids| self.unique_typed(ids, expected))
             {
                 self.resolution_stats.qualified_hint_hits += 1;
                 self.resolution_stats.total_time += start.elapsed();
@@ -1650,11 +2564,11 @@ impl GraphBuilder {
                 if let Some(id) = self
                     .symbols_by_suffix
                     .get(&type_qualified)
-                    .and_then(|ids| unique_resolved(ids))
+                    .and_then(|ids| self.unique_typed(ids, expected))
                     .or_else(|| {
                         self.symbols_by_qualified
                             .get(&type_qualified)
-                            .and_then(|ids| unique_resolved(ids))
+                            .and_then(|ids| self.unique_typed(ids, expected))
                     })
                 {
                     self.resolution_stats.type_hint_hits += 1;
@@ -1684,16 +2598,26 @@ impl GraphBuilder {
         // 4. Fallback: suffix index — `.c` preference map, then lazy cache, then live lookup.
         self.resolution_stats.fuzzy_scans += 1;
         let result = if qualified_hint.is_none() && type_hint.is_none() {
-            if let Some(id) = self.c_preferred_impl.get(name) {
-                Some(*id)
-            } else if let Some(id) = self.suffix_resolve_cache.get(name) {
-                Some(*id)
+            if let Some(&id) = self
+                .c_preferred_impl
+                .get(name)
+                .filter(|id| self.matches_expected(id, expected))
+            {
+                Some(id)
+            } else if let Some(&id) = self
+                .suffix_resolve_cache
+                .get(name)
+                .filter(|_| expected.is_none())
+            {
+                Some(id)
             } else {
                 let resolved = self.symbols_by_suffix.get(name).and_then(|ids| {
-                    unique_resolved(ids)
-                        .or_else(|| single_c_preferred_impl(ids, &self.symbol_files))
+                    self.unique_typed(ids, expected).or_else(|| {
+                        single_c_preferred_impl(ids, &self.symbol_files, &self.declaration_ids)
+                            .filter(|id| self.matches_expected(id, expected))
+                    })
                 });
-                if let Some(id) = resolved {
+                if let Some(id) = resolved.filter(|_| expected.is_none()) {
                     self.suffix_resolve_cache.insert(name.to_string(), id);
                 }
                 resolved
@@ -1701,7 +2625,7 @@ impl GraphBuilder {
         } else {
             self.symbols_by_suffix
                 .get(name)
-                .and_then(|ids| unique_resolved(ids))
+                .and_then(|ids| self.unique_typed(ids, expected))
         };
 
         if result.is_some() {
@@ -1729,9 +2653,8 @@ impl GraphBuilder {
         qualified_hint: Option<&str>,
         type_hint: Option<&str>,
     ) -> Option<Uuid> {
-        let qualified = format!("{file}::{name}");
-        if let Some(id) = self.symbol_index.get(&qualified) {
-            return Some(*id);
+        if let Some(id) = self.exact_symbol(name, file, None) {
+            return Some(id);
         }
 
         if let Some(hint) = qualified_hint
@@ -1886,6 +2809,101 @@ fn symbol_key(file: &str, name: &str, qualified: Option<&str>) -> String {
     format!("{file}::{}", qualified.unwrap_or(name))
 }
 
+fn is_callable_kind(kind: NodeType) -> bool {
+    matches!(
+        kind,
+        NodeType::Function
+            | NodeType::PuppetClass
+            | NodeType::PuppetDefinedType
+            | NodeType::PuppetNode
+            | NodeType::ChefRecipe
+            | NodeType::ChefResource
+            | NodeType::AnsibleTask
+            | NodeType::AnsibleHandler
+    )
+}
+
+fn overload_disc(symbol: &Symbol) -> u64 {
+    let mut hasher = blake3::Hasher::new();
+    if let Some(sig) = symbol.signature.as_deref() {
+        hasher.update(sig.as_bytes());
+    }
+    hasher.update(&[0]);
+    hasher.update(&(symbol.parameters.len() as u32).to_le_bytes());
+    for param in &symbol.parameters {
+        hasher.update(param.name.as_bytes());
+        hasher.update(&[0xfe]);
+        hasher.update(param.param_type.as_deref().unwrap_or("").as_bytes());
+        hasher.update(&[0xfe]);
+        hasher.update(param.default_value.as_deref().unwrap_or("").as_bytes());
+        hasher.update(&[0xff]);
+    }
+    hasher.update(symbol.return_type.as_deref().unwrap_or("").as_bytes());
+    let hash = hasher.finalize();
+    u64::from_le_bytes(hash.as_bytes()[..8].try_into().expect("8 bytes"))
+}
+
+fn overload_params(symbol: &Symbol) -> String {
+    if symbol
+        .parameters
+        .iter()
+        .any(|p| p.param_type.as_deref().is_some_and(|t| !t.is_empty()))
+    {
+        return symbol
+            .parameters
+            .iter()
+            .map(|param| {
+                param
+                    .param_type
+                    .as_deref()
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or("_")
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+    }
+    if let Some(sig) = symbol.signature.as_deref() {
+        let line = sig.lines().next().unwrap_or(sig).trim();
+        if let (Some(open), Some(close)) = (line.find('('), line.rfind(')'))
+            && open < close
+        {
+            let inner = line[open + 1..close].trim();
+            if !inner.is_empty() {
+                return inner.to_string();
+            }
+        }
+        if !line.is_empty() {
+            return line.to_string();
+        }
+    }
+    if !symbol.parameters.is_empty() {
+        return symbol
+            .parameters
+            .iter()
+            .map(|param| {
+                if param.name.is_empty() {
+                    "_"
+                } else {
+                    param.name.as_str()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+    }
+    format!("{:x}", overload_disc(symbol))
+}
+
+fn unique_matching(ids: &[Uuid], matches: impl Fn(&Uuid) -> bool) -> Option<Uuid> {
+    let mut found = None;
+    for id in ids.iter().filter(|id| matches(id)) {
+        if found.is_some_and(|old| old != *id) {
+            return None;
+        }
+        found = Some(*id);
+    }
+    found
+}
+
 /// Return the sole candidate UUID, or `None` when zero or multiple distinct IDs.
 fn unique_resolved(ids: &[Uuid]) -> Option<Uuid> {
     match ids {
@@ -1912,12 +2930,17 @@ fn unique_method_id(ms: &[(String, Uuid)], method: &str) -> Option<Uuid> {
 }
 
 /// When a C symbol appears in both `.h` and `.c`, prefer the sole `.c` definition.
-fn single_c_preferred_impl(ids: &[Uuid], symbol_files: &HashMap<Uuid, String>) -> Option<Uuid> {
+fn single_c_preferred_impl(
+    ids: &[Uuid],
+    symbol_files: &HashMap<Uuid, String>,
+    declarations: &FxHashSet<Uuid>,
+) -> Option<Uuid> {
     let mut c_impl = None;
     for id in ids {
-        if symbol_files
-            .get(id)
-            .is_some_and(|path| path.ends_with(".c"))
+        if !declarations.contains(id)
+            && symbol_files
+                .get(id)
+                .is_some_and(|path| path.ends_with(".c"))
         {
             if c_impl.is_some() {
                 return None;
@@ -2127,6 +3150,13 @@ fn infer_import_binding_from_name(name: &str, cleaned_module: &str) -> Option<St
         return Some(trimmed.to_string());
     }
     None
+}
+
+fn is_mainframe_relation(relation: &Relation) -> bool {
+    matches!(
+        relation.metadata.get("language").and_then(|v| v.as_str()),
+        Some("cobol" | "pli" | "jcl")
+    )
 }
 
 fn relation_allows_external_stub(relation: &Relation) -> bool {
@@ -2368,12 +3398,12 @@ fn compute_c3_mro(
     Some(result)
 }
 
-/// Rightmost type segment: `com.foo.Child` → `Child`, `pkg::Child` → `Child`.
+/// Rightmost type segment: `com.foo.Child` → `Child`, `pkg::Child` → `Child`, `App\Child` → `Child`.
 fn type_simple_name(name: &str) -> &str {
     name.split('<')
         .next()
         .unwrap_or(name)
-        .rsplit(['.', '/', ':'])
+        .rsplit(['.', '/', ':', '\\'])
         .next()
         .filter(|s| !s.is_empty())
         .unwrap_or(name)
@@ -2410,7 +3440,7 @@ fn method_simple_name<'a>(name: &'a str, qualified_hint: Option<&'a str>) -> &'a
     {
         return method;
     }
-    name.rsplit(['.', ':', '#'])
+    name.rsplit(['.', ':', '#', '\\'])
         .next()
         .filter(|s| !s.is_empty())
         .unwrap_or(name)
@@ -2451,7 +3481,124 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn java_overloaded_callers_and_literal_targets_are_independent() {
+        let registry = std::sync::Arc::new(rgctl_languages::default_registry());
+        let extractor = crate::Extractor::new(registry);
+        let source = br#"package demo;
+class Library {
+ static int intHelper() { return 1; }
+ static int stringHelper() { return 2; }
+ static int quote(int value) { return intHelper(); }
+ static int quote(String value) { return stringHelper(); }
+ static int runInt() { return quote(7); }
+ static int runString() { return quote("hello"); }
+}"#;
+        let extraction = extractor
+            .extract_file_with_source(Path::new("Library.java"), source.to_vec())
+            .unwrap();
+        let mut builder = GraphBuilder::new();
+        extractor
+            .populate_graph(&[extraction], &mut builder)
+            .unwrap();
+        let (nodes, edges) = builder.into_graph();
+        let find = |name: &str, identity: Option<&str>| {
+            nodes
+                .iter()
+                .find(|n| {
+                    n.name == name && identity.is_none_or(|i| n.identity_discriminator() == Some(i))
+                })
+                .unwrap()
+                .id
+        };
+        let calls = |from, to| {
+            edges
+                .iter()
+                .any(|e| e.from == from && e.to == to && e.edge_type == EdgeType::Calls)
+        };
+        let int = find("quote", Some("(int)"));
+        let string = find("quote", Some("(String)"));
+        assert!(calls(int, find("intHelper", None)));
+        assert!(calls(string, find("stringHelper", None)));
+        assert!(!calls(int, find("stringHelper", None)));
+        assert!(calls(find("runInt", None), int));
+        assert!(!calls(find("runInt", None), string));
+        assert!(calls(find("runString", None), string));
+    }
+
+    #[test]
+    fn java_overloads_survive_snapshots_body_changes_line_shifts_and_removal() {
+        use crate::Extractor;
+        use rgctl_graph::{
+            SnapshotNodeStore, stable_key_from_node, stable_key_from_row,
+            write_columnar_from_nodes_edges,
+        };
+        let registry = std::sync::Arc::new(rgctl_languages::default_registry());
+        let extractor = Extractor::new(registry);
+        let baseline = include_bytes!(
+            "../../../tests/fixtures/tier1_identity_dependencies/java/dependencies/library/baseline/demo/Library.java"
+        );
+        let candidate = include_bytes!(
+            "../../../tests/fixtures/tier1_identity_dependencies/java/dependencies/library/candidate/demo/Library.java"
+        );
+        let build = |source: &[u8]| {
+            let extraction = extractor
+                .extract_file_with_source(Path::new("Library.java"), source.to_vec())
+                .unwrap();
+            let mut builder = GraphBuilder::new();
+            extractor
+                .populate_graph(&[extraction], &mut builder)
+                .unwrap();
+            let (nodes, edges) = builder.into_graph();
+            let temporary = tempfile::tempdir().unwrap();
+            let path = temporary.path().join("graph.snapshot.bin");
+            write_columnar_from_nodes_edges(nodes.clone(), edges, &path).unwrap();
+            let store = SnapshotNodeStore::open(&path).unwrap();
+            let col = store.columnar().unwrap();
+            for index in 0..col.node_count() {
+                let node = col.materialize_node_at(index).unwrap();
+                assert_eq!(
+                    stable_key_from_row(col, index).unwrap(),
+                    stable_key_from_node(&node)
+                );
+            }
+            nodes
+                .into_iter()
+                .filter(|node| node.name == "quote")
+                .map(|node| {
+                    let restored = store.get_node(node.id).unwrap().unwrap();
+                    assert_eq!(
+                        restored.identity_discriminator(),
+                        node.identity_discriminator()
+                    );
+                    (
+                        node.identity_discriminator().unwrap().to_owned(),
+                        (node.id, node.code_hash.clone()),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let before = build(baseline);
+        let after = build(candidate);
+        assert_eq!(before.len(), 2);
+        assert_eq!(after.len(), 2);
+        assert_ne!(before["(int)"].0, before["(String)"].0);
+        assert_eq!(before["(int)"], after["(int)"]);
+        assert_eq!(before["(String)"].0, after["(String)"].0);
+        assert_ne!(before["(String)"].1, after["(String)"].1);
+        let shifted = format!("\n\n{}", std::str::from_utf8(baseline).unwrap());
+        assert_eq!(before, build(shifted.as_bytes()));
+        let removed = std::str::from_utf8(baseline).unwrap().replace(
+            "    public static int quote(String value) {\n        return value.length();\n    }\n",
+            "",
+        );
+        let remaining = build(removed.as_bytes());
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining["(int)"], before["(int)"]);
     }
 
     #[test]
@@ -2478,6 +3625,7 @@ mod tests {
             modifiers: vec!["public".into()],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         let method = Symbol {
             name: "bar".to_string(),
@@ -2497,6 +3645,7 @@ mod tests {
             modifiers: vec!["public".into()],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&annotation, marker_file);
         builder.add_symbol(&method, foo_file);
@@ -2515,6 +3664,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2549,6 +3699,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&method, file_id);
         builder
@@ -2566,6 +3717,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: Some("java.lang.String".to_string()),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2608,6 +3760,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&class, file_id);
         builder.build_resolution_indexes();
@@ -2626,6 +3779,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2668,6 +3822,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&class, file_id);
         builder.build_resolution_indexes();
@@ -2688,6 +3843,7 @@ mod tests {
                     "org.springframework.security.core.userdetails.UserDetailsService".to_string(),
                 ),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2730,6 +3886,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&class, file_id);
         builder.build_resolution_indexes();
@@ -2748,6 +3905,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2789,6 +3947,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&module, file_id);
         builder
@@ -2806,6 +3965,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: Some("java.base".to_string()),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2848,6 +4008,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&method, file_id);
         builder
@@ -2865,6 +4026,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2908,6 +4070,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "c" }),
+            ..Default::default()
         };
         let defn = Symbol {
             location: SourceLocation {
@@ -2937,6 +4100,7 @@ mod tests {
             metadata: serde_json::json!({ "language": "c" }),
             to_qualified_hint: None,
             to_type_hint: None,
+            ..Default::default()
         };
         let before = builder.edge_count();
         builder.add_relation(&rel).unwrap();
@@ -2966,6 +4130,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "cpp" }),
+            ..Default::default()
         };
         let order_create = Symbol {
             name: "order_create".to_string(),
@@ -2985,6 +4150,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "cpp" }),
+            ..Default::default()
         };
         builder.add_symbol(&checkout, checkout_file);
         builder.add_symbol(&order_create, repo_file);
@@ -3004,6 +4170,7 @@ mod tests {
             metadata: serde_json::json!({ "language": "cpp" }),
             to_qualified_hint: Some("ecommerce::repositories::order_create".to_string()),
             to_type_hint: None,
+            ..Default::default()
         };
         let before = builder.edge_count();
         builder.add_relation(&rel).unwrap();
@@ -3033,6 +4200,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         }
     }
 
@@ -3063,6 +4231,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: Some("User.email".to_string()),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
         assert_eq!(
@@ -3091,6 +4260,7 @@ mod tests {
             metadata: serde_json::json!({ "language": "java" }),
             to_qualified_hint: Some("User.email".to_string()),
             to_type_hint: None,
+            ..Default::default()
         };
         let calls = Relation {
             from: "AuthService.register".to_string(),
@@ -3100,6 +4270,7 @@ mod tests {
             metadata: serde_json::json!({ "language": "java" }),
             to_qualified_hint: None,
             to_type_hint: None,
+            ..Default::default()
         };
 
         for order_refs_first in [true, false] {
@@ -3116,6 +4287,7 @@ mod tests {
                     metadata: serde_json::json!({ "language": "java" }),
                     to_qualified_hint: Some("User.email".to_string()),
                     to_type_hint: None,
+                    ..Default::default()
                 })
                 .unwrap();
             let stub_id = builder
@@ -3169,6 +4341,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         let enc_file = builder.ensure_file_node(Path::new("PasswordEncoder.java"));
         builder.add_symbol(&callee, enc_file);
@@ -3183,6 +4356,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
         assert_eq!(builder.edge_count(), before + 1);
@@ -3211,6 +4385,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java", "is_lambda": true }),
+            ..Default::default()
         };
         let current_lambda = Symbol {
             name: "$lambda$0".to_string(),
@@ -3230,6 +4405,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java", "is_lambda": true }),
+            ..Default::default()
         };
         let id_a = builder.add_symbol(&login_lambda, file_id);
         let id_b = builder.add_symbol(&current_lambda, file_id);
@@ -3266,6 +4442,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&method, file_id);
         for _ in 0..2 {
@@ -3284,6 +4461,7 @@ mod tests {
                     metadata: serde_json::json!({ "language": "java" }),
                     to_qualified_hint: Some("java.lang.String".to_string()),
                     to_type_hint: None,
+                    ..Default::default()
                 })
                 .unwrap();
         }
@@ -3321,6 +4499,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "kind": "heading" }),
+            ..Default::default()
         };
         builder.add_symbol(&heading, guide_id);
         builder.build_resolution_indexes();
@@ -3339,6 +4518,7 @@ mod tests {
                 metadata: serde_json::json!({ "kind": "markdown_link" }),
                 to_qualified_hint: Some("docs/adr.md".to_string()),
                 to_type_hint: Some("file".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -3382,6 +4562,7 @@ mod tests {
                 metadata: serde_json::json!({ "kind": "markdown_link" }),
                 to_qualified_hint: Some("docs/adr.md".to_string()),
                 to_type_hint: Some("file".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -3410,6 +4591,7 @@ mod tests {
                 metadata: serde_json::json!({ "kind": "markdown_link" }),
                 to_qualified_hint: Some("docs/missing.md".to_string()),
                 to_type_hint: Some("file".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -3457,6 +4639,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "kind": "heading", "level": 1 }),
+            ..Default::default()
         };
         let checkout_id = builder.add_symbol(&checkout, guide_id);
         builder.build_resolution_indexes();
@@ -3475,6 +4658,7 @@ mod tests {
                 metadata: serde_json::json!({ "kind": "markdown_link" }),
                 to_qualified_hint: Some("src/CheckoutService.java".to_string()),
                 to_type_hint: Some("file".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -3509,6 +4693,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&method, file_id);
         builder.build_resolution_indexes();
@@ -3528,6 +4713,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
         assert_eq!(builder.node_count(), before);
@@ -3564,6 +4750,7 @@ mod tests {
                 modifiers: vec![],
                 documentation: None,
                 metadata: serde_json::json!({ "language": "java" }),
+                ..Default::default()
             },
             file_id,
         );
@@ -3583,6 +4770,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java", "throws": true }),
                 to_qualified_hint: Some("java.io.IOException".to_string()),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
         assert!(
@@ -3621,6 +4809,7 @@ mod tests {
                 modifiers: vec![],
                 documentation: None,
                 metadata: serde_json::json!({ "language": "puppet" }),
+                ..Default::default()
             },
             file_id,
         );
@@ -3640,6 +4829,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "puppet" }),
                 to_qualified_hint: Some("Package[nginx]".to_string()),
                 to_type_hint: Some("puppetresource".to_string()),
+                ..Default::default()
             })
             .unwrap();
         assert!(
@@ -3674,6 +4864,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: Some("com.foo.Builder".to_string()),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
         builder
@@ -3691,6 +4882,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "java" }),
                 to_qualified_hint: Some("org.bar.Builder".to_string()),
                 to_type_hint: None,
+                ..Default::default()
             })
             .unwrap();
         let stubs: Vec<_> = builder
@@ -3754,6 +4946,7 @@ mod tests {
         symbol.symbol_type = SymbolType::Class;
         symbol.location.file = "OrderDTO.java".to_string();
         symbol.fields = vec![rgctl_plugin_api::Field {
+            source_span: None,
             name: "status".to_string(),
             field_type: Some("String".to_string()),
             visibility: Some("private".to_string()),
@@ -3781,6 +4974,294 @@ mod tests {
         assert!(builder.edges.iter().any(|e| {
             e.from == owner.id && e.to == field.id && e.edge_type == EdgeType::Contains
         }));
+    }
+
+    #[test]
+    fn materialized_field_does_not_drop_same_named_method() {
+        let mut builder = GraphBuilder::new();
+        builder.set_materialize_fields(true);
+        let file_id = builder.ensure_file_node(Path::new("Mod.java"));
+        let mut class_sym = sample_symbol();
+        class_sym.name = "Mod".to_string();
+        class_sym.symbol_type = SymbolType::Class;
+        class_sym.qualified_name = Some("Mod".to_string());
+        class_sym.location.file = "Mod.java".to_string();
+        class_sym.fields = vec![rgctl_plugin_api::Field {
+            name: "status".to_string(),
+            field_type: Some("int".to_string()),
+            visibility: Some("public".to_string()),
+            source_span: None,
+        }];
+        builder.add_symbol(&class_sym, file_id);
+
+        let mut method = sample_symbol();
+        method.name = "status".to_string();
+        method.symbol_type = SymbolType::Method;
+        method.qualified_name = Some("Mod.status".to_string());
+        method.location.file = "Mod.java".to_string();
+        builder.add_symbol(&method, file_id);
+
+        assert!(
+            builder
+                .nodes()
+                .iter()
+                .any(|n| n.node_type == NodeType::Variable && n.name == "status"),
+            "field variable"
+        );
+        assert!(
+            builder
+                .nodes()
+                .iter()
+                .any(|n| n.node_type == NodeType::Function && n.name == "status"),
+            "same-named method must survive field materialization"
+        );
+    }
+
+    #[test]
+    fn same_qualified_name_overloads_both_survive() {
+        let mut builder = GraphBuilder::new();
+        let file_id = builder.ensure_file_node(Path::new("Service.java"));
+        let mut int_serve = sample_symbol();
+        int_serve.name = "serve".to_string();
+        int_serve.symbol_type = SymbolType::Function;
+        int_serve.qualified_name = Some("svc.Service.serve".to_string());
+        int_serve.location.file = "Service.java".to_string();
+        int_serve.signature = Some("int serve(int x)".to_string());
+        int_serve.parameters = vec![rgctl_plugin_api::Parameter {
+            name: "x".to_string(),
+            param_type: Some("int".to_string()),
+            default_value: None,
+        }];
+        let mut str_serve = int_serve.clone();
+        str_serve.signature = Some("String serve(String s)".to_string());
+        str_serve.parameters = vec![rgctl_plugin_api::Parameter {
+            name: "s".to_string(),
+            param_type: Some("String".to_string()),
+            default_value: None,
+        }];
+        builder.add_symbol(&int_serve, file_id);
+        builder.add_symbol(&str_serve, file_id);
+        builder.add_symbol(&str_serve, file_id);
+
+        let serves: Vec<_> = builder
+            .nodes()
+            .iter()
+            .filter(|n| n.node_type == NodeType::Function && n.name == "serve")
+            .collect();
+        assert_eq!(serves.len(), 2, "overload was dropped");
+        let qns: Vec<_> = serves
+            .iter()
+            .map(|n| n.qualified_name.as_deref().unwrap_or(""))
+            .collect();
+        assert!(qns.contains(&"svc.Service.serve"), "{qns:?}");
+        assert!(qns.iter().any(|qn| qn.contains("String")), "{qns:?}");
+    }
+
+    #[test]
+    fn overloaded_methods_attribute_outbound_calls_by_line_span() {
+        let mut builder = GraphBuilder::new();
+        let file_id = builder.ensure_file_node(Path::new("Service.java"));
+        let loc = |s: usize, e: usize| SourceLocation {
+            file: "Service.java".to_string(),
+            start_line: s,
+            end_line: e,
+            start_column: 0,
+            end_column: 0,
+        };
+
+        let mut helper_int = sample_symbol();
+        helper_int.name = "helperInt".to_string();
+        helper_int.symbol_type = SymbolType::Function;
+        helper_int.qualified_name = Some("svc.Service.helperInt".to_string());
+        helper_int.location = loc(2, 2);
+
+        let mut helper_str = helper_int.clone();
+        helper_str.name = "helperStr".to_string();
+        helper_str.qualified_name = Some("svc.Service.helperStr".to_string());
+        helper_str.location = loc(3, 3);
+
+        let mut int_serve = helper_int.clone();
+        int_serve.name = "serve".to_string();
+        int_serve.qualified_name = Some("svc.Service.serve".to_string());
+        int_serve.location = loc(5, 7);
+        int_serve.signature = Some("int serve(int x)".to_string());
+        int_serve.parameters = vec![rgctl_plugin_api::Parameter {
+            name: "x".to_string(),
+            param_type: Some("int".to_string()),
+            default_value: None,
+        }];
+
+        let mut str_serve = int_serve.clone();
+        str_serve.location = loc(9, 11);
+        str_serve.signature = Some("int serve(String s)".to_string());
+        str_serve.parameters = vec![rgctl_plugin_api::Parameter {
+            name: "s".to_string(),
+            param_type: Some("String".to_string()),
+            default_value: None,
+        }];
+
+        let id_helper_int = builder.add_symbol(&helper_int, file_id);
+        let id_helper_str = builder.add_symbol(&helper_str, file_id);
+        let id_int_serve = builder.add_symbol(&int_serve, file_id);
+        let id_str_serve = builder.add_symbol(&str_serve, file_id);
+        builder.build_resolution_indexes();
+
+        builder
+            .add_relation(&Relation {
+                from: "svc.Service.serve".to_string(),
+                to: "svc.Service.helperInt".to_string(),
+                relation_type: RelationType::Calls,
+                location: loc(6, 6),
+                ..Default::default()
+            })
+            .unwrap();
+        builder
+            .add_relation(&Relation {
+                from: "svc.Service.serve".to_string(),
+                to: "svc.Service.helperStr".to_string(),
+                relation_type: RelationType::Calls,
+                location: loc(10, 10),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let int_callees: Vec<Uuid> = builder
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Calls && e.from == id_int_serve)
+            .map(|e| e.to)
+            .collect();
+        let str_callees: Vec<Uuid> = builder
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Calls && e.from == id_str_serve)
+            .map(|e| e.to)
+            .collect();
+        assert_eq!(int_callees, vec![id_helper_int]);
+        assert_eq!(str_callees, vec![id_helper_str]);
+    }
+
+    #[test]
+    fn standalone_field_and_method_coexist_in_both_orders_and_calls_resolve() {
+        for field_first in [true, false] {
+            let mut builder = GraphBuilder::new();
+            let src = b"// Mod.java\nclass Mod { int status; int status() { return 1; } int caller() { return status(); } }\n";
+            let file_id = builder.ensure_file_node_with_source(Path::new("Mod.java"), Some(src));
+            let file_node = builder
+                .nodes()
+                .iter()
+                .find(|n| n.node_type == NodeType::File)
+                .unwrap();
+            assert_eq!(file_node.start_byte, Some(0));
+            assert_eq!(file_node.end_byte, Some(src.len() as u32));
+
+            let mut field_sym = sample_symbol();
+            field_sym.name = "status".to_string();
+            field_sym.symbol_type = SymbolType::Variable;
+            field_sym.qualified_name = Some("pkg.Mod.status".to_string());
+            field_sym.location.file = "Mod.java".to_string();
+
+            let mut method_sym = sample_symbol();
+            method_sym.name = "status".to_string();
+            method_sym.symbol_type = SymbolType::Method;
+            method_sym.qualified_name = Some("pkg.Mod.status".to_string());
+            method_sym.location.file = "Mod.java".to_string();
+
+            let mut caller_sym = sample_symbol();
+            caller_sym.name = "caller".to_string();
+            caller_sym.symbol_type = SymbolType::Method;
+            caller_sym.qualified_name = Some("pkg.Mod.caller".to_string());
+            caller_sym.location.file = "Mod.java".to_string();
+
+            let (field_id, method_id) = if field_first {
+                let f = builder.add_symbol(&field_sym, file_id);
+                let m = builder.add_symbol(&method_sym, file_id);
+                (f, m)
+            } else {
+                let m = builder.add_symbol(&method_sym, file_id);
+                let f = builder.add_symbol(&field_sym, file_id);
+                (f, m)
+            };
+            let caller_id = builder.add_symbol(&caller_sym, file_id);
+            assert_ne!(field_id, method_id, "field_first={field_first}");
+
+            builder.build_resolution_indexes();
+            builder
+                .add_relation(&Relation {
+                    from: "pkg.Mod.caller".to_string(),
+                    to: "status".to_string(),
+                    relation_type: RelationType::Calls,
+                    location: SourceLocation {
+                        file: "Mod.java".to_string(),
+                        start_line: 2,
+                        end_line: 2,
+                        start_column: 0,
+                        end_column: 0,
+                    },
+                    metadata: serde_json::json!({}),
+                    to_qualified_hint: Some("pkg.Mod.status".to_string()),
+                    to_type_hint: Some("Mod".to_string()),
+                    ..Default::default()
+                })
+                .unwrap();
+
+            assert!(
+                builder.edges.iter().any(|e| {
+                    e.edge_type == EdgeType::Calls && e.from == caller_id && e.to == method_id
+                }),
+                "Calls must resolve to method even when same-named field exists (field_first={field_first})"
+            );
+        }
+    }
+
+    #[test]
+    fn unresolved_markdown_anchor_link_uses_portable_url_not_host_temp_path() {
+        let mut builder = GraphBuilder::new();
+        let file_id = builder.ensure_file_node(Path::new("README.md"));
+        let mut heading = sample_symbol();
+        heading.name = "Overview".to_string();
+        heading.symbol_type = SymbolType::Module;
+        heading.qualified_name = Some("README.md#overview".to_string());
+        heading.location.file = "README.md".to_string();
+        heading.metadata = serde_json::json!({ "kind": "heading" });
+        builder.add_symbol(&heading, file_id);
+        builder.build_resolution_indexes();
+
+        builder
+            .add_relation(&Relation {
+                from: "README.md#overview".to_string(),
+                to: "/private/var/folders/xx/tmp.12345/README.md#missing-anchor".to_string(),
+                relation_type: RelationType::References,
+                location: SourceLocation {
+                    file: "README.md".to_string(),
+                    start_line: 3,
+                    end_line: 3,
+                    start_column: 0,
+                    end_column: 0,
+                },
+                metadata: serde_json::json!({
+                    "kind": "markdown_link",
+                    "url": "../README.md#missing-anchor",
+                }),
+                to_qualified_hint: Some(
+                    "/private/var/folders/xx/tmp.12345/README.md#missing-anchor".to_string(),
+                ),
+                to_type_hint: Some("module".to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let stub = builder
+            .nodes()
+            .iter()
+            .find(|n| n.properties.get("is_external_stub").map(String::as_str) == Some("true"))
+            .expect("portable markdown stub");
+        assert_eq!(stub.name.as_str(), "../README.md#missing-anchor");
+        assert_eq!(
+            stub.qualified_name.as_deref(),
+            Some("../README.md#missing-anchor")
+        );
+        assert!(!stub.name.contains("tmp.12345"));
     }
 
     #[test]
@@ -3840,6 +5321,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
+            ..Default::default()
         }
     }
 
@@ -3940,6 +5422,7 @@ mod tests {
             return_type: None,
             parameters: vec![],
             fields: vec![rgctl_plugin_api::Field {
+                source_span: None,
                 name: "total".to_string(),
                 field_type: Some("int".to_string()),
                 visibility: None,
@@ -3947,6 +5430,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
+            ..Default::default()
         };
         builder.add_symbol(&symbol, file_id);
         assert!(
@@ -3978,6 +5462,7 @@ mod tests {
             return_type: None,
             parameters: vec![],
             fields: vec![rgctl_plugin_api::Field {
+                source_span: None,
                 name: "total".to_string(),
                 field_type: Some("int".to_string()),
                 visibility: None,
@@ -3985,6 +5470,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
+            ..Default::default()
         };
         builder.add_symbol(&symbol, file_id);
         builder.build_resolution_indexes();
@@ -4038,6 +5524,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
+            ..Default::default()
         }
     }
 
@@ -4075,6 +5562,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "python" }),
                 to_qualified_hint: Some("Base".to_string()),
                 to_type_hint: Some("class".to_string()),
+                ..Default::default()
             })
             .unwrap();
         builder.emit_mro_overrides();
@@ -4124,6 +5612,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "python" }),
                 to_qualified_hint: Some("Base".to_string()),
                 to_type_hint: Some("class".to_string()),
+                ..Default::default()
             })
             .unwrap();
         builder
@@ -4141,6 +5630,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "python" }),
                 to_qualified_hint: Some("Child.run".to_string()),
                 to_type_hint: Some("Child".to_string()),
+                ..Default::default()
             })
             .unwrap();
         let (_, edges) = builder.into_graph();
@@ -4180,6 +5670,7 @@ mod tests {
                 modifiers: vec![],
                 documentation: None,
                 metadata: serde_json::json!({}),
+                ..Default::default()
             },
             mod_file,
         );
@@ -4201,6 +5692,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "ruby" }),
                 to_qualified_hint: Some("Walkable".to_string()),
                 to_type_hint: Some("module".to_string()),
+                ..Default::default()
             })
             .unwrap();
         builder
@@ -4218,6 +5710,7 @@ mod tests {
                 metadata: serde_json::json!({ "language": "ruby" }),
                 to_qualified_hint: Some("Dog#bark".to_string()),
                 to_type_hint: Some("Dog".to_string()),
+                ..Default::default()
             })
             .unwrap();
         let (_, edges) = builder.into_graph();
@@ -4251,6 +5744,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "python" }),
+            ..Default::default()
         };
         builder.add_symbol(&handler, file_id);
         builder.build_resolution_indexes();
@@ -4274,6 +5768,7 @@ mod tests {
                 }),
                 to_qualified_hint: Some("route::GET /api/users/{id}".to_string()),
                 to_type_hint: Some("route".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -4314,6 +5809,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         let service = Symbol {
             name: "OrderService".to_string(),
@@ -4333,6 +5829,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java" }),
+            ..Default::default()
         };
         builder.add_symbol(&controller, file_id);
         builder.add_symbol(&service, file_id);
@@ -4355,6 +5852,7 @@ mod tests {
                 }),
                 to_qualified_hint: None,
                 to_type_hint: Some("class".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -4380,5 +5878,42 @@ mod tests {
             tags.contains("dependency") && tags.contains("service"),
             "target_vocab should land on in-repo Injects target, got {tags:?}"
         );
+    }
+    #[test]
+    fn materialized_fields_keep_qualified_types_and_byte_spans() {
+        let mut builder = GraphBuilder::new();
+        builder.set_materialize_fields(true);
+        let file = builder.ensure_file_node(Path::new("Order.java"));
+        let mut symbol = sample_symbol();
+        symbol.name = "Order".into();
+        symbol.symbol_type = SymbolType::Class;
+        symbol.fields = vec![rgctl_plugin_api::Field {
+            source_span: None,
+            name: "status".into(),
+            field_type: Some("Status".into()),
+            visibility: None,
+        }];
+        symbol.fields[0].source_span = Some(rgctl_plugin_api::FieldSourceSpan {
+            start_byte: 100,
+            end_byte: 120,
+            name_rel_offset: Some(4),
+            name_token_len: Some(6),
+            name_span_overflow: None,
+            start_line: 10,
+            end_line: 10,
+        });
+        symbol.metadata = serde_json::json!({"field_type_fqns":{"status":"demo.Status"}});
+        builder.add_symbol(&symbol, file);
+        let field = builder
+            .nodes()
+            .iter()
+            .find(|n| n.name == "status")
+            .expect("field");
+        assert_eq!(field.get_property("field_type_fqn"), Some("demo.Status"));
+        assert_eq!(field.start_line, Some(10));
+        assert_eq!(field.start_byte, Some(100));
+        assert_eq!(field.end_byte, Some(120));
+        assert_eq!(field.name_rel_offset, Some(4));
+        assert_eq!(field.name_token_len, Some(6));
     }
 }

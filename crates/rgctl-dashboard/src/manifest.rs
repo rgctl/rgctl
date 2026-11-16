@@ -23,29 +23,13 @@ pub struct SemanticSection {
     pub graph_digest: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KantraSection {
-    pub available: bool,
-    pub violation_count: usize,
-    pub evaluated_rules: usize,
-    pub cache_hits: usize,
-    pub cache_misses: usize,
-    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
-    pub by_category: std::collections::HashMap<String, usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail_dir: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub catalog_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ruleset: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_filter: Option<String>,
+/// Feature flags describing how detail payloads are stored in this bundle.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DashboardCapabilities {
+    /// When true, DFG/slice detail is served from `slice.record_{index,data}.bin`
+    /// (no per-function `slice/<uuid>.json`).
     #[serde(default)]
-    pub file_count: usize,
-    #[serde(default)]
-    pub rule_count: usize,
+    pub slice_detail_archive: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,8 +43,6 @@ pub struct DashboardManifest {
     pub analysis: Option<AnalysisSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic: Option<SemanticSection>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kantra: Option<KantraSection>,
     pub metrics: MetricsSection,
     pub generated_at: String,
     /// Stable fingerprint for incremental dashboard export (semantic, not volatile UUID digest).
@@ -85,6 +67,15 @@ pub struct DashboardManifest {
     /// that knowledge in two places.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// How detail payloads are stored (archive vs per-file).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<DashboardCapabilities>,
+    /// Slice record-pack index path when `capabilities.slice_detail_archive` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slice_record_index_path: Option<String>,
+    /// Slice record-pack data path when `capabilities.slice_detail_archive` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slice_record_data_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -250,9 +241,13 @@ impl DashboardManifest {
             slice_function_count: slice.function_count,
             blast_available: blast.available,
             blast_index_path: crate::blast_export::BLAST_INDEX_FILE.into(),
-            function_metrics_path: Some(
-                crate::function_metrics_export::FUNCTION_METRICS_FILE.into(),
-            ),
+            function_metrics_path: if crate::bundle::selected_version()
+                == crate::bundle::BundleVersion::V1
+            {
+                Some(crate::function_metrics_export::FUNCTION_METRICS_FILE.into())
+            } else {
+                None
+            },
             blast_snapshot_path: if blast.snapshot_copied {
                 Some(crate::blast_export::BLAST_SNAPSHOT_BUNDLE_NAME.into())
             } else {
@@ -330,12 +325,24 @@ impl DashboardManifest {
             },
             analysis,
             semantic,
-            kantra: None,
             metrics,
             generated_at: chrono_now_rfc3339(),
             export_fingerprint: Some(export_fingerprint),
             mode: Some(crate::bundle::selected_mode().to_string()),
             bundle_version: Some(crate::bundle::selected_version_tag().to_string()),
+            capabilities: Some(DashboardCapabilities {
+                slice_detail_archive: slice.record_pack,
+            }),
+            slice_record_index_path: if slice.record_pack {
+                Some(crate::cfg_record_pack::SLICE_RECORD_INDEX_FILE.into())
+            } else {
+                None
+            },
+            slice_record_data_path: if slice.record_pack {
+                Some(crate::cfg_record_pack::SLICE_RECORD_DATA_FILE.into())
+            } else {
+                None
+            },
         }
     }
 }
@@ -434,5 +441,104 @@ mod tests {
         assert_eq!(v["analysis"]["blast_available"], false);
         assert_eq!(v["analysis"]["dataflow_available"], false);
         assert_eq!(v["analysis"]["taint_available"], false);
+    }
+
+    #[test]
+    fn manifest_v1_vs_v2_function_metrics_path() {
+        use crate::bundle::{BundleVersion, set_bundle_override};
+
+        let meta = MetagraphPayload {
+            schema_version: 3,
+            mode: "package_metagraph".into(),
+            community_only: false,
+            threshold_community_only: COMMUNITY_ONLY_THRESHOLD,
+            source_node_count: 1,
+            members_path: None,
+            members_total: None,
+            members_format: None,
+            nodes: vec![],
+            edges: vec![],
+        };
+        let export = MetagraphExport {
+            meta,
+            communities: CommunitiesPayload {
+                schema_version: 1,
+                modularity: 0.0,
+                communities: vec![],
+            },
+        };
+        let metrics = MetricsSection {
+            function_count: 0,
+            class_count: 0,
+            calls_count: 0,
+            avg_complexity: 0.0,
+            high_blast_radius_count: 0,
+        };
+        let blast = BlastExportSummary {
+            available: true,
+            snapshot_copied: true,
+            function_scores: 0,
+        };
+
+        set_bundle_override(Some(BundleVersion::V2));
+        let m_v2 = DashboardManifest::with_phases(
+            1,
+            0,
+            "d".into(),
+            "fp".into(),
+            metrics.clone(),
+            &export,
+            &CfgExportSummary::default(),
+            &SliceExportSummary::default(),
+            &blast,
+            &DataflowExportSummary::default(),
+            &MutationsExportSummary::default(),
+            &TaintExportSummary::default(),
+            &MigrationExportSummary::default(),
+            None,
+        );
+        assert!(
+            m_v2.analysis
+                .as_ref()
+                .unwrap()
+                .function_metrics_path
+                .is_none()
+        );
+        assert_eq!(
+            m_v2.analysis
+                .as_ref()
+                .unwrap()
+                .blast_snapshot_path
+                .as_deref(),
+            Some(crate::blast_export::BLAST_SNAPSHOT_BUNDLE_NAME)
+        );
+
+        set_bundle_override(Some(BundleVersion::V1));
+        let m_v1 = DashboardManifest::with_phases(
+            1,
+            0,
+            "d".into(),
+            "fp".into(),
+            metrics,
+            &export,
+            &CfgExportSummary::default(),
+            &SliceExportSummary::default(),
+            &blast,
+            &DataflowExportSummary::default(),
+            &MutationsExportSummary::default(),
+            &TaintExportSummary::default(),
+            &MigrationExportSummary::default(),
+            None,
+        );
+        assert_eq!(
+            m_v1.analysis
+                .as_ref()
+                .unwrap()
+                .function_metrics_path
+                .as_deref(),
+            Some(crate::function_metrics_export::FUNCTION_METRICS_FILE)
+        );
+
+        set_bundle_override(None);
     }
 }

@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "language": "java",
   "project": "ecommerce-java",
   "graph": {
@@ -246,7 +246,8 @@
       "severity": "required",
       "blast": {
         "exact_direct_callers": [
-          "checkout"
+          "checkout",
+          "clearCart"
         ],
         "min_score": 0.1
       }
@@ -391,6 +392,174 @@
           "close()"
         ]
       }
+    },
+    "v2OverloadInt": {
+      "match": {
+        "name": "v2Overload",
+        "class": "V2OrderLedger",
+        "discriminator": "(int"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "v2Overload",
+        "discriminator": "(int",
+        "file_suffix": "CorrectnessHarness.java",
+        "language": "java"
+      },
+      "exact_callees": [
+        "v2FreeHelper"
+      ]
+    },
+    "v2OverloadStr": {
+      "match": {
+        "name": "v2Overload",
+        "class": "V2OrderLedger",
+        "discriminator": "(String"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "v2Overload",
+        "discriminator": "(String",
+        "file_suffix": "CorrectnessHarness.java",
+        "language": "java"
+      },
+      "exact_callees": [
+        "v2StringTarget"
+      ]
+    },
+    "v2LedgerBalance": {
+      "match": {
+        "name": "balance",
+        "class": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "v2FreeHelper"
+      ],
+      "mutations": {
+        "type": "V2OrderLedger",
+        "must_contain": [
+          "applyAdjustment"
+        ],
+        "must_exclude": [
+          "correctnessLeaf"
+        ]
+      }
+    },
+    "v2AuditWeightImpl": {
+      "match": {
+        "name": "auditWeight",
+        "class": "V2OrderLedger",
+        "discriminator": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "balance"
+      ],
+      "mro": {
+        "extends": [
+          "V2BaseLedger"
+        ],
+        "implements": [
+          "V2AuditPolicy"
+        ],
+        "overrides": [
+          "auditWeight"
+        ]
+      }
+    },
+    "v2SliceFlowProbe": {
+      "match": {
+        "name": "v2SliceFlowProbe",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "slice": {
+        "file": "src/main/java/com/example/ecommerce/correctness/CorrectnessHarness.java",
+        "line": 67,
+        "variable": "finalOut",
+        "must_contain": [
+          "seedInput",
+          "stepVal"
+        ],
+        "must_exclude": [
+          "999"
+        ]
+      },
+      "flows": {
+        "file": "src/main/java/com/example/ecommerce/correctness/CorrectnessHarness.java",
+        "line": 65,
+        "variable": "stepVal",
+        "must_contain": [
+          "aliasVal",
+          "finalOut"
+        ]
+      }
+    },
+    "v2CloneExactA": {
+      "match": {
+        "name": "v2CloneExact",
+        "class": "V2CloneCarrierA"
+      },
+      "severity": "required",
+      "unique": true,
+      "clones": {
+        "mode": "exact",
+        "group_with": [
+          "v2CloneExact"
+        ],
+        "not_grouped_with": [
+          "correctnessLeaf"
+        ]
+      }
+    },
+    "v2CloneFragmentB": {
+      "match": {
+        "name": "v2CloneExact",
+        "class": "V2CloneCarrierB"
+      },
+      "severity": "required",
+      "unique": true,
+      "clones": {
+        "mode": "fragment",
+        "group_with": [
+          "v2CloneExact"
+        ],
+        "not_grouped_with": [
+          "correctnessLeaf"
+        ]
+      }
+    },
+    "v2SemanticLedger": {
+      "match": {
+        "name": "reconcileChargebackLedger",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "archiveChargebackAudit"
+      ],
+      "semantic": {
+        "query": "reconcile chargeback ledger",
+        "top3_contains": "reconcileChargebackLedger",
+        "neighbor_names": [
+          "archiveChargebackAudit"
+        ]
+      },
+      "review": {
+        "file": "src/main/java/com/example/ecommerce/correctness/CorrectnessHarness.java",
+        "find": "return 42;",
+        "replace": "return 43;",
+        "must_contain": [
+          "correctnessMid"
+        ]
+      }
     }
   },
   "invariants": {
@@ -452,5 +621,15 @@
         "correctnessLeaf"
       ]
     }
+  },
+  "analytics": {
+    "severity": "required",
+    "root": "correctnessRoot",
+    "mid": "correctnessMid",
+    "leaf": "correctnessLeaf",
+    "separate": [
+      "cliqueAlphaA",
+      "cliqueBetaA"
+    ]
   }
 }

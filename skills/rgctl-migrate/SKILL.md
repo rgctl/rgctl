@@ -3,8 +3,7 @@ name: rgctl-migrate
 description: >-
   Code-intelligence migration planning with rgctl: framework/runtime/version
   upgrades, API/package/library refactors, and Strangler-Fig architectural
-  extraction. Prefer rgctl structural queries first; Kantra is an optional
-  accelerator only for its embedded target catalog. Use when asked for a
+  extraction. Prefer rgctl structural queries first. Use when asked for a
   migration roadmap, modernization plan, javax→jakarta / Quarkus / Spring Boot
   upgrade, package move, or service-boundary cut.
 rgctl-managed: true
@@ -12,7 +11,7 @@ rgctl-managed: true
 
 # rgctl-migrate (`/rgctl:migrate`)
 
-Plan and execute migrations with **rgctl code intelligence** — not grep-first, not Kantra-first.
+Plan and execute migrations with **rgctl code intelligence** — not grep-first.
 
 ## Step 0: Acquire `.rgctl/` First (mandatory)
 
@@ -81,24 +80,6 @@ Presets: `hybrid_default` | `foundational_first` | `dense_cluster` | `risk_mitig
 ## Test handoffs
 ## Sources (.rgctl/migration_plan.json, communities, blast-radius)
 ```
-
-## Optional Kantra overlay (target-specific only)
-
-Kantra is **not** the primary migration workflow. Use it only when the destination matches the embedded catalog:
-
-`openjdk11+`, `openjdk17+`, `openjdk21+`, `jakarta-ee9+`, `quarkus`, `quarkus3+`, `spring-boot3+`, `spring6+`, `hibernate6+`, `camel3+`, `camel4+`, `eap7`, `eap8`, `openliberty`, `cloud-readiness`, `angular`, `patternfly-v6`, `dotnet-core`
-
-```bash
-# All-target eval during discover (writes .rgctl/kantra_findings.json with targets[])
-rgctl discover . --with-kantra
-rgctl -f json rules targets
-rgctl -f json rules findings --target quarkus,jakarta-ee9+ --limit 40
-
-# Or post-discover against embedded catalog (no DIR required)
-rgctl -f json rules run --target quarkus
-```
-
-For every other migration, stay on Tracks A–C with core structural queries.
 
 ## Post-edit verification
 

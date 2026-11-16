@@ -71,7 +71,7 @@ fn extract_summary(root: &Path, files: &[PathBuf], thread_count: Option<usize>) 
     let registry = shared_registry();
     let extractor = Extractor::new(Arc::clone(&registry));
     let mut builder = GraphBuilder::new();
-    let (_stats, tails) = stream_into_graph(
+    let (_stats, tails, _lossless_sidecars) = stream_into_graph(
         thread_count,
         &extractor,
         registry,
@@ -233,7 +233,7 @@ fn duplicate_fqn_never_fabricates_random_winner() {
         let registry = Arc::new(rgctl_languages::default_registry());
         let extractor = Extractor::new(Arc::clone(&registry));
         let mut builder = GraphBuilder::new();
-        let (_stats, tails) = stream_into_graph(
+        let (_stats, tails, _lossless_sidecars) = stream_into_graph(
             threads,
             &extractor,
             registry,

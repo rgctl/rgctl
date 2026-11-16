@@ -15,6 +15,27 @@ struct PooledParser {
 
 thread_local! {
     static PARSERS: RefCell<HashMap<String, PooledParser>> = RefCell::new(HashMap::new());
+    static CAPTURE_LAST_TREE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static LAST_PARSED_TREE: RefCell<Option<(usize, usize, Tree)>> = const { RefCell::new(None) };
+}
+
+/// Enable or disable capturing the most recent `Tree` parsed on this worker thread
+/// so `--lossless` Green-CST construction can reuse the `Tree` produced during symbol extraction
+/// without parsing the file a second time.
+pub fn set_capture_last_tree(enable: bool) {
+    CAPTURE_LAST_TREE.with(|c| c.set(enable));
+    if !enable {
+        LAST_PARSED_TREE.with(|t| *t.borrow_mut() = None);
+    }
+}
+
+/// Take the captured `Tree` if it matches the `source` slice pointer and length, and disable capture.
+pub fn take_last_parsed_tree(source: &[u8]) -> Option<Tree> {
+    CAPTURE_LAST_TREE.with(|c| c.set(false));
+    LAST_PARSED_TREE.with(|cell| {
+        let taken = cell.borrow_mut().take()?;
+        (taken.0 == source.as_ptr() as usize && taken.1 == source.len()).then_some(taken.2)
+    })
 }
 
 /// Borrow the thread-local parser for `lang_id`, ensuring `grammar` is set once
@@ -72,10 +93,16 @@ pub fn parse_with_pool(lang_id: &str, grammar: Language, source: &[u8]) -> Resul
                 .map_err(|e| format!("set_language({lang_id}): {e}"))?;
             entry.grammar = Some(grammar);
         }
-        entry
+        let tree = entry
             .parser
             .parse(source, None)
-            .ok_or_else(|| format!("parse failed for language `{lang_id}`"))
+            .ok_or_else(|| format!("parse failed for language `{lang_id}`"))?;
+        if CAPTURE_LAST_TREE.with(|c| c.get()) {
+            LAST_PARSED_TREE.with(|t| {
+                *t.borrow_mut() = Some((source.as_ptr() as usize, source.len(), tree.clone()));
+            });
+        }
+        Ok(tree)
     })
 }
 

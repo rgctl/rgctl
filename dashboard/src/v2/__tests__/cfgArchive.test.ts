@@ -5,10 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeRecordIndex } from "./cfgRecordPackFixture";
 import {
   isArchiveOnly,
+  isSliceArchiveOnly,
   loadCfgDetailFromArchive,
   loadCfgIndexMeta,
+  loadSliceIndexMeta,
   resetCfgArchiveCaches,
 } from "../cfgArchive";
+import { loadDfgDetail } from "../hooks/useDfgDetail";
 
 const FN = "11111111-2222-4333-8444-555555555555";
 
@@ -123,5 +126,91 @@ describe("loadCfgDetailFromArchive", () => {
       record_data_path: "cfg_pdg.record_data.bin",
     });
     expect(cfg).toBeNull();
+  });
+});
+
+const sliceDetailJson = JSON.stringify({
+  schema_version: 2,
+  function_id: FN,
+  name: "handle",
+  pdg: {
+    nodes: [{ id: "n1", line: 10, label: "x = req.param", defined: ["x"], used: ["req"] }],
+    edges: [],
+  },
+});
+
+describe("slice archive & loadDfgDetail", () => {
+  it("loads DFG from slice.record_*.bin without fetching slice/<id>.json when manifest.capabilities.slice_detail_archive is true", async () => {
+    const body = new TextEncoder().encode(sliceDetailJson);
+    const indexBytes = encodeRecordIndex([{ id: FN, offset: 0, length: body.length }]);
+    const requestedUrls: string[] = [];
+
+    const customFetch: typeof fetch = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes("slice.record_index.bin")) {
+        return new Response(indexBytes, { status: 200 });
+      }
+      if (url.includes("slice.record_data.bin")) {
+        return new Response(body, { status: 206 });
+      }
+      return new Response("", { status: 404 });
+    };
+
+    const dfg = await loadDfgDetail(FN, "slice", customFetch, {
+      capabilities: { slice_detail_archive: true },
+      slice_record_index_path: "slice.record_index.bin",
+      slice_record_data_path: "slice.record_data.bin",
+    });
+    expect(dfg).not.toBeNull();
+    expect(dfg!.name).toBe("handle");
+    expect(dfg!.nodes).toHaveLength(1);
+    expect(requestedUrls.some((u) => u.includes(`slice/${FN}.json`))).toBe(false);
+  });
+
+  it("checks cached slice_index.json metadata before per-file fetch when manifest is omitted in archive_only mode", async () => {
+    const body = new TextEncoder().encode(sliceDetailJson);
+    const indexBytes = encodeRecordIndex([{ id: FN, offset: 0, length: body.length }]);
+    const requestedUrls: string[] = [];
+
+    const customFetch: typeof fetch = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes("slice_index.json")) {
+        return new Response(
+          JSON.stringify({
+            schema_version: 2,
+            available: true,
+            detail_mode: "archive_only",
+            record_index_path: "slice.record_index.bin",
+            record_data_path: "slice.record_data.bin",
+            function_count: 6000,
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("slice.record_index.bin")) {
+        return new Response(indexBytes, { status: 200 });
+      }
+      if (url.includes("slice.record_data.bin")) {
+        return new Response(body, { status: 206 });
+      }
+      return new Response("", { status: 404 });
+    };
+
+    // First load reads slice_index.json once and goes straight to archive (no 404 on slice/<id>.json).
+    const dfg1 = await loadDfgDetail(FN, "slice", customFetch, null);
+    expect(dfg1).not.toBeNull();
+    expect(requestedUrls.some((u) => u.includes(`slice/${FN}.json`))).toBe(false);
+    expect(requestedUrls.filter((u) => u.includes("slice_index.json"))).toHaveLength(1);
+
+    // Second load reuses cached sliceIndexMeta and sliceRecordIndex (only fetches record_data.bin Range).
+    const dfg2 = await loadDfgDetail(FN, "slice", customFetch, null);
+    expect(dfg2).not.toBeNull();
+    expect(requestedUrls.filter((u) => u.includes("slice_index.json"))).toHaveLength(1);
+    expect(requestedUrls.filter((u) => u.includes("slice.record_index.bin"))).toHaveLength(1);
+
+    const meta = await loadSliceIndexMeta(customFetch);
+    expect(isSliceArchiveOnly(meta)).toBe(true);
   });
 });

@@ -66,10 +66,27 @@ pub struct TaintExportSummary {
     pub vulnerable_flows: usize,
 }
 
+#[allow(dead_code)] // Public convenience wrapper; production path uses `_with_index`.
 pub fn export_taint_bundle(repo_root: &Path, out_dir: &Path) -> Result<TaintExportSummary, String> {
+    export_taint_bundle_with_index(repo_root, out_dir, None)
+}
+
+/// Same as [`export_taint_bundle`], with an optional pre-loaded analysis index.
+pub fn export_taint_bundle_with_index(
+    repo_root: &Path,
+    out_dir: &Path,
+    analysis_index: Option<&crate::analysis_stream_export::AnalysisIndexMap>,
+) -> Result<TaintExportSummary, String> {
     let analysis_dir = repo_root.join(".rgctl/analysis");
     let storage = AnalysisStorage::new(&analysis_dir);
-    let index = storage.load_analysis_index().map_err(|e| e.to_string())?;
+    let owned_index;
+    let index: &crate::analysis_stream_export::AnalysisIndexMap = match analysis_index {
+        Some(idx) => idx,
+        None => {
+            owned_index = storage.load_analysis_index().map_err(|e| e.to_string())?;
+            &owned_index
+        }
+    };
 
     let taint_dir = out_dir.join(TAINT_DETAIL_DIR);
     if taint_dir.exists() {
@@ -78,8 +95,9 @@ pub fn export_taint_bundle(repo_root: &Path, out_dir: &Path) -> Result<TaintExpo
     fs::create_dir_all(&taint_dir).map_err(|e| e.to_string())?;
 
     let mut entries: Vec<_> = index
-        .into_values()
+        .values()
         .filter(|entry| entry.flow_count > 0 || entry.vulnerable_count > 0)
+        .cloned()
         .collect();
     entries.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
 

@@ -1,6 +1,6 @@
 # Terminal + dashboard demos
 
-Aligned with the [User Guide](../user-guide.md) (named communities, CoolStore `/services/*` + `cpg mutations --type ShoppingCart`, Kantra `--with-kantra`, semantic `--scope community`). Pattern for both:
+Aligned with the [User Guide](../user-guide.md) (named communities, CoolStore `/services/*` + `cpg mutations --type ShoppingCart`, semantic `--scope community`). Pattern for both:
 
 1. Record a **clean** video (no on-screen caption chrome)
 2. Keep `*-no-captions.mp4` for comparison
@@ -11,13 +11,13 @@ Aligned with the [User Guide](../user-guide.md) (named communities, CoolStore `/
 ## CLI (VHS)
 
 Comprehensive 7-scene CLI showcase on `rgctl-tests/ecommerce-java`:
-1. **`discover`** (`--with-cfg --with-kantra --export-migration-hints`) — AST, RGCL v2 mmap snapshot, Fast-Leiden, CFG/PDG, Kantra, migration plan
+1. **`discover`** (`--with-cfg --export-migration-hints`) — AST, RGCL v2 mmap snapshot, Fast-Leiden, CFG/PDG, migration plan
 2. **`status`, `find`, `callers`** — zero-grep readiness, exact symbol lookup, and disambiguated call-graph traversal
 3. **`blast-radius`** — upstream change impact scoring (`CartService::clearCart` and `ShoppingCartService::priceShoppingCart`)
 4. **`communities list` & `metrics --pagerank`** — Fast-Leiden domain clusters and production-aware PageRank hotspots
 5. **`inspect cfg`, `cpg mutations`, `slice`** — Hybrid CPG control-flow blocks, field mutations on `ShoppingCart`, and backward program slicing
 6. **`clones` & `semantic`** — structural token-bloom clone detection and offline vocab semantic code search
-7. **`relations -e violates`, `check`, `review paths`, `install --list-agents`** — Konveyor Kantra violations, CI policy gates, PR call-path deltas, and AI coding agent skill pack
+7. **`check`, `review paths`, `install --list-agents`** — CI policy gates, PR call-path deltas, and AI coding agent skill pack
 
 | File | Purpose |
 |------|---------|
@@ -52,7 +52,7 @@ cargo build --bin rgctl
 
 | File | Purpose |
 |------|---------|
-| [`../dashboard/scripts/record-feature-demo.mjs`](../dashboard/scripts/record-feature-demo.mjs) | Tab montage (ecommerce-java defaults) |
+| [`../../dashboard/scripts/record-feature-demo.mjs`](../../dashboard/scripts/record-feature-demo.mjs) | Tab montage (ecommerce-java defaults) |
 | [`record-feature-demo.sh`](record-feature-demo.sh) | Discover + serve + record + burn |
 | [`rgctl-feature-demo.srt`](rgctl-feature-demo.srt) | Written by the recorder |
 | [`burn-feature-demo-captions.sh`](burn-feature-demo-captions.sh) | Burn → `rgctl-feature-demo.mp4` |
@@ -78,10 +78,10 @@ Blog walkthrough for [Decomposing a Monolith into Microservices](https://shaaf.d
 
 | File | Purpose |
 |------|---------|
-| [`microservices-decomposition-cli.tape`](microservices-decomposition-cli.tape) | VHS script |
-| [`record-microservices-decomposition-cli.sh`](record-microservices-decomposition-cli.sh) | Record → `microservices-decomposition-cli-no-captions.{gif,mp4}` |
-| [`microservices-decomposition-cli.srt`](microservices-decomposition-cli.srt) | Subtitle cues |
-| [`burn-microservices-decomposition-cli.sh`](burn-microservices-decomposition-cli.sh) | Burn → `microservices-decomposition-cli.mp4` |
+| `microservices-decomposition-cli.tape` | VHS script |
+| `record-microservices-decomposition-cli.sh` | Record → `microservices-decomposition-cli-no-captions.{gif,mp4}` |
+| `microservices-decomposition-cli.srt` | Subtitle cues |
+| `burn-microservices-decomposition-cli.sh` | Burn → `microservices-decomposition-cli.mp4` |
 
 ```bash
 cargo build --release

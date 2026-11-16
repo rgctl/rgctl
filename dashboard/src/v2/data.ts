@@ -50,19 +50,12 @@ export interface Manifest {
   metrics?: { function_count?: number; class_count?: number; calls_count?: number };
   view?: { community_count?: number; metanode_count?: number };
   semantic?: { available?: boolean; functions_indexed?: number; model_id?: string };
-  /** Konveyor Kantra export summary (`kantra_index.json`). */
-  kantra?: {
-    available: boolean;
-    violation_count?: number;
-    evaluated_rules?: number;
-    index_path?: string | null;
-    detail_dir?: string | null;
-    catalog_id?: string | null;
-    ruleset?: string | null;
-    target_filter?: string | null;
-    file_count?: number;
-    rule_count?: number;
+  /** How detail payloads are stored (archive vs per-file). */
+  capabilities?: {
+    slice_detail_archive?: boolean;
   };
+  slice_record_index_path?: string | null;
+  slice_record_data_path?: string | null;
   /** Pipeline phases; the only honest source of "coverage" in the bundle today. */
   phases?: Record<string, string>;
 }
@@ -264,7 +257,6 @@ export function capabilities(m: Manifest | null): { label: string; available: bo
     { label: "taint", available: a?.taint_available === true },
     { label: "field writes", available: a?.mutations_available === true },
     { label: "semantic search", available: m?.semantic?.available === true },
-    { label: "static rules", available: m?.kantra?.available === true },
   ];
 }
 

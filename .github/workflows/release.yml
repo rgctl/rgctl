@@ -130,12 +130,29 @@ jobs:
             bin: rgctl
             # Default features include semantic-onnx (code-daemon embedder).
             cargo_args: --features semantic-onnx
+          - os: ubuntu-26.04
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+            bin: rgctl
+            # ort has no prebuilt ONNX Runtime binary for musl targets.
+            cargo_args: --no-default-features
+          - os: ubuntu-26.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+            bin: rgctl
+            cargo_args: --features semantic-onnx
+          - os: ubuntu-26.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: tar.gz
+            bin: rgctl
+            # ort has no prebuilt ONNX Runtime binary for musl targets.
+            cargo_args: --no-default-features
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
             bin: rgctl
             cargo_args: --features semantic-onnx
-          - os: macos-latest
+          - os: macos-26-intel
             target: x86_64-apple-darwin
             archive: tar.gz
             bin: rgctl
@@ -143,6 +160,11 @@ jobs:
             cargo_args: --no-default-features
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            archive: zip
+            bin: rgctl.exe
+            cargo_args: --features semantic-onnx
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
             archive: zip
             bin: rgctl.exe
             cargo_args: --features semantic-onnx
@@ -165,8 +187,22 @@ jobs:
         with:
           shared-key: release-${{ matrix.target }}
 
+      - name: Build musl release binary
+        if: endsWith(matrix.target, '-musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes zig
+          zig version
+          cargo install cargo-zigbuild
+          cargo zigbuild --release ${{ matrix.cargo_args }} --target ${{ matrix.target }} --bin rgctl
+
       - name: Build release binary
+        if: ${{ !endsWith(matrix.target, '-musl') }}
         run: cargo build --release ${{ matrix.cargo_args }} --target ${{ matrix.target }} --bin rgctl
+
+      - name: Verify release binary
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/${{ matrix.bin }} --version
 
       - name: Package archive (Unix)
         if: matrix.archive == 'tar.gz'

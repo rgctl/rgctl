@@ -2,6 +2,7 @@
 
 use crate::plugin::source_location;
 use rgctl_plugin_api::{Field, Symbol, SymbolType};
+use rgctl_plugin_helpers::record_symbol_spans;
 use tree_sitter::Node;
 
 fn text(node: Node, source: &[u8]) -> Option<String> {
@@ -24,6 +25,7 @@ pub fn extract_enumerator_fields(enum_node: Node, source: &[u8]) -> Vec<Field> {
             .and_then(|n| text(n, source));
         if let Some(name) = name {
             fields.push(Field {
+                source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                 name,
                 field_type: None,
                 visibility: None,
@@ -67,7 +69,7 @@ pub fn extract_union_specifier_named(
             metadata["underlying_type"] = serde_json::Value::String(tag.to_string());
         }
     }
-    Some(Symbol {
+    let mut symbol = Symbol {
         name: name.clone(),
         symbol_type: SymbolType::Struct,
         qualified_name: Some(name),
@@ -79,7 +81,10 @@ pub fn extract_union_specifier_named(
         modifiers: vec![],
         documentation: None,
         metadata,
-    })
+        ..Default::default()
+    };
+    record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+    Some(symbol)
 }
 
 /// `#define MAX 10`
@@ -95,7 +100,7 @@ pub fn extract_preproc_def(node: Node, source: &[u8], file_path: &str) -> Option
     let value = node
         .child_by_field_name("value")
         .and_then(|n| text(n, source));
-    Some(Symbol {
+    let mut symbol = Symbol {
         name: name.clone(),
         symbol_type: SymbolType::Macro,
         qualified_name: Some(name),
@@ -110,7 +115,10 @@ pub fn extract_preproc_def(node: Node, source: &[u8], file_path: &str) -> Option
             "language": "c",
             "kind": "preproc_def",
         }),
-    })
+        ..Default::default()
+    };
+    record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+    Some(symbol)
 }
 
 /// `#define SQR(x) ((x)*(x))`
@@ -126,7 +134,7 @@ pub fn extract_preproc_function_def(node: Node, source: &[u8], file_path: &str) 
     let value = node
         .child_by_field_name("value")
         .and_then(|n| text(n, source));
-    Some(Symbol {
+    let mut symbol = Symbol {
         name: name.clone(),
         symbol_type: SymbolType::Macro,
         qualified_name: Some(name),
@@ -141,5 +149,8 @@ pub fn extract_preproc_function_def(node: Node, source: &[u8], file_path: &str) 
             "language": "c",
             "kind": "preproc_function_def",
         }),
-    })
+        ..Default::default()
+    };
+    record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+    Some(symbol)
 }

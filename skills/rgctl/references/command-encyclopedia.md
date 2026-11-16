@@ -29,7 +29,6 @@ Prefer the **Canonical** column in examples and agent workflows. Aliases/façade
 | PR call-path review | `review paths` | — |
 | PR policy gate | `review check` | `pr-check` (alias) |
 | Composed review artifact | `review export` | — |
-| Kantra rules | `rules run` | — |
 | Experimental GQL | `gql` | prefer Query verbs above |
 
 `rgctl --help` lists commands under visual groups: Lifecycle · Query · Analysis · Security · Policy · Meta (flat verbs unchanged: `rgctl discover`, not nested).
@@ -66,7 +65,7 @@ Prefer the **Canonical** column in examples and agent workflows. Aliases/façade
 
 **Repo targeting:** `rgctl -r /repo discover .` and `rgctl -r /repo discover` resolve to `/repo` (positional `.` does not override `-r` with process cwd). Relative PATH joins `-r`.
 
-**Other flags:** `--languages java,go` restricts the language set; `--exclude` filters paths (glob); `--verbose` prints per-file progress (noisy — skip unless debugging a stuck/slow discover); `--with-kantra` writes Kantra findings; `--write-json-graph` also writes legacy `graph.db`/`graph.json` (rarely needed — snapshot-only is the default).
+**Other flags:** `--languages java,go` restricts the language set; `--exclude` filters paths (glob); `--verbose` prints per-file progress (noisy — skip unless debugging a stuck/slow discover); `--write-json-graph` also writes legacy `graph.db`/`graph.json` (rarely needed — snapshot-only is the default).
 
 **SCIP overlay:** `--scip <PATH.scip>` applies a compiler-exact `.scip` protobuf index (`apply_scip_overlay`, `resolution = "scip"`) to upgrade ambiguous call edges.
 
@@ -111,7 +110,7 @@ rgctl discover . --with-cfg --with-taint   # whole-repo CFG archive (taint / mut
 
 **Command:** `rgctl [-f json] update [PATH] [--files PATH,...] [--since REF] [--cascade-depth N] [--force] [--no-wait] [--wait-timeout SECS] [-l/--languages CSV] [-e/--exclude GLOB]`
 
-**Purpose:** Incremental **structural** graph patch for changed sources. Not a full discover — does not rebuild communities, Kantra, CFG/PDG, or migration plans. Prefer this (or `serve --watch`) over rediscover when the working tree drifts.
+**Purpose:** Incremental **structural** graph patch for changed sources. Not a full discover — does not rebuild communities, CFG/PDG, or migration plans. Prefer this (or `serve --watch`) over rediscover when the working tree drifts.
 
 **Prerequisites:** Existing `.rgctl/` snapshot (`rgctl discover` once).
 
@@ -809,18 +808,6 @@ rgctl cpg export --format graphson --output cpg.json [--path-contains src/] \
 **Prerequisites:** Discoverable trees or prepared `.rgctl` artifacts for base/head.
 
 **Agent should report:** high-level added/removed/changed symbol counts; avoid dumping full edge lists.
-
----
-
-## rules / kantra
-
-**Command:** `rgctl discover . --with-kantra` then `rgctl rules …` (list / query Konveyor-style findings)
-
-**Purpose:** Run Kantra/rules analysis during discover; query findings afterward. Structural policy workflows that mention `kantra` should use this path (not ad-hoc scrapes).
-
-**Prerequisites:** `discover --with-kantra` writes findings under `.rgctl/`.
-
-**Agent should report:** findings path + top rule hits; pair with `migration_plan.json` when migrating.
 
 ---
 

@@ -7,6 +7,7 @@ use crate::plugin::{
 };
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -361,7 +362,7 @@ pub fn extract_all_single_pass(
                     }
                     "preproc_include" | "preprocessor_include" => {
                         let path = include_path_from_node(node, source)?;
-                        ctx.symbols.push(Symbol {
+                        let mut symbol = Symbol {
                             name: path.clone(),
                             symbol_type: SymbolType::Import,
                             qualified_name: None,
@@ -376,7 +377,10 @@ pub fn extract_all_single_pass(
                                 "language": "c",
                                 "kind": "include",
                             }),
-                        });
+                            ..Default::default()
+                        };
+                        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                        ctx.symbols.push(symbol);
                     }
                     _ => {}
                 }
@@ -459,6 +463,7 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -471,7 +476,20 @@ pub fn extract_all_single_pass(
             "c",
             &mut relations,
         );
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::C,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::C,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

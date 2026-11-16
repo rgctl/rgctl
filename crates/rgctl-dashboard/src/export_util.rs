@@ -2,14 +2,18 @@
 
 use serde::Serialize;
 use std::fs;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 pub fn write_json_compact(path: &Path, value: &impl Serialize) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let json = serde_json::to_string(value).map_err(|e| e.to_string())?;
-    fs::write(path, json).map_err(|e| e.to_string())
+    let file = fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut writer = BufWriter::new(file);
+    serde_json::to_writer(&mut writer, value).map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -48,5 +52,15 @@ mod tests {
         fs::write(&src, b"payload").unwrap();
         link_or_copy(&src, &dst).unwrap();
         assert_eq!(fs::read(&dst).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn write_json_compact_is_not_pretty() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("x.json");
+        write_json_compact(&path, &serde_json::json!({"a": 1, "b": [2, 3]})).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains('\n'), "compact JSON should be a single line");
+        assert!(text.contains("\"a\":1"));
     }
 }

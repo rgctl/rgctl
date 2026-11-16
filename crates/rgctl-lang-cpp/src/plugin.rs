@@ -2,6 +2,7 @@
 
 use crate::single_pass::{cpp_ast_handlers, extract_all_single_pass};
 use rgctl_plugin_api::*;
+use rgctl_plugin_helpers::record_symbol_spans;
 use std::path::Path;
 use tree_sitter::Node;
 
@@ -57,7 +58,7 @@ impl CppPlugin {
             serde_json::json!({ "language": "cpp" })
         };
 
-        Ok(Some(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -69,7 +70,16 @@ impl CppPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
-        }))
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, function_name_node(node));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Cpp,
+        );
+        Ok(Some(symbol))
     }
 
     pub(crate) fn extract_class(
@@ -94,7 +104,7 @@ impl CppPlugin {
             vec![]
         };
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type,
             qualified_name: None,
@@ -106,7 +116,16 @@ impl CppPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "cpp" }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Cpp,
+        );
+        Ok(symbol)
     }
 
     fn symbols_from_tree(
@@ -258,7 +277,7 @@ impl CppPlugin {
                 }
                 "preproc_include" => {
                     let text = node.utf8_text(source)?.trim().to_string();
-                    symbols.push(Symbol {
+                    let mut symbol = Symbol {
                         name: text,
                         symbol_type: SymbolType::Import,
                         qualified_name: None,
@@ -270,11 +289,14 @@ impl CppPlugin {
                         modifiers: vec![],
                         documentation: None,
                         metadata: serde_json::json!({ "language": "cpp" }),
-                    });
+                        ..Default::default()
+                    };
+                    record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                    symbols.push(symbol);
                 }
                 "using_declaration" => {
                     let (name, qualified) = using_import_names(node, source);
-                    symbols.push(Symbol {
+                    let mut symbol = Symbol {
                         name: name.clone(),
                         symbol_type: SymbolType::Import,
                         qualified_name: qualified,
@@ -286,7 +308,10 @@ impl CppPlugin {
                         modifiers: vec![],
                         documentation: None,
                         metadata: serde_json::json!({ "language": "cpp", "import_kind": "using" }),
-                    });
+                        ..Default::default()
+                    };
+                    record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                    symbols.push(symbol);
                 }
                 _ => {}
             }
@@ -390,6 +415,7 @@ impl CppPlugin {
                                 }),
                                 to_qualified_hint: Some(scoped),
                                 to_type_hint: None,
+                                ..Default::default()
                             });
                         }
                     }
@@ -682,6 +708,7 @@ fn walk_cpp_calls(
                             let callee = func.utf8_text(source).ok().unwrap_or("").trim();
                             if !callee.is_empty() {
                                 last.to_qualified_hint = Some(format!("{scope}::{callee}"));
+                                last.metadata["inferred_callable_owner"] = true.into();
                             }
                         } else if let Some(hint) = last.to_qualified_hint.clone() {
                             if let Some(enriched) = enrich_cpp_namespace_hint(&hint, scope) {
@@ -737,6 +764,7 @@ fn relation(
         metadata: serde_json::json!({ "language": "cpp" }),
         to_qualified_hint: None,
         to_type_hint: None,
+        ..Default::default()
     }
 }
 
@@ -823,6 +851,7 @@ pub(crate) fn extract_type_fields(type_node: Node, source: &[u8]) -> Result<Vec<
             };
             if let Some(name) = name_from_declarator(declarator, source) {
                 fields.push(Field {
+                    source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                     name,
                     field_type: field_type.clone(),
                     visibility: None,
@@ -833,7 +862,7 @@ pub(crate) fn extract_type_fields(type_node: Node, source: &[u8]) -> Result<Vec<
     Ok(fields)
 }
 
-fn name_from_declarator(root: Node, source: &[u8]) -> Option<String> {
+fn name_node_from_declarator(root: Node) -> Option<Node> {
     const MAX_DEPTH: usize = 512;
     let mut stack = vec![(root, 0usize)];
 
@@ -844,12 +873,10 @@ fn name_from_declarator(root: Node, source: &[u8]) -> Option<String> {
 
         match node.kind() {
             "identifier" | "type_identifier" | "field_identifier" | "destructor_name" => {
-                return node.utf8_text(source).ok().map(str::to_string);
+                return Some(node);
             }
             "qualified_identifier" => {
-                return node
-                    .child_by_field_name("name")
-                    .and_then(|n| n.utf8_text(source).ok().map(str::to_string));
+                return node.child_by_field_name("name").or(Some(node));
             }
             "function_declarator"
             | "pointer_declarator"
@@ -878,6 +905,18 @@ fn name_from_declarator(root: Node, source: &[u8]) -> Option<String> {
                 }
             }
         }
+    }
+    None
+}
+
+fn name_from_declarator(root: Node, source: &[u8]) -> Option<String> {
+    name_node_from_declarator(root).and_then(|n| n.utf8_text(source).ok().map(str::to_string))
+}
+
+fn function_name_node(node: Node) -> Option<Node> {
+    if matches!(node.kind(), "function_definition" | "declaration") {
+        let decl = node.child_by_field_name("declarator")?;
+        return name_node_from_declarator(decl);
     }
     None
 }

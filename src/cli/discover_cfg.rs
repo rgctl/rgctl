@@ -1,11 +1,11 @@
 //! Parallel CFG/PDG/taint analysis for discover `--with-cfg` / `--with-taint`.
 
 use crate::analysis::hash_maps::FxHashMap;
-use crate::analysis::storage::stable_function_key;
+use crate::analysis::storage::analysis_cache_key;
 use crate::analysis::{
     AnalysisIndexEntry, AnalysisStorage, AstSkeletonRecord, CfgPdgRecord, ControlFlowGraph,
-    DominatorTree, FieldWrite, FunctionAnalysis, FunctionIdSyncEntry, ParsedSourceFile,
-    PdgBuildOptions, ProgramDependenceGraph, TaintAnalyzer, TaintRuleSet, build_cfg_for_function,
+    DominatorTree, FieldWrite, FunctionAnalysis, ParsedSourceFile, PdgBuildOptions,
+    ProgramDependenceGraph, TaintAnalyzer, TaintRuleSet, build_cfg_for_function,
     build_file_local_types_from_tree, build_function_skeleton_from_tree, cfg_language_id_from_path,
     extract_writes_from_cfg, type_env_for_field_writes,
 };
@@ -238,7 +238,6 @@ pub fn run_cfg_analysis_batch(
 
     if let Some(shortcut) = try_full_incremental_shortcut(functions, &cache) {
         let active_keys = active_stable_keys(functions, None);
-        let _ = sync_storage_function_ids(storage, functions);
         let mut result = shortcut;
         result.orphans_removed = storage
             .purge_stale_by_stable_keys(&active_keys)
@@ -299,6 +298,7 @@ pub fn run_cfg_analysis_batch(
     }
 
     let mut save_bytes: Vec<(Uuid, Vec<u8>)> = Vec::new();
+    let mut retained_ids = Vec::new();
     let mut result = CfgAnalysisBatchResult::default();
 
     for (idx, func) in functions.iter().enumerate() {
@@ -328,6 +328,7 @@ pub fn run_cfg_analysis_batch(
                         result.recomputed += 1;
                     }
                     if w.skip_persist {
+                        retained_ids.push(w.function_id);
                         result.skipped_unchanged += 1;
                     }
                     result.success_count += 1;
@@ -353,10 +354,12 @@ pub fn run_cfg_analysis_batch(
         }
     }
 
-    let pack = storage.open_pack_writer().unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "analysis pack writer failed; skipping CFG persistence");
-        Mutex::new(None)
-    });
+    let pack = storage
+        .open_pack_writer_preserving(&retained_ids)
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "analysis pack writer failed; skipping CFG persistence");
+            Mutex::new(None)
+        });
     for (function_id, bytes) in &save_bytes {
         let _ = storage.save_preencoded_no_index_packed(*function_id, bytes, &pack);
     }
@@ -364,7 +367,6 @@ pub fn run_cfg_analysis_batch(
     let _ = storage.refresh_analysis_index_from_entries(&result.index_entries);
 
     let active_keys = active_stable_keys(functions, Some(sources));
-    let _ = sync_storage_function_ids(storage, functions);
     result.orphans_removed = storage
         .purge_stale_by_stable_keys(&active_keys)
         .unwrap_or(0);
@@ -508,21 +510,6 @@ fn process_file_group(
         .collect()
 }
 
-fn sync_storage_function_ids(storage: &AnalysisStorage, functions: &[Node]) -> usize {
-    let refs: Vec<FunctionIdSyncEntry<'_>> = functions
-        .iter()
-        .filter_map(|func| {
-            Some(FunctionIdSyncEntry {
-                function_id: func.id,
-                function_name: &func.name,
-                file_path: func.file_path.as_ref()?,
-                code_hash: func.code_hash.as_ref()?,
-            })
-        })
-        .collect();
-    storage.sync_index_function_ids(&refs).unwrap_or(0)
-}
-
 fn load_incremental_cache(storage: &AnalysisStorage, _repo_root: &Path) -> CfgIncrementalCache {
     let index = storage.load_analysis_index().unwrap_or_default();
     CfgIncrementalCache { index }
@@ -544,7 +531,7 @@ fn active_stable_keys(functions: &[Node], sources: Option<&FileSourceCache>) -> 
         } else {
             continue;
         };
-        keys.insert(stable_function_key(file_path, &func.name, &hash));
+        keys.insert(analysis_cache_key(func.id, &hash));
     }
     keys
 }
@@ -599,13 +586,10 @@ fn analyze_function_in_file(
 ) -> Option<CfgFunctionWork> {
     let code_hash = resolve_code_hash(func_node, source);
 
-    if func_node.code_hash.is_some() {
-        if let Some(hit) = try_fast_cache_hit(func_node, file_path, &code_hash, cache) {
-            return Some(hit);
-        }
-        if let Some(hit) = try_remap_cached(func_node, file_path, &code_hash, cache) {
-            return Some(hit);
-        }
+    if func_node.code_hash.is_some()
+        && let Some(hit) = try_fast_cache_hit(func_node, &code_hash, cache)
+    {
+        return Some(hit);
     }
 
     compute_function_cfg(
@@ -628,39 +612,12 @@ fn analyze_function_in_file(
 
 fn try_fast_cache_hit(
     func_node: &Node,
-    file_path: &str,
     code_hash: &str,
     cache: &CfgIncrementalCache,
 ) -> Option<CfgFunctionWork> {
-    let key = stable_function_key(file_path, &func_node.name, code_hash);
+    let key = analysis_cache_key(func_node.id, code_hash);
     let entry = cache.index.get(&key)?;
     if entry.code_hash != code_hash || entry.function_id != func_node.id {
-        return None;
-    }
-    Some(CfgFunctionWork {
-        function_id: func_node.id,
-        analysis_bytes: None,
-        archive_bytes: None,
-        index_entry: None,
-        field_writes: Vec::new(),
-        skeleton: None,
-        flow_count: entry.flow_count,
-        vulnerable_count: entry.vulnerable_count,
-        from_cache: true,
-        skip_persist: true,
-        blocks: 0,
-    })
-}
-
-fn try_remap_cached(
-    func_node: &Node,
-    file_path: &str,
-    code_hash: &str,
-    cache: &CfgIncrementalCache,
-) -> Option<CfgFunctionWork> {
-    let key = stable_function_key(file_path, &func_node.name, code_hash);
-    let entry = cache.index.get(&key)?;
-    if entry.code_hash != code_hash || entry.function_id == func_node.id {
         return None;
     }
     Some(CfgFunctionWork {
@@ -699,14 +656,35 @@ fn compute_function_cfg(
 
     let build_start = stage.map(|_| Instant::now());
     let bytes = source.as_bytes();
-    let mut cfg_data = parsed
-        .and_then(|p| match (func_node.start_line, func_node.end_line) {
-            (Some(start), Some(end)) => p
-                .build_cfg_for_node_span(language, bytes, &func_node.name, start, end)
-                .ok(),
-            _ => p.build_cfg(language, bytes, &func_node.name).ok(),
-        })
-        .or_else(|| build_cfg_for_function(language, source, &func_node.name).ok())?;
+    let exact_bytes = func_node
+        .start_byte
+        .zip(func_node.end_byte)
+        .map(|(start, end)| (start as usize, end as usize))
+        .or_else(|| {
+            func_node
+                .get_property("source_start_byte")
+                .and_then(|s| s.parse::<usize>().ok())
+                .zip(
+                    func_node
+                        .get_property("source_end_byte")
+                        .and_then(|s| s.parse::<usize>().ok()),
+                )
+        });
+    let mut cfg_data = if let Some(p) = parsed {
+        if let Some((start, end)) = exact_bytes {
+            p.build_cfg_for_byte_range(language, bytes, &func_node.name, start, end)
+                .ok()?
+        } else {
+            match (func_node.start_line, func_node.end_line) {
+                (Some(start), Some(end)) => p
+                    .build_cfg_for_node_span(language, bytes, &func_node.name, start, end)
+                    .ok()?,
+                _ => p.build_cfg(language, bytes, &func_node.name).ok()?,
+            }
+        }
+    } else {
+        build_cfg_for_function(language, source, &func_node.name).ok()?
+    };
     if let (Some(stage), Some(start)) = (stage, build_start) {
         stage
             .build_cfg_ns
@@ -897,7 +875,7 @@ fn compute_from_cfg(
     drop(pdg_arc);
 
     let index_entry = Some(AnalysisIndexEntry {
-        stable_key: stable_function_key(file_path, &func_node.name, code_hash),
+        stable_key: analysis_cache_key(func_node.id, code_hash),
         function_id: func_node.id,
         code_hash: code_hash.to_string(),
         flow_count,
@@ -940,9 +918,9 @@ fn try_full_incremental_shortcut(
             continue;
         }
         eligible += 1;
-        let key = stable_function_key(file_path, &func.name, code_hash);
+        let key = analysis_cache_key(func.id, code_hash);
         let entry = cache.index.get(&key)?;
-        if *code_hash != entry.code_hash {
+        if *code_hash != entry.code_hash || entry.function_id != func.id {
             return None;
         }
         matched += 1;
@@ -963,4 +941,36 @@ fn try_full_incremental_shortcut(
         archive_unchanged: true,
         ..CfgAnalysisBatchResult::default()
     })
+}
+
+#[cfg(test)]
+mod overload_cache_tests {
+    use super::*;
+    #[test]
+    fn identical_name_and_body_cache_cannot_remap_another_overload() {
+        let first = Node::new(rgctl_graph::schema::NodeType::Function, "quote")
+            .with_file_path("Library.java")
+            .with_identity_discriminator("(int)")
+            .with_code_hash("same");
+        let second = Node::new(rgctl_graph::schema::NodeType::Function, "quote")
+            .with_file_path("Library.java")
+            .with_identity_discriminator("(String)")
+            .with_code_hash("same");
+        let key = analysis_cache_key(first.id, "same");
+        let cache = CfgIncrementalCache {
+            index: std::collections::HashMap::from([(
+                key.clone(),
+                AnalysisIndexEntry {
+                    stable_key: key,
+                    function_id: first.id,
+                    code_hash: "same".into(),
+                    flow_count: 0,
+                    vulnerable_count: 0,
+                },
+            )]),
+        };
+        assert!(try_fast_cache_hit(&first, "same", &cache).is_some());
+        assert!(try_fast_cache_hit(&second, "same", &cache).is_none());
+        assert!(try_full_incremental_shortcut(&[first, second], &cache).is_none());
+    }
 }

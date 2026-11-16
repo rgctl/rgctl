@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "language": "csharp",
   "project": "ecommerce-csharp",
   "graph": {
@@ -339,6 +339,157 @@
           "await"
         ]
       }
+    },
+    "v2OverloadInt": {
+      "match": {
+        "name": "V2Overload",
+        "class": "V2OrderLedger",
+        "discriminator": "(int"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "V2Overload",
+        "discriminator": "(int",
+        "file_suffix": "CorrectnessHarness.cs",
+        "language": "csharp"
+      },
+      "exact_callees": [
+        "V2FreeHelper"
+      ]
+    },
+    "v2OverloadStr": {
+      "match": {
+        "name": "V2Overload",
+        "class": "V2OrderLedger",
+        "discriminator": "(string"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "V2Overload",
+        "discriminator": "(string",
+        "file_suffix": "CorrectnessHarness.cs",
+        "language": "csharp"
+      },
+      "exact_callees": [
+        "V2StringTarget"
+      ]
+    },
+    "v2LedgerBalance": {
+      "match": {
+        "name": "ReadBalance",
+        "class": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "V2FreeHelper"
+      ],
+      "mutations": {
+        "type": "V2OrderLedger",
+        "must_contain": [
+          "ApplyAdjustment"
+        ],
+        "must_exclude": [
+          "CorrectnessLeaf"
+        ]
+      }
+    },
+    "v2AuditWeightImpl": {
+      "match": {
+        "name": "AuditWeight",
+        "class": "V2OrderLedger",
+        "discriminator": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "ReadBalance"
+      ],
+      "mro": {
+        "extends": [
+          "V2BaseLedger"
+        ],
+        "implements": [
+          "IV2AuditPolicy"
+        ],
+        "overrides": [
+          "AuditWeight"
+        ]
+      }
+    },
+    "v2SliceFlowProbe": {
+      "match": {
+        "name": "V2SliceFlowProbe",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "slice": {
+        "file": "src/Ecommerce/Correctness/CorrectnessHarness.cs",
+        "line": 35,
+        "variable": "finalOut",
+        "must_contain": [
+          "seedInput",
+          "stepVal"
+        ],
+        "must_exclude": [
+          "999"
+        ]
+      },
+      "flows": {
+        "file": "src/Ecommerce/Correctness/CorrectnessHarness.cs",
+        "line": 33,
+        "variable": "stepVal",
+        "must_contain": [
+          "aliasVal",
+          "finalOut"
+        ]
+      }
+    },
+    "v2CloneExactA": {
+      "match": {
+        "name": "V2CloneExact",
+        "class": "V2CloneCarrierA"
+      },
+      "severity": "required",
+      "unique": true,
+      "clones": {
+        "mode": "exact",
+        "group_with": [
+          "V2CloneExact"
+        ],
+        "not_grouped_with": [
+          "CorrectnessLeaf"
+        ]
+      }
+    },
+    "v2SemanticLedger": {
+      "match": {
+        "name": "ReconcileChargebackLedger",
+        "class": "CorrectnessHarness"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "ArchiveChargebackAudit"
+      ],
+      "semantic": {
+        "query": "reconcile chargeback ledger",
+        "top3_contains": "ReconcileChargebackLedger",
+        "neighbor_names": [
+          "ArchiveChargebackAudit"
+        ]
+      },
+      "review": {
+        "file": "src/Ecommerce/Correctness/CorrectnessHarness.cs",
+        "find": "=> 42;",
+        "replace": "=> 43;",
+        "must_contain": [
+          "CorrectnessMid"
+        ]
+      }
     }
   },
   "invariants": {
@@ -398,5 +549,15 @@
         "correctnessLeaf"
       ]
     }
+  },
+  "analytics": {
+    "severity": "required",
+    "root": "CorrectnessRoot",
+    "mid": "CorrectnessMid",
+    "leaf": "CorrectnessLeaf",
+    "separate": [
+      "CliqueAlphaA",
+      "CliqueBetaA"
+    ]
   }
 }

@@ -15,7 +15,19 @@ pub struct SliceIndexPayload {
     pub schema_version: u32,
     pub available: bool,
     pub function_count: usize,
+    /// `"per_file"` when `slice/<uuid>.json` exists; `"archive_only"` when details live
+    /// only in `slice.record_{index,data}.bin`.
+    #[serde(default = "default_slice_detail_mode")]
+    pub detail_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_index_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_data_path: Option<String>,
     pub functions: Vec<SliceFunctionEntry>,
+}
+
+fn default_slice_detail_mode() -> String {
+    "per_file".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +88,8 @@ pub struct SlicePdgEdge {
 pub struct SliceExportSummary {
     pub available: bool,
     pub function_count: usize,
+    /// True when per-function JSON was omitted in favour of the slice record pack.
+    pub record_pack: bool,
 }
 
 pub(crate) fn function_line_span(cfg: &ControlFlowGraph) -> (usize, usize) {
@@ -168,6 +182,9 @@ pub(crate) fn write_empty_slice_index(index_path: &Path) -> Result<(), String> {
         schema_version: 2,
         available: false,
         function_count: 0,
+        detail_mode: "per_file".into(),
+        record_index_path: None,
+        record_data_path: None,
         functions: vec![],
     };
     write_json_compact(index_path, &index)

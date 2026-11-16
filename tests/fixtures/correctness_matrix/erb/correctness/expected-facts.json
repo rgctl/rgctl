@@ -1,0 +1,65 @@
+{
+  "schema_version": 2,
+  "language": "erb",
+  "project": "correctness-erb",
+  "graph": {
+    "severity": "required",
+    "min_functions": 0,
+    "min_calls_edges": 0,
+    "expected_relations": [
+      {
+        "edge": "uses",
+        "from": "erb:output#1",
+        "to": "$chargeback_total"
+      },
+      {
+        "edge": "uses-fact",
+        "from": "erb:output#2",
+        "to": "@facts['os']['family']"
+      }
+    ]
+  },
+  "symbols": {
+    "orderComment": {
+      "match": {
+        "name": "erb:comment#1",
+        "entity_type": "variable",
+        "file": "order.html.erb"
+      },
+      "severity": "required",
+      "unique": true
+    },
+    "orderTotalOutput": {
+      "match": {
+        "name": "erb:output#1",
+        "entity_type": "variable",
+        "file": "order.html.erb"
+      },
+      "severity": "required",
+      "unique": true
+    },
+    "orderFactOutput": {
+      "match": {
+        "name": "erb:output#2",
+        "entity_type": "variable",
+        "file": "order.html.erb"
+      },
+      "severity": "required",
+      "unique": true
+    },
+    "headerTitleOutput": {
+      "match": {
+        "name": "erb:output#1",
+        "entity_type": "variable",
+        "file": "header.erb"
+      },
+      "severity": "required",
+      "unique": true
+    }
+  },
+  "invariants": {
+    "B2_gql_calls_nonzero": {
+      "enabled": false
+    }
+  }
+}

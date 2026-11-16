@@ -1,6 +1,6 @@
 # rgctl User Guide
 
-End-to-end guide for installing rgctl, indexing an in-tree example, and querying a codebase from the **command line**. Sample outputs target **`rgctl-tests/ecommerce-java`**. Runnable examples are backed by scenarios under [`user-guide/scenarios/`](user-guide/scenarios/) (see change `docs-agent-first-diataxis`).
+End-to-end guide for installing rgctl, indexing an in-tree example, and querying a codebase from the **command line**. Sample outputs target **`rgctl-tests/ecommerce-java`**. Runnable examples are backed by scenarios under [`user-guide/`](user-guide/README.md) (see change `docs-agent-first-diataxis`).
 
 **Concepts:** [Introduction](Introduction.md). **Use with agents:** [agent-skill](https://rgctl.io/docs/guides/agent-skill/) · [USER_AGENTS_TEMPLATE](agents/USER_AGENTS_TEMPLATE.md). **Contribute:** [AGENTS.md](../AGENTS.md). **JSON fields:** [json-api.md](json-api.md).
 
@@ -64,8 +64,12 @@ Pre-built binaries are published on the project **Releases** page:
    |----------|-------------------|
    | macOS (Apple Silicon) | `rgctl-*-aarch64-apple-darwin.tar.gz` |
    | macOS (Intel) | `rgctl-*-x86_64-apple-darwin.tar.gz` |
-   | Linux (x86_64) | `rgctl-*-x86_64-unknown-linux-gnu.tar.gz` |
-   | Windows | `rgctl-*-x86_64-pc-windows-msvc.zip` |
+   | Linux GNU (x86_64) | `rgctl-*-x86_64-unknown-linux-gnu.tar.gz` |
+   | Linux GNU (ARM64) | `rgctl-*-aarch64-unknown-linux-gnu.tar.gz` |
+   | Alpine / musl (x86_64) | `rgctl-*-x86_64-unknown-linux-musl.tar.gz` |
+   | Alpine / musl (ARM64) | `rgctl-*-aarch64-unknown-linux-musl.tar.gz` |
+   | Windows (x86_64) | `rgctl-*-x86_64-pc-windows-msvc.zip` |
+   | Windows (ARM64) | `rgctl-*-aarch64-pc-windows-msvc.zip` |
 
 3. Extract the archive. You should get a single `rgctl` executable (plus `rgctl.exe` on Windows).
 
@@ -85,7 +89,7 @@ If no release is published yet for your platform, use [Option C](#option-c--buil
 
 ### Option C — Build from source
 
-Requires **Rust 1.99+** (Edition 2024; [rustup.rs](https://rustup.rs/)).
+Requires **Rust 1.85+** (Edition 2024; [rustup.rs](https://rustup.rs/)).
 
 ```bash
 git clone https://github.com/rgctl/rgctl.git
@@ -233,11 +237,11 @@ All commands below assume `REPO` points at `ecommerce-java`, or that you run fro
 
 Full table: [Discovering and indexing](https://rgctl.io/docs/guides/discovering-and-indexing/).
 
-Built-in registry includes **markdown** (`rgctl-lang-markdown`): `.md` and `.mdx` are indexed by default (headings, links, code blocks, frontmatter). See [markdown-context.md](markdown-context.md). Use `-l markdown` or `-l markdown,java` to limit languages.
+Built-in registry includes **markdown** (`rgctl-lang-markdown`): `.md` and `.mdx` are indexed by default (headings, links, code blocks, frontmatter). See the [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/). Use `-l markdown` or `-l markdown,java` to limit languages.
 
 ### Full pipeline (`--full`)
 
-`rgctl discover PATH --full` prints an execution plan, runs a **basic** discover (queryable snapshot), reports that the initial discover is complete, then continues in the same process with `--with-cfg --with-universe --with-harmonic --with-taint --with-kantra`, then `semantic index`. Other terminals can run `find` / `inventory` after stage 1. Does **not** imply secret scanning, git churn, SCIP, or migration roadmap export (pass those flags alongside `--full` when needed).
+`rgctl discover PATH --full` prints an execution plan, runs a **basic** discover (queryable snapshot), reports that the initial discover is complete, then continues in the same process with `--with-cfg --with-universe --with-harmonic --with-taint`, then `semantic index`. Other terminals can run `find` / `inventory` after stage 1. Does **not** imply secret scanning, git churn, SCIP, or migration roadmap export (pass those flags alongside `--full` when needed).
 
 ```bash
 rgctl discover . --full
@@ -336,9 +340,9 @@ Harmonic, dashboard, migration export, security, CFG/PDG, and discover-time tain
 | `--with-git` | Git churn hotspots + `CoChangesWith` edges (`metrics --churn`, `relations --edge cochangeswith`) |
 | `--scip PATH` | SCIP overlay — upgrades ambiguous call edges (`resolution = "scip"`) |
 | `--with-harmonic` | Harmonic centrality (migration ranking) |
+| `--lossless` | Lossless source + Green-CST sidecars (`RGCS` v2 `content_store.bin` + `RGCT` v1 `cst.archive.bin`) for `rgctl writeback` |
 | `--with-universe` | Universe dashboard bundle under `.rgctl/dashboard/` (`manifest.mode: "universe"`). Served by `rgctl serve --open`. |
 | `--export-migration-hints` | Migration roadmap JSON (alias: `--export-migration-plan`) |
-| `--with-kantra` | Konveyor Kantra rule evaluation + rules graph index (see below) |
 
 ```bash
 # Whole-repo CFG for inspect / cpg mutations / taint --sink
@@ -365,53 +369,6 @@ Example lines from that richer run:
 ```
 
 Use `--with-cfg` when you need whole-repo `inspect` richness, `cpg mutations`, or `taint --sink`. `slice` and `cpg flows` lazy-build a single function's CFG/PDG into the v3 archive on demand. Add `--with-taint` for discover-time taint flows. On large monorepos (100k+ functions) expect minutes to hours.
-
-### Kantra migration rules (`--with-kantra`)
-
-Evaluate [Konveyor Kantra](https://github.com/konveyor/kantra) rules natively against the indexed graph and source cache — no Kantra CLI, LSP, or containers. Release binaries embed the Konveyor `stable/java` catalog (~2.6k rules); `discover --with-kantra` uses it by default.
-
-```bash
-# Default: embedded catalog + eval + index rules into graph.snapshot.bin
-rgctl discover . -l java -e target --with-kantra
-
-# Migration target filter (konveyor.io/target=<NAME> labels)
-rgctl discover . -l java --with-kantra --kantra-target quarkus
-
-# CI / fixtures: override with a local ruleset directory
-rgctl discover . --with-kantra --kantra-rules tests/fixtures/kantra-rules
-
-# Dev: local konveyor/rulesets checkout instead of embedded blob
-rgctl discover . --with-kantra --kantra-catalog /path/to/rulesets/stable/java
-
-# Index rules into graph only (skip eval)
-rgctl discover . --with-kantra --kantra-index-only
-```
-
-| Flag | Purpose |
-|------|---------|
-| `--with-kantra` | Run Kantra eval and index `KantraRule` / `KantraRuleset` nodes into the session graph |
-| `--kantra-target NAME` | Evaluate only rules labeled `konveyor.io/target=NAME` |
-| `--kantra-rules DIR` | Single ruleset directory (`ruleset.yaml` + `*.yaml`); overrides embedded catalog |
-| `--kantra-catalog ROOT` | Rulesets tree (e.g. `stable/java`); overrides embedded catalog |
-| `--kantra-index-only` | Skip eval; still index catalog rules into the graph |
-
-**Artifacts:** `.rgctl/kantra_findings.json` (violations + skipped rules). Rule nodes are queryable after index:
-
-```bash
-rgctl -f json find --type kantrarule --limit 10 | jq '.returned'
-# Target filter at discover time:
-rgctl discover . --with-kantra --kantra-target quarkus
-```
-
-Konveyor labels (`konveyor.io/target`, `konveyor.io/source`, …) are stored on rule nodes; filter eval with `--kantra-target` and inspect violations in `kantra_findings.json`.
-
-**Source builds:** full embedded catalog requires the git submodule — `git submodule update --init crates/rgctl-kantra/assets/rulesets` or `./scripts/init-kantra-rulesets.sh`. Without it, the build falls back to `tests/fixtures/kantra-rules/`. See [`crates/rgctl-kantra/README.md`](../crates/rgctl-kantra/README.md).
-
-**Further reading:** [Kantra Migration Rules guide](https://rgctl.io/docs/guides/kantra-migration-rules/) (metasfresh scale walkthrough) · [Kantra integration — design & current state](design/kantra-integration-exploration.md) · [`rgctl-kantra` crate README](../crates/rgctl-kantra/README.md) · [JSON schema](json-api.md#kantra_findingsjson)
-
-Does **not** require `--with-cfg`. Unsupported rule providers and invalid regex patterns are skipped with reasons in `skipped_rules`. After full eval, `violates` edges link each `KantraRule` to matched code nodes (`rgctl relations --edge violates --from-type kantrarule`).
-
-**Dashboard:** `discover --with-kantra --with-universe` exports `kantra_index.json` and per-file violation shards. Open the Universe **Static rules** room (category + Konveyor target filters, syntax-highlighted snippets). The **Migration** room remains the strangler-fig schedule — it is not Kantra triage.
 
 ### Verbose logging and stage profiling
 
@@ -458,12 +415,13 @@ After a successful run, the layout below appears under **`{repo}/.rgctl/`**:
 ```
 {repo}/.rgctl/
 ├── graph.snapshot.bin          # RGCL v2 columnar mmap graph (primary cache for queries)
-├── content_store.bin           # Large markdown bodies / files (body_ref / blob_ref; Obsidian + doc semantic)
+├── content_store.bin           # Large markdown bodies / lossless source store (RGCS v2 with --lossless)
+├── cst.archive.bin             # Green-CST leaf token & trivia spans (RGCT v1 with --lossless)
+├── annotation_args.json        # Structured annotation key-value arguments (find --annotation)
 ├── blast_engine.snapshot.bin   # Pre-built blast-radius engine
 ├── macro_call_index.db         # Blast-radius lookup cache (SQLite; not the graph)
 ├── macro_call_index.bin        # Same index in bincode (companion to .db)
 ├── analysis_results.bin        # Columnar analysis properties
-├── kantra_findings.json        # With --with-kantra (violations + skipped rules)
 ├── file_hashes.json            # Incremental file tracker
 ├── migration_plan.json         # With --export-migration-hints
 ├── analysis/                   # Per-function CFG/PDG/taint (with --with-cfg / --with-taint)
@@ -595,8 +553,11 @@ rgctl -r "$REPO" -f json relations clearCart --edge calls --direction in | jq '.
 
 ### Common node / edge types
 
-- Node types for `--type`: `function`, `class`, `interface`, `module`, `file`, `kantrarule`, …
-- Edge types for `--edge`: `calls`, `imports`, `contains`, `depends_on`, `implements`, `overrides`, `references`, `violates`, `cochangeswith`, …
+- Node types for `--type`: `function`, `class`, `interface`, `module`, `file`, `import`, `annotation`, …
+- Edge types for `--edge`: `calls`, `imports`, `contains`, `depends_on`, `implements`, `overrides`, `references`, `cochangeswith`, `annotatedwith`, …
+- Annotation and import-prefix queries:
+  - `rgctl -r "$REPO" -f json find --annotation RestController --show-attributes`
+  - `rgctl -r "$REPO" -f json inventory --by import-prefix --prefix javax.`
 
 ### Named communities (analysis overlay)
 
@@ -733,7 +694,7 @@ rgctl -r "$REPO" blast-radius 'CartService::clearCart' --with-slices
 
 ## 8. Program slicing and taint
 
-`slice` performs **line-level** backward or forward slicing on a source file. Paths may be absolute, cwd-relative, or relative to `--repo`. **No upfront `discover --with-cfg` is required:** if the target function is missing from `.rgctl/analysis/cfg_pdg.bin`, `slice` lazily builds that function's CFG/PDG and appends it to the v3 archive. Whole-repo `rgctl taint --sink` still needs `discover --with-cfg`.
+`slice` performs **line-level** backward or forward slicing on a source file. Paths may be absolute, cwd-relative, or relative to `--repo`. **No upfront `discover --with-cfg` is required:** if the target function is missing from `.rgctl/analysis/cfg_pdg.archive.bin`, `slice` lazily builds that function's CFG/PDG and appends it to the v3 archive. Whole-repo `rgctl taint --sink` still needs `discover --with-cfg`.
 
 ### Backward slice
 
@@ -918,7 +879,7 @@ rgctl -r "$REPO" blast-radius 'ShoppingCartService::priceShoppingCart'
 # → Callers include CartEndpoint.add / delete / checkout and checkOutShoppingCart
 ```
 
-**Dashboard:** after `discover --with-cfg --with-universe`, the **Dataflow** tab includes a **Field mutations (CPG)** panel (same filters). Click a hit to open that function’s PDG and highlight the write line. See [Dashboard user guide](dashboard-user-guide.md#dataflow).
+**Dashboard:** after `discover --with-cfg --with-universe`, the **Dataflow** tab includes a **Field mutations (CPG)** panel (same filters). Click a hit to open that function’s PDG and highlight the write line. See [HTTP Server and Dashboard guide](https://rgctl.io/docs/guides/http-server-and-dashboard/).
 
 JSON for agents:
 
@@ -926,7 +887,7 @@ JSON for agents:
 rgctl -r "$REPO" -f json cpg mutations --type ShoppingCart --exclude-ctors
 ```
 
-Empty result means no **typed** non-ctor writes were recovered (receivers without a resolved type are omitted unless `--include-unresolved`). On C fixtures, query the struct typedef name (e.g. `shopping_cart_t`). See [agent-recipes.md](agent-recipes.md) Recipe 11 and [hybrid-cpg-plan.md](design/hybrid-cpg-plan.md).
+Empty result means no **typed** non-ctor writes were recovered (receivers without a resolved type are omitted unless `--include-unresolved`). On C fixtures, query the struct typedef name (e.g. `shopping_cart_t`). See [Agent pack](https://rgctl.io/docs/guides/agent-skill/) and [hybrid-cpg-plan.md](design/hybrid-cpg-plan.md).
 
 ### Flows, AST, export
 
@@ -1017,7 +978,7 @@ rgctl -r .rgctl-merged -f json callers validateToken
 
 Semantic search is **opt-in** — it does not run during `discover`. Build a separate Hamming index, then query by natural language or keywords.
 
-**Default index scope:** `:Function` symbols. **Doc headings:** `semantic index --scope docs` (or `--scope all` for functions + docs). See [markdown-context.md](markdown-context.md#semantic-search-doc-sections).
+**Default index scope:** `:Function` symbols. **Doc headings:** `semantic index --scope docs` (or `--scope all` for functions + docs). See [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/).
 
 **Prerequisites:** `discover` completed. Default embedder is **vocab** (compiled token table, no ONNX). Quality extra: `--embedder code-daemon` (needs `git lfs pull` for bundled ONNX). CI smoke: `--embedder hash`.
 
@@ -1139,9 +1100,9 @@ rgctl -r "$REPO" export \
 
 Open `$REPO/vault` in Obsidian (**Open folder as vault**). Each note is one heading section; YAML `qualified_name` maps back to graph `module` nodes (`find` / `relations`). Re-run `discover` + `export` after doc changes.
 
-Other doc export formats: `--export-format okf` (JSON entity bundle). Full walkthrough: [markdown-context.md](markdown-context.md#obsidian-vault-export).
+Other doc export formats: `--export-format okf` (JSON entity bundle). Full walkthrough: [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/).
 
-For structural lookups on docs, use `find` / `relations` — see [markdown context](markdown-context.md). For browsing, use `serve` + the dashboard ([HTTP Server and Dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/)).
+For structural lookups on docs, use `find` / `relations` — see [Markdown context graph guide](https://rgctl.io/docs/guides/markdown-context-graph/). For browsing, use `serve` + the dashboard ([HTTP Server and Dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/)).
 
 ---
 
@@ -1207,9 +1168,9 @@ cd /path/to/rgctl
 export REPO="$PWD/rgctl-tests/ecommerce-java"
 cd "$REPO"
 
-# 2. Index (add CFG + dashboard + Kantra for the rest of this walkthrough)
+# 2. Index (add CFG + dashboard for the rest of this walkthrough)
 rgctl discover . -l java -e target \
-  --with-cfg --with-universe --with-harmonic --with-kantra --export-migration-hints
+  --with-cfg --with-universe --with-harmonic --export-migration-hints
 
 # 3. Explore structure
 rgctl -r "$REPO" -f json find --type function --count-only | jq '.total'
@@ -1225,12 +1186,6 @@ rgctl -r "$REPO" -f json blast-radius 'CartService::clearCart' | jq '.metrics'
 rgctl -r "$REPO" cpg status
 rgctl -r "$REPO" cpg mutations --type ShoppingCart --exclude-ctors
 rgctl -r "$REPO" blast-radius 'ShoppingCartService::priceShoppingCart'
-
-# 5b. Konveyor Kantra migration rules (optional target filter)
-rgctl -r "$REPO" -f json find --type kantrarule --limit 5 | jq '.returned'
-rgctl -r "$REPO" -f json relations --edge violates --from-type kantrarule --limit 10 | jq '.returned'
-jq '{violations: (.violations|length), evaluated_rules, target_filter}' \
-  "$REPO/.rgctl/kantra_findings.json"
 
 # 6. Architectural hotspots
 rgctl -r "$REPO" -f json metrics --communities | jq .
@@ -1256,7 +1211,7 @@ Migration hints (with `--export-migration-hints`) land under `.rgctl/migration_p
 
 | Command | Purpose |
 |---------|---------|
-| `discover` | Index repo, build `.rgctl/` artifacts (`--full` = staged CFG/Universe/harmonic/taint/Kantra + semantic) |
+| `discover` | Index repo, build `.rgctl/` artifacts (`--full` = staged CFG/Universe/harmonic/taint + semantic) |
 | `update` / `watch` / `merge` | Incremental patch; live watch; multi-repo park-and-resolve merge |
 | `find` / `callers` / `callees` / `relations` / `inventory` / `status` | Structured graph queries ([§6](#6-structured-graph-queries)); `query …` is a compatibility alias |
 | `communities` | List / refresh Fast-Leiden community labels |
@@ -1268,7 +1223,11 @@ Migration hints (with `--export-migration-hints`) land under `.rgctl/migration_p
 | `metrics` | PageRank, betweenness, communities, `--churn` |
 | `export` | Serialize graph (json, graphml, dot, mermaid, obsidian vault, okf) |
 | `check` / `review check` / `review paths` | CI policy; temporal PR gate (`pr-check` alias); call-path deltas |
+| `diff` | Cold/open columnar snapshot pair diff (`diff <base> <head>`) |
+| `vuln` / `deps` / `taint` | OSV triage (`vuln triage`), manifest reachability (`deps check`), full VEX report (`vuln analyze`), taint flows (`taint --sink`) |
+| `writeback` | Lossless round-trip verification (`verify`), tree reconstruction (`export`), and piece-table span splicing (`patch`; requires `discover --lossless`) |
 | `install` | Copy the bundled agent pack (single skill `rgctl`) into adapter dirs |
+| `completions` | Emit shell completions (`bash`, `zsh`, `fish`, `elvish`, `powershell`) |
 | `semantic` | Opt-in semantic index + query (`--scope community`, `docs`, `all`) |
 | `serve` | HTTP dashboard + `/api/query` + `/api/status` (serve-only; run `discover` first) |
 
@@ -1290,17 +1249,14 @@ Full taxonomy: [CLI command reference](https://rgctl.io/docs/guides/cli-command-
 | `--with-dfg-loops` | Tag loop-carried `DataDependency` edges in PDG (with `--with-cfg`) |
 | `--with-ast-skeleton` | Build AST skeleton archive for `cpg ast` |
 | `--with-harmonic` | Harmonic centrality (default off; needed for migration ranking) |
+| `--lossless` | Emit `RGCS` v2 `content_store.bin` + `RGCT` v1 `cst.archive.bin` for `rgctl writeback` |
+| `--with-limits SPEC` | Resource caps (`max-mem-mb=N,threads=M`) for container / constrained runs |
 | `--with-universe` | Universe dashboard bundle under `.rgctl/dashboard/` (default off; UI for `serve --open`) |
-| `--full` | Staged pipeline: basic discover, then CFG+Universe+harmonic+taint+Kantra, then semantic index |
+| `--full` | Staged pipeline: basic discover, then CFG+Universe+harmonic+taint, then semantic index |
 | `--export-migration-hints` | Migration roadmap JSON (alias `--export-migration-plan`) |
-| `--migration-preset` | Preset for migration hints (`hybrid`, `foundational`, …) |
+| `--migration-preset` | Preset for migration hints (`hybrid_default`, `foundational_first`, `dense_cluster`, `risk_mitigation`) |
 | `--migration-order` | `scheduled` (topological) or `priority` |
 | `--write-json-graph` | Also write legacy `graph.db` / `graph.json` |
-| `--with-kantra` | Konveyor Kantra eval + rules graph index (embedded catalog by default) |
-| `--kantra-target NAME` | Filter eval to `konveyor.io/target=NAME` |
-| `--kantra-rules DIR` | Override embedded catalog with one ruleset directory |
-| `--kantra-catalog ROOT` | Override embedded catalog with a rulesets tree |
-| `--kantra-index-only` | Index rules into graph; skip eval |
 
 There is no umbrella `--all` flag — combine `--with-cfg --with-security --with-taint` explicitly when you want the former deep pass.
 
@@ -1374,7 +1330,7 @@ RUST_LOG=info,profile=info rgctl discover . -v 2>&1 | grep '\[profile\]'
 ### Further reading
 
 - [Introduction](Introduction.md) — concepts and feature goals
-- [cli-getting-started.md](cli-getting-started.md) — deprecated stub (use this User Guide)
+- [Installation](installation.md) — standalone installation and operating modes
 - [HTTP Server and Dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/) — dashboard HTTP API
 - [json-api.md](json-api.md) — machine-readable output + field catalogs
 - [USER_AGENTS_TEMPLATE](agents/USER_AGENTS_TEMPLATE.md) — paste into consumer repos’ `AGENTS.md`

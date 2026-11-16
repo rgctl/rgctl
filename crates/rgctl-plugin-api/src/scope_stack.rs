@@ -139,6 +139,14 @@ impl ScopeStack {
         self.frames.iter().rev().find(|f| f.kind.is_type_like())
     }
 
+    /// Innermost module frame (`defmodule`, `module`, `namespace`, etc.).
+    pub fn current_module(&self) -> Option<&ScopeFrame> {
+        self.frames
+            .iter()
+            .rev()
+            .find(|f| f.kind == ScopeKind::Module)
+    }
+
     pub fn depth(&self) -> u32 {
         self.frames.len() as u32
     }

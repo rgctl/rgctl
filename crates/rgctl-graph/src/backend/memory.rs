@@ -185,10 +185,12 @@ impl MemoryBackend {
         Ok(edges.clone())
     }
 
-    /// Get all node UUIDs (zero-copy except for the Vec of UUIDs)
+    /// Get all node UUIDs in deterministic sorted order (zero-copy except for the Vec of UUIDs)
     pub fn all_node_ids(&self) -> Result<Vec<Uuid>> {
         let nodes = read_lock(&self.nodes)?;
-        Ok(nodes.keys().copied().collect())
+        let mut ids: Vec<Uuid> = nodes.keys().copied().collect();
+        ids.sort_unstable();
+        Ok(ids)
     }
 
     /// Get edge topology as (from, to) pairs (zero-copy except for the Vec of tuples)

@@ -3,6 +3,7 @@
 use crate::single_pass::{extract_all_single_pass, groovy_ast_handlers};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result, complexity_from_metadata, parse_with_pool};
+use rgctl_plugin_helpers::{declaration_header_signature, record_symbol_spans};
 use std::path::Path;
 use tree_sitter::Node;
 
@@ -162,17 +163,17 @@ impl GroovyPlugin {
         file: &str,
     ) -> Option<Symbol> {
         let mut cursor = node.walk();
-        let name = node
-            .children(&mut cursor)
-            .find(|c| {
-                matches!(
-                    c.kind(),
-                    "identifier" | "scoped_identifier" | "type_identifier"
-                )
-            })
-            .and_then(|n| n.utf8_text(source).ok())
+        let name_node = node.children(&mut cursor).find(|c| {
+            matches!(
+                c.kind(),
+                "identifier" | "scoped_identifier" | "type_identifier"
+            )
+        })?;
+        let name = name_node
+            .utf8_text(source)
+            .ok()
             .map(|s| s.trim().to_string())?;
-        Some(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Module,
             qualified_name: Some(name),
@@ -184,7 +185,10 @@ impl GroovyPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "groovy", "groovy_kind": "package" }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        Some(symbol)
     }
 
     pub(crate) fn extract_static_initializer(
@@ -196,7 +200,7 @@ impl GroovyPlugin {
     ) -> Option<Symbol> {
         let owner = Self::enclosing_class(node, source).unwrap_or_else(|| "Unknown".into());
         let qn = Self::qualify(package, &format!("{owner}.<clinit>"));
-        Some(Symbol {
+        let mut symbol = Symbol {
             name: "<clinit>".into(),
             symbol_type: SymbolType::Function,
             qualified_name: Some(qn),
@@ -214,7 +218,25 @@ impl GroovyPlugin {
                 "language": "groovy",
                 "is_static_initializer": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        );
+        Some(symbol)
+    }
+
+    pub(crate) fn anon_owner_qn(
+        node: Node,
+        source: &[u8],
+        package: Option<&str>,
+    ) -> Option<String> {
+        Self::enclosing_callable_qn(node, source, package)
+            .or_else(|| Self::enclosing_class(node, source).map(|c| Self::qualify(package, &c)))
     }
 
     pub(crate) fn extract_lambda_symbol(
@@ -226,25 +248,30 @@ impl GroovyPlugin {
         idx: u32,
     ) -> Option<Symbol> {
         let name = format!("$lambda${idx}");
-        let owner = Self::enclosing_callable_qn(node, source, package)
-            .or_else(|| Self::enclosing_class(node, source).map(|c| Self::qualify(package, &c)));
+        let owner = Self::anon_owner_qn(node, source, package);
         let qn = owner.map(|o| format!("{o}.{name}"));
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: qn,
             location: Self::loc(file, node),
-            signature: node
-                .utf8_text(source)
-                .ok()
-                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            signature: declaration_header_signature(node, source),
             return_type: None,
             parameters: vec![],
             fields: vec![],
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "groovy", "is_lambda": true }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        );
+        Some(symbol)
     }
 
     pub(crate) fn extract_closure_symbol(
@@ -256,25 +283,30 @@ impl GroovyPlugin {
         idx: u32,
     ) -> Option<Symbol> {
         let name = format!("$closure${idx}");
-        let owner = Self::enclosing_callable_qn(node, source, package)
-            .or_else(|| Self::enclosing_class(node, source).map(|c| Self::qualify(package, &c)));
+        let owner = Self::anon_owner_qn(node, source, package);
         let qn = owner.map(|o| format!("{o}.{name}"));
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: qn,
             location: Self::loc(file, node),
-            signature: node
-                .utf8_text(source)
-                .ok()
-                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            signature: declaration_header_signature(node, source),
             return_type: None,
             parameters: vec![],
             fields: vec![],
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "groovy", "is_closure": true }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        );
+        Some(symbol)
     }
 
     pub(crate) fn extract_annotation_element(
@@ -294,7 +326,7 @@ impl GroovyPlugin {
             .child_by_field_name("type")
             .and_then(|n| n.utf8_text(source).ok())
             .map(|s| s.trim().to_string());
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qn),
@@ -312,7 +344,16 @@ impl GroovyPlugin {
                 "language": "groovy",
                 "is_annotation_element": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        );
+        Some(symbol)
     }
 
     pub(crate) fn extract_module_symbol(
@@ -326,7 +367,7 @@ impl GroovyPlugin {
             .and_then(|n| n.utf8_text(source).ok())
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())?;
-        Some(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Module,
             qualified_name: Some(name),
@@ -338,7 +379,10 @@ impl GroovyPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "groovy", "groovy_kind": "module" }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Some(symbol)
     }
 
     pub(crate) fn extract_field_symbol(
@@ -352,26 +396,22 @@ impl GroovyPlugin {
         let declarator = node
             .children(&mut cursor)
             .find(|c| c.kind() == "variable_declarator")?;
-        let name = declarator
-            .child_by_field_name("name")
-            .and_then(|n| n.utf8_text(source).ok())
-            .map(|s| s.trim().to_string())
-            .or_else(|| {
-                let mut c = declarator.walk();
-                declarator.children(&mut c).find_map(|n| {
-                    if n.kind() == "identifier" {
-                        n.utf8_text(source).ok().map(|s| s.trim().to_string())
-                    } else {
-                        None
-                    }
-                })
-            })?;
+        let name_node = declarator.child_by_field_name("name").or_else(|| {
+            let mut c = declarator.walk();
+            declarator
+                .children(&mut c)
+                .find(|n| n.kind() == "identifier")
+        })?;
+        let name = name_node
+            .utf8_text(source)
+            .ok()
+            .map(|s| s.trim().to_string())?;
         let owner = Self::enclosing_class(node, source);
         let qn = match &owner {
             Some(cls) => Self::qualify(package, &format!("{cls}.{name}")),
             None => Self::qualify(package, &name),
         };
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Variable,
             qualified_name: Some(qn),
@@ -389,7 +429,10 @@ impl GroovyPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "groovy", "is_field": true }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        Some(symbol)
     }
 
     pub(crate) fn extract_enum_constant(
@@ -415,7 +458,7 @@ impl GroovyPlugin {
             })?;
         let owner = Self::enclosing_class(node, source).unwrap_or_else(|| "Unknown".into());
         let qn = Self::qualify(package, &format!("{owner}.{name}"));
-        Some(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Variable,
             qualified_name: Some(qn),
@@ -427,7 +470,10 @@ impl GroovyPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "groovy", "is_enum_constant": true }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Some(symbol)
     }
 
     pub(crate) fn extract_parameters(&self, node: Node, source: &[u8]) -> Vec<Parameter> {
@@ -513,15 +559,12 @@ impl GroovyPlugin {
             };
             (name, qn, serde_json::json!({ "language": "groovy" }))
         };
-        Some(Symbol {
+        let mut symbol = Symbol {
             name: sym_name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qn),
             location: Self::loc(file, node),
-            signature: node
-                .utf8_text(source)
-                .ok()
-                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            signature: declaration_header_signature(node, source),
             return_type: if is_ctor {
                 None
             } else {
@@ -534,7 +577,16 @@ impl GroovyPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        );
+        Some(symbol)
     }
 
     pub(crate) fn extract_constructor_symbol(
@@ -548,15 +600,12 @@ impl GroovyPlugin {
             .or_else(|| Self::type_name(node, source))
             .unwrap_or_else(|| "Unknown".into());
         let qn = Self::qualify(package, &format!("{cls}.<init>"));
-        Some(Symbol {
+        let mut symbol = Symbol {
             name: cls,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qn),
             location: Self::loc(file, node),
-            signature: node
-                .utf8_text(source)
-                .ok()
-                .map(|s| s.lines().next().unwrap_or("").trim().to_string()),
+            signature: declaration_header_signature(node, source),
             return_type: None,
             parameters: self.extract_parameters(node, source),
             fields: vec![],
@@ -566,7 +615,16 @@ impl GroovyPlugin {
                 "language": "groovy",
                 "is_constructor": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+        );
+        Some(symbol)
     }
 
     pub(crate) fn extract_import_symbol(node: Node, source: &[u8], file: &str) -> Option<Symbol> {
@@ -582,7 +640,7 @@ impl GroovyPlugin {
             return None;
         }
         let simple = imported.rsplit('.').next().unwrap_or(imported).to_string();
-        Some(Symbol {
+        let mut symbol = Symbol {
             name: simple,
             symbol_type: SymbolType::Import,
             qualified_name: Some(imported.to_string()),
@@ -594,7 +652,10 @@ impl GroovyPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "groovy" }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Some(symbol)
     }
 
     pub(crate) fn append_type_and_annotation_relations(
@@ -628,6 +689,7 @@ impl GroovyPlugin {
                                     metadata: serde_json::json!({ "language": "groovy" }),
                                     to_qualified_hint: None,
                                     to_type_hint: None,
+                                    ..Default::default()
                                 });
                             }
                         }
@@ -648,6 +710,7 @@ impl GroovyPlugin {
                                     metadata: serde_json::json!({ "language": "groovy" }),
                                     to_qualified_hint: None,
                                     to_type_hint: None,
+                                    ..Default::default()
                                 });
                             }
                         }
@@ -668,6 +731,7 @@ impl GroovyPlugin {
                                     }),
                                     to_qualified_hint: None,
                                     to_type_hint: None,
+                                    ..Default::default()
                                 });
                             }
                         }
@@ -689,6 +753,7 @@ impl GroovyPlugin {
                                 metadata: serde_json::json!({ "language": "groovy" }),
                                 to_qualified_hint: None,
                                 to_type_hint: None,
+                                ..Default::default()
                             });
                         }
                     }
@@ -713,6 +778,7 @@ impl GroovyPlugin {
                                 }),
                                 to_qualified_hint: None,
                                 to_type_hint: Some(last.to_string()),
+                                ..Default::default()
                             });
                         }
                     }
@@ -737,6 +803,7 @@ impl GroovyPlugin {
                                 }),
                                 to_qualified_hint: None,
                                 to_type_hint: Some(last.to_string()),
+                                ..Default::default()
                             });
                         }
                     }
@@ -762,6 +829,7 @@ impl GroovyPlugin {
                             }),
                             to_qualified_hint: None,
                             to_type_hint: None,
+                            ..Default::default()
                         });
                     }
                 }
@@ -806,6 +874,7 @@ impl GroovyPlugin {
                                     }),
                                     to_qualified_hint: None,
                                     to_type_hint: Some(simple.to_string()),
+                                    ..Default::default()
                                 });
                             }
                         }
@@ -922,6 +991,7 @@ impl GroovyPlugin {
             }),
             to_qualified_hint: None,
             to_type_hint: None,
+            ..Default::default()
         });
     }
 
@@ -961,7 +1031,7 @@ impl GroovyPlugin {
                         _ => SymbolType::Class,
                     };
                     let qn = Self::qualify(package.as_deref(), &simple);
-                    symbols.push(Symbol {
+                    let mut symbol = Symbol {
                         name: simple,
                         symbol_type,
                         qualified_name: Some(qn),
@@ -976,7 +1046,16 @@ impl GroovyPlugin {
                         modifiers: vec![],
                         documentation: None,
                         metadata: serde_json::json!({ "language": "groovy" }),
-                    });
+                        ..Default::default()
+                    };
+                    record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                    symbol = rgctl_plugin_helpers::callable_identity::symbol(
+                        symbol,
+                        node,
+                        source,
+                        rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+                    );
+                    symbols.push(symbol);
                 }
                 "method_declaration" | "function_definition" => {
                     let name = node
@@ -1027,7 +1106,7 @@ impl GroovyPlugin {
                         };
                         (name, qn, serde_json::json!({ "language": "groovy" }))
                     };
-                    symbols.push(Symbol {
+                    let mut symbol = Symbol {
                         name: sym_name,
                         symbol_type: SymbolType::Function,
                         qualified_name: Some(qn),
@@ -1048,14 +1127,23 @@ impl GroovyPlugin {
                         modifiers: vec![],
                         documentation: None,
                         metadata,
-                    });
+                        ..Default::default()
+                    };
+                    record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                    symbol = rgctl_plugin_helpers::callable_identity::symbol(
+                        symbol,
+                        node,
+                        source,
+                        rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+                    );
+                    symbols.push(symbol);
                 }
                 "constructor_declaration" | "compact_constructor_declaration" => {
                     let cls = Self::enclosing_class(node, source)
                         .or_else(|| Self::type_name(node, source))
                         .unwrap_or_else(|| "Unknown".into());
                     let qn = Self::qualify(package.as_deref(), &format!("{cls}.<init>"));
-                    symbols.push(Symbol {
+                    let mut symbol = Symbol {
                         name: cls,
                         symbol_type: SymbolType::Function,
                         qualified_name: Some(qn),
@@ -1073,7 +1161,16 @@ impl GroovyPlugin {
                             "language": "groovy",
                             "is_constructor": true,
                         }),
-                    });
+                        ..Default::default()
+                    };
+                    record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                    symbol = rgctl_plugin_helpers::callable_identity::symbol(
+                        symbol,
+                        node,
+                        source,
+                        rgctl_plugin_helpers::callable_identity::Policy::Groovy,
+                    );
+                    symbols.push(symbol);
                 }
                 "import_declaration" => {
                     let text = node.utf8_text(source).unwrap_or("").trim();
@@ -1086,7 +1183,7 @@ impl GroovyPlugin {
                         .trim();
                     if !imported.is_empty() {
                         let simple = imported.rsplit('.').next().unwrap_or(imported).to_string();
-                        symbols.push(Symbol {
+                        let mut symbol = Symbol {
                             name: simple,
                             symbol_type: SymbolType::Import,
                             qualified_name: Some(imported.to_string()),
@@ -1098,7 +1195,10 @@ impl GroovyPlugin {
                             modifiers: vec![],
                             documentation: None,
                             metadata: serde_json::json!({ "language": "groovy" }),
-                        });
+                            ..Default::default()
+                        };
+                        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                        symbols.push(symbol);
                     }
                 }
                 _ => {}
@@ -1159,6 +1259,7 @@ impl GroovyPlugin {
                             metadata: serde_json::json!({ "language": "groovy" }),
                             to_qualified_hint: None,
                             to_type_hint: None,
+                            ..Default::default()
                         });
                     }
                 }
@@ -1176,6 +1277,7 @@ impl GroovyPlugin {
                             metadata: serde_json::json!({ "language": "groovy" }),
                             to_qualified_hint: None,
                             to_type_hint: None,
+                            ..Default::default()
                         });
                     }
                 }
@@ -1300,6 +1402,7 @@ impl GroovyPlugin {
                 metadata,
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             });
         }
     }
@@ -1450,11 +1553,45 @@ mod tests {
             .extract_all(Path::new("OrderService.groovy"), src)
             .unwrap();
         assert!(
+            all.relations.iter().any(|r| {
+                r.relation_type == RelationType::Calls
+                    && r.from == "OrderService.findAll"
+                    && r.to == "OrderService.validate"
+            }),
+            "expected Calls from OrderService.findAll -> OrderService.validate: {:?}",
             all.relations
+        );
+        assert!(
+            !all.symbols.iter().any(|s| s.name.starts_with("$closure$")),
+            "method body blocks must not emit synthetic $closure symbols: {:?}",
+            all.symbols
+        );
+    }
+
+    #[test]
+    fn closure_ordinals_are_scoped_per_owner() {
+        let before = b"class Svc {\n  def a() { return 1 }\n  def b() { def c = { x -> x + 1 }; return c(2) }\n}\n";
+        let after = b"class Svc {\n  def a() { def k = { y -> y * 2 }; return k(1) }\n  def b() { def c = { x -> x + 1 }; return c(2) }\n}\n";
+        let plugin = GroovyPlugin::new().unwrap();
+        let sym_before = plugin
+            .extract_all(Path::new("Svc.groovy"), before)
+            .unwrap()
+            .symbols;
+        let sym_after = plugin
+            .extract_all(Path::new("Svc.groovy"), after)
+            .unwrap()
+            .symbols;
+        assert!(
+            sym_before
                 .iter()
-                .any(|r| r.relation_type == RelationType::Calls),
-            "expected Calls: {:?}",
-            all.relations
+                .any(|s| s.qualified_name.as_deref() == Some("Svc.b.$closure$1")),
+            "{sym_before:?}"
+        );
+        assert!(
+            sym_after
+                .iter()
+                .any(|s| s.qualified_name.as_deref() == Some("Svc.b.$closure$1")),
+            "adding closure in sibling Svc.a must not renumber Svc.b.$closure$1: {sym_after:?}"
         );
     }
 

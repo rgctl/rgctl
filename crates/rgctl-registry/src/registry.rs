@@ -47,6 +47,12 @@ pub struct LanguageRegistry {
     /// File extension to language plugin mapping
     extension_map: HashMap<String, Arc<dyn LanguagePlugin>>,
 
+    /// Lowercased extension/basename token to language plugin mapping
+    basename_lower_map: HashMap<String, Arc<dyn LanguagePlugin>>,
+
+    /// Plugins with empty `file_extensions()` that route via custom `matches_path`
+    path_heuristic_plugins: Vec<Arc<dyn LanguagePlugin>>,
+
     /// File extension to config plugin mapping
     config_extension_map: HashMap<String, Arc<dyn ConfigFormatPlugin>>,
 }
@@ -58,6 +64,8 @@ impl LanguageRegistry {
             language_plugins: HashMap::new(),
             config_plugins: HashMap::new(),
             extension_map: HashMap::new(),
+            basename_lower_map: HashMap::new(),
+            path_heuristic_plugins: Vec::new(),
             config_extension_map: HashMap::new(),
         }
     }
@@ -87,14 +95,22 @@ impl LanguageRegistry {
     /// Register a language plugin
     pub fn register_language_plugin(&mut self, plugin: Arc<dyn LanguagePlugin>) {
         let id = plugin.language_id().to_string();
+        let exts = plugin.file_extensions();
 
-        self.language_plugins
-            .insert(id.clone(), Arc::clone(&plugin));
-
-        for ext in plugin.file_extensions() {
-            self.extension_map
-                .insert(ext.to_string(), Arc::clone(&plugin));
+        if exts.is_empty() {
+            self.path_heuristic_plugins
+                .retain(|existing| existing.language_id() != id);
+            self.path_heuristic_plugins.push(Arc::clone(&plugin));
+        } else {
+            for ext in exts {
+                self.extension_map
+                    .insert(ext.to_string(), Arc::clone(&plugin));
+                self.basename_lower_map
+                    .insert(ext.to_ascii_lowercase(), Arc::clone(&plugin));
+            }
         }
+
+        self.language_plugins.insert(id, plugin);
     }
 
     /// Register a config format plugin
@@ -175,48 +191,58 @@ impl LanguageRegistry {
         // objc — `get_plugin_for_file_with_source` / on-disk peek disambiguates.
         // Do not use `language_plugin_for_path` here: both plugins `matches_path` `.m`
         // and HashMap iteration order is unstable.
-        if file_path.extension().and_then(|e| e.to_str()) == Some("m") {
+        let ext = file_path.extension().and_then(|e| e.to_str());
+        if ext == Some("m") {
             return self
                 .get_language_plugin("objc")
                 .or_else(|| self.extension_map.get("m").cloned())
                 .ok_or_else(|| Error::UnsupportedLanguage("m".into()));
         }
 
-        let path_str = file_path.to_string_lossy().replace('\\', "/");
-
-        if let Some(plugin) = self.language_plugin_for_path(&path_str) {
+        if let Some(plugin) = self.language_plugin_for_file_fast(file_path, ext) {
             return Ok(plugin);
         }
 
-        if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
-            self.extension_map
-                .get(ext)
-                .cloned()
-                .ok_or_else(|| Error::UnsupportedLanguage(ext.to_string()))
-        } else {
-            Err(Error::UnsupportedLanguage(
-                file_path.to_string_lossy().to_string(),
-            ))
-        }
+        Err(Error::UnsupportedLanguage(
+            ext.map(str::to_string)
+                .unwrap_or_else(|| file_path.to_string_lossy().to_string()),
+        ))
     }
 
-    /// Find a registered language plugin that claims `path` via [`LanguagePlugin::matches_path`].
+    /// Fast O(1) language plugin lookup without per-file heap allocations.
     ///
     /// Path-heuristic plugins (empty [`LanguagePlugin::file_extensions`]) are checked first so
     /// IaC/CI routing wins over generic extension handlers (e.g. chef vs ruby on `.rb`).
-    fn language_plugin_for_path(&self, path: &str) -> Option<Arc<dyn LanguagePlugin>> {
-        if let Some(plugin) = self
-            .language_plugins
-            .values()
-            .filter(|plugin| plugin.file_extensions().is_empty())
-            .find(|plugin| plugin.matches_path(path))
+    fn language_plugin_for_file_fast(
+        &self,
+        file_path: &Path,
+        ext: Option<&str>,
+    ) -> Option<Arc<dyn LanguagePlugin>> {
+        if !self.path_heuristic_plugins.is_empty() {
+            let path_str = file_path.to_string_lossy().replace('\\', "/");
+            if let Some(plugin) = self
+                .path_heuristic_plugins
+                .iter()
+                .find(|plugin| plugin.matches_path(&path_str))
+            {
+                return Some(Arc::clone(plugin));
+            }
+        }
+        if let Some(ext) = ext
+            && let Some(plugin) = self.extension_map.get(ext)
         {
             return Some(Arc::clone(plugin));
         }
-        self.language_plugins
-            .values()
-            .find(|plugin| plugin.matches_path(path))
-            .cloned()
+        if let Some(name) = file_path.file_name().and_then(|n| n.to_str()) {
+            if name.bytes().all(|b| !b.is_ascii_uppercase()) {
+                if let Some(plugin) = self.basename_lower_map.get(name) {
+                    return Some(Arc::clone(plugin));
+                }
+            } else if let Some(plugin) = self.basename_lower_map.get(&name.to_ascii_lowercase()) {
+                return Some(Arc::clone(plugin));
+            }
+        }
+        None
     }
 
     /// Get a config plugin for a file path
@@ -224,8 +250,10 @@ impl LanguageRegistry {
         &self,
         file_path: &Path,
     ) -> Result<Arc<dyn ConfigFormatPlugin>> {
-        let path_str = file_path.to_string_lossy().replace('\\', "/");
-        if self.language_plugin_for_path(&path_str).is_some() {
+        let ext = file_path.extension().and_then(|e| e.to_str());
+        if ext == Some("m") && self.language_plugins.contains_key("objc")
+            || self.language_plugin_for_file_fast(file_path, ext).is_some()
+        {
             return Err(Error::UnsupportedLanguage(
                 file_path.to_string_lossy().to_string(),
             ));
@@ -241,7 +269,7 @@ impl LanguageRegistry {
             IngestRoute::Config | IngestRoute::Workflow => {}
         }
 
-        if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
+        if let Some(ext) = ext {
             self.config_extension_map
                 .get(ext)
                 .cloned()

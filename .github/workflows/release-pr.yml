@@ -4,7 +4,7 @@
 #   gh workflow run release-pr.yml -f bump=patch
 #
 # When the resulting PR is merged into `main`, `.github/workflows/release.yml`
-# automatically tags `vX.Y.Z` and builds/publishes the 4-platform release binaries.
+# automatically tags `vX.Y.Z` and builds/publishes the 8-platform release binaries.
 name: Prepare Release PR
 
 on:

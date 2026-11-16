@@ -142,8 +142,7 @@ impl WeisfeilerLehmanHasher {
         // 1. Initial coloring (k = 0):
         // h^(0)(v) = BLAKE3(statement_kind(v))
         let mut h_curr = Vec::with_capacity(n);
-        for i in 0..n {
-            let stmt = &region.statements[i];
+        for (i, stmt) in region.statements.iter().enumerate() {
             let blk = stmt_to_block.get(i).copied();
             let kind = CanonicalStatementKind::classify(stmt, blk, cfg);
             let hash = blake3::hash(kind.base_tag());
@@ -179,12 +178,10 @@ impl WeisfeilerLehmanHasher {
 
         // 2c. Def-use data dependency edges
         // Map defined variables to statement indices within the hammock
-        for i in 0..n {
-            let stmt_i = &region.statements[i];
+        for (i, stmt_i) in region.statements.iter().enumerate() {
             for def_var in &stmt_i.defined_vars {
                 let name = def_var.name();
-                for j in (i + 1)..n {
-                    let stmt_j = &region.statements[j];
+                for (j, stmt_j) in region.statements.iter().enumerate().skip(i + 1) {
                     if stmt_j.used_vars.iter().any(|u| u == &name) {
                         edges.push((i, j, CanonicalEdgeTag::DataDefUse));
                     }

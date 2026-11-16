@@ -242,31 +242,6 @@ body {
   background: rgba(25, 135, 84, 0.18);
 }
 
-.kantra-snippet-editor-host .cm-editor {
-  font-size: 0.8125rem;
-}
-
-.kantra-snippet-editor-host .cm-scroller {
-  min-height: 8rem;
-  max-height: 16rem;
-}
-
-.kantra-snippet-editor-host .cm-kantra-line-mandatory {
-  background: rgba(220, 53, 69, 0.22);
-}
-
-.kantra-snippet-editor-host .cm-kantra-line-potential {
-  background: rgba(255, 193, 7, 0.28);
-}
-
-.kantra-snippet-editor-host .cm-kantra-line-optional {
-  background: rgba(13, 202, 240, 0.2);
-}
-
-.kantra-snippet-editor-host .cm-kantra-line-uncategorized {
-  background: rgba(108, 117, 125, 0.18);
-}
-
 .rb-tab-panel-body--scroll {
   overflow: auto;
 }

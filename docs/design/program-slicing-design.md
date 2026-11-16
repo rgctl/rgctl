@@ -1,6 +1,6 @@
 # Program Slicing — Engineering Design
 
-**Backward and forward program slices** over a function’s PDG: the minimal set of statements that affect (or are affected by) a variable at a given source line.
+This document specifies the **Intra- and Inter-Procedural Program Slicing subsystem** in `rgctl` (`crates/rgctl-analysis/src/slicing.rs`, `interprocedural_slicing.rs`, and `src/cli/slice.rs`). It covers backward, forward, taint-aware, and may-alias-expanded slicing over the Program Dependence Graph (PDG), automatic enclosing-function resolution from byte spans, and lazy single-function population of `.rgctl/analysis/cfg_pdg.archive.bin` (`RBCP` v3).
 
 ![Program Slicing tab — source editor and slice controls (gbuilder)](../images/design/program-slicing/slice-editor.png)
 
@@ -8,115 +8,180 @@
 
 ---
 
-## 1. Goals
+## 1. System Overview & End-to-End Data Flow
 
-| Goal | How |
-|------|-----|
-| Minimal relevant code | PDG traversal from slice criterion |
-| CLI automation | `rgctl slice FILE --line N --variable V` |
-| Dashboard exploration | WASM `compute_slice` on exported PDG bundles |
-| Security cross-check | `--taint` mode shares taint engine paths |
-| Lazy archive fill | `ensure_cfg_pdg_for_source` when the function is missing from v3 `cfg_pdg.archive.bin` |
-
-**No upfront `discover --with-cfg` required for `rgctl slice`:** if the target function is absent from `.rgctl/analysis/cfg_pdg.archive.bin`, slice builds that function’s CFG/PDG (lexical `(name, scope_id)` reaching defs) and atomically appends its `TocEntry`. Whole-repo `rgctl taint --sink` and `rgctl cpg mutations` still require `discover --with-cfg`. Dashboard export of slice bundles still benefits from a prior `--with-cfg` / `--with-taint` discover.
-
----
-
-## 2. Architecture overview
-
-```mermaid
-flowchart LR
-  subgraph sources["CFG/PDG sources"]
-    DISC["discover --with-cfg (full archive)"]
-    LAZY["ensure_cfg_pdg_for_source (single fn)"]
-    ARC["cfg_pdg.archive.bin v3 TOC"]
-    DISC --> ARC
-    LAZY --> ARC
-  end
-
-  subgraph export["Dashboard export"]
-    SI[slice_index.json]
-    SB[slice/*.json]
-    ARC --> SI
-    ARC --> SB
-  end
-
-  subgraph runtime["Query"]
-    CLI[slice / cpg flows]
-    WASM[worker compute_slice]
-    CLI --> ARC
-    WASM --> SB
-  end
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 1. CRITERION RESOLUTION (`src/cli/slice.rs`)                                 │
+│                                                                              │
+│  Input: `(file, --line, --variable, [--function], --direction, [--with-alias])`│
+│    ├─► If `--function` omitted: `index_function_locations` + half-open span  │
+│    │     `start_byte <= line_offset < end_byte` selects innermost function   │
+│    └─► `ensure_cfg_pdg_for_source`:                                          │
+│          • Checks `.rgctl/analysis/cfg_pdg.archive.bin` (`RBCP` v3 TOC)      │
+│          • If missing/stale: parses `file`, builds CFG + `(name, scope_id)`  │
+│            PDG, and atomically appends a new 32B `TocEntry` + `TOC3` trailer │
+└───────────────────────────────────────┬──────────────────────────────────────┘
+                                        │
+                                        ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 2. PDG SLICE TRAVERSAL (`crates/rgctl-analysis/src/slicing.rs`)              │
+│                                                                              │
+│  • Locates seed `PdgNodeId` matching `(line, variable)`                      │
+│  • Optional `--with-alias`: expands `variable` with `alias::may_alias_names` │
+│    (local copy assignments and field-base aliases)                           │
+│  • `BackwardSlicer` (`--direction backward`):                                │
+│      Reverse BFS across incoming `DataDependency` + `ControlDependency` edges│
+│  • `ForwardSlicer` (`--direction forward`):                                  │
+│      Forward BFS across outgoing `DataDependency` + `ControlDependency` edges│
+│  • Optional `--taint`:                                                       │
+│      Delegates to `TaintAnalyzer` to trace source -> sink paths & sanitizers │
+└───────────────────────────────────────┬──────────────────────────────────────┘
+                                        │
+                                        ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 3. OUTPUT VIEWS & CONSUMERS                                                  │
+│                                                                              │
+│  • `--view text` (default): ordered source lines + statement snippets        │
+│  • `--view cfg` / `--view pdg`: projected CFG/PDG topology for sliced nodes  │
+│  • `rgctl blast-radius --with-slices`: cross-function call-site handoff      │
+│  • Dashboard `SliceView.tsx`: interactive CodeMirror line highlighting       │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Slice criterion
+## 2. Theoretical Foundations Mapped to `rgctl`
 
-| Field | Role |
-|-------|------|
-| `file` | Source path (read from disk at CLI; bundled in dashboard) |
-| `--line` | 1-based line number |
-| `--variable` | Variable name at criterion |
-| `--function` | Optional enclosing **method** name; when omitted, innermost enclosing function at `file:line` is resolved |
-| `--direction` | `backward` (default) or `forward` |
-| `--with-alias` | Expand criterion via may-alias (copies / field bases) |
-| `--taint` | Taint-aware slice path |
+| Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
+| :--- | :--- | :--- |
+| **Executable Backward & Forward Program Slicing** | Weiser (1981), *Program Slicing* (*ICSE '81*); Ottenstein & Ottenstein (1984), *The Program Dependence Graph in a Software Development Environment* | [`compute_slice_with_options`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/slicing.rs#L1-L260) reduces Weiser's dataflow equations to graph reachability over `ProgramDependenceGraph` (`data_deps` $\cup$ `control_deps`) starting at criterion $C = (\text{line}, \text{variable})$. |
+| **Inter-Procedural System Dependence Graph (SDG) Slicing** | Horwitz, Reps & Binkley (1990), *Interprocedural Slicing Using Dependence Graphs* (*ACM TOPLAS*, 12(1)) | [`InterproceduralCFG`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/interprocedural_slicing.rs#L1-L240) and [`blast_slice_handoff.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/blast_slice_handoff.rs#L1-L150) bind call-site actual arguments to callee formal `Parameter` PDG nodes (`scope_id = 0`) and return statements back to caller call sites. |
+| **Demand-Driven Intra-Procedural May-Alias Expansion** | Steensgaard (1996); lightweight copy/reference propagation | When `--with-alias` is set, [`alias::may_alias_names`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/alias.rs#L1-L140) computes the transitive closure of local alias copies (`let b = &a`, `b.field = ...`) within the function and seeds the slice with all aliased variable names. |
 
 ---
 
-## 4. Rust implementation map
+## 3. Binary Layout, Data Structures & Memory Discipline
 
-| Component | Path |
-|-----------|------|
-| CFG construction | `crates/rgctl-analysis/src/cfg.rs` |
-| PDG + slicing | `crates/rgctl-analysis/src/pdg.rs`, `slicing.rs`, `dataflow.rs` |
-| Lazy archive append | `crates/rgctl-analysis/src/cfg_pdg_archive.rs` (`ensure_cfg_pdg_for_source`) |
-| CLI | `src/cli/slice.rs` |
-| Dashboard export | `crates/rgctl-dashboard/src/slice_export.rs` |
+### 3.1 Core Slicing Types (`crates/rgctl-analysis/src/slicing.rs`)
+
+```rust
+pub struct SliceCriterion {
+    pub file_path: String,
+    pub function_name: String,
+    pub line: usize,
+    pub variable: String,
+    pub direction: SliceDirection, // Backward | Forward
+}
+
+pub struct SliceOptions {
+    pub include_control: bool,
+    pub max_depth: Option<usize>,
+    pub alias_names: Vec<String>,
+}
+
+pub struct ProgramSlice {
+    pub criterion: SliceCriterion,
+    pub lines: Vec<usize>,
+    pub statements: Vec<SlicedStatement>,
+    pub variables_involved: Vec<String>,
+    pub confidence: f64,
+}
+```
+
+### 3.2 Innermost Function Span Resolution & Lazy v3 Archive Append
+
+1. **Half-Open Byte-Span Function Lookup (`function_containing_line`):**
+   - When `--function` is omitted, [`src/cli/slice.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/slice.rs#L49-L58) converts `--line` to its 0-based byte offset (`line_start_byte`) and selects the function with the smallest half-open span `start_byte <= offset < end_byte`. This accurately disambiguates closures, nested functions, and adjacent methods.
+2. **Lazy Archive Caching (`ensure_cfg_pdg_for_source`):**
+   - `rgctl slice` does **not** require a prior `rgctl discover --with-cfg`. If `.rgctl/analysis/cfg_pdg.archive.bin` does not exist or lacks the target function's `Uuid` / `stable_record_uuid`, `ensure_cfg_pdg_for_source` parses only that file, builds the CFG and PDG, and appends the `CfgPdgRecord` + updated 32-byte `TocEntry` footer (`TOC3`).
 
 ---
 
-## 5. Dashboard implementation
+## 4. CLI Contract, JSON Schema & Implementation Map
 
-| Piece | Path |
-|-------|------|
-| Tab | `dashboard/src/SliceView.tsx` |
-| Editor | `dashboard/src/sliceEditor.tsx` (CodeMirror) |
-| Worker | `computeSlice(functionId, line, variable, direction)` |
-| Index | `slice_index.json` → `slice/{uuid}.json` |
+### 4.1 CLI Commands
 
----
-
-## 6. CLI usage
+Verified against `rgctl slice --help` and [`src/cli/mod.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/mod.rs#L623-L653):
 
 ```bash
-# No discover --with-cfg required — lazy single-function append into cfg_pdg.archive.bin
-rgctl slice src/Foo.java --line 42 --variable cart
-rgctl slice src/Foo.java --line 42 --variable cart --function checkOut
-rgctl -f json slice src/Foo.java --line 10 --variable req --direction forward
-rgctl slice src/Foo.java --line 8 --variable input --with-alias
-rgctl slice src/Foo.java --line 8 --variable input --taint
+# Backward slice on variable `cart` at line 42 (auto-resolves enclosing function; lazily caches CFG/PDG)
+rgctl slice src/OrderService.java --line 42 --variable cart -f json
 
-# Optional whole-repo prebuild for dashboard / taint --sink / cpg mutations
-rgctl discover . --with-cfg --with-taint
+# Explicit enclosing function + forward slice
+rgctl slice src/OrderService.java --line 18 --variable order --function createOrder --direction forward -f json
+
+# Expand criterion with intra-procedural may-alias tracking (copies / reference bases)
+rgctl slice src/OrderService.java --line 42 --variable cart --with-alias -f json
+
+# Taint-aware slice from criterion
+rgctl slice src/OrderService.java --line 20 --variable userInput --taint -f json
+
+# Project slice onto CFG or PDG topology view
+rgctl slice src/OrderService.java --line 42 --variable cart --view pdg -f json
+```
+
+### 4.2 JSON Schema (`rgctl slice <file> --line <N> --variable <V> -f json`)
+
+Implemented in [`src/cli/slice_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/slice_output.rs):
+
+```json
+{
+  "schema_version": "1.0",
+  "file": "src/OrderService.java",
+  "function": "checkout",
+  "line": 42,
+  "variable": "cart",
+  "direction": "backward",
+  "view": "text",
+  "lines": [14, 19, 27, 42],
+  "statements": [
+    {
+      "line": 14,
+      "text": "Cart cart = cartRepository.findById(cartId);",
+      "kind": "Assignment",
+      "defs": ["cart"],
+      "uses": ["cartRepository", "cartId"]
+    },
+    {
+      "line": 42,
+      "text": "paymentGateway.charge(cart.getTotal());",
+      "kind": "Call",
+      "defs": [],
+      "uses": ["paymentGateway", "cart"]
+    }
+  ]
+}
+```
+
+### 4.3 Implementation Map
+
+| Component | Source File | Key Types & Functions |
+| :--- | :--- | :--- |
+| **Intra-Procedural Slicer** | [`crates/rgctl-analysis/src/slicing.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/slicing.rs) | `SliceCriterion`, `SliceDirection`, `SliceOptions`, `ProgramSlice`, `compute_slice_with_options` |
+| **Inter-Procedural Slicer & Handoff** | [`crates/rgctl-analysis/src/interprocedural_slicing.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/interprocedural_slicing.rs), [`blast_slice_handoff.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/blast_slice_handoff.rs) | `InterproceduralCFG`, `compute_interprocedural_slice`, `trace_blast_slices` |
+| **May-Alias Helper** | [`crates/rgctl-analysis/src/alias.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/alias.rs) | `may_alias_names` |
+| **Lazy Archive Builder** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `ensure_cfg_pdg_for_source`, `EnsureCfgPdgOpts`, `index_function_locations` |
+| **CLI Slice Command** | [`src/cli/slice.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/slice.rs), [`src/cli/slice_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/slice_output.rs) | `SliceArgs`, `run`, `function_containing_line`, `text_slice_json`, `taint_slice_json` |
+
+---
+
+## 5. Performance Guardrails & Verification Checklist
+
+1. **Zero Whole-Repo Overhead for Single-Function Slicing:** `rgctl slice` must never trigger a whole-repository CFG/PDG build; it parses only the target file and appends one `CfgPdgRecord` to `.rgctl/analysis/cfg_pdg.archive.bin`.
+2. **Actionable Criterion Diagnostics:** When `(line, variable)` matches no PDG node in the resolved function, `name_the_function_searched` reports the exact function searched (and whether it came from `--function` or `file:line` span resolution) plus all candidate functions defined in that file.
+
+### Verification Commands
+
+```bash
+# Run unit and integration slicing tests
+cargo test -p rgctl-analysis slicing
+cargo test --test slicing
 ```
 
 ---
 
-## 7. Testing
+## 6. Known Limitations & By-Design Boundaries
 
-| Layer | Location |
-|-------|----------|
-| Analysis unit tests | `crates/rgctl-analysis/src/slicing.rs` |
-| CLI subprocess | `tests/cli_output/all_commands_sanity.rs` |
-| Dashboard harness | `tests/dashboard_harness.rs` (`slice_index.json`) |
-
-Screenshots: `capture-design-screenshots.mjs` → `docs/images/design/program-slicing/`.
-
----
-
-## 8. Related docs
-
-- [PDG design](pdg-design.md) · [Taint design](taint-analysis-design.md)
-- [Analysis architecture](../analysis-architecture.md)
+1. **Dynamic Dispatch & Reflection:** Slicing follows static AST def-use and call edges; reflective field writes or dynamic `eval` invocations are not part of the PDG.
+2. **Inter-Procedural Handoff Depth:** `rgctl blast-radius <symbol> --with-slices` bounds cross-function PDG slice handoffs to direct caller/callee argument bindings to prevent exponential context explosion on deep call graphs.

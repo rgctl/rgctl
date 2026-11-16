@@ -7,9 +7,19 @@
   (function_body_declaration
     (function_identifier (simple_identifier) @name))) @definition.function
 
+(function_declaration
+  (function_body_declaration
+    (function_identifier
+      (function_identifier (simple_identifier) @name)))) @definition.function
+
 (task_declaration
   (task_body_declaration
     (task_identifier (simple_identifier) @name))) @definition.function
+
+(task_declaration
+  (task_body_declaration
+    (task_identifier
+      (task_identifier (simple_identifier) @name)))) @definition.function
 
 (class_declaration
   (class_identifier (simple_identifier) @name)) @definition.class

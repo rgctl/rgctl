@@ -70,6 +70,12 @@ pub fn extract_name_from_node(node: Node, source: &[u8]) -> Result<Option<String
         }
     }
 
+    if let Some(signature) = node.child_by_field_name("signature")
+        && let Some(name) = extract_name_from_node(signature, source)?
+    {
+        return Ok(Some(name));
+    }
+
     for field in ["name", "lhs", "pattern"] {
         if let Some(field_node) = node.child_by_field_name(field)
             && let Some(name) = extract_name_from_node(field_node, source)?
@@ -104,7 +110,21 @@ pub fn extract_name_from_node(node: Node, source: &[u8]) -> Result<Option<String
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "type_identifier" {
+        if matches!(
+            child.kind(),
+            "type_identifier"
+                | "annotation"
+                | "marker_annotation"
+                | "modifiers"
+                | "attribute"
+                | "attributes"
+                | "decorator"
+                | "decorators"
+                | "metadata"
+                | "visibility_modifier"
+                | "type_arguments"
+                | "type_parameters"
+        ) {
             continue;
         }
         if let Some(name) = extract_name_from_node(child, source)? {
@@ -231,7 +251,8 @@ fn walk_extract(
             }
         }
 
-        symbols.push(Symbol {
+        let name_node = node.child_by_field_name("name");
+        let mut symbol = Symbol {
             name,
             symbol_type,
             qualified_name: None,
@@ -250,7 +271,10 @@ fn walk_extract(
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "extractor": "generic" }),
-        });
+            ..Default::default()
+        };
+        crate::spans::record_symbol_spans(&mut symbol, node, name_node);
+        symbols.push(symbol);
     }
 
     let mut cursor = node.walk();

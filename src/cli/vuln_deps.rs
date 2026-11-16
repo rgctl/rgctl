@@ -363,12 +363,16 @@ pub fn run_sink_taint(ctx: &CliContext, sink: String, source: String, depth: usi
     if !cfg_available {
         anyhow::bail!("{}", missing_cfg_error_message());
     }
-    let sink_in_graph = symbol_in_graph(ctx, &sink);
+    let mut sink_in_graph = symbol_in_graph(ctx, &sink);
     let mut callers = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let short = sink
+        .rsplit(['.', ':'])
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(sink.as_str());
     if let Ok(Some(store)) = ctx.open_snapshot_store() {
         let q = rgctl_graph::StructuredQuery::new(store.as_ref());
-        let short = sink.rsplit('.').next().unwrap_or(sink.as_str());
-        let mut seen = std::collections::HashSet::new();
         for seed in [sink.as_str(), short] {
             if let Ok(nb) = q.call_neighbors(
                 seed,
@@ -387,11 +391,86 @@ pub fn run_sink_taint(ctx: &CliContext, sink: String, source: String, depth: usi
             }
         }
     }
+
+    // Load discover-time taint flows recorded under `.rgctl/analysis/` when `--with-taint` ran.
+    let mut path_summaries = Vec::new();
+    let analysis_dir = ctx.repo.join(".rgctl/analysis");
+    if analysis_dir.is_dir() {
+        let storage = rgctl_analysis::AnalysisStorage::new(&analysis_dir);
+        if let Ok(index) = storage.load_analysis_index() {
+            let mut entries: Vec<_> = index.values().filter(|e| e.flow_count > 0).collect();
+            entries.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+            for entry in entries {
+                let Ok(Some(analysis)) = storage.load_function(entry.function_id) else {
+                    continue;
+                };
+                let Some(flows) = analysis.taint.as_ref() else {
+                    continue;
+                };
+                let pdg = analysis.pdg.as_deref();
+                for flow in flows {
+                    if !flow.is_vulnerable() {
+                        continue;
+                    }
+                    let sink_stmt = pdg
+                        .and_then(|p| p.nodes.get(&flow.sink))
+                        .map(|n| (n.statement.line, n.statement.text.as_str()));
+                    let src_stmt = pdg
+                        .and_then(|p| p.nodes.get(&flow.source))
+                        .map(|n| (n.statement.line, n.statement.text.as_str()));
+                    let sink_text = sink_stmt.map(|(_, t)| t).unwrap_or("");
+                    let matches_sink = (!sink.is_empty() && sink_text.contains(sink.as_str()))
+                        || (!short.is_empty() && sink_text.contains(short))
+                        || analysis.function_name == sink
+                        || analysis.function_name == short;
+                    if !matches_sink {
+                        continue;
+                    }
+                    sink_in_graph = true;
+                    if seen.insert(analysis.function_name.clone()) {
+                        callers.push(analysis.function_name.clone());
+                    }
+                    let from_desc = match src_stmt {
+                        Some((line, text)) => format!(
+                            "{}:{} ({:?}: {})",
+                            analysis.function_name,
+                            line,
+                            flow.source_type,
+                            text.trim()
+                        ),
+                        None => format!("{} ({:?})", analysis.function_name, flow.source_type),
+                    };
+                    let to_desc = match sink_stmt {
+                        Some((line, text)) => format!(
+                            "{}:{} ({:?}: {})",
+                            analysis.function_name,
+                            line,
+                            flow.sink_type,
+                            text.trim()
+                        ),
+                        None => format!("{} ({:?})", analysis.function_name, flow.sink_type),
+                    };
+                    path_summaries.push(rgctl_security::SinkPathSummary {
+                        from: from_desc,
+                        to: to_desc,
+                        hops: Some(flow.path.len()),
+                    });
+                }
+            }
+        }
+    }
+
     // Ensure overlays compile (declarative engine).
     let _ = rgctl_security::rules_with_osv_overlays(None, std::slice::from_ref(&sink))
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    let result =
-        build_sink_first_result(&sink, depth, cfg_available, sink_in_graph, callers, vec![]);
+    let result = build_sink_first_result(
+        &sink,
+        depth,
+        cfg_available,
+        sink_in_graph,
+        callers,
+        path_summaries,
+    );
     if ctx.format == OutputFormat::Json {
         ctx.emit_json_value(&serde_json::to_value(&result)?)?;
     } else {

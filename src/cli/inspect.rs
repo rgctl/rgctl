@@ -4,7 +4,9 @@ use super::args::{InspectLayer, OutputFormat, PdgEdgeLayer};
 use super::context::{CliContext, language_from_path};
 use super::inspect_output::{inspect_cfg_json, inspect_dom_json, inspect_pdg_json};
 use super::markup::markup_context_unsupported;
-use crate::analysis::{DominatorTree, ProgramDependenceGraph, build_cfg_for_function};
+use crate::analysis::{
+    DominatorTree, ParsedSourceFile, ProgramDependenceGraph, build_cfg_for_function,
+};
 use anyhow::Result;
 use rgctl_error::SymbolCandidate;
 use rgctl_graph::backend::{GraphBackend, MemoryBackend};
@@ -33,7 +35,20 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
     }
     let lang = language_from_path(Path::new(file));
     let display_name = node.name.as_str();
-    let mut cfg = build_cfg_for_function(&lang, &source, display_name)?;
+    let mut cfg = if let (Some(sl), Some(el)) = (node.start_line, node.end_line)
+        && sl > 0
+        && el >= sl
+    {
+        ParsedSourceFile::parse(&lang, source.as_bytes())?.build_cfg_for_node_span(
+            &lang,
+            source.as_bytes(),
+            display_name,
+            sl,
+            el,
+        )?
+    } else {
+        build_cfg_for_function(&lang, &source, display_name)?
+    };
     let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes())?;
     let dom = DominatorTree::build(&cfg);
 
@@ -44,7 +59,11 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
             }
             match ctx.format {
                 OutputFormat::Json => {
-                    let response = inspect_cfg_json(display_name, &cfg, prune);
+                    let response = inspect_cfg_json(display_name, &cfg, prune).with_symbol_spans(
+                        node.start_byte,
+                        node.end_byte,
+                        node.name_byte_span(),
+                    );
                     ctx.emit_json_value(&serde_json::to_value(&response)?)?;
                 }
                 OutputFormat::Mermaid => {
@@ -74,7 +93,8 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
                 PdgEdgeLayer::Control => (0, pdg.control_deps.len()),
             };
             if ctx.format == OutputFormat::Json {
-                let response = inspect_pdg_json(display_name, &pdg, def_use, data, control);
+                let response = inspect_pdg_json(display_name, &pdg, def_use, data, control)
+                    .with_symbol_spans(node.start_byte, node.end_byte, node.name_byte_span());
                 ctx.emit_json_value(&serde_json::to_value(&response)?)?;
             } else {
                 println!(
@@ -89,7 +109,8 @@ pub fn run(ctx: &CliContext, args: InspectArgs) -> Result<()> {
         }
         InspectLayer::Dom { frontiers } => {
             if ctx.format == OutputFormat::Json {
-                let response = inspect_dom_json(display_name, &cfg, &dom, frontiers);
+                let response = inspect_dom_json(display_name, &cfg, &dom, frontiers)
+                    .with_symbol_spans(node.start_byte, node.end_byte, node.name_byte_span());
                 ctx.emit_json_value(&serde_json::to_value(&response)?)?;
             } else if ctx.format == OutputFormat::Mermaid {
                 ctx.emit(&dom_to_mermaid(&dom))?;

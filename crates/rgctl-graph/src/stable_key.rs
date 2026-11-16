@@ -53,14 +53,11 @@ pub struct NodeRowRef {
 }
 
 /// BLAKE3 digest of extension blob (0 when absent).
+///
+/// Absolute span fields (`end_byte`, `name_span_overflow`) are excluded so inserting
+/// lines/bytes above an unchanged symbol leaves the digest stable for `rgctl diff`.
 pub fn extension_digest(bytes: Option<&[u8]>) -> u64 {
-    match bytes {
-        None | Some([]) => 0,
-        Some(blob) => {
-            let hash = blake3::hash(blob);
-            u64::from_le_bytes(hash.as_bytes()[..8].try_into().expect("8 bytes"))
-        }
-    }
+    crate::columnar_snapshot::extension_digest_excluding_spans(bytes)
 }
 
 /// Derive a deterministic node [`Uuid`] from a [`StableNodeKey`].
@@ -75,12 +72,27 @@ pub fn deterministic_node_id(
     node_type: NodeType,
     qualified_name: Option<&str>,
 ) -> Uuid {
+    deterministic_node_id_with_discriminator(file_path, name, node_type, qualified_name, None)
+}
+
+/// Derive a node ID with a language-supplied canonical callable discriminator.
+///
+/// An absent or empty discriminator preserves the existing ID contract. The
+/// discriminator must describe the declaration, never its body or coordinates.
+pub fn deterministic_node_id_with_discriminator(
+    file_path: Option<&str>,
+    name: &str,
+    node_type: NodeType,
+    qualified_name: Option<&str>,
+    discriminator: Option<&str>,
+) -> Uuid {
     match file_path {
-        Some(path) => stable_key_to_uuid(stable_key_from_facets(
+        Some(path) => stable_key_to_uuid(stable_key_from_facets_with_discriminator(
             Some(path),
             name,
             node_type,
             qualified_name,
+            discriminator,
         )),
         None => Uuid::new_v4(),
     }
@@ -97,6 +109,20 @@ pub fn stable_key_from_facets(
     node_type: NodeType,
     qualified_name: Option<&str>,
 ) -> StableNodeKey {
+    stable_key_from_facets_with_discriminator(file_path, name, node_type, qualified_name, None)
+}
+
+/// Hash stable declaration facets and an optional canonical callable discriminator.
+///
+/// The optional facet is domain-separated and length-prefixed. Empty values are
+/// treated as absent so callers without callable metadata retain existing keys.
+pub fn stable_key_from_facets_with_discriminator(
+    file_path: Option<&str>,
+    name: &str,
+    node_type: NodeType,
+    qualified_name: Option<&str>,
+    discriminator: Option<&str>,
+) -> StableNodeKey {
     let mut hasher = blake3::Hasher::new();
     if let Some(path) = file_path {
         hasher.update(normalize_path_str(path).as_bytes());
@@ -111,6 +137,11 @@ pub fn stable_key_from_facets(
     } else {
         hasher.update(b"");
     }
+    if let Some(discriminator) = discriminator.filter(|s| !s.is_empty()) {
+        hasher.update(&[0xfe]);
+        hasher.update(&(discriminator.len() as u64).to_le_bytes());
+        hasher.update(discriminator.as_bytes());
+    }
     let hash = hasher.finalize();
     StableNodeKey(u64::from_le_bytes(
         hash.as_bytes()[..8].try_into().expect("8 bytes"),
@@ -119,11 +150,12 @@ pub fn stable_key_from_facets(
 
 /// Stable key facets from a materialized [`Node`] (same contract as [`stable_key_from_row`]).
 pub fn stable_key_from_node(node: &crate::schema::Node) -> StableNodeKey {
-    stable_key_from_facets(
+    stable_key_from_facets_with_discriminator(
         node.file_path.as_deref(),
         node.name.as_ref(),
         node.node_type,
         node.qualified_name.as_deref(),
+        node.identity_discriminator(),
     )
 }
 
@@ -142,7 +174,13 @@ pub fn stable_key_from_row(col: &ColumnarGraphMmap, idx: usize) -> Result<Stable
     )?;
     let node_type = crate::columnar_snapshot::node_type_from_u16(row.node_type)?;
     let qn = col.node_qualified_name_str(idx)?;
-    Ok(stable_key_from_facets(file_path, name, node_type, qn))
+    Ok(stable_key_from_facets_with_discriminator(
+        file_path,
+        name,
+        node_type,
+        qn,
+        col.node_identity_discriminator_str(idx)?,
+    ))
 }
 
 /// Repo-relative path used for PR scope filtering (file path or file-node name).
@@ -200,6 +238,92 @@ mod tests {
         let file = File::open(&path).unwrap();
         let mmap = Arc::new(unsafe { Mmap::map(&file).unwrap() });
         (tmp, ColumnarGraphMmap::open(mmap).unwrap())
+    }
+
+    #[test]
+    fn overload_discriminators_produce_distinct_keys_and_ids() {
+        let key = |signature| {
+            stable_key_from_facets_with_discriminator(
+                Some("Library.java"),
+                "quote",
+                NodeType::Function,
+                Some("demo.Library.quote"),
+                Some(signature),
+            )
+        };
+        let int_key = key("(int)");
+        let string_key = key("(java.lang.String)");
+        assert_ne!(int_key, string_key);
+        assert_ne!(stable_key_to_uuid(int_key), stable_key_to_uuid(string_key));
+        assert_eq!(
+            stable_key_to_uuid(int_key),
+            deterministic_node_id_with_discriminator(
+                Some("Library.java"),
+                "quote",
+                NodeType::Function,
+                Some("demo.Library.quote"),
+                Some("(int)"),
+            ),
+        );
+    }
+
+    #[test]
+    fn optional_discriminator_preserves_existing_identity_contract() {
+        let legacy_key = stable_key_from_facets(
+            Some("Library.java"),
+            "quote",
+            NodeType::Function,
+            Some("demo.Library.quote"),
+        );
+        let legacy_id = deterministic_node_id(
+            Some("Library.java"),
+            "quote",
+            NodeType::Function,
+            Some("demo.Library.quote"),
+        );
+        for discriminator in [None, Some("")] {
+            assert_eq!(
+                legacy_key,
+                stable_key_from_facets_with_discriminator(
+                    Some("Library.java"),
+                    "quote",
+                    NodeType::Function,
+                    Some("demo.Library.quote"),
+                    discriminator,
+                )
+            );
+            assert_eq!(
+                legacy_id,
+                deterministic_node_id_with_discriminator(
+                    Some("Library.java"),
+                    "quote",
+                    NodeType::Function,
+                    Some("demo.Library.quote"),
+                    discriminator,
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn discriminator_does_not_replace_owner_or_node_kind() {
+        let key = |owner, kind| {
+            stable_key_from_facets_with_discriminator(
+                Some("Library.java"),
+                "quote",
+                kind,
+                Some(owner),
+                Some("(int)"),
+            )
+        };
+        assert_ne!(
+            key("demo.A.quote", NodeType::Function),
+            key("demo.B.quote", NodeType::Function)
+        );
+        assert_ne!(
+            key("demo.A.quote", NodeType::Function),
+            key("demo.A.quote", NodeType::Variable)
+        );
     }
 
     #[test]
@@ -334,5 +458,40 @@ mod tests {
                 "digest differs on iteration {i} for identical input"
             );
         }
+    }
+
+    #[test]
+    fn extension_digest_invariant_under_line_and_byte_shifts() {
+        let base = Node::new(NodeType::Function, "process")
+            .with_file_path("svc.rs")
+            .with_qualified_name("svc::process")
+            .with_location(10, 20)
+            .with_byte_spans(Some(120), Some(340), Some(4), None, None)
+            .with_property("cyclomatic".into(), "2".into());
+        let shifted = Node::new(NodeType::Function, "process")
+            .with_file_path("svc.rs")
+            .with_qualified_name("svc::process")
+            .with_location(60, 70)
+            .with_byte_spans(Some(920), Some(1140), Some(4), None, None)
+            .with_property("cyclomatic".into(), "2".into());
+
+        assert_eq!(
+            stable_key_from_node(&base),
+            stable_key_from_node(&shifted),
+            "StableNodeKey must ignore absolute line/byte coordinates"
+        );
+
+        let (_t0, c0) = open_columnar(vec![base]);
+        let (_t1, c1) = open_columnar(vec![shifted]);
+        let d0 = node_row_ref(&c0, 0).unwrap().extension_digest;
+        let d1 = node_row_ref(&c1, 0).unwrap().extension_digest;
+        assert_eq!(
+            d0, d1,
+            "extension_digest must ignore end_byte / absolute span shifts"
+        );
+        assert_eq!(
+            stable_key_from_row(&c0, 0).unwrap(),
+            stable_key_from_row(&c1, 0).unwrap()
+        );
     }
 }

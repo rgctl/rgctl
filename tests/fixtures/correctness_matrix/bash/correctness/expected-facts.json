@@ -1,0 +1,190 @@
+{
+  "schema_version": 2,
+  "language": "bash",
+  "project": "correctness-bash",
+  "graph": {
+    "severity": "required",
+    "min_functions": 15,
+    "min_calls_edges": 8,
+    "forbidden_edges": [
+      {
+        "from": "correctness_leaf",
+        "to": "correctness_root"
+      }
+    ]
+  },
+  "symbols": {
+    "correctnessLeaf": {
+      "match": {
+        "name": "correctness_leaf"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [],
+      "exact_callers": ["correctness_mid"],
+      "blast": {
+        "exact_direct_callers": ["correctness_mid"]
+      },
+      "cfg": {
+        "min_blocks": 1
+      }
+    },
+    "correctnessMid": {
+      "match": {
+        "name": "correctness_mid"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": ["correctness_leaf"],
+      "exact_callers": ["correctness_root"],
+      "blast": {
+        "exact_direct_callers": ["correctness_root"]
+      },
+      "cfg": {
+        "min_blocks": 3,
+        "statements_contain": ["correctness_leaf"]
+      }
+    },
+    "correctnessRoot": {
+      "match": {
+        "name": "correctness_root"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": ["correctness_mid"],
+      "exact_callers": [],
+      "cfg": {
+        "min_blocks": 3,
+        "statements_contain": ["correctness_mid"]
+      }
+    },
+    "correctnessShared": {
+      "match": {
+        "name": "correctness_shared"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callers": ["correctness_left", "correctness_right"],
+      "blast": {
+        "exact_direct_callers": ["correctness_left", "correctness_right"]
+      }
+    },
+    "cfgWhileLoop": {
+      "match": {
+        "name": "cfg_while_loop"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "min_blocks": 3
+      }
+    },
+    "v2SliceFlowProbe": {
+      "match": {
+        "name": "v2_slice_flow_probe"
+      },
+      "severity": "required",
+      "unique": true,
+      "slice": {
+        "file": "src/correctness_harness.sh",
+        "line": 51,
+        "variable": "final_out",
+        "must_contain": ["seed_input", "step_val"],
+        "must_exclude": ["999"]
+      },
+      "flows": {
+        "file": "src/correctness_harness.sh",
+        "line": 48,
+        "variable": "step_val",
+        "must_contain": ["alias_val", "final_out"]
+      }
+    },
+    "v2TaintEval": {
+      "match": {
+        "name": "taint_unsafe_eval"
+      },
+      "severity": "required",
+      "unique": true,
+      "taint": {
+        "sink": "eval ",
+        "source": "external",
+        "min_flows": 1,
+        "must_contain": ["taint_unsafe_eval"]
+      }
+    },
+    "v2CloneExactA": {
+      "match": {
+        "name": "v2_clone_exact_a"
+      },
+      "severity": "required",
+      "unique": true,
+      "clones": {
+        "mode": "bloom",
+        "group_with": ["v2_clone_exact_b"],
+        "not_grouped_with": ["correctness_leaf"]
+      }
+    },
+    "v2SemanticLedger": {
+      "match": {
+        "name": "reconcile_chargeback_ledger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": ["archive_chargeback_audit"],
+      "semantic": {
+        "query": "reconcile chargeback ledger",
+        "top3_contains": "reconcile_chargeback_ledger",
+        "neighbor_names": ["archive_chargeback_audit"]
+      },
+      "review": {
+        "file": "src/correctness_harness.sh",
+        "find": "return 42",
+        "replace": "return 43",
+        "must_contain": ["correctness_mid"]
+      }
+    }
+  },
+  "invariants": {
+    "B1_blast_vs_calls": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": ["correctnessLeaf", "correctnessMid", "correctnessShared"]
+    },
+    "B2_gql_calls_nonzero": {
+      "enabled": true,
+      "severity": "required"
+    },
+    "B5_inspect_cfg_present": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": ["correctnessRoot", "correctnessMid", "correctnessLeaf"]
+    },
+    "B6_cfg_calls_subset_of_calls_edges": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": ["correctnessRoot", "correctnessMid"]
+    },
+    "B7_pdg_lines_subset_cfg": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": ["correctnessRoot", "correctnessMid", "correctnessLeaf"]
+    },
+    "B8_dom_blocks_match_cfg": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": ["correctnessRoot", "correctnessMid", "correctnessLeaf"]
+    },
+    "B9_blast_target_name": {
+      "enabled": true,
+      "severity": "required",
+      "symbols": ["correctnessRoot", "correctnessMid", "correctnessLeaf"]
+    }
+  },
+  "analytics": {
+    "severity": "required",
+    "root": "correctness_root",
+    "mid": "correctness_mid",
+    "leaf": "correctness_leaf",
+    "separate": ["clique_alpha_a", "clique_beta_a"]
+  }
+}

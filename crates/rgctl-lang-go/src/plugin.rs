@@ -98,7 +98,7 @@ impl GoPlugin {
                 (None, serde_json::json!({ "language": "go" }))
             };
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -123,7 +123,20 @@ impl GoPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Go,
+        );
+        Ok(symbol)
     }
 
     fn extract_receiver(
@@ -225,12 +238,16 @@ impl GoPlugin {
     ) -> Result<Symbol> {
         let mut cursor = node.walk();
         let mut name = None;
+        let mut name_node = node.child_by_field_name("name");
         let mut fields = Vec::new();
 
         for child in node.children(&mut cursor) {
             match child.kind() {
                 "type_identifier" => {
                     name = Some(child.utf8_text(source)?.to_string());
+                    if name_node.is_none() {
+                        name_node = Some(child);
+                    }
                 }
                 "struct_type" => {
                     fields = self.extract_struct_fields(child, source)?;
@@ -245,7 +262,7 @@ impl GoPlugin {
             message: "Struct missing name".to_string(),
         })?;
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Struct,
             qualified_name: None,
@@ -263,7 +280,10 @@ impl GoPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, name_node);
+        Ok(symbol)
     }
 
     fn extract_struct_fields(&self, struct_type_node: Node, source: &[u8]) -> Result<Vec<Field>> {
@@ -275,7 +295,7 @@ impl GoPlugin {
                 let mut field_cursor = child.walk();
                 for field_child in child.children(&mut field_cursor) {
                     if field_child.kind() == "field_declaration" {
-                        let mut name = None;
+                        let mut names = Vec::new();
                         let mut field_type = None;
                         let mut embedded = false;
 
@@ -283,7 +303,7 @@ impl GoPlugin {
                         for decl_child in field_child.children(&mut decl_cursor) {
                             match decl_child.kind() {
                                 "field_identifier" => {
-                                    name = Some(decl_child.utf8_text(source)?.to_string());
+                                    names.push(decl_child.utf8_text(source)?.to_string());
                                 }
                                 "type_identifier" | "pointer_type" | "slice_type"
                                 | "qualified_type" | "generic_type" => {
@@ -295,22 +315,24 @@ impl GoPlugin {
                         if let Some(t) = field_child.child_by_field_name("type") {
                             field_type = Some(t.utf8_text(source)?.to_string());
                         }
-                        if let Some(n) = field_child.child_by_field_name("name") {
-                            name = Some(n.utf8_text(source)?.to_string());
-                        }
 
                         // Embedded field: no explicit name (LF-06).
-                        if name.is_none() {
+                        if names.is_empty() {
                             if let Some(ty) = &field_type {
-                                name = Some(ty.trim_start_matches('*').to_string());
+                                names.push(ty.trim_start_matches('*').to_string());
                                 embedded = true;
                             }
                         }
 
-                        if let Some(name) = name {
+                        for name in names {
                             fields.push(Field {
+                                source_span: rgctl_plugin_helpers::field_source_span(
+                                    field_child,
+                                    source,
+                                    &name,
+                                ),
                                 name,
-                                field_type,
+                                field_type: field_type.clone(),
                                 visibility: if embedded {
                                     Some("embedded".into())
                                 } else {
@@ -334,10 +356,14 @@ impl GoPlugin {
     ) -> Result<Symbol> {
         let mut cursor = node.walk();
         let mut name = None;
+        let mut name_node = node.child_by_field_name("name");
 
         for child in node.children(&mut cursor) {
             if child.kind() == "type_identifier" {
                 name = Some(child.utf8_text(source)?.to_string());
+                if name_node.is_none() {
+                    name_node = Some(child);
+                }
                 break;
             }
         }
@@ -349,7 +375,7 @@ impl GoPlugin {
             message: "Interface missing name".to_string(),
         })?;
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Interface,
             qualified_name: Some(name),
@@ -367,7 +393,10 @@ impl GoPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "go" }),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, name_node);
+        Ok(symbol)
     }
 
     /// Interface method elements → Function symbols with `Iface.Method` FQN.
@@ -410,7 +439,7 @@ impl GoPlugin {
                     let Some(method_name) = name else {
                         continue;
                     };
-                    methods.push(Symbol {
+                    let mut symbol = Symbol {
                         name: method_name.clone(),
                         symbol_type: SymbolType::Function,
                         qualified_name: Some(format!("{iface_name}.{method_name}")),
@@ -432,7 +461,20 @@ impl GoPlugin {
                             "interface_method": true,
                             "receiver_type": iface_name,
                         }),
-                    });
+                        ..Default::default()
+                    };
+                    rgctl_plugin_helpers::record_symbol_spans(
+                        &mut symbol,
+                        child,
+                        child.child_by_field_name("name"),
+                    );
+                    symbol = rgctl_plugin_helpers::callable_identity::symbol(
+                        symbol,
+                        child,
+                        source,
+                        rgctl_plugin_helpers::callable_identity::Policy::Go,
+                    );
+                    methods.push(symbol);
                 }
                 "type_identifier" | "qualified_type" | "type_elem" => {
                     // Embedded interface (e.g. RuntimeService embeds PodSandboxManager).
@@ -593,7 +635,7 @@ impl GoPlugin {
             .child_by_field_name("type")
             .and_then(|n| n.utf8_text(source).ok())
             .map(str::to_string);
-        Ok(Some(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::TypeAlias,
             qualified_name: Some(name),
@@ -611,7 +653,14 @@ impl GoPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "go" }),
-        }))
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            type_spec,
+            type_spec.child_by_field_name("name"),
+        );
+        Ok(Some(symbol))
     }
 
     pub(crate) fn extract_imports(
@@ -653,7 +702,7 @@ impl GoPlugin {
                     let name = alias
                         .clone()
                         .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
-                    out.push(Symbol {
+                    let mut symbol = Symbol {
                         name: name.clone(),
                         symbol_type: SymbolType::Import,
                         qualified_name: Some(path.clone()),
@@ -674,7 +723,14 @@ impl GoPlugin {
                             "language": "go",
                             "import_alias": alias,
                         }),
-                    });
+                        ..Default::default()
+                    };
+                    rgctl_plugin_helpers::record_symbol_spans(
+                        &mut symbol,
+                        node,
+                        node.child_by_field_name("name"),
+                    );
+                    out.push(symbol);
                 }
             }
             let mut c = node.walk();
@@ -716,7 +772,17 @@ impl GoPlugin {
                     .and_then(|n| n.utf8_text(source).ok())
                     .map(str::to_string);
                 for name in names {
-                    out.push(Symbol {
+                    let name_node = node
+                        .child_by_field_name("name")
+                        .filter(|n| n.utf8_text(source).ok() == Some(name.as_str()))
+                        .or_else(|| {
+                            let mut c = node.walk();
+                            node.children(&mut c).find(|ch| {
+                                ch.kind() == "identifier"
+                                    && ch.utf8_text(source).ok() == Some(name.as_str())
+                            })
+                        });
+                    let mut symbol = Symbol {
                         name: name.clone(),
                         symbol_type: SymbolType::Variable,
                         qualified_name: Some(name),
@@ -737,7 +803,10 @@ impl GoPlugin {
                             "language": "go",
                             "is_const": true,
                         }),
-                    });
+                        ..Default::default()
+                    };
+                    rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, name_node);
+                    out.push(symbol);
                 }
             }
             let mut c = node.walk();
@@ -779,7 +848,17 @@ impl GoPlugin {
                     .and_then(|n| n.utf8_text(source).ok())
                     .map(str::to_string);
                 for name in names {
-                    out.push(Symbol {
+                    let name_node = node
+                        .child_by_field_name("name")
+                        .filter(|n| n.utf8_text(source).ok() == Some(name.as_str()))
+                        .or_else(|| {
+                            let mut c = node.walk();
+                            node.children(&mut c).find(|ch| {
+                                ch.kind() == "identifier"
+                                    && ch.utf8_text(source).ok() == Some(name.as_str())
+                            })
+                        });
+                    let mut symbol = Symbol {
                         name: name.clone(),
                         symbol_type: SymbolType::Variable,
                         qualified_name: Some(name),
@@ -800,7 +879,10 @@ impl GoPlugin {
                             "language": "go",
                             "kind": "var_spec",
                         }),
-                    });
+                        ..Default::default()
+                    };
+                    rgctl_plugin_helpers::record_symbol_spans(&mut symbol, node, name_node);
+                    out.push(symbol);
                 }
             }
             let mut c = node.walk();
@@ -878,6 +960,7 @@ impl GoPlugin {
                         metadata: serde_json::json!({ "language": "go" }),
                         to_qualified_hint: Some(iface.clone()),
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -907,6 +990,7 @@ impl GoPlugin {
                     }),
                     to_qualified_hint: Some(embed.to_string()),
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
         }

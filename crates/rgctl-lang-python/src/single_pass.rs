@@ -180,6 +180,7 @@ fn emit_decorators_for_node(
             metadata: meta,
             to_qualified_hint: None,
             to_type_hint: None,
+            ..Default::default()
         });
     }
 }
@@ -461,6 +462,7 @@ pub fn extract_all_single_pass(
         .collect();
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
@@ -486,8 +488,16 @@ pub fn extract_all_single_pass(
                 metadata: serde_json::json!({ "language": "python" }),
                 to_qualified_hint: Some(target),
                 to_type_hint: None,
+                ..Default::default()
             });
         }
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Python,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
 
     for pending in pending_subscripts {
@@ -517,6 +527,12 @@ pub fn extract_all_single_pass(
         "python",
         source,
         Some(root),
+        &mut ctx.symbols,
+        &mut relations,
+    );
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Python,
         &mut ctx.symbols,
         &mut relations,
     );

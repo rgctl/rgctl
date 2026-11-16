@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "language": "hcl",
+  "project": "correctness-hcl",
+  "graph": {
+    "severity": "required",
+    "min_functions": 0,
+    "min_calls_edges": 0
+  },
+  "symbols": {
+    "regionVar": {
+      "match": {
+        "name": "variable.region",
+        "entity_type": "variable"
+      },
+      "severity": "required",
+      "unique": true
+    },
+    "chargebackVpc": {
+      "match": {
+        "name": "module.chargeback_vpc",
+        "entity_type": "module"
+      },
+      "severity": "required",
+      "unique": true
+    },
+    "reconcileInstance": {
+      "match": {
+        "name": "resource.aws_instance.reconcile_chargeback_ledger",
+        "entity_type": "struct"
+      },
+      "severity": "required",
+      "unique": true
+    },
+    "archiveInstance": {
+      "match": {
+        "name": "resource.aws_instance.archive_chargeback_audit",
+        "entity_type": "struct"
+      },
+      "severity": "required",
+      "unique": true
+    }
+  },
+  "invariants": {
+    "B2_gql_calls_nonzero": {
+      "enabled": false
+    }
+  }
+}

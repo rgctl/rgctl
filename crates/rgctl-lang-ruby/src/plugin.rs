@@ -7,7 +7,7 @@ use rgctl_plugin_api::{
     callee_name, complexity_from_metadata, containing_function, parse_with_pool, ruby_call_callee,
     walk_calls,
 };
-use rgctl_plugin_helpers::ComplexityCalculator;
+use rgctl_plugin_helpers::{ComplexityCalculator, record_symbol_spans};
 use std::path::Path;
 use tree_sitter::{Node, Parser, Tree};
 
@@ -206,7 +206,7 @@ impl RubyPlugin {
             )
         };
 
-        Ok(Symbol {
+        let mut sym = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -226,7 +226,16 @@ impl RubyPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut sym, node, node.child_by_field_name("name"));
+        sym = rgctl_plugin_helpers::callable_identity::symbol(
+            sym,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Ruby,
+        );
+        Ok(sym)
     }
 
     pub(crate) fn extract_class_or_module(
@@ -247,7 +256,7 @@ impl RubyPlugin {
             })?;
 
         let type_qn = Self::join_qn(scope, &name);
-        let sym = Symbol {
+        let mut sym = Symbol {
             name: name.clone(),
             symbol_type: if is_module {
                 SymbolType::Module
@@ -266,7 +275,9 @@ impl RubyPlugin {
                 "language": "ruby",
                 "kind": if is_module { "module" } else { "class" },
             }),
+            ..Default::default()
         };
+        record_symbol_spans(&mut sym, node, node.child_by_field_name("name"));
         Ok((sym, type_qn))
     }
 
@@ -287,6 +298,9 @@ impl RubyPlugin {
                                 for arg in child.children(&mut c2) {
                                     if let Some(n) = Self::constant_text(arg, source) {
                                         fields.push(Field {
+                                            source_span: rgctl_plugin_helpers::field_source_span(
+                                                arg, source, &n,
+                                            ),
                                             name: n,
                                             field_type: None,
                                             visibility: None,
@@ -325,6 +339,11 @@ impl RubyPlugin {
                     if left.kind() == "instance_variable" {
                         if let Ok(name) = left.utf8_text(source) {
                             fields.push(Field {
+                                source_span: rgctl_plugin_helpers::field_source_span(
+                                    node,
+                                    source,
+                                    name.trim_start_matches('@'),
+                                ),
                                 name: name.trim_start_matches('@').to_string(),
                                 field_type: None,
                                 visibility: None,
@@ -549,7 +568,7 @@ impl RubyPlugin {
                 if let Some(callee) = ruby_call_callee(node, source) {
                     if matches!(callee.as_str(), "require" | "require_relative") {
                         if let Some(path) = self.require_path_arg(node, source) {
-                            symbols.push(Symbol {
+                            let mut sym = Symbol {
                                 name: path.clone(),
                                 symbol_type: SymbolType::Import,
                                 qualified_name: Some(path),
@@ -564,7 +583,10 @@ impl RubyPlugin {
                                     "language": "ruby",
                                     "kind": callee,
                                 }),
-                            });
+                                ..Default::default()
+                            };
+                            record_symbol_spans(&mut sym, node, None);
+                            symbols.push(sym);
                         }
                     }
                 }
@@ -691,6 +713,7 @@ impl RubyPlugin {
                                         }),
                                         to_qualified_hint: Some(mod_name),
                                         to_type_hint: None,
+                                        ..Default::default()
                                     });
                                 }
                             }
@@ -707,6 +730,7 @@ impl RubyPlugin {
                                         }),
                                         to_qualified_hint: Some(mod_name),
                                         to_type_hint: None,
+                                        ..Default::default()
                                     });
                                 }
                             }
@@ -721,6 +745,7 @@ impl RubyPlugin {
                                             metadata: serde_json::json!({ "language": "ruby" }),
                                             to_qualified_hint: Some(ty),
                                             to_type_hint: None,
+                                            ..Default::default()
                                         });
                                     }
                                 }

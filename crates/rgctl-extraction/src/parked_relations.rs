@@ -45,12 +45,13 @@ pub fn save_parked_relations(path: &Path, records: &[ParkedRelationRecord]) -> R
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut file = File::create(path)?;
-    file.write_all(PARKED_RELATIONS_MAGIC)?;
-    file.write_all(&PARKED_RELATIONS_VERSION.to_le_bytes())?;
-    let payload = bincode::serialize(records)
+    let file = File::create(path)?;
+    let mut writer = std::io::BufWriter::with_capacity(256 * 1024, file);
+    writer.write_all(PARKED_RELATIONS_MAGIC)?;
+    writer.write_all(&PARKED_RELATIONS_VERSION.to_le_bytes())?;
+    bincode::serialize_into(&mut writer, records)
         .map_err(|e| Error::SerdeError(format!("parked_relations serialize: {e}")))?;
-    file.write_all(&payload)?;
+    writer.flush()?;
     Ok(())
 }
 

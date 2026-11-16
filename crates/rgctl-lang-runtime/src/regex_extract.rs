@@ -49,6 +49,7 @@ pub fn extract_regex_symbols(
                     modifiers: vec![],
                     documentation: None,
                     metadata: serde_json::json!({ "extractor": extractor }),
+                    ..Default::default()
                 });
             }
         }

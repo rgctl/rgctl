@@ -87,11 +87,6 @@ export const ROOMS = [
   { id: "review", label: "Review", blurb: "what changed, what does it touch?" },
   { id: "taint", label: "Taint", blurb: "where does untrusted data reach a sink?" },
   { id: "migration", label: "Migration", blurb: "what order should we move it?" },
-  {
-    id: "rules",
-    label: "Static rules",
-    blurb: "what do static migration rules say we must change?",
-  },
   { id: "proof", label: "Proof", blurb: "why should I believe any of this?" },
 ] as const;
 

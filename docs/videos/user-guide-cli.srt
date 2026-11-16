@@ -1,7 +1,7 @@
 1
 00:00:00,000 --> 00:00:06,500
 Index Once in Sub-Second Time (rgctl discover)
-Tree-sitter AST · RGCL v2 mmap graph · CFG/PDG · Konveyor Kantra · Migration plan
+Tree-sitter AST · RGCL v2 mmap graph · CFG/PDG · Migration plan
 
 2
 00:00:06,560 --> 00:00:11,500
@@ -45,8 +45,8 @@ Compiled vocab embedder + graph-distance score fusion in ~30ms
 
 10
 00:00:58,760 --> 00:01:07,200
-Native Konveyor Kantra Rules & CI Policy Gates (relations · check)
-Query migration rule violations as graph edges & enforce blast-radius gates
+CI Policy Gates (rgctl check)
+Enforce blast-radius and architecture gates in CI
 
 11
 00:01:07,200 --> 00:01:17,500

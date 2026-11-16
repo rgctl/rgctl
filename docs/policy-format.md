@@ -113,7 +113,7 @@ rgctl -r "$REPO" -f json review check \
 # rgctl -f json pr-check …
 ```
 
-Defaults: delta head synthesis from base artifact; `--base-artifact` = `$RGCTL_BASE_ARTIFACT` or `{repo}/.rgctl-base/`. Use `--full-snapshots` for pre-built dual artifacts. Additional flags: `--bisect`, `--synthetic-head worktree`, `--cascade-depth`, `--strict-calendar` (treat grace/sunset calendar warnings as failures). Outcomes append to `.rgctl/violation_ledger.jsonl` (ratchet: `new` / `existing` / `resolved` / `regression`). Example workflow: [.github/workflows/rgctl-pr-check.yml](../.github/workflows/rgctl-pr-check.yml). Walkthrough: [CI Policy Checks guide](https://rgctl.io/docs/guides/ci-policy-checks/) · [PR Review guide](https://rgctl.io/docs/guides/pr-review/).
+Defaults: delta head synthesis from base artifact; `--base-artifact` = `$RGCTL_BASE_ARTIFACT` or `{repo}/.rgctl-base/`. Use `--full-snapshots` for pre-built dual artifacts. Additional flags: `--bisect`, `--synthetic-head worktree`, `--cascade-depth`, `--strict-calendar` (treat grace/sunset calendar warnings as failures). Outcomes append to `.rgctl/violation_ledger.jsonl` (ratchet: `new` / `existing` / `resolved` / `regression`). Walkthrough: [CI Policy Checks guide](https://rgctl.io/docs/guides/ci-policy-checks/) · [PR Review guide](https://rgctl.io/docs/guides/pr-review/).
 
 ---
 
@@ -126,6 +126,6 @@ See [json-api.md](json-api.md) blast-radius `gatekeeping` and `check` field cata
 
 ## See also
 
-- [Introduction — CI policy](Introduction.md#ci-policy-checks)
+- [Introduction](Introduction.md)
 - [User Guide §14](user-guide.md#14-ci-policy-check)
-- [Building a migration plan](building-migration-plan.md) — Phase 5 governance
+- [Migration planning guide](https://rgctl.io/docs/guides/migration-planning/) — Phase 5 governance

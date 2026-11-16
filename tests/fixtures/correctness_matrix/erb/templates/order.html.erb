@@ -1,0 +1,8 @@
+<%# Chargeback ledger receipt template (UTF-8: € £ ¥) %>
+<div class="ledger">
+  <span class="total"><%= @chargeback_total %></span>
+  <span class="os"><%= @facts['os']['family'] %></span>
+  <% @line_items.each do |item| %>
+    <p><%= item %></p>
+  <% end %>
+</div>

@@ -9,7 +9,8 @@
 use crate::single_pass::{extract_all_single_pass, java_ast_handlers};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::ComplexityCalculator;
+use rgctl_plugin_helpers::callable_identity::{self, Policy};
+use rgctl_plugin_helpers::{ComplexityCalculator, record_call_site_spans, record_symbol_spans};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -64,9 +65,11 @@ pub(crate) struct ExtractCtx {
     /// Per-owner counters for instance initializer blocks (`Type.<initblock>N`).
     initblock_counters: RefCell<HashMap<String, usize>>,
     /// Per-enclosing-callable counters for lambda expressions (`Owner.$lambda$N`),
-    /// assigned in document order (pre-order DFS) so the symbol pass and the
-    /// relations pass (each re-parsing the source independently) agree on `N`.
+    /// assigned in document order on first visits and reused by later walks.
     lambda_counters: RefCell<HashMap<String, usize>>,
+    /// A lambda may be visited by both symbol and relation walks on this tree.
+    /// Node ids are transient lookup keys, never persisted graph identities.
+    lambda_indices: RefCell<HashMap<usize, usize>>,
 }
 
 impl ExtractCtx {
@@ -79,6 +82,7 @@ impl ExtractCtx {
             anon_names: Self::collect_anonymous_names(root),
             initblock_counters: RefCell::new(HashMap::new()),
             lambda_counters: RefCell::new(HashMap::new()),
+            lambda_indices: RefCell::new(HashMap::new()),
         }
     }
 
@@ -230,6 +234,18 @@ fn strip_java_type_sugar(raw: &str) -> String {
         .to_string()
 }
 
+/// Strip surrounding quotes from a Java string/char literal; leave other tokens.
+fn strip_java_string_literal(raw: &str) -> String {
+    let t = raw.trim();
+    if t.len() >= 2 {
+        let b = t.as_bytes();
+        if (b[0] == b'"' && b[t.len() - 1] == b'"') || (b[0] == b'\'' && b[t.len() - 1] == b'\'') {
+            return t[1..t.len() - 1].to_string();
+        }
+    }
+    t.to_string()
+}
+
 fn source_location(node: Node, file_path: &str) -> SourceLocation {
     SourceLocation {
         file: file_path.to_string(),
@@ -325,6 +341,66 @@ impl JavaPlugin {
         (simple, raw_name, args)
     }
 
+    /// Parse annotation argument list into a structured map (`value`, `path`,
+    /// `name`, `unitName`, `method`, `produces`, `consumes`, `defaultValue`, …).
+    fn parse_annotation_args_map(
+        &self,
+        ann_node: Node,
+        source: &[u8],
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut out = serde_json::Map::new();
+        let Some(args_node) = ann_node.child_by_field_name("arguments") else {
+            return out;
+        };
+        let mut cursor = args_node.walk();
+        let mut saw_named = false;
+        let mut positional: Option<String> = None;
+        for child in args_node.children(&mut cursor) {
+            match child.kind() {
+                "element_value_pair" => {
+                    saw_named = true;
+                    let key = child
+                        .child_by_field_name("key")
+                        .and_then(|n| n.utf8_text(source).ok())
+                        .unwrap_or("")
+                        .to_string();
+                    let val_node = child
+                        .child_by_field_name("value")
+                        .or_else(|| child.named_child(1));
+                    let raw = val_node
+                        .and_then(|n| n.utf8_text(source).ok())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if key.is_empty() || raw.is_empty() {
+                        continue;
+                    }
+                    let cleaned = strip_java_string_literal(&raw);
+                    out.insert(key, serde_json::Value::String(cleaned));
+                }
+                "string_literal"
+                | "identifier"
+                | "scoped_identifier"
+                | "field_access"
+                | "element_value_array_initializer"
+                | "annotation"
+                | "marker_annotation"
+                    if !saw_named && positional.is_none() =>
+                {
+                    let raw = child.utf8_text(source).unwrap_or("").trim().to_string();
+                    if !raw.is_empty() {
+                        positional = Some(strip_java_string_literal(&raw));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !saw_named && let Some(v) = positional {
+            out.insert("value".into(), serde_json::Value::String(v));
+        }
+        out
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn push_annotated_with(
         &self,
@@ -335,6 +411,30 @@ impl JavaPlugin {
         ctx: &ExtractCtx,
         same_file_types: &HashSet<String>,
         relations: &mut Vec<Relation>,
+    ) {
+        self.push_annotated_with_scoped(
+            from,
+            ann_node,
+            source,
+            file_path,
+            ctx,
+            same_file_types,
+            relations,
+            None,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_annotated_with_scoped(
+        &self,
+        from: &str,
+        ann_node: Node,
+        source: &[u8],
+        file_path: &Path,
+        ctx: &ExtractCtx,
+        same_file_types: &HashSet<String>,
+        relations: &mut Vec<Relation>,
+        scope: Option<&str>,
     ) {
         let (name, raw_name, args) = self.annotation_name_and_args(ann_node, source);
         if name.is_empty() {
@@ -353,10 +453,19 @@ impl JavaPlugin {
         if let Some(args) = args {
             metadata["arguments"] = serde_json::Value::String(args);
         }
+        let args_map = self.parse_annotation_args_map(ann_node, source);
+        if !args_map.is_empty() {
+            metadata["annotation_args"] = serde_json::Value::Object(args_map);
+        }
         if let Some(ref fqn) = fqn {
             metadata["fqn"] = serde_json::Value::String(fqn.clone());
         }
-        relations.push(Relation {
+        if let Some(scope) = scope {
+            metadata["call_context"] =
+                serde_json::Value::String(format!("AnnotationScope::{scope}"));
+            metadata["annotation_scope"] = serde_json::Value::String(scope.to_string());
+        }
+        let mut rel = Relation {
             from: from.to_string(),
             to: name,
             relation_type: RelationType::AnnotatedWith,
@@ -364,7 +473,10 @@ impl JavaPlugin {
             metadata,
             to_qualified_hint: fqn,
             to_type_hint: None,
-        });
+            ..Default::default()
+        };
+        record_call_site_spans(&mut rel, ann_node);
+        relations.push(rel);
     }
 
     /// Simple type names declared in this file (class/interface/enum/annotation/record).
@@ -468,7 +580,12 @@ impl JavaPlugin {
 
     /// Populate `type_params` / `throws` / `receiver_type` metadata keys on an
     /// existing metadata object for a method/constructor-shaped node.
-    fn apply_callable_metadata(&self, node: Node, source: &[u8], metadata: &mut serde_json::Value) {
+    fn apply_callable_metadata(
+        &self,
+        node: Node,
+        source: &[u8],
+        metadata: &mut serde_json::Value,
+    ) -> Result<()> {
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
@@ -478,6 +595,7 @@ impl JavaPlugin {
         if let Some(rt) = self.receiver_type_text(node, source) {
             metadata["receiver_type"] = serde_json::Value::String(rt);
         }
+        Ok(())
     }
 
     // ---------------------------------------------------------------
@@ -603,18 +721,31 @@ impl JavaPlugin {
 
     /// Stable pre-order index for a `lambda_expression`, scoped to its
     /// nearest enclosing callable (or enclosing type, for field/static
-    /// initializer lambdas). Called identically from the symbol pass and the
-    /// relations pass (each with a fresh `ExtractCtx`/counter) so both agree
-    /// on `N` for `Owner.$lambda$N`, since both walk the tree in the same
-    /// document order.
-    fn lambda_index(&self, node: Node, source: &[u8], ctx: &ExtractCtx) -> (Option<String>, usize) {
+    /// initializer lambdas). First encounters assign in document order; repeated
+    /// visits to the same immutable AST node reuse its index. This supports both
+    /// fresh contexts in the split APIs and one shared context in `extract_all`.
+    fn lambda_index(
+        &self,
+        node: Node,
+        source: &[u8],
+        ctx: &ExtractCtx,
+    ) -> Result<(Option<String>, usize)> {
         let owner = self
             .find_containing_callable_qn(node, source, ctx)
             .or_else(|| {
                 self.find_containing_type_name(node, source, ctx)
                     .map(|o| ctx.qualify_type(&o))
             });
-        let key = owner.clone().unwrap_or_else(|| "<unknown>".to_string());
+        if let Some(index) = ctx.lambda_indices.borrow().get(&node.id()).copied() {
+            return Ok((owner, index));
+        }
+        let key = format!(
+            "{}\u{1f}{}",
+            owner.as_deref().unwrap_or("<unknown>"),
+            callable_identity::java::enclosing_discriminator(node, source)?
+                .as_deref()
+                .unwrap_or("")
+        );
         let idx = {
             let mut counters = ctx.lambda_counters.borrow_mut();
             let counter = counters.entry(key).or_insert(0);
@@ -622,7 +753,8 @@ impl JavaPlugin {
             *counter += 1;
             current
         };
-        (owner, idx)
+        ctx.lambda_indices.borrow_mut().insert(node.id(), idx);
+        Ok((owner, idx))
     }
 
     // ---------------------------------------------------------------
@@ -655,9 +787,9 @@ impl JavaPlugin {
         let parameters = self.extract_parameters(node, source)?;
 
         let mut metadata = serde_json::json!({ "language": "java" });
-        self.apply_callable_metadata(node, source, &mut metadata);
+        self.apply_callable_metadata(node, source, &mut metadata)?;
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -669,7 +801,10 @@ impl JavaPlugin {
             modifiers,
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        callable_identity::try_symbol(symbol, node, source, Policy::Java)
     }
 
     pub(crate) fn extract_constructor(
@@ -704,9 +839,9 @@ impl JavaPlugin {
             "language": "java",
             "is_constructor": true,
         });
-        self.apply_callable_metadata(node, source, &mut metadata);
+        self.apply_callable_metadata(node, source, &mut metadata)?;
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qualified_name),
@@ -718,7 +853,10 @@ impl JavaPlugin {
             modifiers,
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        callable_identity::try_symbol(symbol, node, source, Policy::Java)
     }
 
     /// `compact_constructor_declaration` (records): `record Point(int x, int y) { public Point { ... } }`.
@@ -749,14 +887,15 @@ impl JavaPlugin {
         let modifiers = self.collect_keyword_modifiers(node, source);
         let qualified_name = format!("{}.<init>", ctx.qualify_type(&owner));
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name: Some(qualified_name),
             location: source_location(node, file_path),
             signature: Some(first_line_text(node, source)?),
             return_type: None,
-            parameters: vec![],
+            parameters: self
+                .extract_parameters(self.find_enclosing_type_node(node).unwrap_or(node), source)?,
             fields: vec![],
             modifiers,
             documentation: None,
@@ -765,7 +904,10 @@ impl JavaPlugin {
                 "is_constructor": true,
                 "is_compact_constructor": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        callable_identity::try_symbol(symbol, node, source, Policy::Java)
     }
 
     pub(crate) fn extract_static_initializer(
@@ -778,7 +920,7 @@ impl JavaPlugin {
         let owner = self.find_containing_type_name(node, source, ctx);
         let qualified_name = owner.map(|o| format!("{}.<clinit>", ctx.qualify_type(&o)));
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: "<clinit>".to_string(),
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -793,7 +935,10 @@ impl JavaPlugin {
                 "language": "java",
                 "is_static_initializer": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     /// Instance initializer block: a bare `block` that is a direct child of a
@@ -819,7 +964,7 @@ impl JavaPlugin {
         let name = format!("<initblock>{idx}");
         let qualified_name = owner_qn.map(|o| format!("{o}.{name}"));
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -834,7 +979,10 @@ impl JavaPlugin {
                 "language": "java",
                 "is_instance_initializer": true,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     /// Extract parameters from `formal_parameters`, handling both
@@ -947,7 +1095,9 @@ impl JavaPlugin {
                     && let Some(name_node) = field_child.child_by_field_name("name")
                 {
                     let name = name_node.utf8_text(source)?.to_string();
+
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                         name,
                         field_type: field_type.clone(),
                         visibility: visibility.clone(),
@@ -990,7 +1140,9 @@ impl JavaPlugin {
                     Some(args) => Some(format!("enum_constant{args}")),
                     None => Some("enum_constant".to_string()),
                 };
+
                 fields.push(Field {
+                    source_span: rgctl_plugin_helpers::field_source_span(child, source, name),
                     name: name.to_string(),
                     field_type: None,
                     visibility,
@@ -1029,7 +1181,9 @@ impl JavaPlugin {
                     && let Some(name_node) = decl.child_by_field_name("name")
                 {
                     let name = name_node.utf8_text(source)?.to_string();
+
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                         name,
                         field_type: field_type.clone(),
                         visibility: None,
@@ -1047,6 +1201,7 @@ impl JavaPlugin {
         Ok(params
             .into_iter()
             .map(|p| Field {
+                source_span: rgctl_plugin_helpers::field_source_span(record_node, source, &p.name),
                 name: p.name,
                 field_type: p.param_type,
                 visibility: None,
@@ -1075,6 +1230,7 @@ impl JavaPlugin {
 
         let modifiers = self.collect_keyword_modifiers(node, source);
 
+        let mut metadata = serde_json::json!({ "language": "java" });
         let fields = match symbol_type {
             SymbolType::Class => self.extract_class_fields(node, source)?,
             SymbolType::Enum => self.extract_enum_fields(node, source)?,
@@ -1086,12 +1242,11 @@ impl JavaPlugin {
 
         let qualified_name = Some(self.type_node_qualified_name(node, source, ctx));
 
-        let mut metadata = serde_json::json!({ "language": "java" });
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type,
             qualified_name,
@@ -1103,7 +1258,10 @@ impl JavaPlugin {
             modifiers,
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        Ok(symbol)
     }
 
     /// Walk type declarations and synthesize Lombok-generated members into `symbols`.
@@ -1380,7 +1538,7 @@ impl JavaPlugin {
             if field_getter {
                 let gname = Self::lombok_getter_name(&f.name, f.field_type.as_deref());
                 if !declared.contains(&gname) {
-                    synthetics.push(Symbol {
+                    let symbol = Symbol {
                         name: gname.clone(),
                         symbol_type: SymbolType::Function,
                         qualified_name: Some(format!("{owner_qn}.{gname}")),
@@ -1399,13 +1557,15 @@ impl JavaPlugin {
                             "language": "java",
                             "lombok_synthesized": true,
                         }),
-                    });
+                        ..Default::default()
+                    };
+                    synthetics.push(symbol);
                 }
             }
             if field_setter {
                 let sname = Self::lombok_setter_name(&f.name);
                 if !declared.contains(&sname) {
-                    synthetics.push(Symbol {
+                    let symbol = Symbol {
                         name: sname.clone(),
                         symbol_type: SymbolType::Function,
                         qualified_name: Some(format!("{owner_qn}.{sname}")),
@@ -1429,13 +1589,15 @@ impl JavaPlugin {
                             "language": "java",
                             "lombok_synthesized": true,
                         }),
-                    });
+                        ..Default::default()
+                    };
+                    synthetics.push(symbol);
                 }
             }
         }
 
         if wants_builder && !declared.contains("builder") {
-            synthetics.push(Symbol {
+            let symbol = Symbol {
                 name: "builder".into(),
                 symbol_type: SymbolType::Function,
                 qualified_name: Some(format!("{owner_qn}.builder")),
@@ -1450,14 +1612,16 @@ impl JavaPlugin {
                     "language": "java",
                     "lombok_synthesized": true,
                 }),
-            });
+                ..Default::default()
+            };
+            synthetics.push(symbol);
         }
 
         let push_ctor = |params: Vec<Parameter>, synthetics: &mut Vec<Symbol>| {
             if has_explicit_ctor || declared.contains(&owner_simple) {
                 return;
             }
-            synthetics.push(Symbol {
+            let symbol = Symbol {
                 name: owner_simple.clone(),
                 symbol_type: SymbolType::Function,
                 qualified_name: Some(format!("{owner_qn}.<init>")),
@@ -1473,7 +1637,9 @@ impl JavaPlugin {
                     "is_constructor": true,
                     "lombok_synthesized": true,
                 }),
-            });
+                ..Default::default()
+            };
+            synthetics.push(symbol);
         };
 
         if wants_no_ctor && !has_explicit_ctor {
@@ -1509,6 +1675,7 @@ impl JavaPlugin {
             let class_sym = &mut symbols[class_idx];
             if !class_sym.fields.iter().any(|f| f.name == "log") {
                 class_sym.fields.push(Field {
+                    source_span: None,
                     name: "log".into(),
                     field_type: Some("Logger".into()),
                     visibility: Some("private static final".into()),
@@ -1538,15 +1705,15 @@ impl JavaPlugin {
         let name = name_node.utf8_text(source)?.to_string();
 
         let modifiers = self.collect_keyword_modifiers(node, source);
-        let fields = self.extract_record_fields(node, source)?;
         let qualified_name = Some(self.type_node_qualified_name(node, source, ctx));
 
         let mut metadata = serde_json::json!({ "language": "java", "is_record": true });
+        let fields = self.extract_record_fields(node, source)?;
         if let Some(tp) = self.type_parameters_text(node, source) {
             metadata["type_params"] = serde_json::Value::String(tp);
         }
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Class,
             qualified_name,
@@ -1558,7 +1725,10 @@ impl JavaPlugin {
             modifiers,
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        Ok(symbol)
     }
 
     /// `annotation_type_element_declaration` (`String value() default "";`)
@@ -1596,7 +1766,7 @@ impl JavaPlugin {
             metadata["default_value"] = serde_json::Value::String(default_value.to_string());
         }
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -1608,7 +1778,10 @@ impl JavaPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, Some(name_node));
+        Ok(symbol)
     }
 
     /// `lambda_expression` becomes a synthetic Function under the nearest
@@ -1620,11 +1793,11 @@ impl JavaPlugin {
         file_path: &str,
         ctx: &ExtractCtx,
     ) -> Result<Symbol> {
-        let (owner, idx) = self.lambda_index(node, source, ctx);
+        let (owner, idx) = self.lambda_index(node, source, ctx)?;
         let name = format!("$lambda${idx}");
         let qualified_name = owner.map(|o| format!("{o}.{name}"));
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name,
             symbol_type: SymbolType::Function,
             qualified_name,
@@ -1635,8 +1808,13 @@ impl JavaPlugin {
             fields: vec![],
             modifiers: vec![],
             documentation: None,
-            metadata: serde_json::json!({ "language": "java", "is_lambda": true }),
-        })
+            metadata: serde_json::json!({
+                "language": "java", "is_lambda": true,
+            }),
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        callable_identity::try_symbol(symbol, node, source, Policy::Java)
     }
 
     pub(crate) fn extract_package_symbol(
@@ -1646,14 +1824,15 @@ impl JavaPlugin {
         file_path: &str,
     ) -> Result<Symbol> {
         let mut cursor = node.walk();
-        let name = node
+        let name_node = node
             .children(&mut cursor)
-            .find(|c| c.kind() == "identifier" || c.kind() == "scoped_identifier")
+            .find(|c| c.kind() == "identifier" || c.kind() == "scoped_identifier");
+        let name = name_node
             .and_then(|n| n.utf8_text(source).ok())
             .unwrap_or("")
             .to_string();
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Module,
             qualified_name: Some(name),
@@ -1665,7 +1844,10 @@ impl JavaPlugin {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({ "language": "java", "java_kind": "package" }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, name_node);
+        Ok(symbol)
     }
 
     /// `module-info.java`'s `module_declaration`. Directives (`requires`,
@@ -1738,7 +1920,7 @@ impl JavaPlugin {
             }
         }
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: SymbolType::Module,
             qualified_name: Some(name),
@@ -1758,7 +1940,10 @@ impl JavaPlugin {
                 "uses": uses,
                 "provides": provides,
             }),
-        })
+            ..Default::default()
+        };
+        record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+        Ok(symbol)
     }
 
     fn symbols_from_tree(
@@ -1890,7 +2075,7 @@ impl JavaPlugin {
             if let Some(o) = owner_qn.filter(|o| !o.is_empty()) {
                 metadata["member_of"] = serde_json::Value::String(o.to_string());
             }
-            symbols.push(Symbol {
+            let mut symbol = Symbol {
                 name: name.to_string(),
                 symbol_type: SymbolType::Variable,
                 qualified_name: Some(qn),
@@ -1902,7 +2087,10 @@ impl JavaPlugin {
                 modifiers: kw.clone(),
                 documentation: None,
                 metadata,
-            });
+                ..Default::default()
+            };
+            record_symbol_spans(&mut symbol, node, Some(name_node));
+            symbols.push(symbol);
         }
     }
 
@@ -2061,7 +2249,7 @@ impl JavaPlugin {
             }
             "import_declaration" => {
                 let text = node.utf8_text(source)?.trim().to_string();
-                symbols.push(Symbol {
+                let mut symbol = Symbol {
                     name: text.clone(),
                     symbol_type: SymbolType::Import,
                     qualified_name: None,
@@ -2079,7 +2267,10 @@ impl JavaPlugin {
                     modifiers: vec![],
                     documentation: None,
                     metadata: serde_json::json!({ "language": "java" }),
-                });
+                    ..Default::default()
+                };
+                record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
+                symbols.push(symbol);
             }
             _ => {}
         }
@@ -2103,6 +2294,10 @@ impl LanguagePlugin for JavaPlugin {
 
     fn grammar(&self) -> Option<tree_sitter::Language> {
         Some(tree_sitter_java::LANGUAGE.into())
+    }
+
+    fn cache_fingerprint(&self) -> Option<&[u8]> {
+        Some(b"java-shared-callable-identity-v1")
     }
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
@@ -2141,6 +2336,7 @@ impl LanguagePlugin for JavaPlugin {
             &mut sym_copy,
             &mut relations,
         );
+        callable_identity::finish(Policy::Java, &mut sym_copy, &mut relations);
         Ok(relations)
     }
 
@@ -2337,6 +2533,7 @@ impl JavaPlugin {
                         metadata: serde_json::json!({ "language": "java" }),
                         to_qualified_hint,
                         to_type_hint,
+                        ..Default::default()
                     });
                 }
             }
@@ -2381,7 +2578,7 @@ impl JavaPlugin {
                         let Some(parent_class) = Self::inheritance_type_name(child, source) else {
                             continue;
                         };
-                        relations.push(Relation {
+                        let mut rel = Relation {
                             from: owner.clone(),
                             to: parent_class.clone(),
                             relation_type: RelationType::Extends,
@@ -2397,7 +2594,10 @@ impl JavaPlugin {
                                 .resolve_type_fqn(&parent_class, same_file_types)
                                 .or_else(|| ctx.import_qualified_hint(&parent_class)),
                             to_type_hint: None,
-                        });
+                            ..Default::default()
+                        };
+                        record_call_site_spans(&mut rel, child);
+                        relations.push(rel);
                     }
                 }
             }
@@ -2419,7 +2619,7 @@ impl JavaPlugin {
                                 else {
                                     continue;
                                 };
-                                relations.push(Relation {
+                                let mut rel = Relation {
                                     from: owner.clone(),
                                     to: interface_name.clone(),
                                     relation_type: RelationType::Implements,
@@ -2435,7 +2635,10 @@ impl JavaPlugin {
                                         .resolve_type_fqn(&interface_name, same_file_types)
                                         .or_else(|| ctx.import_qualified_hint(&interface_name)),
                                     to_type_hint: None,
-                                });
+                                    ..Default::default()
+                                };
+                                record_call_site_spans(&mut rel, type_node);
+                                relations.push(rel);
                             }
                         }
                     }
@@ -2449,7 +2652,7 @@ impl JavaPlugin {
                         else {
                             continue;
                         };
-                        relations.push(Relation {
+                        let mut rel = Relation {
                             from: owner.clone(),
                             to: interface_name.clone(),
                             relation_type: RelationType::Implements,
@@ -2465,7 +2668,10 @@ impl JavaPlugin {
                                 .resolve_type_fqn(&interface_name, same_file_types)
                                 .or_else(|| ctx.import_qualified_hint(&interface_name)),
                             to_type_hint: None,
-                        });
+                            ..Default::default()
+                        };
+                        record_call_site_spans(&mut rel, interface_node);
+                        relations.push(rel);
                     }
                 }
             }
@@ -2504,7 +2710,7 @@ impl JavaPlugin {
                             let Some(name) = Self::inheritance_type_name(t, source) else {
                                 continue;
                             };
-                            relations.push(Relation {
+                            let mut rel = Relation {
                                 from: owner.clone(),
                                 to: name.clone(),
                                 relation_type: RelationType::Extends,
@@ -2520,7 +2726,10 @@ impl JavaPlugin {
                                     .resolve_type_fqn(&name, same_file_types)
                                     .or_else(|| ctx.import_qualified_hint(&name)),
                                 to_type_hint: None,
-                            });
+                                ..Default::default()
+                            };
+                            record_call_site_spans(&mut rel, t);
+                            relations.push(rel);
                         }
                     }
                 }
@@ -2607,6 +2816,7 @@ impl JavaPlugin {
                         metadata: serde_json::json!({ "language": "java" }),
                         to_qualified_hint: ctx.resolve_type_fqn(&name, same_file_types),
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -2714,12 +2924,25 @@ impl JavaPlugin {
         };
 
         if let Some(from) = from {
+            let scope = match node.kind() {
+                "formal_parameter" | "spread_parameter" => Some("Parameter"),
+                "field_declaration" => Some("Field"),
+                "method_declaration"
+                | "constructor_declaration"
+                | "compact_constructor_declaration" => Some("Method"),
+                "class_declaration"
+                | "interface_declaration"
+                | "enum_declaration"
+                | "record_declaration"
+                | "annotation_type_declaration" => Some("Type"),
+                _ => None,
+            };
             let mut cursor = node.walk();
             let modifiers_node = node.children(&mut cursor).find(|c| c.kind() == "modifiers");
             if let Some(modifiers_node) = modifiers_node {
                 let (_, annotations) = self.split_modifiers(modifiers_node, source);
                 for ann in annotations {
-                    self.push_annotated_with(
+                    self.push_annotated_with_scoped(
                         &from,
                         ann,
                         source,
@@ -2727,6 +2950,7 @@ impl JavaPlugin {
                         ctx,
                         same_file_types,
                         relations,
+                        scope,
                     );
                 }
             }
@@ -2788,6 +3012,7 @@ impl JavaPlugin {
                     metadata: serde_json::json!({ "language": "java" }),
                     to_qualified_hint: fqn,
                     to_type_hint: Some(last_segment.to_string()),
+                    ..Default::default()
                 });
             }
         }
@@ -2849,7 +3074,7 @@ impl JavaPlugin {
                             metadata: serde_json::json!({ "language": "java", "method_reference": true }),
                             to_qualified_hint,
                             to_type_hint,
-                        });
+                         ..Default::default() });
                 }
             }
         }
@@ -2921,6 +3146,7 @@ impl JavaPlugin {
                 }),
                 to_qualified_hint: None,
                 to_type_hint: None,
+                ..Default::default()
             });
         }
 
@@ -2993,6 +3219,7 @@ impl JavaPlugin {
                     metadata: serde_json::json!({ "language": "java" }),
                     to_qualified_hint,
                     to_type_hint,
+                    ..Default::default()
                 });
             }
         }
@@ -3032,6 +3259,7 @@ impl JavaPlugin {
                     metadata: serde_json::json!({ "language": "java", "array": true }),
                     to_qualified_hint: fqn,
                     to_type_hint: Some(last.to_string()),
+                    ..Default::default()
                 });
             }
         }
@@ -3070,6 +3298,7 @@ impl JavaPlugin {
                     metadata: serde_json::json!({ "language": "java", "class_literal": true }),
                     to_qualified_hint: fqn,
                     to_type_hint: Some(last.to_string()),
+                    ..Default::default()
                 });
             }
         }
@@ -3094,7 +3323,7 @@ impl JavaPlugin {
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         if node.kind() == "lambda_expression" {
-            let (owner, idx) = self.lambda_index(node, source, ctx);
+            let (owner, idx) = self.lambda_index(node, source, ctx)?;
             if let Some(from) = owner {
                 let to = format!("{from}.$lambda${idx}");
                 relations.push(Relation {
@@ -3102,9 +3331,14 @@ impl JavaPlugin {
                     to,
                     relation_type: RelationType::Calls,
                     location: source_location(node, &file_path.to_string_lossy()),
-                    metadata: serde_json::json!({ "language": "java", "is_lambda_call": true }),
+                    metadata: serde_json::json!({
+                        "language": "java", "is_lambda_call": true,
+                        "from_identity_discriminator": callable_identity::java::enclosing_discriminator(node, source)?,
+                        "to_identity_discriminator": callable_identity::java::enclosing_discriminator(node, source)?,
+                    }),
                     to_qualified_hint: None,
                     to_type_hint: None,
+                    ..Default::default()
                 });
             }
         }
@@ -3155,6 +3389,7 @@ impl JavaPlugin {
                     metadata: serde_json::json!({ "language": "java", "throws": true }),
                     to_qualified_hint: fqn,
                     to_type_hint: Some(simple.to_string()),
+                    ..Default::default()
                 });
             }
         }
@@ -3231,6 +3466,7 @@ impl JavaPlugin {
                         metadata: serde_json::json!({ "language": "java", "jpms": "requires" }),
                         to_qualified_hint: Some(m.to_string()),
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -3248,6 +3484,7 @@ impl JavaPlugin {
                         metadata: serde_json::json!({ "language": "java", "jpms": "uses" }),
                         to_qualified_hint: Some(t.to_string()),
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -3276,6 +3513,7 @@ impl JavaPlugin {
                         metadata: serde_json::json!({ "language": "java", "jpms": kind }),
                         to_qualified_hint: Some(text.to_string()),
                         to_type_hint: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -3292,7 +3530,7 @@ impl JavaPlugin {
                         metadata: serde_json::json!({ "language": "java", "jpms": directive.kind() }),
                         to_qualified_hint: Some(p.to_string()),
                         to_type_hint: None,
-                    });
+                     ..Default::default() });
                 }
             }
             _ => {}
@@ -3322,15 +3560,18 @@ impl JavaPlugin {
                     .package
                     .clone()
                     .unwrap_or_else(|| file_path.to_string_lossy().to_string());
-                relations.push(Relation {
+                let mut rel = Relation {
                     from: owner,
                     to: simple,
                     relation_type: RelationType::Uses,
                     location: source_location(node, &file_path.to_string_lossy()),
-                    metadata: serde_json::json!({ "language": "java", "fqn": fqn }),
+                    metadata: serde_json::json!({ "language": "java", "fqn": fqn, "import": true }),
                     to_qualified_hint: Some(fqn.to_string()),
                     to_type_hint: None,
-                });
+                    ..Default::default()
+                };
+                record_call_site_spans(&mut rel, name_node);
+                relations.push(rel);
             }
         }
 
@@ -3457,6 +3698,9 @@ impl JavaPlugin {
                     s.name == callee
                         && s.symbol_type == SymbolType::Function
                         && s.location.file == file_path.to_string_lossy()
+                        && to_qualified_hint
+                            .as_deref()
+                            .is_none_or(|hint| s.qualified_name.as_deref() == Some(hint))
                 })
                 .collect();
             let local_target = match same_file_matches.as_slice() {
@@ -3469,15 +3713,26 @@ impl JavaPlugin {
                     .unwrap_or_else(|| callee.to_string()),
             };
 
+            let metadata = serde_json::json!({ "language": "java" });
+            let relation_start = relations.len();
             relations.push(Relation {
                 from,
                 to: local_target,
                 relation_type: RelationType::Calls,
                 location: source_location(node, &file_path.to_string_lossy()),
-                metadata: serde_json::json!({ "language": "java" }),
+                metadata,
                 to_qualified_hint,
                 to_type_hint,
+                ..Default::default()
             });
+            callable_identity::call_with_local_types(
+                node,
+                source,
+                Policy::Java,
+                Some(from_fn),
+                &mut relations[relation_start..],
+                |name| self.find_local_variable_type(node, name, source),
+            );
         }
     }
 
@@ -3827,6 +4082,178 @@ mod tests {
             .unwrap()
     }
 
+    #[test]
+    fn lambda_identity_is_scoped_to_the_owning_overload() {
+        let symbols = symbols_of(
+            br#"class Library {
+            Runnable quote(int value) { return () -> intHelper(); }
+            Runnable quote(String value) { return () -> stringHelper(); }
+        }"#,
+            "Library.java",
+        );
+        let lambdas: Vec<_> = symbols
+            .iter()
+            .filter(|s| s.metadata["is_lambda"] == true)
+            .collect();
+        assert_eq!(lambdas.len(), 2);
+        assert_eq!(lambdas[0].name, "$lambda$0");
+        assert_eq!(lambdas[1].name, "$lambda$0");
+        assert_eq!(lambdas[0].metadata["identity_discriminator"], "(int)");
+        assert_eq!(lambdas[1].metadata["identity_discriminator"], "(String)");
+    }
+
+    #[test]
+    fn combined_lambda_targets_match_symbols_and_split_extraction() {
+        let plugin = JavaPlugin::new().unwrap();
+        for source in [
+            "class Demo { int run(){ java.util.function.IntSupplier f=()->1; return f.getAsInt(); } }",
+            "class Demo { void run(){ Runnable a=()->{}; Runnable b=()->{}; a.run(); b.run(); } }",
+            "class Demo { Runnable run(int x){return ()->{};} Runnable run(String x){return ()->{};} }",
+            "class Demo { java.util.function.Supplier<Runnable> run(){return ()->()->{};} }",
+            "class Demo { Runnable field=()->{}; static Runnable global=()->{}; Demo(){Runnable x=()->{};} static {Runnable x=()->{};} {Runnable x=()->{};} }",
+        ] {
+            for text in [source.to_owned(), format!("\n// line shift\n{source}")] {
+                let path = Path::new("Demo.java");
+                let bytes = text.as_bytes();
+                let combined = plugin.extract_all(path, bytes).unwrap();
+                let split_symbols = plugin.extract_symbols(path, bytes).unwrap();
+                let split_relations = plugin
+                    .extract_relations(path, bytes, &split_symbols)
+                    .unwrap();
+                let keys = |symbols: &[Symbol]| {
+                    let mut keys: Vec<_> = symbols
+                        .iter()
+                        .filter(|s| s.metadata["is_lambda"] == true)
+                        .map(|s| {
+                            (
+                                s.qualified_name.clone(),
+                                s.metadata
+                                    .get("identity_discriminator")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_owned(),
+                            )
+                        })
+                        .collect();
+                    keys.sort();
+                    keys
+                };
+                assert_eq!(keys(&combined.symbols), keys(&split_symbols), "{text}");
+                for (symbols, relations) in [
+                    (&combined.symbols, &combined.relations),
+                    (&split_symbols, &split_relations),
+                ] {
+                    let mut targets = vec![];
+                    for relation in relations
+                        .iter()
+                        .filter(|r| r.metadata["is_lambda_call"] == true)
+                    {
+                        let identity = relation
+                            .metadata
+                            .get("to_identity_discriminator")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let matches = symbols
+                            .iter()
+                            .filter(|s| {
+                                s.metadata["is_lambda"] == true
+                                    && s.qualified_name.as_deref() == Some(relation.to.as_str())
+                                    && s.metadata
+                                        .get("identity_discriminator")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        == identity
+                            })
+                            .count();
+                        assert_eq!(
+                            matches, 1,
+                            "dangling lambda target {} in {text}",
+                            relation.to
+                        );
+                        targets.push((Some(relation.to.clone()), identity.to_owned()));
+                    }
+                    targets.sort();
+                    assert_eq!(targets, keys(symbols), "{text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn callable_identity_tracks_types_not_names_locations_or_bodies() {
+        let original = include_bytes!(
+            "../../../tests/fixtures/tier1_identity_dependencies/java/dependencies/library/baseline/demo/Library.java"
+        );
+        let candidate = include_bytes!(
+            "../../../tests/fixtures/tier1_identity_dependencies/java/dependencies/library/candidate/demo/Library.java"
+        );
+        let before = symbols_of(original, "Library.java");
+        let changed = symbols_of(candidate, "Library.java");
+        let shifted = format!(
+            "\n\n{}",
+            std::str::from_utf8(candidate)
+                .expect("fixture UTF-8")
+                .replace("int value", "final int renamed")
+                .replace("value + 1", "renamed + 2")
+        );
+        let after = symbols_of(shifted.as_bytes(), "Library.java");
+        for symbols in [&before, &changed, &after] {
+            let methods: Vec<_> = symbols.iter().filter(|s| s.name == "quote").collect();
+            assert_eq!(methods.len(), 2);
+            assert_eq!(methods[0].qualified_name, methods[1].qualified_name);
+            assert_eq!(methods[0].metadata["identity_discriminator"], "(int)");
+            assert_eq!(methods[1].metadata["identity_discriminator"], "(String)");
+        }
+    }
+
+    #[test]
+    fn callable_identity_normalizes_arrays_varargs_and_record_constructors() {
+        let symbols = symbols_of(
+            br#"class Arrays {
+            void first(@A String /* type */ [] values) {}
+            void second(String values[]) {}
+            void third(String... values) {}
+            void receiver(Arrays this, int value) {}
+            Arrays(int value) {}
+            Arrays(String value) {}
+        }
+        record Point(int x, String y) { Point {} }
+        "#,
+            "Arrays.java",
+        );
+        for name in ["first", "second", "third"] {
+            let method = symbols
+                .iter()
+                .find(|s| s.name == name)
+                .expect("array method");
+            assert_eq!(
+                method.metadata["identity_discriminator"], "(String[])",
+                "{name}"
+            );
+        }
+        let receiver = symbols
+            .iter()
+            .find(|s| s.name == "receiver")
+            .expect("receiver");
+        assert_eq!(receiver.metadata["identity_discriminator"], "(int)");
+        let constructors: Vec<_> = symbols
+            .iter()
+            .filter(|s| s.name == "Arrays")
+            .filter(|s| s.symbol_type == SymbolType::Function)
+            .collect();
+        assert_eq!(constructors.len(), 2);
+        assert_eq!(constructors[0].metadata["identity_discriminator"], "(int)");
+        assert_eq!(
+            constructors[1].metadata["identity_discriminator"],
+            "(String)"
+        );
+        let compact = symbols
+            .iter()
+            .find(|s| s.metadata["is_compact_constructor"] == true)
+            .expect("compact constructor");
+        assert_eq!(compact.metadata["identity_discriminator"], "(int,String)");
+    }
+
     // ---------------------------------------------------------------
     // Existing behavior (must keep passing)
     // ---------------------------------------------------------------
@@ -4133,6 +4560,105 @@ public class Greeter {
             }),
             "expected Injects OrderService with @Inject call_context, got {injects:?}"
         );
+    }
+
+    #[test]
+    fn parameter_annotations_carry_scope_spans_and_annotation_args() {
+        let source = br#"
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+
+public class Orders {
+    @RequestMapping(path = "/api", method = RequestMethod.GET, produces = "application/json")
+    @GetMapping("/orders/{id}")
+    public String get(
+        @PathVariable("id") Long id,
+        @RequestParam(name = "filter", defaultValue = "all") String filter
+    ) {
+        return filter;
+    }
+}
+"#;
+        let plugin = JavaPlugin::new().unwrap();
+        let result = plugin
+            .extract_all(Path::new("Orders.java"), source)
+            .unwrap();
+
+        let path_var = result
+            .relations
+            .iter()
+            .find(|r| {
+                r.relation_type == RelationType::AnnotatedWith
+                    && r.to == "PathVariable"
+                    && r.metadata.get("call_context").and_then(|v| v.as_str())
+                        == Some("AnnotationScope::Parameter")
+            })
+            .expect("PathVariable parameter AnnotatedWith");
+        assert!(path_var.call_site_start_byte.is_some());
+        assert!(path_var.call_site_byte_len.is_some());
+        let path_args = path_var
+            .metadata
+            .get("annotation_args")
+            .and_then(|v| v.as_object())
+            .expect("PathVariable annotation_args");
+        assert_eq!(path_args.get("value").and_then(|v| v.as_str()), Some("id"));
+
+        let req_param = result
+            .relations
+            .iter()
+            .find(|r| r.relation_type == RelationType::AnnotatedWith && r.to == "RequestParam")
+            .expect("RequestParam");
+        let rp_args = req_param
+            .metadata
+            .get("annotation_args")
+            .and_then(|v| v.as_object())
+            .expect("RequestParam annotation_args");
+        assert_eq!(rp_args.get("name").and_then(|v| v.as_str()), Some("filter"));
+        assert_eq!(
+            rp_args.get("defaultValue").and_then(|v| v.as_str()),
+            Some("all")
+        );
+
+        let req_mapping = result
+            .relations
+            .iter()
+            .find(|r| r.relation_type == RelationType::AnnotatedWith && r.to == "RequestMapping")
+            .expect("RequestMapping");
+        let rm_args = req_mapping
+            .metadata
+            .get("annotation_args")
+            .and_then(|v| v.as_object())
+            .expect("RequestMapping annotation_args");
+        assert_eq!(rm_args.get("path").and_then(|v| v.as_str()), Some("/api"));
+        assert!(
+            rm_args
+                .get("method")
+                .and_then(|v| v.as_str())
+                .is_some_and(|m| m.contains("GET")),
+            "expected method=RequestMethod.GET, got {rm_args:?}"
+        );
+        assert_eq!(
+            rm_args.get("produces").and_then(|v| v.as_str()),
+            Some("application/json")
+        );
+        assert!(req_mapping.call_site_start_byte.is_some());
+
+        let imports: Vec<_> = result
+            .relations
+            .iter()
+            .filter(|r| {
+                r.relation_type == RelationType::Uses
+                    && r.metadata
+                        .get("import")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+            })
+            .collect();
+        assert!(!imports.is_empty());
+        assert!(imports.iter().all(|r| r.call_site_start_byte.is_some()));
     }
 
     // ---------------------------------------------------------------

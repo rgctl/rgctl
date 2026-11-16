@@ -20,14 +20,13 @@ fn profile_linux_dashboard_export() {
         return;
     }
 
-    let hydrate_start = Instant::now();
+    let open_start = Instant::now();
     let snapshot = MmappedGraphSnapshot::open(&snapshot_path).expect("open snapshot");
-    let backend = snapshot.hydrate_backend().expect("hydrate backend");
     tracing::info!(
         target: "profile",
-        secs = hydrate_start.elapsed().as_secs_f64(),
-        nodes = backend.node_count(),
-        "[profile] hydrate_backend for dashboard export"
+        secs = open_start.elapsed().as_secs_f64(),
+        nodes = snapshot.node_count(),
+        "[profile] mmap open for dashboard export (no hydrate)"
     );
 
     let dashboard = root.join(".rgctl/dashboard");
@@ -39,7 +38,7 @@ fn profile_linux_dashboard_export() {
     let analysis = rgctl_analysis::AnalysisResults::load(&analysis_path).expect("load analysis");
 
     export_dashboard_bundle_with_context(
-        &backend,
+        rgctl_graph::GraphSource::mmap(&snapshot),
         &root,
         &snapshot_path,
         DashboardExportContext::with_analysis(&analysis),

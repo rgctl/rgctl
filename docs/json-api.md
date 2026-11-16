@@ -27,7 +27,10 @@ Programmatic reference for parsing rgctl output. Every structured CLI command em
 15. [`semantic`](#15-semantic)
 16. [`communities`](#16-communities)
 17. [`cpg`](#17-cpg)
-18. [`install`](#18-install)
+18. [`vuln triage` / `deps check` / `vuln analyze` / `taint`](#18-vuln-triage--deps-check--vuln-analyze--taint)
+19. [`install`](#19-install)
+20. [`writeback` (`verify` / `export` / `patch`)](#20-writeback-verify--export--patch)
+21. [`diff`](#21-diff)
 
 ---
 
@@ -91,7 +94,10 @@ if (doc.schema_version !== 2) {
 | `communities` | **1** | list / label |
 | `clones` | **1 / 2** | exact Type-1 / bloom (v1); fragment hammocks (v2) + optional seed |
 | `cpg` (status / mutations / flows / …) | **1** | per-subcommand shapes |
-| `install` | **3** | agent pack write report (`list-agents` JSON is separate; see §18) |
+| `vuln` / `deps` | **1** | OSV triage / deps check / analyze |
+| `diff` | **1** | Cold/open columnar snapshot pair diff (`DiffResponse`) |
+| `install` | **3** | agent pack write report (`list-agents` JSON is separate; see §19) |
+| `writeback` (`verify` / `export` / `patch`) | *(TrustLedgerReport)* | `files_processed`, `files_verified_identical`, `bytes_written`, `edits_applied`, `entries[]` |
 
 **Omitted vs null:** optional fields are **absent** when unset (not `null`), unless noted otherwise. Empty collections are usually `[]`, not omitted.
 
@@ -119,6 +125,8 @@ if (doc.schema_version !== 2) {
 | `cpg` | ✅ | varies by subcommand | Hybrid CPG façade (`slice` / `inspect` are canonical for flow/CFG) |
 | `vuln` / `deps` | ✅ | varies | OSV triage / analyze / deps check (`security …` aliases same handlers) |
 | `security` | ✅ | same as `vuln`/`deps`/`taint` | Soft namespace; no separate JSON schema |
+| `writeback` | ✅ | `files_processed`, `entries` | Lossless round-trip verify, export, and piece-table patch (`TrustLedgerReport`) |
+| `diff` | ✅ | `digest_equal`, `nodes_added`, `timings` | Columnar snapshot pair comparison |
 | `install` | ✅ | `writes` | Install bundled agent pack (skills + optional commands) |
 | `export` | ❌ (file) | — | Full-graph serialization |
 | `serve` | ❌ | — | HTTP dashboard + semantic API (foreground) |
@@ -131,11 +139,8 @@ Help groups commands as Lifecycle · Query · Analysis · Security · Policy · 
 
 ```bash
 rgctl -f json discover PATH [-l LANGS] [-e PATTERNS] [--with-cfg] [--with-taint] \
-  [--with-git] [--git-since 90.days] [--scip PATH.scip] \
-  [--with-kantra] [--kantra-target NAME] [--full]
+  [--with-git] [--git-since 90.days] [--scip PATH.scip] [--full]
 ```
-
-Kantra flags (`--with-kantra`, `--kantra-rules`, `--kantra-catalog`, `--kantra-target`, `--kantra-index-only`) do not change stdout JSON shape; they add `.rgctl/kantra_findings.json` and `KantraRule` nodes in `graph.snapshot.bin`. See [`kantra_findings.json`](#kantra_findingsjson).
 
 ### TypeScript shape
 
@@ -192,7 +197,8 @@ Agent-facing graph exploration: `find`, `callers`, `callees`, `relations`, `inve
 ### `find`
 
 ```bash
-rgctl -f json find [PATTERN] [--type TYPE] [--file GLOB] [--scope PREFIX] [--exact] [--limit N] [--count-only]
+rgctl -f json find [PATTERN] [--type TYPE] [--file GLOB] [--scope PREFIX] \
+  [--annotation NAME] [--show-attributes] [--package COORD] [--exact] [--limit N] [--count-only]
 ```
 
 ```typescript
@@ -268,7 +274,7 @@ interface EdgeRow {
 ### `inventory`
 
 ```bash
-rgctl -f json inventory --by type|edge|lang|file|community|import-prefix [--file GLOB] [--scope PREFIX]
+rgctl -f json inventory --by type|edge|lang|file|community|import-prefix [--prefix STR] [--file GLOB] [--scope PREFIX]
 ```
 
 ```typescript
@@ -295,8 +301,6 @@ interface SessionStatus {
   digest?: string;
   nodes?: number;
   edges?: number;
-  kantra_findings: boolean;
-  kantra_findings_path?: string;
   /** Present when status is `ok`: sources match file_hashes.json */
   index_current?: boolean;
   dirty_files?: number;
@@ -372,7 +376,6 @@ rgctl -f json callers clearCart | jq '.callers[].name'
 rgctl -f json relations clearCart --edge calls --direction in | jq '.edges[].source.name'
 rgctl -f json inventory --by community | jq '.counts[:5]'
 rgctl -f json communities list | jq '.communities[:5]'
-rgctl -f json find --type kantrarule --limit 5 | jq '.entities[].name'
 ```
 
 ---
@@ -943,7 +946,6 @@ These files are written under `.rgctl/` (and copied into `.rgctl/dashboard/` for
 | `dashboard/taint/{uuid}.json` | 1 | Per-function taint flows |
 | `dashboard/slice/{uuid}.json` | 1 | Per-function source + PDG bundle |
 | `dashboard/cfg/{uuid}.json` | 1 | Per-function CFG preview |
-| `kantra_findings.json` | 2 | Kantra violations + enrichment + skipped rules (`discover --with-kantra`) |
 | `file_hashes.json` | — | Incremental discover state |
 | `content_store.bin` | — | Blake3-keyed blob store for truncated markdown bodies / large files (`body_ref`, `blob_ref`) |
 
@@ -1013,73 +1015,6 @@ These files are written under `.rgctl/` (and copied into `.rgctl/dashboard/` for
   "path_statements": ["...", "...", "..."]
 }
 ```
-
-### `kantra_findings.json`
-
-Written by `discover --with-kantra` (eval + enrich stages). Rule nodes are indexed into `graph.snapshot.bin` (`KantraRuleset`, `KantraRule`); `VIOLATES` edges link rules to resolved code nodes after enrich.
-
-Incremental filecontent results are cached under `.rgctl/kantra_cache/` (content-hash keyed; invalidated on ruleset change).
-
-```json
-{
-  "schema_version": 2,
-  "command": "kantra_findings",
-  "catalog_id": "stable-java@022bbd34b34eca53d04b6cb2b97b27e47fef479b",
-  "ruleset": "embedded-stable-java",
-  "target_filter": "quarkus",
-  "evaluated_rules": 2656,
-  "violations": [
-    {
-      "rule_id": "springboot-00001",
-      "category": "mandatory",
-      "file": "src/main/java/com/example/Foo.java",
-      "line": 12,
-      "message": "…",
-      "matched_by": "java.referenced",
-      "symbol": "org.springframework.stereotype.Service",
-      "enrichment": {
-        "node_id": "550e8400-e29b-41d4-a716-446655440000",
-        "community_id": 12,
-        "pagerank": 0.0042,
-        "blast_radius_score": 18.5,
-        "impact_zone_size": 47
-      }
-    }
-  ],
-  "skipped_rules": [
-    {
-      "rule_id": "some-xml-rule",
-      "reason": "unsupported: builtin.xml"
-    }
-  ],
-  "cache_hits": 120,
-  "cache_misses": 3
-}
-```
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `schema_version` | `2` | Artifact version |
-| `command` | `"kantra_findings"` | Discriminator |
-| `catalog_id` | string? | Embedded: `stable-java@<rulesets-git-sha>`; fixture: `fixture@<hash>`; override paths use `dir@…` / tree id |
-| `ruleset` | string | Display name from catalog |
-| `target_filter` | string? | Set when `--kantra-target` is active |
-| `evaluated_rules` | number | Rules in catalog before per-rule skip |
-| `violations` | array | Matches with `rule_id`, `file`, `line`, `matched_by` (`filecontent`, `java.referenced`, …) |
-| `violations[].symbol` | string? | Import or symbol name when resolved by referenced rules |
-| `violations[].enrichment` | object? | Graph linkage + metrics (after blast engine build) |
-| `violations[].enrichment.node_id` | string? | UUID of matched graph node (used for `VIOLATES` edges) |
-| `violations[].enrichment.community_id` | number? | Fast-Leiden community id |
-| `violations[].enrichment.pagerank` | number? | PageRank centrality |
-| `violations[].enrichment.blast_radius_score` | number? | Blast-radius score for the node |
-| `violations[].enrichment.impact_zone_size` | number? | Transitive impact zone size |
-| `skipped_rules` | array | Unsupported providers, invalid regex, or eval errors (`rule_id`, `reason`) |
-| `cache_hits` | number? | Per-file cache hits (`builtin.filecontent` warmup); omitted when zero |
-| `cache_misses` | number? | Stale cache entries re-evaluated; omitted when zero |
-
-Query violation edges: `rgctl -f json relations --edge violates --from-type kantrarule --limit 20`.
-
-Fixture override (`--kantra-rules`) omits full Konveyor `catalog_id` unless the ruleset was compiled from the submodule.
 
 Binary artifacts (`graph.snapshot.bin`, `graph_payload.bin`, `blast_engine.snapshot.bin`) use internal columnar formats — use CLI JSON or `export --export-format json` for portable graph access.
 
@@ -1543,6 +1478,85 @@ rgctl -r "$REPO" -f json install --skill | jq '.writes[] | {agent, workflow, kin
 
 ---
 
+## 20. `writeback` (`verify` / `export` / `patch`)
+
+Lossless round-trip verification, working-tree reconstruction, and piece-table span splicing over `.rgctl/content_store.bin` (`RGCS` v2) and `.rgctl/cst.archive.bin` (`RGCT` v1). Requires prior `rgctl discover . --lossless`. Types: `crates/rgctl-graph/src/writeback.rs` (`TrustLedgerReport`, `TrustLedgerEntry`, `TrustStatus`), CLI `src/cli/writeback.rs`. Design: [lossless-writeback-architecture.md](design/lossless-writeback-architecture.md).
+
+```bash
+rgctl -r "$REPO" -f json writeback verify [--languages LANGS] [--strict]
+rgctl -r "$REPO" -f json writeback export --output ./reconstructed [--languages LANGS] [--file GLOB]
+rgctl -r "$REPO" -f json writeback patch --rename old_fn=new_fn [--dry-run] [--output ./patched | --in-place] [--force]
+rgctl -r "$REPO" -f json writeback patch --plan mutations.json [--dry-run] [--output ./patched | --in-place] [--force]
+```
+
+### TypeScript shape (`TrustLedgerReport`)
+
+```typescript
+type TrustStatus =
+  | "verified_identical"
+  | "patched_verified"
+  | "skipped_non_tier1"
+  | "conflict_rejected"
+  | "syntax_error_rejected"
+  | "parse_warning_passthrough";
+
+interface TrustLedgerEntry {
+  file: string;
+  status: TrustStatus;
+  blake3_before: string;
+  blake3_after: string;
+  macro_or_error_spans: [number, number][];
+}
+
+interface TrustLedgerReport {
+  files_processed: number;
+  files_verified_identical: number;
+  bytes_written: number;
+  edits_applied: number;
+  entries: TrustLedgerEntry[];
+}
+```
+
+```bash
+rgctl -r "$REPO" -f json writeback verify | jq '{files_processed, files_verified_identical}'
+rgctl -r "$REPO" -f json writeback patch --rename clearCart=resetCart --dry-run \
+  | jq '{edits_applied, touched: [.entries[] | select(.status == "patched_verified") | .file]}'
+```
+
+---
+
+## 21. `diff`
+
+Cold/open columnar snapshot pair comparison (`SnapshotPair::open` + `digest_equal` + `diff_snapshots`). Types: `src/cli/diff.rs` (`DiffResponse`), `crates/rgctl-graph/src/snapshot_diff.rs`. Design: [graph-diff-design.md](design/graph-diff-design.md).
+
+```bash
+rgctl -f json diff <BASE_PATH> <HEAD_PATH>
+```
+
+### TypeScript shape
+
+```typescript
+interface DiffResponse {
+  schema_version: 1;
+  base: string;
+  head: string;
+  digest_equal: boolean;
+  nodes_added: number;
+  nodes_removed: number;
+  nodes_changed: number;
+  edges_added: number;
+  edges_removed: number;
+  timings: {
+    wall_secs: number;
+    open_secs: number;
+    digest_secs: number;
+    diff_secs: number;
+  };
+}
+```
+
+---
+
 ## Verification
 
 Schema fixtures are tested in CI:
@@ -1551,7 +1565,7 @@ Schema fixtures are tested in CI:
 cargo test --test cli_output --test subprocess_golden_path --test all_commands_sanity
 ```
 
-See [cli-io-sanity-qe.md](cli-io-sanity-qe.md) for the full coverage matrix.
+See [internal/integration-tests.md](internal/integration-tests.md) for the full coverage matrix.
 
 ---
 
@@ -1560,7 +1574,7 @@ See [cli-io-sanity-qe.md](cli-io-sanity-qe.md) for the full coverage matrix.
 - [user-guide.md](user-guide.md) — install, ecommerce-java walkthrough (CoolStore dual API), CLI examples
 - Field catalogs — exhaustive tables later in this document (formerly `cli-output-schemas.md`)
 - [HTTP Server and Dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/) — `rgctl serve`, dashboard, semantic HTTP API
-- [cli-io-sanity-qe.md](cli-io-sanity-qe.md) — subprocess JSON contract and release perf gates
+- [internal/integration-tests.md](internal/integration-tests.md) — subprocess JSON contract and release perf gates
 
 ---
 
@@ -1577,7 +1591,7 @@ See [cli-io-sanity-qe.md](cli-io-sanity-qe.md) for the full coverage matrix.
 | Composable graph topology | ✅ | — | — | — | — | ✅ | ✅ | — | — | — | — |
 | Stable node UUIDs (no nil) | ✅ | — | — | — | — | — | — | — | — | — | — |
 
-**Tests:** See [cli-io-sanity-qe.md](cli-io-sanity-qe.md) for the full coverage matrix, harness design, and extension guide.
+**Tests:** See [internal/integration-tests.md](internal/integration-tests.md) for the full coverage matrix, harness design, and extension guide.
 
 | Layer | Cargo target | Path | Covers |
 |-------|--------------|------|--------|
@@ -2052,7 +2066,7 @@ Includes line list **and** PDG subgraph topology for the slice:
 **Command:**
 
 ```bash
-rgctl -f json inspect SYMBOL --layer cfg|pdg|dom [layer options]
+rgctl -f json inspect SYMBOL cfg|pdg|dom [layer options]
 ```
 
 **Source:** `src/cli/inspect_output.rs`

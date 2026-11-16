@@ -240,16 +240,38 @@ pub fn extract_all_single_pass(
                     "method_declaration" => {
                         // Prior extract only pulled methods from `class_declaration` bodies
                         // (not interface/trait/enum) plus orphan methods with no enclosing class.
+                        // Methods inside `anonymous_class` are already extracted by
+                        // `extract_embedded_symbols` -> `walk_anonymous_classes` under `$Anonymous*`.
+                        let in_anon_class = {
+                            let mut cur = node.parent();
+                            let mut anon = false;
+                            while let Some(p) = cur {
+                                match p.kind() {
+                                    "anonymous_class" => {
+                                        anon = true;
+                                        break;
+                                    }
+                                    "class_declaration"
+                                    | "interface_declaration"
+                                    | "trait_declaration"
+                                    | "enum_declaration" => break,
+                                    _ => cur = p.parent(),
+                                }
+                            }
+                            anon
+                        };
                         let type_frame = ctx.scopes.current_type();
-                        let in_class = type_frame.is_some_and(|t| t.kind == ScopeKind::Class);
+                        let in_class = !in_anon_class
+                            && type_frame.is_some_and(|t| t.kind == ScopeKind::Class);
                         let owner = if in_class {
                             type_frame.map(|t| t.qualified_prefix.clone())
                         } else {
                             None
                         };
-                        if in_class
-                            || (type_frame.is_none()
-                                && plugin.find_enclosing_class_name(node, source).is_none())
+                        if !in_anon_class
+                            && (in_class
+                                || (type_frame.is_none()
+                                    && plugin.find_enclosing_class_name(node, source).is_none()))
                         {
                             if let Some(sym) = plugin.extract_method(
                                 node,
@@ -498,6 +520,7 @@ pub fn extract_all_single_pass(
         .filter(|s| s.symbol_type == SymbolType::Function)
         .collect();
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         push_php_call_relation(
             pending.node,
             source,
@@ -506,6 +529,13 @@ pub fn extract_all_single_pass(
             &function_symbols,
             &import_map,
             &mut relations,
+        );
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Php,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
         );
     }
 
@@ -517,6 +547,12 @@ pub fn extract_all_single_pass(
         "php",
         source,
         Some(root),
+        &mut ctx.symbols,
+        &mut relations,
+    );
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Php,
         &mut ctx.symbols,
         &mut relations,
     );

@@ -30,6 +30,7 @@ export function resetCfgArchiveCaches(): void {
   wasmReady = null;
   recordIndex = null;
   recordPaths = null;
+  resetSliceArchiveCaches();
 }
 
 /** Always re-read the small index JSON so stubs / re-exports stay honest. */
@@ -110,7 +111,7 @@ export async function loadCfgDetailFromArchive(
     return null;
   }
 
-  const bytes = await fetchCfgRecordBytes(bundleUrl(dataPath).toString(), location);
+  const bytes = await fetchCfgRecordBytes(bundleUrl(dataPath).toString(), location, fetchImpl);
   const json = parseCfgDetail(bytes);
   const raw = JSON.parse(json) as CfgDetail & { schema_version?: number };
   return {
@@ -124,4 +125,101 @@ export async function loadCfgDetailFromArchive(
     idom: raw.idom,
     dominance_frontiers: raw.dominance_frontiers,
   };
+}
+
+export interface SliceIndexMeta {
+  schema_version?: number;
+  available?: boolean;
+  detail_mode?: string;
+  record_index_path?: string | null;
+  record_data_path?: string | null;
+  function_count?: number;
+}
+
+let sliceIndexMetaCache: SliceIndexMeta | null | undefined = undefined;
+let sliceRecordIndex: Map<string, { offset: number; length: number }> | null = null;
+let sliceRecordPaths: { indexPath: string; dataPath: string } | null = null;
+
+/** Test seam — clear slice record-pack caches between cases. */
+export function resetSliceArchiveCaches(): void {
+  sliceIndexMetaCache = undefined;
+  sliceRecordIndex = null;
+  sliceRecordPaths = null;
+}
+
+export async function loadSliceIndexMeta(
+  fetchImpl: typeof fetch = fetch,
+): Promise<SliceIndexMeta | null> {
+  if (sliceIndexMetaCache !== undefined) {
+    return sliceIndexMetaCache;
+  }
+  try {
+    const res = await fetchImpl(bundleUrl("slice_index.json"), { cache: "no-store" });
+    if (!res.ok) {
+      sliceIndexMetaCache = null;
+      return null;
+    }
+    const raw = (await res.json()) as SliceIndexMeta;
+    // Retain only lightweight header fields, not the `functions` array (~23 MB on large repos).
+    sliceIndexMetaCache = {
+      schema_version: raw.schema_version,
+      available: raw.available,
+      detail_mode: raw.detail_mode,
+      record_index_path: raw.record_index_path,
+      record_data_path: raw.record_data_path,
+      function_count: raw.function_count,
+    };
+    return sliceIndexMetaCache;
+  } catch {
+    return null;
+  }
+}
+
+export function isSliceArchiveOnly(meta: SliceIndexMeta | null): boolean {
+  return (
+    meta?.detail_mode === "archive_only" &&
+    Boolean(meta.record_index_path) &&
+    Boolean(meta.record_data_path)
+  );
+}
+
+async function ensureSliceRecordIndex(
+  indexPath: string,
+  dataPath: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Map<string, { offset: number; length: number }>> {
+  if (sliceRecordIndex && sliceRecordPaths?.indexPath === indexPath) {
+    return sliceRecordIndex;
+  }
+  const res = await fetchImpl(bundleUrl(indexPath), { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`${indexPath}: HTTP ${res.status}`);
+  }
+  sliceRecordIndex = parseCfgRecordIndex(new Uint8Array(await res.arrayBuffer()));
+  sliceRecordPaths = { indexPath, dataPath };
+  return sliceRecordIndex;
+}
+
+/**
+ * Fetch one function's slice/PDG JSON bytes from `slice.record_*.bin` via HTTP Range.
+ * Returns `null` when the function is not in the pack.
+ */
+export async function loadSliceJsonFromArchive(
+  functionId: string,
+  meta?: SliceIndexMeta | null,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Uint8Array | null> {
+  const index = meta ?? (await loadSliceIndexMeta(fetchImpl));
+  const indexPath = index?.record_index_path;
+  const dataPath = index?.record_data_path;
+  if (!indexPath || !dataPath) {
+    throw new Error("Slice record pack not available in this bundle");
+  }
+
+  const locations = await ensureSliceRecordIndex(indexPath, dataPath, fetchImpl);
+  const location = locations.get(functionId);
+  if (!location) {
+    return null;
+  }
+  return fetchCfgRecordBytes(bundleUrl(dataPath).toString(), location, fetchImpl);
 }

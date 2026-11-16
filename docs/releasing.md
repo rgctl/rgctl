@@ -44,9 +44,13 @@ Pushing a tag matching `v*` triggers [`.github/workflows/release.yml`](../.githu
 
 1. **Build** `rgctl` release binaries for:
    - `x86_64-unknown-linux-gnu`
+   - `aarch64-unknown-linux-gnu`
+   - `x86_64-unknown-linux-musl`
+   - `aarch64-unknown-linux-musl`
    - `aarch64-apple-darwin`
    - `x86_64-apple-darwin`
    - `x86_64-pc-windows-msvc`
+   - `aarch64-pc-windows-msvc`
 2. **Package** as `rgctl-<version>-<target>.tar.gz` (or `.zip` on Windows).
 3. **Publish** a GitHub Release with notes from `docs/releases/<tag>.md` (if present) plus GitHub-generated PR/commit notes, and `SHA256SUMS.txt`.
 
@@ -96,8 +100,12 @@ From [GitHub Releases](https://github.com/rgctl/rgctl/releases):
 |----------|----------------|
 | macOS Apple Silicon | `rgctl-*-aarch64-apple-darwin.tar.gz` |
 | macOS Intel | `rgctl-*-x86_64-apple-darwin.tar.gz` |
-| Linux x86_64 | `rgctl-*-x86_64-unknown-linux-gnu.tar.gz` |
-| Windows | `rgctl-*-x86_64-pc-windows-msvc.zip` |
+| Linux GNU x86_64 | `rgctl-*-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux GNU ARM64 | `rgctl-*-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux musl x86_64 | `rgctl-*-x86_64-unknown-linux-musl.tar.gz` |
+| Linux musl ARM64 | `rgctl-*-aarch64-unknown-linux-musl.tar.gz` |
+| Windows x86_64 | `rgctl-*-x86_64-pc-windows-msvc.zip` |
+| Windows ARM64 | `rgctl-*-aarch64-pc-windows-msvc.zip` |
 
 Extract and run `rgctl --version`. See [User Guide §1](user-guide.md#1-installation).
 
@@ -105,7 +113,7 @@ Extract and run `rgctl --version`. See [User Guide §1](user-guide.md#1-installa
 
 ## After release
 
-- Verify the Release page lists all four platform archives and checksums.
+- Verify the Release page lists all eight platform archives and checksums.
 - Smoke-test `discover` + `find --type function --count-only` on a small repo with the downloaded binary.
 - If `RGCTL_TESTS_DISPATCH_TOKEN` is configured, CI dispatches `rgctl-released` to the external test repo (see workflow comments).
 

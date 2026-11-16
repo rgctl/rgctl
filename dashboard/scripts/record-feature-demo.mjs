@@ -8,7 +8,7 @@
  * Prereq (ecommerce-java fixture recommended):
  *   rgctl -r rgctl-tests/ecommerce-java discover . -l java -e target \
  *     --with-cfg --with-security --with-taint --with-dashboard --with-harmonic \
- *     --with-kantra --export-migration-hints
+ *     --export-migration-hints
  *   rgctl -r rgctl-tests/ecommerce-java semantic index --embedder vocab
  *   rgctl -r rgctl-tests/ecommerce-java serve --port 8080
  *
@@ -122,13 +122,6 @@ const TAB_SEGMENTS = [
     panel: ".migration-view, .migration-tuning",
     caption: "Migration",
     body: "Package roadmap · presets & ordering",
-  },
-  {
-    key: "kantra",
-    tab: "Migration Rules",
-    panel: ".kantra-view",
-    caption: "Migration Rules",
-    body: "Konveyor violations · filters & snippets",
   },
   {
     key: "guide",
@@ -397,25 +390,6 @@ async function prepareSegment(page, key) {
       }
       case "migration": {
         await page.waitForSelector(".migration-tuning, .migration-view", { timeout: 20000 }).catch(() => {});
-        await sleep(400);
-        break;
-      }
-      case "kantra": {
-        await page.waitForSelector(".kantra-view", { timeout: 20000 }).catch(() => {});
-        const fileItem = page.locator(".kantra-view .function-list-item").first();
-        if (await fileItem.count()) {
-          await fileItem.click();
-          await sleep(700);
-        }
-        const row = page.locator(".kantra-view table tbody tr").first();
-        if (await row.count()) {
-          await row.click();
-          await sleep(700);
-        }
-        await page
-          .locator('[data-testid="kantra-snippet-editor"]')
-          .waitFor({ state: "visible", timeout: 15000 })
-          .catch(() => {});
         await sleep(400);
         break;
       }

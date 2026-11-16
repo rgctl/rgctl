@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "language": "go",
   "project": "ecommerce-go",
   "graph": {
@@ -419,6 +419,115 @@
           "continue"
         ]
       }
+    },
+    "v2LedgerBalance": {
+      "match": {
+        "name": "ReadBalance",
+        "class": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "V2FreeHelper"
+      ],
+      "mutations": {
+        "type": "V2OrderLedger",
+        "must_contain": [
+          "ApplyAdjustment"
+        ],
+        "must_exclude": [
+          "CorrectnessLeaf"
+        ]
+      }
+    },
+    "v2AuditWeightImpl": {
+      "match": {
+        "name": "AuditWeight",
+        "class": "V2OrderLedger",
+        "discriminator": "V2OrderLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "ReadBalance"
+      ],
+      "mro": {
+        "extends": [
+          "V2BaseLedger"
+        ],
+        "implements": [
+          "V2AuditPolicy"
+        ]
+      }
+    },
+    "v2SliceFlowProbe": {
+      "match": {
+        "name": "V2SliceFlowProbe"
+      },
+      "severity": "required",
+      "unique": true,
+      "slice": {
+        "file": "internal/correctness/harness.go",
+        "line": 68,
+        "variable": "finalOut",
+        "must_contain": [
+          "seedInput",
+          "stepVal"
+        ],
+        "must_exclude": [
+          "999"
+        ]
+      },
+      "flows": {
+        "file": "internal/correctness/harness.go",
+        "line": 66,
+        "variable": "stepVal",
+        "must_contain": [
+          "aliasVal",
+          "finalOut"
+        ]
+      }
+    },
+    "v2CloneBloomA": {
+      "match": {
+        "name": "V2CloneBloomA"
+      },
+      "severity": "required",
+      "unique": true,
+      "clones": {
+        "mode": "bloom",
+        "group_with": [
+          "V2CloneBloomB"
+        ],
+        "not_grouped_with": [
+          "CorrectnessLeaf"
+        ]
+      }
+    },
+    "v2SemanticLedger": {
+      "match": {
+        "name": "ReconcileChargebackLedger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "ArchiveChargebackAudit"
+      ],
+      "semantic": {
+        "query": "reconcile chargeback ledger",
+        "top3_contains": "ReconcileChargebackLedger",
+        "neighbor_names": [
+          "ArchiveChargebackAudit"
+        ]
+      },
+      "review": {
+        "file": "internal/correctness/harness.go",
+        "find": "return 42",
+        "replace": "return 43",
+        "must_contain": [
+          "CorrectnessMid"
+        ]
+      }
     }
   },
   "invariants": {
@@ -478,5 +587,15 @@
         "correctnessLeaf"
       ]
     }
+  },
+  "analytics": {
+    "severity": "required",
+    "root": "CorrectnessRoot",
+    "mid": "CorrectnessMid",
+    "leaf": "CorrectnessLeaf",
+    "separate": [
+      "CliqueAlphaA",
+      "CliqueBetaA"
+    ]
   }
 }

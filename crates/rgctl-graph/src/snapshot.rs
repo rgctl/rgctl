@@ -126,7 +126,7 @@ impl MmappedGraphSnapshot {
         let version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
         let backing = match version {
             SNAPSHOT_VERSION_V1 => SnapshotBacking::Legacy(parse_v1_payload(&mmap)?),
-            v if v == crate::columnar_snapshot::COLUMNAR_SNAPSHOT_VERSION => {
+            v if v == 2 || v == crate::columnar_snapshot::COLUMNAR_SNAPSHOT_VERSION => {
                 SnapshotBacking::Columnar(ColumnarGraphMmap::open(Arc::clone(&mmap))?)
             }
             other => {

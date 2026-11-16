@@ -3,7 +3,10 @@
 use crate::plugin::Plugin;
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
-use rgctl_plugin_helpers::{extract_name_from_node, node_to_location};
+use rgctl_plugin_helpers::{
+    extract_name_from_node, node_to_location, record_call_site_spans,
+    record_symbol_spans_from_source,
+};
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Node;
@@ -196,7 +199,7 @@ fn flush_bash_call(
             .unwrap_or_else(|| pending.callee.clone()),
         _ => pending.callee.clone(),
     };
-    relations.push(Relation {
+    let mut rel = Relation {
         from,
         to: local_target,
         relation_type: RelationType::Calls,
@@ -204,7 +207,10 @@ fn flush_bash_call(
         metadata: serde_json::json!({ "language": "bash" }),
         to_qualified_hint: None,
         to_type_hint: None,
-    });
+        ..Default::default()
+    };
+    record_call_site_spans(&mut rel, pending.node);
+    relations.push(rel);
 }
 
 /// Single iterative DFS: function symbols + command Calls + complexity.
@@ -278,7 +284,7 @@ pub fn extract_all_single_pass(
                         let loc = ((node.end_position().row - node.start_position().row) + 1).max(1)
                             as u32;
                         let qn = name.clone();
-                        ctx.symbols.push(Symbol {
+                        let mut sym = Symbol {
                             name: name.clone(),
                             symbol_type: SymbolType::Function,
                             qualified_name: Some(qn.clone()),
@@ -290,7 +296,16 @@ pub fn extract_all_single_pass(
                             modifiers: vec![],
                             documentation: None,
                             metadata: serde_json::json!({ "language": "bash" }),
-                        });
+                            ..Default::default()
+                        };
+                        record_symbol_spans_from_source(&mut sym, node, source);
+                        ctx.symbols
+                            .push(rgctl_plugin_helpers::callable_identity::symbol(
+                                sym,
+                                node,
+                                source,
+                                rgctl_plugin_helpers::callable_identity::Policy::Bash,
+                            ));
                         ctx.enter_scope(
                             ScopeKind::Function,
                             Some(name),
@@ -309,7 +324,7 @@ pub fn extract_all_single_pass(
 
                 if kind == "declaration_command" {
                     for name in declaration_var_names(node, source) {
-                        ctx.symbols.push(Symbol {
+                        let mut sym = Symbol {
                             name: name.clone(),
                             symbol_type: SymbolType::Variable,
                             qualified_name: Some(name),
@@ -324,7 +339,10 @@ pub fn extract_all_single_pass(
                                 "language": "bash",
                                 "kind": "declaration_command"
                             }),
-                        });
+                            ..Default::default()
+                        };
+                        record_symbol_spans_from_source(&mut sym, node, source);
+                        ctx.symbols.push(sym);
                     }
                 }
 
@@ -403,8 +421,22 @@ pub fn extract_all_single_pass(
     }
 
     for pending in pending_calls {
+        let identity_relation_start = relations.len();
         flush_bash_call(&pending, &ctx.symbols, file_path, &mut relations);
+        rgctl_plugin_helpers::callable_identity::call(
+            pending.node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Bash,
+            ctx.symbols.get(pending.from_symbol_idx),
+            &mut relations[identity_relation_start..],
+        );
     }
+
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Bash,
+        &mut ctx.symbols,
+        &mut relations,
+    );
 
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }

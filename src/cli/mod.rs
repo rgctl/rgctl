@@ -29,7 +29,6 @@ mod inspect;
 pub mod inspect_output;
 mod install;
 pub mod install_output;
-mod kantra_discover;
 mod markup;
 mod merge;
 mod metrics;
@@ -41,7 +40,6 @@ mod pr_check;
 mod pr_check_output;
 mod review;
 mod review_export;
-mod rules;
 mod semantic;
 mod semantic_api;
 pub mod semantic_output;
@@ -53,6 +51,7 @@ mod structured_query;
 mod temporal_prep;
 pub mod update;
 mod vuln_deps;
+mod writeback;
 
 pub use args::{OutputFormat, SymbolTargetArgs};
 pub use help_ia::root_command;
@@ -110,6 +109,41 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
+pub enum WritebackAction {
+    /// Round-trip verify reconstructed Tier-1 files against the source tree
+    Verify {
+        #[arg(short = 'l', long = "languages")]
+        languages: Option<String>,
+        #[arg(long = "strict")]
+        strict: bool,
+    },
+    /// Materialize reconstructed sources into an output directory
+    Export {
+        #[arg(long = "output", short = 'o', value_name = "DIR")]
+        output: std::path::PathBuf,
+        #[arg(short = 'l', long = "languages")]
+        languages: Option<String>,
+        #[arg(long = "file", value_name = "GLOB")]
+        file: Option<String>,
+    },
+    /// Surgical span patch / rename using the piece-table splicer
+    Patch {
+        #[arg(long = "rename", value_name = "OLD=NEW")]
+        rename: Option<String>,
+        #[arg(long = "plan", value_name = "PATH")]
+        plan: Option<std::path::PathBuf>,
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long = "output", short = 'o', value_name = "DIR")]
+        output: Option<std::path::PathBuf>,
+        #[arg(long = "in-place")]
+        in_place: bool,
+        #[arg(long = "force")]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum Commands {
     /// Index and analyze a codebase
     #[command(display_order = 1)]
@@ -151,6 +185,10 @@ pub enum Commands {
             help_heading = "Pipeline features"
         )]
         with_cfg: bool,
+
+        /// Materialize source fields as graph nodes with identifier byte spans, without CFG/PDG.
+        #[arg(long = "with-fields", help_heading = "Pipeline features")]
+        with_fields: bool,
 
         /// Discover-time taint analysis (requires CFG/PDG; implies CFG pass if needed).
         /// Off by default. On-demand: `slice ... --taint`.
@@ -197,6 +235,11 @@ pub enum Commands {
         #[arg(long = "with-ast-skeleton", help_heading = "Pipeline features")]
         with_ast_skeleton: bool,
 
+        /// Persist lossless source frames + Green-CST (`.rgctl/content_store.bin` RGCS v2,
+        /// `.rgctl/cst.archive.bin`). Also `RGCTL_LOSSLESS=1`. Off by default.
+        #[arg(long = "lossless", help_heading = "Pipeline features")]
+        lossless: bool,
+
         /// Write legacy JSON graph files (`graph.db` / `graph.json`); default is snapshot-only.
         #[arg(long = "write-json-graph", help_heading = "Session / limits")]
         write_json_graph: bool,
@@ -222,40 +265,8 @@ pub enum Commands {
         #[arg(long = "with-harmonic", help_heading = "Migration")]
         with_harmonic: bool,
 
-        /// Evaluate Konveyor Kantra rules natively during discover (embedded catalog by default).
-        #[arg(long = "with-kantra", help_heading = "Pipeline features")]
-        with_kantra: bool,
-
-        /// Override embedded catalog with a Kantra rules directory (`ruleset.yaml` + `*.yaml`).
-        #[arg(
-            long = "kantra-rules",
-            value_name = "DIR",
-            help_heading = "Pipeline features"
-        )]
-        kantra_rules: Option<String>,
-
-        /// Override embedded catalog with a ruleset tree (walks for `ruleset.yaml` dirs).
-        #[arg(
-            long = "kantra-catalog",
-            value_name = "ROOT",
-            help_heading = "Pipeline features"
-        )]
-        kantra_catalog: Option<String>,
-
-        /// Evaluate only rules labeled `konveyor.io/target=<NAME>`.
-        #[arg(
-            long = "kantra-target",
-            value_name = "NAME",
-            help_heading = "Pipeline features"
-        )]
-        kantra_target: Option<String>,
-
-        /// Index Kantra rules into the graph without running violation eval.
-        #[arg(long = "kantra-index-only", help_heading = "Pipeline features")]
-        kantra_index_only: bool,
-
         /// Staged full pipeline: basic discover (queryable snapshot), then CFG + Universe +
-        /// harmonic + taint + Kantra, then semantic index. Prints a plan first; does not imply
+        /// harmonic + taint, then semantic index. Prints a plan first; does not imply
         /// security, git, SCIP, or migration export.
         #[arg(long = "full", help_heading = "Session / limits")]
         full: bool,
@@ -312,6 +323,13 @@ pub enum Commands {
         /// export, and leave `serve` on the "Dashboard is being prepared" page.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
         extra: Vec<String>,
+    },
+
+    /// Lossless reconstruct / verify / patch Tier-1 sources from `.rgctl/` sidecars
+    #[command(display_order = 2)]
+    Writeback {
+        #[command(subcommand)]
+        action: WritebackAction,
     },
 
     /// Experimental graph query language — prefer `find` / `callers` / `relations` / `inventory` for common queries
@@ -599,13 +617,6 @@ pub enum Commands {
             env = "RGCTL_UPDATE_WAIT_TIMEOUT_SECS"
         )]
         wait_timeout: u64,
-    },
-
-    /// Evaluate Konveyor-shaped rules against the session (Kantra engine)
-    #[command(display_order = 53)]
-    Rules {
-        #[command(subcommand)]
-        action: RulesCommands,
     },
 
     /// Alias namespace for structured query verbs (`query find`, `query callers`, …)
@@ -1139,48 +1150,6 @@ pub enum SecurityCommands {
         #[arg(long = "depth", default_value_t = 8)]
         depth: usize,
     },
-}
-
-#[derive(Subcommand)]
-pub enum RulesCommands {
-    /// Evaluate Kantra rules against the current session graph (embedded catalog when DIR omitted)
-    Run {
-        /// Ruleset directory (`ruleset.yaml` + `*.yaml`); omit to use the embedded catalog
-        #[arg(value_name = "DIR")]
-        rules_dir: Option<std::path::PathBuf>,
-
-        /// Filter by `konveyor.io/target` label
-        #[arg(long = "target", value_name = "NAME")]
-        target: Option<String>,
-
-        /// Override with a rulesets tree (mutually exclusive with DIR as single ruleset when set)
-        #[arg(long = "catalog", value_name = "ROOT")]
-        catalog: Option<std::path::PathBuf>,
-    },
-    /// Query `.rgctl/kantra_findings.json` with optional target/source/category/file filters
-    Findings {
-        /// Filter by `konveyor.io/target` (comma-separated OR)
-        #[arg(long = "target", value_name = "NAME")]
-        target: Option<String>,
-
-        /// Filter by `konveyor.io/source` (comma-separated OR)
-        #[arg(long = "source", value_name = "NAME")]
-        source: Option<String>,
-
-        /// Filter by category (mandatory/optional/potential)
-        #[arg(long = "category", value_name = "CAT")]
-        category: Option<String>,
-
-        /// Substring match on violation file path
-        #[arg(long = "file", value_name = "SUBSTR")]
-        file: Option<String>,
-
-        /// Max violations to return
-        #[arg(long = "limit", value_name = "N")]
-        limit: Option<usize>,
-    },
-    /// List embedded catalog targets/sources (with hit counts when findings exist)
-    Targets,
 }
 
 #[derive(Subcommand)]
@@ -1759,6 +1728,7 @@ impl Cli {
                 verbose: _,
                 with_security,
                 with_cfg,
+                with_fields,
                 with_taint,
                 taint_rules,
                 scip,
@@ -1766,15 +1736,11 @@ impl Cli {
                 git_since,
                 with_dfg_loops,
                 with_ast_skeleton,
+                lossless,
                 write_json_graph,
                 with_universe,
                 export_migration_hints,
                 with_harmonic,
-                with_kantra,
-                kantra_rules,
-                kantra_catalog,
-                kantra_target,
-                kantra_index_only,
                 mut full,
                 with_limits,
                 migration_preset,
@@ -1811,6 +1777,7 @@ impl Cli {
                         exclude: join_exclude_patterns(&exclude),
                         with_security,
                         with_cfg,
+                        with_fields,
                         with_taint,
                         taint_rules,
                         scip,
@@ -1818,15 +1785,11 @@ impl Cli {
                         git_since,
                         with_dfg_loops,
                         with_ast_skeleton,
+                        lossless,
                         write_json_graph,
                         with_universe,
                         export_migration_hints,
                         with_harmonic,
-                        with_kantra,
-                        kantra_rules,
-                        kantra_catalog,
-                        kantra_target,
-                        kantra_index_only,
                         full,
                         with_limits,
                         migration_preset,
@@ -1836,6 +1799,38 @@ impl Cli {
                         cascade_depth,
                     },
                 )
+            }
+            Commands::Writeback { action } => {
+                let subcommand = match action {
+                    WritebackAction::Verify { languages, strict } => {
+                        writeback::WritebackSubcommand::Verify { languages, strict }
+                    }
+                    WritebackAction::Export {
+                        output,
+                        languages,
+                        file,
+                    } => writeback::WritebackSubcommand::Export {
+                        output,
+                        languages,
+                        file_glob: file,
+                    },
+                    WritebackAction::Patch {
+                        rename,
+                        plan,
+                        dry_run,
+                        output,
+                        in_place,
+                        force,
+                    } => writeback::WritebackSubcommand::Patch {
+                        rename,
+                        plan,
+                        dry_run,
+                        output,
+                        in_place,
+                        force,
+                    },
+                };
+                writeback::run(&ctx, writeback::WritebackArgs { subcommand })
             }
             Commands::Gql {
                 query,
@@ -2107,21 +2102,6 @@ impl Cli {
                     wait_timeout_secs: wait_timeout,
                 },
             ),
-            Commands::Rules { action } => match action {
-                RulesCommands::Run {
-                    rules_dir,
-                    target,
-                    catalog,
-                } => rules::run_rules(&ctx, rules_dir, target, catalog),
-                RulesCommands::Findings {
-                    target,
-                    source,
-                    category,
-                    file,
-                    limit,
-                } => rules::run_findings(&ctx, target, source, category, file, limit),
-                RulesCommands::Targets => rules::run_targets(&ctx),
-            },
             Commands::Query { action } => match action {
                 QueryCommands::Find {
                     pattern,
@@ -2792,6 +2772,7 @@ impl Cli {
 fn command_label_for(command: &Commands) -> &'static str {
     match command {
         Commands::Discover { .. } => "discover",
+        Commands::Writeback { .. } => "writeback",
         Commands::Gql { .. } => "gql",
         Commands::Find { .. } => "find",
         Commands::Callers { .. } => "callers",
@@ -2801,7 +2782,6 @@ fn command_label_for(command: &Commands) -> &'static str {
         Commands::Status => "status",
         Commands::Watch { .. } => "watch",
         Commands::Update { .. } => "update",
-        Commands::Rules { .. } => "rules",
         Commands::Query { action } => match action {
             QueryCommands::Find { .. } => "query find",
             QueryCommands::Callers { .. } => "query callers",

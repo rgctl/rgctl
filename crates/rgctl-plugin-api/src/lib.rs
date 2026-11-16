@@ -14,7 +14,9 @@ mod single_pass;
 
 pub use ast_handlers::{AstHandlerTable, HandlerMask};
 pub use kind_dispatch::{KindDispatchOnce, KindDispatchTable, MAX_KIND_ID};
-pub use parser_pool::{parse_with_pool, with_thread_local_parser};
+pub use parser_pool::{
+    parse_with_pool, set_capture_last_tree, take_last_parsed_tree, with_thread_local_parser,
+};
 pub use scope_stack::{ScopeComplexity, ScopeFrame, ScopeKind, ScopeStack};
 pub use single_pass::{
     COMPLEXITY_META_KEY, SinglePassCtx, ast_coverage_track_enabled, attach_complexity,
@@ -27,8 +29,9 @@ pub use call_extraction::{
     C_CALL_KINDS, CPP_CALL_KINDS, CSHARP_CALL_KINDS, GO_CALL_KINDS, JS_CALL_KINDS,
     KOTLIN_CALL_KINDS, PHP_CALL_KINDS, PYTHON_CALL_KINDS, RUBY_CALL_KINDS, RUST_CALL_KINDS,
     TS_CALL_KINDS, callee_name, containing_function, containing_function_from_scope,
-    infer_python_method_target, kotlin_call_callee, push_call_relation, push_call_relation_from,
-    push_call_relation_scoped, ruby_call_callee, ruby_call_unresolved, walk_calls,
+    infer_param_type_from_signature, infer_python_method_target, kotlin_call_callee,
+    push_call_relation, push_call_relation_from, push_call_relation_scoped, ruby_call_callee,
+    ruby_call_unresolved, walk_calls,
 };
 
 pub use error::{Error, Result};
@@ -72,6 +75,55 @@ pub struct Symbol {
 
     /// Language-specific metadata
     pub metadata: serde_json::Value,
+
+    /// Exact 0-indexed start byte of the symbol declaration (`None` = unknown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_byte: Option<u32>,
+
+    /// Exact exclusive end byte of the symbol declaration (`None` = unknown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_byte: Option<u32>,
+
+    /// Identifier token start relative to [`Self::start_byte`] (`None` = unknown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_rel_offset: Option<u16>,
+
+    /// Raw identifier token length when it differs from [`Self::name`] (synthesized FQNs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_token_len: Option<u16>,
+
+    /// Overflow `(rel_start, len)` when the identifier starts ≥ 65535 bytes after `start_byte`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_span_overflow: Option<(u32, u32)>,
+}
+
+impl Default for Symbol {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            symbol_type: SymbolType::Variable,
+            qualified_name: None,
+            location: SourceLocation {
+                file: String::new(),
+                start_line: 0,
+                end_line: 0,
+                start_column: 0,
+                end_column: 0,
+            },
+            signature: None,
+            return_type: None,
+            parameters: Vec::new(),
+            fields: Vec::new(),
+            modifiers: Vec::new(),
+            documentation: None,
+            metadata: serde_json::Value::Null,
+            start_byte: None,
+            end_byte: None,
+            name_rel_offset: None,
+            name_token_len: None,
+            name_span_overflow: None,
+        }
+    }
 }
 
 /// Type of symbol
@@ -183,9 +235,24 @@ pub struct Parameter {
     pub default_value: Option<String>,
 }
 
+/// Source coordinates carried with an extracted field until graph materialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldSourceSpan {
+    pub start_byte: u32,
+    pub end_byte: u32,
+    pub name_rel_offset: Option<u16>,
+    pub name_token_len: Option<u16>,
+    pub name_span_overflow: Option<(u32, u32)>,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
 /// Struct/class field
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Field {
+    /// Field declaration and identifier coordinates, when backed by source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_span: Option<FieldSourceSpan>,
     /// Field name
     pub name: String,
 
@@ -226,6 +293,36 @@ pub struct Relation {
     /// Used when we can infer the class from variable type but not the full qualified name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_type_hint: Option<String>,
+
+    /// Call-site / reference identifier start byte in the source file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_site_start_byte: Option<u32>,
+
+    /// Call-site / reference identifier byte length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_site_byte_len: Option<u16>,
+}
+
+impl Default for Relation {
+    fn default() -> Self {
+        Self {
+            from: String::new(),
+            to: String::new(),
+            relation_type: RelationType::Calls,
+            location: SourceLocation {
+                file: String::new(),
+                start_line: 0,
+                end_line: 0,
+                start_column: 0,
+                end_column: 0,
+            },
+            metadata: serde_json::Value::Null,
+            to_qualified_hint: None,
+            to_type_hint: None,
+            call_site_start_byte: None,
+            call_site_byte_len: None,
+        }
+    }
 }
 
 /// Combined output from [`LanguagePlugin::extract_all`].
@@ -477,7 +574,7 @@ pub trait LanguagePlugin: Send + Sync {
         {
             return true;
         }
-        if path_obj
+        path_obj
             .file_name()
             .and_then(|n| n.to_str())
             .is_some_and(|name| {
@@ -485,10 +582,6 @@ pub trait LanguagePlugin: Send + Sync {
                     .iter()
                     .any(|ext| name.eq_ignore_ascii_case(ext))
             })
-        {
-            return true;
-        }
-        false
     }
 }
 
@@ -597,6 +690,7 @@ mod tests {
                 modifiers: vec!["pub".to_string()],
                 documentation: Some("Test function".to_string()),
                 metadata: serde_json::json!({}),
+                ..Default::default()
             }])
         }
 
@@ -618,8 +712,7 @@ mod tests {
                     end_column: 20,
                 },
                 metadata: serde_json::json!({}),
-                to_qualified_hint: None,
-                to_type_hint: None,
+                ..Default::default()
             }])
         }
 
@@ -740,6 +833,7 @@ mod tests {
             modifiers: vec![],
             documentation: None,
             metadata: serde_json::json!({}),
+            ..Default::default()
         };
         let source = b"mock source";
         let complexity = plugin.calculate_complexity(&symbol, source).unwrap();

@@ -32,9 +32,6 @@ const TaintView = lazy(() =>
 const MigrationView = lazy(() =>
   import("./MigrationView").then((m) => ({ default: m.MigrationView })),
 );
-const KantraView = lazy(() =>
-  import("./KantraView").then((m) => ({ default: m.KantraView })),
-);
 const GuideView = lazy(() => import("./GuideView").then((m) => ({ default: m.GuideView })));
 
 function TabLoading() {
@@ -121,7 +118,7 @@ export function App() {
 
         <div
           class={`card shadow-sm border-top-0 rounded-top-0 rb-tab-panel-card ${
-            tab === "graph" || tab === "cfg" || tab === "slice" || tab === "blast" || tab === "dataflow" || tab === "taint" || tab === "migration" || tab === "kantra"
+            tab === "graph" || tab === "cfg" || tab === "slice" || tab === "blast" || tab === "dataflow" || tab === "taint" || tab === "migration"
               ? "graph-panel p-0"
               : "p-0"
           }`}
@@ -142,8 +139,6 @@ export function App() {
                           ? "rb-tab-panel-body--cfg p-0"
                           : tab === "migration"
                             ? "rb-tab-panel-body--cfg p-0"
-                            : tab === "kantra"
-                              ? "rb-tab-panel-body--cfg p-0"
                             : "rb-tab-panel-body--scroll p-0"
             }`}
           >
@@ -309,14 +304,6 @@ function TabPanel({
     return (
       <TabPanelStack tabId={id}>
         <MigrationView />
-      </TabPanelStack>
-    );
-  }
-
-  if (id === "kantra") {
-    return (
-      <TabPanelStack tabId={id}>
-        <KantraView manifest={manifest} />
       </TabPanelStack>
     );
   }

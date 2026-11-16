@@ -4,7 +4,8 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 const SNAPSHOT_MAGIC: [u8; 4] = *b"RBGR";
-const COLUMNAR_VERSION: u32 = 2;
+const COLUMNAR_VERSION_V2: u32 = 2;
+const COLUMNAR_VERSION_V3: u32 = 3;
 const HEADER_SIZE: usize = 136;
 const NODE_ROW_SIZE: usize = 64;
 const EDGE_ROW_SIZE: usize = 40;
@@ -42,6 +43,7 @@ pub fn node_type_name(node_type: u16) -> &'static str {
 #[derive(Clone)]
 pub struct ColumnarView {
     bytes: Vec<u8>,
+    format_version: u32,
     schema_version: u32,
     node_count: usize,
     edge_count: usize,
@@ -128,9 +130,9 @@ impl ColumnarView {
             return Err("invalid graph payload magic (expected RBGR columnar v2)".into());
         }
         let format_version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
-        if format_version != COLUMNAR_VERSION {
+        if !matches!(format_version, COLUMNAR_VERSION_V2 | COLUMNAR_VERSION_V3) {
             return Err(format!(
-                "unsupported payload format version {format_version} (expected {COLUMNAR_VERSION})"
+                "unsupported payload format version {format_version} (expected {COLUMNAR_VERSION_V2} or {COLUMNAR_VERSION_V3})"
             ));
         }
 
@@ -157,6 +159,7 @@ impl ColumnarView {
 
         Ok(Self {
             bytes,
+            format_version,
             schema_version,
             node_count,
             edge_count,
@@ -389,6 +392,7 @@ impl ColumnarView {
         )?;
         let complexity = extension_complexity(
             &self.bytes,
+            self.format_version,
             self.offset_extensions as usize,
             row.extension_off,
             row.extension_len,
@@ -396,6 +400,7 @@ impl ColumnarView {
         .unwrap_or(0.0);
         let community_id = extension_property_usize(
             &self.bytes,
+            self.format_version,
             self.offset_extensions as usize,
             row.extension_off,
             row.extension_len,
@@ -417,6 +422,7 @@ impl ColumnarView {
         let row = read_node_row(&self.bytes, self.offset_nodes as usize, idx as usize)?;
         Ok(extension_property_f64(
             &self.bytes,
+            self.format_version,
             self.offset_extensions as usize,
             row.extension_off,
             row.extension_len,
@@ -507,52 +513,93 @@ fn optional_string(
     read_string(bytes, pool_base, pool_len, off, len).map(Some)
 }
 
-#[derive(serde::Deserialize, Default)]
-struct NodeExtension {
-    #[serde(default)]
+#[derive(serde::Deserialize)]
+struct WasmGraphParameter {
+    _name: String,
+    _param_type: Option<String>,
+    _default_value: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct NodeExtensionV2Prefix {
+    _qualified_name: Option<String>,
+    _return_type: Option<String>,
+    _code_hash: Option<String>,
+    _token_bloom: Option<[u64; 4]>,
+    _parameters: Vec<WasmGraphParameter>,
     properties: HashMap<String, String>,
 }
 
-fn extension_complexity(bytes: &[u8], ext_base: usize, off: u32, len: u32) -> Option<f64> {
-    extension_property_f64(bytes, ext_base, off, len, "cyclomatic")
+#[derive(serde::Deserialize)]
+struct NodeExtensionV3Prefix {
+    _qualified_name: Option<String>,
+    _identity_discriminator: Option<String>,
+    _return_type: Option<String>,
+    _code_hash: Option<String>,
+    _token_bloom: Option<[u64; 4]>,
+    _parameters: Vec<WasmGraphParameter>,
+    properties: HashMap<String, String>,
+}
+
+fn extension_properties(
+    bytes: &[u8],
+    format_version: u32,
+    ext_base: usize,
+    off: u32,
+    len: u32,
+) -> Option<HashMap<String, String>> {
+    if len == 0 {
+        return None;
+    }
+    let start = ext_base + off as usize;
+    let end = start + len as usize;
+    if end > bytes.len() {
+        return None;
+    }
+    let slice = &bytes[start..end];
+    if format_version >= COLUMNAR_VERSION_V3 {
+        bincode::deserialize::<NodeExtensionV3Prefix>(slice)
+            .ok()
+            .map(|ext| ext.properties)
+    } else {
+        bincode::deserialize::<NodeExtensionV2Prefix>(slice)
+            .ok()
+            .map(|ext| ext.properties)
+    }
+}
+
+fn extension_complexity(
+    bytes: &[u8],
+    format_version: u32,
+    ext_base: usize,
+    off: u32,
+    len: u32,
+) -> Option<f64> {
+    extension_property_f64(bytes, format_version, ext_base, off, len, "cyclomatic")
 }
 
 fn extension_property_f64(
     bytes: &[u8],
+    format_version: u32,
     ext_base: usize,
     off: u32,
     len: u32,
     key: &str,
 ) -> Option<f64> {
-    if len == 0 {
-        return None;
-    }
-    let start = ext_base + off as usize;
-    let end = start + len as usize;
-    if end > bytes.len() {
-        return None;
-    }
-    let ext: NodeExtension = bincode::deserialize(&bytes[start..end]).ok()?;
-    ext.properties.get(key).and_then(|v| v.parse::<f64>().ok())
+    extension_properties(bytes, format_version, ext_base, off, len)?
+        .get(key)
+        .and_then(|v| v.parse::<f64>().ok())
 }
 
 fn extension_property_usize(
     bytes: &[u8],
+    format_version: u32,
     ext_base: usize,
     off: u32,
     len: u32,
     key: &str,
 ) -> Option<usize> {
-    if len == 0 {
-        return None;
-    }
-    let start = ext_base + off as usize;
-    let end = start + len as usize;
-    if end > bytes.len() {
-        return None;
-    }
-    let ext: NodeExtension = bincode::deserialize(&bytes[start..end]).ok()?;
-    ext.properties
+    extension_properties(bytes, format_version, ext_base, off, len)?
         .get(key)
         .and_then(|v| v.parse::<usize>().ok())
 }
@@ -606,5 +653,25 @@ mod tests {
     #[test]
     fn parse_uuid_bytes_rejects_short() {
         assert!(parse_uuid_bytes("not-a-uuid").is_err());
+    }
+
+    #[test]
+    fn columnar_view_accepts_v2_and_v3_headers() {
+        fn empty_header(version: u32) -> Vec<u8> {
+            let mut buf = vec![0u8; HEADER_SIZE];
+            buf[0..4].copy_from_slice(&SNAPSHOT_MAGIC);
+            buf[4..8].copy_from_slice(&version.to_le_bytes());
+            buf[8..12].copy_from_slice(&1u32.to_le_bytes());
+            let off = (HEADER_SIZE as u64).to_le_bytes();
+            buf[92..100].copy_from_slice(&off);
+            buf[100..108].copy_from_slice(&off);
+            buf[108..116].copy_from_slice(&off);
+            buf[128..136].copy_from_slice(&off);
+            buf
+        }
+
+        assert!(ColumnarView::open(empty_header(COLUMNAR_VERSION_V2)).is_ok());
+        assert!(ColumnarView::open(empty_header(COLUMNAR_VERSION_V3)).is_ok());
+        assert!(ColumnarView::open(empty_header(4)).is_err());
     }
 }

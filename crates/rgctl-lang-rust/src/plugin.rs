@@ -126,7 +126,7 @@ impl RustPlugin {
             (None, serde_json::json!({ "language": "rust" }))
         };
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: raw_name,
             symbol_type,
             qualified_name,
@@ -151,7 +151,20 @@ impl RustPlugin {
             modifiers,
             documentation,
             metadata,
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        symbol = rgctl_plugin_helpers::callable_identity::symbol(
+            symbol,
+            node,
+            source,
+            rgctl_plugin_helpers::callable_identity::Policy::Rust,
+        );
+        Ok(symbol)
     }
 
     /// Parent-walk fallback when no [`ScopeStack`] is available (legacy symbol walk).
@@ -276,7 +289,7 @@ impl RustPlugin {
         let module_prefix = module_prefix_from_path(Path::new(file_path));
         let qn = qualify_with_module(module_prefix.as_deref(), &name);
 
-        Ok(Symbol {
+        let mut symbol = Symbol {
             name: name.clone(),
             symbol_type: if is_enum {
                 SymbolType::Enum
@@ -298,7 +311,14 @@ impl RustPlugin {
             modifiers,
             documentation: None,
             metadata: serde_json::json!({}),
-        })
+            ..Default::default()
+        };
+        rgctl_plugin_helpers::record_symbol_spans(
+            &mut symbol,
+            node,
+            node.child_by_field_name("name"),
+        );
+        Ok(symbol)
     }
 
     /// Collect `enum_variant` names as [`Field`] entries on the enum symbol.
@@ -319,6 +339,7 @@ impl RustPlugin {
                 .map(str::to_string);
             if let Some(name) = name {
                 fields.push(Field {
+                    source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                     name,
                     field_type: None,
                     visibility: None,
@@ -364,6 +385,7 @@ impl RustPlugin {
 
                 if let Some(name) = name {
                     fields.push(Field {
+                        source_span: rgctl_plugin_helpers::field_source_span(child, source, &name),
                         name,
                         field_type,
                         visibility,
@@ -525,13 +547,19 @@ impl RustPlugin {
 
             match node.kind() {
                 "function_item" => {
-                    let impl_ty = self.find_containing_impl_type(node, source);
-                    symbols.push(self.extract_function(
-                        node,
-                        source,
-                        &file_path_str,
-                        impl_ty.as_deref(),
-                    )?);
+                    let is_trait_default_method = node.parent().is_some_and(|p| {
+                        p.kind() == "declaration_list"
+                            && p.parent().is_some_and(|gp| gp.kind() == "trait_item")
+                    });
+                    if !is_trait_default_method {
+                        let impl_ty = self.find_containing_impl_type(node, source);
+                        symbols.push(self.extract_function(
+                            node,
+                            source,
+                            &file_path_str,
+                            impl_ty.as_deref(),
+                        )?);
+                    }
                 }
                 "struct_item" => {
                     symbols.push(self.extract_type_definition(

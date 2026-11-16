@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "language": "c",
   "project": "ecommerce-c",
   "graph": {
@@ -275,6 +275,82 @@
         "min_blocks": 4,
         "statements_contain": []
       }
+    },
+    "v2SliceFlowProbe": {
+      "match": {
+        "name": "v2_slice_flow_probe"
+      },
+      "severity": "required",
+      "unique": true,
+      "mro": {
+        "severity": "unsupported"
+      },
+      "mutations": {
+        "severity": "unsupported",
+        "type": "none"
+      },
+      "slice": {
+        "file": "src/correctness_harness.c",
+        "line": 28,
+        "variable": "final_out",
+        "must_contain": [
+          "seed_input",
+          "step_val"
+        ],
+        "must_exclude": [
+          "999"
+        ]
+      },
+      "flows": {
+        "file": "src/correctness_harness.c",
+        "line": 26,
+        "variable": "step_val",
+        "must_contain": [
+          "alias_val",
+          "final_out"
+        ]
+      }
+    },
+    "v2CloneBloomA": {
+      "match": {
+        "name": "v2_clone_bloom_a"
+      },
+      "severity": "required",
+      "unique": true,
+      "clones": {
+        "mode": "bloom",
+        "group_with": [
+          "v2_clone_bloom_b"
+        ],
+        "not_grouped_with": [
+          "correctness_leaf"
+        ]
+      }
+    },
+    "v2SemanticLedger": {
+      "match": {
+        "name": "reconcile_chargeback_ledger"
+      },
+      "severity": "required",
+      "unique": true,
+      "exact_callees": [
+        "archive_chargeback_audit"
+      ],
+      "semantic": {
+        "query": "reconcile chargeback ledger",
+        "top3_contains": "reconcile_chargeback_ledger",
+        "neighbor_names": [
+          "archive_chargeback_audit"
+        ]
+      },
+      "review": {
+        "file": "src/correctness_harness.c",
+        "find": "return 42;",
+        "replace": "return 43;",
+        "must_contain": [
+          "correctness_mid"
+        ]
+      }
     }
   },
   "invariants": {
@@ -334,5 +410,15 @@
         "correctnessLeaf"
       ]
     }
+  },
+  "analytics": {
+    "severity": "required",
+    "root": "correctness_root",
+    "mid": "correctness_mid",
+    "leaf": "correctness_leaf",
+    "separate": [
+      "clique_alpha_a",
+      "clique_beta_a"
+    ]
   }
 }

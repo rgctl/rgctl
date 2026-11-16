@@ -18,8 +18,31 @@ pub struct InspectCfgResponse {
     pub symbol: String,
     pub layer: String,
     pub pruned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_byte: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_byte: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_start_byte: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_end_byte: Option<u32>,
     pub nodes: Vec<CfgBlockNode>,
     pub edges: Vec<CfgEdgeNode>,
+}
+
+impl InspectCfgResponse {
+    pub fn with_symbol_spans(
+        mut self,
+        start_byte: Option<u32>,
+        end_byte: Option<u32>,
+        name_span: Option<(u32, u32)>,
+    ) -> Self {
+        self.start_byte = start_byte;
+        self.end_byte = end_byte;
+        self.name_start_byte = name_span.map(|(s, _)| s);
+        self.name_end_byte = name_span.map(|(_, e)| e);
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -27,10 +50,33 @@ pub struct InspectPdgResponse {
     pub schema_version: u32,
     pub symbol: String,
     pub layer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_byte: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_byte: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_start_byte: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_end_byte: Option<u32>,
     pub nodes: Vec<PdgGraphNode>,
     pub edges: Vec<PdgGraphEdge>,
     pub data_deps: usize,
     pub control_deps: usize,
+}
+
+impl InspectPdgResponse {
+    pub fn with_symbol_spans(
+        mut self,
+        start_byte: Option<u32>,
+        end_byte: Option<u32>,
+        name_span: Option<(u32, u32)>,
+    ) -> Self {
+        self.start_byte = start_byte;
+        self.end_byte = end_byte;
+        self.name_start_byte = name_span.map(|(s, _)| s);
+        self.name_end_byte = name_span.map(|(_, e)| e);
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -57,9 +103,32 @@ pub struct InspectDomResponse {
     pub schema_version: u32,
     pub symbol: String,
     pub layer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_byte: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_byte: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_start_byte: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_end_byte: Option<u32>,
     pub nodes: Vec<DomBlockNode>,
     pub idom: Vec<DomRelation>,
     pub frontiers: Vec<DomFrontier>,
+}
+
+impl InspectDomResponse {
+    pub fn with_symbol_spans(
+        mut self,
+        start_byte: Option<u32>,
+        end_byte: Option<u32>,
+        name_span: Option<(u32, u32)>,
+    ) -> Self {
+        self.start_byte = start_byte;
+        self.end_byte = end_byte;
+        self.name_start_byte = name_span.map(|(s, _)| s);
+        self.name_end_byte = name_span.map(|(_, e)| e);
+        self
+    }
 }
 
 fn block_index_map(cfg: &ControlFlowGraph) -> HashMap<BlockId, usize> {
@@ -78,6 +147,10 @@ pub fn inspect_cfg_json(symbol: &str, cfg: &ControlFlowGraph, pruned: bool) -> I
         symbol: symbol.to_string(),
         layer: "cfg".into(),
         pruned,
+        start_byte: None,
+        end_byte: None,
+        name_start_byte: None,
+        name_end_byte: None,
         nodes: topo.nodes,
         edges: topo.edges,
     }
@@ -95,6 +168,10 @@ pub fn inspect_pdg_json(
         schema_version: INSPECT_SCHEMA_VERSION,
         symbol: symbol.to_string(),
         layer: "pdg".into(),
+        start_byte: None,
+        end_byte: None,
+        name_start_byte: None,
+        name_end_byte: None,
         nodes: topo.nodes,
         edges: topo.edges,
         data_deps,
@@ -158,6 +235,10 @@ pub fn inspect_dom_json(
         schema_version: INSPECT_SCHEMA_VERSION,
         symbol: symbol.to_string(),
         layer: "dom".into(),
+        start_byte: None,
+        end_byte: None,
+        name_start_byte: None,
+        name_end_byte: None,
         nodes,
         idom,
         frontiers,
@@ -172,6 +253,10 @@ pub fn fixture_inspect_cfg_response() -> InspectCfgResponse {
         symbol: "main".into(),
         layer: "cfg".into(),
         pruned: false,
+        start_byte: None,
+        end_byte: None,
+        name_start_byte: None,
+        name_end_byte: None,
         nodes: cfg.nodes,
         edges: cfg.edges,
     }

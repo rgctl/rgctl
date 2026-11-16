@@ -18,6 +18,8 @@ pub struct DiscoverArgs {
     pub with_security: bool,
     /// CFG / dominators / PDG. Default off.
     pub with_cfg: bool,
+    /// Materialize fields without requiring CFG analysis.
+    pub with_fields: bool,
     /// Discover-time taint (implies CFG pass). Default off.
     pub with_taint: bool,
     /// Extra taint rule pack path (file or directory).
@@ -40,16 +42,6 @@ pub struct DiscoverArgs {
     pub export_migration_hints: bool,
     /// Compute harmonic centrality (HyperBall on large graphs). Default off.
     pub with_harmonic: bool,
-    /// Native Kantra rule evaluation during discover.
-    pub with_kantra: bool,
-    /// Override embedded catalog with a single ruleset directory.
-    pub kantra_rules: Option<String>,
-    /// Override embedded catalog with a ruleset tree (`ruleset.yaml` dirs).
-    pub kantra_catalog: Option<String>,
-    /// Evaluate only rules with `konveyor.io/target=<name>`.
-    pub kantra_target: Option<String>,
-    /// Hydrate Kantra rule nodes only; skip violation eval.
-    pub kantra_index_only: bool,
     /// Staged full pipeline (`--full`).
     pub full: bool,
     /// Resource limits (`--with-limits SPEC` / `RGCTL_WITH_LIMITS`).
@@ -64,6 +56,8 @@ pub struct DiscoverArgs {
     pub files: Option<Vec<String>>,
     /// Reverse call-dependency hops for `--files` updates.
     pub cascade_depth: usize,
+    /// Persist lossless content store + Green-CST (`--lossless` / `RGCTL_LOSSLESS=1`).
+    pub lossless: bool,
 }
 
 /// Choose the session `--repo` base before joining a relative positional `PATH`.
@@ -155,12 +149,6 @@ mod session_root_tests {
 }
 
 pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
-    // `--full` always enables Kantra in the deep stage; still validate override exclusivity.
-    super::kantra_discover::validate_kantra_flags(
-        args.with_kantra || args.full,
-        &args.kantra_rules,
-        &args.kantra_catalog,
-    )?;
     let limits = super::discover_limits::DiscoverLimits::from_cli(args.with_limits.as_deref())?;
     let path = resolve_session_root(ctx, args.path.as_deref());
 
@@ -169,7 +157,34 @@ pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
     }
 
     if let Some(files) = &args.files {
-        return run_files_update(ctx, &path, files.clone(), &args);
+        let wants_fields = args.full
+            || args.with_fields
+            || args.with_cfg
+            || args.with_taint
+            || args.with_dfg_loops
+            || args.with_ast_skeleton;
+        let field_mode_ready = !wants_fields
+            || super::pipeline_status::read_digest_marker(
+                Path::new(&path),
+                super::pipeline_status::MATERIALIZED_FIELDS_DIGEST_FILE,
+            )
+            .is_some_and(|digest| {
+                rgctl_graph::SnapshotNodeStore::open_from_repo(Path::new(&path)).is_ok_and(
+                    |snapshot| {
+                        snapshot
+                            .content_digest()
+                            .is_ok_and(|current| current == digest)
+                    },
+                )
+            });
+        if field_mode_ready
+            && rgctl_extraction::callable_resolution::semantics_current(Path::new(&path))
+        {
+            return run_files_update(ctx, &path, files.clone(), &args);
+        }
+        tracing::info!(
+            "Extraction semantics or field mode changed; rebuilding the source graph before incremental updates"
+        );
     }
 
     if args.with_universe {
@@ -204,20 +219,17 @@ pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
             with_dashboard: args.with_universe,
             export_migration_hints: args.export_migration_hints,
             with_harmonic: args.with_harmonic,
-            with_kantra: args.with_kantra,
-            kantra_rules: args.kantra_rules.clone(),
-            kantra_catalog: args.kantra_catalog.clone(),
-            kantra_target: args.kantra_target.clone(),
-            kantra_index_only: args.kantra_index_only,
             migration_preset: &args.migration_preset,
             migration_order: &args.migration_order,
             db_path: &ctx.db,
-            force_materialize_fields: false,
+            force_materialize_fields: args.with_fields,
             force_reindex: false,
             emit_cli_summary: true,
             artifact_root: args.artifact_root.as_deref(),
             limits,
             reuse_basic_analytics: false,
+            lossless: args.lossless
+                || std::env::var_os("RGCTL_LOSSLESS").is_some_and(|v| v != "0" && v != "false"),
         },
     )?;
     Ok(())

@@ -1,0 +1,1 @@
+CREATE TABLE box (value INTEGER);

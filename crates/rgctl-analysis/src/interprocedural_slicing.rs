@@ -106,6 +106,17 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> InterproceduralSlicer<'a, C> {
             let current_pdg = self.pdg_for(current_func)?;
             let node = &current_pdg.nodes[&current_node];
 
+            for dep in &current_pdg.data_deps {
+                if dep.to == current_node && slice.insert((current_func, dep.from)) {
+                    worklist.push_back((current_func, dep.from));
+                }
+            }
+            for dep in &current_pdg.control_deps {
+                if dep.dependent == current_node && slice.insert((current_func, dep.controller)) {
+                    worklist.push_back((current_func, dep.controller));
+                }
+            }
+
             for var in &node.used_vars {
                 if self.is_parameter(current_func, var) {
                     for (caller_id, _) in self.icfg.caller_cfgs(current_func) {
@@ -182,14 +193,64 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> InterproceduralSlicer<'a, C> {
     }
 
     fn is_parameter(&self, function: Uuid, variable: &str) -> bool {
+        if matches!(
+            variable,
+            "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "@" | "*"
+        ) {
+            return true;
+        }
         if self
             .icfg
             .call_graph()
             .parameter_names(function)
             .iter()
-            .any(|p| p == variable)
+            .any(|p| p.trim_start_matches('$') == variable)
         {
             return true;
+        }
+        if let Some(cfg) = self.icfg.get_cfg(function)
+            && cfg
+                .local_types
+                .keys()
+                .any(|k| k.trim_start_matches('$') == variable)
+        {
+            // Exclude locals that have a body definition in the function's PDG.
+            if let Ok(pdg) = self.pdg_for(function) {
+                let defined_in_body = pdg.nodes.values().any(|n| {
+                    n.defined_vars
+                        .iter()
+                        .any(|d| d.trim_start_matches('$') == variable)
+                });
+                if !defined_in_body {
+                    return true;
+                }
+            }
+        }
+        if let Ok(Some(func_node)) = self.backend.get_node(function) {
+            if let Some(sig) = func_node.signature.as_deref()
+                && header_mentions_param(sig, func_node.name.as_str(), variable)
+            {
+                return true;
+            }
+            if let Some(file_path) = func_node.file_path.as_deref()
+                && let Some(source) = self.source_files.get(file_path).or_else(|| {
+                    self.source_files
+                        .iter()
+                        .find(|(k, _)| k.ends_with(file_path))
+                        .map(|(_, v)| v)
+                })
+            {
+                let start_idx = func_node.start_line.unwrap_or(1).saturating_sub(1);
+                let header: String = source
+                    .lines()
+                    .skip(start_idx)
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if header_mentions_param(&header, func_node.name.as_str(), variable) {
+                    return true;
+                }
+            }
         }
         if let Ok(pdg) = self.pdg_for(function) {
             return pdg.nodes.values().any(|n| {
@@ -237,6 +298,19 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> InterproceduralSlicer<'a, C> {
             Vec::new()
         }
     }
+}
+
+fn header_mentions_param(header: &str, func_name: &str, variable: &str) -> bool {
+    let scope = if let Some((_, after_open)) = header.split_once('(') {
+        after_open.split(')').next().unwrap_or(after_open)
+    } else if let Some(pos) = header.find(func_name) {
+        &header[pos + func_name.len()..]
+    } else {
+        header
+    };
+    scope
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|tok| !tok.is_empty() && tok == variable && tok != func_name)
 }
 
 #[cfg(test)]
