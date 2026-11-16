@@ -302,6 +302,17 @@ pub struct AssignmentValueFact {
     pub value: ExpressionId,
 }
 
+/// Store into a named instance member; values and receivers remain distinct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldWriteFact {
+    /// Exact object expression receiving the store.
+    pub receiver: ExpressionId,
+    /// Interned native member name.
+    pub member: OperandNameId,
+    /// Stored RHS expression.
+    pub value: ExpressionId,
+}
+
 /// Pooled per-function native syntax facts, persisted with the CFG.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FunctionOperands {
@@ -331,6 +342,8 @@ pub struct FunctionOperands {
     pub returns: Vec<ReturnFact>,
     /// Projected RHS values for native multi-value assignments.
     pub assignment_values: Vec<AssignmentValueFact>,
+    /// Explicit native instance-member stores, preserving receiver identity.
+    pub field_writes: Vec<FieldWriteFact>,
     /// Scoped native local keys, indexed by LocalSlotId.
     pub local_slots: Vec<OperandNameId>,
     /// Exact local read occurrences and CFG positions.
@@ -366,6 +379,10 @@ impl FunctionOperands {
             .assignment_values
             .iter()
             .all(|a| a.target.start < a.target.end && expr(a.value))
+            && self
+                .field_writes
+                .iter()
+                .all(|w| expr(w.receiver) && name(w.member) && expr(w.value))
             && self.local_slots.iter().all(|&id| name(id))
             && self
                 .local_uses

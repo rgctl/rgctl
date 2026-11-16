@@ -58,6 +58,13 @@ pub struct ReceiverTarget {
 pub enum OriginTransferCause {
     /// Native scoped local transfer.
     Local(LocalTransferKind),
+    /// A stored value reaches a named member read on the same possible object.
+    Field {
+        /// Possible object allocation/provider origin used for the store/load join.
+        object: OriginId,
+        /// Exact member read; its native operand supplies the member identity.
+        read: ValueRef,
+    },
     /// Native selected-invocation binding.
     Invocation {
         /// Invocation identity and target.
@@ -277,6 +284,12 @@ struct Query<'a, C: InterproceduralCfgAccess + ?Sized> {
     edge_pairs: HashSet<(ValueRef, ValueRef)>,
     facts: HashMap<ValueRef, HashSet<OriginId>>,
     queue: VecDeque<(ValueRef, OriginId)>,
+    field_names: HashMap<String, u32>,
+    field_accesses: HashMap<ValueRef, Vec<FieldAccess>>,
+    field_stores: HashMap<(OriginId, u32), HashSet<ValueRef>>,
+    field_loads: HashMap<(OriginId, u32), HashSet<ValueRef>>,
+    field_access_count: usize,
+    field_slot_count: usize,
     fact_count: usize,
     steps: usize,
     limited: bool,
@@ -306,6 +319,12 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
             edge_pairs: HashSet::new(),
             facts: HashMap::new(),
             queue: VecDeque::new(),
+            field_names: HashMap::new(),
+            field_accesses: HashMap::new(),
+            field_stores: HashMap::new(),
+            field_loads: HashMap::new(),
+            field_access_count: 0,
+            field_slot_count: 0,
             fact_count: 0,
             steps: 0,
             limited: false,
@@ -414,6 +433,7 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
                     });
             }
         }
+        self.register_fields(function);
         let Ok(pdg) = ProgramDependenceGraph::build(cfg, b"") else {
             self.diagnostic(OriginDiagnostic::MissingFunction(function));
             return;
@@ -611,6 +631,10 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
                 }
                 self.fact(to, origin);
             }
+            let accesses = self.field_accesses.get(&value).cloned().unwrap_or_default();
+            for access in accesses {
+                self.bind_field(access, origin)
+            }
             let calls = self.receivers.get(&value).cloned().unwrap_or_default();
             let type_id = self.output.seeds[origin.0 as usize].type_id;
             for call in calls {
@@ -692,5 +716,170 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
             )
         });
         self.output
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FieldAccess {
+    member: u32,
+    value: ValueRef,
+    store: bool,
+}
+impl<C: InterproceduralCfgAccess + ?Sized> Query<'_, C> {
+    fn register_fields(&mut self, function: Uuid) {
+        let Some(cfg) = self.icfg.get_cfg(function) else {
+            return;
+        };
+        let selectors: HashSet<_> = cfg.operands.calls.iter().map(|c| c.callee).collect();
+        for (index, expression) in cfg.operands.expressions.iter().enumerate() {
+            if self.limited {
+                break;
+            }
+            if selectors.contains(&ExpressionId(index as u32)) {
+                continue;
+            }
+            if let ExpressionKind::Member(member) = expression.kind
+                && let Some(&receiver) = expression
+                    .inputs
+                    .slice(&cfg.operands.inputs)
+                    .and_then(|s| s.first())
+                && let Some(name) = cfg.operands.operand_name(member)
+            {
+                self.field_access(
+                    ValueRef {
+                        function,
+                        expression: receiver,
+                    },
+                    name,
+                    ValueRef {
+                        function,
+                        expression: ExpressionId(index as u32),
+                    },
+                    false,
+                );
+            }
+        }
+        for write in &cfg.operands.field_writes {
+            if self.limited {
+                break;
+            }
+            if let Some(name) = cfg.operands.operand_name(write.member) {
+                self.field_access(
+                    ValueRef {
+                        function,
+                        expression: write.receiver,
+                    },
+                    name,
+                    ValueRef {
+                        function,
+                        expression: write.value,
+                    },
+                    true,
+                );
+            }
+        }
+    }
+    fn field_access(&mut self, base: ValueRef, name: &str, value: ValueRef, store: bool) {
+        if self.limited {
+            return;
+        }
+        if self.field_access_count >= self.limits.max_transfers {
+            self.limit();
+            return;
+        }
+        let next = self.field_names.len() as u32;
+        let member = *self.field_names.entry(name.to_owned()).or_insert(next);
+        let access = FieldAccess {
+            member,
+            value,
+            store,
+        };
+        self.field_access_count += 1;
+        self.field_accesses.entry(base).or_default().push(access);
+        let mut origins: Vec<_> = self
+            .facts
+            .get(&base)
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect();
+        origins.sort_by_key(|o| o.0);
+        for origin in origins {
+            self.bind_field(access, origin)
+        }
+    }
+    fn bind_field(&mut self, access: FieldAccess, object: OriginId) {
+        if !self.step() {
+            return;
+        }
+        let key = (object, access.member);
+        if access.store {
+            if self.field_slot_count >= self.limits.max_transfers {
+                self.limit();
+                return;
+            }
+            if !self
+                .field_stores
+                .entry(key)
+                .or_default()
+                .insert(access.value)
+            {
+                return;
+            }
+            self.field_slot_count += 1;
+            let mut reads: Vec<_> = self
+                .field_loads
+                .get(&key)
+                .into_iter()
+                .flatten()
+                .copied()
+                .collect();
+            reads.sort_by_key(|v| (v.function, v.expression.0));
+            for read in reads {
+                if !self.step() {
+                    break;
+                }
+                self.edge(
+                    access.value,
+                    read,
+                    OriginTransferCause::Field { object, read },
+                );
+            }
+        } else {
+            if self.field_slot_count >= self.limits.max_transfers {
+                self.limit();
+                return;
+            }
+            if !self
+                .field_loads
+                .entry(key)
+                .or_default()
+                .insert(access.value)
+            {
+                return;
+            }
+            self.field_slot_count += 1;
+            let mut writes: Vec<_> = self
+                .field_stores
+                .get(&key)
+                .into_iter()
+                .flatten()
+                .copied()
+                .collect();
+            writes.sort_by_key(|v| (v.function, v.expression.0));
+            for write in writes {
+                if !self.step() {
+                    break;
+                }
+                self.edge(
+                    write,
+                    access.value,
+                    OriginTransferCause::Field {
+                        object,
+                        read: access.value,
+                    },
+                );
+            }
+        }
     }
 }

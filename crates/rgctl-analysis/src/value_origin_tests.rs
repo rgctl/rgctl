@@ -531,3 +531,218 @@ fn input_order_does_not_change_serialized_origin_results() {
         serde_json::to_value(second).unwrap()
     );
 }
+
+#[test]
+fn instance_stores_cross_constructor_and_method_boundaries() {
+    for (language, caller, ctor_name, ctor, run, method) in [
+        (
+            "javascript",
+            "function exercise(){return new Box(new X()).run();}",
+            "constructor",
+            "class Box{constructor(value){this.inner=value;}}",
+            "class Box{run(){return this.inner.execute();}}",
+            "class X{execute(){return 100;}}",
+        ),
+        (
+            "typescript",
+            "function exercise():number{return new Box(new X()).run();}",
+            "constructor",
+            "class Box{constructor(value:Y){this.inner=value;}}",
+            "class Box{run():number{return this.inner.execute();}}",
+            "class X{execute():number{return 100;}}",
+        ),
+        (
+            "python",
+            "def exercise():\n return Box(X()).run()\n",
+            "__init__",
+            "class Box:\n def __init__(self,value):\n  self.inner=value\n",
+            "class Box:\n def run(self):\n  return self.inner.execute()\n",
+            "class X:\n def execute(self):\n  return 100\n",
+        ),
+    ] {
+        let f = Fixture::new(
+            language,
+            &[
+                ("exercise", caller),
+                (ctor_name, ctor),
+                ("run", run),
+                ("execute", method),
+            ],
+        );
+        assert_eq!(f.fixture_cfg(1).operands.field_writes.len(), 1, "{language}");
+        let run = f.target(0, "run", 2, ReceiverSupply::Member);
+        let execute = f.target(2, "execute", 3, ReceiverSupply::Member);
+        let output = OriginAnalysis::build(
+            &f.icfg,
+            &[
+                seed(f.allocation(0, "Box"), 102),
+                seed(f.allocation(0, "X"), 100),
+            ],
+            &[f.target(0, "Box", 1, ReceiverSupply::Constructed)],
+            &[member(run, 102), member(execute, 100)],
+            Default::default(),
+        );
+        assert!(
+            output.receiver_targets.iter().any(|r| r.target == execute),
+            "{language}: {output:?}"
+        );
+        assert!(
+            output
+                .transfers
+                .iter()
+                .any(|e| matches!(e.cause, OriginTransferCause::Field { .. })),
+            "{language}"
+        );
+    }
+}
+
+#[test]
+fn named_fields_do_not_alias_the_container_or_a_different_member() {
+    let f = Fixture::new(
+        "javascript",
+        &[
+            (
+                "exercise",
+                "function exercise(){const box=new Box();box.inner=new X();return box.other.execute();}",
+            ),
+            ("execute", "class X{execute(){return 100;}}"),
+        ],
+    );
+    let execute = f.target(0, "execute", 1, ReceiverSupply::Member);
+    let output = OriginAnalysis::build(
+        &f.icfg,
+        &[
+            seed(f.allocation(0, "Box"), 102),
+            seed(f.allocation(0, "X"), 100),
+        ],
+        &[],
+        &[member(execute, 100)],
+        Default::default(),
+    );
+    assert!(!output.receiver_targets.iter().any(|r| r.target == execute));
+    assert!(
+        !output
+            .origins(f.allocation(0, "Box"))
+            .iter()
+            .any(|o| output.seeds[o.0 as usize].type_id == Uuid::from_u128(100))
+    );
+}
+
+#[test]
+fn field_reassignment_keeps_all_possible_stored_values() {
+    let f = Fixture::new(
+        "javascript",
+        &[
+            (
+                "exercise",
+                "function exercise(){const box=new Box();box.inner=new X();box.inner=new W();return box.inner.execute();}",
+            ),
+            ("execute", "class X{execute(){return 100;}}"),
+            ("execute", "class W{execute(){return 200;}}"),
+        ],
+    );
+    let x = f.target(0, "execute", 1, ReceiverSupply::Member);
+    let w = f.target(0, "execute", 2, ReceiverSupply::Member);
+    let output = OriginAnalysis::build(
+        &f.icfg,
+        &[
+            seed(f.allocation(0, "Box"), 102),
+            seed(f.allocation(0, "X"), 100),
+            seed(f.allocation(0, "W"), 101),
+        ],
+        &[],
+        &[member(x, 100), member(w, 101)],
+        Default::default(),
+    );
+    for target in [x, w] {
+        assert!(
+            output.receiver_targets.iter().any(|r| r.target == target),
+            "{output:?}"
+        );
+    }
+}
+
+#[test]
+fn field_store_references_are_validated_and_persisted() {
+    let f = Fixture::new(
+        "javascript",
+        &[(
+            "exercise",
+            "function exercise(){const box=new Box();box.inner=new X();return box.inner;}",
+        )],
+    );
+    let cfg = f.fixture_cfg(0);
+    let mut restored: ControlFlowGraph =
+        bincode::deserialize(&bincode::serialize(cfg).unwrap()).unwrap();
+    assert_eq!(cfg.operands, restored.operands);
+    restored.operands.field_writes[0].receiver = ExpressionId(u32::MAX);
+    assert!(!restored.operands.valid_references());
+}
+
+#[test]
+fn parameter_properties_and_keyed_struct_values_supply_member_reads() {
+    for (language, caller, middle_name, middle, method, constructed) in [
+        (
+            "typescript",
+            "function exercise(){return new Box(new X()).run();}",
+            "constructor",
+            "class Box{constructor(public inner:Y){} run(){return this.inner.execute();}}",
+            "class X{execute(){return 100;}}",
+            true,
+        ),
+        (
+            "go",
+            "package demo\nfunc exercise()int{return Box{inner:X{}}.Run()}",
+            "unused",
+            "package demo\nfunc unused(){}",
+            "package demo\nfunc(x X)Execute()int{return 100}",
+            false,
+        ),
+    ] {
+        let run_source = if constructed {
+            "class Box{run(){return this.inner.execute();}}"
+        } else {
+            "package demo\nfunc(b Box)Run()int{return b.inner.Execute()}"
+        };
+        let f = Fixture::new(
+            language,
+            &[
+                ("exercise", caller),
+                (middle_name, middle),
+                (if constructed { "run" } else { "Run" }, run_source),
+                (if constructed { "execute" } else { "Execute" }, method),
+            ],
+        );
+        let run = f.target(
+            0,
+            if constructed { "run" } else { "Run" },
+            2,
+            ReceiverSupply::Member,
+        );
+        let execute = f.target(
+            2,
+            if constructed { "execute" } else { "Execute" },
+            3,
+            ReceiverSupply::Member,
+        );
+        let initial = if constructed {
+            vec![f.target(0, "Box", 1, ReceiverSupply::Constructed)]
+        } else {
+            vec![]
+        };
+        let output = OriginAnalysis::build(
+            &f.icfg,
+            &[
+                seed(f.allocation(0, "Box"), 102),
+                seed(f.allocation(0, "X"), 100),
+            ],
+            &initial,
+            &[member(run, 102), member(execute, 100)],
+            Default::default(),
+        );
+        assert!(
+            output.receiver_targets.iter().any(|r| r.target == execute),
+            "{language}: {output:?}"
+        );
+    }
+}

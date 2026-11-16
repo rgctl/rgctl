@@ -3,7 +3,7 @@
 use super::*;
 use crate::language_profile::{canonical_language_id, function_kinds_for};
 use rgctl_error::{Error, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
 const EXPRESSION_DEPTH_LIMIT: usize = 64;
@@ -79,6 +79,7 @@ pub(crate) fn lower_function_operands(
         source,
         names: HashMap::new(),
         expressions: HashMap::new(),
+        field_write_nodes: HashSet::new(),
         nested_kinds: function_kinds_for(canonical)?,
     };
     if function.has_error() {
@@ -125,9 +126,20 @@ pub(crate) fn lower_function_operands(
                 });
             }
         }
-        for (_, value) in local_write_sources(node) {
+        for (target, value) in local_write_sources(node) {
             if let Some(value) = value {
-                lowerer.expression(value, 0)?;
+                let value = lowerer.expression(value, 0)?;
+                if let Some((receiver, member)) = member_parts(target)
+                    && lowerer.field_write_nodes.insert(target.id())
+                {
+                    let receiver = lowerer.expression(receiver, 0)?;
+                    let member = lowerer.node_name(member)?;
+                    lowerer.facts.field_writes.push(FieldWriteFact {
+                        receiver,
+                        member,
+                        value,
+                    });
+                }
             }
         }
         if let Some(condition) = node.child_by_field_name("condition") {
@@ -204,6 +216,7 @@ struct Lowerer<'a> {
     source: &'a [u8],
     names: HashMap<&'a str, OperandNameId>,
     expressions: HashMap<usize, ExpressionId>,
+    field_write_nodes: HashSet<usize>,
     nested_kinds: &'static [&'static str],
 }
 
@@ -634,6 +647,26 @@ impl<'a> Lowerer<'a> {
                 .unwrap_or("")
                 .trim_start_matches('$');
             self.formal(text, Some(name), kind, default)?;
+            // TypeScript constructor parameter properties perform a native
+            // instance-member store even though the body contains no assignment.
+            if self.facts.language == OperandLanguage::TypeScript
+                && param
+                    .children(&mut param.walk())
+                    .any(|n| matches!(n.kind(), "accessibility_modifier" | "readonly"))
+                && let Some(receiver) = self
+                    .facts
+                    .formals
+                    .iter()
+                    .find(|f| f.kind == FormalKind::Receiver)
+                    .map(|f| f.value)
+                && let Some(formal) = self.facts.formals.last()
+            {
+                self.facts.field_writes.push(FieldWriteFact {
+                    receiver,
+                    member: formal.name,
+                    value: formal.value,
+                });
+            }
             if param.kind() == "optional_parameter"
                 && let Some(formal) = self.facts.formals.last_mut()
             {
@@ -719,6 +752,36 @@ impl<'a> Lowerer<'a> {
                 for child in native_operand_children(node) {
                     if child.id() != type_node.id() {
                         inputs.push(self.expression(child, depth + 1)?);
+                    }
+                }
+                if self.facts.language == OperandLanguage::Go
+                    && matches!(
+                        type_node.kind(),
+                        "type_identifier" | "qualified_type" | "generic_type" | "struct_type"
+                    )
+                    && let Some(body) = node.child_by_field_name("body")
+                {
+                    for field in native_operand_children(body)
+                        .into_iter()
+                        .filter(|n| n.kind() == "keyed_element")
+                    {
+                        let key = field
+                            .child_by_field_name("key")
+                            .and_then(|n| n.named_child(0));
+                        let value = field
+                            .child_by_field_name("value")
+                            .and_then(|n| n.named_child(0));
+                        if let (Some(key), Some(value)) = (key, value)
+                            && matches!(key.kind(), "identifier" | "field_identifier")
+                        {
+                            let member = self.node_name(key)?;
+                            let value = self.expression(value, depth + 1)?;
+                            self.facts.field_writes.push(FieldWriteFact {
+                                receiver: id,
+                                member,
+                                value,
+                            });
+                        }
                     }
                 }
                 ExpressionKind::Construction(type_value)

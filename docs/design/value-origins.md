@@ -100,3 +100,30 @@ alias the tuple with its elements or mix different return positions. Missing
 projection consumers remain diagnosed. Type-switch aliases reuse the incoming
 origin within the switch scope. Instance-field and general aggregate storage
 remain separate extensions.
+
+## Named instance-member state
+
+The native operand lowerer now records explicit `FieldWriteFact` values without
+confusing the stored RHS with the receiver object. Reads reuse native `Member`
+operands. Supported writes include explicit assignments, TypeScript constructor
+parameter properties, and named keyed Go struct construction. Constructor
+invocation binding supplies the constructed result to the constructor receiver.
+
+The origin solver joins stores and loads by query-local object origin plus
+member name, then emits `OriginTransferCause::Field` with the object origin and
+exact read. It registers newly loaded functions and replays existing receiver
+origins, and registers new store/load edges regardless of processing order.
+This is flow-insensitive weak-update state: all stores remain possible, including
+stores from merged invocation contexts. It can over-warn and does not prove
+object uniqueness or temporal validity. A stored X does not turn the container
+itself into X, and differently named fields do not automatically alias.
+
+Member-access and slot-entry counts share `max_transfers`, and all generated
+store/load pair processing uses `max_steps`. Exhaustion returns the existing
+limit diagnostic and partial prefix. No whole-repository heap is created.
+
+Implicit/unqualified Java fields, generated dataclass constructors, module
+initialization, descriptors, computed properties, collections and reflective
+state still require their respective facts/models. These tests do not establish
+complete heap, alias or lifecycle semantics. Stored field operands require CFG
+semantics 8 and RBCP v11; previous records are rejected by revision guards.
