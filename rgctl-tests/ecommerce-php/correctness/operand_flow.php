@@ -20,3 +20,7 @@ function operand_callback(callable $callback, $value) { return $callback($value)
 
 function operand_bound(callable $callback, $box, $value) { return $callback($value); }
 class OperandBound { function operand_bound_target($value) { return $value; } }
+
+function operand_yield($value, $terminal) { yield $value; return $terminal; }
+function operand_generator($value, $terminal) { $iterator = operand_yield($value, $terminal); return $iterator->current(); }
+function operand_generator_return($value, $terminal) { $iterator = operand_yield($value, $terminal); $iterator->current(); $iterator->next(); return $iterator->getReturn(); }

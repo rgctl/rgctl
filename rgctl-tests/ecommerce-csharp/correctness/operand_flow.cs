@@ -20,3 +20,13 @@ class OperandBoundCaller { static int operand_bound(System.Func<int,int> callbac
 class OperandBound { int operand_bound_target(int value) { return value; } }
 
 class OperandCallableField { static int operand_callable_field(OperandCallable box, System.Func<int,int> callback, int value) { box.callback = callback; return box.callback(value); } }
+
+class OperandAwait {
+ static async System.Threading.Tasks.Task<object> operand_deferred_source(object value) { return value; }
+ static async System.Threading.Tasks.Task<object> operand_await(object value) { return await operand_deferred_source(value); }
+}
+
+class OperandGenerator {
+ static System.Collections.Generic.IEnumerable<object> operand_yield(object value, object terminal) { yield return value; yield break; }
+ static object operand_generator(object value, object terminal) { var iterator = operand_yield(value, terminal).GetEnumerator(); iterator.MoveNext(); return iterator.Current; }
+}

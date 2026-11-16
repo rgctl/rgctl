@@ -263,6 +263,10 @@ struct CfgSpec {
     exact_edge_kinds: Option<Vec<String>>,
     statements_contain: Option<Vec<String>>,
     operand_formals: Option<usize>,
+    operand_yields: Option<usize>,
+    operand_generator: Option<bool>,
+    operand_awaits: Option<usize>,
+    operand_channel_types: Option<usize>,
     operand_calls: Option<usize>,
     operand_field_writes: Option<usize>,
     operand_element_writes: Option<usize>,
@@ -1932,6 +1936,7 @@ fn check_cfg(sid: &str, cs: &CfgSpec, cfg: &Value) -> Vec<CheckResult> {
         ("formals", cs.operand_formals),
         ("calls", cs.operand_calls),
         ("returns", cs.operand_returns),
+        ("yields", cs.operand_yields),
         ("field_writes", cs.operand_field_writes),
         ("element_writes", cs.operand_element_writes),
     ] {
@@ -1946,6 +1951,41 @@ fn check_cfg(sid: &str, cs: &CfgSpec, cfg: &Value) -> Vec<CheckResult> {
                 sev,
                 actual == Some(expected),
                 format!("{pool}={actual:?} expected={expected}"),
+            ));
+        }
+    }
+    if let Some(expected) = cs.operand_generator {
+        let actual = cfg
+            .get("operands")
+            .and_then(|o| o.get("generator"))
+            .and_then(Value::as_bool);
+        out.push(check(
+            format!("symbol.{sid}.cfg.operand_generator"),
+            sev,
+            actual == Some(expected),
+            format!("generator={actual:?}, expected={expected}"),
+        ));
+    }
+    for (kind, expected) in [
+        ("AwaitedValue", cs.operand_awaits),
+        ("ChannelType", cs.operand_channel_types),
+    ] {
+        if let Some(expected) = expected {
+            let count = cfg
+                .get("operands")
+                .and_then(|o| o.get("expressions"))
+                .and_then(Value::as_array)
+                .map(|expressions| {
+                    expressions
+                        .iter()
+                        .filter(|e| e.get("kind").and_then(Value::as_str) == Some(kind))
+                        .count()
+                });
+            out.push(check(
+                format!("symbol.{sid}.cfg.operand_{kind}"),
+                sev,
+                count == Some(expected),
+                format!("{kind} count={count:?}, expected={expected}"),
             ));
         }
     }

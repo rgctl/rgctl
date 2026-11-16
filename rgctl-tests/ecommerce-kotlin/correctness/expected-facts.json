@@ -39,6 +39,32 @@
   ]
   },
   "symbols": {
+    "operand_await": {
+      "match": {
+        "name": "operand_await"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_calls": 1,
+        "operand_returns": 1,
+        "operand_awaits": 0,
+        "operand_generator": false
+      }
+    },
+    "operand_deferred_source": {
+      "match": {
+        "name": "operand_deferred_source"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_returns": 1,
+        "operand_generator": false
+      }
+    },
     "operand_callback": {
       "match": {
         "name": "operand_callback"

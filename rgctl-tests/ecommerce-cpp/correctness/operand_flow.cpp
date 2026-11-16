@@ -15,3 +15,9 @@ int operand_callback(int (*callback)(int), int value) { return callback(value); 
 
 int operand_bound(Callback callback, OperandSelf box, int value) { return callback(value); }
 class OperandBound { public: int operand_bound_target(int value) { return value; } };
+
+DeferredTask operand_deferred_source(Item value) { co_return value; }
+DeferredTask operand_await(Item value) { co_return co_await operand_deferred_source(value); }
+
+Generator operand_yield(Item value, Item terminal) { co_yield value; co_return terminal; }
+Generator operand_generator(Item value, Item terminal) { return operand_yield(value, terminal); }

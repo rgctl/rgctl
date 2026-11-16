@@ -20,6 +20,8 @@ mod tests;
 
 #[path = "callable_origins.rs"]
 mod callable_origins;
+#[path = "deferred_origins.rs"]
+mod deferred_origins;
 use callable_origins::CallableState;
 pub use callable_origins::{CallableCandidate, CallableValue, OriginRequirement};
 
@@ -64,6 +66,20 @@ pub struct ReceiverTarget {
 pub enum OriginTransferCause {
     /// Native scoped local transfer.
     Local(LocalTransferKind),
+    /// A modeled deferred runner exposes the possible result of its argument.
+    DeferredCall {
+        /// Exact native runner invocation; builtin source spelling is conservative.
+        call: CallRef,
+    },
+    /// A supported iterator reader exposes a yielded or terminal value.
+    DeferredYield {
+        /// Opaque source generator identity, distinct from yielded values.
+        container: OriginId,
+        /// Exact native reader expression.
+        read: ValueRef,
+        /// This value came from terminal return, rather than an explicit yield.
+        terminal: bool,
+    },
     /// A possible stored element reaches an indexed read on the same aggregate.
     Element {
         /// Opaque aggregate or object origin, distinct from the stored value.
@@ -337,6 +353,7 @@ struct Query<'a, C: InterproceduralCfgAccess + ?Sized> {
     queue: VecDeque<(ValueRef, OriginId)>,
     seed_ids: HashMap<OriginSeed, OriginId>,
     callables: CallableState,
+    deferred: deferred_origins::DeferredState,
     field_names: HashMap<String, u32>,
     field_accesses: HashMap<ValueRef, Vec<FieldAccess>>,
     field_stores: HashMap<(OriginId, MemoryMember), HashSet<ValueRef>>,
@@ -376,6 +393,7 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
             queue: VecDeque::new(),
             seed_ids: HashMap::new(),
             callables: CallableState::default(),
+            deferred: deferred_origins::DeferredState::default(),
             field_names: HashMap::new(),
             field_accesses: HashMap::new(),
             field_stores: HashMap::new(),
@@ -492,6 +510,10 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
         }
         self.register_callable_calls(function);
         self.register_fields(function);
+        self.register_deferred(function);
+        if self.limited {
+            return;
+        }
         let Ok(pdg) = ProgramDependenceGraph::build(cfg, b"") else {
             self.diagnostic(OriginDiagnostic::MissingFunction(function));
             return;
@@ -609,6 +631,7 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
         if self.limited {
             return;
         }
+        self.bind_yields(target);
         let Ok(binding) = self.bindings.bind_invocation(target) else {
             self.diagnostic(OriginDiagnostic::BindingError(target));
             return;
@@ -626,6 +649,10 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
         for diagnostic in diagnostics {
             self.diagnostic(OriginDiagnostic::Binding { target, diagnostic });
         }
+        let generator = self
+            .icfg
+            .get_cfg(target.callee)
+            .is_some_and(|cfg| cfg.operands.generator);
         let scalar_return = self
             .icfg
             .get_cfg(target.callee)
@@ -633,6 +660,9 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
         for transfer in transfers {
             if !self.step() {
                 break;
+            }
+            if generator && matches!(transfer.kind, TransferKind::ReturnToResult { .. }) {
+                continue;
             }
             if let TransferKind::ReturnToResult { position } = transfer.kind
                 && !scalar_return
@@ -729,6 +759,7 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
                 }
                 self.fact(to, origin);
             }
+            self.deferred_fact(value, origin);
             self.callable_fact(value, origin);
             let accesses = self.field_accesses.get(&value).cloned().unwrap_or_default();
             for access in accesses {
@@ -830,6 +861,8 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
 enum MemoryMember {
     Field(u32),
     Element,
+    Yielded,
+    GeneratorReturn,
 }
 #[derive(Debug, Clone, Copy)]
 struct FieldAccess {
@@ -1033,6 +1066,13 @@ impl<C: InterproceduralCfgAccess + ?Sized> Query<'_, C> {
                     access.value,
                     read,
                     match access.member {
+                        MemoryMember::Yielded | MemoryMember::GeneratorReturn => {
+                            OriginTransferCause::DeferredYield {
+                                container: object,
+                                read,
+                                terminal: access.member == MemoryMember::GeneratorReturn,
+                            }
+                        }
                         MemoryMember::Field(_) => OriginTransferCause::Field { object, read },
                         MemoryMember::Element => OriginTransferCause::Element {
                             container: object,
@@ -1071,6 +1111,13 @@ impl<C: InterproceduralCfgAccess + ?Sized> Query<'_, C> {
                     write,
                     access.value,
                     match access.member {
+                        MemoryMember::Yielded | MemoryMember::GeneratorReturn => {
+                            OriginTransferCause::DeferredYield {
+                                container: object,
+                                read: access.value,
+                                terminal: access.member == MemoryMember::GeneratorReturn,
+                            }
+                        }
                         MemoryMember::Field(_) => OriginTransferCause::Field {
                             object,
                             read: access.value,

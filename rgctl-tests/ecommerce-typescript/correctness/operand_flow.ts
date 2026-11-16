@@ -25,3 +25,9 @@ function operand_callable_field(box: {callback: (value: number) => number}, call
 
 function operand_apply(callback: any, value: any) { return callback.apply(null, [value]); }
 function operand_partial_bind(callback: any, value: any) { return callback.bind(null, value)(); }
+
+async function operand_deferred_source(value: object): Promise<object> { return value; }
+async function operand_await(value: object): Promise<object> { return await operand_deferred_source(value); }
+
+function* operand_yield(value: object, terminal: object): Generator<object, object, unknown> { yield value; return terminal; }
+function operand_generator(value: object, terminal: object): object { const iterator = operand_yield(value, terminal); const step = iterator.next(); return step.value; }

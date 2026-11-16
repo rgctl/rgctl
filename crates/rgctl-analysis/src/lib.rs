@@ -310,4 +310,6 @@ pub use wl_hash::{CanonicalEdgeTag, CanonicalStatementKind, WeisfeilerLehmanHash
 pub mod value_origins;
 
 #[cfg(test)]
+mod tier1_deferred_tests;
+#[cfg(test)]
 mod tier1_operand_tests;

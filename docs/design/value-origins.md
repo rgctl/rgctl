@@ -152,7 +152,7 @@ memory-access, slot and work budgets. Indexed assignment reads the container and
 selector rather than defining a new container variable; native def/use lowering
 now preserves that distinction for supported indexed forms.
 
-Persisted aggregate operands require CFG semantics 9 and RBCP v12. Contexts and
+Persisted aggregate operands require CFG semantics 11 and RBCP v14. Contexts and
 keys merge; no precise index exclusion, complete container API semantics,
 iteration, comprehension, or mutation-order proof is claimed.
 
@@ -247,3 +247,60 @@ Callable/type prerequisites must actually reach their source value. Supplying an
 unsatisfied prerequisite cannot activate a call. Direct callable loads from a
 member are now memory reads even when that member is the invocation selector.
 The existing merged contexts, keys and bounded-work diagnostics still apply.
+
+## Explicit deferred values
+
+Native `AwaitedValue` operands preserve possible resolved origins on a successful
+await. Canonical argument/return bindings compose asynchronous factory returns
+with the await reader; no source-text or global method-name joins are introduced.
+This is a resolved-value abstraction: it does not establish precise coroutine or
+promise object identity before awaiting, nor prove execution or scheduling.
+
+Native generators carry a `generator` role and explicit `yields` values. Binding
+a generator introduces an opaque invocation-result identity. Yielded elements and
+terminal returns have separate query-local slots. Ordinary return transfers do
+not type the generator itself as either value. `DeferredYield` provenance records
+which slot supplied an exact read, including whether it was a terminal result.
+Iterator-result and enumerator carriers also keep opaque identities. Existing
+weak updates, merged contexts and bounded memory/work budgets still apply.
+
+### Tier 1 coverage
+
+Canonical `correctness/operand_flow.*` fixtures and
+`tests/fixtures/native_deferred_cases.json` enumerate all 20 procedural languages:
+
+- Native await/co-await: C++, C#, JavaScript, TypeScript, Python, Rust, Swift,
+  and Dart. Dart's grouping node preserves its inner await. Kotlin suspend calls
+  already use ordinary canonical argument/return bindings and have an equivalent
+  compatibility fixture rather than an invented await keyword.
+- Generator producer facts: C++, C#, JavaScript, TypeScript, Python, PHP, and
+  Dart, including native generator declarations in the ECMA CFG inventory.
+- Readers: Python `next`/`anext` and iterator methods; PHP `current`/`getReturn`;
+  ECMA `next().value` including aliases of the iterator result; C# enumerator
+  `Current`; Dart iterable `iterator.current`. ECMA iterator values conservatively
+  include terminal returns when `done` may be true. Python/PHP current-element
+  readers do not receive terminal returns. C++ custom promise/iterator reader
+  protocols require their own models; this slice exposes co-yield facts and an
+  opaque factory result without assuming a library ABI.
+- Python `asyncio.run` exposes possible resolved origins. Go native channel
+  construction, sends, receives, cross-function handoffs and comma-ok result
+  position zero use element storage. The Boolean status never receives the
+  element origin. Distinct channel allocation sites retain separate slots.
+
+The manifest explicitly marks languages without native await/generator syntax or
+without a modeled reader. Java/Groovy/Scala future libraries, Ruby block/Fiber
+protocols, Lua coroutines, Elixir mailboxes, and shell stream/job behavior are not
+inferred from unrelated method names. SQL/HCL and ERB/Markdown retain the existing
+declarative/non-procedural boundary.
+
+Library conventions are language/source-spelling premises, not proof of an
+unshadowed or unmodified builtin; unresolved call/binding evidence remains visible.
+Delegating yields retain a generator role and an explicit `ReturnConvention`
+diagnostic, preventing terminal values from leaking into the opaque generator.
+Resume arguments, arbitrary awaitable transformations, event loops, stream APIs,
+channel iteration/close semantics, delivery order, termination and race freedom
+need further models. Empty or partial results must not establish no impact.
+
+New persisted roles and operands use CFG semantics 11 and RBCP v14. Capture
+reuses the current native tree and worker pipeline; query extensions remain lazy
+and bounded rather than constructing a whole-repository heap.

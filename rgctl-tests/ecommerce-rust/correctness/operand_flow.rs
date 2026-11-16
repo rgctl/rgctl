@@ -12,3 +12,6 @@ fn operand_callback(callback: fn(i32) -> i32, value: i32) -> i32 { return callba
 
 fn operand_bound(callback: impl Fn(i32) -> i32, box_value: OperandBound, value: i32) -> i32 { return callback(value); }
 impl OperandBound { fn operand_bound_target(&self, value: i32) -> i32 { return value; } }
+
+async fn operand_deferred_source(value: Item) -> Item { return value; }
+async fn operand_await(value: Item) -> Item { return operand_deferred_source(value).await; }

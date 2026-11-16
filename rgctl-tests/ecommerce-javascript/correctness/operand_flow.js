@@ -25,3 +25,14 @@ function operand_callable_field(box, callback, value) { box.callback = callback;
 
 function operand_apply(callback, value) { return callback.apply(null, [value]); }
 function operand_partial_bind(callback, value) { return callback.bind(null, value)(); }
+
+async function operand_deferred_source(value) { return value; }
+async function operand_await(value) { return await operand_deferred_source(value); }
+
+function* operand_yield(value, terminal) { yield value; return terminal; }
+function operand_generator(value, terminal) { const iterator = operand_yield(value, terminal); const step = iterator.next(); return step.value; }
+
+function* operand_empty_generator(terminal) { return terminal; }
+function operand_empty_factory(terminal) { return operand_empty_generator(terminal); }
+function* operand_delegated(value, terminal) { yield* [value]; return terminal; }
+function operand_delegated_factory(value, terminal) { return operand_delegated(value, terminal); }

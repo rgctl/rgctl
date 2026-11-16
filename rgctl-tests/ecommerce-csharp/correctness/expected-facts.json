@@ -34,6 +34,57 @@
     ]
   },
   "symbols": {
+    "operand_await": {
+      "match": {
+        "name": "operand_await"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_calls": 1,
+        "operand_returns": 1,
+        "operand_awaits": 1,
+        "operand_generator": false
+      }
+    },
+    "operand_deferred_source": {
+      "match": {
+        "name": "operand_deferred_source"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_returns": 1,
+        "operand_generator": false
+      }
+    },
+    "operand_yield": {
+      "match": {
+        "name": "operand_yield"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_yields": 1,
+        "operand_generator": true,
+        "operand_returns": 0
+      }
+    },
+    "operand_generator": {
+      "match": {
+        "name": "operand_generator"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_returns": 1,
+        "operand_generator": false
+      }
+    },
     "operand_callback": {
       "match": {
         "name": "operand_callback"

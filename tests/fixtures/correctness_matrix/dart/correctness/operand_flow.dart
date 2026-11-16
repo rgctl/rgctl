@@ -15,3 +15,12 @@ int operand_callback(int Function(int) callback, int value) { return callback(va
 
 int operand_bound(int Function(int) callback, OperandBound box, int value) { return callback(value); }
 class OperandBound { int operand_bound_target(int value) { return value; } }
+
+Future<Object> operand_deferred_source(Object value) async { return value; }
+Future<Object> operand_await(Object value) async { return await operand_deferred_source(value); }
+
+Iterable<Object> operand_yield(Object value, Object terminal) sync* { yield value; }
+Object operand_generator(Object value, Object terminal) { final iterator = operand_yield(value, terminal).iterator; iterator.moveNext(); return iterator.current; }
+
+Iterable<Object> operand_empty_generator(Object terminal) sync* { return; }
+Object operand_empty_factory(Object terminal) { return operand_empty_generator(terminal); }

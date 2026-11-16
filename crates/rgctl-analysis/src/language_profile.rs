@@ -94,6 +94,8 @@ const PROFILES: &[LanguageAnalysisProfile] = &[
         function_kinds: &[
             "function_declaration",
             "function_expression",
+            "generator_function_declaration",
+            "generator_function",
             "method_definition",
             "arrow_function",
         ],
@@ -107,6 +109,8 @@ const PROFILES: &[LanguageAnalysisProfile] = &[
         function_kinds: &[
             "function_declaration",
             "function_expression",
+            "generator_function_declaration",
+            "generator_function",
             "method_definition",
             "arrow_function",
         ],

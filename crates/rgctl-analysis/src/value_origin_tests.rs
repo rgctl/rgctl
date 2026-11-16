@@ -1064,3 +1064,97 @@ fn canonical_function_values_need_no_nominal_type_to_activate_indirect_calls() {
         "{output:?}"
     );
 }
+
+#[test]
+fn explicit_generator_values_reach_next_results() {
+    let f = Fixture::new(
+        "python",
+        &[
+            (
+                "exercise",
+                "def exercise():\n value=next(values())\n return value.execute()\n",
+            ),
+            ("values", "def values():\n yield X()\n"),
+            ("execute", "class X:\n def execute(self):\n  return 100\n"),
+        ],
+    );
+    let target = f.target(0, "execute", 2, ReceiverSupply::Member);
+    let output = OriginAnalysis::build(
+        &f.icfg,
+        &[seed(f.allocation(1, "X"), 100)],
+        &[f.target(0, "values", 1, ReceiverSupply::None)],
+        &[member(target, 100)],
+        Default::default(),
+    );
+    assert!(
+        output.receiver_targets.iter().any(|r| r.target == target),
+        "{output:?}"
+    );
+    assert_eq!(f.fixture_cfg(1).operands.yields.len(), 1);
+}
+
+#[test]
+fn possible_resolved_values_cross_await_and_asyncio_run() {
+    for caller in [
+        "async def exercise():\n value=await make()\n return value.execute()\n",
+        "def exercise():\n value=asyncio.run(make())\n return value.execute()\n",
+    ] {
+        let f = Fixture::new(
+            "python",
+            &[
+                ("exercise", caller),
+                ("make", "async def make():\n return X()\n"),
+                ("execute", "class X:\n def execute(self):\n  return 100\n"),
+            ],
+        );
+        let target = f.target(0, "execute", 2, ReceiverSupply::Member);
+        let output = OriginAnalysis::build(
+            &f.icfg,
+            &[seed(f.allocation(1, "X"), 100)],
+            &[f.target(0, "make", 1, ReceiverSupply::None)],
+            &[member(target, 100)],
+            Default::default(),
+        );
+        assert!(
+            output.receiver_targets.iter().any(|r| r.target == target),
+            "{caller}: {output:?}"
+        );
+    }
+}
+
+#[test]
+fn go_channel_sends_reach_received_values_without_typing_the_channel_as_an_element() {
+    let f = Fixture::new(
+        "go",
+        &[
+            (
+                "exercise",
+                "package demo\nfunc exercise()int{values:=make(chan Y,1);values<-X{};value:=<-values;return value.Execute()}",
+            ),
+            ("Execute", "package demo\nfunc(x X)Execute()int{return 100}"),
+        ],
+    );
+    let target = f.target(0, "Execute", 1, ReceiverSupply::Member);
+    let output = OriginAnalysis::build(
+        &f.icfg,
+        &[seed(f.allocation(0, "X"), 100)],
+        &[],
+        &[member(target, 100)],
+        Default::default(),
+    );
+    assert!(
+        output.receiver_targets.iter().any(|r| r.target == target),
+        "{output:?}"
+    );
+    let make = f.call(0, "make");
+    let result = f.fixture_cfg(0).operands.calls[make.site.0 as usize].result;
+    assert!(
+        output
+            .origins(ValueRef {
+                function: f.ids[0],
+                expression: result
+            })
+            .iter()
+            .all(|o| output.seeds[o.0 as usize].type_id.is_none())
+    );
+}

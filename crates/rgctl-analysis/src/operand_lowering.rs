@@ -82,6 +82,26 @@ pub(crate) fn lower_function_operands(
         field_write_nodes: HashSet::new(),
         nested_kinds: function_kinds_for(canonical)?,
     };
+    if matches!(
+        language,
+        OperandLanguage::JavaScript | OperandLanguage::TypeScript
+    ) && (matches!(
+        function.kind(),
+        "generator_function_declaration" | "generator_function"
+    ) || function
+        .children(&mut function.walk())
+        .any(|n| n.kind() == "*"))
+    {
+        lowerer.facts.generator = true;
+    }
+    if language == OperandLanguage::Dart
+        && function.child_by_field_name("body").is_some_and(|body| {
+            body.children(&mut body.walk())
+                .any(|n| matches!(n.kind(), "sync*" | "async*"))
+        })
+    {
+        lowerer.facts.generator = true;
+    }
     if function.has_error() {
         lowerer.diagnostic(function, OperandDiagnosticKind::MalformedSyntax)?;
     }
@@ -104,7 +124,11 @@ pub(crate) fn lower_function_operands(
             && left.named_child_count() > 1
             && right.named_child_count() == 1
             && let Some(rhs) = right.named_child(0)
-            && matches!(rhs.kind(), "call_expression" | "type_assertion_expression")
+            && (matches!(rhs.kind(), "call_expression" | "type_assertion_expression")
+                || (rhs.kind() == "unary_expression"
+                    && rhs
+                        .child_by_field_name("operator")
+                        .is_some_and(|n| n.kind() == "<-")))
         {
             let source = lowerer.expression(rhs, 0)?;
             for (position, target) in native_operand_children(left).into_iter().enumerate() {
@@ -148,6 +172,67 @@ pub(crate) fn lower_function_operands(
                 }
             }
         }
+        if language == OperandLanguage::Go
+            && node.kind() == "send_statement"
+            && let (Some(channel), Some(value)) = (
+                node.child_by_field_name("channel"),
+                node.child_by_field_name("value"),
+            )
+        {
+            let container = lowerer.expression(channel, 0)?;
+            let value = lowerer.expression(value, 0)?;
+            lowerer
+                .facts
+                .element_writes
+                .push(ElementWriteFact { container, value });
+        }
+        let native_yield = matches!(
+            (language, node.kind()),
+            (OperandLanguage::Python, "yield")
+                | (
+                    OperandLanguage::JavaScript | OperandLanguage::TypeScript,
+                    "yield_expression"
+                )
+                | (
+                    OperandLanguage::Php,
+                    "yield_expression" | "yield_from_expression"
+                )
+                | (OperandLanguage::CSharp, "yield_statement")
+                | (
+                    OperandLanguage::Dart,
+                    "yield_statement" | "yield_each_statement"
+                )
+                | (
+                    OperandLanguage::Cpp,
+                    "co_yield_statement" | "co_yield_expression"
+                )
+        );
+        if native_yield {
+            lowerer.facts.generator = true;
+            let delegated = matches!(
+                node.kind(),
+                "yield_from_expression" | "yield_each_statement"
+            ) || node
+                .children(&mut node.walk())
+                .any(|n| matches!(n.kind(), "from" | "*"));
+            if delegated {
+                lowerer.diagnostic(node, OperandDiagnosticKind::ReturnConvention)?;
+            } else if let Some(value) = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("argument"))
+                .or_else(|| node.named_child(0))
+            {
+                let value = if value.kind() == "array_element_initializer" {
+                    value
+                        .named_child(value.named_child_count().saturating_sub(1))
+                        .unwrap_or(value)
+                } else {
+                    value
+                };
+                let value = lowerer.expression(value, 0)?;
+                lowerer.facts.yields.push(value);
+            }
+        }
         if let Some(condition) = node.child_by_field_name("condition") {
             lowerer.expression(condition, 0)?;
         }
@@ -165,7 +250,7 @@ pub(crate) fn lower_function_operands(
             | "new_expression" => {
                 lowerer.expression(node, 0)?;
             }
-            "return_statement" | "return_expression" | "return" => {
+            "return_statement" | "return_expression" | "return" | "co_return_statement" => {
                 lowerer.return_site(node, false)?
             }
             "control_transfer_statement" if node.child_by_field_name("result").is_some() => {
@@ -762,6 +847,43 @@ impl<'a> Lowerer<'a> {
         Ok(None)
     }
 
+    // Keep deferred traversal state outside the main recursive expression frame;
+    // common call chains must continue to fit on a 2 MiB worker stack.
+    fn deferred_operand_kind(
+        &mut self,
+        node: Node<'_>,
+        depth: usize,
+        inputs: &mut smallvec::SmallVec<[ExpressionId; 4]>,
+    ) -> Result<Option<ExpressionKind>> {
+        if matches!(
+            node.kind(),
+            "await" | "await_expression" | "co_await_expression"
+        ) {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() != "comment" {
+                    inputs.push(self.expression(child, depth + 1)?);
+                }
+            }
+            return Ok(Some(ExpressionKind::AwaitedValue));
+        }
+        if self.facts.language == OperandLanguage::Go {
+            if node.kind() == "channel_type" {
+                return Ok(Some(ExpressionKind::ChannelType));
+            }
+            if node.kind() == "unary_expression"
+                && node
+                    .child_by_field_name("operator")
+                    .is_some_and(|n| n.kind() == "<-")
+                && let Some(value) = node.child_by_field_name("operand")
+            {
+                inputs.push(self.expression(value, depth + 1)?);
+                return Ok(Some(ExpressionKind::Element));
+            }
+        }
+        Ok(None)
+    }
+
     fn expression(&mut self, node: Node<'_>, depth: usize) -> Result<ExpressionId> {
         if let Some(&id) = self.expressions.get(&node.id()) {
             return Ok(id);
@@ -782,6 +904,8 @@ impl<'a> Lowerer<'a> {
         let expression_kind = if self.is_callable_boundary(node) {
             self.diagnostic(node, OperandDiagnosticKind::NestedCallable)?;
             ExpressionKind::Unknown
+        } else if let Some(kind) = self.deferred_operand_kind(node, depth, &mut inputs)? {
+            kind
         } else if let Some(base) = native_element_base(node) {
             inputs.push(self.expression(base, depth + 1)?);
             for child in native_operand_children(node)
@@ -996,7 +1120,13 @@ impl<'a> Lowerer<'a> {
             for child in native_operand_children(node) {
                 inputs.push(self.expression(child, depth + 1)?);
             }
-            if kind == "parenthesized_expression"
+            if (self.facts.language == OperandLanguage::Dart
+                && kind == "unary_expression"
+                && node.child_count() == 1
+                && node
+                    .named_child(0)
+                    .is_some_and(|n| n.kind() == "await_expression"))
+                || kind == "parenthesized_expression"
                 || (self.facts.language == OperandLanguage::Elixir
                     && kind == "dot"
                     && native_operand_children(node).len() == 1)
@@ -1070,6 +1200,20 @@ impl<'a> Lowerer<'a> {
                 result
             }
         };
+        let range = self.lower_call_arguments(node, depth)?;
+        self.facts.calls[id.0 as usize] = CallSiteFact {
+            span: native_operand_span(node)?,
+            callee,
+            receiver,
+            arguments: range,
+            result,
+            kind,
+        };
+        Ok(id)
+    }
+
+    // Keep argument buffers off the recursive callee/receiver traversal frame.
+    fn lower_call_arguments(&mut self, node: Node<'_>, depth: usize) -> Result<OperandRange> {
         // Collect locally, then append after nested invocations have populated
         // their own argument ranges. Parent arguments stay contiguous.
         let mut arguments = smallvec::SmallVec::<[ArgumentFact; 4]>::new();
@@ -1143,15 +1287,7 @@ impl<'a> Lowerer<'a> {
             len: checked_operand_index(arguments.len())?,
         };
         self.facts.arguments.extend(arguments);
-        self.facts.calls[id.0 as usize] = CallSiteFact {
-            span: native_operand_span(node)?,
-            callee,
-            receiver,
-            arguments: range,
-            result,
-            kind,
-        };
-        Ok(id)
+        Ok(range)
     }
 
     fn return_site(&mut self, node: Node<'_>, implicit: bool) -> Result<()> {

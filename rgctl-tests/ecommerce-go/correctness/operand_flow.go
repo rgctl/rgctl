@@ -34,3 +34,8 @@ func operand_bound(callback func(int) int, box OperandBound, value int) int { re
 func(box OperandBound) operand_bound_target(value int) int { return value }
 
 func operand_callable_field(box OperandCallable, callback func(int) int, value int) int { box.Callback = callback; return box.Callback(value) }
+
+func operand_channel_send(ch chan any, value any) { ch <- value }
+func operand_channel(value any) any { ch := make(chan any, 1); go operand_channel_send(ch, value); selected, ok := <-ch; if ok { return selected }; return nil }
+
+func operand_channel_isolation(value any, other any) any { left := make(chan any, 1); right := make(chan any, 1); left <- value; right <- other; return <-left }

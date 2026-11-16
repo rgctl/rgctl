@@ -35,3 +35,28 @@ class OperandBound:
 def operand_callable_field(box, callback, value):
  box.callback = callback
  return box.callback(value)
+
+async def operand_deferred_source(value):
+ return value
+async def operand_await(value):
+ return await operand_deferred_source(value)
+def operand_deferred_runner(value):
+ return asyncio.run(operand_deferred_source(value))
+
+def operand_yield(value, terminal):
+ yield value
+ return terminal
+def operand_generator(value, terminal):
+ iterator = operand_yield(value, terminal)
+ return next(iterator)
+async def operand_async_yield(value):
+ yield value
+async def operand_async_generator(value):
+ return await anext(operand_async_yield(value))
+def operand_delegated(value, terminal):
+ yield from [value]
+ return terminal
+def operand_delegated_factory(value, terminal):
+ return operand_delegated(value, terminal)
+def operand_not_generator(value):
+ return next([value])

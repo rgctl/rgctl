@@ -310,6 +310,42 @@
     ]
   },
   "symbols": {
+    "operand_channel": {
+      "match": {
+        "name": "operand_channel"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_returns": 2,
+        "operand_channel_types": 1,
+        "operand_generator": false
+      }
+    },
+    "operand_channel_send": {
+      "match": {
+        "name": "operand_channel_send"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_element_writes": 1
+      }
+    },
+    "operand_channel_isolation": {
+      "match": {
+        "name": "operand_channel_isolation"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_element_writes": 2,
+        "operand_channel_types": 2
+      }
+    },
     "operand_callback": {
       "match": {
         "name": "operand_callback"

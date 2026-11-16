@@ -19,3 +19,6 @@ func operand_callback(_ callback: (Int) -> Int, _ value: Int) -> Int { return ca
 
 func operand_bound(_ callback: (Int) -> Int, _ box: OperandBound, _ value: Int) -> Int { return callback(value) }
 class OperandBound { func operand_bound_target(_ value: Int) -> Int { return value } }
+
+func operand_deferred_source(_ value: Item) async -> Item { return value }
+func operand_await(_ value: Item) async -> Item { return await operand_deferred_source(value) }

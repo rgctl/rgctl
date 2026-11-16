@@ -23,3 +23,6 @@ fun operand_bound(callback: (Int) -> Int, box: OperandBound, value: Int): Int { 
 class OperandBound { fun operand_bound_target(value: Int): Int { return value } }
 
 fun operand_callable_field(box: OperandCallable, callback: (Int) -> Int, value: Int): Int { box.callback = callback; return box.callback(value) }
+
+suspend fun operand_deferred_source(value: Any): Any { return value }
+suspend fun operand_await(value: Any): Any { return operand_deferred_source(value) }
