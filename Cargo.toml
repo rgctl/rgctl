@@ -596,6 +596,10 @@ name = "docs_guides_cli_fact_check"
 path = "tests/docs_guides_cli_fact_check.rs"
 
 [[test]]
+name = "dead_code"
+path = "tests/dead_code.rs"
+
+[[test]]
 name = "mainframe_plugins_correctness"
 path = "tests/mainframe_plugins_correctness.rs"
 

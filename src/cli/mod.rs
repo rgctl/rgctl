@@ -11,6 +11,8 @@ mod communities;
 mod completions;
 mod context;
 mod cpg;
+mod dead_code;
+pub mod dead_code_output;
 mod diff;
 mod discover;
 mod discover_cfg;
@@ -654,6 +656,30 @@ pub enum Commands {
         /// Expand criterion via intra-procedural may-alias heuristics (copies / field bases)
         #[arg(long = "with-alias")]
         with_alias: bool,
+    },
+
+    /// Dead-code detection via graph reachability analysis
+    #[command(display_order = 19, name = "dead-code")]
+    DeadCode {
+        /// Filter by confidence level (high, medium, low; comma-separated)
+        #[arg(long = "confidence", value_name = "LEVEL")]
+        confidence: Option<String>,
+
+        /// Entry-point patterns (name, qualified_name, or file glob; repeatable)
+        #[arg(long = "entry-point", value_name = "PATTERN", action = clap::ArgAction::Append)]
+        entry_points: Vec<String>,
+
+        /// Exclude patterns (path or name substring; repeatable)
+        #[arg(long = "exclude", short = 'e', value_name = "PATTERN", action = clap::ArgAction::Append)]
+        exclude: Vec<String>,
+
+        /// Include test symbols in the analysis
+        #[arg(long = "include-tests")]
+        include_tests: bool,
+
+        /// Max findings to report
+        #[arg(long = "limit", value_name = "N")]
+        limit: Option<usize>,
     },
 
     /// Macro impact / blast radius for a symbol
@@ -1842,6 +1868,22 @@ impl Cli {
                     with_alias,
                 },
             ),
+            Commands::DeadCode {
+                confidence,
+                entry_points,
+                exclude,
+                include_tests,
+                limit,
+            } => dead_code::run(
+                &ctx,
+                dead_code::DeadCodeArgs {
+                    confidence,
+                    entry_points,
+                    exclude,
+                    include_tests,
+                    limit,
+                },
+            ),
             Commands::BlastRadius {
                 symbol,
                 depth,
@@ -2748,6 +2790,7 @@ fn command_label_for(command: &Commands) -> &'static str {
             QueryCommands::Inventory { .. } => "query inventory",
         },
         Commands::Slice { .. } => "slice",
+        Commands::DeadCode { .. } => "dead-code",
         Commands::BlastRadius { .. } => "blast-radius",
         Commands::Taint { .. } => "taint",
         Commands::Inspect { .. } => "inspect",

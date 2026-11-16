@@ -117,6 +117,11 @@ run_rgctl_commands_suite() {
     "communities list" \
     communities list
 
+  # dead-code — graph reachability analysis
+  assert_rgctl_json_cmd "dead-code" "$repo" \
+    "dead-code" \
+    dead-code
+
   # inspect — CFG / PDG / dominance for a function symbol
   for mode in cfg pdg dom; do
     assert_rgctl_json_cmd "inspect ${mode} (${RGCTL_CMD_INSPECT_FN})" "$repo" \

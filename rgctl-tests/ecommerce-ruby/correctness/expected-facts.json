@@ -278,6 +278,30 @@
       }
     }
   },
+  "dead_code": {
+    "severity": "required",
+    "entry_point": "correctness_root",
+    "reachable_with_entry_point": ["correctness_root", "correctness_mid", "correctness_leaf"],
+    "must_contain": [
+      {
+        "name": "correctness_root",
+        "kind": "unreferenced_function",
+        "confidence": "high",
+        "file": "correctness_harness.rb"
+      },
+      {
+        "name": "correctness_diamond",
+        "kind": "unreferenced_function",
+        "confidence": "high"
+      }
+    ],
+    "must_not_contain": [
+      "build",
+      "process",
+      "correctness_mid",
+      "correctness_leaf"
+    ]
+  },
   "invariants": {
     "B1_blast_vs_calls": {
       "enabled": true,

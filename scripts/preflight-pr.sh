@@ -518,6 +518,7 @@ if [[ "$RUN_TEST" -eq 1 ]]; then
   run_cargo_tests_parallel debug --features "${FEATURES}" \
     --workspace \
     --test cli_output \
+    --test all_commands_sanity \
     --test single_pass_complexity_parity \
     --test slicing \
     --test taint_analysis \
