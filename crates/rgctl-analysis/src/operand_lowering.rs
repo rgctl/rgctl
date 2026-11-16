@@ -83,6 +83,40 @@ pub(crate) fn lower_function_operands(
             lowerer.diagnostic(node, OperandDiagnosticKind::NestedCallable)?;
             continue;
         }
+        if language == OperandLanguage::Go
+            && matches!(
+                node.kind(),
+                "short_var_declaration" | "assignment_statement"
+            )
+            && let (Some(left), Some(right)) = (
+                node.child_by_field_name("left"),
+                node.child_by_field_name("right"),
+            )
+            && left.named_child_count() > 1
+            && right.named_child_count() == 1
+            && let Some(rhs) = right.named_child(0)
+            && matches!(rhs.kind(), "call_expression" | "type_assertion_expression")
+        {
+            let source = lowerer.expression(rhs, 0)?;
+            for (position, target) in children(left).into_iter().enumerate() {
+                if target.kind() != "identifier" {
+                    continue;
+                }
+                let value = ExpressionId(index(lowerer.facts.expressions.len())?);
+                let inputs = lowerer.inputs(&[source])?;
+                lowerer.facts.expressions.push(ExpressionFact {
+                    span: Some(span(target)?),
+                    kind: ExpressionKind::Projection {
+                        position: index(position)?,
+                    },
+                    inputs,
+                });
+                lowerer.facts.assignment_values.push(AssignmentValueFact {
+                    target: span(target)?,
+                    value,
+                });
+            }
+        }
         for (_, value) in local_write_sources(node) {
             if let Some(value) = value {
                 lowerer.expression(value, 0)?;
@@ -715,6 +749,11 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
         "variable_declarator" | "var_spec" => root
             .child_by_field_name("name")
             .map(|target| vec![(target, root.child_by_field_name("value").map(scalar))])
+            .unwrap_or_default(),
+        "type_switch_statement" => root
+            .child_by_field_name("alias")
+            .and_then(|n| n.named_child(0))
+            .map(|alias| vec![(alias, root.child_by_field_name("value"))])
             .unwrap_or_default(),
         "assignment"
         | "assignment_expression"

@@ -6,6 +6,7 @@ use crate::operands::*;
 pub(super) struct OperandAnchors {
     names: HashMap<String, OperandNameId>,
     values: HashMap<(u32, u32), ExpressionId>,
+    assignments: HashMap<(u32, u32), ExpressionId>,
     reads: Vec<(OperandSpan, ExpressionId, OperandNameId)>,
     slots: HashMap<String, LocalSlotId>,
 }
@@ -39,6 +40,12 @@ impl OperandAnchors {
                     result.reads.push((span, id, name));
                 }
             }
+        }
+        for assignment in &facts.assignment_values {
+            result.assignments.insert(
+                (assignment.target.start, assignment.target.end),
+                assignment.value,
+            );
         }
         result
             .reads
@@ -151,13 +158,23 @@ impl CfgBuilder<'_> {
             });
             let candidate = matches.next();
             let value = if matches.next().is_none() {
-                candidate.and_then(|(_, rhs)| *rhs).and_then(|rhs| {
-                    let key = (
-                        u32::try_from(rhs.start_byte()).ok()?,
-                        u32::try_from(rhs.end_byte()).ok()?,
-                    );
-                    self.operand_anchors.values.get(&key).copied()
-                })
+                candidate
+                    .and_then(|(_, rhs)| *rhs)
+                    .and_then(|rhs| {
+                        let key = (
+                            u32::try_from(rhs.start_byte()).ok()?,
+                            u32::try_from(rhs.end_byte()).ok()?,
+                        );
+                        self.operand_anchors.values.get(&key).copied()
+                    })
+                    .or_else(|| {
+                        let (target, _) = candidate?;
+                        let key = (
+                            u32::try_from(target.start_byte()).ok()?,
+                            u32::try_from(target.end_byte()).ok()?,
+                        );
+                        self.operand_anchors.assignments.get(&key).copied()
+                    })
             } else {
                 None
             };

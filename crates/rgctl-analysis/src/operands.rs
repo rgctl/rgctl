@@ -108,6 +108,11 @@ pub enum ExpressionKind {
     },
     /// Assertion or reference cast preserving the operand on a successful path.
     AssertedValue,
+    /// Assignment from a tuple-valued expression; first input is the result.
+    Projection {
+        /// Declared result position; consumers may conservatively merge slots.
+        position: u32,
+    },
     /// Other computation with ordered syntactic children.
     Computation,
     /// Unsupported, malformed or depth-limited expression.
@@ -260,6 +265,15 @@ pub struct OperandDiagnostic {
     pub kind: OperandDiagnosticKind,
 }
 
+/// Synthetic projected value defining one native assignment target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssignmentValueFact {
+    /// Exact declared/assigned identifier span.
+    pub target: OperandSpan,
+    /// Projected expression supplying this write.
+    pub value: ExpressionId,
+}
+
 /// Pooled per-function native syntax facts, persisted with the CFG.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FunctionOperands {
@@ -287,6 +301,8 @@ pub struct FunctionOperands {
     pub arguments: Vec<ArgumentFact>,
     /// Return sites and their value operands.
     pub returns: Vec<ReturnFact>,
+    /// Projected RHS values for native multi-value assignments.
+    pub assignment_values: Vec<AssignmentValueFact>,
     /// Scoped native local keys, indexed by LocalSlotId.
     pub local_slots: Vec<OperandNameId>,
     /// Exact local read occurrences and CFG positions.
@@ -318,7 +334,11 @@ impl FunctionOperands {
                     ExpressionKind::Conditional { condition } => expr(condition),
                     _ => true,
                 }
-        }) && self.local_slots.iter().all(|&id| name(id))
+        }) && self
+            .assignment_values
+            .iter()
+            .all(|a| a.target.start < a.target.end && expr(a.value))
+            && self.local_slots.iter().all(|&id| name(id))
             && self
                 .local_uses
                 .iter()

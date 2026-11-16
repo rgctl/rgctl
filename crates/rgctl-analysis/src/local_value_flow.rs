@@ -253,6 +253,18 @@ impl LocalValueFlow {
                 ExpressionKind::Parenthesized => LocalTransferKind::Parenthesized,
                 ExpressionKind::Conditional { .. } => LocalTransferKind::ConditionalAlternative,
                 ExpressionKind::AssertedValue => LocalTransferKind::AssertedValue,
+                ExpressionKind::Projection { position: 0 }
+                    if expression
+                        .inputs
+                        .slice(&cfg.operands.inputs)
+                        .and_then(|s| s.first())
+                        .is_some_and(|id| {
+                            cfg.operands.expressions[id.0 as usize].kind
+                                == ExpressionKind::AssertedValue
+                        }) =>
+                {
+                    LocalTransferKind::AssertedValue
+                }
                 _ => continue,
             };
             for &from in expression.inputs.slice(&cfg.operands.inputs).unwrap_or(&[]) {

@@ -4480,6 +4480,19 @@ impl<'a> CfgBuilder<'a> {
     }
 
     fn visit_switch(&mut self, node: Node, source: &[u8]) -> Result<()> {
+        let scoped_alias = self.language == "go"
+            && node.kind() == "type_switch_statement"
+            && node.child_by_field_name("alias").is_some();
+        if scoped_alias {
+            self.push_scope_frame();
+        }
+        let result = self.visit_switch_inner(node, source);
+        if scoped_alias {
+            self.pop_scope_frame();
+        }
+        result
+    }
+    fn visit_switch_inner(&mut self, node: Node, source: &[u8]) -> Result<()> {
         // Go: `switch init; value` — init runs before the branch.
         if let Some(init) = node.child_by_field_name("initializer") {
             self.visit_statement(init, source)?;
@@ -4492,6 +4505,36 @@ impl<'a> CfgBuilder<'a> {
                     break;
                 }
             }
+        }
+
+        // A Go type-switch alias is the successful selected value in each arm.
+        // Keep all possible origins; branch type filtering is a separate concern.
+        if self.language == "go"
+            && node.kind() == "type_switch_statement"
+            && let (Some(alias), Some(value)) = (
+                node.child_by_field_name("alias")
+                    .and_then(|n| n.named_child(0)),
+                node.child_by_field_name("value"),
+            )
+            && alias.kind() == "identifier"
+        {
+            let (_, mut used) = extract_def_use(value, source);
+            used.sort();
+            self.capture_local_reads(value, &used)?;
+            let defined = smallvec::smallvec![DefVar::local(alias.utf8_text(source)?)];
+            let (defined_vars, used_vars) = self.rewrite_scoped_vars(defined, used, true, false);
+            self.capture_local_writes(node, source, &defined_vars)?;
+            self.add_statement_to_current(Statement {
+                kind: StatementKind::Declaration,
+                line: node.start_position().row + 1,
+                text: format!(
+                    "{} := {}.(type)",
+                    alias.utf8_text(source)?,
+                    value.utf8_text(source)?
+                ),
+                defined_vars,
+                used_vars,
+            });
         }
 
         // C++17: `switch (init; cond)` — init inside condition_clause.
