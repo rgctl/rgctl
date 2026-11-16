@@ -45,6 +45,8 @@ pub enum ReceiverSupply {
     FirstArgument,
     /// The allocated invocation result supplies a constructor's receiver.
     Constructed,
+    /// A callable value retains a receiver expression from another invocation.
+    BoundValue(ValueRef),
 }
 
 /// A resolver-selected target for a particular invocation.
@@ -283,8 +285,21 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> CallBindings<'a, C> {
             {
                 self.diagnostics.push(BindingDiagnostic::LanguageBoundary);
             } else {
+                let bound_receiver = if let ReceiverSupply::BoundValue(value) = target.receiver {
+                    if self.icfg.get_cfg(value.function).is_some_and(|cfg| {
+                        (value.expression.0 as usize) < cfg.operands.expressions.len()
+                    }) {
+                        Some(value)
+                    } else {
+                        self.diagnostics.push(BindingDiagnostic::InvalidOperand);
+                        None
+                    }
+                } else {
+                    None
+                };
                 let mut binder = Binder {
                     target,
+                    bound_receiver,
                     caller: caller_facts,
                     callee: callee_facts,
                     call,
@@ -331,6 +346,7 @@ fn ecma(language: OperandLanguage) -> bool {
 
 struct Binder<'a> {
     target: InvocationTarget,
+    bound_receiver: Option<ValueRef>,
     caller: &'a FunctionOperands,
     callee: &'a FunctionOperands,
     call: &'a CallSiteFact,
@@ -447,14 +463,15 @@ impl Binder<'_> {
             ReceiverConvention::PythonDescriptor | ReceiverConvention::PythonClassDescriptor
         ) && matches!(
             self.target.receiver,
-            ReceiverSupply::Member | ReceiverSupply::Constructed
+            ReceiverSupply::Member | ReceiverSupply::Constructed | ReceiverSupply::BoundValue(_)
         );
         let receiver_in_rest = python_bound && positional.is_empty() && rest.is_some();
         if python_bound {
             receiver = positional.first().map(|&(_, index)| index).or(rest);
             positional.retain(|&(_, index)| Some(index) != receiver);
         }
-        let mut skip_first = false;
+        let mut skip_first =
+            self.target.receiver == ReceiverSupply::FirstArgument && !arguments.is_empty();
         if let Some(formal) = receiver {
             let kind = if receiver_in_rest {
                 TransferKind::RestElement { index: 0 }
@@ -476,6 +493,7 @@ impl Binder<'_> {
                     }
                 }
                 ReceiverSupply::Constructed => self.actual(self.call.result),
+                ReceiverSupply::BoundValue(_) => self.bound_receiver.map(BindingSource::Expression),
             };
             if self.callee.receiver_convention == ReceiverConvention::PythonClassDescriptor {
                 self.record_binding_diagnostic(BindingDiagnostic::ClassReceiver);

@@ -27,3 +27,10 @@ func operand_element(box []any, value any) any { box[0] = value; return box[1] }
 func operand_rest(values ...any) any { return values[0] }
 
 func operand_rest_relay(value any) any { return operand_rest(value) }
+
+func operand_callback(callback func(int) int, value int) int { return callback(value) }
+
+func operand_bound(callback func(int) int, box OperandBound, value int) int { return callback(value) }
+func(box OperandBound) operand_bound_target(value int) int { return value }
+
+func operand_callable_field(box OperandCallable, callback func(int) int, value int) int { box.Callback = callback; return box.Callback(value) }

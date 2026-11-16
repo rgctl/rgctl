@@ -9,3 +9,8 @@ object OperandChoice { def operand_choice(flag: Boolean, left: Any, right: Any):
 
 object OperandStorage { def operand_field(box: OperandBox, value: Any): Any = { box.slot = value; return box.slot } }
 object OperandElements { def operand_container(value: Any): (Any, Any) = { return (value, value) } }
+
+object OperandCallback { def operand_callback(callback: Int => Int, value: Int): Int = { return callback(value) } }
+
+object OperandBoundCaller { def operand_bound(callback: Int => Int, box: OperandBound, value: Int): Int = { return callback(value) } }
+class OperandBound { def operand_bound_target(value: Int): Int = { return value } }

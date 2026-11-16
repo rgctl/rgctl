@@ -15,3 +15,13 @@ function operand_rest(...values: object[]): object { return values[0]; }
 function operand_rest_relay(value: object): object { return operand_rest(value); }
 
 function operand_box(value: object): object { const holder: {slot?: object} = {}; holder.slot = value; const items = [holder.slot]; return items[0]; }
+
+function operand_callback(callback: (value: number) => number, value: number): number { return callback(value); }
+
+function operand_bound(callback: (value: number) => number, box: OperandBound, value: number): number { return callback(value); }
+class OperandBound { operand_bound_target(value: number): number { return value; } }
+
+function operand_callable_field(box: {callback: (value: number) => number}, callback: (value: number) => number, value: number): number { box.callback = callback; return box.callback(value); }
+
+function operand_apply(callback: any, value: any) { return callback.apply(null, [value]); }
+function operand_partial_bind(callback: any, value: any) { return callback.bind(null, value)(); }

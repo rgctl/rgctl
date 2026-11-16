@@ -932,3 +932,135 @@ fn indexed_updates_preserve_container_identity_and_replay_existing_values() {
             .all(|o| output.seeds[o.0 as usize].type_id.is_none())
     );
 }
+#[test]
+fn bound_method_values_cross_callback_formals_in_four_languages() {
+    for (language, caller, invoke, method, method_name) in [
+        (
+            "javascript",
+            "function exercise(){const value=new X();return invoke(value.execute.bind(value));}",
+            "function invoke(fn){return fn();}",
+            "class X{execute(){return 100;}}",
+            "execute",
+        ),
+        (
+            "typescript",
+            "function exercise(){const value=new X();return invoke(value.execute.bind(value));}",
+            "function invoke(fn:()=>number){return fn();}",
+            "class X{execute(){return 100;}}",
+            "execute",
+        ),
+        (
+            "python",
+            "def exercise():\n value=X()\n return invoke(value.execute)\n",
+            "def invoke(fn):\n return fn()\n",
+            "class X:\n def execute(self):\n  return 100\n",
+            "execute",
+        ),
+        (
+            "go",
+            "package demo\nfunc exercise()int{var value Y=X{};return invoke(value.Execute)}",
+            "package demo\nfunc invoke(fn func()int)int{return fn()}",
+            "package demo\nfunc(x X)Execute()int{return 100}",
+            "Execute",
+        ),
+    ] {
+        let f = Fixture::new(
+            language,
+            &[
+                ("exercise", caller),
+                ("invoke", invoke),
+                (method_name, method),
+            ],
+        );
+        let cfg = f.fixture_cfg(0);
+        let (index,expression)=cfg.operands.expressions.iter().enumerate().find(|(_,e)| matches!(e.kind,ExpressionKind::Member(n) if cfg.operands.operand_name(n)==Some(method_name))).unwrap();
+        let base = expression.inputs.slice(&cfg.operands.inputs).unwrap()[0];
+        let receiver = ValueRef {
+            function: f.ids[0],
+            expression: base,
+        };
+        let candidate = CallableCandidate {
+            value: ValueRef {
+                function: f.ids[0],
+                expression: ExpressionId(index as u32),
+            },
+            callee: f.ids[2],
+            receiver: ReceiverSupply::BoundValue(receiver),
+            requirement: Some(OriginRequirement {
+                value: receiver,
+                type_id: Uuid::from_u128(100),
+            }),
+        };
+        let output = OriginAnalysis::build_with_callables(
+            &f.icfg,
+            &[seed(f.allocation(0, "X"), 100)],
+            &[f.target(0, "invoke", 1, ReceiverSupply::None)],
+            &[],
+            &[candidate],
+            Default::default(),
+        );
+        assert!(
+            output
+                .callable_targets
+                .iter()
+                .any(|r| r.target.call.caller == f.ids[1] && r.target.callee == f.ids[2]),
+            "{language}: {output:?}"
+        );
+        let formal = f.fixture_cfg(2).operands.formals[0].value;
+        assert!(
+            output
+                .origins(ValueRef {
+                    function: f.ids[2],
+                    expression: formal
+                })
+                .iter()
+                .any(|o| output.seeds[o.0 as usize].type_id == Some(Uuid::from_u128(100))),
+            "bound receiver lost: {language}"
+        );
+    }
+}
+
+#[test]
+fn canonical_function_values_need_no_nominal_type_to_activate_indirect_calls() {
+    let f = Fixture::new(
+        "javascript",
+        &[
+            ("exercise", "function exercise(){return invoke(work);}"),
+            ("invoke", "function invoke(fn){return fn();}"),
+            ("work", "function work(){return 100;}"),
+        ],
+    );
+    let cfg = f.fixture_cfg(0);
+    let index = cfg
+        .operands
+        .expressions
+        .iter()
+        .position(
+            |e| matches!(e.kind,ExpressionKind::Name(n) if cfg.operands.operand_name(n)==Some("work")),
+        )
+        .unwrap();
+    let candidate = CallableCandidate {
+        value: ValueRef {
+            function: f.ids[0],
+            expression: ExpressionId(index as u32),
+        },
+        callee: f.ids[2],
+        receiver: ReceiverSupply::None,
+        requirement: None,
+    };
+    let output = OriginAnalysis::build_with_callables(
+        &f.icfg,
+        &[],
+        &[f.target(0, "invoke", 1, ReceiverSupply::None)],
+        &[],
+        &[candidate],
+        Default::default(),
+    );
+    assert!(
+        output
+            .callable_targets
+            .iter()
+            .any(|r| r.target.call.caller == f.ids[1] && r.target.callee == f.ids[2]),
+        "{output:?}"
+    );
+}

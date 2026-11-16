@@ -188,3 +188,62 @@ for this query. This capability matrix does not qualify arbitrary getters,
 setters, overloaded indexing, reflective storage, library collections, or exact
 mutation order. Ruby's fixture uses native `@slot` storage; a `box.slot` method
 call is not assumed to be a field read.
+
+## Callable values and bound receivers
+
+`build_with_callables` accepts `CallableCandidate` inputs at exact native values,
+with a canonical target, receiver supply and optional exact receiver/type premise.
+The query creates distinct callable-value origins, propagates them through local,
+argument, return and modeled memory transfers, and activates invocations whose
+callee expression receives them. `callable_values` and `callable_targets` retain
+the possible function and native invocation evidence. Newly activated function
+alternatives replay already reached consumers. Budgets bound inputs, callable
+bindings, evidence and work; the reverse value index is bounded by origin facts.
+
+`ReceiverSupply::BoundValue` retains a function-qualified receiver expression
+from another caller. The invocation binder validates it against native records
+and binds the target receiver formal; it does not reinterpret the receiver as an
+ordinary explicit argument. Python descriptor conventions consume the receiver
+formal as with ordinary member calls. First-argument receiver conventions skip
+that actual even when the selected function declares no receiver formal.
+
+Native ECMA `bind`, `call` and `apply` models preserve possible target reachability.
+Bound receiver alternatives merge, including the original receiver candidate.
+The current model does not qualify partial bound argument lists or apply-array
+expansion. `UnsupportedCallableArguments` explicitly marks those cases; existing
+unresolved/binding evidence also remains relevant. Source
+spelling of these library methods is a conservative modeling premise, not proof
+of an unmodified builtin. Member reference binding is conservative across
+languages; retaining an ECMA receiver may over-warn on an otherwise unbound use.
+
+Resolvers own lexical/name and canonical-target coverage. Possible same-file
+name candidates are not a scope-completeness proof. Fields, keys and callers
+still merge as documented. Captures, decorators, arbitrary descriptors,
+reflection, scheduling and interprocedural taint need separate models. This
+query-local extension itself does not add persisted call-target edges. Native
+function-pointer parameter, anonymous invocation and dynamic command lowering
+repairs require CFG semantics 10 and RBCP v13 in this PR.
+
+
+### Tier 1 callable coverage
+
+Canonical `operand_callback` fixtures activate resolver-supplied function values
+across all 20 procedural Tier 1 languages and check argument/return propagation
+(shell commands retain their stream/exit-status boundary). Sixteen languages with
+native method receiver conventions additionally keep a bound receiver distinct
+from the ordinary argument. Seven field-call fixtures compose callable storage
+with direct invocation; no intermediate scalar alias is required.
+
+Native invocation forms include C/C++ function-pointer declarators, Elixir
+anonymous invocation dots and expanded Bash command names. Ruby `call`, Java
+`Function.apply`, and Puppet's leading-callable `call` convention are modeled
+explicitly as conservative source-spelling premises. Arbitrary receiver members
+such as Java `toString` or Ruby `object_id` do not invoke the stored callable.
+Custom Java SAM names and other callable-object protocols need canonical
+resolution/models beyond this named convention. Puppet's leading callable uses
+the existing first-argument convention and retains binding uncertainty.
+
+Callable/type prerequisites must actually reach their source value. Supplying an
+unsatisfied prerequisite cannot activate a call. Direct callable loads from a
+member are now memory reads even when that member is the invocation selector.
+The existing merged contexts, keys and bounded-work diagnostics still apply.

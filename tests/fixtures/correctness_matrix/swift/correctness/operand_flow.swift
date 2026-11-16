@@ -14,3 +14,8 @@ func operand_element(_ input: [Any], _ value: Any) -> Any { var box = input; box
 func operand_rest(_ values: Any...) -> Any { return values[0] }
 
 func operand_rest_relay(_ value: Any) -> Any { return operand_rest(value) }
+
+func operand_callback(_ callback: (Int) -> Int, _ value: Int) -> Int { return callback(value) }
+
+func operand_bound(_ callback: (Int) -> Int, _ box: OperandBound, _ value: Int) -> Int { return callback(value) }
+class OperandBound { func operand_bound_target(_ value: Int) -> Int { return value } }

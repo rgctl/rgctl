@@ -621,3 +621,288 @@ fn native_variadic_formals_keep_containers_distinct_from_actual_elements() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+#[test]
+fn callable_values_activate_native_invocations_across_tier1() {
+    use crate::value_origins::CallableCandidate;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/native_operand_cases.json"
+    ))
+    .unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let language = case["language"].as_str().unwrap();
+        let source = std::fs::read_to_string(root.join(case["file"].as_str().unwrap())).unwrap();
+        for function in [
+            "operand_callback",
+            "operand_callable_field",
+            "operand_callback_other",
+            "operand_apply",
+            "operand_partial_bind",
+        ] {
+            if !source.contains(function) {
+                continue;
+            }
+            let memory = function == "operand_callable_field";
+            let caller_cfg = build_cfg_for_function(language, &source, function).unwrap();
+            let sink_cfg = build_cfg_for_function(language, &source, "operand_sink").unwrap();
+            if caller_cfg.operands.formals.len() != if memory { 3 } else { 2 } {
+                let tree =
+                    crate::language_profile::parse_source(language, source.as_bytes()).unwrap();
+                failures.push(format!(
+                    "{language}: callback formals: {:#?}\n{}",
+                    caller_cfg.operands,
+                    tree.root_node().to_sexp()
+                ));
+                continue;
+            }
+            let callback = caller_cfg.operands.formals[if memory { 1 } else { 0 }].value;
+            let actual = caller_cfg.operands.formals[if memory { 2 } else { 1 }].value;
+            let box_value = caller_cfg.operands.formals[0].value;
+            let formal = sink_cfg.operands.formals[0].value;
+            let outputs: Vec<_> = caller_cfg
+                .operands
+                .returns
+                .iter()
+                .flat_map(|r| r.values.slice(&caller_cfg.operands.inputs).unwrap())
+                .copied()
+                .collect();
+            let caller_outputs = !outputs.is_empty();
+            let mut backend = MemoryBackend::new();
+            let mut caller = Node::new(NodeType::Function, "operand_callback");
+            caller.id = Uuid::from_u128(101);
+            backend.insert_node(caller.clone()).unwrap();
+            let mut sink = Node::new(NodeType::Function, "operand_sink");
+            sink.id = Uuid::from_u128(102);
+            backend.insert_node(sink.clone()).unwrap();
+            let icfg = InterproceduralCFG::from_cfg_archive(
+                &backend,
+                HashMap::from([(caller.id, caller_cfg), (sink.id, sink_cfg)]),
+            )
+            .unwrap();
+            let seed = OriginSeed {
+                value: ValueRef {
+                    function: caller.id,
+                    expression: actual,
+                },
+                type_id: Some(Uuid::from_u128(1000)),
+            };
+            let candidate = CallableCandidate {
+                value: ValueRef {
+                    function: caller.id,
+                    expression: callback,
+                },
+                callee: sink.id,
+                receiver: ReceiverSupply::None,
+                requirement: None,
+            };
+            let mut seeds = vec![seed];
+            if memory {
+                seeds.push(OriginSeed {
+                    value: ValueRef {
+                        function: caller.id,
+                        expression: box_value,
+                    },
+                    type_id: Some(Uuid::from_u128(1001)),
+                });
+            }
+            let result = OriginAnalysis::build_with_callables(
+                &icfg,
+                &seeds,
+                &[],
+                &[],
+                &[candidate],
+                OriginLimits::default(),
+            );
+            if function == "operand_callback_other" {
+                assert!(
+                    result.callable_targets.is_empty(),
+                    "{language}: arbitrary member activated callable: {result:#?}"
+                );
+                continue;
+            }
+            let blocked = crate::value_origins::CallableCandidate {
+                requirement: Some(crate::value_origins::OriginRequirement {
+                    value: seed.value,
+                    type_id: Uuid::from_u128(9999),
+                }),
+                ..candidate
+            };
+            let blocked_result = OriginAnalysis::build_with_callables(
+                &icfg,
+                &seeds,
+                &[],
+                &[],
+                &[blocked],
+                OriginLimits::default(),
+            );
+            assert!(
+                blocked_result.callable_targets.is_empty(),
+                "{language}: unsatisfied canonical requirement activated a callable"
+            );
+            if matches!(function, "operand_apply" | "operand_partial_bind") {
+                assert!(
+                    !result.callable_targets.is_empty(),
+                    "{language}: lost conservative callable target"
+                );
+                assert!(
+                    result.diagnostics.iter().any(|d| matches!(
+                        d,
+                        crate::value_origins::OriginDiagnostic::UnsupportedCallableArguments(_)
+                    )),
+                    "{language}: unsupported expanded arguments must remain explicit: {result:#?}"
+                );
+                continue;
+            }
+            let reached = result
+                .origins(ValueRef {
+                    function: sink.id,
+                    expression: formal,
+                })
+                .iter()
+                .any(|o| result.seeds[o.0 as usize].type_id == seed.type_id);
+            let returned = outputs.into_iter().any(|expression| {
+                result
+                    .origins(ValueRef {
+                        function: caller.id,
+                        expression,
+                    })
+                    .iter()
+                    .any(|o| result.seeds[o.0 as usize].type_id == seed.type_id)
+            });
+            if result.callable_targets.is_empty()
+                || !reached
+                || (language != "bash" && (!caller_outputs || !returned))
+            {
+                let tree =
+                    crate::language_profile::parse_source(language, source.as_bytes()).unwrap();
+                failures.push(format!(
+                    "{language}: callable target/argument/return: {result:#?}\n{:#?}\n{}",
+                    icfg.get_cfg(caller.id).unwrap().operands,
+                    tree.root_node().to_sexp()
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn native_bound_callbacks_keep_receiver_and_argument_origins_separate() {
+    use crate::value_origins::CallableCandidate;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/native_operand_cases.json"
+    ))
+    .unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let language = case["language"].as_str().unwrap();
+        let source = std::fs::read_to_string(root.join(case["file"].as_str().unwrap())).unwrap();
+        let applicable = !matches!(language, "c" | "puppet" | "bash" | "elixir");
+        assert_eq!(
+            source.contains("operand_bound_target"),
+            applicable,
+            "{language}: bound fixture coverage"
+        );
+        if !applicable {
+            continue;
+        }
+        let caller_cfg = build_cfg_for_function(language, &source, "operand_bound").unwrap();
+        let callee_cfg = build_cfg_for_function(
+            language,
+            &source,
+            if language == "lua" {
+                "OperandBound:operand_bound_target"
+            } else {
+                "operand_bound_target"
+            },
+        )
+        .unwrap();
+        let receiver = callee_cfg
+            .operands
+            .formals
+            .iter()
+            .find(|f| {
+                f.kind == FormalKind::Receiver
+                    || callee_cfg.operands.operand_name(f.name) == Some("self")
+            })
+            .unwrap()
+            .value;
+        let argument = callee_cfg.operands.formals.last().unwrap().value;
+        let outputs: Vec<_> = caller_cfg
+            .operands
+            .returns
+            .iter()
+            .flat_map(|r| r.values.slice(&caller_cfg.operands.inputs).unwrap())
+            .copied()
+            .collect();
+        assert_eq!(caller_cfg.operands.formals.len(), 3, "{language}");
+        let callback = caller_cfg.operands.formals[0].value;
+        let bound = caller_cfg.operands.formals[1].value;
+        let actual = caller_cfg.operands.formals[2].value;
+        let mut backend = MemoryBackend::new();
+        let mut caller = Node::new(NodeType::Function, "operand_bound");
+        caller.id = Uuid::from_u128(100);
+        backend.insert_node(caller.clone()).unwrap();
+        let mut callee = Node::new(NodeType::Function, "operand_bound_target");
+        callee.id = Uuid::from_u128(101);
+        backend.insert_node(callee.clone()).unwrap();
+        let icfg = InterproceduralCFG::from_cfg_archive(
+            &backend,
+            HashMap::from([(caller.id, caller_cfg), (callee.id, callee_cfg)]),
+        )
+        .unwrap();
+        let seeds = [(bound, 2000), (actual, 1000)].map(|(expression, id)| OriginSeed {
+            value: ValueRef {
+                function: caller.id,
+                expression,
+            },
+            type_id: Some(Uuid::from_u128(id)),
+        });
+        let candidate = CallableCandidate {
+            value: ValueRef {
+                function: caller.id,
+                expression: callback,
+            },
+            callee: callee.id,
+            receiver: ReceiverSupply::BoundValue(ValueRef {
+                function: caller.id,
+                expression: bound,
+            }),
+            requirement: None,
+        };
+        let result = OriginAnalysis::build_with_callables(
+            &icfg,
+            &seeds,
+            &[],
+            &[],
+            &[candidate],
+            OriginLimits::default(),
+        );
+        let types = |function, expression| -> std::collections::BTreeSet<_> {
+            result
+                .origins(ValueRef {
+                    function,
+                    expression,
+                })
+                .iter()
+                .map(|o| result.seeds[o.0 as usize].type_id)
+                .collect()
+        };
+        if result.callable_targets.is_empty()
+            || types(callee.id, receiver) != [seeds[0].type_id].into_iter().collect()
+            || types(callee.id, argument) != [seeds[1].type_id].into_iter().collect()
+            || !outputs.into_iter().all(|expression| {
+                types(caller.id, expression) == [seeds[1].type_id].into_iter().collect()
+            })
+        {
+            failures.push(format!(
+                "{language}: bound receiver/argument/return mismatch: {result:#?}\n{:#?}",
+                icfg.get_cfg(callee.id).unwrap().operands
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

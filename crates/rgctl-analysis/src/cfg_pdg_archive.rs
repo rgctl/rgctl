@@ -17,7 +17,8 @@
 //! - **v9**: projected multi-value assignment operands.
 //! - **v10**: sparse positional and unsupported-pattern slot semantics.
 //! - **v11**: explicit instance-member stores.
-//! - **v12** (current): aggregate identities and element stores/loads.
+//! - **v12**: aggregate identities and element stores/loads.
+//! - **v13** (current): native callable operand and dynamic command roles.
 
 use crate::cfg::ControlFlowGraph;
 use crate::hash_maps::FxHashMap;
@@ -40,8 +41,8 @@ static NEXT_ARCHIVE_TMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Magic bytes for CFG/PDG archive files (`RBCP`).
 pub const ARCHIVE_MAGIC: [u8; 4] = *b"RBCP";
-/// Current archive format (v12 = aggregate element operands).
-pub const ARCHIVE_VERSION: u32 = 12;
+/// Current archive format (v13 = callable operand roles).
+pub const ARCHIVE_VERSION: u32 = 13;
 /// Legacy monolithic bincode payload.
 pub const ARCHIVE_VERSION_V1: u32 = 1;
 /// Legacy header-TOC format.

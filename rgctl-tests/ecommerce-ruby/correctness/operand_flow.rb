@@ -39,3 +39,20 @@ end
 def operand_rest_relay(value)
  return operand_rest(value)
 end
+
+def operand_callback(callback, value)
+ return callback.call(value)
+end
+
+def operand_bound(callback, box, value)
+ return callback.call(value)
+end
+class OperandBound
+ def operand_bound_target(value)
+  return value
+ end
+end
+
+def operand_callback_other(callback, value)
+ return callback.object_id
+end

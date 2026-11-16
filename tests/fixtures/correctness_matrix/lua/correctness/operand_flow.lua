@@ -22,3 +22,19 @@ function operand_element(box, value)
  box[0] = value
  return box[1]
 end
+
+function operand_callback(callback, value)
+ return callback(value)
+end
+
+function operand_bound(callback, box, value)
+ return callback(value)
+end
+function OperandBound:operand_bound_target(value)
+ return value
+end
+
+function operand_callable_field(box, callback, value)
+ box.callback = callback
+ return box.callback(value)
+end

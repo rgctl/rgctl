@@ -1,8 +1,8 @@
 //! Bounded possible-value origins through native local and invocation transfers.
 //! Resolution inputs use canonical IDs; the solver never parses or matches names.
 use crate::call_bindings::{
-    BindingDiagnostic, BindingSource, CallBindings, CallRef, InvocationTarget, TransferKind,
-    ValueRef,
+    BindingDiagnostic, BindingSource, CallBindings, CallRef, InvocationTarget, ReceiverSupply,
+    TransferKind, ValueRef,
 };
 use crate::interprocedural_cfg::InterproceduralCfgAccess;
 use crate::local_value_flow::{
@@ -17,6 +17,11 @@ use uuid::Uuid;
 #[cfg(test)]
 #[path = "value_origin_tests.rs"]
 mod tests;
+
+#[path = "callable_origins.rs"]
+mod callable_origins;
+use callable_origins::CallableState;
+pub use callable_origins::{CallableCandidate, CallableValue, OriginRequirement};
 
 /// Dense query-local origin index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -138,6 +143,9 @@ pub enum OriginDiagnostic {
     },
     /// No supplied/discovered canonical target for an invocation in a visited function.
     UnresolvedCall(CallRef),
+    /// Target reachability is retained, but apply-array or pre-bound arguments
+    /// need an expanded-actual model before argument-specific flow is complete.
+    UnsupportedCallableArguments(CallRef),
     /// No resolver-provided member candidate accepts an arriving receiver type.
     UnresolvedReceiver {
         /// Exact invocation.
@@ -188,6 +196,10 @@ pub struct OriginAnalysis {
     pub values: Vec<ValueOrigins>,
     /// Receiver-supported possible calls, including origin provenance.
     pub receiver_targets: Vec<ReceiverTarget>,
+    /// Possible functions carried through native value transfers.
+    pub callable_values: Vec<CallableValue>,
+    /// Canonical invocations activated by reaching callable values.
+    pub callable_targets: Vec<ReceiverTarget>,
     /// Native value-transfer explanations.
     pub transfers: Vec<OriginTransfer>,
     /// Partial/unknown/limit evidence.
@@ -215,10 +227,22 @@ impl OriginAnalysis {
         members: &[MemberCandidate],
         limits: OriginLimits,
     ) -> Self {
+        Self::build_with_callables(icfg, seeds, targets, members, &[], limits)
+    }
+    /// Include canonical callable-value candidates alongside instance candidates.
+    pub fn build_with_callables<C: InterproceduralCfgAccess + ?Sized>(
+        icfg: &C,
+        seeds: &[OriginSeed],
+        targets: &[InvocationTarget],
+        members: &[MemberCandidate],
+        callables: &[CallableCandidate],
+        limits: OriginLimits,
+    ) -> Self {
         let mut query = Query::new(icfg, limits);
         if seeds.len() > limits.max_facts
             || targets.len() > limits.max_targets
             || members.len() > limits.max_member_candidates
+            || callables.len() > limits.max_member_candidates
         {
             query.limit();
             return query.finish();
@@ -236,6 +260,21 @@ impl OriginAnalysis {
                 continue;
             }
             query.members.entry(call).or_default().push(member);
+        }
+        let mut ordered_callables = callables.to_vec();
+        ordered_callables.sort_by_key(|c| {
+            (
+                c.value.function,
+                c.value.expression.0,
+                c.callee,
+                receiver_key(c.receiver),
+            )
+        });
+        for candidate in ordered_callables {
+            query.callable_candidate(candidate);
+            if query.limited {
+                break;
+            }
         }
         let mut ordered_targets = targets.to_vec();
         ordered_targets.sort_by_key(|t| target_key(*t));
@@ -263,12 +302,21 @@ impl OriginAnalysis {
         query.finish()
     }
 }
-fn target_key(target: InvocationTarget) -> (Uuid, u32, Uuid, u8) {
+fn receiver_key(receiver: ReceiverSupply) -> (u8, Uuid, u32) {
+    match receiver {
+        ReceiverSupply::None => (0, Uuid::nil(), 0),
+        ReceiverSupply::Member => (1, Uuid::nil(), 0),
+        ReceiverSupply::FirstArgument => (2, Uuid::nil(), 0),
+        ReceiverSupply::Constructed => (3, Uuid::nil(), 0),
+        ReceiverSupply::BoundValue(value) => (4, value.function, value.expression.0),
+    }
+}
+fn target_key(target: InvocationTarget) -> (Uuid, u32, Uuid, (u8, Uuid, u32)) {
     (
         target.call.caller,
         target.call.site.0,
         target.callee,
-        target.receiver as u8,
+        receiver_key(target.receiver),
     )
 }
 struct Query<'a, C: InterproceduralCfgAccess + ?Sized> {
@@ -288,6 +336,7 @@ struct Query<'a, C: InterproceduralCfgAccess + ?Sized> {
     facts: HashMap<ValueRef, HashSet<OriginId>>,
     queue: VecDeque<(ValueRef, OriginId)>,
     seed_ids: HashMap<OriginSeed, OriginId>,
+    callables: CallableState,
     field_names: HashMap<String, u32>,
     field_accesses: HashMap<ValueRef, Vec<FieldAccess>>,
     field_stores: HashMap<(OriginId, MemoryMember), HashSet<ValueRef>>,
@@ -308,6 +357,8 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
                 seeds: vec![],
                 values: vec![],
                 receiver_targets: vec![],
+                callable_values: vec![],
+                callable_targets: vec![],
                 transfers: vec![],
                 diagnostics: vec![],
                 context_policy: OriginContextPolicy::MergedPossibleOrigins,
@@ -324,6 +375,7 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
             facts: HashMap::new(),
             queue: VecDeque::new(),
             seed_ids: HashMap::new(),
+            callables: CallableState::default(),
             field_names: HashMap::new(),
             field_accesses: HashMap::new(),
             field_stores: HashMap::new(),
@@ -438,6 +490,7 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
                     });
             }
         }
+        self.register_callable_calls(function);
         self.register_fields(function);
         let Ok(pdg) = ProgramDependenceGraph::build(cfg, b"") else {
             self.diagnostic(OriginDiagnostic::MissingFunction(function));
@@ -498,6 +551,7 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
         }
         self.facts.entry(value).or_default().insert(origin);
         self.fact_count += 1;
+        self.index_callable_origin(value, origin);
         self.queue.push_back((value, origin));
     }
     fn edge(&mut self, from: ValueRef, to: ValueRef, cause: OriginTransferCause) {
@@ -549,6 +603,9 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
         self.bound_calls.insert(target.call);
         self.load(target.call.caller);
         self.load(target.callee);
+        if let ReceiverSupply::BoundValue(value) = target.receiver {
+            self.load(value.function);
+        }
         if self.limited {
             return;
         }
@@ -672,6 +729,7 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
                 }
                 self.fact(to, origin);
             }
+            self.callable_fact(value, origin);
             let accesses = self.field_accesses.get(&value).cloned().unwrap_or_default();
             for access in accesses {
                 self.bind_field(access, origin)
@@ -750,6 +808,12 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
         self.output
             .receiver_targets
             .sort_by_key(|r| (target_key(r.target), r.origin.0));
+        self.output
+            .callable_values
+            .sort_by_key(|b| (b.origin.0, b.callee, receiver_key(b.receiver)));
+        self.output
+            .callable_targets
+            .sort_by_key(|r| (target_key(r.target), r.origin.0));
         self.output.transfers.sort_by_key(|e| {
             (
                 e.from.function,
@@ -778,13 +842,9 @@ impl<C: InterproceduralCfgAccess + ?Sized> Query<'_, C> {
         let Some(cfg) = self.icfg.get_cfg(function) else {
             return;
         };
-        let selectors: HashSet<_> = cfg.operands.calls.iter().map(|c| c.callee).collect();
         for (index, expression) in cfg.operands.expressions.iter().enumerate() {
             if self.limited {
                 break;
-            }
-            if selectors.contains(&ExpressionId(index as u32)) {
-                continue;
             }
             if let ExpressionKind::Member(member) = expression.kind
                 && let Some(&receiver) = expression

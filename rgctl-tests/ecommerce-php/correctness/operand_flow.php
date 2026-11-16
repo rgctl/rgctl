@@ -15,3 +15,8 @@ function operand_element($box, $value) { $box[0] = $value; return $box[1]; }
 function operand_rest(...$values) { return $values[0]; }
 
 function operand_rest_relay($value) { return operand_rest($value); }
+
+function operand_callback(callable $callback, $value) { return $callback($value); }
+
+function operand_bound(callable $callback, $box, $value) { return $callback($value); }
+class OperandBound { function operand_bound_target($value) { return $value; } }

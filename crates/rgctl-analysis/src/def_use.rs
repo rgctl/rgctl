@@ -659,7 +659,9 @@ fn collect_def_use_node<'a>(
             } else {
                 let mut c = node.walk();
                 for ch in node.children(&mut c) {
-                    if ch.kind() != "command_name" {
+                    if ch.kind() != "command_name"
+                        || ch.named_child(0).is_some_and(|n| n.kind() != "word")
+                    {
                         stack.push((ch, false, depth + 1));
                     }
                 }

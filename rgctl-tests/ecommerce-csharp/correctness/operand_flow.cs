@@ -13,3 +13,10 @@ class OperandElements { static object operand_element(object[] box, object value
 class OperandRest { static object operand_rest(params object[] values) { return values[0]; } }
 
 class OperandRestRelay { static object operand_rest_relay(object value) { return OperandRest.operand_rest(value); } }
+
+class OperandCallback { static int operand_callback(System.Func<int,int> callback, int value) { return callback(value); } }
+
+class OperandBoundCaller { static int operand_bound(System.Func<int,int> callback, OperandBound box, int value) { return callback(value); } }
+class OperandBound { int operand_bound_target(int value) { return value; } }
+
+class OperandCallableField { static int operand_callable_field(OperandCallable box, System.Func<int,int> callback, int value) { box.callback = callback; return box.callback(value); } }

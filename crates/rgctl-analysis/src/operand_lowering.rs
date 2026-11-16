@@ -660,6 +660,7 @@ impl<'a> Lowerer<'a> {
                         if !matches!(
                             n.kind(),
                             "array_declarator"
+                                | "function_declarator"
                                 | "pointer_declarator"
                                 | "reference_declarator"
                                 | "parenthesized_declarator"
@@ -996,6 +997,9 @@ impl<'a> Lowerer<'a> {
                 inputs.push(self.expression(child, depth + 1)?);
             }
             if kind == "parenthesized_expression"
+                || (self.facts.language == OperandLanguage::Elixir
+                    && kind == "dot"
+                    && native_operand_children(node).len() == 1)
                 || matches!(kind, "simple_expansion" | "expansion")
                 || (kind == "string"
                     && native_operand_children(node).len() == 1

@@ -5,3 +5,5 @@ function operand_relay(Integer $value) >> Integer { $alias = $value
 
 function operand_container(Integer $value) >> Array { $items = [$value]
  $items }
+
+function operand_callback(String $callback, Integer $value) >> Integer { call($callback, $value) }

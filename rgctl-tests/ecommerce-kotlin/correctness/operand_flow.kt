@@ -16,3 +16,10 @@ fun operand_element(box: Array<Any>, value: Any): Any { box[0] = value; return b
 fun operand_rest(vararg values: Any): Any { return values[0] }
 
 fun operand_rest_relay(value: Any): Any { return operand_rest(value) }
+
+fun operand_callback(callback: (Int) -> Int, value: Int): Int { return callback(value) }
+
+fun operand_bound(callback: (Int) -> Int, box: OperandBound, value: Int): Int { return callback(value) }
+class OperandBound { fun operand_bound_target(value: Int): Int { return value } }
+
+fun operand_callable_field(box: OperandCallable, callback: (Int) -> Int, value: Int): Int { box.callback = callback; return box.callback(value) }

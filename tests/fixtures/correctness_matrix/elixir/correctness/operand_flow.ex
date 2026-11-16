@@ -15,3 +15,9 @@ defmodule OperandElements do
   items[:slot]
  end
 end
+
+defmodule OperandCallback do
+ def operand_callback(callback, value) do
+  callback.(value)
+ end
+end

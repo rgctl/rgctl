@@ -10,3 +10,10 @@ class OperandElements { static Object operand_element(Object[] box, Object value
 class OperandRest { static Object operand_rest(Object... values) { return values[0]; } }
 
 class OperandRestRelay { static Object operand_rest_relay(Object value) { return OperandRest.operand_rest(value); } }
+
+class OperandCallback { static int operand_callback(java.util.function.Function<Integer,Integer> callback, int value) { return callback.apply(value); } }
+
+class OperandBoundCaller { static int operand_bound(java.util.function.Function<Integer,Integer> callback, OperandBound box, int value) { return callback.apply(value); } }
+class OperandBound { int operand_bound_target(int value) { return value; } }
+
+class OperandCallbackOther { static String operand_callback_other(java.util.function.Function<Integer,Integer> callback, int value) { return callback.toString(); } }

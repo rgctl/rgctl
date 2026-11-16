@@ -34,6 +34,18 @@
     ]
   },
   "symbols": {
+    "operand_callback": {
+      "match": {
+        "name": "operand_callback"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_calls": 1,
+        "operand_returns": 1
+      }
+    },
     "operand_field": {
       "match": {
         "name": "operand_field"

@@ -22,3 +22,16 @@ def operand_rest(*values: object):
 
 def operand_rest_relay(value):
  return operand_rest(value)
+
+def operand_callback(callback, value):
+ return callback(value)
+
+def operand_bound(callback, box, value):
+ return callback(value)
+class OperandBound:
+ def operand_bound_target(self, value):
+  return value
+
+def operand_callable_field(box, callback, value):
+ box.callback = callback
+ return box.callback(value)
