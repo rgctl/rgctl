@@ -102,32 +102,44 @@ impl StructuralTopology {
     }
 
     /// Outgoing neighbors filtered by allowed edge types.
+    ///
+    /// Uses a stack-allocated `[bool; 256]` edge-type mask instead of a heap
+    /// `HashSet`, so per-node filtering is allocation-free.
     pub fn out_filtered<'a>(
         &'a self,
         u: u32,
         allowed: &'a [EdgeType],
     ) -> impl Iterator<Item = u32> + 'a {
+        let mut mask = [false; 256];
+        for &ty in allowed {
+            mask[edge_type_to_u8(ty) as usize] = true;
+        }
         let (targets, types) = self.csr.out_neighbors(u);
-        let allowed_codes: HashSet<u8> = allowed.iter().copied().map(edge_type_to_u8).collect();
         targets
             .iter()
             .zip(types.iter())
-            .filter(move |&(_, &ty)| allowed_codes.contains(&ty))
+            .filter(move |&(_, &ty)| mask[ty as usize])
             .map(|(&t, _)| t)
     }
 
     /// Incoming neighbors filtered by allowed edge types.
+    ///
+    /// Uses a stack-allocated `[bool; 256]` edge-type mask instead of a heap
+    /// `HashSet`, so per-node filtering is allocation-free.
     pub fn in_filtered<'a>(
         &'a self,
         u: u32,
         allowed: &'a [EdgeType],
     ) -> impl Iterator<Item = u32> + 'a {
+        let mut mask = [false; 256];
+        for &ty in allowed {
+            mask[edge_type_to_u8(ty) as usize] = true;
+        }
         let (targets, types) = self.csr.in_neighbors(u);
-        let allowed_codes: HashSet<u8> = allowed.iter().copied().map(edge_type_to_u8).collect();
         targets
             .iter()
             .zip(types.iter())
-            .filter(move |&(_, &ty)| allowed_codes.contains(&ty))
+            .filter(move |&(_, &ty)| mask[ty as usize])
             .map(|(&t, _)| t)
     }
 

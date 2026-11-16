@@ -492,6 +492,30 @@
       }
     }
   },
+  "dead_code": {
+    "severity": "required",
+    "entry_point": "CorrectnessRoot",
+    "reachable_with_entry_point": ["CorrectnessRoot", "CorrectnessMid", "CorrectnessLeaf"],
+    "must_contain": [
+      {
+        "name": "CorrectnessRoot",
+        "kind": "unreferenced_function",
+        "confidence": "high",
+        "file": "CorrectnessHarness.cs"
+      },
+      {
+        "name": "CorrectnessHarness",
+        "kind": "unreferenced_class",
+        "confidence": "medium"
+      }
+    ],
+    "must_not_contain": [
+      "List",
+      "Get",
+      "CorrectnessMid",
+      "CorrectnessLeaf"
+    ]
+  },
   "invariants": {
     "B1_blast_vs_calls": {
       "enabled": true,

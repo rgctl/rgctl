@@ -31,6 +31,7 @@ Programmatic reference for parsing rgctl output. Every structured CLI command em
 19. [`install`](#19-install)
 20. [`writeback` (`verify` / `export` / `patch`)](#20-writeback-verify--export--patch)
 21. [`diff`](#21-diff)
+22. [`dead-code`](#22-dead-code)
 
 ---
 
@@ -122,6 +123,7 @@ if (doc.schema_version !== 2) {
 | `communities` | ✅ | `communities`, `modularity` | Named community labels |
 | `clones` | ✅ | `groups`, `graph_digest` | Exact / bloom / fragment (SESE + 1-WL) clone groups; not semantic search |
 | `review check` / `review paths` / `review export` | ✅ | violations / paths / composed export | Temporal PR gate + call-path deltas (`pr-check` = alias) |
+| `dead-code` | ✅ | `summary`, `findings` | Graph-reachability dead-code detection |
 | `cpg` | ✅ | varies by subcommand | Hybrid CPG façade (`slice` / `inspect` are canonical for flow/CFG) |
 | `vuln` / `deps` | ✅ | varies | OSV triage / analyze / deps check (`security …` aliases same handlers) |
 | `security` | ✅ | same as `vuln`/`deps`/`taint` | Soft namespace; no separate JSON schema |
@@ -1605,6 +1607,54 @@ interface DiffResponse {
     digest_secs: number;
     diff_secs: number;
   };
+}
+```
+
+---
+
+## 22. `dead-code`
+
+Graph-reachability dead-code detection (`DeadCodeAnalyzer` over `PetGraphView` / `StructuralTopology` CSR). Types: `crates/rgctl-analysis/src/dead_code.rs`, `src/cli/dead_code.rs`, `src/cli/dead_code_output.rs`.
+
+```bash
+rgctl -f json dead-code [--confidence high,medium,low] [--entry-point PAT]...
+                        [--exclude PAT]... [--include-tests] [--limit N]
+```
+
+Finds symbols that are unreachable from any entry point (`main` / `__init__`,
+framework annotations such as `@RestController` / `@Service` / `@Scheduled`,
+`ExposesRoute` edges, and user-supplied `--entry-point` patterns) **and** have
+no incoming reference edges — i.e. dead roots. Downstream helpers of a dead
+root and isolated recursion cycles are intentionally suppressed (root-only
+semantics).
+
+`--confidence` accepts only `high`, `medium`, `low` (comma-separated); invalid
+level names exit non-zero instead of silently returning an empty report.
+
+### TypeScript shape
+
+```typescript
+interface DeadCodeReport {
+  schema_version: 1;
+  summary: {
+    total_symbols: number;   // analyzable symbols in scope
+    reachable_symbols: number;
+    dead_symbols: number;    // after --confidence / --limit filters
+    entry_points: number;
+  };
+  findings: Array<{
+    symbol_name: string;
+    qualified_name: string | null;
+    file_path: string | null;
+    start_line: number | null;
+    end_line: number | null;
+    node_type: string;       // "Function" | "Class" | "Import" | ...
+    kind: "unused_import" | "unreferenced_function" | "unreferenced_class"
+        | "unreferenced_variable" | "unreferenced_module" | "unreferenced_type";
+    confidence: "high" | "medium" | "low";
+    reason: string;
+    node_id: string;         // UUID
+  }>;                        // ordered: high confidence first, then file/line
 }
 ```
 

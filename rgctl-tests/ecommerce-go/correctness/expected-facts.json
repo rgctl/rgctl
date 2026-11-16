@@ -530,6 +530,25 @@
       }
     }
   },
+  "dead_code": {
+    "severity": "required",
+    "entry_point": "CorrectnessRoot",
+    "reachable_with_entry_point": ["CorrectnessRoot", "CorrectnessMid", "CorrectnessLeaf"],
+    "must_contain": [
+      {
+        "name": "CorrectnessRoot",
+        "kind": "unreferenced_function",
+        "confidence": "high",
+        "file": "harness.go"
+      }
+    ],
+    "must_not_contain": [
+      "main",
+      "listProducts",
+      "CorrectnessMid",
+      "CorrectnessLeaf"
+    ]
+  },
   "invariants": {
     "B1_blast_vs_calls": {
       "enabled": true,

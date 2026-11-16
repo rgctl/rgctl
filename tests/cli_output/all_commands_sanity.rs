@@ -15,7 +15,7 @@
 //! | Command | What this file asserts |
 //! |---------|------------------------|
 //! | `discover` | Text + JSON v2; flags in [`test_discover_cli_flags`] |
-//! | `blast-radius` | v2 sections, empty/default `handoffs`, `--depth` + `caller_depth_limit`, `--with-slices` populated handoffs, policy → exit 1 |
+//! | `blast-radius` | v2 sections, empty/default `handoffs`, `--depth` + `caller_depth_limit`, `--with-slices` populated handoffs, ambiguous → `AMBIGUOUS_SYMBOL`, policy → exit 1 |
 //! | `gql` | v1 rows; `--explain` sets `explain: true` |
 //! | `metrics` | Standalone `--pagerank`, `--betweenness`, `--communities` key omission |
 //! | `check` | Pass → exit 0; fail → exit 1 on `publishEvent` scale breach |
@@ -255,12 +255,31 @@ fn test_all_cli_commands_json_schema_sanity() {
         );
     }
 
-    // --- blast-radius --summary ---
+    // --- blast-radius: ambiguous symbol → structured error contract ---
+    // `process` is deliberately overloaded in this fixture (two Java
+    // overloads + one Rust fn), so the bare name must be rejected with a
+    // structured AMBIGUOUS_SYMBOL payload on stdout and exit code 1.
+    let ambiguous = sandbox.run(&["-f", "json", "blast-radius", "process"]);
+    assert_exit_code(&ambiguous, 1, "blast-radius ambiguous symbol");
+    let amb_doc = sandbox.parse_stdout_json(&ambiguous);
+    assert_eq!(amb_doc["error_code"].as_str(), Some("AMBIGUOUS_SYMBOL"));
+    assert!(
+        amb_doc["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("Ambiguous symbol")),
+        "expected an ambiguity message: {amb_doc}"
+    );
+    assert!(amb_doc.get("recovery_command").is_some());
+
+    // --- blast-radius --summary (`--line 4` disambiguates the `process()`
+    //     overload; `process(String)` sits on line 8) ---
     let blast_sum = sandbox.run(&[
         "-f",
         "json",
         "blast-radius",
         "OrderService::process",
+        "--line",
+        "4",
         "--summary",
     ]);
     assert_success(&blast_sum, "blast-radius --summary");
@@ -273,8 +292,15 @@ fn test_all_cli_commands_json_schema_sanity() {
     assert!(sum_doc.get("distance_buckets").is_some());
     assert!(sum_doc.get("top_files").is_some());
 
-    // --- blast-radius v2 ---
-    let blast = sandbox.run(&["-f", "json", "blast-radius", "OrderService::process"]);
+    // --- blast-radius v2 (`--line 4` selects the no-arg overload) ---
+    let blast = sandbox.run(&[
+        "-f",
+        "json",
+        "blast-radius",
+        "OrderService::process",
+        "--line",
+        "4",
+    ]);
     assert_success(&blast, "blast-radius");
     let blast_doc = sandbox.parse_stdout_json(&blast);
     let blast_str = str::from_utf8(&blast.stdout).unwrap();
@@ -683,6 +709,34 @@ fn test_all_cli_commands_json_schema_sanity() {
         "second index pass should reuse embeddings: {stats:?}"
     );
 
+    // --- dead-code: JSON contract ---
+    let dead_code = sandbox.run(&["-f", "json", "dead-code"]);
+    assert_success(&dead_code, "dead-code");
+    let dead_code_doc = sandbox.parse_stdout_json(&dead_code);
+    assert_schema_version(&dead_code_doc, 1);
+    assert_keys_present(&dead_code_doc, &["summary", "findings"]);
+    let dc_summary = dead_code_doc.get("summary").expect("dead-code summary");
+    assert_keys_present(
+        dc_summary,
+        &[
+            "total_symbols",
+            "reachable_symbols",
+            "dead_symbols",
+            "entry_points",
+        ],
+    );
+    assert!(dead_code_doc["findings"].is_array());
+
+    // --- dead-code: invalid --confidence rejected (no silent empty report) ---
+    let bad_confidence = sandbox.run(&["-f", "json", "dead-code", "--confidence", "hig"]);
+    assert_exit_code(&bad_confidence, 1, "dead-code invalid --confidence");
+    let bad_doc = sandbox.parse_stdout_json(&bad_confidence);
+    let msg = bad_doc["message"].as_str().unwrap_or("");
+    assert!(
+        msg.contains("--confidence") && msg.contains("medium"),
+        "error should name the flag and valid levels: {bad_doc}"
+    );
+
     // --- blast-radius policy violation → exit 1, JSON still valid ---
     let strict_policy = sandbox.repo.join("strict_policy.json");
     fs::write(&strict_policy, r#"{"max_impact_nodes": 0}"#).expect("write policy");
@@ -693,6 +747,11 @@ fn test_all_cli_commands_json_schema_sanity() {
         "process",
         "--class",
         "OrderService",
+        // `--line 4` disambiguates the `process()` overload. Without it the
+        // AMBIGUOUS_SYMBOL error also exits 1 and would silently satisfy the
+        // exit-code check below while breaking the gatekeeping JSON payload.
+        "--line",
+        "4",
         "--policy-file",
         strict_policy.to_str().unwrap(),
     ]);

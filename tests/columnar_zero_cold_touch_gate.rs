@@ -16,6 +16,17 @@ use std::path::Path;
 use tempfile::TempDir;
 use uuid::Uuid;
 
+/// The cold-extension deserialization counter is process-global while test
+/// threads run in parallel; tests that reset/assert it must serialize so one
+/// test's materializations cannot land inside another's reset→assert window.
+static COLD_COUNTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lock_cold_counter() -> std::sync::MutexGuard<'static, ()> {
+    COLD_COUNTER_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn write_chain_graph(path: &Path, n: usize) -> Vec<Uuid> {
     let mut backend = MemoryBackend::new();
     let mut ids = Vec::with_capacity(n);
@@ -39,6 +50,7 @@ fn write_chain_graph(path: &Path, n: usize) -> Vec<Uuid> {
 
 #[test]
 fn diff_snapshots_zero_cold_ext() {
+    let _cold = lock_cold_counter();
     let tmp = TempDir::new().unwrap();
     let base_path = tmp.path().join("base.bin");
     let head_path = tmp.path().join("head.bin");
@@ -59,6 +71,7 @@ fn diff_snapshots_zero_cold_ext() {
 
 #[test]
 fn blast_scoped_and_cascade_zero_cold_ext() {
+    let _cold = lock_cold_counter();
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("g.bin");
     let ids = write_chain_graph(&path, 500);
@@ -86,6 +99,7 @@ fn blast_scoped_and_cascade_zero_cold_ext() {
 fn evaluate_pr_check_bounds_hydration_on_5k_graph() {
     // CLI `review check` / `pr-check` is the public surface for evaluate_pr_check.
     // Bound cold materializations while opening + scoped blast on a 5k-node graph.
+    let _cold = lock_cold_counter();
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("g.bin");
     let ids = write_chain_graph(&path, 5_000);
@@ -102,6 +116,7 @@ fn evaluate_pr_check_bounds_hydration_on_5k_graph() {
 
 #[test]
 fn materialize_increments_counter() {
+    let _cold = lock_cold_counter();
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("g.bin");
     let a = Node::new(NodeType::Function, "a")
@@ -122,6 +137,7 @@ fn materialize_increments_counter() {
 
 #[test]
 fn fast_pagerank_and_leiden_zero_cold_ext() {
+    let _cold = lock_cold_counter();
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("g.bin");
     write_chain_graph(&path, 2_000);
@@ -143,6 +159,7 @@ fn fast_pagerank_and_leiden_zero_cold_ext() {
 
 #[test]
 fn hot_name_and_type_scan_zero_cold_ext() {
+    let _cold = lock_cold_counter();
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("g.bin");
     write_chain_graph(&path, 2_000);
@@ -175,5 +192,85 @@ fn hot_name_and_type_scan_zero_cold_ext() {
         cold_ext_deserialization_count(),
         0,
         "hot name/type/qn scan and filter_function_impact must not cold-deserialize NodeExtension"
+    );
+}
+
+#[test]
+fn dead_code_analyzer_zero_cold_ext_on_fully_reachable_graph() {
+    // `rgctl dead-code` must stay zero-cold-touch when every node is reachable
+    // from the entry point: the single `0..n` Pass 1 reads hot `NodeRow`
+    // columns only, BFS walks the CSR, and Pass 3 skips reachable nodes
+    // before any `materialize_node_at` (findings == 0 → 0 cold decodes).
+    let _cold = lock_cold_counter();
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("g.bin");
+    let n = 2_000;
+    let mut backend = MemoryBackend::new();
+    let mut ids = Vec::with_capacity(n);
+    for i in 0..n {
+        let name = if i == 0 {
+            "main".to_string()
+        } else {
+            format!("f{i}")
+        };
+        let node = Node::new(NodeType::Function, name)
+            .with_file_path(format!("src/f{i}.rs"))
+            .with_qualified_name(format!("mod::f{i}"))
+            .with_location(1, 10)
+            .with_property("note".into(), format!("cold-{i}"));
+        ids.push(node.id);
+        backend.insert_node(node).unwrap();
+    }
+    for i in 0..n.saturating_sub(1) {
+        backend
+            .insert_edge(Edge::new(ids[i], ids[i + 1], EdgeType::Calls))
+            .unwrap();
+    }
+    write_columnar_from_backend(&backend, &path).unwrap();
+    let store = SnapshotNodeStore::open(&path).unwrap();
+
+    reset_cold_ext_deserialization_count();
+    let analyzer = rgctl_analysis::DeadCodeAnalyzer::new(&store).unwrap();
+    let report = analyzer.analyze().unwrap();
+    assert_eq!(
+        cold_ext_deserialization_count(),
+        0,
+        "dead-code analyze() on a fully reachable graph must not cold-deserialize NodeExtension"
+    );
+    assert_eq!(
+        report.summary.dead_symbols, 0,
+        "chain from main is reachable"
+    );
+    assert!(
+        report.summary.reachable_symbols > 0,
+        "expected reachable symbols from the main root"
+    );
+}
+
+#[test]
+fn dead_code_analyzer_cold_ext_bounded_by_findings() {
+    // With unreachable nodes, cold decodes are allowed only for confirmed
+    // findings (CSR prechecks filter reachable / import / referenced nodes
+    // before materialization), never O(N).
+    let _cold = lock_cold_counter();
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("g.bin");
+    write_chain_graph(&path, 2_000);
+    let store = SnapshotNodeStore::open(&path).unwrap();
+
+    reset_cold_ext_deserialization_count();
+    let analyzer = rgctl_analysis::DeadCodeAnalyzer::new(&store).unwrap();
+    let report = analyzer.analyze().unwrap();
+    let cold = cold_ext_deserialization_count();
+    // No `main` root in this graph: every chain node is unreachable, but only
+    // f0 has no inbound reference edge, so exactly one finding materializes.
+    assert_eq!(
+        report.summary.dead_symbols, 1,
+        "only the chain head is dead"
+    );
+    assert_eq!(report.findings[0].symbol_name, "f0");
+    assert_eq!(
+        cold, 1,
+        "cold decodes must equal the finding count (sparse materialization), got {cold}"
     );
 }
