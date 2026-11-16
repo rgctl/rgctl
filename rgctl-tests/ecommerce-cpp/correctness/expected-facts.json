@@ -415,6 +415,24 @@
       }
     }
   },
+  "dead_code": {
+    "severity": "required",
+    "entry_point": "correctnessRoot",
+    "reachable_with_entry_point": ["correctnessRoot", "correctnessMid", "correctnessLeaf"],
+    "must_contain": [
+      {
+        "name": "correctnessRoot",
+        "kind": "unreferenced_function",
+        "confidence": "high",
+        "file": "correctness_harness.cpp"
+      }
+    ],
+    "must_not_contain": [
+      "main",
+      "correctnessMid",
+      "correctnessLeaf"
+    ]
+  },
   "invariants": {
     "B1_blast_vs_calls": {
       "enabled": true,

@@ -4,7 +4,7 @@ rgctl QE for map collisions, graph correctness, and semantic search follows **op
 
 - Required checks **fail the suite** (non-zero exit / CI red) until the underlying bug is fixed.
 - Do **not** downgrade a failing required check to `best_effort` / `#[ignore]` solely to green CI.
-- **Do not test via `rgctl gql` (`gql` is deprecated):** All correctness and QE harnesses must assert via canonical structured JSON verbs (`rgctl -f json find`, `callers`, `callees`, `relations`, `inventory`, `blast-radius`, `inspect`, `slice`, `cpg`, `security`, `clones`, `semantic`, `review`) or typed Rust snapshot APIs — never Cypher-like `rgctl gql`.
+- **Do not test via `rgctl gql` (`gql` is deprecated):** All correctness and QE harnesses must assert via canonical structured JSON verbs (`rgctl -f json find`, `callers`, `callees`, `relations`, `inventory`, `blast-radius`, `inspect`, `slice`, `cpg`, `security`, `clones`, `semantic`, `review`, `dead-code`) or typed Rust snapshot APIs — never Cypher-like `rgctl gql`.
 - Product/engine fixes are **separate** changes when working in a pure QE lane, or fixed directly in engine crates when delivering end-to-end correctness fixes; never weaken assertions to mask product bugs.
 
 ## When a required check fails

@@ -85,7 +85,7 @@ Prefer **exact** fields for harness symbols. Soft `min_*` / `*_any` remain for d
 
 ### Layers
 
-> **Important:** `rgctl gql` is **deprecated** and is not used by `graph_correctness`. All symbol and edge assertions run against canonical structured JSON verbs (`find`, `callers`, `callees`, `relations`, `inventory`, `blast-radius`, `inspect`, `slice`, `cpg`, `security`, `clones`, `semantic`, `review`) and typed `ColumnarGraphSnapshot` / `AnalysisResults` APIs.
+> **Important:** `rgctl gql` is **deprecated** and is not used by `graph_correctness`. All symbol and edge assertions run against canonical structured JSON verbs (`find`, `callers`, `callees`, `relations`, `inventory`, `blast-radius`, `inspect`, `slice`, `cpg`, `security`, `clones`, `semantic`, `review`, `dead-code`) and typed `ColumnarGraphSnapshot` / `AnalysisResults` APIs.
 
 | Section | Source of truth | What we assert |
 |---------|-----------------|----------------|
@@ -157,6 +157,7 @@ Omitted sections are skipped. Set `severity` to `unsupported` to record a dimens
 | `clones` | `rgctl -f json clones --mode exact\|bloom\|fragment --no-write` | `group_with` names share a group with this symbol; `not_grouped_with` names do not. Optional `seed`, `min_loc` (default 1) |
 | `semantic` | `semantic index --embedder vocab` then `semantic query --limit 3 --expand neighbors` | `top3_contains` is in the top 3 hit names (optional `scope` path prefix via `--scope`). `neighbor_names` must appear in the neighbor expansion |
 | `review` | `review paths --synthetic-head worktree` | Sandbox-only edit: replace `find` with `replace` in `file` inside a `TempDir` copy with local git init, then require `must_contain` names in the report. The tracked fixture is never modified |
+| `dead_code` | `rgctl -f json dead-code` (+ second run with `--entry-point`) | `must_contain` findings (optional `kind`, `confidence`, `file` suffix) appear in the default run; `must_not_contain` names (entry points and their callees) are never flagged; when `entry_point` is set, every `reachable_with_entry_point` name (default: the entry point itself) becomes un-flagged and `summary.entry_points` grows |
 
 ## `analytics`
 
@@ -212,6 +213,31 @@ and check the call chain `root -> mid -> leaf`:
     "find": "return y",
     "replace": "return z",
     "must_contain": ["correctnessRoot"]
+  }
+}
+```
+
+### Top-level `dead_code` section
+
+Runs `rgctl -f json dead-code` against the discovered fixture graph. The default
+run must report every `must_contain` symbol (unreferenced harness roots) with
+the expected `kind` / `confidence` / `file` suffix, and must never flag the
+`must_not_contain` names (real entry points such as `main`, route handlers,
+`@RestController` methods, and their callees). When `entry_point` is set, the
+checker re-runs with `--entry-point <name>` and requires every `must_contain`
+symbol to become reachable (un-flagged) with a grown `summary.entry_points`.
+
+```json
+{
+  "dead_code": {
+    "severity": "required",
+    "entry_point": "correctness_root",
+    "reachable_with_entry_point": ["correctness_root", "correctness_mid", "correctness_leaf"],
+    "must_contain": [
+      { "name": "correctness_root", "kind": "unreferenced_function", "confidence": "high", "file": "correctness.rs" },
+      { "name": "correctness_diamond", "kind": "unreferenced_function", "confidence": "high" }
+    ],
+    "must_not_contain": ["main", "seed_demo", "correctness_mid", "correctness_leaf"]
   }
 }
 ```

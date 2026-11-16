@@ -36,6 +36,8 @@ struct ExpectedFacts {
     #[serde(default)]
     invariants: Invariants,
     #[serde(default)]
+    dead_code: Option<DeadCodeSpec>,
+    #[serde(default)]
     analytics: Option<AnalyticsSpec>,
 }
 
@@ -420,6 +422,42 @@ struct ReviewSpec {
     /// Caller names that must appear in `review paths --synthetic-head worktree`.
     #[serde(default)]
     must_contain: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DeadCodeSpec {
+    #[serde(default = "required_sev")]
+    severity: String,
+    /// Harness root passed via `--entry-point` on a second run. Every name in
+    /// `reachable_with_entry_point` must become un-flagged and
+    /// `summary.entry_points` must grow.
+    #[serde(default)]
+    entry_point: Option<String>,
+    /// Findings that must appear in the default (flag-less) run.
+    #[serde(default)]
+    must_contain: Vec<DeadCodeExpect>,
+    /// Symbol names that must NOT be flagged in the default run
+    /// (entry points such as `main` / route handlers and their callees).
+    #[serde(default)]
+    must_not_contain: Vec<String>,
+    /// Names that must be un-flagged in the `--entry-point` re-run (the
+    /// harness root and its call chain). Defaults to `[entry_point]`.
+    #[serde(default)]
+    reachable_with_entry_point: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeadCodeExpect {
+    name: String,
+    /// Expected `kind` of the finding (`unreferenced_function`, …).
+    #[serde(default)]
+    kind: Option<String>,
+    /// Expected `confidence` tier (`high`, `medium`, `low`).
+    #[serde(default)]
+    confidence: Option<String>,
+    /// Optional file-suffix filter on the finding's `file_path`.
+    #[serde(default)]
+    file: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1381,6 +1419,9 @@ pub fn run_project(
         checks.extend(check_symbol(sid, entry, bin, &work, &index));
     }
     checks.extend(check_invariants(&facts, bin, &work, &index));
+    if let Some(dc) = &facts.dead_code {
+        checks.extend(check_dead_code(dc, bin, &work));
+    }
     if let Some(analytics) = &facts.analytics {
         if !needs_full_analytics {
             checks.push(ensure_analytics_discover(bin, &work, exclude));
@@ -2203,6 +2244,166 @@ fn check_mro(sid: &str, spec: &MroSpec, m: &MatchSpec, bin: &Path, cwd: &Path) -
                 format!("{from} -[{edge}]-> {name}"),
             ));
         }
+    }
+    out
+}
+
+fn dead_code_report(bin: &Path, cwd: &Path, extra: &[&str]) -> Option<Value> {
+    let mut args = vec!["-f", "json", "dead-code"];
+    args.extend_from_slice(extra);
+    run_json(bin, cwd, &args)
+}
+
+fn dead_code_findings(doc: &Value) -> &[Value] {
+    doc.get("findings")
+        .and_then(|v| v.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+fn finding_hits<'a>(findings: &'a [Value], name: &str) -> Vec<&'a Value> {
+    findings
+        .iter()
+        .filter(|f| {
+            f.get("symbol_name")
+                .and_then(|v| v.as_str())
+                .is_some_and(|n| name_matches(n, name))
+        })
+        .collect()
+}
+
+fn check_dead_code(spec: &DeadCodeSpec, bin: &Path, cwd: &Path) -> Vec<CheckResult> {
+    if spec.severity == "unsupported" {
+        return vec![];
+    }
+    let mut out = Vec::new();
+    let Some(doc) = dead_code_report(bin, cwd, &[]) else {
+        return vec![check(
+            "dead_code.run",
+            &spec.severity,
+            false,
+            "rgctl -f json dead-code failed",
+        )];
+    };
+    // JSON contract: schema_version + summary counters + findings array.
+    let contract_ok = doc.get("schema_version").and_then(|v| v.as_u64()).is_some()
+        && [
+            "total_symbols",
+            "reachable_symbols",
+            "dead_symbols",
+            "entry_points",
+        ]
+        .iter()
+        .all(|k| {
+            doc.pointer(&format!("/summary/{k}"))
+                .and_then(|v| v.as_u64())
+                .is_some()
+        })
+        && doc.get("findings").and_then(|v| v.as_array()).is_some();
+    let findings = dead_code_findings(&doc).to_vec();
+    out.push(check(
+        "dead_code.run",
+        &spec.severity,
+        contract_ok,
+        format!(
+            "summary={} findings={}",
+            doc.get("summary").cloned().unwrap_or(Value::Null),
+            findings.len()
+        ),
+    ));
+
+    for exp in &spec.must_contain {
+        let hits = finding_hits(&findings, &exp.name);
+        let mut ok = !hits.is_empty();
+        let mut detail = format!("'{}' findings={}", exp.name, hits.len());
+        if let Some(kind) = &exp.kind {
+            let kind_ok = hits
+                .iter()
+                .any(|f| f.get("kind").and_then(|v| v.as_str()) == Some(kind.as_str()));
+            ok = ok && kind_ok;
+            detail.push_str(&format!(" kind={kind}({kind_ok})"));
+        }
+        if let Some(conf) = &exp.confidence {
+            let conf_ok = hits
+                .iter()
+                .any(|f| f.get("confidence").and_then(|v| v.as_str()) == Some(conf.as_str()));
+            ok = ok && conf_ok;
+            detail.push_str(&format!(" confidence={conf}({conf_ok})"));
+        }
+        if let Some(file) = &exp.file {
+            let file_ok = hits.iter().any(|f| {
+                f.get("file_path")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|p| p.ends_with(file.as_str()) || p.contains(file.as_str()))
+            });
+            ok = ok && file_ok;
+            detail.push_str(&format!(" file={file}({file_ok})"));
+        }
+        out.push(check(
+            format!("dead_code.must_contain.{}", exp.name),
+            &spec.severity,
+            ok,
+            detail,
+        ));
+    }
+
+    for name in &spec.must_not_contain {
+        let hits = finding_hits(&findings, name);
+        out.push(check(
+            format!("dead_code.must_not_contain.{name}"),
+            &spec.severity,
+            hits.is_empty(),
+            if hits.is_empty() {
+                format!("'{name}' not flagged (as expected)")
+            } else {
+                format!("'{name}' unexpectedly flagged {} time(s)", hits.len())
+            },
+        ));
+    }
+
+    if let Some(ep) = &spec.entry_point {
+        let Some(doc2) = dead_code_report(bin, cwd, &["--entry-point", ep]) else {
+            out.push(check(
+                "dead_code.entry_point_run",
+                &spec.severity,
+                false,
+                format!("rgctl dead-code --entry-point {ep} failed"),
+            ));
+            return out;
+        };
+        let findings2 = dead_code_findings(&doc2).to_vec();
+        let chain: Vec<String> = if spec.reachable_with_entry_point.is_empty() {
+            vec![ep.clone()]
+        } else {
+            spec.reachable_with_entry_point.clone()
+        };
+        for name in &chain {
+            let still = !finding_hits(&findings2, name).is_empty();
+            out.push(check(
+                format!("dead_code.entry_point_reachable.{name}"),
+                &spec.severity,
+                !still,
+                if still {
+                    format!("'{name}' still flagged with --entry-point {ep}")
+                } else {
+                    format!("'{name}' reachable (not flagged) with --entry-point {ep}")
+                },
+            ));
+        }
+        let eps1 = doc
+            .pointer("/summary/entry_points")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let eps2 = doc2
+            .pointer("/summary/entry_points")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        out.push(check(
+            "dead_code.entry_point_registered",
+            &spec.severity,
+            eps2 > eps1,
+            format!("entry_points {eps1} -> {eps2} with --entry-point {ep}"),
+        ));
     }
     out
 }
@@ -3247,6 +3448,14 @@ mod v2_schema {
             "mid": "correctnessMid",
             "leaf": "correctnessLeaf",
             "separate": ["left", "right"]
+          },
+          "dead_code": {
+            "entry_point": "correctnessRoot",
+            "reachable_with_entry_point": ["correctnessRoot", "correctnessMid"],
+            "must_contain": [
+              {"name": "correctnessRoot", "kind": "unreferenced_function", "confidence": "high", "file": "CorrectnessHarness.java"}
+            ],
+            "must_not_contain": ["main", "listAll"]
           }
         }"#;
         let facts: ExpectedFacts = serde_json::from_str(raw).expect("v2 facts");
@@ -3279,6 +3488,27 @@ mod v2_schema {
         assert_eq!(
             analytics.separate,
             ["left".to_string(), "right".to_string()]
+        );
+        let dc = facts.dead_code.as_ref().expect("dead_code");
+        assert_eq!(dc.entry_point.as_deref(), Some("correctnessRoot"));
+        assert_eq!(
+            dc.reachable_with_entry_point,
+            ["correctnessRoot".to_string(), "correctnessMid".to_string()]
+        );
+        assert_eq!(dc.must_contain.len(), 1);
+        assert_eq!(dc.must_contain[0].name, "correctnessRoot");
+        assert_eq!(
+            dc.must_contain[0].kind.as_deref(),
+            Some("unreferenced_function")
+        );
+        assert_eq!(dc.must_contain[0].confidence.as_deref(), Some("high"));
+        assert_eq!(
+            dc.must_contain[0].file.as_deref(),
+            Some("CorrectnessHarness.java")
+        );
+        assert_eq!(
+            dc.must_not_contain,
+            ["main".to_string(), "listAll".to_string()]
         );
     }
 }
