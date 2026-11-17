@@ -107,12 +107,25 @@ pub fn ruby_call_unresolved(call: Node, source: &[u8]) -> bool {
 /// `function_symbols` SHOULD already be filtered to [`SymbolType::Function`].
 /// Prefer [`containing_function_from_scope`] during single-pass extraction.
 pub fn containing_function<'a>(node: Node, function_symbols: &[&'a Symbol]) -> Option<&'a Symbol> {
-    let line = node.start_position().row + 1;
+    let start = (node.start_position().row + 1, node.start_position().column);
+    let end = (node.end_position().row + 1, node.end_position().column);
     function_symbols
         .iter()
         .copied()
-        .filter(|s| line >= s.location.start_line && line <= s.location.end_line)
-        .min_by_key(|s| s.location.end_line - s.location.start_line)
+        .filter(|s| {
+            (s.location.start_line, s.location.start_column) <= start
+                && end <= (s.location.end_line, s.location.end_column)
+        })
+        // Nested declarations can share both boundary lines. Prefer the later
+        // start and earlier end rather than relying on symbol iteration order.
+        .min_by_key(|s| {
+            let p = &s.location;
+            (
+                p.end_line.saturating_sub(p.start_line),
+                std::cmp::Reverse((p.start_line, p.start_column)),
+                (p.end_line, p.end_column),
+            )
+        })
 }
 
 /// O(1) enclosing function via [`ScopeStack`] (single-pass AST engine).
@@ -245,7 +258,7 @@ pub fn callee_name(root: Node, source: &[u8]) -> Option<String> {
 
 /// Push a `Calls` relation when `node` is a recognized call site.
 ///
-/// Resolves the enclosing function via an `O(F)` line scan. Prefer
+/// Resolves the enclosing function via an `O(F)` source-span scan. Prefer
 /// [`push_call_relation_scoped`] during single-pass extraction.
 #[allow(clippy::too_many_arguments)]
 pub fn push_call_relation(
