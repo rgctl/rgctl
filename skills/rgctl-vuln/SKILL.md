@@ -26,7 +26,7 @@ Bound stdout on large repos: keep `--depth` small on follow-up `blast-radius` pr
 ## Prerequisites
 
 - Index the repo once with `rgctl discover . --full` (recommended staged pipeline: graph + CFG/PDG + taint + semantic; or `rgctl -r "$REPO" discover --full` without positional `.`) if `.rgctl/graph.snapshot.bin` is missing. Plain `rgctl discover .` also works in fast CI — `vuln analyze` and `vuln scan` lazily build single-function CFG/PDG per discovered call site on demand.
-- Add `--with-dep-stubs` (`discover . --full --with-dep-stubs` or directly on `vuln scan` / `vuln analyze`) when wrapper JARs or `node_modules`/`vendor` packages sit between first-party code and vulnerable sinks.
+- Add `--with-dep-stubs` on `vuln scan` or `vuln analyze` when wrapper JARs or `node_modules`/`vendor` packages sit between first-party code and vulnerable sinks (builds `.rgctl/dep_stubs.bin` on demand).
 - Lockfiles across all Tier-1 ecosystems (`Cargo.lock`, `go.sum`, `gradle.lockfile`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `requirements.txt`, `packages.lock.json`, `composer.lock`, `Gemfile.lock`, `pubspec.lock`, `mix.lock`, `Package.resolved`, `Puppetfile.lock`, `vcpkg.json`, `conan.lock`, `*.rockspec`) are scanned automatically.
 - Local override flags (`--osv <file|dir>`, `--from-report <path>`, `--offline`) guarantee **zero outbound network requests**.
 

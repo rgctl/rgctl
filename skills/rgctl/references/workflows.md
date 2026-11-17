@@ -398,9 +398,6 @@ cd "$REPO" && rgctl discover . --full
 
 # Or minimal CI index (`vuln scan` and `vuln analyze` lazily hydrate single-function CFG/PDG per call site):
 cd "$REPO" && rgctl discover .
-
-# Optional: build `.rgctl/dep_stubs.bin` to stitch App -> WrapperJar -> VulnerableSink:
-cd "$REPO" && rgctl discover . --full --with-dep-stubs
 ```
 
 ### Mode A: Whole-repo scan, network fetch & local overrides (`vuln fetch` / `vuln scan`)
