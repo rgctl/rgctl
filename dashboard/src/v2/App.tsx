@@ -2,12 +2,16 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Instrument } from "./Instrument";
 import { Palette } from "./Palette";
-import { Chip, Panel, Unavailable } from "./shell";
+import { Chip, Command, Panel, Unavailable } from "./shell";
 import { Cfg } from "./rooms/Cfg";
 import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
 import { ArchitectureRoom } from "./rooms/Architecture";
 import { MigrationRoom } from "./rooms/Migration";
 import { TaintRoom } from "./rooms/Taint";
+import { DfgGraph } from "./rooms/DfgGraph";
+import { BlastStage } from "./rooms/BlastStage";
+import { useDfgDetail } from "./hooks/useDfgDetail";
+import { useBlastRadius } from "./hooks/useBlastRadius";
 import { loadManifest, type FunctionEntry } from "./data";
 import { LENSES, ROOMS, keyOf, type LensId, type RoomId } from "./focus";
 import { useFocus } from "./useFocus";
@@ -208,6 +212,73 @@ export function App() {
 }
 
 /**
+ * PDG / dataflow lens — the Taint room's DFG canvas, attached to the Focus.
+ *
+ * `useDfgDetail` owns the archive/per-file decision and the four-valued absence state; this component
+ * only chooses the surface and the receipt. The graph component is shared so the Taint and Understand
+ * rooms cannot drift into drawing two different PDGs.
+ */
+function DataflowLens({ entry }: { entry: FunctionEntry }) {
+  const dfg = useDfgDetail(entry.function_id, true, "slice");
+  return (
+    <Panel
+      title="PDG / Dataflow"
+      subtitle="def-use edges for this symbol"
+      right={dfg.kind === "ready" ? <Chip tone="blue">PDG</Chip> : undefined}
+    >
+      {(dfg.kind === "idle" || dfg.kind === "loading") && (
+        <p className="text-[11px] text-zinc-500">Loading PDG…</p>
+      )}
+      {(dfg.kind === "absent" || dfg.kind === "failed") && (
+        <Unavailable
+          tag={dfg.kind === "failed" ? "read failed" : "no PDG"}
+          what={
+            dfg.kind === "failed"
+              ? "Could not read the PDG for this subject"
+              : "No PDG / dataflow detail for this subject"
+          }
+          why={dfg.reason}
+        />
+      )}
+      {dfg.kind === "ready" && (
+        <DfgGraph dfg={dfg.dfg} maxHeightClass="max-h-[58vh]" testId="understand-dfg-stage" />
+      )}
+      <Command>rgctl -r &lt;repo&gt; -f json cpg pdg {entry.name}</Command>
+    </Panel>
+  );
+}
+
+/**
+ * Blast-radius lens — the Taint room's blast canvas, attached to the Focus.
+ *
+ * Depth is the only control: it is the search radius, and the worker debounces it. The engine is lazy,
+ * so opening Understand never downloads graph_payload until this lens is selected.
+ */
+function BlastLens({ entry }: { entry: FunctionEntry }) {
+  const [depth, setDepth] = useState(5);
+  const blast = useBlastRadius(entry.function_id, depth, true);
+  return (
+    <Panel
+      title="Blast radius"
+      subtitle="upstream callers by hop depth"
+      right={blast.kind === "ready" ? <Chip tone="amber">live</Chip> : undefined}
+    >
+      <BlastStage
+        seedName={entry.name}
+        depth={depth}
+        onDepthChange={setDepth}
+        score={null}
+        blast={blast}
+        testIdPrefix="understand"
+      />
+      <Command>
+        rgctl -r &lt;repo&gt; -f json blast-radius {entry.name} --depth {depth}
+      </Command>
+    </Panel>
+  );
+}
+
+/**
  * Orientation: exactly one screen, and it links into work rather than printing totals. Totals without a
  * destination are what made the old landing experience a wall of numbers.
  */
@@ -346,9 +417,13 @@ function UnderstandRoom({
       </Panel>
 
       {lens === "cfg" && <Cfg entry={entry} />}
-      {/* Everything else in the control is a question phase 3 answers. `code` and `cfgpdg` are gone: both
-          were the CFG lens in another frame, and both are now controls inside it (show source / graph height). */}
-      {lens !== "cfg" && <LensPlaceholder lens={lens} />}
+      {lens === "dataflow" && <DataflowLens entry={entry} />}
+      {lens === "blast" && <BlastLens entry={entry} />}
+      {/* Slice/Trace, Metrics, and Time remain questions phase 3 answers. `code` and `cfgpdg` are gone:
+          both were the CFG lens in another frame, and both are now controls inside it. */}
+      {lens !== "cfg" && lens !== "dataflow" && lens !== "blast" && (
+        <LensPlaceholder lens={lens} />
+      )}
     </div>
   );
 }

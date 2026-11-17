@@ -32,32 +32,19 @@ const PENDING: Partial<Record<RoomId, { change: string; what: string; why: strin
  * Lenses that are not written yet, keyed by **lens**.
  *
  * `Placeholder` above is keyed by room, so rendering `<Placeholder room="understand" />` for an unbuilt
- * lens returned `null` — five lens tabs (dataflow, slice, blast, metrics, time) produced an empty pane with
- * nothing saying why. A tab that appears functional and renders nothing is worse than a tab that is
- * visibly absent.
+ * lens returned `null` — the unimplemented lens tabs produced an empty pane with nothing saying why. A tab
+ * that appears functional and renders nothing is worse than a tab that is visibly absent.
  *
- * Each entry says what the lens will show and why it is not there, and the two reasons are genuinely
- * different — which is the point of writing them out rather than saying "not built yet" five times:
- * most lenses have their data and simply no code, while `metrics` is **blocked by a keying mismatch**.
+ * CFG, PDG/Dataflow, and Blast are implemented in `App.tsx`. The remaining entries say what the lens will
+ * show and why it is not there; `metrics` is **blocked by a keying mismatch**, while slice/time have data
+ * or a mechanism but no view yet.
  */
 const PENDING_LENSES: Partial<Record<LensId, { what: string; why: string; status: string; tag: string }>> = {
-  dataflow: {
-    tag: "code not written",
-    what: "Dataflow lens",
-    status: "not written yet — the data is here",
-    why: "Def-use over the PDG for the focused symbol: which definitions reach its uses, and which of its definitions reach further. This bundle carries the detail (`dataflow_detail_dir: slice`), so the lens is code that has not been written rather than data that is missing.",
-  },
   slice: {
     tag: "code not written",
     what: "Slice / Trace lens",
     status: "not written yet — the data is here",
     why: "A statement-level backward or forward slice for the focused symbol — the lines that must run for it, or that it affects. The `slice/` details are in this bundle for every indexed function.",
-  },
-  blast: {
-    tag: "code not written",
-    what: "Blast lens",
-    status: "not written yet — the data is here",
-    why: "What the symbol can reach, SCC-condensed, with the caveat that reachability uses `Calls` edges only — so indirect, virtual and macro call sites under-report impact.",
   },
   metrics: {
     tag: "blocked: no join key",

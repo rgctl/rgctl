@@ -149,15 +149,19 @@ describe("the shell has no tab strip", () => {
   });
 });
 
-describe("an unbuilt lens explains itself instead of rendering an empty pane", () => {
-  it("dataflow names the lens and says the data is present", async () => {
+describe("a lens renders its subject or explains its absence", () => {
+  it("dataflow draws the shared PDG canvas for the subject", async () => {
     renderApp(`/understand?lens=dataflow&focus=${SUBJECT}`);
-    // Previously this rendered `null`: `<Placeholder room="understand" />` is keyed by room, so five lens
-    // tabs produced an empty pane with nothing saying why.
-    // The lens names itself in the panel title and again in the explanation, so match all occurrences.
-    expect((await screen.findAllByText(/Dataflow lens/)).length).toBeGreaterThan(0);
-    expect(await screen.findByText(/not written yet — the data is here/)).toBeTruthy();
-    expect(await screen.findByText(/dataflow_detail_dir/)).toBeTruthy();
+    expect(await screen.findByText(/PDG \/ Dataflow/)).toBeTruthy();
+    expect(await screen.findByTestId("understand-dfg-stage")).toBeTruthy();
+    expect(await screen.findByText(/2 data edges/)).toBeTruthy();
+  });
+
+  it("blast mounts the shared radius canvas for the subject", async () => {
+    renderApp(`/understand?lens=blast&focus=${SUBJECT}`);
+    expect(await screen.findByText(/Blast radius/)).toBeTruthy();
+    expect(await screen.findByTestId("understand-blast-stage")).toBeTruthy();
+    expect(await screen.findByTestId("understand-blast-depth")).toBeTruthy();
   });
 
   it("metrics states the keying mismatch rather than printing a zero", async () => {

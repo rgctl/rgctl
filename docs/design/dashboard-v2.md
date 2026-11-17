@@ -91,6 +91,16 @@ Semantic search is a **mode of the command palette**, not an eighth room and not
 - **Complete function index:** lightweight `--with-universe` bundles have no `cfg_index.json` / `slice_index.json`; they carry `function_index.json` so semantic hits can resolve into Focus without a full CFG build.
 - **No per-keystroke load:** the server caches `SemanticIndex` and `AnalysisResults`; the UI runs a query on submit, using `expand: "blast"` rather than the slower `all` expansion because the answer only needs caller/impact evidence.
 
+### 3.4 Understand lenses
+
+`Understand` implements three lenses against the current Focus:
+
+- **CFG** — source + control-flow graph via `SymbolReader`.
+- **PDG / Dataflow** — def-use edges via the shared `DfgGraph`, loaded through `useDfgDetail` (per-file or record-pack).
+- **Blast** — upstream caller shells via the shared `BlastStage` and the lazy WASM engine.
+
+The Taint room and Understand share `CfgGraph`, `DfgGraph`, and `BlastStage`; only the surrounding room and test identity differ. `Slice/Trace`, `Metrics`, and `Time` remain explicit absences until their views land.
+
 ---
 
 ## 4. CLI Contract, JSON Schema & Implementation Map
@@ -134,6 +144,7 @@ rgctl serve --query-only --host 127.0.0.1 --port 8080
 | **HTTP Server & Live Watcher** | [`src/cli/http_serve.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/http_serve.rs), [`src/cli/file_watch.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/file_watch.rs) | `serve`, `handle_api_query`, `handle_api_cpg` |
 | **Dashboard v2 Shell & Focus** | [`dashboard/src/v2/`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/v2/) | `focus.ts`, `DEFAULT_ROOM`, `ArchitectureRoom`, `ReviewRoom` |
 | **Ask mode (semantic retrieval)** | [`dashboard/src/v2/Palette.tsx`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/v2/Palette.tsx), [`dashboard/src/v2/ask.ts`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/v2/ask.ts) | `askSemantic`, `answerFor`, Focus handoff via `pickKey` |
+| **Understand lenses** | [`dashboard/src/v2/App.tsx`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/v2/App.tsx), [`rooms/Cfg.tsx`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/v2/rooms/Cfg.tsx), [`rooms/DfgGraph.tsx`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/v2/rooms/DfgGraph.tsx), [`rooms/BlastStage.tsx`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/v2/rooms/BlastStage.tsx) | `Cfg`, `DataflowLens`, `BlastLens`; shared with Taint |
 | **Complete function index** | [`crates/rgctl-dashboard/src/function_index_export.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-dashboard/src/function_index_export.rs) | `FUNCTION_INDEX_FILE`, `export_function_index` |
 | **Legacy & Lens Views** | [`dashboard/src/`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/) | `App.tsx`, `BlastView.tsx`, `CfgView.tsx`, `DataflowView.tsx`, `SliceView.tsx`, `TaintView.tsx`, `MigrationView.tsx`, `SearchView.tsx` |
 
