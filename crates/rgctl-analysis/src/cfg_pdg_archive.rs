@@ -1102,39 +1102,93 @@ mod tests {
     }
 
     #[test]
-    fn archive_round_trip_v3() {
+    fn archive_round_trip_and_stale_rebuild() {
         let id = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let source = "fn example() { let enabled = true; if enabled { consume(); } }";
+        let cfg = build_cfg_for_function("rust", source, "example").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes()).unwrap();
         let mut archive = CfgPdgArchive::default();
-        archive.insert(sample_record(id, "add"));
-
+        for function_id in [id, other] {
+            archive.insert(CfgPdgRecord {
+                function_id,
+                code_hash: hash_code(source),
+                function_name: "example".into(),
+                file_path: Some("demo.rs".into()),
+                cfg: Arc::new(cfg.clone()),
+                pdg: Arc::new(pdg.clone()),
+            });
+        }
         let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join(CFG_PDG_ARCHIVE_FILE);
+        let path = CfgPdgArchive::default_path(tmp.path());
         archive.write_to_path(&path).unwrap();
-
-        let file = File::open(&path).unwrap();
-        let mmap = unsafe { Mmap::map(&file).unwrap() };
-        assert_eq!(&mmap[0..4], &ARCHIVE_MAGIC);
-        assert_eq!(
-            u32::from_le_bytes(mmap[4..8].try_into().unwrap()),
-            ARCHIVE_VERSION
+        {
+            let file = File::open(&path).unwrap();
+            let mmap = unsafe { Mmap::map(&file).unwrap() };
+            assert_eq!(&mmap[0..4], &ARCHIVE_MAGIC);
+            assert_eq!(
+                u32::from_le_bytes(mmap[4..8].try_into().unwrap()),
+                ARCHIVE_VERSION
+            );
+            let trailer = &mmap[mmap.len() - TOC_TRAILER_SIZE..];
+            let toc_offset = u64::from_le_bytes(trailer[0..8].try_into().unwrap());
+            assert_eq!(toc_offset % 8, 0);
+            assert_eq!(
+                u32::from_le_bytes(trailer[12..16].try_into().unwrap()),
+                TOC_FOOTER_MAGIC
+            );
+            let loaded = CfgPdgArchive::load_from_path(&path).unwrap();
+            assert!(loaded.get_pdg(id).is_some());
+            assert!(loaded.get_cfg(id).is_some());
+            let view = CfgPdgArchiveMmap::open(&path).unwrap();
+            assert!(view.contains(id));
+            assert_eq!(view.len(), 2);
+            let single = view.load_record(id).unwrap().expect("selective load");
+            assert_eq!(single.function_name, "example");
+            assert!(
+                single
+                    .pdg
+                    .nodes
+                    .values()
+                    .any(|n| n.statement.kind == crate::cfg::StatementKind::Branch
+                        && n.used_vars.contains("enabled"))
+            );
+        }
+        // The same source must rebuild after an archive semantics upgrade.
+        // Raw append must not relabel unrelated stale records as current.
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[4..8].copy_from_slice(&3u32.to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+        assert!(CfgPdgArchiveMmap::open(&path).is_err());
+        assert!(CfgPdgArchive::load_from_path(&path).is_err());
+        let rebuilt = ensure_cfg_pdg_for_source(EnsureCfgPdgOpts {
+            repo_root: tmp.path(),
+            language: "rust",
+            source,
+            function_name: "example",
+            file_path: Some("demo.rs"),
+            start_byte: None,
+            end_byte: None,
+            function_id: Some(id),
+            persist: true,
+        })
+        .unwrap();
+        assert!(
+            rebuilt
+                .pdg
+                .nodes
+                .values()
+                .any(|n| n.statement.kind == crate::cfg::StatementKind::Branch
+                    && n.used_vars.contains("enabled"))
         );
-        let trailer = &mmap[mmap.len() - TOC_TRAILER_SIZE..];
-        let toc_offset = u64::from_le_bytes(trailer[0..8].try_into().unwrap());
-        assert_eq!(toc_offset % 8, 0);
-        assert_eq!(
-            u32::from_le_bytes(trailer[12..16].try_into().unwrap()),
-            TOC_FOOTER_MAGIC
-        );
-
-        let loaded = CfgPdgArchive::load_from_path(&path).unwrap();
-        assert!(loaded.get_pdg(id).is_some());
-        assert!(loaded.get_cfg(id).is_some());
-
         let view = CfgPdgArchiveMmap::open(&path).unwrap();
         assert!(view.contains(id));
+        assert!(!view.contains(other));
         assert_eq!(view.len(), 1);
-        let single = view.load_record(id).unwrap().expect("selective load");
-        assert_eq!(single.function_name, "add");
+        assert_eq!(
+            u32::from_le_bytes(std::fs::read(&path).unwrap()[4..8].try_into().unwrap()),
+            ARCHIVE_VERSION
+        );
     }
 
     #[test]

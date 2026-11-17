@@ -1005,6 +1005,7 @@ mod tests {
         };
         let mut entries = vec![current.clone()];
         for key in [
+            "Library.java\x1fscore\x1fsame".to_string(),
             stable_function_key("Library.java", "score", "same"),
             format!("function-v1\x1f{id}\x1fsame"),
         ] {
@@ -1020,6 +1021,19 @@ mod tests {
         assert_eq!(index[&current.stable_key].flow_count, 3);
         assert_eq!(index[&current.stable_key].vulnerable_count, 1);
         assert!(!index.contains_key(&analysis_cache_key(Uuid::new_v4(), "same")));
+        // Complete the migration lifecycle: an all-stale index must miss,
+        // rebuilt analysis must be indexed, and purge must preserve that payload.
+        entries.retain(|e| e.stable_key != current.stable_key);
+        fs::write(storage.index_path(), bincode::serialize(&entries).unwrap()).unwrap();
+        assert!(storage.load_analysis_index().unwrap().is_empty());
+        storage
+            .save_function(&sample_analysis(id, "score", "same"))
+            .unwrap();
+        assert_eq!(storage.load_analysis_index().unwrap().len(), 1);
+        storage
+            .purge_stale_by_stable_keys(&HashSet::from([current.stable_key]))
+            .unwrap();
+        assert!(storage.load_function(id).unwrap().is_some());
     }
 
     #[test]

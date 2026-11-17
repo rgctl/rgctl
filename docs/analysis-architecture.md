@@ -1,6 +1,6 @@
 # `rgctl` Graph Analysis, CPG & Reachability Architecture
 
-This document specifies the **macro-level graph analytics and intra-procedural Code Property Graph (CPG) architecture** of `rgctl` (`crates/rgctl-analysis`). It details the three-tier memory model, CSR projection and topology residency, centrality and community detection algorithms, SCC-condensed blast-radius reachability, and the indexed v3 `cfg_pdg.archive.bin` archive.
+This document specifies the **macro-level graph analytics and intra-procedural Code Property Graph (CPG) architecture** of `rgctl` (`crates/rgctl-analysis`). It details the three-tier memory model, CSR projection and topology residency, centrality and community detection algorithms, SCC-condensed blast-radius reachability, and the indexed v4 `cfg_pdg.archive.bin` archive.
 
 ---
 
@@ -163,7 +163,7 @@ rgctl dead-code --confidence high,medium --entry-point main -f json
 | **Fast-Leiden Communities** | [`crates/rgctl-analysis/src/community.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/community.rs), [`community_naming.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/community_naming.rs) | `CommunityDetector`, `CommunityConfig`, `HubStripPolicy`, `label_communities` |
 | **Blast Radius & SCC DAG** | [`crates/rgctl-analysis/src/blast_radius.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/blast_radius.rs), [`reachability.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/reachability.rs) | `BlastRadiusEngine`, `CondensedDag`, `MacroCallIndex` |
 | **CFG, Dominance & PDG** | [`cfg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg.rs), [`dominance.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/dominance.rs), [`dataflow.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/dataflow.rs), [`pdg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/pdg.rs) | `CfgAnalyzer`, `DominanceAnalyzer`, `DataflowAnalyzer`, `PdgBuilder` |
-| **v3 CPG Archive & Lazy Builder** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `CfgPdgArchiveMmap`, `CfgPdgRecord`, `TocEntry`, `ensure_cfg_pdg_for_source` |
+| **v4 CPG Archive & Lazy Builder** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `CfgPdgArchiveMmap`, `CfgPdgRecord`, `TocEntry`, `ensure_cfg_pdg_for_source` |
 | **Slicing & Taint** | [`slicing.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/slicing.rs), [`interprocedural_slicing.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/interprocedural_slicing.rs), [`taint.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/taint.rs) | `BackwardSlicer`, `ForwardSlicer`, `InterproceduralCFG`, `TaintAnalyzer` |
 | **Dead-Code Reachability** | `crates/rgctl-analysis/src/dead_code.rs` (`rgctl dead-code`) | `DeadCodeAnalyzer`, `DeadCodeReport`, `is_framework_annotation` |
 
