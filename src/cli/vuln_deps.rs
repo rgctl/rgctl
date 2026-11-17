@@ -194,16 +194,102 @@ pub fn run_deps_check(
     Ok(())
 }
 
+struct PreindexedImport {
+    name: String,
+    qualified_name: Option<String>,
+    file: Option<String>,
+}
+
 /// Shared mmap & sidecar artifacts opened ONCE across single or Rayon-batch advisory evaluation.
 struct SharedVulnGraphResources {
     repo: PathBuf,
     canon_repo: Option<PathBuf>,
     store: Option<Arc<rgctl_graph::SnapshotNodeStore>>,
     parked: Vec<rgctl_extraction::ParkedRelationRecord>,
+    /// Pre-grouped indices into `parked` keyed by short callee identifier (`O(1)` lookup per OSV method).
+    parked_calls_by_tail: std::collections::HashMap<String, Vec<usize>>,
+    /// All `NodeType::Import` rows pre-scanned once without truncation or cold extension bincode touches.
+    imports: Vec<PreindexedImport>,
     blast_engine: Option<rgctl_analysis::BlastRadiusEngine>,
     dep_stubs: Option<DepStubsIndex>,
     trigger_rules: Vec<VulnTriggerRule>,
     cfg_archive_exists: bool,
+}
+
+fn collect_all_imports(store: &rgctl_graph::SnapshotNodeStore) -> Vec<PreindexedImport> {
+    if let Some(col) = store.columnar() {
+        let mut out = Vec::new();
+        for idx in 0..col.node_count() {
+            if col.node_type_at(idx).ok() != Some(rgctl_graph::schema::NodeType::Import) {
+                continue;
+            }
+            let Ok(name) = col.node_name_str(idx) else {
+                continue;
+            };
+            let qn = col
+                .node_qualified_name_str(idx)
+                .ok()
+                .flatten()
+                .map(str::to_string);
+            let file = col
+                .node_file_path_str(idx)
+                .ok()
+                .flatten()
+                .map(str::to_string);
+            out.push(PreindexedImport {
+                name: name.to_string(),
+                qualified_name: qn,
+                file,
+            });
+        }
+        return out;
+    }
+    let q = rgctl_graph::StructuredQuery::new(store);
+    let filters = rgctl_graph::QueryFilters {
+        node_type: Some(rgctl_graph::schema::NodeType::Import),
+        limit: None,
+        ..Default::default()
+    };
+    q.find(None, &filters)
+        .map(|found| {
+            found
+                .entities
+                .into_iter()
+                .map(|ent| PreindexedImport {
+                    name: ent.name,
+                    qualified_name: ent.qualified_name,
+                    file: ent.file,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn build_parked_calls_index(
+    parked: &[rgctl_extraction::ParkedRelationRecord],
+) -> std::collections::HashMap<String, Vec<usize>> {
+    let mut index: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+    for (idx, rec) in parked.iter().enumerate() {
+        if rec.relation_type != rgctl_plugin_api::RelationType::Calls {
+            continue;
+        }
+        let raw = rec.to_name.split('\u{1f}').next().unwrap_or(&rec.to_name);
+        let raw_tail = raw.rsplit(['.', ':', '\\', '/']).next().unwrap_or(raw);
+        if !raw_tail.is_empty() {
+            index.entry(raw_tail.to_string()).or_default().push(idx);
+        }
+        if let Some(qhint) = rec
+            .to_qualified_hint
+            .as_deref()
+            .map(|h| h.split('\u{1f}').next().unwrap_or(h))
+        {
+            let q_tail = qhint.rsplit(['.', ':', '\\', '/']).next().unwrap_or(qhint);
+            if !q_tail.is_empty() && q_tail != raw_tail {
+                index.entry(q_tail.to_string()).or_default().push(idx);
+            }
+        }
+    }
+    index
 }
 
 impl SharedVulnGraphResources {
@@ -212,6 +298,11 @@ impl SharedVulnGraphResources {
         let canon_repo = ctx.repo.canonicalize().ok();
         let parked_path = artifact_path(&ctx.repo, rgctl_extraction::PARKED_RELATIONS_FILE);
         let parked = rgctl_extraction::load_parked_relations(&parked_path).unwrap_or_default();
+        let parked_calls_by_tail = build_parked_calls_index(&parked);
+        let imports = store
+            .as_deref()
+            .map(collect_all_imports)
+            .unwrap_or_default();
         let graph_digest = ctx.graph_digest().ok().flatten().unwrap_or_default();
         let blast_engine = rgctl_analysis::try_load_engine(&ctx.repo, &graph_digest)
             .ok()
@@ -233,6 +324,8 @@ impl SharedVulnGraphResources {
             canon_repo,
             store,
             parked,
+            parked_calls_by_tail,
+            imports,
             blast_engine,
             dep_stubs,
             trigger_rules,
@@ -581,27 +674,20 @@ fn graph_package_signals(
         && let Ok(res) = resolve_package_with_ecosystem(Some(&m.ecosystem), &m.name)
     {
         pkg_prefixes = res.import_prefixes;
-        let filters = rgctl_graph::QueryFilters {
-            node_type: Some(rgctl_graph::schema::NodeType::Import),
-            limit: Some(5_000),
-            ..Default::default()
-        };
-        if let Ok(found) = q.find(None, &filters) {
-            for ent in found.entities {
-                let qn = ent.qualified_name.as_deref().unwrap_or("");
-                let hits_prefix = pkg_prefixes
-                    .iter()
-                    .any(|p| !p.is_empty() && (ent.name.contains(p) || qn.contains(p)));
-                if hits_prefix {
-                    import_hits += 1;
-                    if let Some(f) = ent.file {
-                        let label = if qn.is_empty() {
-                            ent.name
-                        } else {
-                            format!("{} {}", ent.name, qn)
-                        };
-                        file_imports.push((f, label));
-                    }
+        for ent in &shared.imports {
+            let qn = ent.qualified_name.as_deref().unwrap_or("");
+            let hits_prefix = pkg_prefixes
+                .iter()
+                .any(|p| !p.is_empty() && (ent.name.contains(p) || qn.contains(p)));
+            if hits_prefix {
+                import_hits += 1;
+                if let Some(f) = &ent.file {
+                    let label = if qn.is_empty() {
+                        ent.name.clone()
+                    } else {
+                        format!("{} {}", ent.name, qn)
+                    };
+                    file_imports.push((f.clone(), label));
                 }
             }
         }
@@ -651,13 +737,22 @@ fn graph_package_signals(
         }
     }
 
-    // 1. Direct external calls recorded in `.rgctl/parked_relations.bin`.
+    // 1. Direct external calls recorded in `.rgctl/parked_relations.bin` (O(1) short-callee lookup).
     let mut caller_chains = Vec::new();
-    for rec in &shared.parked {
-        if rec.relation_type != rgctl_plugin_api::RelationType::Calls {
+    for m in methods {
+        let sep = if m.contains("::") {
+            "::"
+        } else if m.contains('\\') {
+            "\\"
+        } else {
+            "."
+        };
+        let short_method = m.rsplit(sep).next().unwrap_or(m.as_str());
+        let Some(indices) = shared.parked_calls_by_tail.get(short_method) else {
             continue;
-        }
-        for m in methods {
+        };
+        for &idx in indices {
+            let rec = &shared.parked[idx];
             if parked_call_matches_osv_method(rec, m, &pkg_prefixes, &file_imports) {
                 let caller_fqn = store
                     .get_node(rec.from_node_id)

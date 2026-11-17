@@ -66,6 +66,12 @@ pub fn execute_with_registry(
             if let Some(status) = unreadiness_graph(session) {
                 return Ok(status);
             }
+            let snap_path = session.snapshot_path();
+            if snap_path.is_file() {
+                let store = rgctl_graph::SnapshotNodeStore::open(&snap_path)
+                    .map_err(crate::error::ServiceError::from)?;
+                return crate::metrics::run_metrics_from_store(&store, &args);
+            }
             let graph = session.load_graph()?;
             crate::metrics::run_metrics(graph, &args)
         }

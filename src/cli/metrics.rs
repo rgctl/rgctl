@@ -274,6 +274,7 @@ pub fn run(ctx: &CliContext, args: MetricsArgs) -> Result<()> {
                     betweenness: args.betweenness || run_all,
                     communities: args.communities || run_all,
                     include_tests: args.include_tests,
+                    iterations: args.iterations,
                 }),
             )?
         } else {
@@ -281,7 +282,6 @@ pub fn run(ctx: &CliContext, args: MetricsArgs) -> Result<()> {
                 "schema_version": 1,
             })
         };
-        let _ = args.iterations;
         if args.churn || (run_all && git_churn_json_exists(&ctx.repo)) {
             let graph = ctx.load_graph()?;
             let hotspots = collect_churn_hotspots(graph.backend(), 20);
@@ -301,7 +301,7 @@ pub fn run(ctx: &CliContext, args: MetricsArgs) -> Result<()> {
         MetricsCommunitiesSection, MetricsPagerankSection, build_metrics_response_with_churn,
     };
     use crate::analysis::{
-        BetweennessCentrality, CommunityDetector, FastPageRank, PetGraphView, classify_node_role,
+        CommunityDetector, FastPageRank, PetGraphView, SampledBetweenness, classify_node_role,
         community_edge_types_for_backend, default_behavioral_edges, filter_scores_by_role,
     };
 
@@ -348,7 +348,7 @@ pub fn run(ctx: &CliContext, args: MetricsArgs) -> Result<()> {
     }
 
     if args.betweenness || run_all {
-        let bc = BetweennessCentrality::compute_unbounded(&view, allowed);
+        let bc = SampledBetweenness::compute_adaptive(&view, allowed);
         let mut top: Vec<_> = bc.iter().map(|(id, score)| (id, *score)).collect();
         top.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
         top.truncate(20);

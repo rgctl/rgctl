@@ -1076,18 +1076,16 @@ pub fn extract_all_single_pass(
             }
             _ => callee.clone(),
         };
-        let mut metadata = serde_json::json!({ "language": "swift" });
-        if inferred_owner {
-            metadata["inferred_callable_owner"] = serde_json::Value::Bool(true);
-        }
         let mut rel = Relation {
             from,
             to,
             relation_type: RelationType::Calls,
             location: node_to_location(pending.node, &file_path_str),
-            metadata,
+            metadata: serde_json::Value::Null,
             to_qualified_hint: to_qualified_hint.or(Some(callee)),
             to_type_hint,
+            language: Some(std::borrow::Cow::Borrowed("swift")),
+            inferred_callable_owner: inferred_owner,
             ..Default::default()
         };
         record_call_site_spans(&mut rel, pending.node);

@@ -201,6 +201,17 @@ Optional release-mode dashboard gates: add `--release --test dashboard_*` target
 
 CLI I/O layer reference: [internal/integration-tests.md](internal/integration-tests.md). Workflow mirror: [.github/workflows/ci.yml](../.github/workflows/ci.yml).
 
+### Performance & correctness PR review checklist
+
+Before opening or approving a PR that touches extraction, `GraphBuilder`, `discover`, `--with-cfg`, or CLI query engines, verify every item in **[internal/pr-review-checklist.md](internal/pr-review-checklist.md)**:
+
+- [ ] **No JSON metadata maps on hot ingest structs:** Typed fields on `Symbol` / `Relation` instead of per-symbol/per-call `serde_json::Map` (`BTreeMap`) allocations; `facts_cache::FORMAT_VERSION` bumped if serialized layout changed.
+- [ ] **`O(1)` per-file call & scope resolution:** `CallFileIndex` (`push_call_relation_from_indexed`) + `ScopeStack` instead of `O(calls × symbols)` scans or `.collect::<Vec<_>>()` CST child walks.
+- [ ] **Hot-column / streaming discipline:** No cold `NodeExtension` scans on default `discover`, no whole-repo `preload_file_sources`, no `.collect::<Vec<_>>()` of encoded `--with-cfg` artifacts, and single `(CFG, PDG)` serialization streamed over bounded channels.
+- [ ] **Bounded AST & CFG recursion:** Explicit iterative stacks (`MAX_AST_WALK_DEPTH = 2048`) and `CfgBuilder` depth guards (`MAX_CFG_STATEMENT_DEPTH = 1024`); bodiless declarations skipped without inflating `analysis_error`.
+- [ ] **Zero silent query truncation & flag parity:** No internal `limit: Some(N)` caps on correctness scans (`vuln`, `dead-code`, `review`); CLI flags (`--file`, `--iterations`, etc.) work identically in human and `-f json` output.
+- [ ] **100% `[profile]` stage accounting & cold gates:** `|wall_secs - accounted_secs| < 0.5 s` (`cargo test --test profile_stage_accounting`) and cold `[profile]` gates verified (`tests/cold_profile_gates.rs`).
+
 ---
 
 ## 6. Documentation & PR
@@ -284,6 +295,7 @@ git log -1 --format=%B | grep -i '^Signed-off-by:'
 ## See also
 
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — clone, build, test overview
+- [internal/pr-review-checklist.md](internal/pr-review-checklist.md) — **mandatory** hot-path, streaming-CFG, AST-bound & correctness PR review checklist
 - [tier-1-language-support.md](tier-1-language-support.md) — Layer A–F depth
 - [internal/integration-tests.md](internal/integration-tests.md) — CLI test layers
 - [dashboard-v2.md](design/dashboard-v2.md) — Universe dashboard bundle pipeline

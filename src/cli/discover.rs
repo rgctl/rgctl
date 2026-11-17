@@ -230,6 +230,7 @@ pub fn run(ctx: &CliContext, args: DiscoverArgs) -> Result<()> {
             reuse_basic_analytics: false,
             lossless: args.lossless
                 || std::env::var_os("RGCTL_LOSSLESS").is_some_and(|v| v != "0" && v != "false"),
+            pre_discovered_files: None,
         },
     )?;
     Ok(())

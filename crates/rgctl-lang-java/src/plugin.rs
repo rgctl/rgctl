@@ -3326,18 +3326,19 @@ impl JavaPlugin {
             let (owner, idx) = self.lambda_index(node, source, ctx)?;
             if let Some(from) = owner {
                 let to = format!("{from}.$lambda${idx}");
+                let enc_disc = callable_identity::java::enclosing_discriminator(node, source)?
+                    .map(String::into_boxed_str);
                 relations.push(Relation {
                     from,
                     to,
                     relation_type: RelationType::Calls,
                     location: source_location(node, &file_path.to_string_lossy()),
-                    metadata: serde_json::json!({
-                        "language": "java", "is_lambda_call": true,
-                        "from_identity_discriminator": callable_identity::java::enclosing_discriminator(node, source)?,
-                        "to_identity_discriminator": callable_identity::java::enclosing_discriminator(node, source)?,
-                    }),
+                    metadata: serde_json::json!({ "is_lambda_call": true }),
                     to_qualified_hint: None,
                     to_type_hint: None,
+                    language: Some(std::borrow::Cow::Borrowed("java")),
+                    from_identity_discriminator: enc_disc.clone(),
+                    to_identity_discriminator: enc_disc,
                     ..Default::default()
                 });
             }
@@ -4098,8 +4099,8 @@ mod tests {
         assert_eq!(lambdas.len(), 2);
         assert_eq!(lambdas[0].name, "$lambda$0");
         assert_eq!(lambdas[1].name, "$lambda$0");
-        assert_eq!(lambdas[0].metadata["identity_discriminator"], "(int)");
-        assert_eq!(lambdas[1].metadata["identity_discriminator"], "(String)");
+        assert_eq!(lambdas[0].identity_discriminator_str(), Some("(int)"));
+        assert_eq!(lambdas[1].identity_discriminator_str(), Some("(String)"));
     }
 
     #[test]
@@ -4127,11 +4128,7 @@ mod tests {
                         .map(|s| {
                             (
                                 s.qualified_name.clone(),
-                                s.metadata
-                                    .get("identity_discriminator")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_owned(),
+                                s.identity_discriminator_str().unwrap_or("").to_owned(),
                             )
                         })
                         .collect();
@@ -4148,21 +4145,13 @@ mod tests {
                         .iter()
                         .filter(|r| r.metadata["is_lambda_call"] == true)
                     {
-                        let identity = relation
-                            .metadata
-                            .get("to_identity_discriminator")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                        let identity = relation.to_identity_discriminator_str().unwrap_or("");
                         let matches = symbols
                             .iter()
                             .filter(|s| {
                                 s.metadata["is_lambda"] == true
                                     && s.qualified_name.as_deref() == Some(relation.to.as_str())
-                                    && s.metadata
-                                        .get("identity_discriminator")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        == identity
+                                    && s.identity_discriminator_str().unwrap_or("") == identity
                             })
                             .count();
                         assert_eq!(
@@ -4201,8 +4190,8 @@ mod tests {
             let methods: Vec<_> = symbols.iter().filter(|s| s.name == "quote").collect();
             assert_eq!(methods.len(), 2);
             assert_eq!(methods[0].qualified_name, methods[1].qualified_name);
-            assert_eq!(methods[0].metadata["identity_discriminator"], "(int)");
-            assert_eq!(methods[1].metadata["identity_discriminator"], "(String)");
+            assert_eq!(methods[0].identity_discriminator_str(), Some("(int)"));
+            assert_eq!(methods[1].identity_discriminator_str(), Some("(String)"));
         }
     }
 
@@ -4227,7 +4216,8 @@ mod tests {
                 .find(|s| s.name == name)
                 .expect("array method");
             assert_eq!(
-                method.metadata["identity_discriminator"], "(String[])",
+                method.identity_discriminator_str(),
+                Some("(String[])"),
                 "{name}"
             );
         }
@@ -4235,23 +4225,23 @@ mod tests {
             .iter()
             .find(|s| s.name == "receiver")
             .expect("receiver");
-        assert_eq!(receiver.metadata["identity_discriminator"], "(int)");
+        assert_eq!(receiver.identity_discriminator_str(), Some("(int)"));
         let constructors: Vec<_> = symbols
             .iter()
             .filter(|s| s.name == "Arrays")
             .filter(|s| s.symbol_type == SymbolType::Function)
             .collect();
         assert_eq!(constructors.len(), 2);
-        assert_eq!(constructors[0].metadata["identity_discriminator"], "(int)");
+        assert_eq!(constructors[0].identity_discriminator_str(), Some("(int)"));
         assert_eq!(
-            constructors[1].metadata["identity_discriminator"],
-            "(String)"
+            constructors[1].identity_discriminator_str(),
+            Some("(String)")
         );
         let compact = symbols
             .iter()
             .find(|s| s.metadata["is_compact_constructor"] == true)
             .expect("compact constructor");
-        assert_eq!(compact.metadata["identity_discriminator"], "(int,String)");
+        assert_eq!(compact.identity_discriminator_str(), Some("(int,String)"));
     }
 
     // ---------------------------------------------------------------

@@ -88,7 +88,8 @@ impl CPlugin {
             fields: vec![],
             modifiers: vec![],
             documentation: None,
-            metadata: serde_json::json!({ "language": "c" }),
+            metadata: serde_json::Value::Null,
+            language: Some(std::borrow::Cow::Borrowed("c")),
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, function_name_node(node));
@@ -122,12 +123,12 @@ impl CPlugin {
 
         let fields = extract_struct_fields(node, source)?;
 
-        let mut metadata = serde_json::json!({ "language": "c" });
-        if let (Some(alias), Some(tag)) = (typedef_name, struct_tag.as_deref()) {
-            if alias != tag {
-                metadata["underlying_type"] = serde_json::Value::String(tag.to_string());
+        let metadata = match (typedef_name, struct_tag.as_deref()) {
+            (Some(alias), Some(tag)) if alias != tag => {
+                serde_json::json!({ "underlying_type": tag })
             }
-        }
+            _ => serde_json::Value::Null,
+        };
 
         let mut symbol = Symbol {
             name: name.clone(),
@@ -141,6 +142,7 @@ impl CPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
+            language: Some(std::borrow::Cow::Borrowed("c")),
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));
@@ -175,12 +177,12 @@ impl CPlugin {
                 message: "Enum missing name".to_string(),
             })?;
 
-        let mut metadata = serde_json::json!({ "language": "c" });
-        if let (Some(alias), Some(tag)) = (typedef_name, enum_tag.as_deref()) {
-            if alias != tag {
-                metadata["underlying_type"] = serde_json::Value::String(tag.to_string());
+        let metadata = match (typedef_name, enum_tag.as_deref()) {
+            (Some(alias), Some(tag)) if alias != tag => {
+                serde_json::json!({ "underlying_type": tag })
             }
-        }
+            _ => serde_json::Value::Null,
+        };
 
         let mut symbol = Symbol {
             name: name.clone(),
@@ -194,6 +196,7 @@ impl CPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
+            language: Some(std::borrow::Cow::Borrowed("c")),
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, node.child_by_field_name("name"));

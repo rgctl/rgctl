@@ -108,7 +108,9 @@ pub fn run_full_pipeline(
         ctx.verbose,
     );
 
+    let full_start = std::time::Instant::now();
     let mut last_response: Option<DiscoverJsonResponse> = None;
+    let mut shared_files: Option<Arc<[PathBuf]>> = None;
 
     // --- stage 1 ---
     let lossless_wanted = extras.lossless
@@ -119,6 +121,7 @@ pub fn run_full_pipeline(
             store_path,
             extras.languages.as_deref(),
             extras.exclude.as_deref(),
+            &mut shared_files,
         );
     if skip_basic {
         pipeline_status::set_stage(store_path, STAGE_BASIC, StageStatus::Skipped)?;
@@ -133,9 +136,15 @@ pub fn run_full_pipeline(
         match run_full_analysis(
             &work_ctx,
             root,
-            analysis_opts(&work_ctx, &extras, BasicOrDeep::Basic { force_reindex }),
+            analysis_opts(
+                &work_ctx,
+                &extras,
+                BasicOrDeep::Basic { force_reindex },
+                shared_files.clone(),
+            ),
         ) {
             Ok(outcome) => {
+                shared_files = Some(outcome.discovered_files);
                 last_response = Some(outcome.response);
                 let mut st =
                     pipeline_status::set_stage(store_path, STAGE_BASIC, StageStatus::Complete)?;
@@ -160,7 +169,7 @@ pub fn run_full_pipeline(
         match run_full_analysis(
             &work_ctx,
             root,
-            analysis_opts(&work_ctx, &extras, BasicOrDeep::Deep),
+            analysis_opts(&work_ctx, &extras, BasicOrDeep::Deep, shared_files.clone()),
         ) {
             Ok(outcome) => {
                 last_response = Some(outcome.response);
@@ -177,10 +186,12 @@ pub fn run_full_pipeline(
     }
 
     // --- stage 3 ---
+    let mut semantic_secs = 0.0f64;
     if should_skip_semantic(store_path) {
         pipeline_status::set_stage(store_path, STAGE_SEMANTIC, StageStatus::Skipped)?;
     } else {
         pipeline_status::set_stage(store_path, STAGE_SEMANTIC, StageStatus::Running)?;
+        let sem_start = std::time::Instant::now();
         match run_index_with_emit(
             &work_ctx,
             SemanticIndexArgs {
@@ -199,6 +210,7 @@ pub fn run_full_pipeline(
             false,
         ) {
             Ok(()) => {
+                semantic_secs = sem_start.elapsed().as_secs_f64();
                 pipeline_status::set_stage(store_path, STAGE_SEMANTIC, StageStatus::Complete)?;
                 if human {
                     info!("[✓] Semantic index complete");
@@ -209,6 +221,29 @@ pub fn run_full_pipeline(
                 return Err(err).context("full pipeline: semantic_index");
             }
         }
+    }
+    if ctx.verbose {
+        let full_wall = full_start.elapsed().as_secs_f64();
+        if semantic_secs > 0.0 {
+            let pct = if full_wall > 0.0 {
+                100.0 * semantic_secs / full_wall
+            } else {
+                0.0
+            };
+            tracing::info!(
+                target: "profile",
+                stage = "semantic_index",
+                secs = semantic_secs,
+                pct_wall = pct,
+                "[profile] stage"
+            );
+        }
+        tracing::info!(
+            target: "profile",
+            wall_secs = full_wall,
+            semantic_secs,
+            "[profile] full pipeline summary"
+        );
     }
 
     let mut final_status = pipeline_status::read_status(store_path);
@@ -274,6 +309,7 @@ fn analysis_opts<'a>(
     ctx: &'a CliContext,
     extras: &'a FullPipelineArgs,
     which: BasicOrDeep,
+    pre_discovered_files: Option<Arc<[PathBuf]>>,
 ) -> AnalysisOptions<'a> {
     let (with_cfg, with_dashboard, with_harmonic, force_reindex, deep) = match which {
         BasicOrDeep::Basic { force_reindex } => (false, false, false, force_reindex, false),
@@ -310,6 +346,7 @@ fn analysis_opts<'a>(
         reuse_basic_analytics: deep,
         lossless: extras.lossless
             || std::env::var_os("RGCTL_LOSSLESS").is_some_and(|v| v != "0" && v != "false"),
+        pre_discovered_files,
     }
 }
 
@@ -327,31 +364,40 @@ fn sources_unchanged(
     store: &Path,
     languages: Option<&str>,
     exclude: Option<&str>,
+    shared_files: &mut Option<Arc<[PathBuf]>>,
 ) -> bool {
     if !rgctl_extraction::callable_resolution::semantics_current(store) {
         return false;
     }
-    let mut discovery = DiscoveryConfig::default();
-    if let Some(langs) = languages {
-        discovery.languages = Some(
-            langs
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
-        );
-    }
-    if let Some(excludes) = exclude {
-        discovery.exclude_patterns = excludes
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
-    let registry = LanguageRegistry::new().into();
-    let discoverer = FileDiscoverer::with_config(Arc::clone(&registry), discovery);
-    let Ok(files) = discoverer.discover(source) else {
-        return false;
+    let files = match shared_files {
+        Some(existing) => Arc::clone(existing),
+        None => {
+            let mut discovery = DiscoveryConfig::default();
+            if let Some(langs) = languages {
+                discovery.languages = Some(
+                    langs
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                );
+            }
+            if let Some(excludes) = exclude {
+                discovery.exclude_patterns = excludes
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            let registry = LanguageRegistry::new().into();
+            let discoverer = FileDiscoverer::with_config(Arc::clone(&registry), discovery);
+            let Ok(walked) = discoverer.discover(source) else {
+                return false;
+            };
+            let arc: Arc<[PathBuf]> = Arc::from(walked);
+            *shared_files = Some(Arc::clone(&arc));
+            arc
+        }
     };
     let tracker = FileTracker::load(store).unwrap_or_else(|_| FileTracker::new(store));
     tracker
@@ -365,13 +411,14 @@ fn should_skip_basic(
     store: &Path,
     languages: Option<&str>,
     exclude: Option<&str>,
+    shared_files: &mut Option<Arc<[PathBuf]>>,
 ) -> bool {
     let Some(digest) = snapshot_digest(store) else {
         return false;
     };
     let marker = pipeline_status::read_digest_marker(store, MATERIALIZED_FIELDS_DIGEST_FILE);
     marker.as_deref() == Some(digest.as_str())
-        && sources_unchanged(source, store, languages, exclude)
+        && sources_unchanged(source, store, languages, exclude, shared_files)
 }
 
 fn should_skip_deep(store: &Path) -> bool {
@@ -443,7 +490,7 @@ mod tests {
             false,
         );
         let extras = sample_extras();
-        let opts = analysis_opts(&ctx, &extras, BasicOrDeep::Deep);
+        let opts = analysis_opts(&ctx, &extras, BasicOrDeep::Deep, None);
         assert!(opts.with_cfg);
         assert!(opts.with_dashboard);
         assert!(opts.with_harmonic);
@@ -469,6 +516,7 @@ mod tests {
             BasicOrDeep::Basic {
                 force_reindex: false,
             },
+            None,
         );
         assert!(!opts.with_cfg);
         assert!(!opts.with_dashboard);

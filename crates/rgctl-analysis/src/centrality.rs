@@ -240,6 +240,44 @@ impl FlatGraphIndex {
         }
     }
 
+    /// Build a contiguous flat edge list directly from a [`rgctl_graph::SnapshotNodeStore`]
+    /// without hydrating [`rgctl_graph::backend::MemoryBackend`] or full CSR adjacency.
+    pub fn from_snapshot_store(
+        store: &rgctl_graph::SnapshotNodeStore,
+        allowed_types: &[EdgeType],
+    ) -> rgctl_error::Result<(Self, Vec<Uuid>)> {
+        let allowed = edge_type_set(allowed_types);
+        if let Some(col) = store.columnar() {
+            let node_count = col.node_count();
+            let uuids: Vec<Uuid> = col.node_ids_by_index().map(|(_, id)| id).collect();
+            let mut flat_edges = Vec::with_capacity(col.edge_count().min(262_144));
+            let mut participates = vec![false; node_count];
+            col.for_each_edge(|from, to, ty| {
+                if allowed.contains(&ty)
+                    && let (Some(s), Some(t)) = (col.find_node_index(from), col.find_node_index(to))
+                {
+                    flat_edges.push((s, t));
+                    participates[s] = true;
+                    participates[t] = true;
+                }
+                Ok(())
+            })?;
+            return Ok((
+                Self {
+                    node_count,
+                    flat_edges,
+                    participates,
+                },
+                uuids,
+            ));
+        }
+        let view = PetGraphView::from_snapshot_store(store)?;
+        let uuids: Vec<Uuid> = (0..view.node_count())
+            .filter_map(|i| view.get_uuid(petgraph::graph::NodeIndex::new(i)))
+            .collect();
+        Ok((Self::from_view(&view, allowed_types), uuids))
+    }
+
     /// Per-node in/out degree on the filtered projection.
     pub fn filtered_degrees(&self) -> (Vec<usize>, Vec<usize>) {
         let mut in_degree = vec![0usize; self.node_count];

@@ -62,18 +62,22 @@ pub fn dispatch_lookup_tracked(dispatch: &KindDispatchTable, kind_id: u16) -> Ha
 }
 
 /// Read complexity attached during single-pass extraction.
+#[inline]
 pub fn complexity_from_metadata(symbol: &Symbol) -> Option<ComplexityMetrics> {
+    if let Some(ref c) = symbol.complexity {
+        return Some(c.clone());
+    }
+    if symbol.metadata.is_null() {
+        return None;
+    }
     let v = symbol.metadata.get(COMPLEXITY_META_KEY)?;
     serde_json::from_value(v.clone()).ok()
 }
 
-/// Persist complexity onto a symbol's JSON metadata.
+/// Persist complexity onto a symbol's typed field (zero JSON allocation).
+#[inline]
 pub fn attach_complexity(symbol: &mut Symbol, metrics: &ComplexityMetrics) {
-    if let Ok(v) = serde_json::to_value(metrics)
-        && let Some(obj) = symbol.metadata.as_object_mut()
-    {
-        obj.insert(COMPLEXITY_META_KEY.to_string(), v);
-    }
+    symbol.complexity = Some(metrics.clone());
 }
 
 /// Parse `{lang}-ast-coverage.json` `handlers` object into `(name, label)` pairs.

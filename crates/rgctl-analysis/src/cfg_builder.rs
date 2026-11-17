@@ -15,6 +15,9 @@ use tree_sitter::{Node, Tree};
 /// Maximum AST recursion depth for CFG expression walks (matches C++ extraction cap).
 const AST_WALK_MAX_DEPTH: usize = 2048;
 
+/// Maximum nested statement / condition recursion depth in [`CfgBuilder`].
+const MAX_CFG_STATEMENT_DEPTH: usize = 1024;
+
 /// Common CFG statement and control-flow AST node kinds recognized by [`CfgBuilder`].
 const CFG_HANDLED_KINDS: &[&str] = &[
     "additive_expression",
@@ -905,6 +908,10 @@ struct CfgBuilder<'a> {
     pending_exception_edges: HashSet<(BlockId, BlockId)>,
     /// One-time warn when expression walk hits [`AST_WALK_MAX_DEPTH`].
     expr_walk_depth_warned: bool,
+    /// Current nested statement recursion depth (bounded at [`MAX_CFG_STATEMENT_DEPTH`]).
+    statement_depth: usize,
+    /// One-time warn when statement recursion hits [`MAX_CFG_STATEMENT_DEPTH`].
+    stmt_walk_depth_warned: bool,
     /// Lexical block frames: bare local name → scoped id (`x` or `x#N`).
     scope_frames: Vec<HashMap<String, String>>,
     /// Monotonic id for shadowed locals (`x#1`, `x#2`, …).
@@ -950,6 +957,8 @@ impl<'a> CfgBuilder<'a> {
             next_block_serial: 1,
             pending_exception_edges: HashSet::new(),
             expr_walk_depth_warned: false,
+            statement_depth: 0,
+            stmt_walk_depth_warned: false,
             scope_frames: vec![HashMap::new()],
             next_shadow_id: 1,
             block_scope_entered: false,
@@ -1164,6 +1173,31 @@ impl<'a> CfgBuilder<'a> {
         if !self.flow_active {
             return Ok(());
         }
+        if self.statement_depth >= MAX_CFG_STATEMENT_DEPTH {
+            if !self.stmt_walk_depth_warned {
+                self.stmt_walk_depth_warned = true;
+                warn!(
+                    depth = self.statement_depth,
+                    language = self.language,
+                    "CFG statement recursion limit exceeded; truncating deep subtree"
+                );
+            }
+            self.add_statement_to_current(Statement {
+                kind: StatementKind::Expression,
+                line: node.start_position().row + 1,
+                text: node.kind().to_string(),
+                defined_vars: SmallVec::new(),
+                used_vars: SmallVec::new(),
+            });
+            return Ok(());
+        }
+        self.statement_depth += 1;
+        let res = self.visit_statement_inner(node, source);
+        self.statement_depth -= 1;
+        res
+    }
+
+    fn visit_statement_inner(&mut self, node: Node, source: &[u8]) -> Result<()> {
         // C/C++: skip `#if 0` / `#if false` arm bodies, but still visit `#else` / `#elif`.
         if matches!(node.kind(), "preproc_if" | "preproc_ifdef")
             && is_dead_preproc_branch(node, source)
@@ -1178,7 +1212,7 @@ impl<'a> CfgBuilder<'a> {
         }
         match node.kind() {
             // Ruby control flow
-            "if" | "unless" => self.visit_if(node, source),
+            "if" | "unless" | "elsif" => self.visit_if(node, source),
             "while" | "until" => self.visit_while(node, source),
             "for" => self.visit_for(node, source),
             "case" | "case_match" => self.visit_switch(node, source),
@@ -2527,238 +2561,269 @@ impl<'a> CfgBuilder<'a> {
     }
 
     fn visit_if(&mut self, node: Node, source: &[u8]) -> Result<()> {
-        // Go: `if init; cond` — init runs in the current block before the condition.
-        if let Some(init) = node.child_by_field_name("initializer") {
-            self.visit_statement(init, source)?;
-        }
-
-        // C++17: init lives inside `condition_clause` (`if (auto x = f(); x)`).
-        let cond_node = node
-            .child_by_field_name("condition")
-            .or_else(|| node.child_by_field_name("operand"))
-            .or_else(|| {
-                // Field-less grammars (Puppet, Swift, Bash, …): first predicate-like child.
-                find_direct_child_kinds(
-                    node,
-                    &[
-                        "expression",
-                        "binary_expression",
-                        "comparison_expression",
-                        "unary_expression",
-                        "test_command",
-                        "variable",
-                        "function_call",
-                        "parenthesized_expression",
-                        "selector",
-                        "literal",
-                        "boolean",
-                        "string",
-                        "number",
-                    ],
-                )
-            });
-        let (cxx_init, cond_value) = cond_node
-            .map(split_condition_clause)
-            .unwrap_or((None, None));
-        if let Some(init) = cxx_init {
-            self.visit_statement(init, source)?;
-        }
-
-        let alternative = node
-            .child_by_field_name("alternative")
-            .or_else(|| node.child_by_field_name("else_clause"))
-            .or_else(|| find_direct_child_kind(node, "else_if_clause"))
-            .or_else(|| find_direct_child_kind(node, "elif_clause"))
-            .or_else(|| find_direct_child_kind(node, "else_clause"))
-            .or_else(|| find_direct_child_kind(node, "else_statement"))
-            .or_else(|| find_direct_child_kind(node, "elsif_statement"))
-            // PHP: `else_if_clause` siblings are flat under `if_statement`; when
-            // visiting an else_if, chain to the next else_if / else on the parent.
-            .or_else(|| next_php_elseif_or_else(node))
-            // Swift: bare `else` keyword followed by `{` + `statements` — take the
-            // second `statements` child when present.
-            .or_else(|| {
-                let mut stmts = Vec::new();
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if child.kind() == "statements" {
-                        stmts.push(child);
-                    }
-                }
-                if stmts.len() >= 2 {
-                    Some(stmts[1])
-                } else {
-                    None
-                }
-            });
-        let has_else = alternative.is_some();
-
-        let cond_block = if self.can_reuse_current_as_cond() {
-            self.current_block
-        } else {
-            let cond_block = self.new_block();
-            self.cfg
-                .add_edge(self.current_block, cond_block, CfgEdgeType::Next);
-            cond_block
-        };
-        self.current_block = cond_block;
-
-        let true_block = self.new_block();
         let merge = self.new_block();
-        let false_block = if has_else {
-            Some(self.new_block())
-        } else {
-            None
-        };
-        let false_target = false_block.unwrap_or(merge);
+        let mut cur_node = node;
+        let mut chain_arms = 0usize;
+        let mut any_reaches_merge = false;
 
-        if let Some(cond) = cond_value.or(cond_node) {
-            self.wire_condition(cond, source, true_block, false_target)?;
-        } else {
-            self.add_statement_to_current(Statement {
-                kind: StatementKind::Branch,
-                line: node.start_position().row + 1,
-                text: "if".to_string(),
-                defined_vars: SmallVec::new(),
-                used_vars: SmallVec::new(),
-            });
-            self.cfg
-                .add_edge(cond_block, true_block, CfgEdgeType::IfTrue);
-            self.cfg
-                .add_edge(cond_block, false_target, CfgEdgeType::IfFalse);
-        }
-
-        self.flow_active = true;
-        self.current_block = true_block;
-        if (self.language == "bash" || self.language == "sh")
-            && matches!(node.kind(), "if_statement" | "elif_clause")
-        {
-            // Bash `if <cond>; then <stmt1>; <stmt2>; [elif|else|fi]`: visit all statements after `then`.
-            let mut saw_then = false;
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if !child.is_named() {
-                    if child.kind() == "then" {
-                        saw_then = true;
-                    }
-                    continue;
-                }
-                if !saw_then {
-                    continue;
-                }
-                if matches!(
-                    child.kind(),
-                    "else_clause"
-                        | "else_statement"
-                        | "elsif_statement"
-                        | "else_if_clause"
-                        | "elif_clause"
-                ) {
-                    break;
-                }
-                self.visit_statement(child, source)?;
+        loop {
+            // Go: `if init; cond` — init runs in the current block before the condition.
+            if let Some(init) = cur_node.child_by_field_name("initializer") {
+                self.visit_statement(init, source)?;
             }
-        } else if let Some(consequence) = node
-            .child_by_field_name("consequence")
-            .or_else(|| node.child_by_field_name("body"))
-            .or_else(|| find_direct_child_kind(node, "block"))
-            .or_else(|| find_direct_child_kind(node, "statements"))
-            .or_else(|| find_direct_child_kind(node, "compound_statement"))
-            .or_else(|| {
-                let mut after_cond = false;
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
+
+            // C++17: init lives inside `condition_clause` (`if (auto x = f(); x)`).
+            let cond_node = cur_node
+                .child_by_field_name("condition")
+                .or_else(|| cur_node.child_by_field_name("operand"))
+                .or_else(|| {
+                    // Field-less grammars (Puppet, Swift, Bash, …): first predicate-like child.
+                    find_direct_child_kinds(
+                        cur_node,
+                        &[
+                            "expression",
+                            "binary_expression",
+                            "comparison_expression",
+                            "unary_expression",
+                            "test_command",
+                            "variable",
+                            "function_call",
+                            "parenthesized_expression",
+                            "selector",
+                            "literal",
+                            "boolean",
+                            "string",
+                            "number",
+                        ],
+                    )
+                });
+            let (cxx_init, cond_value) = cond_node
+                .map(split_condition_clause)
+                .unwrap_or((None, None));
+            if let Some(init) = cxx_init {
+                self.visit_statement(init, source)?;
+            }
+
+            let alternative = cur_node
+                .child_by_field_name("alternative")
+                .or_else(|| cur_node.child_by_field_name("else_clause"))
+                .or_else(|| find_direct_child_kind(cur_node, "else_if_clause"))
+                .or_else(|| find_direct_child_kind(cur_node, "elif_clause"))
+                .or_else(|| find_direct_child_kind(cur_node, "else_clause"))
+                .or_else(|| find_direct_child_kind(cur_node, "else_statement"))
+                .or_else(|| find_direct_child_kind(cur_node, "elsif_statement"))
+                .or_else(|| find_direct_child_kind(cur_node, "elsif"))
+                // PHP: `else_if_clause` siblings are flat under `if_statement`; when
+                // visiting an else_if, chain to the next else_if / else on the parent.
+                .or_else(|| next_php_elseif_or_else(cur_node))
+                // Swift: bare `else` keyword followed by `{` + `statements` — take the
+                // second `statements` child when present.
+                .or_else(|| {
+                    let mut stmts = Vec::new();
+                    let mut cursor = cur_node.walk();
+                    for child in cur_node.children(&mut cursor) {
+                        if child.kind() == "statements" {
+                            stmts.push(child);
+                        }
+                    }
+                    if stmts.len() >= 2 {
+                        Some(stmts[1])
+                    } else {
+                        None
+                    }
+                });
+            let has_else = alternative.is_some();
+
+            let cond_block = if self.can_reuse_current_as_cond() {
+                self.current_block
+            } else {
+                let cond_block = self.new_block();
+                self.cfg
+                    .add_edge(self.current_block, cond_block, CfgEdgeType::Next);
+                cond_block
+            };
+            self.current_block = cond_block;
+
+            let true_block = self.new_block();
+            let false_block = if has_else {
+                Some(self.new_block())
+            } else {
+                None
+            };
+            let false_target = false_block.unwrap_or(merge);
+
+            if let Some(cond) = cond_value.or(cond_node) {
+                self.wire_condition(cond, source, true_block, false_target)?;
+            } else {
+                self.add_statement_to_current(Statement {
+                    kind: StatementKind::Branch,
+                    line: cur_node.start_position().row + 1,
+                    text: "if".to_string(),
+                    defined_vars: SmallVec::new(),
+                    used_vars: SmallVec::new(),
+                });
+                self.cfg
+                    .add_edge(cond_block, true_block, CfgEdgeType::IfTrue);
+                self.cfg
+                    .add_edge(cond_block, false_target, CfgEdgeType::IfFalse);
+            }
+
+            self.flow_active = true;
+            self.current_block = true_block;
+            if (self.language == "bash" || self.language == "sh")
+                && matches!(cur_node.kind(), "if_statement" | "elif_clause")
+            {
+                // Bash `if <cond>; then <stmt1>; <stmt2>; [elif|else|fi]`: visit all statements after `then`.
+                let mut saw_then = false;
+                let mut cursor = cur_node.walk();
+                for child in cur_node.children(&mut cursor) {
                     if !child.is_named() {
+                        if child.kind() == "then" {
+                            saw_then = true;
+                        }
+                        continue;
+                    }
+                    if !saw_then {
                         continue;
                     }
                     if matches!(
                         child.kind(),
-                        "test_command"
-                            | "comparison_expression"
-                            | "binary_expression"
-                            | "expression"
-                            | "parenthesized_expression"
+                        "else_clause"
+                            | "else_statement"
+                            | "elsif_statement"
+                            | "else_if_clause"
+                            | "elif_clause"
                     ) {
-                        after_cond = true;
-                        continue;
+                        break;
                     }
-                    if after_cond
-                        && !matches!(
-                            child.kind(),
-                            "else_clause" | "else_statement" | "elsif_statement" | "else_if_clause"
-                        )
-                    {
-                        return Some(child);
-                    }
+                    self.visit_statement(child, source)?;
                 }
-                None
-            })
-        {
-            if is_block_like(consequence.kind()) {
-                self.visit_block(consequence, source)?;
-            } else {
-                self.visit_statement(consequence, source)?;
+            } else if let Some(consequence) = cur_node
+                .child_by_field_name("consequence")
+                .or_else(|| cur_node.child_by_field_name("body"))
+                .or_else(|| find_direct_child_kind(cur_node, "block"))
+                .or_else(|| find_direct_child_kind(cur_node, "statements"))
+                .or_else(|| find_direct_child_kind(cur_node, "compound_statement"))
+                .or_else(|| {
+                    let mut after_cond = false;
+                    let mut cursor = cur_node.walk();
+                    for child in cur_node.children(&mut cursor) {
+                        if !child.is_named() {
+                            continue;
+                        }
+                        if matches!(
+                            child.kind(),
+                            "test_command"
+                                | "comparison_expression"
+                                | "binary_expression"
+                                | "expression"
+                                | "parenthesized_expression"
+                        ) {
+                            after_cond = true;
+                            continue;
+                        }
+                        if after_cond
+                            && !matches!(
+                                child.kind(),
+                                "else_clause"
+                                    | "else_statement"
+                                    | "elsif"
+                                    | "elsif_statement"
+                                    | "else_if_clause"
+                            )
+                        {
+                            return Some(child);
+                        }
+                    }
+                    None
+                })
+            {
+                if is_block_like(consequence.kind()) {
+                    self.visit_block(consequence, source)?;
+                } else {
+                    self.visit_statement(consequence, source)?;
+                }
             }
-        }
-        let true_end = self.current_block;
-        let true_reaches = self.flow_active;
+            if self.flow_active {
+                self.cfg
+                    .add_edge(self.current_block, merge, CfgEdgeType::Next);
+                any_reaches_merge = true;
+            }
 
-        let mut false_end = false_target;
-        let false_reaches;
-        if let Some(false_block) = false_block {
+            let Some(false_block) = false_block else {
+                // IfFalse already targets merge — no phantom false trampoline.
+                any_reaches_merge = true;
+                break;
+            };
             self.flow_active = true;
             self.current_block = false_block;
-            if let Some(alternative) = alternative {
-                let alt = if alternative.kind() == "else_clause"
-                    || alternative.kind() == "else_statement"
-                {
+            let Some(alternative) = alternative else {
+                self.cfg
+                    .add_edge(self.current_block, merge, CfgEdgeType::Next);
+                any_reaches_merge = true;
+                break;
+            };
+
+            let alt =
+                if alternative.kind() == "else_clause" || alternative.kind() == "else_statement" {
                     find_child_kind(alternative, "block")
                         .or_else(|| find_child_kind(alternative, "statements"))
                         .or_else(|| find_child_kind(alternative, "compound_statement"))
                         .or_else(|| find_child_kind(alternative, "do_group"))
                         .unwrap_or(alternative)
-                } else if alternative.kind() == "if_expression"
-                    || alternative.kind() == "if_statement"
-                    || alternative.kind() == "elsif_statement"
-                    || alternative.kind() == "else_if_clause"
-                    || alternative.kind() == "elif_clause"
-                {
-                    // `else if` / PHP else_if / Puppet elsif / Bash elif — visit as nested if-like.
-                    alternative
                 } else {
                     alternative
                 };
-                if alt.kind() == "if_expression"
-                    || alt.kind() == "if_statement"
-                    || alt.kind() == "elsif_statement"
-                    || alt.kind() == "else_if_clause"
-                    || alt.kind() == "elif_clause"
-                {
-                    self.visit_if(alt, source)?;
-                } else if is_block_like(alt.kind()) {
-                    self.visit_block(alt, source)?;
-                } else {
-                    // else_clause / else_statement / other: visit as statement
-                    self.visit_statement(alt, source)?;
+
+            if matches!(
+                alt.kind(),
+                "if_expression"
+                    | "if_statement"
+                    | "elsif"
+                    | "elsif_statement"
+                    | "else_if_clause"
+                    | "elif_clause"
+            ) {
+                chain_arms += 1;
+                if self.statement_depth.saturating_add(chain_arms) >= MAX_CFG_STATEMENT_DEPTH {
+                    if !self.stmt_walk_depth_warned {
+                        self.stmt_walk_depth_warned = true;
+                        warn!(
+                            depth = self.statement_depth.saturating_add(chain_arms),
+                            language = self.language,
+                            "CFG if/elsif chain limit exceeded; truncating remaining arms"
+                        );
+                    }
+                    self.add_statement_to_current(Statement {
+                        kind: StatementKind::Expression,
+                        line: alt.start_position().row + 1,
+                        text: alt.kind().to_string(),
+                        defined_vars: SmallVec::new(),
+                        used_vars: SmallVec::new(),
+                    });
+                    self.cfg
+                        .add_edge(self.current_block, merge, CfgEdgeType::Next);
+                    any_reaches_merge = true;
+                    break;
                 }
-                false_end = self.current_block;
-                false_reaches = self.flow_active;
-            } else {
-                false_reaches = true;
+                cur_node = alt;
+                continue;
             }
-        } else {
-            // IfFalse already targets merge — no phantom false trampoline.
-            false_reaches = false;
+
+            if is_block_like(alt.kind()) {
+                self.visit_block(alt, source)?;
+            } else {
+                self.visit_statement(alt, source)?;
+            }
+            if self.flow_active {
+                self.cfg
+                    .add_edge(self.current_block, merge, CfgEdgeType::Next);
+                any_reaches_merge = true;
+            }
+            break;
         }
 
-        if true_reaches {
-            self.cfg.add_edge(true_end, merge, CfgEdgeType::Next);
-        }
-        if false_reaches {
-            self.cfg.add_edge(false_end, merge, CfgEdgeType::Next);
-        }
-        // No-else fallthrough reaches merge via IfFalse; keep flow active like before.
-        self.flow_active = true_reaches || false_reaches || !has_else;
+        self.flow_active = any_reaches_merge;
         self.current_block = merge;
         Ok(())
     }
@@ -4047,11 +4112,27 @@ impl<'a> CfgBuilder<'a> {
         true_dest: BlockId,
         false_dest: BlockId,
     ) -> Result<()> {
+        self.wire_condition_depth(cond, source, true_dest, false_dest, 0)
+    }
+
+    fn wire_condition_depth(
+        &mut self,
+        cond: Node,
+        source: &[u8],
+        true_dest: BlockId,
+        false_dest: BlockId,
+        depth: usize,
+    ) -> Result<()> {
         // Unwrap Java/C-style `(expr)`. C++ `condition_clause` uses the `value` field
         // (initializer is visited separately by if/switch).
         let cond = {
             let mut c = cond;
+            let mut unwrap_steps = 0usize;
             loop {
+                if unwrap_steps >= AST_WALK_MAX_DEPTH {
+                    break;
+                }
+                unwrap_steps += 1;
                 match c.kind() {
                     "parenthesized_expression" => {
                         if let Some(inner) = c.named_child(0) {
@@ -4075,7 +4156,9 @@ impl<'a> CfgBuilder<'a> {
             c
         };
 
-        if let Some(op) = logical_operator(cond, source) {
+        if depth < MAX_CFG_STATEMENT_DEPTH
+            && let Some(op) = logical_operator(cond, source)
+        {
             let left = cond
                 .child_by_field_name("left")
                 .ok_or_else(|| Error::ParseError {
@@ -4092,20 +4175,32 @@ impl<'a> CfgBuilder<'a> {
                 })?;
             let mid = self.new_block();
             if op == "&&" {
-                self.wire_condition(left, source, mid, false_dest)?;
+                self.wire_condition_depth(left, source, mid, false_dest, depth + 1)?;
                 self.flow_active = true;
                 self.current_block = mid;
-                self.wire_condition(right, source, true_dest, false_dest)?;
+                self.wire_condition_depth(right, source, true_dest, false_dest, depth + 1)?;
             } else {
-                self.wire_condition(left, source, true_dest, mid)?;
+                self.wire_condition_depth(left, source, true_dest, mid, depth + 1)?;
                 self.flow_active = true;
                 self.current_block = mid;
-                self.wire_condition(right, source, true_dest, false_dest)?;
+                self.wire_condition_depth(right, source, true_dest, false_dest, depth + 1)?;
             }
             return Ok(());
         }
 
-        let text = cond.utf8_text(source)?.trim().to_string();
+        let text = if depth >= MAX_CFG_STATEMENT_DEPTH {
+            if !self.expr_walk_depth_warned {
+                self.expr_walk_depth_warned = true;
+                warn!(
+                    depth = depth,
+                    language = self.language,
+                    "CFG logical condition depth limit exceeded; emitting flat branch"
+                );
+            }
+            cond.kind().to_string()
+        } else {
+            cond.utf8_text(source)?.trim().to_string()
+        };
         if is_constant_false(&text) {
             self.add_statement_to_current(Statement {
                 kind: StatementKind::Branch,
@@ -4146,14 +4241,20 @@ impl<'a> CfgBuilder<'a> {
     }
 
     fn note_setjmp_in_expr(&mut self, node: Node, source: &[u8]) {
-        if is_setjmp_call(node, source) {
-            self.setjmp_sites.push(self.current_block);
-            return;
-        }
-        let mut c = node.walk();
-        for ch in node.children(&mut c) {
-            if ch.is_named() {
-                self.note_setjmp_in_expr(ch, source);
+        let mut stack = vec![(node, 0usize)];
+        while let Some((cur, depth)) = stack.pop() {
+            if depth > AST_WALK_MAX_DEPTH {
+                continue;
+            }
+            if is_setjmp_call(cur, source) {
+                self.setjmp_sites.push(self.current_block);
+                continue;
+            }
+            let mut c = cur.walk();
+            for ch in cur.children(&mut c) {
+                if ch.is_named() {
+                    stack.push((ch, depth + 1));
+                }
             }
         }
     }

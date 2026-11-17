@@ -11,6 +11,20 @@ use uuid::Uuid;
 /// Default pivot count for sampled betweenness (Eppstein–Wang / RANDES style).
 pub const DEFAULT_SAMPLE_PIVOTS: usize = 512;
 
+/// Deterministic default seed for sampled betweenness pivot selection.
+pub const DEFAULT_SAMPLE_SEED: u64 = 0xA5A5_5A5A_C3C3_3C3C;
+
+/// Adaptive pivot count scaled for graph vertex count (`512` default, `128` at `>= 50k`, `32` at `>= 500k`).
+pub fn adaptive_betweenness_pivots(node_count: usize, base_pivots: usize) -> usize {
+    if node_count >= 500_000 {
+        base_pivots.min(32).min(node_count)
+    } else if node_count >= 50_000 {
+        base_pivots.min(128).min(node_count)
+    } else {
+        base_pivots.min(node_count)
+    }
+}
+
 /// Graphs at or below this size use exact Brandes / BFS harmonic.
 pub const DEFAULT_EXACT_CENTRALITY_LIMIT: usize = 500;
 
@@ -216,8 +230,17 @@ impl SampledBetweenness {
         let index = FlatGraphIndex::from_view(view, allowed_types);
         let flat = Self::compute_flat(&index, pivot_count, seed);
         view.index_uuid_iter()
-            .filter_map(|(idx, uuid)| flat.get(idx.index()).copied().map(|s| (uuid, s)))
+            .filter_map(|(idx, uuid)| {
+                let s = flat.get(idx.index()).copied()?;
+                (s > 0.0).then_some((uuid, s))
+            })
             .collect()
+    }
+
+    /// Adaptive active-pivot sampled betweenness using [`DEFAULT_SAMPLE_PIVOTS`] and [`DEFAULT_SAMPLE_SEED`].
+    pub fn compute_adaptive(view: &PetGraphView, allowed_types: &[EdgeType]) -> HashMap<Uuid, f64> {
+        let pivots = adaptive_betweenness_pivots(view.node_count(), DEFAULT_SAMPLE_PIVOTS);
+        Self::compute(view, allowed_types, pivots, DEFAULT_SAMPLE_SEED)
     }
 }
 

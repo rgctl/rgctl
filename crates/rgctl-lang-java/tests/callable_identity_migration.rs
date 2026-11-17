@@ -55,14 +55,14 @@ fn shared_call_policy_keeps_java_expression_evidence_and_unknowns() {
         None,
     ]) {
         assert_eq!(
-            call.metadata["argument_identity_discriminator"].as_str(),
+            call.argument_identity_discriminator_str(),
             expected,
             "call on line {}",
             call.location.start_line
         );
-        assert_eq!(call.metadata["from_identity_discriminator"], "(String)");
+        assert_eq!(call.from_identity_discriminator_str(), Some("(String)"));
         if expected.is_none() {
-            assert!(call.metadata["to_identity_discriminator"].is_null());
+            assert!(call.to_identity_discriminator_str().is_none());
         }
     }
 }
@@ -90,7 +90,7 @@ fn shared_java_symbol_policy_preserves_spans_and_propagates_type_errors() {
         .unwrap();
     let migrated =
         callable_identity::try_symbol(original.clone(), method, source, Policy::Java).unwrap();
-    assert_eq!(migrated.metadata["identity_discriminator"], "(Widget)");
+    assert_eq!(migrated.identity_discriminator_str(), Some("(Widget)"));
     assert_eq!(migrated.start_byte, Some(method.start_byte() as u32));
     assert_eq!(migrated.end_byte, Some(method.end_byte() as u32));
     assert!(migrated.metadata.get("source_start_byte").is_none());
@@ -132,9 +132,7 @@ fn legacy_and_single_pass_keep_the_same_java_declaration_identities() {
                 assert!(s.start_byte.is_some() && s.end_byte.is_some());
                 (
                     s.qualified_name.clone(),
-                    s.metadata["identity_discriminator"]
-                        .as_str()
-                        .map(str::to_owned),
+                    s.identity_discriminator_str().map(str::to_owned),
                     s.start_byte,
                     s.end_byte,
                 )
@@ -158,7 +156,7 @@ fn legacy_and_single_pass_keep_the_same_java_declaration_identities() {
         assert!(
             single.symbols.iter().any(|s| {
                 s.qualified_name.as_deref() == Some(qualified)
-                    && s.metadata["identity_discriminator"] == expected
+                    && s.identity_discriminator_str() == Some(expected)
             }),
             "missing {qualified} {expected}"
         );

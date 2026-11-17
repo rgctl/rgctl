@@ -20,15 +20,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
-/// Post–single-pass-AST linux cold wall (default discover, no cfg/dashboard/harmonic).
-/// Baseline: **75 s** cold wall on reference M3 Pro / 36 GB (2026-10-21; 3-run mean ~71 s).
-const LINUX_COLD_WALL_BASELINE_SECS: f64 = 75.0;
+/// Post–ingest-reclamation linux cold wall (default discover, no cfg/dashboard/harmonic).
+/// Baseline: **48 s** cold wall on reference M3 Pro / 36 GB (2026-11-17; measured ~40.9 s).
+const LINUX_COLD_WALL_BASELINE_SECS: f64 = 48.0;
 const LINUX_COLD_MAX_NODES: u64 = 2_800_000;
-/// metasfresh `discover --full` cold wall (gate uses process elapsed, not just final summary).
-/// Baseline: **50 s** on same reference machine (2026-10-21; elapsed ~45 s, final summary ~25 s).
-const METASFRESH_COLD_WALL_BASELINE_SECS: f64 = 50.0;
-/// Override via `RGCTL_KAFKA_COLD_BASELINE_SECS`. Measured ~9.6 s (2026-10-21).
-const KAFKA_COLD_WALL_BASELINE_SECS: f64 = 12.0;
+/// metasfresh `discover --full` cold wall (gate uses process elapsed across all 3 stages).
+/// Baseline: **38 s** on same reference machine (2026-11-17; elapsed ~32.3–35.7 s).
+const METASFRESH_COLD_WALL_BASELINE_SECS: f64 = 38.0;
+/// Override via `RGCTL_KAFKA_COLD_BASELINE_SECS`. Measured ~8.7 s (2026-11-17).
+const KAFKA_COLD_WALL_BASELINE_SECS: f64 = 9.5;
 /// `rust-lang/rust` full tree with `-l rust`. Baseline: **25 s** (2026-10-21; measured ~23.5 s).
 const RUST_COLD_WALL_BASELINE_SECS: f64 = 25.0;
 /// llvm/llvm-project `clang/` sparse checkout with `-l cpp`. Baseline: **12 s** (2026-10-21; ~9.7 s).
@@ -45,6 +45,8 @@ const NODE_JAVASCRIPT_COLD_WITH_CFG_WALL_BASELINE_SECS: f64 = 5.0;
 const HOME_ASSISTANT_PYTHON_COLD_WALL_BASELINE_SECS: f64 = 15.0;
 /// discourse with `-l ruby`. Baseline: **8 s** (2026-11-03 post-98% AST; ~7.0 s process / ~5.4 s wall).
 const DISCOURSE_RUBY_COLD_WALL_BASELINE_SECS: f64 = 8.0;
+/// discourse with `-l ruby --with-cfg` (deep AST + streaming CFG). Measured ~4.6 s (2026-11-17).
+const DISCOURSE_RUBY_COLD_WITH_CFG_WALL_BASELINE_SECS: f64 = 7.0;
 /// JetBrains/kotlin sparse `libraries`+`plugins`+`analysis` (`-l kotlin`).
 /// Baseline: **15 s** (2026-11-03 post-98% AST; ~13.7 s process, ~238k nodes).
 /// Override via `RGCTL_KOTLIN_COLD_BASELINE_SECS`.
@@ -300,6 +302,9 @@ pub fn run_cold_discover_timed(repo: &Path, extra_args: &[&str]) -> (Output, Dur
         "rgctl binary not found at {} — run cargo build --release --bin rgctl",
         bin.display()
     );
+    // Ensure macOS AMFI first-exec code-signing scan on a freshly linked release
+    // binary runs before starting the discover timer (does not touch `.rgctl`).
+    let _ = Command::new(&bin).arg("--version").output();
     let start = Instant::now();
     let output = Command::new(&bin)
         .current_dir(repo)
@@ -887,6 +892,9 @@ fn k8s_website_obsidian_export_to_vault() {
     }
 
     let bin = rgctl_bin();
+    // Ensure macOS AMFI first-exec code-signing scan on a freshly linked release
+    // binary runs before starting the discover timer (does not touch `.rgctl`).
+    let _ = Command::new(&bin).arg("--version").output();
     let start = Instant::now();
     let output = Command::new(&bin)
         .args([
@@ -958,6 +966,9 @@ fn pr_check_rgctl_graph_slice_within_baseline() {
         .unwrap_or(PR_CHECK_RGCTL_GRAPH_SLICE_BASELINE_SECS);
 
     let bin = rgctl_bin();
+    // Ensure macOS AMFI first-exec code-signing scan on a freshly linked release
+    // binary runs before starting the discover timer (does not touch `.rgctl`).
+    let _ = Command::new(&bin).arg("--version").output();
     let start = Instant::now();
     let output = Command::new(&bin)
         .current_dir(&repo)
@@ -1025,6 +1036,38 @@ fn discourse_cold_discover_within_baseline() {
         baseline
     );
     assert_within_baseline("discourse ruby cold discover", elapsed, baseline);
+}
+
+#[test]
+#[ignore = "manual: cold discover on example/discourse (-l ruby --with-cfg)"]
+fn discourse_cold_discover_with_cfg_within_baseline() {
+    let repo = discourse_ruby_repo_path();
+    if !repo.is_dir() {
+        eprintln!(
+            "skip: discourse corpus not at {} (clone example/discourse or set RGCTL_DISCOURSE_REPO)",
+            repo.display()
+        );
+        return;
+    }
+
+    let baseline = std::env::var("RGCTL_DISCOURSE_RUBY_COLD_WITH_CFG_BASELINE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DISCOURSE_RUBY_COLD_WITH_CFG_WALL_BASELINE_SECS);
+
+    let (output, elapsed) = run_cold_discover_timed(&repo, &["-l", "ruby", "--with-cfg"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "discover --with-cfg failed:\nstdout={stdout}\nstderr={stderr}"
+    );
+    let profile = resolve_profile_summary(&stdout, &stderr, elapsed);
+    eprintln!(
+        "discourse ruby --with-cfg cold: wall={:.1}s nodes={} functions={} peak_rss_mb={:.1} (baseline {:.1}s)",
+        profile.wall_secs, profile.nodes, profile.functions, profile.peak_rss_mb, baseline
+    );
+    assert_within_baseline("discourse ruby --with-cfg cold discover", elapsed, baseline);
 }
 
 #[test]
@@ -1206,6 +1249,9 @@ fn linux_cold_diff_within_baseline() {
         bin.display()
     );
 
+    // Ensure macOS AMFI first-exec code-signing scan on a freshly linked release
+    // binary runs before starting the discover timer (does not touch `.rgctl`).
+    let _ = Command::new(&bin).arg("--version").output();
     let start = Instant::now();
     let output = Command::new(&bin)
         .current_dir(&repo)
@@ -1276,6 +1322,9 @@ fn tier1_lossless_writeback_roundtrip_perf() {
     );
 
     let _ = std::fs::remove_dir_all(repo.join(".rgctl"));
+    // Ensure macOS AMFI first-exec code-signing scan on a freshly linked release
+    // binary runs before starting the discover timer (does not touch `.rgctl`).
+    let _ = Command::new(&bin).arg("--version").output();
     let start = Instant::now();
     let discover = Command::new(&bin)
         .current_dir(&repo)

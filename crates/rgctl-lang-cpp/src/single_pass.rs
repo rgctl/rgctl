@@ -725,17 +725,19 @@ pub fn extract_all_single_pass(
         }
     }
 
+    let call_file_index = CallFileIndex::new(file_path, &ctx.symbols);
     for pending in pending_calls {
         let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
             continue;
         };
         let before = relations.len();
-        push_call_relation_from(
+        push_call_relation_from_indexed(
             pending.node,
             source,
             file_path,
             &ctx.symbols,
+            &call_file_index,
             from_fn,
             "cpp",
             &mut relations,
@@ -748,7 +750,7 @@ pub fn extract_all_single_pass(
                             let callee = func.utf8_text(source).ok().unwrap_or("").trim();
                             if !callee.is_empty() {
                                 rel.to_qualified_hint = Some(format!("{scope}::{callee}"));
-                                rel.metadata["inferred_callable_owner"] = true.into();
+                                rel.inferred_callable_owner = true;
                             }
                         } else if let Some(hint) = rel.to_qualified_hint.clone() {
                             if let Some(enriched) = enrich_cpp_namespace_hint(&hint, scope) {

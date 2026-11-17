@@ -12,6 +12,10 @@ pub struct StageTiming {
 #[derive(Debug, Clone, Default)]
 pub struct DiscoverStageReport {
     pub wall_total: StageTiming,
+    /// Directory walk (`FileDiscoverer::discover`).
+    pub file_discover: StageTiming,
+    /// Incremental tracker load + `detect_changes`.
+    pub detect_changes: StageTiming,
     pub index_pipeline: StageTiming,
     pub index_extract: StageTiming,
     /// Sequential pass-1 merge wall (subset of `index_extract`).
@@ -27,8 +31,13 @@ pub struct DiscoverStageReport {
     pub graph_pass2: StageTiming,
     /// Spill + columnar compile (subset of `index_graph_build`).
     pub graph_spill_columnar: StageTiming,
+    /// Parked-relation + callable-resolution sidecar persistence (subset of `index_graph_build`).
+    pub parked_save: StageTiming,
+    /// Cold snapshot open + sorted `node_ids` initialization (or Stage-1 analytics load).
+    pub cold_open: StageTiming,
     pub topology: StageTiming,
     pub community: StageTiming,
+    pub community_labels: StageTiming,
     pub complexity: StageTiming,
     pub centrality: StageTiming,
     pub dependency: StageTiming,
@@ -44,6 +53,7 @@ pub struct DiscoverStageReport {
     pub blast_query: StageTiming,
     pub blast_snapshot: StageTiming,
     pub macro_index: StageTiming,
+    pub structural_sketch: StageTiming,
     pub save_analysis: StageTiming,
     pub save_tracker: StageTiming,
     pub save_snapshot: StageTiming,
@@ -62,8 +72,17 @@ pub struct DiscoverStageReport {
 }
 
 impl DiscoverStageReport {
-    pub fn record(&self) {
-        let post_index = self.community.secs
+    /// Non-overlapping pre-index wall time (`file_discover` + `detect_changes`).
+    pub fn pre_index_secs(&self) -> f64 {
+        self.file_discover.secs + self.detect_changes.secs
+    }
+
+    /// Non-overlapping post-index wall time across all analysis and persistence stages.
+    pub fn post_index_secs(&self) -> f64 {
+        self.cold_open.secs
+            + self.topology.secs
+            + self.community.secs
+            + self.community_labels.secs
             + self.complexity.secs
             + self.centrality.secs
             + self.dependency.secs
@@ -75,21 +94,38 @@ impl DiscoverStageReport {
             + self.blast_query.secs
             + self.blast_snapshot.secs
             + self.macro_index.secs
+            + self.structural_sketch.secs
             + self.save_analysis.secs
             + self.save_tracker.secs
             + self.save_snapshot.secs
             + self.save_dashboard.secs
-            + self.migration_plan.secs;
+            + self.migration_plan.secs
+    }
+
+    /// Total non-overlapping wall time accounted for by top-level phase timers.
+    pub fn top_level_accounted_secs(&self) -> f64 {
+        self.pre_index_secs() + self.index_pipeline.secs + self.post_index_secs()
+    }
+
+    pub fn record(&self) {
+        let pre_index = self.pre_index_secs();
+        let post_index = self.post_index_secs();
+        let accounted = self.top_level_accounted_secs();
 
         let stages: &[(&str, f64)] = &[
+            ("file_discover", self.file_discover.secs),
+            ("detect_changes", self.detect_changes.secs),
             ("index_extract", self.index_extract.secs),
             ("extract_pass1", self.extract_pass1.secs),
             ("index_graph_build", self.index_graph_build.secs),
             ("graph_resolution_index", self.graph_resolution_index.secs),
             ("graph_pass2", self.graph_pass2.secs),
             ("graph_spill_columnar", self.graph_spill_columnar.secs),
+            ("parked_save", self.parked_save.secs),
+            ("cold_open", self.cold_open.secs),
             ("topology", self.topology.secs),
             ("community", self.community.secs),
+            ("community_labels", self.community_labels.secs),
             ("complexity", self.complexity.secs),
             ("centrality", self.centrality.secs),
             ("dependency", self.dependency.secs),
@@ -101,6 +137,7 @@ impl DiscoverStageReport {
             ("blast_query", self.blast_query.secs),
             ("blast_snapshot", self.blast_snapshot.secs),
             ("macro_index", self.macro_index.secs),
+            ("structural_sketch", self.structural_sketch.secs),
             ("save_analysis", self.save_analysis.secs),
             ("save_tracker", self.save_tracker.secs),
             ("save_snapshot", self.save_snapshot.secs),
@@ -111,8 +148,10 @@ impl DiscoverStageReport {
         tracing::info!(
             target: "profile",
             wall_secs = self.wall_total.secs,
+            pre_index_secs = pre_index,
             index_secs = self.index_pipeline.secs,
             post_index_secs = post_index,
+            accounted_secs = accounted,
             peak_rss_mb = self.peak_rss_mb,
             ingest_peak_rss_mb = self.ingest_peak_rss_mb,
             analysis_peak_rss_mb = self.analysis_peak_rss_mb,

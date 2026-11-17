@@ -2,9 +2,7 @@
 
 use super::args::OutputFormat;
 use super::context::CliContext;
-use super::discover_cfg::{
-    CfgAnalysisOptions, FileSourceCache, preload_file_sources, run_cfg_analysis_batch,
-};
+use super::discover_cfg::{CfgAnalysisOptions, FileSourceCache, run_cfg_analysis_batch};
 use super::discover_limits::{DiscoverLimits, check_memory_budget};
 use super::discover_output::{DiscoverArtifacts, build_discover_response};
 use super::stage_profile::{DiscoverStageReport, secs};
@@ -69,6 +67,8 @@ pub(crate) struct AnalysisOptions<'a> {
     pub reuse_basic_analytics: bool,
     /// Persist RGCS/RGCT lossless sidecars (`--lossless` / `RGCTL_LOSSLESS=1`).
     pub lossless: bool,
+    /// Optional pre-walked repository file list shared across staged `--full` passes.
+    pub pre_discovered_files: Option<Arc<[PathBuf]>>,
 }
 
 /// Result of one `run_full_analysis` pass.
@@ -78,6 +78,7 @@ pub(crate) struct DiscoverRunOutcome {
     #[allow(dead_code)]
     pub reused_snapshot: bool,
     pub graph_digest: String,
+    pub discovered_files: Arc<[PathBuf]>,
 }
 
 pub(crate) fn run_full_analysis(
@@ -111,6 +112,7 @@ pub(crate) fn run_full_analysis(
         limits,
         reuse_basic_analytics,
         lossless,
+        pre_discovered_files,
     } = opts;
 
     let verbose = ctx.verbose;
@@ -210,12 +212,23 @@ pub(crate) fn run_full_analysis(
     );
 
     // Discover files (used for indexing and later for security/tracking)
-    let discoverer = FileDiscoverer::with_config(Arc::clone(&registry), discovery_config.clone());
-    let files = discoverer.discover(root)?;
+    let files: Arc<[PathBuf]> = match pre_discovered_files {
+        Some(shared) => shared,
+        None => {
+            let discover_start = Instant::now();
+            let discoverer =
+                FileDiscoverer::with_config(Arc::clone(&registry), discovery_config.clone());
+            let walked = discoverer.discover(root)?;
+            profile.file_discover.secs = secs(discover_start.elapsed());
+            Arc::from(walked)
+        }
+    };
 
     let snapshot_path = rgctl_graph::snapshot::MmappedGraphSnapshot::default_path(store);
+    let detect_start = Instant::now();
     let mut file_tracker = FileTracker::load(store).unwrap_or_else(|_| FileTracker::new(store));
     let file_changes = file_tracker.detect_changes(&files)?;
+    profile.detect_changes.secs = secs(detect_start.elapsed());
 
     // Index the repository (or reuse snapshot when sources are unchanged).
     // Lever 1: write columnar from GraphBuilder Vecs — never build MemoryBackend for discover.
@@ -291,6 +304,7 @@ pub(crate) fn run_full_analysis(
     profile.graph_resolution_index.secs = secs(index_stats.graph_resolution_index);
     profile.graph_pass2.secs = secs(index_stats.graph_pass2);
     profile.graph_spill_columnar.secs = secs(index_stats.graph_spill_columnar);
+    profile.parked_save.secs = secs(index_stats.parked_save);
     profile.nodes = index_stats.nodes_created;
     // Snapshot write is folded into index_graph_build (Lever 1: no separate backend rewrite).
     profile.save_snapshot.secs = 0.0;
@@ -423,6 +437,7 @@ pub(crate) fn run_full_analysis(
     debug!("{}", mem_monitor.report());
 
     // Cold metadata + CSR from snapshot — no fat CodeGraph through analysis (#33 / Lever 1).
+    let cold_open_start = Instant::now();
     let cold = match cold_reused {
         Some(cold) => cold,
         None => crate::analysis::ColdMetadataDb::open(&snapshot_path)?,
@@ -433,14 +448,23 @@ pub(crate) fn run_full_analysis(
         && graph_from_snapshot
         && basic_analytics_reusable(store, &graph_digest, &analysis_path);
 
-    let functions;
+    let use_hot_functions = !graph_from_snapshot && scip.is_none();
+    let hot_functions = if use_hot_functions {
+        std::mem::take(&mut index_stats.hot_functions)
+    } else {
+        Vec::new()
+    };
+    let functions: Vec<rgctl_graph::schema::Node>;
+    let function_ids: Vec<uuid::Uuid>;
     let mut analysis_results;
     let mut petgraph_view: Option<PetGraphView> = None;
 
     if reuse_ok {
         analysis_results = AnalysisResults::load(&analysis_path)?;
-        functions = cold.collect_nodes_by_type(NodeType::Function)?;
-        profile.functions = functions.len();
+        functions = Vec::new();
+        function_ids = cold.store().node_ids_for_type(NodeType::Function);
+        profile.cold_open.secs = secs(cold_open_start.elapsed());
+        profile.functions = function_ids.len();
         profile.ingest_peak_rss_mb = mem_monitor.seal_phase().unwrap_or(0.0);
         if let Some(limit) = limits.as_ref().and_then(|l| l.max_mem_mb) {
             check_memory_budget(profile.ingest_peak_rss_mb, limit)?;
@@ -448,7 +472,7 @@ pub(crate) fn run_full_analysis(
         if human_output {
             info!(
                 "[✓] Reused Stage 1 analytics ({} functions)",
-                functions.len()
+                function_ids.len()
             );
         }
         if with_harmonic {
@@ -476,36 +500,98 @@ pub(crate) fn run_full_analysis(
         let mut node_ids = cold.store().all_node_ids();
         node_ids.sort_unstable();
         analysis_results = AnalysisResults::new(node_ids);
+        profile.cold_open.secs = secs(cold_open_start.elapsed());
 
-        // Complexity from cold mmap payloads (single Function collect — reused below).
         let complexity_start = Instant::now();
-        let complexity_report = ComplexityAnalyzer::analyze_lookup(&cold)?;
-        analysis_results.fill_complexity(&complexity_report);
-        profile.complexity.secs = secs(complexity_start.elapsed());
-        if verbose {
-            debug!("✓ Complexity analysis:");
-            debug!("  Functions: {}", complexity_report.functions.len());
-            debug!("  Avg cyclomatic: {:.1}", complexity_report.avg_cyclomatic);
-            debug!("  Max cyclomatic: {}", complexity_report.max_cyclomatic);
-        }
-        let high_complexity = complexity_report
-            .by_level
-            .get(&crate::analysis::ComplexityLevel::High)
-            .copied()
-            .unwrap_or(0);
-        let medium_complexity = complexity_report
-            .by_level
-            .get(&crate::analysis::ComplexityLevel::Medium)
-            .copied()
-            .unwrap_or(0);
-        if human_output {
-            info!(
-                "[✓] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
-                complexity_report.functions.len(),
-                complexity_report.avg_cyclomatic,
-                high_complexity,
-                medium_complexity
+        if use_hot_functions {
+            let fn_len = hot_functions.len();
+            let mut total_cyclomatic = 0usize;
+            let mut max_cyclomatic = 0u32;
+            let mut high_complexity = 0usize;
+            let mut medium_complexity = 0usize;
+            for hf in &hot_functions {
+                let cyc = hf.cyclomatic as usize;
+                total_cyclomatic += cyc;
+                if hf.cyclomatic > max_cyclomatic {
+                    max_cyclomatic = hf.cyclomatic;
+                }
+                match crate::analysis::classify_complexity(cyc) {
+                    crate::analysis::ComplexityLevel::High => high_complexity += 1,
+                    crate::analysis::ComplexityLevel::Medium => medium_complexity += 1,
+                    _ => {}
+                }
+            }
+            let avg_cyclomatic = if fn_len > 0 {
+                total_cyclomatic as f64 / fn_len as f64
+            } else {
+                0.0
+            };
+            analysis_results.fill_complexity_from_raw(
+                hot_functions
+                    .iter()
+                    .map(|hf| (hf.id, hf.cyclomatic, hf.cognitive)),
+                avg_cyclomatic,
+                max_cyclomatic,
             );
+            profile.complexity.secs = secs(complexity_start.elapsed());
+            if verbose {
+                debug!("✓ Complexity analysis (hot):");
+                debug!("  Functions: {}", fn_len);
+                debug!("  Avg cyclomatic: {:.1}", avg_cyclomatic);
+                debug!("  Max cyclomatic: {}", max_cyclomatic);
+            }
+            if human_output {
+                info!(
+                    "[✓] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
+                    fn_len, avg_cyclomatic, high_complexity, medium_complexity
+                );
+            }
+            function_ids = hot_functions.iter().map(|hf| hf.id).collect();
+            functions = Vec::new();
+        } else {
+            // Snapshot-reuse / SCIP fallback: materialize from cold mmap payloads.
+            let complexity_report = ComplexityAnalyzer::analyze_lookup(&cold)?;
+            analysis_results.fill_complexity(&complexity_report);
+            profile.complexity.secs = secs(complexity_start.elapsed());
+            if verbose {
+                debug!("✓ Complexity analysis:");
+                debug!("  Functions: {}", complexity_report.functions.len());
+                debug!("  Avg cyclomatic: {:.1}", complexity_report.avg_cyclomatic);
+                debug!("  Max cyclomatic: {}", complexity_report.max_cyclomatic);
+            }
+            let high_complexity = complexity_report
+                .by_level
+                .get(&crate::analysis::ComplexityLevel::High)
+                .copied()
+                .unwrap_or(0);
+            let medium_complexity = complexity_report
+                .by_level
+                .get(&crate::analysis::ComplexityLevel::Medium)
+                .copied()
+                .unwrap_or(0);
+            if human_output {
+                info!(
+                    "[✓] Analyzed {} functions (avg complexity: {:.1}, {} high, {} medium)",
+                    complexity_report.functions.len(),
+                    complexity_report.avg_cyclomatic,
+                    high_complexity,
+                    medium_complexity
+                );
+            }
+            function_ids = complexity_report
+                .functions
+                .iter()
+                .map(|fc| fc.node.id)
+                .collect();
+            functions = if run_cfg_pass {
+                complexity_report
+                    .functions
+                    .into_iter()
+                    .map(|fc| fc.node)
+                    .collect()
+            } else {
+                Vec::new()
+            };
         }
         debug!("{}", mem_monitor.report());
 
@@ -527,13 +613,7 @@ pub(crate) fn run_full_analysis(
         };
         profile.topology.secs = secs(topo_start.elapsed());
 
-        // Reuse Function nodes already materialized for complexity (avoid 2nd full scan).
-        functions = complexity_report
-            .functions
-            .into_iter()
-            .map(|fc| fc.node)
-            .collect();
-        profile.functions = functions.len();
+        profile.functions = function_ids.len();
         // Seal ingest phase: absolute peak stays; analysis phase peak resets to current RSS.
         profile.ingest_peak_rss_mb = mem_monitor.seal_phase().unwrap_or(0.0);
         if let Some(limit) = limits.as_ref().and_then(|l| l.max_mem_mb) {
@@ -663,6 +743,7 @@ pub(crate) fn run_full_analysis(
 
         // Name communities after centrality so PageRank can influence labels.
         {
+            let labels_start = Instant::now();
             let infra = analysis_results
                 .community
                 .as_ref()
@@ -670,6 +751,7 @@ pub(crate) fn run_full_analysis(
             let _ = rgctl_analysis::fill_community_labels(&mut analysis_results, infra, |uuid| {
                 cold.node_name_and_path(uuid).ok().flatten()
             });
+            profile.community_labels.secs = secs(labels_start.elapsed());
         }
 
         // Dependency analysis — full-graph Kosaraju is O(N+E) and duplicates work the
@@ -758,15 +840,7 @@ pub(crate) fn run_full_analysis(
             debug!("--with-taint implies CFG/PDG pass");
         }
 
-        let file_sources: Option<FileSourceCache> = if with_ast_skeleton || with_cfg {
-            Some(preload_file_sources(
-                &functions,
-                root,
-                limits.as_ref().and_then(|l| l.threads),
-            ))
-        } else {
-            None
-        };
+        let file_sources: Option<FileSourceCache> = None;
 
         let taint_rule_set = if with_taint {
             let cli = taint_rules.as_ref().map(std::path::PathBuf::from);
@@ -788,8 +862,10 @@ pub(crate) fn run_full_analysis(
             None
         };
 
+        let archive_path = CfgPdgArchive::default_path(store);
         let batch = run_cfg_analysis_batch(
             &functions,
+            Some(cold.store()),
             &storage,
             root,
             CfgAnalysisOptions {
@@ -799,12 +875,14 @@ pub(crate) fn run_full_analysis(
                 dfg_loops: with_dfg_loops,
                 taint_rules: taint_rule_set,
                 with_ast_skeleton,
+                archive_output: Some((archive_path.clone(), graph_digest.clone())),
             },
             file_sources.as_ref(),
         );
         let success_count = batch.success_count;
         let error_count = batch.error_count;
-        profile.cfg_total.secs = secs(cfg_start.elapsed());
+        let total_cfg_wall = secs(cfg_start.elapsed());
+        profile.cfg_total.secs = (total_cfg_wall - batch.archive_finish_secs).max(0.0);
         if let Some(sp) = batch.stage_profile {
             profile.cfg_build.secs = sp.build_cfg_secs;
             profile.cfg_dominator.secs = sp.dominator_secs;
@@ -812,13 +890,21 @@ pub(crate) fn run_full_analysis(
             profile.cfg_taint.secs = sp.taint_secs;
         }
 
-        let archive_path = CfgPdgArchive::default_path(store);
         let archive_start = Instant::now();
         if batch.archive_unchanged {
             if verbose {
                 debug!(
                     skipped = batch.skipped_unchanged,
                     "CFG/PDG archive unchanged — skipping rewrite"
+                );
+            }
+        } else if batch.archive_streamed {
+            if verbose {
+                debug!(
+                    path = %archive_path.display(),
+                    analyzed = batch.success_count,
+                    skipped_declarations = batch.skip_bodiless_declaration,
+                    "CFG/PDG archive streamed directly to disk"
                 );
             }
         } else if !batch.archive_record_bytes.is_empty() {
@@ -848,7 +934,7 @@ pub(crate) fn run_full_analysis(
                 warn!(error = %err, "Failed to save cfg_pdg archive");
             }
         }
-        profile.cfg_archive.secs = secs(archive_start.elapsed());
+        profile.cfg_archive.secs = batch.archive_finish_secs + secs(archive_start.elapsed());
 
         // Field-write index: prefer fused worker results; fall back to archive only when needed.
         let fw_start = Instant::now();
@@ -908,10 +994,17 @@ pub(crate) fn run_full_analysis(
                 let Some(archive) = archive else {
                     return Ok::<(PathBuf, usize), rgctl_error::Error>((fw_path.clone(), 0));
                 };
+                let fallback_fns;
+                let fns_slice: &[rgctl_graph::schema::Node] = if !functions.is_empty() {
+                    &functions
+                } else {
+                    fallback_fns = cold.collect_nodes_by_type(NodeType::Function)?;
+                    &fallback_fns
+                };
                 build_and_save_field_write_index(
                     store,
                     &archive,
-                    &functions,
+                    fns_slice,
                     Some(graph_digest.clone()),
                     preloaded,
                 )
@@ -988,7 +1081,7 @@ pub(crate) fn run_full_analysis(
                         batch.total_flows, batch.vulnerable_flows
                     );
                 }
-            } else if !functions.is_empty() {
+            } else if !function_ids.is_empty() {
                 println!(
                     "  No functions analyzed (CFG supported: {})",
                     cfg_language_list()
@@ -1069,6 +1162,7 @@ pub(crate) fn run_full_analysis(
                     run_start.elapsed().as_millis() as u64,
                     graph_from_snapshot,
                     graph_digest.clone(),
+                    Arc::clone(&files),
                 ));
             }
         };
@@ -1098,7 +1192,7 @@ pub(crate) fn run_full_analysis(
         let skip_bulk_blast = engine.uses_on_demand_reachability();
         if skip_bulk_blast && verbose {
             debug!(
-                functions = functions.len(),
+                functions = function_ids.len(),
                 "Flat graph — skipping bulk blast-radius scan (use `blast-radius` for on-demand queries; #28)"
             );
         }
@@ -1106,13 +1200,10 @@ pub(crate) fn run_full_analysis(
             if skip_bulk_blast {
                 Vec::new()
             } else {
-                functions
+                function_ids
                     .par_iter()
-                    .filter_map(|func_node| {
-                        engine
-                            .analyze(func_node.id)
-                            .ok()
-                            .map(|result| (func_node.id, result))
+                    .filter_map(|&func_id| {
+                        engine.analyze(func_id).ok().map(|result| (func_id, result))
                     })
                     .collect()
             };
@@ -1253,7 +1344,7 @@ pub(crate) fn run_full_analysis(
         }
     }
 
-    let analyzed_functions = functions.len();
+    let analyzed_functions = function_ids.len();
 
     let total_time = blast_start.elapsed();
 
@@ -1295,7 +1386,19 @@ pub(crate) fn run_full_analysis(
         info!("[✓] Analysis complete");
     }
 
-    analysis_results.fill_structural_sketch_from_nodes(&functions)?;
+    let sketch_start = Instant::now();
+    if use_hot_functions {
+        analysis_results.fill_structural_sketch_from_blooms(
+            hot_functions
+                .iter()
+                .filter_map(|hf| hf.token_bloom.map(|b| (hf.id, b))),
+        )?;
+    } else if !functions.is_empty() {
+        analysis_results.fill_structural_sketch_from_nodes(&functions)?;
+    } else {
+        analysis_results.fill_structural_sketch_from_lookup(&cold)?;
+    }
+    profile.structural_sketch.secs = secs(sketch_start.elapsed());
 
     // Save analysis results (columnar format - separate from graph!)
     let save_analysis_start = Instant::now();
@@ -1447,6 +1550,7 @@ pub(crate) fn run_full_analysis(
                         run_start.elapsed().as_millis() as u64,
                         graph_from_snapshot,
                         graph_digest.clone(),
+                        Arc::clone(&files),
                     ));
                 }
                 if human_output {
@@ -1471,6 +1575,7 @@ pub(crate) fn run_full_analysis(
                         run_start.elapsed().as_millis() as u64,
                         graph_from_snapshot,
                         graph_digest.clone(),
+                        Arc::clone(&files),
                     ));
                 }
             }
@@ -1539,6 +1644,7 @@ pub(crate) fn run_full_analysis(
         run_start.elapsed().as_millis() as u64,
         graph_from_snapshot,
         graph_digest,
+        files,
     ))
 }
 
@@ -1547,11 +1653,13 @@ fn discover_outcome(
     duration_ms: u64,
     reused_snapshot: bool,
     graph_digest: String,
+    discovered_files: Arc<[PathBuf]>,
 ) -> DiscoverRunOutcome {
     DiscoverRunOutcome {
         response: build_discover_response(stats, duration_ms),
         reused_snapshot,
         graph_digest,
+        discovered_files,
     }
 }
 

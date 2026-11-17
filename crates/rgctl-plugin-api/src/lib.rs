@@ -26,12 +26,12 @@ pub use single_pass::{
 };
 
 pub use call_extraction::{
-    C_CALL_KINDS, CPP_CALL_KINDS, CSHARP_CALL_KINDS, GO_CALL_KINDS, JS_CALL_KINDS,
+    C_CALL_KINDS, CPP_CALL_KINDS, CSHARP_CALL_KINDS, CallFileIndex, GO_CALL_KINDS, JS_CALL_KINDS,
     KOTLIN_CALL_KINDS, PHP_CALL_KINDS, PYTHON_CALL_KINDS, RUBY_CALL_KINDS, RUST_CALL_KINDS,
     TS_CALL_KINDS, callee_name, containing_function, containing_function_from_scope,
     infer_param_type_from_signature, infer_python_method_target, kotlin_call_callee,
-    push_call_relation, push_call_relation_from, push_call_relation_scoped, ruby_call_callee,
-    ruby_call_unresolved, walk_calls,
+    push_call_relation, push_call_relation_from, push_call_relation_from_indexed,
+    push_call_relation_scoped, ruby_call_callee, ruby_call_unresolved, walk_calls,
 };
 
 pub use error::{Error, Result};
@@ -95,6 +95,169 @@ pub struct Symbol {
     /// Overflow `(rel_start, len)` when the identifier starts ≥ 65535 bytes after `start_byte`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name_span_overflow: Option<(u32, u32)>,
+
+    /// Declaration vs implementation role for callable symbols (avoids `serde_json::Map` on hot ingest).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callable_role: Option<CallableRole>,
+
+    /// Canonical parameter/overload identity discriminator (`None` when unique without discriminator).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_discriminator: Option<Box<str>>,
+
+    /// MRO override dispatch identity when distinct or explicitly suppressed (`Some("")`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_identity: Option<Box<str>>,
+
+    /// Explicit trait / inherent override owner (e.g. Rust `trait:Display` or `<inherent>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_owner: Option<Box<str>>,
+
+    /// Normalized parameter-type tuple `(T1,T2)` used for literal/formal call-site matching.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameter_identity: Option<Box<str>>,
+
+    /// Generic type-parameter arity when non-zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generic_arity: Option<u8>,
+
+    /// True when an earlier dynamic definition is superseded by a later redefinition in the same scope.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub superseded_definition: bool,
+
+    /// Source language identifier (borrowed `'static` in hot paths; avoids `metadata["language"]` `BTreeMap`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<std::borrow::Cow<'static, str>>,
+
+    /// Precomputed single-pass complexity metrics (avoids JSON round-trip per function).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complexity: Option<ComplexityMetrics>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Role of a callable symbol declaration vs body implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallableRole {
+    /// Header prototype, interface signature, or overload declaration without body.
+    Declaration,
+    /// Concrete callable implementation with body.
+    Implementation,
+}
+
+impl CallableRole {
+    /// Canonical string representation matching persisted graph properties.
+    #[inline]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Declaration => "declaration",
+            Self::Implementation => "implementation",
+        }
+    }
+}
+
+impl Symbol {
+    /// Effective language string (typed field first, legacy JSON metadata fallback).
+    #[inline]
+    pub fn language_str(&self) -> Option<&str> {
+        if let Some(ref lang) = self.language {
+            return Some(lang.as_ref());
+        }
+        if self.metadata.is_null() {
+            return None;
+        }
+        self.metadata.get("language").and_then(|v| v.as_str())
+    }
+
+    /// Effective callable role (typed field first, legacy JSON metadata fallback).
+    #[inline]
+    pub fn callable_role_str(&self) -> Option<&str> {
+        if let Some(role) = self.callable_role {
+            return Some(role.as_str());
+        }
+        if self.metadata.is_null() {
+            return None;
+        }
+        self.metadata.get("callable_role").and_then(|v| v.as_str())
+    }
+
+    /// Effective canonical identity discriminator (typed field first, legacy JSON metadata fallback).
+    #[inline]
+    pub fn identity_discriminator_str(&self) -> Option<&str> {
+        if let Some(ref d) = self.identity_discriminator {
+            return Some(d.as_ref());
+        }
+        if self.metadata.is_null() {
+            return None;
+        }
+        self.metadata
+            .get("identity_discriminator")
+            .and_then(|v| v.as_str())
+    }
+
+    /// Effective MRO override identity (typed field first, legacy JSON metadata fallback).
+    #[inline]
+    pub fn override_identity_str(&self) -> Option<&str> {
+        if let Some(ref d) = self.override_identity {
+            return Some(d.as_ref());
+        }
+        if self.metadata.is_null() {
+            return None;
+        }
+        self.metadata
+            .get("override_identity")
+            .and_then(|v| v.as_str())
+    }
+
+    /// Effective override owner (typed field first, legacy JSON metadata fallback).
+    #[inline]
+    pub fn override_owner_str(&self) -> Option<&str> {
+        if let Some(ref o) = self.override_owner {
+            return Some(o.as_ref());
+        }
+        if self.metadata.is_null() {
+            return None;
+        }
+        self.metadata.get("override_owner").and_then(|v| v.as_str())
+    }
+
+    /// Effective normalized parameter tuple (typed field first, legacy JSON metadata fallback).
+    #[inline]
+    pub fn parameter_identity_str(&self) -> Option<&str> {
+        if let Some(ref p) = self.parameter_identity {
+            return Some(p.as_ref());
+        }
+        if self.metadata.is_null() {
+            return None;
+        }
+        self.metadata
+            .get("parameter_identity")
+            .and_then(|v| v.as_str())
+    }
+
+    /// Effective generic parameter count.
+    #[inline]
+    pub fn generic_arity_val(&self) -> Option<usize> {
+        if let Some(a) = self.generic_arity {
+            return Some(a as usize);
+        }
+        if self.metadata.is_null() {
+            return None;
+        }
+        self.metadata
+            .get("generic_arity")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+    }
+
+    /// Whether this callable was superseded by a later dynamic redefinition.
+    #[inline]
+    pub fn is_superseded_definition(&self) -> bool {
+        self.superseded_definition
+            || (!self.metadata.is_null() && self.metadata["superseded_definition"] == true)
+    }
 }
 
 impl Default for Symbol {
@@ -122,6 +285,15 @@ impl Default for Symbol {
             name_rel_offset: None,
             name_token_len: None,
             name_span_overflow: None,
+            callable_role: None,
+            identity_discriminator: None,
+            override_identity: None,
+            override_owner: None,
+            parameter_identity: None,
+            generic_arity: None,
+            superseded_definition: false,
+            language: None,
+            complexity: None,
         }
     }
 }
@@ -301,6 +473,157 @@ pub struct Relation {
     /// Call-site / reference identifier byte length.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call_site_byte_len: Option<u16>,
+
+    /// Source language identifier (borrowed `'static` in hot paths; avoids `metadata["language"]` `BTreeMap`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<std::borrow::Cow<'static, str>>,
+
+    /// Caller overload identity discriminator (`""` when explicitly un-discriminated).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_identity_discriminator: Option<Box<str>>,
+
+    /// Callee overload identity discriminator resolved from same-file evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_identity_discriminator: Option<Box<str>>,
+
+    /// Conservative literal/formal argument type tuple `(int,String)` at a call site.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_identity_discriminator: Option<Box<str>>,
+
+    /// True when Tier-1 callable-identity resolution governs this `Calls` edge.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exact_callable_resolution: bool,
+
+    /// True when `to_qualified_hint` was speculatively inferred from the enclosing owner.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub inferred_callable_owner: bool,
+
+    /// Explicit type-argument arity at a generic call site (e.g. `foo::<A, B>()`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explicit_generic_arity: Option<u8>,
+}
+
+/// Intern common language IDs to `'static` borrows so `Relation.language` allocates zero heap bytes.
+#[inline]
+pub fn intern_language_cow(language: &str) -> std::borrow::Cow<'static, str> {
+    let s: &'static str = match language {
+        "c" => "c",
+        "cpp" => "cpp",
+        "csharp" => "csharp",
+        "go" => "go",
+        "groovy" => "groovy",
+        "java" => "java",
+        "javascript" => "javascript",
+        "kotlin" => "kotlin",
+        "php" => "php",
+        "puppet" => "puppet",
+        "python" => "python",
+        "ruby" => "ruby",
+        "rust" => "rust",
+        "typescript" => "typescript",
+        "swift" => "swift",
+        "scala" => "scala",
+        "dart" => "dart",
+        "elixir" => "elixir",
+        "lua" => "lua",
+        "bash" => "bash",
+        "sql" => "sql",
+        "hcl" => "hcl",
+        "erb" => "erb",
+        "markdown" => "markdown",
+        _ => return std::borrow::Cow::Owned(language.to_string()),
+    };
+    std::borrow::Cow::Borrowed(s)
+}
+
+impl Relation {
+    /// Effective language string (typed field first, legacy JSON metadata fallback).
+    #[inline]
+    pub fn language_str(&self) -> Option<&str> {
+        if let Some(ref lang) = self.language {
+            return Some(lang.as_ref());
+        }
+        if self.metadata.is_null() {
+            return None;
+        }
+        self.metadata.get("language").and_then(|v| v.as_str())
+    }
+
+    /// Effective caller identity discriminator (typed field first, legacy JSON metadata fallback).
+    #[inline]
+    pub fn from_identity_discriminator_str(&self) -> Option<&str> {
+        if let Some(ref d) = self.from_identity_discriminator {
+            return Some(d.as_ref());
+        }
+        if self.metadata.is_null() {
+            return None;
+        }
+        self.metadata
+            .get("from_identity_discriminator")
+            .and_then(|v| v.as_str())
+    }
+
+    /// Effective callee identity discriminator (typed field first, legacy JSON metadata fallback).
+    #[inline]
+    pub fn to_identity_discriminator_str(&self) -> Option<&str> {
+        if let Some(ref d) = self.to_identity_discriminator {
+            return Some(d.as_ref());
+        }
+        if self.metadata.is_null() {
+            return None;
+        }
+        self.metadata
+            .get("to_identity_discriminator")
+            .and_then(|v| v.as_str())
+    }
+
+    /// Effective call-site argument tuple discriminator.
+    #[inline]
+    pub fn argument_identity_discriminator_str(&self) -> Option<&str> {
+        if let Some(ref d) = self.argument_identity_discriminator {
+            return Some(d.as_ref());
+        }
+        if self.metadata.is_null() {
+            return None;
+        }
+        self.metadata
+            .get("argument_identity_discriminator")
+            .and_then(|v| v.as_str())
+    }
+
+    /// Whether exact callable-identity resolution is active on this relation.
+    #[inline]
+    pub fn is_exact_callable_resolution(&self) -> bool {
+        self.exact_callable_resolution
+            || (!self.metadata.is_null()
+                && self
+                    .metadata
+                    .get("exact_callable_resolution")
+                    .and_then(|v| v.as_bool())
+                    == Some(true))
+    }
+
+    /// Whether `to_qualified_hint` was inferred from the caller's enclosing owner.
+    #[inline]
+    pub fn is_inferred_callable_owner(&self) -> bool {
+        self.inferred_callable_owner
+            || (!self.metadata.is_null() && self.metadata["inferred_callable_owner"] == true)
+    }
+
+    /// Explicit generic type-argument count at a call site, if any.
+    #[inline]
+    pub fn explicit_generic_arity_val(&self) -> Option<usize> {
+        if let Some(a) = self.explicit_generic_arity {
+            return Some(a as usize);
+        }
+        if self.metadata.is_null() {
+            return None;
+        }
+        self.metadata
+            .get("explicit_generic_arity")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+    }
 }
 
 impl Default for Relation {
@@ -321,6 +644,13 @@ impl Default for Relation {
             to_type_hint: None,
             call_site_start_byte: None,
             call_site_byte_len: None,
+            language: None,
+            from_identity_discriminator: None,
+            to_identity_discriminator: None,
+            argument_identity_discriminator: None,
+            exact_callable_resolution: false,
+            inferred_callable_owner: false,
+            explicit_generic_arity: None,
         }
     }
 }

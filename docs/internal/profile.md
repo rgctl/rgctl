@@ -63,9 +63,9 @@ cargo test --release --test cold_profile_gates -- --ignored --nocapture --test-t
 
 | Gate | Corpus | Discover flags | Baseline (wall, +10%) |
 |------|--------|----------------|------------------------|
-| `linux_cold_discover_within_baseline` | `example/linux` | default | **75 s** (2026-10-21; 3-run mean ~71 s) |
-| `metasfresh_cold_discover_within_baseline` | `example/metasfresh-4.9.8b` | `--full` | **50 s** (2026-10-21; process elapsed ~45 s, final summary ~25 s) |
-| `kafka_cold_discover_within_baseline` | `example/kafka` | default | env `RGCTL_KAFKA_COLD_BASELINE_SECS` (default **12 s**; 2026-10-21 ~9.6 s) |
+| `linux_cold_discover_within_baseline` | `example/linux` | default | **48 s** (2026-11-17; ~40.9 s wall, ~7.4 GB peak footprint) |
+| `metasfresh_cold_discover_within_baseline` | `example/metasfresh-4.9.8b` | `--full` | **38 s** (2026-11-17; process elapsed ~32.3–35.7 s across all 3 passes) |
+| `kafka_cold_discover_within_baseline` | `example/kafka` | default | env `RGCTL_KAFKA_COLD_BASELINE_SECS` (default **9.5 s**; 2026-11-17 ~8.7 s) |
 | `k8s_website_markdown_cold_discover_within_baseline` | `example/k8s-website` | `-l markdown` | **9 s** (2026-10-21; ~7.7 s) |
 | `ecommerce_java_inheritance_cold_discover_within_baseline` | `rgctl-tests/ecommerce-java` | default | **0.36 s** wall; **0.013 s** `index_graph_build` |
 | `rust_cold_discover_within_baseline` | `example/rust` | `-l rust` | **25 s** (2026-10-21; ~23.5 s) |
@@ -76,6 +76,7 @@ cargo test --release --test cold_profile_gates -- --ignored --nocapture --test-t
 | `node_javascript_cold_discover_with_cfg_within_baseline` | `example/node/test` | `-l javascript --with-cfg` | **5 s** (2026-10-21; ~3.8 s) |
 | `home_assistant_python_cold_discover_within_baseline` | `example/home-assistant` | `-l python` | **15 s** (2026-10-21; ~13.4 s) |
 | `discourse_cold_discover_within_baseline` | `example/discourse` | `-l ruby` | env `RGCTL_DISCOURSE_RUBY_COLD_BASELINE_SECS` (default **8 s**; 2026-11-03 ~7.0 s process) |
+| `discourse_cold_discover_with_cfg_within_baseline` | `example/discourse` | `-l ruby --with-cfg` | env `RGCTL_DISCOURSE_RUBY_COLD_WITH_CFG_BASELINE_SECS` (default **7 s**; 2026-11-17 ~4.6 s) |
 | `kotlin_cold_discover_within_baseline` | `example/kotlin` | `-l kotlin` | **15 s** (2026-11-03 post-98% AST; ~13.7 s) |
 | `groovy_cold_discover_within_baseline` | `example/groovy` | `-l groovy` | **8 s** (2026-11-03 post-98% AST; ~6.9 s) |
 | `pr_check_rgctl_graph_slice_within_baseline` | `crates/rgctl-graph` | delta `pr-check` (base cache only) | **1.0 s** |
@@ -140,8 +141,8 @@ document metasfresh sampling; Gate A (linux cold discover) is N/A unless the def
 
 | Line | Meaning |
 |------|---------|
-| `[profile] discover summary` | Wall time, `index_secs`, `post_index_secs`, peak RSS (`peak_rss_mb`, `ingest_peak_rss_mb`, `analysis_peak_rss_mb`), node/function counts |
-| `[profile] stage` | Per-stage wall seconds and `%` of discover wall (`index_extract`, `extract_pass1`, `index_graph_build`, `graph_resolution_index`, `graph_pass2`, `graph_spill_columnar`, `centrality`, …) |
+| `[profile] discover summary` | Wall time, `pre_index_secs` (`file_discover` + `detect_changes`), `index_secs`, `post_index_secs`, `accounted_secs` (`\|wall_secs - accounted_secs\| < 0.5 s` gated in `tests/profile_stage_accounting.rs`), peak RSS (`peak_rss_mb`, `ingest_peak_rss_mb`, `analysis_peak_rss_mb`), node/function counts |
+| `[profile] stage` | Per-stage wall seconds and `%` of discover wall (`file_discover`, `detect_changes`, `index_extract`, `extract_pass1`, `index_graph_build`, `graph_resolution_index`, `graph_pass2`, `graph_spill_columnar`, `parked_save`, `cold_open`, `topology`, `community`, `community_labels`, `complexity`, `centrality`, `structural_sketch`, `semantic_index`, …) |
 | `[profile] extract cpu stage` | CPU-sum across extract workers (`extract_read`, `extract_parse`); may exceed `index_extract` wall |
 | `[profile] centrality breakdown` | PageRank / betweenness / harmonic sub-times |
 | `[profile] save_dashboard stage` | Dashboard export substeps (e.g. `export_cfg_slice`) |
@@ -166,33 +167,31 @@ Algorithm detail (sampled betweenness, HyperBall, adaptive gating): [analysis-ar
 
 ---
 
-## Gate baselines (2026-10-21, single-pass AST)
+## Gate baselines (2026-11-17, ingest reclamation & streaming CFG)
 
-Recorded on the **reference machine** above, release `rgctl`, cold `.rgctl/` removed. These values are the **`cold_profile_gates`** baselines (+10% tolerance). Prior 2026-08/09 envelopes kept in git history for comparison.
+Recorded on the **reference machine** above, release `rgctl`, cold `.rgctl/` removed. These values are the **`cold_profile_gates`** baselines (+10% tolerance). Prior envelopes kept in git history for comparison.
 
-### Linux (`example/linux`) — default discover
+### Linux (`example/linux`) — default discover & `--with-cfg`
 
-| Metric | Value |
-|--------|-------|
-| Wall (3-run mean / max) | **71.0 s** / **72.3 s** |
-| **Gate baseline** | **75 s** (pass ≤ 82.5 s) |
-| Peak RSS (rgctl) | **~13.1–14.1 GB** |
-| Nodes / functions | 2,700,362 / 1,864,594 |
+| Metric | Default discover | `--with-cfg` |
+|--------|------------------|--------------|
+| Wall | **40.9 s** (`41.0 s` real; `99.8%` accounted) | **85.3 s** (`85.5 s` real; `99.8%` accounted) |
+| **Gate baseline** | **48 s** (pass ≤ 52.8 s) | — |
+| Peak RSS / memory footprint | **~9.0 GB** RSS / **7.4 GB** footprint | **~11.2 GB** RSS / **10.5 GB** footprint (`0 MB` swap) |
+| Nodes / functions | 1,806,957 / 948,922 (`2,799,756` with external stubs) | 2,799,756 / 948,922 (`774,030` CFG/PDG built) |
 
-Top stages (% of wall): `index_extract` **~18 s** (25%), `extract_pass1` **~18 s** (25%), `index_graph_build` **~13 s** (18%), `graph_spill_columnar` **~10 s** (14%).
+Top default stages (% of wall): `index_extract` **~15.3 s** (37%), `extract_pass1` **~15.2 s** (37%), `file_discover` **~8.4 s** (21%), `index_graph_build` **~8.8 s** (22%: `graph_pass2` **1.24 s**, `graph_spill_columnar` **6.89 s**), `blast_build` **~3.15 s** (8%).
 
 ### metasfresh (`example/metasfresh-4.9.8b`) — `--full`
 
 | Metric | Value |
 |--------|-------|
-| Wall (final summary / process elapsed) | **~25 s** / **~45 s** |
-| **Gate baseline** | **50 s** (pass ≤ 55 s; gate times process elapsed) |
-| Peak RSS | **~5.1 GB** (final); ingest ~1.9 GB |
-| Nodes / functions | 311,051 / 133,143 |
+| Wall (3-stage process elapsed) | **~32.3–35.7 s** (`9.0–9.7 s` basic + `13.5–14.0 s` deep + `9.6–11.9 s` `semantic_index`) |
+| **Gate baseline** | **38 s** (pass ≤ 41.8 s; gate times process elapsed) |
+| Peak RSS / memory footprint | **~3.5 GB** RSS / **2.55 GiB** footprint |
+| Nodes / functions | 325,539 / 140,509 |
 
-Stage walls (profile summaries): **basic ~18 s**, **deep ~46 s**, **semantic ~9 s** (inferred from timestamps; semantic has little `[profile]` logging).
-
-Deep-pass hotspots: `cfg_total` **~18 s**, `save_dashboard` **~11 s** (`export_cfg_slice` **~9.7 s**), harmonic centrality **~6.7 s**, `field_write` **~4.6 s**.
+Deep-pass hotspots: harmonic centrality **~6.6 s**, `save_dashboard` **~2.5 s**, `cold_open` **~2.4 s**, `cfg_total` **~2.0 s** (`cfg_archive` **~0.01 s**; bodiless interface/abstract declarations skipped before AST parse).
 
 ### Rust (`example/rust`) — `-l rust`
 
@@ -294,11 +293,11 @@ Fixture-scale: `rgctl-tests/ecommerce-kotlin`, `tests/dashboard_ecommerce_kotlin
 
 Fixture-scale: `rgctl-tests/ecommerce-groovy`, `tests/dashboard_ecommerce_groovy.rs`.
 
-### CFG on large C++ corpora (`--with-cfg`)
+### Streaming CFG & bounded AST recursion (`--with-cfg`)
 
-`discover --with-cfg` builds per-function CFGs on a dedicated **16 MiB** Rayon pool (`with_large_pool` / `rgctl-worker-*`) with the pass coordinated on a **`rgctl-large-stack`** thread. Default discover/extract uses the normal pool (OS default ~2 MiB worker stacks). Field-write indexing after CFG also runs on a large-stack thread.
+`discover --with-cfg` streams per-file source reads and per-file `ColumnarGraphMmap` function materialization on a dedicated **16 MiB** Rayon pool (`with_large_pool`), serializes `(CFG, PDG)` once per function, and streams encoded records over a bounded `sync_channel` directly into `AnalysisStorage` pack and `StreamingCfgPdgArchiveWriter` (`cfg_pdg.archive.bin` v3).
 
-Pathological inputs (e.g. llvm `clang/test/Index/annotate-deep-statements.cpp` with thousands of nested `call_expression` nodes) are capped at **depth 2048** during CFG expression walks and def-use extraction (`cfg_builder` / `def_use`); one warning per function is logged and deeper branches are skipped. For full llvm `clang/` CFG discover on older builds, `RUST_MIN_STACK=16777216` was the workaround.
+Pathological inputs (e.g. llvm `clang/test/Index/annotate-deep-statements.cpp` or Discourse 2,500-deep Ruby chained calls / `elsif` ladders) are bounded by iterative stacks (`MAX_AST_WALK_DEPTH = 2048` in `field_write_locals` and `def_use`, iterative `if/elsif` lowering + `MAX_CFG_STATEMENT_DEPTH = 1024` in `cfg_builder`).
 
 ---
 

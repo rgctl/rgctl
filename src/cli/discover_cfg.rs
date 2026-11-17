@@ -1,22 +1,27 @@
-//! Parallel CFG/PDG/taint analysis for discover `--with-cfg` / `--with-taint`.
+//! Parallel streaming CFG/PDG/taint analysis for discover `--with-cfg` / `--with-taint`.
 
+use crate::analysis::cfg_pdg_archive::{StreamingCfgPdgArchiveWriter, stable_record_uuid};
 use crate::analysis::hash_maps::FxHashMap;
 use crate::analysis::storage::analysis_cache_key;
 use crate::analysis::{
     AnalysisIndexEntry, AnalysisStorage, AstSkeletonRecord, CfgPdgRecord, ControlFlowGraph,
-    DominatorTree, FieldWrite, FunctionAnalysis, ParsedSourceFile, PdgBuildOptions,
-    ProgramDependenceGraph, TaintAnalyzer, TaintRuleSet, build_cfg_for_function,
+    DominatorTree, FieldWrite, ParsedSourceFile, PdgBuildOptions, ProgramDependenceGraph,
+    TaintAnalyzer, TaintFlow, TaintRuleSet, build_cfg_for_function,
     build_file_local_types_from_tree, build_function_skeleton_from_tree, cfg_language_id_from_path,
     extract_writes_from_cfg, type_env_for_field_writes,
 };
 use rayon::prelude::*;
 use rgctl_graph::code_index::hash_code;
-use rgctl_graph::schema::Node;
+use rgctl_graph::columnar_snapshot::ColumnarGraphMmap;
+use rgctl_graph::schema::{Node, NodeType};
+use rgctl_graph::snapshot::SnapshotNodeStore;
 use rgctl_pipeline::{with_large_pool, with_large_stack, with_pool};
+use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
 use tracing::info;
 use uuid::Uuid;
@@ -36,6 +41,8 @@ pub struct CfgAnalysisOptions {
     pub taint_rules: Option<Arc<TaintRuleSet>>,
     /// Extract AST skeletons on workers (`--with-ast-skeleton`).
     pub with_ast_skeleton: bool,
+    /// Optional target `(archive_path, graph_digest)` for direct streaming v3 archive writes.
+    pub archive_output: Option<(PathBuf, String)>,
 }
 
 /// Why a function was not CFG-analyzed.
@@ -45,7 +52,9 @@ pub enum CfgSkipReason {
     UnsupportedLanguage,
     /// Source text was not available for the function's file.
     MissingSource,
-    /// Parse or CFG/PDG construction failed (or empty body).
+    /// Prototype, interface method, or abstract declaration with no executable body.
+    BodilessDeclaration,
+    /// Parse or CFG/PDG construction failed.
     AnalysisError,
 }
 
@@ -54,6 +63,7 @@ impl CfgSkipReason {
         match self {
             Self::UnsupportedLanguage => "unsupported_language",
             Self::MissingSource => "missing_source",
+            Self::BodilessDeclaration => "bodiless_declaration",
             Self::AnalysisError => "analysis_error",
         }
     }
@@ -83,6 +93,7 @@ pub struct CfgAnalysisBatchResult {
     pub error_count: usize,
     pub skip_unsupported_language: usize,
     pub skip_missing_source: usize,
+    pub skip_bodiless_declaration: usize,
     pub skip_analysis_error: usize,
     pub skips: Vec<CfgSkipEvent>,
     pub total_flows: usize,
@@ -91,11 +102,15 @@ pub struct CfgAnalysisBatchResult {
     pub recomputed: usize,
     pub skipped_unchanged: usize,
     pub orphans_removed: usize,
-    /// Pre-encoded CFG/PDG archive records `(function_id, bincode)`.
+    /// Pre-encoded CFG/PDG archive records `(function_id, bincode)` when `archive_output` is `None`.
     pub archive_record_bytes: Vec<(Uuid, Vec<u8>)>,
     /// Legacy in-memory records (empty when worker-side encode is used).
     pub archive_records: Vec<CfgPdgRecord>,
     pub archive_unchanged: bool,
+    /// True when the v3 CFG/PDG archive was streamed directly to disk during the batch.
+    pub archive_streamed: bool,
+    /// Wall-clock seconds spent finalizing/flushing the streamed archive TOC + rename.
+    pub archive_finish_secs: f64,
     /// Field writes extracted on workers (fused; skip archive re-open when non-empty).
     pub field_writes: Vec<FieldWrite>,
     /// Optional AST skeletons extracted on workers.
@@ -107,10 +122,15 @@ pub struct CfgAnalysisBatchResult {
 
 impl CfgAnalysisBatchResult {
     fn record_skip(&mut self, reason: CfgSkipReason, file_path: &str, symbol: &str, verbose: bool) {
+        if reason == CfgSkipReason::BodilessDeclaration {
+            self.skip_bodiless_declaration += 1;
+            return;
+        }
         self.error_count += 1;
         match reason {
             CfgSkipReason::UnsupportedLanguage => self.skip_unsupported_language += 1,
             CfgSkipReason::MissingSource => self.skip_missing_source += 1,
+            CfgSkipReason::BodilessDeclaration => {}
             CfgSkipReason::AnalysisError => self.skip_analysis_error += 1,
         }
         if verbose {
@@ -141,10 +161,14 @@ struct CfgFunctionTiming {
 
 struct CfgFunctionWork {
     function_id: Uuid,
-    /// Pre-encoded [`FunctionAnalysis`] bincode (worker-side).
+    /// Stable cache key (`analysis_cache_key`) for orphan purging without a full `Vec<Node>`.
+    active_key: Option<String>,
+    /// Pre-encoded [`crate::analysis::FunctionAnalysis`] bincode (worker-side).
     analysis_bytes: Option<Vec<u8>>,
     /// Pre-encoded [`CfgPdgRecord`] bincode (worker-side).
     archive_bytes: Option<Vec<u8>>,
+    /// Precomputed [`stable_record_uuid`] for v3 archive TOC alias (avoids writer deserialize).
+    archive_alias_uuid: Option<Uuid>,
     index_entry: Option<AnalysisIndexEntry>,
     field_writes: Vec<FieldWrite>,
     skeleton: Option<AstSkeletonRecord>,
@@ -165,7 +189,7 @@ struct FileWorkGroup {
     func_indices: Vec<usize>,
 }
 
-/// Parallel file read cache keyed by node `file_path` strings.
+/// Optional preloaded file read cache keyed by node `file_path` strings.
 pub struct FileSourceCache {
     sources: HashMap<String, Arc<String>>,
 }
@@ -182,7 +206,7 @@ impl FileSourceCache {
     }
 }
 
-fn resolve_read_path(repo_root: &Path, file_path: &str) -> std::path::PathBuf {
+fn resolve_read_path(repo_root: &Path, file_path: &str) -> PathBuf {
     let path = Path::new(file_path);
     if path.is_file() {
         path.to_path_buf()
@@ -192,6 +216,7 @@ fn resolve_read_path(repo_root: &Path, file_path: &str) -> std::path::PathBuf {
 }
 
 /// Read each unique function source file once (parallel when `thread_count` is set).
+#[allow(dead_code)]
 pub fn preload_file_sources(
     functions: &[Node],
     repo_root: &Path,
@@ -216,7 +241,9 @@ pub fn preload_file_sources(
 
 struct CfgWorkContext<'a> {
     functions: &'a [Node],
-    sources: &'a FileSourceCache,
+    columnar: Option<&'a ColumnarGraphMmap>,
+    repo_root: &'a Path,
+    sources: Option<&'a FileSourceCache>,
     cache: &'a CfgIncrementalCache,
     stage: Option<&'a CfgStageTimings>,
     timings: Option<&'a Mutex<Vec<CfgFunctionTiming>>>,
@@ -226,17 +253,38 @@ struct CfgWorkContext<'a> {
     with_ast_skeleton: bool,
 }
 
-/// Analyze all repository functions in parallel with incremental reuse and bincode persistence.
+fn is_bodiless_declaration_node(func: &Node) -> bool {
+    func.get_property("callable_role") == Some("declaration")
+}
+
+fn alias_uuid_for(file_path: &str, function_name: &str, code_hash: &str) -> Option<Uuid> {
+    if file_path.is_empty() || function_name.is_empty() || code_hash.is_empty() {
+        None
+    } else {
+        Some(stable_record_uuid(file_path, function_name, code_hash))
+    }
+}
+
+/// Analyze all repository functions in parallel with per-file streaming reads and bounded
+/// channel persistence into [`AnalysisStorage`] and [`StreamingCfgPdgArchiveWriter`].
 pub fn run_cfg_analysis_batch(
     functions: &[Node],
+    node_store: Option<&SnapshotNodeStore>,
     storage: &AnalysisStorage,
     repo_root: &Path,
     options: CfgAnalysisOptions,
     file_sources: Option<&FileSourceCache>,
 ) -> CfgAnalysisBatchResult {
     let cache = load_incremental_cache(storage, repo_root);
+    let columnar = if functions.is_empty() {
+        node_store.and_then(|s| s.columnar())
+    } else {
+        None
+    };
 
-    if let Some(shortcut) = try_full_incremental_shortcut(functions, &cache) {
+    if columnar.is_none()
+        && let Some(shortcut) = try_full_incremental_shortcut(functions, &cache)
+    {
         let active_keys = active_stable_keys(functions, None);
         let mut result = shortcut;
         result.orphans_removed = storage
@@ -245,110 +293,105 @@ pub fn run_cfg_analysis_batch(
         return result;
     }
 
-    let owned_sources;
-    let sources = match file_sources {
-        Some(preloaded) => preloaded,
-        None => {
-            owned_sources = preload_file_sources(functions, repo_root, options.thread_count);
-            &owned_sources
-        }
-    };
-    let groups = group_work_items_by_file(functions);
-    let stage = options.verbose.then(CfgStageTimings::default);
-    let stage_ref = stage.as_ref();
-    let timing_log = options
-        .verbose
-        .then(|| Mutex::new(Vec::<CfgFunctionTiming>::new()));
-    let timing_ref = timing_log.as_ref();
-
-    let ctx = CfgWorkContext {
-        functions,
-        sources,
-        cache: &cache,
-        stage: stage_ref,
-        timings: timing_ref,
-        enable_taint: options.enable_taint,
-        dfg_loops: options.dfg_loops,
-        taint_rules: options.taint_rules.as_ref(),
-        with_ast_skeleton: options.with_ast_skeleton,
-    };
-
-    let nested: Vec<Vec<Result<CfgFunctionWork, CfgSkipReason>>> = with_large_stack(|| {
-        with_large_pool(options.thread_count, || {
-            groups
-                .par_iter()
-                .map(|group| process_file_group(group, &ctx))
-                .collect()
-        })
-    });
-
-    let mut in_group = vec![false; functions.len()];
-    for group in &groups {
-        for &idx in &group.func_indices {
-            in_group[idx] = true;
-        }
-    }
-
-    let stage_profile = stage_ref.map(|stage| {
-        let analyzed = nested.iter().flatten().filter(|w| w.is_ok()).count();
-        emit_stage_profile(stage, analyzed)
-    });
-    if let (Some(log), true) = (timing_log, options.verbose) {
-        emit_tail_profile(&log);
-    }
-
-    let mut save_bytes: Vec<(Uuid, Vec<u8>)> = Vec::new();
-    let mut retained_ids = Vec::new();
-    let mut result = CfgAnalysisBatchResult::default();
-
-    for (idx, func) in functions.iter().enumerate() {
-        if in_group[idx] {
-            continue;
-        }
-        let path = func.file_path.as_deref().unwrap_or("<unknown>");
-        result.record_skip(
-            CfgSkipReason::UnsupportedLanguage,
-            path,
-            &func.name,
+    let mut unsupported_skips: Vec<(String, String)> = Vec::new();
+    let mut unsupported_count = 0usize;
+    let mut groups = if let Some(col) = columnar {
+        group_work_items_from_columnar(
+            col,
             options.verbose,
-        );
-    }
+            &mut unsupported_count,
+            &mut unsupported_skips,
+        )
+    } else {
+        group_work_items_by_file(functions)
+    };
+    groups.sort_by(|a, b| a.file_path.cmp(&b.file_path));
 
-    for (group, outcomes) in groups.iter().zip(nested) {
-        for (&func_idx, outcome) in group.func_indices.iter().zip(outcomes) {
-            let func = &functions[func_idx];
-            match outcome {
-                Err(reason) => {
-                    result.record_skip(reason, &group.file_path, &func.name, options.verbose);
-                }
-                Ok(w) => {
-                    if w.from_cache {
-                        result.cache_hits += 1;
+    let mut in_group = if columnar.is_none() {
+        vec![false; functions.len()]
+    } else {
+        Vec::new()
+    };
+    let mut retained_ids: Vec<Uuid> = Vec::new();
+    let mut retained_archive_entries: Vec<(Uuid, Option<Uuid>)> = Vec::new();
+
+    if let Some(col) = columnar {
+        // On cold runs `cache.index` is empty — skip decoding any cold extensions up front!
+        if !cache.index.is_empty() {
+            let mut all_cached = true;
+            let mut total_flows = 0usize;
+            let mut vulnerable_flows = 0usize;
+            let mut matched = 0usize;
+            let mut skipped_decls = 0usize;
+            let mut active_keys = HashSet::new();
+            for group in &groups {
+                for &col_idx in &group.func_indices {
+                    let Ok(func) = col.materialize_node_at(col_idx) else {
+                        all_cached = false;
+                        continue;
+                    };
+                    if is_bodiless_declaration_node(&func) {
+                        skipped_decls += 1;
+                        continue;
+                    }
+                    if let Some(code_hash) = func.code_hash.as_deref() {
+                        active_keys.insert(analysis_cache_key(func.id, code_hash));
+                        if let Some(hit) = try_fast_cache_hit(&func, code_hash, &cache) {
+                            retained_ids.push(func.id);
+                            let alias = alias_uuid_for(&group.file_path, &func.name, code_hash);
+                            retained_archive_entries.push((func.id, alias));
+                            matched += 1;
+                            total_flows += hit.flow_count;
+                            vulnerable_flows += hit.vulnerable_count;
+                        } else {
+                            all_cached = false;
+                        }
                     } else {
-                        result.recomputed += 1;
+                        all_cached = false;
                     }
-                    if w.skip_persist {
-                        retained_ids.push(w.function_id);
-                        result.skipped_unchanged += 1;
-                    }
-                    result.success_count += 1;
-                    result.total_flows += w.flow_count;
-                    result.vulnerable_flows += w.vulnerable_count;
-                    result.field_writes.extend(w.field_writes);
-                    if let Some(skel) = w.skeleton {
-                        result.skeletons.push(skel);
-                    }
-                    if let Some(entry) = w.index_entry {
-                        result.index_entries.push(entry);
-                    }
-                    if let Some(bytes) = w.archive_bytes {
-                        result.archive_record_bytes.push((w.function_id, bytes));
-                    }
-                    if let Some(bytes) = w.analysis_bytes
-                        && !w.skip_persist
-                    {
-                        save_bytes.push((w.function_id, bytes));
-                    }
+                }
+            }
+            if all_cached && matched > 0 {
+                let mut shortcut = CfgAnalysisBatchResult {
+                    success_count: matched,
+                    skip_bodiless_declaration: skipped_decls,
+                    total_flows,
+                    vulnerable_flows,
+                    cache_hits: matched,
+                    skipped_unchanged: matched,
+                    archive_unchanged: true,
+                    ..CfgAnalysisBatchResult::default()
+                };
+                for (path, name) in &unsupported_skips {
+                    shortcut.record_skip(
+                        CfgSkipReason::UnsupportedLanguage,
+                        path,
+                        name,
+                        options.verbose,
+                    );
+                }
+                if !options.verbose {
+                    shortcut.error_count += unsupported_count;
+                    shortcut.skip_unsupported_language += unsupported_count;
+                }
+                shortcut.orphans_removed = storage
+                    .purge_stale_by_stable_keys(&active_keys)
+                    .unwrap_or(0);
+                return shortcut;
+            }
+        }
+    } else {
+        for group in &groups {
+            for &idx in &group.func_indices {
+                in_group[idx] = true;
+                let func = &functions[idx];
+                if !is_bodiless_declaration_node(func)
+                    && let Some(code_hash) = func.code_hash.as_deref()
+                    && try_fast_cache_hit(func, code_hash, &cache).is_some()
+                {
+                    retained_ids.push(func.id);
+                    let alias = alias_uuid_for(&group.file_path, &func.name, code_hash);
+                    retained_archive_entries.push((func.id, alias));
                 }
             }
         }
@@ -360,13 +403,217 @@ pub fn run_cfg_analysis_batch(
             tracing::warn!(error = %e, "analysis pack writer failed; skipping CFG persistence");
             Mutex::new(None)
         });
-    for (function_id, bytes) in &save_bytes {
-        let _ = storage.save_preencoded_no_index_packed(*function_id, bytes, &pack);
+
+    let archive_writer = options.archive_output.as_ref().and_then(|(path, digest)| {
+        match StreamingCfgPdgArchiveWriter::create_preserving(
+            path,
+            Some(digest.as_str()),
+            &retained_archive_entries,
+        ) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(), "streaming cfg_pdg archive writer failed");
+                None
+            }
+        }
+    });
+
+    let stage = options.verbose.then(CfgStageTimings::default);
+    let stage_ref = stage.as_ref();
+    let timing_log = options
+        .verbose
+        .then(|| Mutex::new(Vec::<CfgFunctionTiming>::new()));
+    let timing_ref = timing_log.as_ref();
+
+    let ctx = CfgWorkContext {
+        functions,
+        columnar,
+        repo_root,
+        sources: file_sources,
+        cache: &cache,
+        stage: stage_ref,
+        timings: timing_ref,
+        enable_taint: options.enable_taint,
+        dfg_loops: options.dfg_loops,
+        taint_rules: options.taint_rules.as_ref(),
+        with_ast_skeleton: options.with_ast_skeleton,
+    };
+
+    let worker_threads = options
+        .thread_count
+        .unwrap_or_else(rayon::current_num_threads)
+        .clamp(2, 16);
+    let channel_bound = worker_threads * 4;
+    let (tx, rx) =
+        mpsc::sync_channel::<(usize, Vec<Result<CfgFunctionWork, CfgSkipReason>>)>(channel_bound);
+
+    let groups_ref = &groups;
+    let pack_ref = &pack;
+    let verbose = options.verbose;
+
+    let (mut result, archive_writer_out, analyzed_count, streamed_active_keys) =
+        std::thread::scope(|s| {
+            let consumer = s.spawn(move || {
+                let mut res = CfgAnalysisBatchResult::default();
+                let mut writer = archive_writer;
+                let mut analyzed = 0usize;
+                let mut active_keys: HashSet<String> = HashSet::new();
+
+                while let Ok((group_idx, outcomes)) = rx.recv() {
+                    let group = &groups_ref[group_idx];
+                    for (&func_idx, outcome) in group.func_indices.iter().zip(outcomes) {
+                        match outcome {
+                            Err(reason) => {
+                                let sym_name: Cow<'_, str> = if let Some(col) = columnar {
+                                    col.node_name_str(func_idx)
+                                        .map(Cow::Borrowed)
+                                        .unwrap_or(Cow::Borrowed("<unknown>"))
+                                } else {
+                                    Cow::Borrowed(functions[func_idx].name.as_str())
+                                };
+                                res.record_skip(reason, &group.file_path, &sym_name, verbose);
+                            }
+                            Ok(w) => {
+                                analyzed += 1;
+                                if let Some(k) = w.active_key {
+                                    active_keys.insert(k);
+                                }
+                                if w.from_cache {
+                                    res.cache_hits += 1;
+                                } else {
+                                    res.recomputed += 1;
+                                }
+                                if w.skip_persist {
+                                    res.skipped_unchanged += 1;
+                                }
+                                res.success_count += 1;
+                                res.total_flows += w.flow_count;
+                                res.vulnerable_flows += w.vulnerable_count;
+                                res.field_writes.extend(w.field_writes);
+                                if let Some(skel) = w.skeleton {
+                                    res.skeletons.push(skel);
+                                }
+                                if let Some(entry) = w.index_entry {
+                                    res.index_entries.push(entry);
+                                }
+                                if let Some(bytes) = w.analysis_bytes
+                                    && !w.skip_persist
+                                {
+                                    let _ = storage.save_preencoded_no_index_packed(
+                                        w.function_id,
+                                        &bytes,
+                                        pack_ref,
+                                    );
+                                }
+                                if let Some(bytes) = w.archive_bytes {
+                                    if let Some(ref mut aw) = writer {
+                                        let _ =
+                                            aw.append(w.function_id, w.archive_alias_uuid, &bytes);
+                                    } else {
+                                        res.archive_record_bytes.push((w.function_id, bytes));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                (res, writer, analyzed, active_keys)
+            });
+
+            with_large_stack(|| {
+                with_large_pool(options.thread_count, || {
+                    groups_ref.par_iter().enumerate().for_each_with(
+                        tx,
+                        |sender, (group_idx, group)| {
+                            let outcomes = process_file_group(group, &ctx);
+                            let _ = sender.send((group_idx, outcomes));
+                        },
+                    );
+                });
+            });
+
+            consumer
+                .join()
+                .unwrap_or_else(|_| (CfgAnalysisBatchResult::default(), None, 0, HashSet::new()))
+        });
+
+    if columnar.is_some() {
+        for (path, name) in &unsupported_skips {
+            result.record_skip(
+                CfgSkipReason::UnsupportedLanguage,
+                path,
+                name,
+                options.verbose,
+            );
+        }
+        if !options.verbose {
+            result.error_count += unsupported_count;
+            result.skip_unsupported_language += unsupported_count;
+        }
+    } else {
+        for (idx, func) in functions.iter().enumerate() {
+            if in_group[idx] {
+                continue;
+            }
+            if is_bodiless_declaration_node(func) {
+                result.record_skip(
+                    CfgSkipReason::BodilessDeclaration,
+                    func.file_path.as_deref().unwrap_or("<unknown>"),
+                    &func.name,
+                    options.verbose,
+                );
+                continue;
+            }
+            let Some(path) = func.file_path.as_deref() else {
+                continue;
+            };
+            result.record_skip(
+                CfgSkipReason::UnsupportedLanguage,
+                path,
+                &func.name,
+                options.verbose,
+            );
+        }
     }
+
+    let stage_profile = stage_ref.map(|stage| emit_stage_profile(stage, analyzed_count));
+    if let (Some(log), true) = (timing_log, options.verbose) {
+        emit_tail_profile(&log);
+    }
+
+    // Deterministic order independent of worker completion order.
+    result
+        .index_entries
+        .sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    result.skeletons.sort_by(|a, b| {
+        (&a.file_path, &a.function_name, &a.function_id).cmp(&(
+            &b.file_path,
+            &b.function_name,
+            &b.function_id,
+        ))
+    });
+
     let _ = AnalysisStorage::finish_pack(pack);
+    if let Some(writer) = archive_writer_out {
+        let archive_finish_start = Instant::now();
+        if writer.records_written() > 0 {
+            if let Err(err) = writer.finish() {
+                tracing::warn!(error = %err, "Failed to finalize streamed cfg_pdg archive");
+            } else {
+                result.archive_streamed = true;
+            }
+        }
+        result.archive_finish_secs = archive_finish_start.elapsed().as_secs_f64();
+    }
+
     let _ = storage.refresh_analysis_index_from_entries(&result.index_entries);
 
-    let active_keys = active_stable_keys(functions, Some(sources));
+    let active_keys = if columnar.is_some() {
+        streamed_active_keys
+    } else {
+        active_stable_keys(functions, file_sources)
+    };
     result.orphans_removed = storage
         .purge_stale_by_stable_keys(&active_keys)
         .unwrap_or(0);
@@ -438,6 +685,49 @@ fn emit_tail_profile(log: &Mutex<Vec<CfgFunctionTiming>>) {
     }
 }
 
+fn group_work_items_from_columnar(
+    col: &ColumnarGraphMmap,
+    verbose: bool,
+    unsupported_count: &mut usize,
+    unsupported_skips: &mut Vec<(String, String)>,
+) -> Vec<FileWorkGroup> {
+    let mut by_file: HashMap<String, FileWorkGroup> = HashMap::new();
+    for idx in 0..col.node_count() {
+        let Ok(nt) = col.node_type_at(idx) else {
+            continue;
+        };
+        if nt != NodeType::Function {
+            continue;
+        }
+        let Ok(Some(file_path)) = col.node_file_path_str(idx) else {
+            continue;
+        };
+        if let Some(group) = by_file.get_mut(file_path) {
+            group.func_indices.push(idx);
+            continue;
+        }
+        let language = cfg_language_id_from_path(Path::new(file_path)).unwrap_or("");
+        if language.is_empty() {
+            if verbose {
+                let name = col.node_name_str(idx).unwrap_or("<unknown>");
+                unsupported_skips.push((file_path.to_string(), name.to_string()));
+            } else {
+                *unsupported_count += 1;
+            }
+            continue;
+        }
+        by_file.insert(
+            file_path.to_string(),
+            FileWorkGroup {
+                file_path: file_path.to_string(),
+                language: language.to_string(),
+                func_indices: vec![idx],
+            },
+        );
+    }
+    by_file.into_values().collect()
+}
+
 fn group_work_items_by_file(functions: &[Node]) -> Vec<FileWorkGroup> {
     let mut by_file: HashMap<String, FileWorkGroup> = HashMap::new();
     for (idx, func) in functions.iter().enumerate() {
@@ -467,9 +757,65 @@ fn process_file_group(
     group: &FileWorkGroup,
     ctx: &CfgWorkContext<'_>,
 ) -> Vec<Result<CfgFunctionWork, CfgSkipReason>> {
-    let Some(source) = ctx.sources.get(&group.file_path) else {
-        return (0..group.func_indices.len())
-            .map(|_| Err(CfgSkipReason::MissingSource))
+    // Materialize only this single file's Function nodes when streaming from ColumnarGraphMmap.
+    let local_nodes: Vec<Option<Node>> = if let Some(col) = ctx.columnar {
+        group
+            .func_indices
+            .iter()
+            .map(|&col_idx| col.materialize_node_at(col_idx).ok())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let func_at = |slot_idx: usize| -> Option<&Node> {
+        if ctx.columnar.is_some() {
+            local_nodes[slot_idx].as_ref()
+        } else {
+            Some(&ctx.functions[group.func_indices[slot_idx]])
+        }
+    };
+
+    let mut outcomes: Vec<Option<Result<CfgFunctionWork, CfgSkipReason>>> =
+        Vec::with_capacity(group.func_indices.len());
+    let mut needs_source = false;
+
+    for slot_idx in 0..group.func_indices.len() {
+        let Some(func) = func_at(slot_idx) else {
+            outcomes.push(Some(Err(CfgSkipReason::AnalysisError)));
+            continue;
+        };
+        if is_bodiless_declaration_node(func) {
+            outcomes.push(Some(Err(CfgSkipReason::BodilessDeclaration)));
+            continue;
+        }
+        if let Some(code_hash) = func.code_hash.as_deref()
+            && let Some(hit) = try_fast_cache_hit(func, code_hash, ctx.cache)
+        {
+            outcomes.push(Some(Ok(hit)));
+            continue;
+        }
+        needs_source = true;
+        outcomes.push(None);
+    }
+
+    if !needs_source {
+        return outcomes
+            .into_iter()
+            .map(|o| o.unwrap_or(Err(CfgSkipReason::BodilessDeclaration)))
+            .collect();
+    }
+
+    let source: Option<Cow<'_, str>> = match ctx.sources {
+        Some(cache) => cache.get(&group.file_path).map(Cow::Borrowed),
+        None => std::fs::read_to_string(resolve_read_path(ctx.repo_root, &group.file_path))
+            .ok()
+            .map(Cow::Owned),
+    };
+
+    let Some(source) = source else {
+        return outcomes
+            .into_iter()
+            .map(|o| o.unwrap_or(Err(CfgSkipReason::MissingSource)))
             .collect();
     };
 
@@ -485,19 +831,26 @@ fn process_file_group(
         })
         .unwrap_or_default();
 
-    group
-        .func_indices
-        .iter()
-        .map(|&func_idx| {
-            let func = &ctx.functions[func_idx];
-            analyze_function_in_file(
+    outcomes
+        .into_iter()
+        .enumerate()
+        .map(|(slot_idx, pre)| {
+            if let Some(done) = pre {
+                return done;
+            }
+            let Some(func) = func_at(slot_idx) else {
+                return Err(CfgSkipReason::AnalysisError);
+            };
+            let code_hash = resolve_code_hash(func, &source);
+            compute_function_cfg(
                 func,
                 &group.language,
                 &group.file_path,
-                source,
+                &source,
+                &code_hash,
                 parsed.as_ref(),
                 &file_locals,
-                ctx.cache,
+                false,
                 ctx.stage,
                 ctx.timings,
                 ctx.enable_taint,
@@ -505,7 +858,6 @@ fn process_file_group(
                 ctx.taint_rules,
                 ctx.with_ast_skeleton,
             )
-            .ok_or(CfgSkipReason::AnalysisError)
         })
         .collect()
 }
@@ -518,6 +870,9 @@ fn load_incremental_cache(storage: &AnalysisStorage, _repo_root: &Path) -> CfgIn
 fn active_stable_keys(functions: &[Node], sources: Option<&FileSourceCache>) -> HashSet<String> {
     let mut keys = HashSet::new();
     for func in functions {
+        if is_bodiless_declaration_node(func) {
+            continue;
+        }
         let Some(file_path) = func.file_path.as_ref() else {
             continue;
         };
@@ -568,48 +923,6 @@ fn function_name_looks_like_ctor(name: &str, node: &Node) -> bool {
     false
 }
 
-#[allow(clippy::too_many_arguments)]
-fn analyze_function_in_file(
-    func_node: &Node,
-    language: &str,
-    file_path: &str,
-    source: &str,
-    parsed: Option<&ParsedSourceFile>,
-    file_locals: &FxHashMap<(usize, String), HashMap<String, String>>,
-    cache: &CfgIncrementalCache,
-    stage: Option<&CfgStageTimings>,
-    timings: Option<&Mutex<Vec<CfgFunctionTiming>>>,
-    enable_taint: bool,
-    dfg_loops: bool,
-    taint_rules: Option<&Arc<TaintRuleSet>>,
-    with_ast_skeleton: bool,
-) -> Option<CfgFunctionWork> {
-    let code_hash = resolve_code_hash(func_node, source);
-
-    if func_node.code_hash.is_some()
-        && let Some(hit) = try_fast_cache_hit(func_node, &code_hash, cache)
-    {
-        return Some(hit);
-    }
-
-    compute_function_cfg(
-        func_node,
-        language,
-        file_path,
-        source,
-        &code_hash,
-        parsed,
-        file_locals,
-        false,
-        stage,
-        timings,
-        enable_taint,
-        dfg_loops,
-        taint_rules,
-        with_ast_skeleton,
-    )
-}
-
 fn try_fast_cache_hit(
     func_node: &Node,
     code_hash: &str,
@@ -622,8 +935,10 @@ fn try_fast_cache_hit(
     }
     Some(CfgFunctionWork {
         function_id: func_node.id,
+        active_key: Some(key),
         analysis_bytes: None,
         archive_bytes: None,
+        archive_alias_uuid: None,
         index_entry: None,
         field_writes: Vec::new(),
         skeleton: None,
@@ -633,6 +948,15 @@ fn try_fast_cache_hit(
         skip_persist: true,
         blocks: 0,
     })
+}
+
+fn map_cfg_build_error(err: rgctl_error::Error) -> CfgSkipReason {
+    match err {
+        rgctl_error::Error::ParseError { ref message, .. } if message == "Function has no body" => {
+            CfgSkipReason::BodilessDeclaration
+        }
+        _ => CfgSkipReason::AnalysisError,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -651,7 +975,7 @@ fn compute_function_cfg(
     dfg_loops: bool,
     taint_rules: Option<&Arc<TaintRuleSet>>,
     with_ast_skeleton: bool,
-) -> Option<CfgFunctionWork> {
+) -> Result<CfgFunctionWork, CfgSkipReason> {
     let total_start = timings.is_some().then(Instant::now);
 
     let build_start = stage.map(|_| Instant::now());
@@ -673,17 +997,19 @@ fn compute_function_cfg(
     let mut cfg_data = if let Some(p) = parsed {
         if let Some((start, end)) = exact_bytes {
             p.build_cfg_for_byte_range(language, bytes, &func_node.name, start, end)
-                .ok()?
+                .map_err(map_cfg_build_error)?
         } else {
             match (func_node.start_line, func_node.end_line) {
                 (Some(start), Some(end)) => p
                     .build_cfg_for_node_span(language, bytes, &func_node.name, start, end)
-                    .ok()?,
-                _ => p.build_cfg(language, bytes, &func_node.name).ok()?,
+                    .map_err(map_cfg_build_error)?,
+                _ => p
+                    .build_cfg(language, bytes, &func_node.name)
+                    .map_err(map_cfg_build_error)?,
             }
         }
     } else {
-        build_cfg_for_function(language, source, &func_node.name).ok()?
+        build_cfg_for_function(language, source, &func_node.name).map_err(map_cfg_build_error)?
     };
     if let (Some(stage), Some(start)) = (stage, build_start) {
         stage
@@ -752,7 +1078,8 @@ fn compute_function_cfg(
         enable_taint,
         dfg_loops,
         taint_rules,
-    )?;
+    )
+    .ok_or(CfgSkipReason::AnalysisError)?;
 
     if let (Some(start), Some(log)) = (total_start, timings)
         && let Ok(mut entries) = log.lock()
@@ -765,7 +1092,109 @@ fn compute_function_cfg(
         });
     }
 
-    Some(work)
+    Ok(work)
+}
+
+#[derive(Serialize)]
+struct FunctionAnalysisPrefix<'a> {
+    function_id: Uuid,
+    function_name: &'a str,
+    file_path: &'a str,
+    code_hash: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct FunctionAnalysisSuffix<'a> {
+    dominance: Option<&'a DominatorTree>,
+    taint: &'a Option<Vec<TaintFlow>>,
+}
+
+#[derive(Serialize)]
+struct ArchiveRecordPrefix<'a> {
+    function_id: Uuid,
+    code_hash: &'a str,
+    function_name: &'a str,
+    file_path: Option<&'a str>,
+}
+
+/// Serialize `cfg` and `pdg` once and splice them into the exact bincode layouts of
+/// [`crate::analysis::FunctionAnalysis`] and [`CfgPdgRecord`].
+fn encode_analysis_and_archive_bytes(
+    function_id: Uuid,
+    function_name: &str,
+    file_path: &str,
+    code_hash: &str,
+    cfg: &ControlFlowGraph,
+    pdg: Option<&ProgramDependenceGraph>,
+    taint: &Option<Vec<TaintFlow>>,
+) -> Option<(Vec<u8>, Option<Vec<u8>>)> {
+    let cfg_bytes = bincode::serialize(cfg).ok()?;
+    let pdg_bytes = match pdg {
+        Some(p) => Some(bincode::serialize(p).ok()?),
+        None => None,
+    };
+
+    let pdg_len = pdg_bytes.as_ref().map_or(0, Vec::len);
+    let mut analysis_bytes = Vec::with_capacity(
+        64 + function_name.len() + file_path.len() + code_hash.len() + cfg_bytes.len() + pdg_len,
+    );
+    bincode::serialize_into(
+        &mut analysis_bytes,
+        &FunctionAnalysisPrefix {
+            function_id,
+            function_name,
+            file_path,
+            code_hash: Some(code_hash),
+        },
+    )
+    .ok()?;
+    analysis_bytes.push(1u8); // cfg: Some(...)
+    analysis_bytes.extend_from_slice(&cfg_bytes);
+    match &pdg_bytes {
+        Some(pb) => {
+            analysis_bytes.push(1u8); // pdg: Some(...)
+            analysis_bytes.extend_from_slice(pb);
+        }
+        None => {
+            analysis_bytes.push(0u8); // pdg: None
+        }
+    }
+    bincode::serialize_into(
+        &mut analysis_bytes,
+        &FunctionAnalysisSuffix {
+            dominance: None,
+            taint,
+        },
+    )
+    .ok()?;
+
+    let archive_bytes = match &pdg_bytes {
+        Some(pb) => {
+            let mut buf = Vec::with_capacity(
+                48 + code_hash.len()
+                    + function_name.len()
+                    + file_path.len()
+                    + cfg_bytes.len()
+                    + pb.len(),
+            );
+            bincode::serialize_into(
+                &mut buf,
+                &ArchiveRecordPrefix {
+                    function_id,
+                    code_hash,
+                    function_name,
+                    file_path: Some(file_path),
+                },
+            )
+            .ok()?;
+            buf.extend_from_slice(&cfg_bytes);
+            buf.extend_from_slice(pb);
+            Some(buf)
+        }
+        None => None,
+    };
+
+    Some((analysis_bytes, archive_bytes))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -816,12 +1245,9 @@ fn compute_from_cfg(
     }
 
     let taint_start = stage.map(|_| Instant::now());
-    let cfg_arc = Arc::new(cfg_data);
-    let pdg_arc = pdg_data.map(Arc::new);
     let (taint_data, flow_count, vulnerable_count) = if enable_taint {
-        if let Some(ref pdg) = pdg_arc {
-            let mut analyzer =
-                TaintAnalyzer::with_dominator(pdg.as_ref(), cfg_arc.as_ref(), dom_data);
+        if let Some(ref pdg) = pdg_data {
+            let mut analyzer = TaintAnalyzer::with_dominator(pdg, &cfg_data, dom_data);
             if let Some(rules) = taint_rules {
                 analyzer.detect_patterns_with_rules(language, rules.as_ref());
             } else {
@@ -844,38 +1270,25 @@ fn compute_from_cfg(
             .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
     }
 
-    let analysis = FunctionAnalysis {
-        function_id: func_node.id,
-        function_name: func_node.name.to_string(),
-        file_path: file_path.to_string(),
-        code_hash: Some(code_hash.to_string()),
-        cfg: Some(Arc::clone(&cfg_arc)),
-        pdg: pdg_arc.as_ref().map(Arc::clone),
-        dominance: None,
-        taint: taint_data,
-    };
+    let (analysis_bytes, archive_bytes) = encode_analysis_and_archive_bytes(
+        func_node.id,
+        &func_node.name,
+        file_path,
+        code_hash,
+        &cfg_data,
+        pdg_data.as_ref(),
+        &taint_data,
+    )?;
+    drop(pdg_data);
+    drop(cfg_data);
 
-    let archive_record = pdg_arc.as_ref().map(|pdg| CfgPdgRecord {
-        function_id: func_node.id,
-        code_hash: code_hash.to_string(),
-        function_name: func_node.name.to_string(),
-        file_path: Some(file_path.to_string()),
-        cfg: Arc::clone(&cfg_arc),
-        pdg: Arc::clone(pdg),
-    });
-
-    let analysis_bytes = bincode::serialize(&analysis).ok();
-    let archive_bytes = archive_record
+    let archive_alias_uuid = archive_bytes
         .as_ref()
-        .and_then(|r| bincode::serialize(r).ok());
-    // Drop CFG/PDG Arcs before returning from the worker.
-    drop(analysis);
-    drop(archive_record);
-    drop(cfg_arc);
-    drop(pdg_arc);
+        .and_then(|_| alias_uuid_for(file_path, &func_node.name, code_hash));
 
+    let stable_key = analysis_cache_key(func_node.id, code_hash);
     let index_entry = Some(AnalysisIndexEntry {
-        stable_key: analysis_cache_key(func_node.id, code_hash),
+        stable_key: stable_key.clone(),
         function_id: func_node.id,
         code_hash: code_hash.to_string(),
         flow_count,
@@ -884,8 +1297,10 @@ fn compute_from_cfg(
 
     Some(CfgFunctionWork {
         function_id: func_node.id,
-        analysis_bytes,
+        active_key: Some(stable_key),
+        analysis_bytes: Some(analysis_bytes),
         archive_bytes,
+        archive_alias_uuid,
         index_entry,
         field_writes,
         skeleton,
@@ -897,7 +1312,8 @@ fn compute_from_cfg(
     })
 }
 
-/// When every CFG-eligible function is already indexed with the same body hash, skip the batch.
+/// When every CFG-eligible non-declaration function is already indexed with the same body hash,
+/// skip the batch completely.
 fn try_full_incremental_shortcut(
     functions: &[Node],
     cache: &CfgIncrementalCache,
@@ -906,8 +1322,13 @@ fn try_full_incremental_shortcut(
     let mut vulnerable_flows = 0usize;
     let mut matched = 0usize;
     let mut eligible = 0usize;
+    let mut skipped_decls = 0usize;
 
     for func in functions {
+        if is_bodiless_declaration_node(func) {
+            skipped_decls += 1;
+            continue;
+        }
         let Some(file_path) = func.file_path.as_ref() else {
             continue;
         };
@@ -934,6 +1355,7 @@ fn try_full_incremental_shortcut(
 
     Some(CfgAnalysisBatchResult {
         success_count: matched,
+        skip_bodiless_declaration: skipped_decls,
         total_flows,
         vulnerable_flows,
         cache_hits: matched,
@@ -946,6 +1368,8 @@ fn try_full_incremental_shortcut(
 #[cfg(test)]
 mod overload_cache_tests {
     use super::*;
+    use crate::analysis::FunctionAnalysis;
+
     #[test]
     fn identical_name_and_body_cache_cannot_remap_another_overload() {
         let first = Node::new(rgctl_graph::schema::NodeType::Function, "quote")
@@ -972,5 +1396,86 @@ mod overload_cache_tests {
         assert!(try_fast_cache_hit(&first, "same", &cache).is_some());
         assert!(try_fast_cache_hit(&second, "same", &cache).is_none());
         assert!(try_full_incremental_shortcut(&[first, second], &cache).is_none());
+    }
+
+    #[test]
+    fn single_encode_matches_bincode_struct_serialization_byte_for_byte() {
+        let src = "fn compute(x: i32) -> i32 { if x > 0 { x + 1 } else { x - 1 } }";
+        let cfg = build_cfg_for_function("rust", src, "compute").expect("cfg");
+        let pdg = ProgramDependenceGraph::build(&cfg, src.as_bytes()).expect("pdg");
+        let fn_id = Uuid::new_v4();
+        let cfg_arc = Arc::new(cfg.clone());
+        let pdg_arc = Arc::new(pdg.clone());
+
+        let expected_analysis = FunctionAnalysis {
+            function_id: fn_id,
+            function_name: "compute".to_string(),
+            file_path: "src/lib.rs".to_string(),
+            code_hash: Some("hash123".to_string()),
+            cfg: Some(Arc::clone(&cfg_arc)),
+            pdg: Some(Arc::clone(&pdg_arc)),
+            dominance: None,
+            taint: None,
+        };
+        let expected_archive = CfgPdgRecord {
+            function_id: fn_id,
+            code_hash: "hash123".to_string(),
+            function_name: "compute".to_string(),
+            file_path: Some("src/lib.rs".to_string()),
+            cfg: cfg_arc,
+            pdg: pdg_arc,
+        };
+
+        let (actual_analysis, actual_archive) = encode_analysis_and_archive_bytes(
+            fn_id,
+            "compute",
+            "src/lib.rs",
+            "hash123",
+            &cfg,
+            Some(&pdg),
+            &None,
+        )
+        .expect("single encode");
+
+        assert_eq!(
+            actual_analysis,
+            bincode::serialize(&expected_analysis).expect("expected analysis"),
+        );
+        assert_eq!(
+            actual_archive.expect("archive bytes"),
+            bincode::serialize(&expected_archive).expect("expected archive"),
+        );
+    }
+
+    #[test]
+    fn bodiless_declarations_skip_without_incrementing_error_count() {
+        let mut decl = Node::new(rgctl_graph::schema::NodeType::Function, "onEvent")
+            .with_file_path("Listener.java")
+            .with_code_hash("decl_hash");
+        decl.properties
+            .insert("callable_role".to_string(), "declaration".to_string());
+
+        let impl_fn = Node::new(rgctl_graph::schema::NodeType::Function, "handle")
+            .with_file_path("Handler.java")
+            .with_code_hash("impl_hash");
+        let key = analysis_cache_key(impl_fn.id, "impl_hash");
+        let cache = CfgIncrementalCache {
+            index: std::collections::HashMap::from([(
+                key.clone(),
+                AnalysisIndexEntry {
+                    stable_key: key,
+                    function_id: impl_fn.id,
+                    code_hash: "impl_hash".into(),
+                    flow_count: 2,
+                    vulnerable_count: 1,
+                },
+            )]),
+        };
+
+        let shortcut =
+            try_full_incremental_shortcut(&[decl, impl_fn], &cache).expect("shortcut hits");
+        assert_eq!(shortcut.error_count, 0);
+        assert_eq!(shortcut.skip_bodiless_declaration, 1);
+        assert_eq!(shortcut.success_count, 1);
     }
 }

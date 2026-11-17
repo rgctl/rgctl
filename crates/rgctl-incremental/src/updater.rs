@@ -751,10 +751,7 @@ impl IncrementalUpdater {
                     &relation.from,
                     &file,
                     callable,
-                    relation
-                        .metadata
-                        .get("from_identity_discriminator")
-                        .and_then(|v| v.as_str()),
+                    relation.from_identity_discriminator_str(),
                 );
                 let to_id = if callable {
                     resolve_call_target(&symbol_index, &bases, &member_methods, &relation, &file)
@@ -857,15 +854,9 @@ fn resolve_call_target(
     relation: &rgctl_plugin_api::Relation,
     file: &str,
 ) -> Option<Uuid> {
-    let identity = relation
-        .metadata
-        .get("to_identity_discriminator")
-        .and_then(|v| v.as_str());
-    let arguments = relation
-        .metadata
-        .get("argument_identity_discriminator")
-        .and_then(|v| v.as_str());
-    if relation.metadata.get("explicit_generic_arity").is_some() && identity.is_none() {
+    let identity = relation.to_identity_discriminator_str();
+    let arguments = relation.argument_identity_discriminator_str();
+    if relation.explicit_generic_arity_val().is_some() && identity.is_none() {
         return None;
     }
     let direct = |name: &str, free_only: bool| -> Option<Option<Uuid>> {
@@ -903,7 +894,7 @@ fn resolve_call_target(
         .as_deref()
         .unwrap_or(&relation.to);
     let inherited_overloads =
-        relation.metadata["language"] == "java" && arguments.is_some() && identity.is_none();
+        relation.language_str() == Some("java") && arguments.is_some() && identity.is_none();
     let local = direct(target, false);
     if let Some(found) = local
         && (found.is_some() || !inherited_overloads)
@@ -966,8 +957,7 @@ fn resolve_call_target(
             return interface_target.filter(|_| !interface_ambiguous);
         }
     }
-    if local.is_none() && relation.metadata["inferred_callable_owner"] == true && identity.is_none()
-    {
+    if local.is_none() && relation.is_inferred_callable_owner() && identity.is_none() {
         return direct(&relation.to, true).flatten();
     }
     None

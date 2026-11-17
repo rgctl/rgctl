@@ -381,6 +381,30 @@ impl AnalysisResults {
         }
     }
 
+    /// Fill complexity directly from hot `(node_id, cyclomatic, cognitive)` tuples (zero cold `NodeExtension` touches).
+    pub fn fill_complexity_from_raw(
+        &mut self,
+        rows: impl IntoIterator<Item = (Uuid, u32, u32)>,
+        avg_cyclomatic: f64,
+        max_cyclomatic: u32,
+    ) {
+        let node_count = self.node_count();
+        if self.complexity.is_none() {
+            self.complexity = Some(ComplexityTable::with_capacity(node_count));
+        }
+        let uuid_to_compact = &self.uuid_to_compact;
+        let table = self.complexity.as_mut().unwrap();
+        table.avg_cyclomatic = avg_cyclomatic;
+        table.max_cyclomatic = max_cyclomatic;
+        for (id, cyclomatic, cognitive) in rows {
+            if let Some(&compact_id) = uuid_to_compact.get(&id) {
+                let idx = compact_id as usize;
+                table.cyclomatic[idx] = cyclomatic;
+                table.cognitive[idx] = cognitive;
+            }
+        }
+    }
+
     /// Initialize centrality table.
     pub fn init_centrality(&mut self) -> &mut CentralityTable {
         self.centrality = Some(CentralityTable::with_capacity(self.node_count()));
@@ -469,6 +493,24 @@ impl AnalysisResults {
             if let Some(bloom) = node.token_bloom
                 && let Some(compact_id) = self.get_compact_id(node.id)
             {
+                rows.push((compact_id, bloom));
+            }
+        }
+        let table = self.init_structural_sketch();
+        for (compact_id, bloom) in rows {
+            table.set_bloom(compact_id, bloom);
+        }
+        Ok(())
+    }
+
+    /// Fill structural sketch blooms from hot `(node_id, bloom)` pairs (zero `Node` materialization).
+    pub fn fill_structural_sketch_from_blooms(
+        &mut self,
+        blooms: impl IntoIterator<Item = (Uuid, [u64; 4])>,
+    ) -> rgctl_error::Result<()> {
+        let mut rows = Vec::new();
+        for (id, bloom) in blooms {
+            if let Some(compact_id) = self.get_compact_id(id) {
                 rows.push((compact_id, bloom));
             }
         }
