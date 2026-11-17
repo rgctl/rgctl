@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MigrationRoom } from "../rooms/Migration";
 import { Placeholder } from "../rooms/Placeholder";
+import { resetMigrationGraphCache } from "../data/loadMigrationGraph";
 import migrationGraph from "./fixtures/migration_graph.json";
 
 function stubBundle(routes: Record<string, unknown>): void {
@@ -20,6 +21,7 @@ function stubBundle(routes: Record<string, unknown>): void {
 }
 
 afterEach(() => {
+  resetMigrationGraphCache();
   vi.unstubAllGlobals();
 });
 

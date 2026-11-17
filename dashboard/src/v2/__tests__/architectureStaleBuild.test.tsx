@@ -12,6 +12,7 @@
  */
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetArchitectureCache } from "../architecture";
 import metagraphJson from "./fixtures/architecture/metagraph.json";
 import summaryJson from "./fixtures/architecture/communities.json";
 
@@ -31,6 +32,7 @@ vi.mock("../universe/UniverseScene", () => ({
 const { ArchitectureRoom } = await import("../rooms/Architecture");
 
 afterEach(() => {
+  resetArchitectureCache();
   vi.unstubAllGlobals();
 });
 

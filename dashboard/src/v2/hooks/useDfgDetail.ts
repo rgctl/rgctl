@@ -15,6 +15,7 @@ import {
   loadSliceJsonFromArchive,
   type SliceIndexMeta,
 } from "../cfgArchive";
+import { loadDfgDetailFromWorker } from "../expandEngine";
 
 export type DfgState =
   | { kind: "idle" }
@@ -22,6 +23,17 @@ export type DfgState =
   | { kind: "ready"; dfg: DfgDetail }
   | { kind: "absent"; reason: string }
   | { kind: "failed"; reason: string };
+
+/**
+ * Detail cache shared by Understand and Taint. v1's worker kept slice bundles in a Map; v2 was
+ * refetching and re-parsing the same `slice/<uuid>.json` every time a lens remounted.
+ */
+const dfgCache = new Map<string, Promise<DfgDetail | null>>();
+
+/** Test seam. */
+export function resetDfgDetailCache(): void {
+  dfgCache.clear();
+}
 
 interface SliceBundle {
   function_id: string;
@@ -159,7 +171,22 @@ export function useDfgDetail(
     }
     let cancelled = false;
     setState({ kind: "loading" });
-    loadDfgDetail(functionId, detailDir, fetch, resolvedManifest)
+    const cacheKey = `${detailDir}\x1f${functionId}\x1f${resolvedManifest?.graph?.digest ?? ""}`;
+    let pending = dfgCache.get(cacheKey);
+    if (!pending) {
+      const fallback = () => loadDfgDetail(functionId, detailDir, fetch, resolvedManifest);
+      const created: Promise<DfgDetail | null> =
+        typeof Worker === "undefined"
+          ? fallback()
+          : loadDfgDetailFromWorker(functionId, detailDir)
+              .then((raw) => (raw ? toDfg(raw as SliceBundle) : null))
+              .catch(fallback);
+      dfgCache.set(cacheKey, created);
+      // A failed read is not a cache entry: a retry after the bundle/server recovers should try again.
+      created.catch(() => dfgCache.delete(cacheKey));
+      pending = created;
+    }
+    pending
       .then((dfg) => {
         if (cancelled) return;
         setState(

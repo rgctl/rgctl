@@ -4,25 +4,29 @@ use super::context::CliContext;
 use super::discover::resolve_session_root;
 use super::pipeline_status::{self, PIPELINE_STATUS_SCHEMA_VERSION};
 use super::semantic::SemanticQueryArgs;
-use super::semantic_api::{execute_semantic_query, semantic_index_path, semantic_status};
+use super::semantic_api::{
+    execute_semantic_query_with_analysis, load_analysis_results, semantic_index_path,
+    semantic_status, semantic_status_for_index,
+};
 use super::semantic_output::query_response_to_json;
 use anyhow::{Context, Result, bail};
 use axum::{
     Json, Router,
     body::Body,
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, Method, Request, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use rgctl_analysis::{CommunityQueryContext, SemanticIndex};
+use rgctl_analysis::{AnalysisResults, CommunityQueryContext, SemanticIndex};
 use rgctl_dashboard::default_dashboard_path;
 use rgctl_gql::QueryMacroRegistry;
 use rgctl_graph::CodeGraph;
-use rgctl_service::command::{QueryArgs, SearchArgs, SearchScope};
+use rgctl_graph::backend::GraphBackend;
+use rgctl_graph::schema::NodeType;
+use rgctl_service::command::QueryArgs;
 use rgctl_service::query::run_query;
-use rgctl_service::search::run_search;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -30,7 +34,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tower::ServiceExt;
+use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
+use uuid::Uuid;
 
 /// Options for the unified HTTP `serve` command.
 ///
@@ -54,6 +60,7 @@ pub(crate) struct AppState {
     #[allow(dead_code)]
     registry: QueryMacroRegistry,
     semantic: RwLock<Option<Arc<SemanticIndex>>>,
+    analysis: Option<Arc<AnalysisResults>>,
     community: RwLock<Option<CommunityQueryContext>>,
     dashboard_announced: AtomicBool,
 }
@@ -87,6 +94,29 @@ struct SemanticQueryRequest {
     /// `function` (default) or `community`
     #[serde(default)]
     scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FunctionQuery {
+    /// Exact function UUID; when present, returns at most one row.
+    id: Option<String>,
+    /// Case-insensitive substring over name and file path.
+    q: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct FunctionRow {
+    function_id: String,
+    name: String,
+    file_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct FunctionsResponse {
+    functions: Vec<FunctionRow>,
+    total: usize,
 }
 
 fn default_semantic_limit() -> usize {
@@ -156,12 +186,20 @@ pub fn serve(ctx: &CliContext, args: HttpServeArgs) -> Result<()> {
     };
 
     let semantic = load_semantic_index(&session_root);
+    let analysis = match load_analysis_results(&session_root) {
+        Ok(analysis) => analysis.map(Arc::new),
+        Err(err) => {
+            eprintln!("[warn] failed to load analysis results: {err}");
+            None
+        }
+    };
     let state = Arc::new(AppState {
         repo: session_root.clone(),
         dashboard_dir: dashboard_dir.clone(),
         graph: RwLock::new(graph),
         registry: QueryMacroRegistry::with_defaults(),
         semantic: RwLock::new(semantic.map(Arc::new)),
+        analysis,
         community: RwLock::new(community),
         dashboard_announced: AtomicBool::new(dashboard_dir.join("index.html").is_file()),
     });
@@ -218,12 +256,16 @@ async fn run_server(ctx: &CliContext, args: HttpServeArgs, state: Arc<AppState>)
     rest = rest
         .route("/api/query", post(api_query))
         .route("/graphql", post(api_query))
+        .route("/api/functions", get(api_functions))
         .route("/api/semantic/status", get(api_semantic_status))
         .route("/api/semantic/query", post(api_semantic_query));
     if !args.query_only {
         rest = rest.fallback(dashboard_fallback);
     }
     app = app.merge(rest.with_state(state.clone()));
+    // The bundle's cfg/slice indexes are tens of MB of JSON. Localhost hides the transfer cost;
+    // compressed responses make the same files usable over a remote/WSL-forwarded serve too.
+    app = app.layer(CompressionLayer::new());
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -560,10 +602,97 @@ async fn api_query(
     }
 }
 
+/// Compact function lookup/search for the dashboard shell.
+///
+/// The browser must not fetch/parse `cfg_index.json` + `slice_index.json` (67 MB each on metasfresh)
+/// just to resolve a Focus or search the palette. The server already has the graph; this returns only
+/// the rows the shell needs. Static bundles still have the JSON index fallback.
+async fn api_functions(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<FunctionQuery>,
+) -> Result<Json<FunctionsResponse>, (StatusCode, String)> {
+    let graph = {
+        let guard = state.graph.read().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "graph lock poisoned".into(),
+            )
+        })?;
+        guard
+            .clone()
+            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "graph not ready".into()))?
+    };
+
+    if let Some(raw) = params.id.as_deref() {
+        let id = Uuid::parse_str(raw.trim())
+            .map_err(|_| (StatusCode::BAD_REQUEST, "function id must be a UUID".into()))?;
+        let node = graph
+            .backend()
+            .get_node(id)
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "function not found".into()))?;
+        if node.node_type != NodeType::Function {
+            return Err((StatusCode::NOT_FOUND, "node is not a function".into()));
+        }
+        return Ok(Json(FunctionsResponse {
+            functions: vec![FunctionRow {
+                function_id: node.id.to_string(),
+                name: node.name.to_string(),
+                file_path: node.file_path.as_ref().map(ToString::to_string),
+            }],
+            total: 1,
+        }));
+    }
+
+    let query = params.q.unwrap_or_default().trim().to_ascii_lowercase();
+    let limit = params.limit.unwrap_or(200).clamp(1, 500);
+    let response = tokio::task::spawn_blocking(move || {
+        let mut functions = Vec::with_capacity(limit.min(256));
+        let mut total = 0usize;
+        let _ = graph.backend().for_each_node(|node| {
+            if node.node_type != NodeType::Function {
+                return;
+            }
+            let name = node.name.to_string();
+            let file_path = node.file_path.as_ref().map(ToString::to_string);
+            if !query.is_empty() {
+                let name_match = name.to_ascii_lowercase().contains(&query);
+                let path_match = file_path
+                    .as_deref()
+                    .is_some_and(|p| p.to_ascii_lowercase().contains(&query));
+                if !name_match && !path_match {
+                    return;
+                }
+            }
+            total += 1;
+            if functions.len() < limit {
+                functions.push(FunctionRow {
+                    function_id: node.id.to_string(),
+                    name,
+                    file_path,
+                });
+            }
+        });
+        functions.sort_by(|a, b| a.name.cmp(&b.name));
+        FunctionsResponse { functions, total }
+    })
+    .await
+    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")))?;
+
+    Ok(Json(response))
+}
+
 async fn api_semantic_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let status = semantic_status(&state.repo);
+    // Use the index the server already holds; `semantic_status` reloads the 100+ MB index from disk.
+    let cached = state
+        .semantic
+        .read()
+        .ok()
+        .and_then(|guard| guard.as_ref().cloned())
+        .map(|index| semantic_status_for_index(&index));
+    let status = cached.unwrap_or_else(|| semantic_status(&state.repo));
     Ok(Json(serde_json::to_value(status).map_err(internal_error)?))
 }
 
@@ -623,34 +752,8 @@ async fn api_semantic_query(
     };
     let repo = state.repo.clone();
 
-    if expand.is_none() {
-        let _ = index;
-        let search_scope = match scope {
-            super::semantic::CliSemanticScope::Function => SearchScope::Function,
-            super::semantic::CliSemanticScope::Community => SearchScope::Community,
-            super::semantic::CliSemanticScope::Docs => SearchScope::Docs,
-            super::semantic::CliSemanticScope::All => SearchScope::All,
-        };
-        let text = query.to_string();
-        let limit = body.limit.clamp(1, 100);
-        let value = tokio::task::spawn_blocking(move || {
-            run_search(
-                &graph,
-                &repo,
-                &SearchArgs {
-                    text,
-                    scope: search_scope,
-                    limit: Some(limit),
-                },
-            )
-        })
-        .await
-        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")))?
-        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-        return Ok(Json(value));
-    }
-
     let index = Arc::clone(&index);
+    let analysis = state.analysis.clone();
     let args = SemanticQueryArgs {
         query: query.to_string(),
         limit: body.limit.clamp(1, 100),
@@ -664,11 +767,12 @@ async fn api_semantic_query(
         scope,
     };
 
-    let response =
-        tokio::task::spawn_blocking(move || execute_semantic_query(&repo, &graph, &index, &args))
-            .await
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")))?
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+    let response = tokio::task::spawn_blocking(move || {
+        execute_semantic_query_with_analysis(&repo, &graph, &index, analysis.as_deref(), &args)
+    })
+    .await
+    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")))?
+    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
     Ok(Json(query_response_to_json(&response)))
 }

@@ -9,6 +9,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 pub const CFG_INDEX_FILE: &str = "cfg_index.json";
+pub const CFG_META_FILE: &str = "cfg_meta.json";
 pub const CFG_DETAIL_DIR: &str = "cfg";
 pub const CFG_ARCHIVE_BUNDLE_NAME: &str = "cfg_pdg.archive.bin";
 
@@ -230,6 +231,23 @@ fn truncate(s: &str, max: usize) -> String {
         return s.to_string();
     }
     s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
+}
+
+/// Small header-only companion to `cfg_index.json`.
+///
+/// The browser needs `detail_mode` and the record paths to decide between per-file JSON and the
+/// archive; it does not need the 67 MB function array.
+pub fn write_cfg_meta(out_dir: &Path, payload: &CfgIndexPayload) -> Result<(), String> {
+    let meta = serde_json::json!({
+        "schema_version": payload.schema_version,
+        "available": payload.available,
+        "archive_path": payload.archive_path,
+        "detail_mode": payload.detail_mode,
+        "record_index_path": payload.record_index_path,
+        "record_data_path": payload.record_data_path,
+        "function_count": payload.function_count,
+    });
+    write_json_compact(&out_dir.join(CFG_META_FILE), &meta)
 }
 
 pub(crate) fn write_empty_cfg_index(index_path: &Path) -> Result<(), String> {

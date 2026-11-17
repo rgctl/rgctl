@@ -9,6 +9,7 @@ mod communities;
 mod dataflow_export;
 mod export_context;
 mod export_util;
+mod function_index_export;
 mod function_meta;
 mod function_metrics_export;
 mod manifest;
@@ -28,6 +29,7 @@ pub use bundle::{
 pub use communities::{COMMUNITIES_FILE, COMMUNITIES_SCHEMA_VERSION, CommunitiesPayload};
 pub use dataflow_export::{DATAFLOW_INDEX_FILE, DataflowExportSummary};
 pub use export_context::DashboardExportContext;
+pub use function_index_export::FUNCTION_INDEX_FILE;
 pub use manifest::{
     AnalysisSection, DashboardCapabilities, DashboardManifest, MANIFEST_SCHEMA_VERSION,
     MetricsSection, SemanticSection, ViewSection,
@@ -236,6 +238,16 @@ fn export_dashboard_bundle_inner(
             migration_export::export_default_migration_plan(graph, &out_dir)
         })?;
     }
+
+    // Lightweight discover has no CFG/slice sidecars, but the shell still needs a complete function
+    // index to resolve semantic results into a Focus. Full bundles already carry that union in
+    // cfg_index.json + slice_index.json, so this sidecar is only written when both are empty.
+    if cfg_summary.function_count == 0 && slice_summary.function_count == 0 {
+        profile_stage("export_function_index", || {
+            function_index_export::export_function_index(graph, &out_dir)
+        })?;
+    }
+
     let semantic_summary = semantic_section(repo_root);
     let manifest = Manifest::with_phases(
         node_count,

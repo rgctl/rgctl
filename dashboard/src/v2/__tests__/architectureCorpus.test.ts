@@ -13,7 +13,7 @@
  * `rgctl discover . --with-universe --with-cfg` and re-capturing the two files.
  */
 import { describe, expect, it } from "vitest";
-import { buildView, channelReport } from "../architecture";
+import { buildView, channelReport, resetArchitectureCache } from "../architecture";
 import { aggregateCommunities, coverageOf, groupNamespaces, toPackages } from "../architectureLayers";
 import type { CommunitySummary, Metagraph } from "../architectureTypes";
 // Imported rather than read from disk: the v2 tsconfig carries browser types only, and a test that needs
@@ -115,6 +115,7 @@ describe("metasfresh, as captured", () => {
 describe("the metagraph reaches the room", () => {
   it("is carried on the ready state, not merely used to build the view", async () => {
     const { loadArchitecture } = await import("../architecture");
+    resetArchitectureCache();
     const original = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);

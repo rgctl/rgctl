@@ -38,7 +38,9 @@ export async function loadCfgIndexMeta(
   fetchImpl: typeof fetch = fetch,
 ): Promise<CfgIndexMeta | null> {
   try {
-    const res = await fetchImpl(bundleUrl("cfg_index.json"), { cache: "no-store" });
+    // Prefer the header-only companion; fall back for bundles written before it existed.
+    let res = await fetchImpl(bundleUrl("cfg_meta.json"), { cache: "no-store" });
+    if (!res.ok) res = await fetchImpl(bundleUrl("cfg_index.json"), { cache: "no-store" });
     if (!res.ok) return null;
     return (await res.json()) as CfgIndexMeta;
   } catch {
@@ -154,7 +156,9 @@ export async function loadSliceIndexMeta(
     return sliceIndexMetaCache;
   }
   try {
-    const res = await fetchImpl(bundleUrl("slice_index.json"), { cache: "no-store" });
+    // Prefer the header-only companion; fall back for bundles written before it existed.
+    let res = await fetchImpl(bundleUrl("slice_meta.json"), { cache: "no-store" });
+    if (!res.ok) res = await fetchImpl(bundleUrl("slice_index.json"), { cache: "no-store" });
     if (!res.ok) {
       sliceIndexMetaCache = null;
       return null;

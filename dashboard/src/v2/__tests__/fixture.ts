@@ -89,6 +89,24 @@ const BODIES: Record<string, unknown> = {
   "slice_index.json": { schema_version: 1, available: true, function_count: FUNCTIONS.length, functions: FUNCTIONS },
   "sources_index.json": { schema_version: 1, files: [{ source_id: SOURCE_ID, file_path: SOURCE_PATH, total_lines: SOURCE_LINES.length }] },
   [`cfg/${SUBJECT}.json`]: CFG[SUBJECT],
+  // PDG / dataflow detail for the same subject. `useDfgDetail` reads `slice/<id>.json` when the
+  // manifest does not select an archive; this is the shape the real bundle writes.
+  [`slice/${SUBJECT}.json`]: {
+    function_id: SUBJECT,
+    name: "handleAuth",
+    pdg: {
+      nodes: [
+        { id: "n1", line: 2, label: "token = req.headers.get(...)", kind: "assign", defined: ["token"], used: [] },
+        { id: "n2", line: 3, label: "if (!token)", kind: "branch", defined: [], used: ["token"] },
+        { id: "n3", line: 6, label: "return verify(token)", kind: "return", defined: [], used: ["token"] },
+      ],
+      edges: [
+        { source: "n1", target: "n2", kind: "data", variable: "token" },
+        { source: "n1", target: "n3", kind: "data", variable: "token" },
+        { source: "n2", target: "n3", kind: "control", variable: null },
+      ],
+    },
+  },
 };
 
 function json(body: unknown, status = 200) {
@@ -109,6 +127,57 @@ export function installFetchStub() {
   const stub = vi.fn(async (input: RequestInfo | URL) => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.pathname : String(input);
     const path = raw.startsWith("file:") ? new URL(raw).pathname : raw;
+    if (path.endsWith("/api/semantic/status")) {
+      return json({
+        available: true,
+        model_id: "test-vocab",
+        dimensions: 256,
+        functions_indexed: FUNCTIONS.length,
+        graph_digest: "deadbeefdeadbeef",
+      });
+    }
+    if (path.endsWith("/api/semantic/query")) {
+      return json({
+        schema_version: 3,
+        query: "checkout pricing",
+        model_id: "test-vocab",
+        dimensions: 256,
+        hits: [
+          {
+            node_id: SUBJECT,
+            name: "handleAuth",
+            qualified_name: "auth.handleAuth",
+            file_path: SOURCE_PATH,
+            distance: 12,
+            score: 0.91,
+            fused_score: 0.91,
+            ranking: "fusion",
+          },
+          {
+            node_id: OTHER,
+            name: "verify",
+            qualified_name: "auth.verify",
+            file_path: SOURCE_PATH,
+            distance: 20,
+            score: 0.72,
+            fused_score: 0.72,
+            ranking: "fusion",
+          },
+        ],
+        expansion: {
+          blast: [
+            {
+              anchor_node_id: SUBJECT,
+              anchor_name: "handleAuth",
+              direct_callers: 4,
+              impact_zone: 9,
+              score: 12.3,
+            },
+          ],
+          neighbors: [],
+        },
+      });
+    }
     for (const [name, body] of Object.entries(BODIES)) {
       if (path.endsWith(name)) return json(body);
     }

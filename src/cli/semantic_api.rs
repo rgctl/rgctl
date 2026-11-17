@@ -53,14 +53,7 @@ pub fn semantic_status(repo: &Path) -> SemanticStatusResponse {
     }
 
     match SemanticIndex::load(&path) {
-        Ok(index) => SemanticStatusResponse {
-            available: true,
-            model_id: Some(index.model_id.clone()),
-            dimensions: Some(index.dimensions),
-            functions_indexed: Some(index.len()),
-            graph_digest: index.graph_digest.clone(),
-            message: None,
-        },
+        Ok(index) => semantic_status_for_index(&index),
         Err(err) => SemanticStatusResponse {
             available: false,
             model_id: None,
@@ -72,6 +65,30 @@ pub fn semantic_status(repo: &Path) -> SemanticStatusResponse {
     }
 }
 
+/// Status for an index the caller already has in memory.
+#[must_use]
+pub fn semantic_status_for_index(index: &SemanticIndex) -> SemanticStatusResponse {
+    SemanticStatusResponse {
+        available: true,
+        model_id: Some(index.model_id.clone()),
+        dimensions: Some(index.dimensions),
+        functions_indexed: Some(index.len()),
+        graph_digest: index.graph_digest.clone(),
+        message: None,
+    }
+}
+
+/// Load analysis results once, for callers that hold them for the server lifetime.
+pub fn load_analysis_results(repo: &Path) -> Result<Option<AnalysisResults>> {
+    let path = repo.join(".rgctl/analysis_results.bin");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    AnalysisResults::load(&path)
+        .map(Some)
+        .with_context(|| format!("load analysis results {}", path.display()))
+}
+
 /// Run a semantic query against a loaded index (CLI + HTTP).
 pub fn execute_semantic_query(
     repo: &Path,
@@ -79,21 +96,24 @@ pub fn execute_semantic_query(
     index: &SemanticIndex,
     args: &SemanticQueryArgs,
 ) -> Result<SemanticQueryJsonResponse> {
+    let analysis = load_analysis_results(repo)?;
+    execute_semantic_query_with_analysis(repo, graph, index, analysis.as_ref(), args)
+}
+
+/// Run a semantic query with caller-supplied analysis, so HTTP requests do not deserialize
+/// `analysis_results.bin` on every query.
+pub fn execute_semantic_query_with_analysis(
+    repo: &Path,
+    graph: &CodeGraph,
+    index: &SemanticIndex,
+    analysis: Option<&AnalysisResults>,
+    args: &SemanticQueryArgs,
+) -> Result<SemanticQueryJsonResponse> {
     validate_index_scope(index, args.scope)?;
 
     let reload = OnnxReloadOptions {
         model_path: args.model.clone(),
         tokenizer_path: args.tokenizer.clone(),
-    };
-
-    let analysis_path = repo.join(".rgctl/analysis_results.bin");
-    let analysis = if analysis_path.is_file() {
-        Some(
-            AnalysisResults::load(&analysis_path)
-                .with_context(|| format!("load analysis results {}", analysis_path.display()))?,
-        )
-    } else {
-        None
     };
 
     let fusion = SemanticFusionConfig {
@@ -110,7 +130,7 @@ pub fn execute_semantic_query(
             )
         })?;
         let backend = graph.backend();
-        let ctx = CommunityQueryContext::from_analysis(&analysis, |uuid| {
+        let ctx = CommunityQueryContext::from_analysis(analysis, |uuid| {
             backend.get_node(uuid).ok().flatten().map(|n| {
                 (
                     n.name.to_string(),
@@ -124,7 +144,7 @@ pub fn execute_semantic_query(
             .map(|c| (c.id, c.label.clone()))
             .collect();
         let community_hits =
-            query_communities(index, &analysis, &labels, &args.query, args.limit, &reload)?;
+            query_communities(index, analysis, &labels, &args.query, args.limit, &reload)?;
         let hits: Vec<SemanticHitJson> = community_hits
             .into_iter()
             .map(|h| SemanticHitJson {
@@ -153,7 +173,7 @@ pub fn execute_semantic_query(
         args.limit,
         &reload,
         &fusion,
-        analysis.as_ref(),
+        analysis,
         Some(graph.backend()),
         Some(repo),
     )?;

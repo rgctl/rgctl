@@ -19,8 +19,9 @@
  *
  * So the framings became *controls* here. **Show source** collapses the source pane and gives the graph the
  * full width at `70vh` — what the CFG·PDG lens did — and the graph with the source collapsed is what the
- * Code lens was. What remains in the lens control is one implemented lens plus the genuinely different
- * questions phase 3 will fill (dataflow, slice, blast, metrics, time).
+ * Code lens was. What remains in the lens control is this implemented lens plus the genuinely different
+ * questions phase 3 will fill (slice/trace, metrics, time); PDG/Dataflow and Blast are now separate
+ * lenses in `App.tsx`.
  *
  * ## The binding
  *

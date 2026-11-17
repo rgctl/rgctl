@@ -4,8 +4,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAppRouter } from "../router";
+import { resetCfgDetailCache } from "../data";
+import { resetDfgDetailCache } from "../hooks/useDfgDetail";
 import { Placeholder } from "../rooms/Placeholder";
 import { TaintPathStage } from "../rooms/TaintPathStage";
 import taintIndex from "./fixtures/taint/taint_index.json";
@@ -42,6 +44,11 @@ function renderAt(path: string) {
   );
   return router;
 }
+
+beforeEach(() => {
+  resetCfgDetailCache();
+  resetDfgDetailCache();
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();

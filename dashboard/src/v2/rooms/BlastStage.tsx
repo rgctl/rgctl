@@ -22,12 +22,15 @@ export function BlastStage({
   onDepthChange,
   score,
   blast,
+  testIdPrefix = "taint",
 }: {
   seedName: string;
   depth: number;
   onDepthChange: (d: number) => void;
   score: BlastFunctionScore | null;
   blast: BlastRadiusState;
+  /** Taint and Understand share the drawing; the room owns the test identity. */
+  testIdPrefix?: string;
 }) {
   const size = 360;
   const cx = size / 2;
@@ -61,7 +64,7 @@ export function BlastStage({
       MAX_CALLERS_DRAWN;
 
   return (
-    <div className="flex min-h-[200px] flex-1 flex-col gap-3" data-testid="taint-blast-stage">
+    <div className="flex min-h-[200px] flex-1 flex-col gap-3" data-testid={`${testIdPrefix}-blast-stage`}>
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-[11px] text-zinc-400">
           <span className="shrink-0">Caller depth</span>
@@ -72,7 +75,7 @@ export function BlastStage({
             step={1}
             value={depth}
             onChange={(e) => onDepthChange(Number(e.target.value))}
-            data-testid="taint-blast-depth"
+            data-testid={`${testIdPrefix}-blast-depth`}
             className="w-36"
           />
           <span className="w-5 tabular-nums text-zinc-200">{depth}</span>
