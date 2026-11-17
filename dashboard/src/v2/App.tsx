@@ -27,6 +27,7 @@ export function App() {
     setExplode,
     goRoom,
     pick: focusPick,
+    pickKey: focusPickKey,
   } = useFocus();
 
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -50,6 +51,11 @@ export function App() {
   const pick = (f: FunctionEntry) => {
     setPaletteOpen(false);
     focusPick(f);
+  };
+
+  const pickKey = (key: string) => {
+    setPaletteOpen(false);
+    focusPickKey(key);
   };
 
   return (
@@ -189,7 +195,14 @@ export function App() {
         </main>
       </div>
 
-      <Palette open={paletteOpen} onOpenChange={setPaletteOpen} functions={list} onPick={pick} />
+      <Palette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        functions={list}
+        manifest={manifest.data ?? null}
+        onPick={pick}
+        onPickKey={pickKey}
+      />
     </div>
   );
 }

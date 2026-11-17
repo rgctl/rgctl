@@ -4,7 +4,10 @@ use super::context::CliContext;
 use super::discover::resolve_session_root;
 use super::pipeline_status::{self, PIPELINE_STATUS_SCHEMA_VERSION};
 use super::semantic::SemanticQueryArgs;
-use super::semantic_api::{execute_semantic_query, semantic_index_path, semantic_status};
+use super::semantic_api::{
+    execute_semantic_query_with_analysis, load_analysis_results, semantic_index_path,
+    semantic_status, semantic_status_for_index,
+};
 use super::semantic_output::query_response_to_json;
 use anyhow::{Context, Result, bail};
 use axum::{
@@ -15,13 +18,12 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use rgctl_analysis::{CommunityQueryContext, SemanticIndex};
+use rgctl_analysis::{AnalysisResults, CommunityQueryContext, SemanticIndex};
 use rgctl_dashboard::default_dashboard_path;
 use rgctl_gql::QueryMacroRegistry;
 use rgctl_graph::CodeGraph;
-use rgctl_service::command::{QueryArgs, SearchArgs, SearchScope};
+use rgctl_service::command::QueryArgs;
 use rgctl_service::query::run_query;
-use rgctl_service::search::run_search;
 use serde::Deserialize;
 use serde_json::Value;
 use std::net::SocketAddr;
@@ -54,6 +56,7 @@ pub(crate) struct AppState {
     #[allow(dead_code)]
     registry: QueryMacroRegistry,
     semantic: RwLock<Option<Arc<SemanticIndex>>>,
+    analysis: Option<Arc<AnalysisResults>>,
     community: RwLock<Option<CommunityQueryContext>>,
     dashboard_announced: AtomicBool,
 }
@@ -156,12 +159,20 @@ pub fn serve(ctx: &CliContext, args: HttpServeArgs) -> Result<()> {
     };
 
     let semantic = load_semantic_index(&session_root);
+    let analysis = match load_analysis_results(&session_root) {
+        Ok(analysis) => analysis.map(Arc::new),
+        Err(err) => {
+            eprintln!("[warn] failed to load analysis results: {err}");
+            None
+        }
+    };
     let state = Arc::new(AppState {
         repo: session_root.clone(),
         dashboard_dir: dashboard_dir.clone(),
         graph: RwLock::new(graph),
         registry: QueryMacroRegistry::with_defaults(),
         semantic: RwLock::new(semantic.map(Arc::new)),
+        analysis,
         community: RwLock::new(community),
         dashboard_announced: AtomicBool::new(dashboard_dir.join("index.html").is_file()),
     });
@@ -563,7 +574,14 @@ async fn api_query(
 async fn api_semantic_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let status = semantic_status(&state.repo);
+    // Use the index the server already holds; `semantic_status` reloads the 100+ MB index from disk.
+    let cached = state
+        .semantic
+        .read()
+        .ok()
+        .and_then(|guard| guard.as_ref().cloned())
+        .map(|index| semantic_status_for_index(&index));
+    let status = cached.unwrap_or_else(|| semantic_status(&state.repo));
     Ok(Json(serde_json::to_value(status).map_err(internal_error)?))
 }
 
@@ -623,34 +641,8 @@ async fn api_semantic_query(
     };
     let repo = state.repo.clone();
 
-    if expand.is_none() {
-        let _ = index;
-        let search_scope = match scope {
-            super::semantic::CliSemanticScope::Function => SearchScope::Function,
-            super::semantic::CliSemanticScope::Community => SearchScope::Community,
-            super::semantic::CliSemanticScope::Docs => SearchScope::Docs,
-            super::semantic::CliSemanticScope::All => SearchScope::All,
-        };
-        let text = query.to_string();
-        let limit = body.limit.clamp(1, 100);
-        let value = tokio::task::spawn_blocking(move || {
-            run_search(
-                &graph,
-                &repo,
-                &SearchArgs {
-                    text,
-                    scope: search_scope,
-                    limit: Some(limit),
-                },
-            )
-        })
-        .await
-        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")))?
-        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-        return Ok(Json(value));
-    }
-
     let index = Arc::clone(&index);
+    let analysis = state.analysis.clone();
     let args = SemanticQueryArgs {
         query: query.to_string(),
         limit: body.limit.clamp(1, 100),
@@ -664,11 +656,12 @@ async fn api_semantic_query(
         scope,
     };
 
-    let response =
-        tokio::task::spawn_blocking(move || execute_semantic_query(&repo, &graph, &index, &args))
-            .await
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")))?
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+    let response = tokio::task::spawn_blocking(move || {
+        execute_semantic_query_with_analysis(&repo, &graph, &index, analysis.as_deref(), &args)
+    })
+    .await
+    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")))?
+    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
     Ok(Json(query_response_to_json(&response)))
 }

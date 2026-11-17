@@ -40,6 +40,8 @@ export interface FocusState {
   goRoom: (room: RoomId) => void;
   /** Set Focus from an index entry (key only — never the payload). */
   pick: (entry: FunctionEntry) => void;
+  /** Set Focus from a stable key, for results (semantic hits) that are not in the local symbol index. */
+  pickKey: (key: Focus) => void;
 }
 
 export function useFocus(): FocusState {
@@ -69,8 +71,7 @@ export function useFocus(): FocusState {
   const goRoom = (next: RoomId) =>
     void navigate({ to: "/$roomId", params: { roomId: next }, search: (prev) => prev });
 
-  const pick = (f: FunctionEntry) => {
-    const key = keyOf(f);
+  const pickKey = (key: Focus) => {
     // Rooms that do not read the Focus would take a selection and show nothing with it, leaving the graph
     // two actions away. Architecture is one of them, and it is now the landing room, so ⌘K from `/` has to
     // carry you to the surface that renders what you picked.
@@ -84,6 +85,8 @@ export function useFocus(): FocusState {
     }
     setFocus(key);
   };
+
+  const pick = (f: FunctionEntry) => pickKey(keyOf(f));
 
   return {
     room,
@@ -100,5 +103,6 @@ export function useFocus(): FocusState {
     setExplode,
     goRoom,
     pick,
+    pickKey,
   };
 }

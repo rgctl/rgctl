@@ -262,3 +262,41 @@ describe("a redirect keeps the view state", () => {
     expect(router.state.location.search).toMatchObject({ focus: SUBJECT });
   });
 });
+
+/**
+ * Ask is a mode of the omnibox, not an eighth room.
+ *
+ * The result is an entry point: a semantic hit with a UUID Focus resolves in the local symbol index, so
+ * the answer can hand off to Understand without inventing a parallel detail view.
+ */
+describe("Ask retrieves natural language and hands off to Focus", () => {
+  it("shows an answer with evidence and opens the top hit in Understand", async () => {
+    const router = renderApp("/repo");
+    await screen.findByText(/this screen is not a dashboard/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /Search symbols, communities/ }));
+    const dialog = await screen.findByRole("dialog");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ask" }));
+    const input = await within(dialog).findByPlaceholderText(/checkout pricing/i);
+    fireEvent.change(input, { target: { value: "checkout pricing" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ask →" }));
+
+    // The answer is assembled from the hit and expansion.blast, not from a prose model.
+    expect(await within(dialog).findByText(/handleAuth is the strongest match/i)).toBeTruthy();
+    expect(within(dialog).getByText(/4 direct callers/i)).toBeTruthy();
+    expect(within(dialog).getByText(/impact zone of 9/i)).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Open in Understand" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/understand"));
+    expect(router.state.location.search).toMatchObject({ focus: SUBJECT });
+  });
+
+  it("keeps the seven-room rail unchanged", async () => {
+    renderApp("/repo");
+    await screen.findByText(/this screen is not a dashboard/i);
+    const nav = document.querySelector('nav[aria-label="Rooms"]');
+    expect(nav?.querySelectorAll("button")).toHaveLength(7);
+  });
+});
