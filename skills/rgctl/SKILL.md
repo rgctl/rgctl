@@ -106,7 +106,6 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 - `--with-universe` — Build universe dashboard bundle
 - `--export-migration-hints` — Write `.rgctl/migration_plan.json` (primary migration deliverable)
 - `--with-security --with-taint` — Security scanning
-- `--with-dep-stubs` — Transitive `.jar`/`.war` bytecode & vendor call stubs (`.rgctl/dep_stubs.bin`)
 - `--with-harmonic` — Harmonic centrality (used with migration ranking)
 - `-l cobol,pli,jcl,apex,pascal,perl,ada,matlab` — legacy/mainframe migration languages when those sources are present
 
