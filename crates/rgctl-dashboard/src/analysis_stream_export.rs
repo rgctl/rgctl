@@ -194,30 +194,29 @@ pub fn export_cfg_slice_from_storage_with_index(
     write_source_index(out_dir, &catalog_entries)?;
 
     let slice_available = !slice_functions.is_empty();
-    write_json_compact(
-        &out_dir.join(SLICE_INDEX_FILE),
-        &crate::slice_export::SliceIndexPayload {
-            schema_version: 2,
-            available: slice_available,
-            function_count: slice_functions.len(),
-            detail_mode: if write_slice_details {
-                "per_file".into()
-            } else {
-                "archive_only".into()
-            },
-            record_index_path: if slice_record_pack {
-                Some(SLICE_RECORD_INDEX_FILE.into())
-            } else {
-                None
-            },
-            record_data_path: if slice_record_pack {
-                Some(SLICE_RECORD_DATA_FILE.into())
-            } else {
-                None
-            },
-            functions: slice_functions.clone(),
+    let slice_payload = crate::slice_export::SliceIndexPayload {
+        schema_version: 2,
+        available: slice_available,
+        function_count: slice_functions.len(),
+        detail_mode: if write_slice_details {
+            "per_file".into()
+        } else {
+            "archive_only".into()
         },
-    )?;
+        record_index_path: if slice_record_pack {
+            Some(SLICE_RECORD_INDEX_FILE.into())
+        } else {
+            None
+        },
+        record_data_path: if slice_record_pack {
+            Some(SLICE_RECORD_DATA_FILE.into())
+        } else {
+            None
+        },
+        functions: slice_functions.clone(),
+    };
+    write_json_compact(&out_dir.join(SLICE_INDEX_FILE), &slice_payload)?;
+    crate::slice_export::write_slice_meta(out_dir, &slice_payload)?;
 
     let archive_path = CfgPdgArchive::default_path(repo_root);
     let archive_copied = if archive_path.is_file() {
@@ -228,35 +227,34 @@ pub fn export_cfg_slice_from_storage_with_index(
     };
 
     let cfg_available = !cfg_functions.is_empty();
-    write_json_compact(
-        &out_dir.join(CFG_INDEX_FILE),
-        &CfgIndexPayload {
-            schema_version: 2,
-            available: cfg_available,
-            archive_path: if archive_copied {
-                Some(CFG_ARCHIVE_BUNDLE_NAME.into())
-            } else {
-                None
-            },
-            detail_mode: if write_cfg_details {
-                "per_file".into()
-            } else {
-                "archive_only".into()
-            },
-            record_index_path: if record_pack_written {
-                Some(CFG_RECORD_INDEX_FILE.into())
-            } else {
-                None
-            },
-            record_data_path: if record_pack_written {
-                Some(CFG_RECORD_DATA_FILE.into())
-            } else {
-                None
-            },
-            function_count: cfg_functions.len(),
-            functions: cfg_functions,
+    let cfg_payload = CfgIndexPayload {
+        schema_version: 2,
+        available: cfg_available,
+        archive_path: if archive_copied {
+            Some(CFG_ARCHIVE_BUNDLE_NAME.into())
+        } else {
+            None
         },
-    )?;
+        detail_mode: if write_cfg_details {
+            "per_file".into()
+        } else {
+            "archive_only".into()
+        },
+        record_index_path: if record_pack_written {
+            Some(CFG_RECORD_INDEX_FILE.into())
+        } else {
+            None
+        },
+        record_data_path: if record_pack_written {
+            Some(CFG_RECORD_DATA_FILE.into())
+        } else {
+            None
+        },
+        function_count: cfg_functions.len(),
+        functions: cfg_functions,
+    };
+    write_json_compact(&out_dir.join(CFG_INDEX_FILE), &cfg_payload)?;
+    crate::cfg_export::write_cfg_meta(out_dir, &cfg_payload)?;
 
     Ok(StreamedAnalysisExport {
         slice: SliceExportSummary {

@@ -39,6 +39,7 @@ export interface UseMigrationSchedule {
 }
 
 const DEFAULT_WEIGHTS: MigrationWeights = { alpha: 0.33, beta: 0.33, gamma: 0.34 };
+const MIGRATION_TUNING_DEBOUNCE_MS = 200;
 
 export function useMigrationSchedule(): UseMigrationSchedule {
   const [load, setLoad] = useState<MigrationGraphLoad | null>(null);
@@ -58,14 +59,30 @@ export function useMigrationSchedule(): UseMigrationSchedule {
 
   const presetId = useMemo(() => matchPreset(weights), [weights]);
 
+  // v1 debounced the layout key by GRAPH_UPDATE_DEBOUNCE_MS. The controls stay live, but the
+  // O(communities) plan + layout recompute waits until the slider/preset edit settles.
+  const [tuning, setTuning] = useState({ weights, presetId, orderMode });
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => setTuning({ weights, presetId, orderMode }),
+      MIGRATION_TUNING_DEBOUNCE_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [weights, presetId, orderMode]);
+
   const state = useMemo((): MigrationRoomState => {
     if (load === null) return { kind: "loading" };
     if (load.kind === "missing") return { kind: "missing" };
     if (load.kind === "empty") return { kind: "empty", graph: load.graph };
-    const plan = computeMigrationPlan(load.graph, presetId, weights, orderMode);
+    const plan = computeMigrationPlan(
+      load.graph,
+      tuning.presetId,
+      tuning.weights,
+      tuning.orderMode,
+    );
     const layout = layoutMigration(plan, load.graph.communities, load.graph.edges);
     return { kind: "ready", graph: load.graph, plan, layout };
-  }, [load, weights, presetId, orderMode]);
+  }, [load, tuning]);
 
   const applyPreset = useCallback((id: MigrationPresetId) => {
     if (id === "custom") return;

@@ -8,6 +8,10 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { beforeEach, describe, expect, it } from "vitest";
+import { resetCfgDetailCache } from "../data";
+import { resetArchitectureCache } from "../architecture";
+import { resetMigrationGraphCache } from "../data/loadMigrationGraph";
+import { resetDfgDetailCache } from "../hooks/useDfgDetail";
 import { createAppRouter } from "../router";
 import { installFetchStub, SUBJECT, OTHER, SOURCE_PATH } from "./fixture";
 
@@ -37,7 +41,13 @@ function searchOf(router: ReturnType<typeof createAppRouter>): string {
   ).toString();
 }
 
-beforeEach(() => installFetchStub());
+beforeEach(() => {
+  resetCfgDetailCache();
+  resetDfgDetailCache();
+  resetArchitectureCache();
+  resetMigrationGraphCache();
+  installFetchStub();
+});
 
 describe("the Focus round-trips through the URL", () => {
   it("resolves a subject from the URL alone, and a reload keeps room, lens and subject", async () => {
@@ -133,6 +143,27 @@ describe("/ is the universe, not a menu", () => {
   });
 });
 
+describe("the function index is view-scoped", () => {
+  it("does not fetch cfg/slice indexes for Architecture without a Focus", async () => {
+    const stub = installFetchStub();
+    renderApp("/architecture");
+    await screen.findByText(/This bundle carries no architecture dataset/);
+    const urls = stub.mock.calls.map(([input]) => String(input));
+    expect(urls.some((u) => u.includes("cfg_index.json"))).toBe(false);
+    expect(urls.some((u) => u.includes("slice_index.json"))).toBe(false);
+  });
+
+  it("fetches the index when the palette opens", async () => {
+    const stub = installFetchStub();
+    renderApp("/architecture");
+    await screen.findByText(/This bundle carries no architecture dataset/);
+    fireEvent.click(screen.getByRole("button", { name: /Search symbols, communities/ }));
+    await screen.findByText(/of 2 candidates/);
+    const urls = stub.mock.calls.map(([input]) => String(input));
+    expect(urls.some((u) => u.includes("cfg_index.json"))).toBe(true);
+  });
+});
+
 describe("the shell has no tab strip", () => {
   it("rooms are a labelled vertical nav and there is no tablist", async () => {
     renderApp("/repo");
@@ -149,15 +180,19 @@ describe("the shell has no tab strip", () => {
   });
 });
 
-describe("an unbuilt lens explains itself instead of rendering an empty pane", () => {
-  it("dataflow names the lens and says the data is present", async () => {
+describe("a lens renders its subject or explains its absence", () => {
+  it("dataflow draws the shared PDG canvas for the subject", async () => {
     renderApp(`/understand?lens=dataflow&focus=${SUBJECT}`);
-    // Previously this rendered `null`: `<Placeholder room="understand" />` is keyed by room, so five lens
-    // tabs produced an empty pane with nothing saying why.
-    // The lens names itself in the panel title and again in the explanation, so match all occurrences.
-    expect((await screen.findAllByText(/Dataflow lens/)).length).toBeGreaterThan(0);
-    expect(await screen.findByText(/not written yet — the data is here/)).toBeTruthy();
-    expect(await screen.findByText(/dataflow_detail_dir/)).toBeTruthy();
+    expect(await screen.findByText(/PDG \/ Dataflow/)).toBeTruthy();
+    expect(await screen.findByTestId("understand-dfg-stage")).toBeTruthy();
+    expect(await screen.findByText(/2 data edges/)).toBeTruthy();
+  });
+
+  it("blast mounts the shared radius canvas for the subject", async () => {
+    renderApp(`/understand?lens=blast&focus=${SUBJECT}`);
+    expect(await screen.findByText(/Blast radius/)).toBeTruthy();
+    expect(await screen.findByTestId("understand-blast-stage")).toBeTruthy();
+    expect(await screen.findByTestId("understand-blast-depth")).toBeTruthy();
   });
 
   it("metrics states the keying mismatch rather than printing a zero", async () => {
@@ -260,5 +295,43 @@ describe("a redirect keeps the view state", () => {
     const router = renderApp(`/?focus=${SUBJECT}`);
     await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
     expect(router.state.location.search).toMatchObject({ focus: SUBJECT });
+  });
+});
+
+/**
+ * Ask is a mode of the omnibox, not an eighth room.
+ *
+ * The result is an entry point: a semantic hit with a UUID Focus resolves in the local symbol index, so
+ * the answer can hand off to Understand without inventing a parallel detail view.
+ */
+describe("Ask retrieves natural language and hands off to Focus", () => {
+  it("shows an answer with evidence and opens the top hit in Understand", async () => {
+    const router = renderApp("/repo");
+    await screen.findByText(/this screen is not a dashboard/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /Search symbols, communities/ }));
+    const dialog = await screen.findByRole("dialog");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ask" }));
+    const input = await within(dialog).findByPlaceholderText(/checkout pricing/i);
+    fireEvent.change(input, { target: { value: "checkout pricing" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ask →" }));
+
+    // The answer is assembled from the hit and expansion.blast, not from a prose model.
+    expect(await within(dialog).findByText(/handleAuth is the strongest match/i)).toBeTruthy();
+    expect(within(dialog).getByText(/4 direct callers/i)).toBeTruthy();
+    expect(within(dialog).getByText(/impact zone of 9/i)).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Open in Understand" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/understand"));
+    expect(router.state.location.search).toMatchObject({ focus: SUBJECT });
+  });
+
+  it("keeps the seven-room rail unchanged", async () => {
+    renderApp("/repo");
+    await screen.findByText(/this screen is not a dashboard/i);
+    const nav = document.querySelector('nav[aria-label="Rooms"]');
+    expect(nav?.querySelectorAll("button")).toHaveLength(7);
   });
 });

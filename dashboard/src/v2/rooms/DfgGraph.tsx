@@ -41,10 +41,13 @@ export function DfgGraph({
   dfg,
   highlightVariable,
   maxHeightClass = "max-h-[52vh]",
+  testId = "taint-dfg-stage",
 }: {
   dfg: DfgDetail;
   highlightVariable?: string | null;
   maxHeightClass?: string;
+  /** The room owns the identity; the graph itself is the same drawing. */
+  testId?: string;
 }) {
   const layout = useMemo(() => {
     const sorted = [...dfg.nodes].sort((a, b) => a.line - b.line || a.id.localeCompare(b.id));
@@ -61,7 +64,7 @@ export function DfgGraph({
   const otherEdges = dfg.edges.filter((e) => e.kind && e.kind !== "data");
 
   return (
-    <div className="flex flex-col gap-2" data-testid="taint-dfg-stage">
+    <div className="flex flex-col gap-2" data-testid={testId}>
       <div className="flex flex-wrap items-center gap-2">
         <Chip tone="blue">{dfg.nodes.length} nodes</Chip>
         <Chip tone="zinc">{dataEdges.length} data edges</Chip>

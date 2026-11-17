@@ -12,6 +12,7 @@
  */
 import { useEffect, useState } from "react";
 import { loadCfgDetail, type CfgDetail } from "./data";
+import { loadCfgDetailFromWorker } from "./expandEngine";
 
 export type CfgState =
   | { kind: "loading" }
@@ -34,7 +35,13 @@ export function useCfgDetail(functionId: string): CfgState {
     }
     let cancelled = false;
     setState({ kind: "loading" });
-    loadCfgDetail(functionId)
+    const pending =
+      typeof Worker === "undefined"
+        ? loadCfgDetail(functionId)
+        : loadCfgDetailFromWorker(functionId)
+            .then((raw) => raw as CfgDetail | null)
+            .catch(() => loadCfgDetail(functionId));
+    pending
       .then((detail) => {
         if (cancelled) return;
         setState(

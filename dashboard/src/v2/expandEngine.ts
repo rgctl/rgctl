@@ -17,6 +17,8 @@ export interface ExpandedNode {
   file_path?: string | null;
 }
 
+export type SharedBlastPayload = Extract<BlastWorkerOut, { type: "blast_result" }>["payload"];
+
 export interface ExpandedSubgraph {
   nodes: ExpandedNode[];
   /** Member edges. The engine emits **calls** only — see `MEMBER_EDGE_KINDS`. */
@@ -96,8 +98,14 @@ function request<T>(message: Omit<BlastWorkerIn, "requestId">): Promise<T> {
   });
 }
 
-async function ensureWorker(): Promise<Worker> {
+function ensureSpawned(): Worker {
   if (!worker) worker = spawn();
+  return worker;
+}
+
+/** Graph-payload engine (blast/expand). Detail reads use the worker without loading 538 MB first. */
+async function ensureEngine(): Promise<Worker> {
+  const spawned = ensureSpawned();
   if (!ready) {
     ready = (async () => {
       await request<BlastWorkerOut>({ type: "init" });
@@ -107,7 +115,7 @@ async function ensureWorker(): Promise<Worker> {
     });
   }
   await ready;
-  return worker;
+  return spawned;
 }
 
 /** Expand member indices into a subgraph. `typeMask = 0` keeps every node kind. */
@@ -118,13 +126,58 @@ export async function expandMembers(
 ): Promise<ExpandedSubgraph> {
   progressListener = onProgress ?? null;
   try {
-    await ensureWorker();
+    await ensureEngine();
     const result = await request<BlastWorkerOut>({ type: "expand", indices, typeMask } as never);
     if (result.type !== "expand_result") throw new Error(`unexpected worker reply: ${result.type}`);
     return result.payload;
   } finally {
     progressListener = null;
   }
+}
+
+/**
+ * Blast radius over the shared engine.
+ *
+ * The Taint and Understand blast lenses use this instead of owning a Worker. The graph payload is the
+ * expensive part; a per-lens worker meant switching Blast -> CFG -> Blast re-downloaded it.
+ */
+export async function blastByUuid(uuid: string, maxDepth: number): Promise<SharedBlastPayload> {
+  await ensureEngine();
+  const result = await request<BlastWorkerOut>({ type: "blast_by_uuid", uuid, maxDepth } as never);
+  if (result.type !== "blast_result") {
+    throw new Error(`unexpected worker reply: ${result.type}`);
+  }
+  return result.payload;
+}
+
+/**
+ * Parse a CFG record in the worker. The worker fetches `cfg_meta.json` / record packs and runs
+ * `parseCfgDetail` there; the main thread receives a plain object.
+ */
+export async function loadCfgDetailFromWorker(functionId: string): Promise<unknown | null> {
+  ensureSpawned();
+  const result = await request<BlastWorkerOut>({ type: "cfg_detail", functionId } as never);
+  if (result.type !== "cfg_detail_result") {
+    throw new Error(`unexpected worker reply: ${result.type}`);
+  }
+  return result.payload;
+}
+
+/** Parse a PDG/slice record in the worker. */
+export async function loadDfgDetailFromWorker(
+  functionId: string,
+  detailDir: string,
+): Promise<unknown | null> {
+  ensureSpawned();
+  const result = await request<BlastWorkerOut>({
+    type: "dfg_detail",
+    functionId,
+    detailDir,
+  } as never);
+  if (result.type !== "dfg_detail_result") {
+    throw new Error(`unexpected worker reply: ${result.type}`);
+  }
+  return result.payload;
 }
 
 /** Test seam. */

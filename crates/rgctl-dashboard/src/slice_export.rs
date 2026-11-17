@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 pub const SLICE_INDEX_FILE: &str = "slice_index.json";
+pub const SLICE_META_FILE: &str = "slice_meta.json";
 pub const SLICE_DETAIL_DIR: &str = "slice";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,6 +189,20 @@ pub(crate) fn write_empty_slice_index(index_path: &Path) -> Result<(), String> {
         functions: vec![],
     };
     write_json_compact(index_path, &index)
+}
+
+/// Small header-only companion to `slice_index.json`; avoids fetching the 66 MB function array
+/// just to discover the record-pack paths.
+pub fn write_slice_meta(out_dir: &Path, payload: &SliceIndexPayload) -> Result<(), String> {
+    let meta = serde_json::json!({
+        "schema_version": payload.schema_version,
+        "available": payload.available,
+        "detail_mode": payload.detail_mode,
+        "record_index_path": payload.record_index_path,
+        "record_data_path": payload.record_data_path,
+        "function_count": payload.function_count,
+    });
+    write_json_compact(&out_dir.join(SLICE_META_FILE), &meta)
 }
 
 #[cfg(test)]

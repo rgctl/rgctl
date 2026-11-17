@@ -5,14 +5,17 @@
  * Loads `graph_payload.bin` into WASM `EngineContext` once, then answers
  * `blastRadiusByUuid` / `indexOfUuid` so the UI never blocks on a 100MB+ parse.
  */
-import init, { EngineContext } from "../../wasm/rgctl_wasm.js";
+import init, { EngineContext, parseCfgDetail } from "../../wasm/rgctl_wasm.js";
+import { fetchCfgRecordBytes, parseCfgRecordIndex } from "../cfgRecordIndex";
 
 export type BlastWorkerIn =
   | { type: "init"; requestId: number }
   /** Expand a package's member indices into a subgraph: nodes plus the edges among them. */
   | { type: "expand"; requestId: number; indices: Uint32Array; typeMask: number }
   | { type: "blast_by_uuid"; requestId: number; uuid: string; maxDepth: number }
-  | { type: "index_of_uuid"; requestId: number; uuid: string };
+  | { type: "index_of_uuid"; requestId: number; uuid: string }
+  | { type: "cfg_detail"; requestId: number; functionId: string }
+  | { type: "dfg_detail"; requestId: number; functionId: string; detailDir: string };
 
 export type BlastWorkerOut =
   | { type: "ready"; requestId: number; nodeCount: number; edgeCount: number; digest: string }
@@ -36,6 +39,8 @@ export type BlastWorkerOut =
       };
     }
   | { type: "index_result"; requestId: number; index: number | null }
+  | { type: "cfg_detail_result"; requestId: number; payload: unknown | null }
+  | { type: "dfg_detail_result"; requestId: number; payload: unknown | null }
   | {
       type: "expand_result";
       requestId: number;
@@ -67,6 +72,118 @@ function bundleDataUrl(filename: string): URL {
 
 let engine: EngineContext | null = null;
 let initPromise: Promise<void> | null = null;
+let wasmReady: Promise<void> | null = null;
+
+interface DetailMeta {
+  detail_mode?: string;
+  record_index_path?: string | null;
+  record_data_path?: string | null;
+}
+
+let cfgRecordIndex: Map<string, { offset: number; length: number }> | null = null;
+let cfgRecordPaths: string | null = null;
+let sliceRecordIndex: Map<string, { offset: number; length: number }> | null = null;
+let sliceRecordPaths: string | null = null;
+const detailCache = new Map<string, unknown>();
+
+async function ensureWasm(): Promise<void> {
+  if (!wasmReady) wasmReady = init().then(() => undefined);
+  return wasmReady;
+}
+
+async function fetchJson<T>(name: string): Promise<T | null> {
+  try {
+    const res = await fetch(bundleDataUrl(name));
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function ensureRecordIndex(
+  indexPath: string,
+  dataPath: string,
+  cache: "cfg" | "slice",
+): Promise<Map<string, { offset: number; length: number }>> {
+  const cachePath = `${indexPath}\x1f${dataPath}`;
+  if (cache === "cfg" && cfgRecordIndex && cfgRecordPaths === cachePath) return cfgRecordIndex;
+  if (cache === "slice" && sliceRecordIndex && sliceRecordPaths === cachePath) return sliceRecordIndex;
+  const res = await fetch(bundleDataUrl(indexPath));
+  if (!res.ok) throw new Error(`${indexPath}: HTTP ${res.status}`);
+  const index = parseCfgRecordIndex(new Uint8Array(await res.arrayBuffer()));
+  if (cache === "cfg") {
+    cfgRecordIndex = index;
+    cfgRecordPaths = cachePath;
+  } else {
+    sliceRecordIndex = index;
+    sliceRecordPaths = cachePath;
+  }
+  return index;
+}
+
+async function loadCfgDetailInWorker(functionId: string): Promise<unknown | null> {
+  const cached = detailCache.get(`cfg\x1f${functionId}`);
+  if (cached !== undefined) return cached;
+  const meta =
+    (await fetchJson<DetailMeta>("cfg_meta.json")) ??
+    (await fetchJson<DetailMeta>("cfg_index.json"));
+  let payload: unknown | null = null;
+  if (
+    meta?.detail_mode === "archive_only" &&
+    meta.record_index_path &&
+    meta.record_data_path
+  ) {
+    await ensureWasm();
+    const locations = await ensureRecordIndex(
+      meta.record_index_path,
+      meta.record_data_path,
+      "cfg",
+    );
+    const location = locations.get(functionId);
+    if (location) {
+      const bytes = await fetchCfgRecordBytes(
+        bundleDataUrl(meta.record_data_path).toString(),
+        location,
+      );
+      payload = JSON.parse(parseCfgDetail(bytes));
+    }
+  }
+  if (payload === null) payload = await fetchJson(`cfg/${functionId}.json`);
+  detailCache.set(`cfg\x1f${functionId}`, payload);
+  return payload;
+}
+
+async function loadDfgDetailInWorker(
+  functionId: string,
+  detailDir: string,
+): Promise<unknown | null> {
+  const key = `dfg\x1f${detailDir}\x1f${functionId}`;
+  const cached = detailCache.get(key);
+  if (cached !== undefined) return cached;
+  const meta =
+    (await fetchJson<DetailMeta>("slice_meta.json")) ??
+    (await fetchJson<DetailMeta>("slice_index.json"));
+  let payload: unknown | null = null;
+  if (meta?.record_index_path && meta.record_data_path) {
+    const locations = await ensureRecordIndex(
+      meta.record_index_path,
+      meta.record_data_path,
+      "slice",
+    );
+    const location = locations.get(functionId);
+    if (location) {
+      const bytes = await fetchCfgRecordBytes(
+        bundleDataUrl(meta.record_data_path).toString(),
+        location,
+      );
+      payload = JSON.parse(new TextDecoder().decode(bytes));
+    }
+  }
+  if (payload === null) payload = await fetchJson(`${detailDir}/${functionId}.json`);
+  detailCache.set(key, payload);
+  return payload;
+}
 
 function emitProgress(phase: "engine" | "parsing", loaded: number, total: number): void {
   const out: BlastWorkerOut = { type: "progress", phase, loaded, total };
@@ -171,6 +288,18 @@ self.onmessage = async (ev: MessageEvent<BlastWorkerIn>) => {
           edges: Array<{ source: number; target: number; edge_type: number }>;
         };
         const out: BlastWorkerOut = { type: "expand_result", requestId: msg.requestId, payload };
+        self.postMessage(out);
+        break;
+      }
+      case "cfg_detail": {
+        const payload = await loadCfgDetailInWorker(msg.functionId);
+        const out: BlastWorkerOut = { type: "cfg_detail_result", requestId: msg.requestId, payload };
+        self.postMessage(out);
+        break;
+      }
+      case "dfg_detail": {
+        const payload = await loadDfgDetailInWorker(msg.functionId, msg.detailDir);
+        const out: BlastWorkerOut = { type: "dfg_detail_result", requestId: msg.requestId, payload };
         self.postMessage(out);
         break;
       }

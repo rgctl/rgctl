@@ -8,6 +8,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArchitectureRoom } from "../rooms/Architecture";
+import { resetArchitectureCache } from "../architecture";
 import metagraphJson from "./fixtures/architecture/metagraph.json";
 import summaryJson from "./fixtures/architecture/communities.json";
 
@@ -24,6 +25,7 @@ function stubBundle(routes: Record<string, unknown>): void {
 }
 
 afterEach(() => {
+  resetArchitectureCache();
   vi.unstubAllGlobals();
 });
 
