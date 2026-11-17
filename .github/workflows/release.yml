@@ -196,24 +196,84 @@ jobs:
           cargo install cargo-zigbuild
           cargo zigbuild --release ${{ matrix.cargo_args }} --target ${{ matrix.target }} --bin rgctl
 
-      # ort-sys 2.0.0-rc.13 copies ONNX DLLs into release/, release/build,
-      # release/deps, and release/examples. GitHub runners cannot symlink, and
-      # a --bin build has not created examples/ yet, so the copy panics.
+      # ort-sys 2.0.0-rc.13 resolves its target dir via OUT_DIR.ancestors().nth(3),
+      # which points to release/ on Cargo < 1.99 (build/ort-sys-<hash>/out) and to
+      # release/build/ on Cargo 1.99+ (build/ort-sys/<hash>/out), then links/copies
+      # DLLs (e.g. DirectML.dll) into {dir, dir/deps, dir/examples}. Pre-create both
+      # directory trees and clear any dangling cached DLL symlinks before building.
       - name: Prepare Windows ONNX library directories
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $dest = "target/${{ matrix.target }}/release"
-          New-Item -ItemType Directory -Force -Path @(
+          $dest = Join-Path $PWD "target/${{ matrix.target }}/release"
+          $dirs = @(
             $dest,
-            "$dest/build",
             "$dest/deps",
-            "$dest/examples"
-          ) | Out-Null
+            "$dest/examples",
+            "$dest/build",
+            "$dest/build/deps",
+            "$dest/build/examples"
+          )
+          New-Item -ItemType Directory -Force -Path $dirs | Out-Null
+          foreach ($dir in $dirs) {
+            foreach ($item in Get-ChildItem -LiteralPath $dir -Filter *.dll -Force -ErrorAction SilentlyContinue) {
+              if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                $broken = $false
+                try {
+                  $target = $item.ResolveLinkTarget($true)
+                  $broken = ($null -eq $target) -or (-not $target.Exists)
+                } catch {
+                  $broken = $true
+                }
+                if ($broken) {
+                  $item.Delete()
+                }
+              }
+            }
+          }
 
       - name: Build release binary
         if: ${{ !endsWith(matrix.target, '-musl') }}
         run: cargo build --release ${{ matrix.cargo_args }} --target ${{ matrix.target }} --bin rgctl
+
+      # Materialize real (non-symlink) runtime DLLs directly next to rgctl.exe in
+      # release/ before running `rgctl.exe --version` or zipping the archive, whether
+      # ort-sys placed them under release/build/ (Cargo 1.99+) or release/.
+      - name: Stage Windows ONNX runtime DLLs
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $release = Join-Path $PWD "target/${{ matrix.target }}/release"
+          $searchDirs = @("$release/build", $release)
+          $staged = @{}
+          foreach ($dir in $searchDirs) {
+            if (-not (Test-Path -LiteralPath $dir)) { continue }
+            foreach ($item in Get-ChildItem -LiteralPath $dir -Filter *.dll -Force | Where-Object { -not $_.PSIsContainer }) {
+              if ($staged.ContainsKey($item.Name)) { continue }
+              $bytes = [System.IO.File]::ReadAllBytes($item.FullName)
+              if ($bytes.Length -eq 0) {
+                throw "DLL $($item.FullName) resolved to 0 bytes"
+              }
+              $destPath = Join-Path $release $item.Name
+              if (Test-Path -LiteralPath $destPath) {
+                $existing = Get-Item -LiteralPath $destPath -Force
+                if ($existing.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                  $existing.Delete()
+                }
+              }
+              if (-not (Test-Path -LiteralPath $destPath) -or $item.FullName -ne (Get-Item -LiteralPath $destPath -Force).FullName) {
+                [System.IO.File]::WriteAllBytes($destPath, $bytes)
+              }
+              $staged[$item.Name] = $destPath
+            }
+          }
+          if ($staged.Count -eq 0) {
+            throw "Windows semantic-onnx build produced no DLLs in $release or $release/build"
+          }
+          foreach ($path in $staged.Values) {
+            $info = Get-Item -LiteralPath $path -Force
+            Write-Host "Staged DLL: $($info.FullName) ($($info.Length) bytes)"
+          }
 
       - name: Verify release binary
         shell: bash
@@ -238,14 +298,18 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ needs.prepare.outputs.version }}"
-          $release = "target/${{ matrix.target }}/release"
+          $release = Join-Path $PWD "target/${{ matrix.target }}/release"
           New-Item -ItemType Directory -Force -Path package | Out-Null
-          Copy-Item "$release/${{ matrix.bin }}" "package/rgctl.exe"
-          $dlls = @(Get-ChildItem $release -Filter *.dll -File)
+          Copy-Item -LiteralPath "$release/${{ matrix.bin }}" -Destination "package/rgctl.exe" -Force
+          $dlls = @(Get-ChildItem -LiteralPath $release -Filter *.dll -Force | Where-Object {
+            -not $_.PSIsContainer -and -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+          })
           if ($dlls.Count -eq 0) {
-            throw "Windows semantic-onnx build produced no DLLs next to rgctl.exe"
+            throw "Windows semantic-onnx build produced no materialized DLLs next to rgctl.exe"
           }
-          Copy-Item $dlls.FullName -Destination package
+          foreach ($dll in $dlls) {
+            Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path "package" $dll.Name) -Force
+          }
           $archive = "rgctl-${version}-${{ matrix.target }}.zip"
           Compress-Archive -Path (Join-Path (Resolve-Path package) '*') -DestinationPath $archive -Force
           echo "ARCHIVE=$archive" >> $env:GITHUB_ENV
