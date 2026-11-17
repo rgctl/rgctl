@@ -3,6 +3,7 @@
 [![Release](https://img.shields.io/github/v/release/rgctl/rgctl?style=for-the-badge&logo=github&color=0ea5e9)](https://github.com/rgctl/rgctl/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/rgctl/rgctl/total?style=for-the-badge&logo=github&color=22c55e)](https://github.com/rgctl/rgctl/releases)
 [![Stars](https://img.shields.io/github/stars/rgctl/rgctl?style=for-the-badge&logo=github)](https://github.com/rgctl/rgctl/stargazers)
+[![Discord](https://img.shields.io/badge/discord-join-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FVMcqbe4U)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/rgctl/rgctl/ci-lint.yml?branch=main&style=flat-square&label=CI)](https://github.com/rgctl/rgctl/actions)
@@ -42,6 +43,8 @@
 > Index once (`discover`), then ask callers, blast radius, control/data-flow slices, clones, communities, and PR call-path deltas — compact deterministic JSON for agents, not grepping the tree.
 
 **What the R stands for:** **R**ust · **R**eachability · **R**ich graph (30+ typed relations, Hybrid CPG, mmap snapshots).
+
+Questions, ideas, and “does this look right?” are welcome on [Discord](https://discord.gg/FVMcqbe4U). You do not need a pull request to join.
 
 ### Without `rgctl` vs with `rgctl`
 
@@ -209,7 +212,7 @@ Each plugin’s AST or query coverage is rendered at [rgctl.io/docs/languages/](
 
 ## Contributing
 
-We welcome contributors across four tracks — see **[CONTRIBUTING.md](CONTRIBUTING.md)** to get started:
+We welcome contributors across four tracks — see **[CONTRIBUTING.md](CONTRIBUTING.md)** to get started, or [join Discord](https://discord.gg/FVMcqbe4U) if you want to talk it through first:
 
 1. **Language Plugins & AST Coverage:** Add or deepen tree-sitter extractors ([contributor-checklist.md](docs/contributor-checklist.md), [language-testing-guide.md](docs/language-testing-guide.md)).
 2. **Declarative Taint Rules:** Expand security source/sink/sanitizer rules ([Vulnerability and Osv Analysis](https://rgctl.io/docs/guides/vulnerability-and-osv-analysis/)).
@@ -231,7 +234,7 @@ We welcome contributors across four tracks — see **[CONTRIBUTING.md](CONTRIBUT
 | [Docs index](docs/README.md) | Complete documentation map |
 | [AGENTS.md](AGENTS.md) | Performance rules & cold gates for contributing to *this* repo |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contributor tracks, dev setup, test matrix |
-| [Latest release](docs/releases/v0.4.27.md) · [Unreleased](docs/releases/unreleased.md) | Release notes & upcoming changelog |
+| [Latest release](docs/releases/v0.4.28.md) · [Unreleased](docs/releases/unreleased.md) | Release notes & upcoming changelog |
 
 ---
 
