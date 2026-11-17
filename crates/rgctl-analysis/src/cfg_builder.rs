@@ -12,6 +12,10 @@ use std::collections::{HashMap, HashSet};
 use tracing::warn;
 use tree_sitter::{Node, Tree};
 
+#[cfg(test)]
+#[path = "cfg_predicate_tests.rs"]
+mod predicate_tests;
+
 /// Maximum AST recursion depth for CFG expression walks (matches C++ extraction cap).
 const AST_WALK_MAX_DEPTH: usize = 2048;
 
@@ -2577,6 +2581,17 @@ impl<'a> CfgBuilder<'a> {
                 .child_by_field_name("condition")
                 .or_else(|| cur_node.child_by_field_name("operand"))
                 .or_else(|| {
+                    // Dart leaves the predicate unfielded; its body is fielded.
+                    if self.language != "dart" {
+                        return None;
+                    }
+                    let body = cur_node.child_by_field_name("consequence")?;
+                    let mut cursor = cur_node.walk();
+                    cur_node
+                        .named_children(&mut cursor)
+                        .find(|child| !child.is_extra() && child.end_byte() <= body.start_byte())
+                })
+                .or_else(|| {
                     // Field-less grammars (Puppet, Swift, Bash, …): first predicate-like child.
                     find_direct_child_kinds(
                         cur_node,
@@ -4205,7 +4220,7 @@ impl<'a> CfgBuilder<'a> {
             self.add_statement_to_current(Statement {
                 kind: StatementKind::Branch,
                 line: cond.start_position().row + 1,
-                text,
+                text: text.to_string(),
                 defined_vars: SmallVec::new(),
                 used_vars: SmallVec::new(),
             });
@@ -4217,7 +4232,7 @@ impl<'a> CfgBuilder<'a> {
             self.add_statement_to_current(Statement {
                 kind: StatementKind::Branch,
                 line: cond.start_position().row + 1,
-                text,
+                text: text.to_string(),
                 defined_vars: SmallVec::new(),
                 used_vars: SmallVec::new(),
             });
@@ -4226,13 +4241,20 @@ impl<'a> CfgBuilder<'a> {
             return Ok(());
         }
 
-        self.add_statement_to_current(Statement {
-            kind: StatementKind::Branch,
-            line: cond.start_position().row + 1,
-            text,
-            defined_vars: SmallVec::new(),
-            used_vars: SmallVec::new(),
-        });
+        // Conditions are value uses (and may contain assignments), not just
+        // control-flow labels. Reuse ordinary lowering to preserve lexical
+        // scope and def/use facts for the PDG.
+        if depth >= MAX_CFG_STATEMENT_DEPTH {
+            self.add_statement_to_current(Statement {
+                kind: StatementKind::Branch,
+                line: cond.start_position().row + 1,
+                text,
+                defined_vars: SmallVec::new(),
+                used_vars: SmallVec::new(),
+            });
+        } else {
+            self.add_statement(cond, source, StatementKind::Branch)?;
+        }
         self.note_setjmp_in_expr(cond, source);
         let from = self.current_block;
         self.cfg.add_edge(from, true_dest, CfgEdgeType::IfTrue);

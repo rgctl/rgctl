@@ -23,7 +23,10 @@ use uuid::Uuid;
 ///
 /// Not suitable for analysis caching: different owners can have identical names and bodies.
 pub fn stable_function_key(file_path: &str, function_name: &str, code_hash: &str) -> String {
-    format!("{file_path}\x1f{function_name}\x1f{code_hash}")
+    format!(
+        "{file_path}\x1f{function_name}\x1f{code_hash}\x1fcfg{}",
+        crate::cfg::CFG_SEMANTICS_VERSION
+    )
 }
 
 /// Cache key for one exact graph callable and body revision.
@@ -31,7 +34,10 @@ pub fn stable_function_key(file_path: &str, function_name: &str, code_hash: &str
 /// The node UUID includes path, owner, callable discriminator and node kind.
 /// A real identity change must rebuild analysis rather than rename its payload.
 pub fn analysis_cache_key(function_id: Uuid, code_hash: &str) -> String {
-    format!("function-v1\x1f{function_id}\x1f{code_hash}")
+    format!(
+        "function-v1\x1f{function_id}\x1f{code_hash}\x1fcfg{}",
+        crate::cfg::CFG_SEMANTICS_VERSION
+    )
 }
 
 /// Suffix for bincode per-function analysis artifacts (`{uuid}.analysis.bin`).
@@ -43,7 +49,7 @@ pub const ANALYSIS_INDEX_FILE: &str = "analysis_index.bin";
 /// Lightweight metadata for incremental CFG reuse (no CFG/PDG payload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisIndexEntry {
-    /// Versioned exact-function cache key (UUID plus body hash).
+    /// Exact callable UUID, body hash, and procedural semantics revision.
     pub stable_key: String,
     /// Current graph node UUID for the function.
     pub function_id: Uuid,
@@ -252,23 +258,15 @@ impl AnalysisStorage {
         let bytes = fs::read(&path)?;
         let entries: Vec<AnalysisIndexEntry> = bincode::deserialize(&bytes)
             .map_err(|e| Error::SerdeError(format!("analysis index decode: {e}")))?;
-        // Keep the existing bincode layout. Upgrade legacy name-based keys using
-        // their recorded UUID, never by guessing which current callable owns them.
-        // Entries already lost to a legacy collision rebuild on their next miss.
-        let mut upgraded = false;
-        let index = entries
+        Ok(entries
             .into_iter()
-            .map(|mut entry| {
-                let key = analysis_cache_key(entry.function_id, &entry.code_hash);
-                upgraded |= entry.stable_key != key;
-                entry.stable_key = key.clone();
-                (key, entry)
+            // A body hash and callable UUID cannot validate lowering from an
+            // older binary. Do not upgrade stale keys into the current revision.
+            .filter(|entry| {
+                entry.stable_key == analysis_cache_key(entry.function_id, &entry.code_hash)
             })
-            .collect();
-        if upgraded {
-            self.write_analysis_index(&index)?;
-        }
-        Ok(index)
+            .map(|e| (e.stable_key.clone(), e))
+            .collect())
     }
 
     fn write_analysis_index(&self, entries: &HashMap<String, AnalysisIndexEntry>) -> Result<()> {
@@ -993,33 +991,35 @@ mod tests {
     }
 
     #[test]
-    fn legacy_index_upgrade_preserves_recorded_identity_only() {
+    fn legacy_index_is_not_promoted_to_current_semantics() {
         let tmp = TempDir::new().unwrap();
         let storage = AnalysisStorage::new(tmp.path());
         storage.ensure_dir().unwrap();
         let id = Uuid::new_v4();
-        let entry = AnalysisIndexEntry {
-            stable_key: stable_function_key("Library.java", "score", "same"),
+        let current = AnalysisIndexEntry {
+            stable_key: analysis_cache_key(id, "same"),
             function_id: id,
             code_hash: "same".into(),
             flow_count: 3,
             vulnerable_count: 1,
         };
-        fs::write(
-            storage.index_path(),
-            bincode::serialize(&vec![entry]).unwrap(),
-        )
-        .unwrap();
+        let mut entries = vec![current.clone()];
+        for key in [
+            stable_function_key("Library.java", "score", "same"),
+            format!("function-v1\x1f{id}\x1fsame"),
+        ] {
+            entries.push(AnalysisIndexEntry {
+                stable_key: key,
+                ..current.clone()
+            });
+        }
+        fs::write(storage.index_path(), bincode::serialize(&entries).unwrap()).unwrap();
         let index = storage.load_analysis_index().unwrap();
-        let key = analysis_cache_key(id, "same");
         assert_eq!(index.len(), 1);
-        assert_eq!(index[&key].function_id, id);
-        assert_eq!(index[&key].flow_count, 3);
-        assert_eq!(index[&key].vulnerable_count, 1);
+        assert_eq!(index[&current.stable_key].function_id, id);
+        assert_eq!(index[&current.stable_key].flow_count, 3);
+        assert_eq!(index[&current.stable_key].vulnerable_count, 1);
         assert!(!index.contains_key(&analysis_cache_key(Uuid::new_v4(), "same")));
-        let persisted: Vec<AnalysisIndexEntry> =
-            bincode::deserialize(&fs::read(storage.index_path()).unwrap()).unwrap();
-        assert_eq!(persisted[0].stable_key, key);
     }
 
     #[test]
