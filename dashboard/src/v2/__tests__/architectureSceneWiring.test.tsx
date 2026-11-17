@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import metagraphJson from "./fixtures/architecture/metagraph.json";
 import summaryJson from "./fixtures/architecture/communities.json";
 import { installFetchStub } from "./fixture";
+import { resetArchitectureCache } from "../architecture";
 
 /** The callbacks the room installed on the scene, as the scene would have received them. */
 const installed: {
@@ -97,6 +98,7 @@ function json(body: unknown): Response {
 }
 
 afterEach(() => {
+  resetArchitectureCache();
   vi.unstubAllGlobals();
   // Every field, not just the one a test used: a callback left over from the previous test's (now unmounted) room
   // satisfies the next test's `waitFor` and quietly tests nothing — the same shape of defect as the `skip:` that

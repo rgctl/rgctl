@@ -13,8 +13,8 @@
  * Understand lenses inspect it. That is why this component never draws a graph of its own.
  */
 import * as Dialog from "@radix-ui/react-dialog";
-import { useEffect, useMemo, useState } from "react";
-import type { FunctionEntry, Manifest } from "./data";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { searchFunctions, type FunctionEntry, type Manifest } from "./data";
 import {
   answerFor,
   askSemantic,
@@ -32,6 +32,7 @@ export function Palette({
   open,
   onOpenChange,
   functions,
+  functionsLoading = false,
   manifest,
   onPick,
   onPickKey,
@@ -39,6 +40,7 @@ export function Palette({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   functions: FunctionEntry[];
+  functionsLoading?: boolean;
   manifest: Manifest | null;
   onPick: (entry: FunctionEntry) => void;
   onPickKey: (key: string) => void;
@@ -54,16 +56,38 @@ export function Palette({
   const [askLoading, setAskLoading] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [apiMatches, setApiMatches] = useState<FunctionEntry[] | null>(null);
 
-  const matches = useMemo(() => {
-    const q = query.trim().toLowerCase();
+  const deferredQuery = useDeferredValue(query);
+  useEffect(() => {
+    if (!open || mode !== "symbols") return;
+    const q = deferredQuery.trim();
+    if (!q) {
+      setApiMatches(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void searchFunctions(q, 40).then((rows) => {
+        if (!cancelled) setApiMatches(rows);
+      });
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [open, mode, deferredQuery]);
+
+  const localMatches = useMemo(() => {
+    const q = deferredQuery.trim().toLowerCase();
     const pool = q
       ? functions.filter(
           (f) => f.name.toLowerCase().includes(q) || (f.file_path ?? "").toLowerCase().includes(q),
         )
       : functions;
     return pool.slice(0, 40);
-  }, [functions, query]);
+  }, [functions, deferredQuery]);
+  const matches = apiMatches ?? localMatches;
 
   const resolvable = useMemo(
     () => new Set(functions.map((f) => f.function_id)),
@@ -219,6 +243,7 @@ export function Palette({
               matches={matches}
               active={active}
               total={functions.length}
+              loading={functionsLoading}
               onActive={setActive}
               onPick={onPick}
             />
@@ -269,12 +294,14 @@ function SymbolResults({
   matches,
   active,
   total,
+  loading,
   onActive,
   onPick,
 }: {
   matches: FunctionEntry[];
   active: number;
   total: number;
+  loading: boolean;
   onActive: (index: number) => void;
   onPick: (entry: FunctionEntry) => void;
 }) {
@@ -282,8 +309,10 @@ function SymbolResults({
     <div className="max-h-[52vh] overflow-y-auto p-1">
       {matches.length === 0 && (
         <p className="px-2 py-3 text-[12px] text-zinc-500">
-          No function matches. The bundle carries {total} function{total === 1 ? "" : "s"}.
-          {total === 0 && " This bundle has no CFG/slice index; use Ask for semantic results."}
+          {loading && total === 0
+            ? "Loading the function index…"
+            : `No function matches. The bundle carries ${total} function${total === 1 ? "" : "s"}.`}
+          {!loading && total === 0 && " This bundle has no CFG/slice index; use Ask for semantic results."}
         </p>
       )}
       {matches.map((f, i) => (

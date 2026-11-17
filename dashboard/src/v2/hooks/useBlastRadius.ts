@@ -1,10 +1,12 @@
 /**
- * Live blast-radius expand for a taint subject (function UUID).
+ * Live blast-radius expand for a focused function UUID.
  *
- * Engine load is deferred until `enabled` — metasfresh's graph_payload is huge.
+ * The engine lives in `expandEngine` as a module-level singleton shared with Architecture expansion.
+ * This hook owns only the debounce and the four-state result; a per-lens Worker would reload the
+ * graph payload on every Blast mount (Understand -> CFG -> Blast, Taint -> Understand -> Blast).
  */
-import { useEffect, useRef, useState } from "react";
-import type { BlastWorkerIn, BlastWorkerOut } from "../blastWorker";
+import { useEffect, useState } from "react";
+import { blastByUuid, type SharedBlastPayload } from "../expandEngine";
 
 export interface BlastCaller {
   index: number;
@@ -14,15 +16,7 @@ export interface BlastCaller {
   node_type_name: string;
 }
 
-export interface BlastPayload {
-  seed_index: number;
-  seed_name: string;
-  depth_limit: number;
-  direct_caller_count: number;
-  impact_zone_count: number;
-  score: number;
-  callers: BlastCaller[];
-}
+export type BlastPayload = SharedBlastPayload;
 
 export type BlastRadiusState =
   | { kind: "idle" }
@@ -39,67 +33,12 @@ export function useBlastRadius(
   enabled: boolean,
 ): BlastRadiusState {
   const [state, setState] = useState<BlastRadiusState>({ kind: "idle" });
-  const [workerEpoch, setWorkerEpoch] = useState(0);
-  const workerRef = useRef<Worker | null>(null);
-  const nextId = useRef(1);
-  const pending = useRef(
-    new Map<number, { resolve: (v: BlastWorkerOut) => void; reject: (e: Error) => void }>(),
-  );
-  const engineReady = useRef(false);
 
   useEffect(() => {
     if (!enabled) {
       setState({ kind: "idle" });
-      workerRef.current = null;
-      engineReady.current = false;
       return;
     }
-    if (typeof Worker === "undefined") {
-      setState({
-        kind: "failed",
-        reason: "Web Workers are unavailable in this environment — cannot load the blast engine.",
-      });
-      return;
-    }
-
-    const worker = new Worker(new URL("../blastWorker.ts", import.meta.url), { type: "module" });
-    workerRef.current = worker;
-    worker.onmessage = (ev: MessageEvent<BlastWorkerOut>) => {
-      const data = ev.data;
-      // Progress is a broadcast about the payload download, not an answer to a request: it carries no
-      // request id, and nothing here asked for it. Returning first keeps the id lookup below honest.
-      if (data.type === "progress") return;
-      if (data.type === "error") {
-        if (data.requestId != null) {
-          pending.current.get(data.requestId)?.reject(new Error(data.message));
-          pending.current.delete(data.requestId);
-        } else {
-          setState({ kind: "failed", reason: data.message });
-        }
-        return;
-      }
-      if (data.requestId != null) {
-        const p = pending.current.get(data.requestId);
-        if (!p) return;
-        pending.current.delete(data.requestId);
-        p.resolve(data);
-      }
-    };
-    worker.onerror = (ev) => {
-      setState({ kind: "failed", reason: ev.message || "blast worker error" });
-    };
-    setWorkerEpoch((n) => n + 1);
-
-    return () => {
-      worker.terminate();
-      if (workerRef.current === worker) workerRef.current = null;
-      engineReady.current = false;
-      pending.current.clear();
-    };
-  }, [enabled]);
-
-  useEffect(() => {
-    if (!enabled) return;
     if (!functionId) {
       setState({
         kind: "absent",
@@ -108,43 +47,18 @@ export function useBlastRadius(
       return;
     }
 
-    const worker = workerRef.current;
-    if (!worker) return;
-
     let cancelled = false;
     setState({ kind: "loading" });
-
-    const send = (msg: BlastWorkerIn) =>
-      new Promise<BlastWorkerOut>((resolve, reject) => {
-        pending.current.set(msg.requestId, { resolve, reject });
-        worker.postMessage(msg);
-      });
 
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          if (!engineReady.current) {
-            const ready = await send({ type: "init", requestId: nextId.current++ });
-            if (cancelled) return;
-            if (ready.type !== "ready") {
-              throw new Error("blast engine init failed");
-            }
-            engineReady.current = true;
-          }
-          const result = await send({
-            type: "blast_by_uuid",
-            requestId: nextId.current++,
-            uuid: functionId,
-            maxDepth: depth,
-          });
+          const payload = await blastByUuid(functionId, depth);
           if (cancelled) return;
-          if (result.type !== "blast_result") {
-            throw new Error("unexpected blast worker response");
-          }
-          setState({ kind: "ready", payload: result.payload });
-        } catch (e) {
+          setState({ kind: "ready", payload });
+        } catch (error) {
           if (cancelled) return;
-          const message = e instanceof Error ? e.message : String(e);
+          const message = error instanceof Error ? error.message : String(error);
           if (/no columnar node/i.test(message)) {
             setState({
               kind: "absent",
@@ -161,7 +75,7 @@ export function useBlastRadius(
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [enabled, functionId, depth, workerEpoch]);
+  }, [enabled, functionId, depth]);
 
   return state;
 }

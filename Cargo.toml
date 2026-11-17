@@ -320,7 +320,7 @@ ignore = "0.4"
 notify = "7"
 include_dir = "0.7"
 axum = "0.8"
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.6", features = ["fs", "compression-gzip"] }
 tower = { version = "0.5", features = ["util"] }
 
 [dev-dependencies]

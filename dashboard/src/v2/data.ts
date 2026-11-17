@@ -132,6 +132,33 @@ export interface CfgDetail {
   dominance_frontiers?: number[][];
 }
 
+interface FunctionsApiResponse {
+  functions: FunctionEntry[];
+  total: number;
+}
+
+async function apiFunctions(query: string): Promise<FunctionsApiResponse | null> {
+  try {
+    const res = await fetch(`/api/functions${query}`);
+    if (!res.ok) return null;
+    return (await res.json()) as FunctionsApiResponse;
+  } catch {
+    return null;
+  }
+}
+
+/** Palette search. `null` means the API is unavailable; callers fall back to the local directory. */
+export async function searchFunctions(query: string, limit = 40): Promise<FunctionEntry[] | null> {
+  const api = await apiFunctions(`?q=${encodeURIComponent(query)}&limit=${limit}`);
+  return api?.functions ?? null;
+}
+
+/** Resolve a Focus that is not in the directory, including semantic hits outside the first page. */
+export async function fetchFunctionById(id: string): Promise<FunctionEntry | null> {
+  const api = await apiFunctions(`?id=${encodeURIComponent(id)}`);
+  return api?.functions[0] ?? null;
+}
+
 export async function loadManifest(): Promise<Manifest | null> {
   return getJson<Manifest>("manifest.json");
 }
@@ -142,6 +169,15 @@ export async function loadManifest(): Promise<Manifest | null> {
  * rather than one being chosen and the other's columns lost.
  */
 export async function loadFunctions(): Promise<FunctionEntry[]> {
+  // The server has the graph in memory. Asking it for a small directory avoids fetching and parsing
+  // the 67 MB cfg_index + 67 MB slice_index on every dashboard load. Static bundles fall back below.
+  const api = await apiFunctions("?limit=500");
+  if (api) return api.functions;
+
+  return loadFunctionsFromBundle();
+}
+
+async function loadFunctionsFromBundle(): Promise<FunctionEntry[]> {
   const [cfg, slice] = await Promise.all([
     getJson<IndexPayload>("cfg_index.json"),
     getJson<IndexPayload>("slice_index.json"),
@@ -166,8 +202,25 @@ export async function loadFunctions(): Promise<FunctionEntry[]> {
 /**
  * Per-file JSON when the export wrote `cfg/<id>.json`; otherwise the archive
  * record pack decoded with WASM (`detail_mode: "archive_only"`, large repos).
+ *
+ * The promise is cached per function so switching Understand -> CFG -> elsewhere -> CFG does not
+ * refetch and re-parse the same sidecar. `resetCfgDetailCache` is the test seam.
  */
-export async function loadCfgDetail(functionId: string): Promise<CfgDetail | null> {
+const cfgDetailCache = new Map<string, Promise<CfgDetail | null>>();
+
+export function resetCfgDetailCache(): void {
+  cfgDetailCache.clear();
+}
+
+export function loadCfgDetail(functionId: string): Promise<CfgDetail | null> {
+  const cached = cfgDetailCache.get(functionId);
+  if (cached) return cached;
+  const pending = loadCfgDetailUncached(functionId);
+  cfgDetailCache.set(functionId, pending);
+  return pending;
+}
+
+async function loadCfgDetailUncached(functionId: string): Promise<CfgDetail | null> {
   const { isArchiveOnly, loadCfgDetailFromArchive, loadCfgIndexMeta } = await import("./cfgArchive");
   const meta = await loadCfgIndexMeta();
   if (isArchiveOnly(meta)) {

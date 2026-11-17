@@ -17,6 +17,8 @@ export interface ExpandedNode {
   file_path?: string | null;
 }
 
+export type SharedBlastPayload = Extract<BlastWorkerOut, { type: "blast_result" }>["payload"];
+
 export interface ExpandedSubgraph {
   nodes: ExpandedNode[];
   /** Member edges. The engine emits **calls** only — see `MEMBER_EDGE_KINDS`. */
@@ -125,6 +127,21 @@ export async function expandMembers(
   } finally {
     progressListener = null;
   }
+}
+
+/**
+ * Blast radius over the shared engine.
+ *
+ * The Taint and Understand blast lenses use this instead of owning a Worker. The graph payload is the
+ * expensive part; a per-lens worker meant switching Blast -> CFG -> Blast re-downloaded it.
+ */
+export async function blastByUuid(uuid: string, maxDepth: number): Promise<SharedBlastPayload> {
+  await ensureWorker();
+  const result = await request<BlastWorkerOut>({ type: "blast_by_uuid", uuid, maxDepth } as never);
+  if (result.type !== "blast_result") {
+    throw new Error(`unexpected worker reply: ${result.type}`);
+  }
+  return result.payload;
 }
 
 /** Test seam. */

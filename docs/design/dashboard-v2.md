@@ -152,6 +152,17 @@ rgctl serve --query-only --host 127.0.0.1 --port 8080
 
 ## 5. Performance Guardrails & Verification Checklist
 
+### 5.0 Browser loading model (v2)
+
+- **View-scoped function index:** Architecture can render without `cfg_index.json` / `slice_index.json`. `useFocus` enables the function query only for Repo/Understand/Review, a URL Focus, or an open `⌘K` palette. The key includes `manifest.graph.digest` once the manifest resolves.
+- **Lazy rooms:** Architecture, Migration, and Taint are `React.lazy` chunks with a shell-level `Suspense` fallback. A direct `/understand` link does not parse the Architecture room or its Three.js scene.
+- **Shared worker:** `expandEngine` owns one module-level worker for Architecture member expansion and blast queries. Blast lenses no longer create per-mount Workers, so `graph_payload.bin` is downloaded and parsed once.
+- **Detail caches:** CFG detail promises and DFG detail promises are cached by function id (DFG also by detail directory and graph digest); in-flight requests are deduplicated.
+- **Bounded UI work:** Focus resolution uses a `Map`, palette filtering uses `useDeferredValue`, and Migration plan/layout recomputation is debounced by 200 ms.
+- **Compressed static JSON:** `serve` applies gzip content encoding when the client advertises support.
+- **Function data over the API:** the shell asks `GET /api/functions` for a 500-row directory and for palette search; it resolves an out-of-directory Focus by UUID through the same endpoint. The 67 MB `cfg_index.json` / `slice_index.json` pair is not a startup dependency.
+- **Header-only analysis metadata:** `cfg_meta.json` and `slice_meta.json` carry `detail_mode` and record-pack paths, so selecting CFG/PDG does not fetch the full 67 MB indexes. `cfg_meta.json` is ~219 bytes and `slice_meta.json` ~178 bytes on metasfresh.
+
 1. **Serve Never Auto-Runs Full Discover:** `rgctl serve` is strictly a fast read/query server over `.rgctl/` (plus optional incremental `--watch`). It never blocks startup with an implicit whole-repo `discover`.
 2. **In-Memory `DashboardExportContext` Reuse:** When `rgctl discover --with-universe` runs, `export_dashboard_bundle` consumes the in-memory `AnalysisResults` and `CodeGraph` directly via `DashboardExportContext` without reloading snapshots per export stage.
 

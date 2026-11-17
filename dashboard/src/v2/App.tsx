@@ -1,13 +1,11 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Instrument } from "./Instrument";
 import { Palette } from "./Palette";
 import { Chip, Command, Panel, Unavailable } from "./shell";
 import { Cfg } from "./rooms/Cfg";
 import { LensPlaceholder, Placeholder } from "./rooms/Placeholder";
-import { ArchitectureRoom } from "./rooms/Architecture";
-import { MigrationRoom } from "./rooms/Migration";
-import { TaintRoom } from "./rooms/Taint";
+
 import { DfgGraph } from "./rooms/DfgGraph";
 import { BlastStage } from "./rooms/BlastStage";
 import { useDfgDetail } from "./hooks/useDfgDetail";
@@ -16,7 +14,22 @@ import { loadManifest, type FunctionEntry } from "./data";
 import { LENSES, ROOMS, keyOf, type LensId, type RoomId } from "./focus";
 import { useFocus } from "./useFocus";
 
+// Heavy rooms are their own chunks. The shell renders immediately; a direct
+// `/understand` link must not parse Architecture's Three.js room just to show a CFG.
+const ArchitectureRoom = lazy(() =>
+  import("./rooms/Architecture").then((m) => ({ default: m.ArchitectureRoom })),
+);
+const MigrationRoom = lazy(() =>
+  import("./rooms/Migration").then((m) => ({ default: m.MigrationRoom })),
+);
+const TaintRoom = lazy(() =>
+  import("./rooms/Taint").then((m) => ({ default: m.TaintRoom })),
+);
+
 export function App() {
+  // Declared before `useFocus` because the function index is view-scoped: Architecture
+  // does not need the 67 MB cfg/slice indexes until the palette opens.
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const {
     room,
     lens,
@@ -32,9 +45,11 @@ export function App() {
     goRoom,
     pick: focusPick,
     pickKey: focusPickKey,
-  } = useFocus();
+  } = useFocus({
+    enableFunctions: (room, focus) =>
+      paletteOpen || focus !== null || room !== "architecture",
+  });
 
-  const [paletteOpen, setPaletteOpen] = useState(false);
   const manifest = useQuery({ queryKey: ["manifest"], queryFn: loadManifest });
 
   useEffect(() => {
@@ -151,6 +166,7 @@ export function App() {
         */}
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
+            <Suspense fallback={<RoomLoading />}>
             {functionsError != null && (
               <Unavailable
                 what="The function index could not be read"
@@ -195,6 +211,7 @@ export function App() {
               room !== "architecture" &&
               room !== "migration" &&
               room !== "taint" && <Placeholder room={room} />}
+            </Suspense>
           </div>
         </main>
       </div>
@@ -203,11 +220,20 @@ export function App() {
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
         functions={list}
+        functionsLoading={functionsLoading}
         manifest={manifest.data ?? null}
         onPick={pick}
         onPickKey={pickKey}
       />
     </div>
+  );
+}
+
+function RoomLoading() {
+  return (
+    <Panel title="Loading room…">
+      <p className="text-[11px] text-zinc-500">Loading the room chunk and its data…</p>
+    </Panel>
   );
 }
 

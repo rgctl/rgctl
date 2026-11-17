@@ -86,8 +86,24 @@ export function channelReport(view: ArchitectureView): {
   };
 }
 
+/**
+ * The composed architecture view is immutable for a bundle, and the room unmounts on every room switch.
+ * Cache the promise so returning to Architecture does not refetch metagraph/communities/migration.
+ */
+let architecturePromise: Promise<ArchitectureState> | null = null;
+
+/** Test seam. */
+export function resetArchitectureCache(): void {
+  architecturePromise = null;
+}
+
 /** Load and compose. A missing metagraph is a state, not an empty city. */
-export async function loadArchitecture(): Promise<ArchitectureState> {
+export function loadArchitecture(): Promise<ArchitectureState> {
+  if (!architecturePromise) architecturePromise = loadArchitectureUncached();
+  return architecturePromise;
+}
+
+async function loadArchitectureUncached(): Promise<ArchitectureState> {
   let metagraph: Metagraph | null;
   try {
     metagraph = await getJson<Metagraph>("metagraph.json");

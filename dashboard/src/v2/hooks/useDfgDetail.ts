@@ -23,6 +23,17 @@ export type DfgState =
   | { kind: "absent"; reason: string }
   | { kind: "failed"; reason: string };
 
+/**
+ * Detail cache shared by Understand and Taint. v1's worker kept slice bundles in a Map; v2 was
+ * refetching and re-parsing the same `slice/<uuid>.json` every time a lens remounted.
+ */
+const dfgCache = new Map<string, Promise<DfgDetail | null>>();
+
+/** Test seam. */
+export function resetDfgDetailCache(): void {
+  dfgCache.clear();
+}
+
 interface SliceBundle {
   function_id: string;
   name: string;
@@ -159,7 +170,15 @@ export function useDfgDetail(
     }
     let cancelled = false;
     setState({ kind: "loading" });
-    loadDfgDetail(functionId, detailDir, fetch, resolvedManifest)
+    const cacheKey = `${detailDir}\x1f${functionId}\x1f${resolvedManifest?.graph?.digest ?? ""}`;
+    let pending = dfgCache.get(cacheKey);
+    if (!pending) {
+      pending = loadDfgDetail(functionId, detailDir, fetch, resolvedManifest);
+      dfgCache.set(cacheKey, pending);
+      // A failed read is not a cache entry: a retry after the bundle/server recovers should try again.
+      pending.catch(() => dfgCache.delete(cacheKey));
+    }
+    pending
       .then((dfg) => {
         if (cancelled) return;
         setState(

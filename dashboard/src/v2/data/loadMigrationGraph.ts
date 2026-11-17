@@ -13,8 +13,24 @@ export type MigrationGraphLoad =
   | { kind: "empty"; graph: MigrationGraphPayload }
   | { kind: "ready"; graph: MigrationGraphPayload };
 
-export async function loadMigrationGraph(
+let migrationPromise: Promise<MigrationGraphLoad> | null = null;
+
+/** Test seam. */
+export function resetMigrationGraphCache(): void {
+  migrationPromise = null;
+}
+
+export function loadMigrationGraph(
   fetchImpl: typeof fetch = fetch,
+): Promise<MigrationGraphLoad> {
+  // Tests inject a fetch; never let one stubbed read poison the process-wide cache.
+  if (fetchImpl !== fetch) return loadMigrationGraphUncached(fetchImpl);
+  if (!migrationPromise) migrationPromise = loadMigrationGraphUncached(fetchImpl);
+  return migrationPromise;
+}
+
+async function loadMigrationGraphUncached(
+  fetchImpl: typeof fetch,
 ): Promise<MigrationGraphLoad> {
   try {
     const res = await fetchImpl(bundleUrl("migration_graph.json"), { cache: "no-store" });

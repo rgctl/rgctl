@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use axum::{
     Json, Router,
     body::Body,
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, Method, Request, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -22,9 +22,11 @@ use rgctl_analysis::{AnalysisResults, CommunityQueryContext, SemanticIndex};
 use rgctl_dashboard::default_dashboard_path;
 use rgctl_gql::QueryMacroRegistry;
 use rgctl_graph::CodeGraph;
+use rgctl_graph::backend::GraphBackend;
+use rgctl_graph::schema::NodeType;
 use rgctl_service::command::QueryArgs;
 use rgctl_service::query::run_query;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -32,7 +34,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tower::ServiceExt;
+use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
+use uuid::Uuid;
 
 /// Options for the unified HTTP `serve` command.
 ///
@@ -90,6 +94,29 @@ struct SemanticQueryRequest {
     /// `function` (default) or `community`
     #[serde(default)]
     scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FunctionQuery {
+    /// Exact function UUID; when present, returns at most one row.
+    id: Option<String>,
+    /// Case-insensitive substring over name and file path.
+    q: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct FunctionRow {
+    function_id: String,
+    name: String,
+    file_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct FunctionsResponse {
+    functions: Vec<FunctionRow>,
+    total: usize,
 }
 
 fn default_semantic_limit() -> usize {
@@ -229,12 +256,16 @@ async fn run_server(ctx: &CliContext, args: HttpServeArgs, state: Arc<AppState>)
     rest = rest
         .route("/api/query", post(api_query))
         .route("/graphql", post(api_query))
+        .route("/api/functions", get(api_functions))
         .route("/api/semantic/status", get(api_semantic_status))
         .route("/api/semantic/query", post(api_semantic_query));
     if !args.query_only {
         rest = rest.fallback(dashboard_fallback);
     }
     app = app.merge(rest.with_state(state.clone()));
+    // The bundle's cfg/slice indexes are tens of MB of JSON. Localhost hides the transfer cost;
+    // compressed responses make the same files usable over a remote/WSL-forwarded serve too.
+    app = app.layer(CompressionLayer::new());
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -569,6 +600,86 @@ async fn api_query(
             Json(serde_json::json!({"error": err.to_string()})),
         )),
     }
+}
+
+/// Compact function lookup/search for the dashboard shell.
+///
+/// The browser must not fetch/parse `cfg_index.json` + `slice_index.json` (67 MB each on metasfresh)
+/// just to resolve a Focus or search the palette. The server already has the graph; this returns only
+/// the rows the shell needs. Static bundles still have the JSON index fallback.
+async fn api_functions(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<FunctionQuery>,
+) -> Result<Json<FunctionsResponse>, (StatusCode, String)> {
+    let graph = {
+        let guard = state.graph.read().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "graph lock poisoned".into(),
+            )
+        })?;
+        guard
+            .clone()
+            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "graph not ready".into()))?
+    };
+
+    if let Some(raw) = params.id.as_deref() {
+        let id = Uuid::parse_str(raw.trim())
+            .map_err(|_| (StatusCode::BAD_REQUEST, "function id must be a UUID".into()))?;
+        let node = graph
+            .backend()
+            .get_node(id)
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "function not found".into()))?;
+        if node.node_type != NodeType::Function {
+            return Err((StatusCode::NOT_FOUND, "node is not a function".into()));
+        }
+        return Ok(Json(FunctionsResponse {
+            functions: vec![FunctionRow {
+                function_id: node.id.to_string(),
+                name: node.name.to_string(),
+                file_path: node.file_path.as_ref().map(ToString::to_string),
+            }],
+            total: 1,
+        }));
+    }
+
+    let query = params.q.unwrap_or_default().trim().to_ascii_lowercase();
+    let limit = params.limit.unwrap_or(200).clamp(1, 500);
+    let response = tokio::task::spawn_blocking(move || {
+        let mut functions = Vec::with_capacity(limit.min(256));
+        let mut total = 0usize;
+        let _ = graph.backend().for_each_node(|node| {
+            if node.node_type != NodeType::Function {
+                return;
+            }
+            let name = node.name.to_string();
+            let file_path = node.file_path.as_ref().map(ToString::to_string);
+            if !query.is_empty() {
+                let name_match = name.to_ascii_lowercase().contains(&query);
+                let path_match = file_path
+                    .as_deref()
+                    .is_some_and(|p| p.to_ascii_lowercase().contains(&query));
+                if !name_match && !path_match {
+                    return;
+                }
+            }
+            total += 1;
+            if functions.len() < limit {
+                functions.push(FunctionRow {
+                    function_id: node.id.to_string(),
+                    name,
+                    file_path,
+                });
+            }
+        });
+        functions.sort_by(|a, b| a.name.cmp(&b.name));
+        FunctionsResponse { functions, total }
+    })
+    .await
+    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")))?;
+
+    Ok(Json(response))
 }
 
 async fn api_semantic_status(

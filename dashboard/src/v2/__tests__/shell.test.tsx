@@ -8,6 +8,10 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { beforeEach, describe, expect, it } from "vitest";
+import { resetCfgDetailCache } from "../data";
+import { resetArchitectureCache } from "../architecture";
+import { resetMigrationGraphCache } from "../data/loadMigrationGraph";
+import { resetDfgDetailCache } from "../hooks/useDfgDetail";
 import { createAppRouter } from "../router";
 import { installFetchStub, SUBJECT, OTHER, SOURCE_PATH } from "./fixture";
 
@@ -37,7 +41,13 @@ function searchOf(router: ReturnType<typeof createAppRouter>): string {
   ).toString();
 }
 
-beforeEach(() => installFetchStub());
+beforeEach(() => {
+  resetCfgDetailCache();
+  resetDfgDetailCache();
+  resetArchitectureCache();
+  resetMigrationGraphCache();
+  installFetchStub();
+});
 
 describe("the Focus round-trips through the URL", () => {
   it("resolves a subject from the URL alone, and a reload keeps room, lens and subject", async () => {
@@ -130,6 +140,27 @@ describe("/ is the universe, not a menu", () => {
     const router = renderApp(`/?focus=${SUBJECT}`);
     await waitFor(() => expect(router.state.location.pathname).toBe("/architecture"));
     expect(router.state.location.search).toMatchObject({ focus: SUBJECT });
+  });
+});
+
+describe("the function index is view-scoped", () => {
+  it("does not fetch cfg/slice indexes for Architecture without a Focus", async () => {
+    const stub = installFetchStub();
+    renderApp("/architecture");
+    await screen.findByText(/This bundle carries no architecture dataset/);
+    const urls = stub.mock.calls.map(([input]) => String(input));
+    expect(urls.some((u) => u.includes("cfg_index.json"))).toBe(false);
+    expect(urls.some((u) => u.includes("slice_index.json"))).toBe(false);
+  });
+
+  it("fetches the index when the palette opens", async () => {
+    const stub = installFetchStub();
+    renderApp("/architecture");
+    await screen.findByText(/This bundle carries no architecture dataset/);
+    fireEvent.click(screen.getByRole("button", { name: /Search symbols, communities/ }));
+    await screen.findByText(/of 2 candidates/);
+    const urls = stub.mock.calls.map(([input]) => String(input));
+    expect(urls.some((u) => u.includes("cfg_index.json"))).toBe(true);
   });
 });
 

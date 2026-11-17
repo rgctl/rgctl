@@ -5,7 +5,7 @@
  * files appear in this bundle. Analysis capabilities remain a separate tooltip (CFG, slices, …).
  */
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   capabilities,
   languageCoverageFromPaths,
@@ -34,7 +34,14 @@ export function Instrument({
 }) {
   const caps = capabilities(manifest);
   const digest = manifest?.graph?.digest ?? manifest?.export_fingerprint;
-  const sources = useQuery({ queryKey: ["sources-index"], queryFn: loadSourceIndex });
+  const [coverageRequested, setCoverageRequested] = useState(false);
+  // `sources_index.json` is ~5.5 MB on metasfresh. It powers the coverage dots only, so load it
+  // when the reader asks for it rather than on every page.
+  const sources = useQuery({
+    queryKey: ["sources-index", digest ?? "pending"],
+    queryFn: loadSourceIndex,
+    enabled: coverageRequested && manifest != null,
+  });
   const coverage = useMemo(
     () => languageCoverageFromPaths((sources.data ?? []).map((f) => f.file_path)),
     [sources.data],
@@ -64,8 +71,18 @@ export function Instrument({
           </span>
         </span>
 
-        <span className="flex items-center gap-1" title={coverageTitle}>
-          {coverage.languages.length === 0 && !sources.isLoading ? (
+        <span
+          className="flex items-center gap-1 outline-none"
+          title={coverageRequested ? coverageTitle : "Hover or focus to load language coverage"}
+          tabIndex={0}
+          onMouseEnter={() => setCoverageRequested(true)}
+          onFocus={() => setCoverageRequested(true)}
+        >
+          {!coverageRequested ? (
+            <span className="text-[10px] text-zinc-600">coverage · hover</span>
+          ) : sources.isLoading ? (
+            <span className="text-[10px] text-zinc-500">loading coverage…</span>
+          ) : coverage.languages.length === 0 ? (
             <span className="text-[10px] text-zinc-500">no language coverage in this bundle</span>
           ) : (
             <>
