@@ -3416,7 +3416,11 @@ impl GraphBuilder {
             .take()
             .ok_or_else(|| Error::SerdeError("finish_spill called without spill mode".into()))?;
         // Offload multi-million-entry GraphBuilder resolution table deallocation off the critical path.
-        std::thread::spawn(move || drop(self));
+        if self.symbol_index.len() >= 10_000 {
+            std::thread::spawn(move || drop(self));
+        } else {
+            drop(self);
+        }
         spill.finish()
     }
 }

@@ -24,7 +24,10 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
+
+static NEXT_ARCHIVE_TMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Magic bytes for CFG/PDG archive files (`RBCP`).
 pub const ARCHIVE_MAGIC: [u8; 4] = *b"RBCP";
@@ -710,6 +713,15 @@ impl StreamingCfgPdgArchiveWriter {
         graph_digest: Option<&str>,
         retained: &[(Uuid, Option<Uuid>)],
     ) -> Result<Self> {
+        Self::create_with_buffer_size(path, graph_digest, retained, 4 * 1024 * 1024)
+    }
+
+    fn create_with_buffer_size(
+        path: &Path,
+        graph_digest: Option<&str>,
+        retained: &[(Uuid, Option<Uuid>)],
+        buf_capacity: usize,
+    ) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -732,8 +744,17 @@ impl StreamingCfgPdgArchiveWriter {
         let digest_len = u32::try_from(digest_bytes.len())
             .map_err(|_| Error::SerdeError("graph digest too long".into()))?;
 
-        let tmp_path = path.with_extension("bin.tmp");
-        let mut file = BufWriter::with_capacity(4 * 1024 * 1024, File::create(&tmp_path)?);
+        let seq = NEXT_ARCHIVE_TMP_ID.fetch_add(1, Ordering::Relaxed);
+        let tmp_name = format!(
+            "{}.{}.{}.tmp",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(CFG_PDG_ARCHIVE_FILE),
+            std::process::id(),
+            seq
+        );
+        let tmp_path = path.with_file_name(tmp_name);
+        let mut file = BufWriter::with_capacity(buf_capacity, File::create(&tmp_path)?);
         file.write_all(&ARCHIVE_MAGIC)?;
         file.write_all(&ARCHIVE_VERSION.to_le_bytes())?;
         file.write_all(&digest_len.to_le_bytes())?;
@@ -826,7 +847,13 @@ fn write_v3_archive(
     graph_digest: Option<&str>,
     record_bytes: &[(Uuid, Vec<u8>)],
 ) -> Result<()> {
-    let mut writer = StreamingCfgPdgArchiveWriter::create_preserving(path, graph_digest, &[])?;
+    let buf_cap = if record_bytes.len() <= 64 {
+        64 * 1024
+    } else {
+        4 * 1024 * 1024
+    };
+    let mut writer =
+        StreamingCfgPdgArchiveWriter::create_with_buffer_size(path, graph_digest, &[], buf_cap)?;
     for (id, bytes) in record_bytes {
         let alias = stable_alias_uuid_from_payload(bytes);
         writer.append(*id, alias, bytes)?;

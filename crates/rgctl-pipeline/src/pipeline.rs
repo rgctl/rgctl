@@ -243,8 +243,12 @@ impl ProcessingPipeline {
             extractor.populate_pass2(&tails, &mut builder)
         })?;
         let pass2_elapsed = pass2_start.elapsed();
-        // Free multi-million-relation ExtractionTail vectors off the critical path.
-        std::thread::spawn(move || drop(tails));
+        // Free multi-million-relation ExtractionTail vectors off the critical path on large repos.
+        if tails.len() >= 10_000 {
+            std::thread::spawn(move || drop(tails));
+        } else {
+            drop(tails);
+        }
         let parked_start = Instant::now();
         rgctl_extraction::callable_resolution::save(store, &mut builder)?;
         let mut parked_elapsed = parked_start.elapsed();
@@ -292,7 +296,11 @@ impl ProcessingPipeline {
             }
         }
         parked_elapsed += sidecar_start.elapsed();
-        std::thread::spawn(move || drop(parked_relations));
+        if parked_relations.len() >= 10_000 {
+            std::thread::spawn(move || drop(parked_relations));
+        } else {
+            drop(parked_relations);
+        }
         tracing::info!(
             resolution_index_secs = index_elapsed.as_secs_f64(),
             pass2_relation_resolution_secs = pass2_elapsed.as_secs_f64(),
