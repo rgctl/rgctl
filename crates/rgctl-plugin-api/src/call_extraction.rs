@@ -1,8 +1,52 @@
 //! Shared helpers for extracting `Calls` relations from tree-sitter ASTs.
 
-use crate::{Relation, RelationType, ScopeStack, SourceLocation, Symbol, SymbolType};
+use crate::{
+    Relation, RelationType, ScopeStack, SourceLocation, Symbol, SymbolType, intern_language_cow,
+};
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::Path;
 use tree_sitter::Node;
+
+/// Precomputed per-file callable index avoiding `O(S)` symbol scans and repeated path allocations per call site.
+pub struct CallFileIndex<'a> {
+    file_str: Cow<'a, str>,
+    /// Maps bare function name → `Some(&Symbol)` when unique in `file_path`, or `None` when ambiguous.
+    unique_fn_by_name: HashMap<&'a str, Option<&'a Symbol>>,
+}
+
+impl<'a> CallFileIndex<'a> {
+    /// Build once per file before flushing call relations.
+    pub fn new(file_path: &'a Path, symbols: &'a [Symbol]) -> Self {
+        let file_str = file_path.to_string_lossy();
+        let mut unique_fn_by_name: HashMap<&'a str, Option<&'a Symbol>> =
+            HashMap::with_capacity(symbols.len());
+        for sym in symbols {
+            if sym.symbol_type == SymbolType::Function && sym.location.file == file_str {
+                unique_fn_by_name
+                    .entry(sym.name.as_str())
+                    .and_modify(|slot| *slot = None)
+                    .or_insert(Some(sym));
+            }
+        }
+        Self {
+            file_str,
+            unique_fn_by_name,
+        }
+    }
+
+    /// Borrow the cached file path string.
+    #[inline]
+    pub fn file_str(&self) -> &str {
+        self.file_str.as_ref()
+    }
+
+    /// Return the unique same-file `SymbolType::Function` matching `callee`, if unambiguous.
+    #[inline]
+    pub fn unique_same_file_fn(&self, callee: &str) -> Option<&'a Symbol> {
+        self.unique_fn_by_name.get(callee).copied().flatten()
+    }
+}
 
 /// Call node kinds per language grammar.
 pub const RUST_CALL_KINDS: &[&str] = &["call_expression", "macro_invocation"];
@@ -320,6 +364,46 @@ pub fn push_call_relation_from(
     language: &str,
     relations: &mut Vec<Relation>,
 ) {
+    push_call_relation_from_opt_index(
+        node, source, file_path, symbols, None, from_fn, language, relations,
+    );
+}
+
+/// Emit a `Calls` relation using a prebuilt [`CallFileIndex`] (`O(1)` same-file lookup, zero per-call path alloc).
+#[allow(clippy::too_many_arguments)]
+pub fn push_call_relation_from_indexed(
+    node: Node,
+    source: &[u8],
+    file_path: &Path,
+    symbols: &[Symbol],
+    file_index: &CallFileIndex<'_>,
+    from_fn: &Symbol,
+    language: &str,
+    relations: &mut Vec<Relation>,
+) {
+    push_call_relation_from_opt_index(
+        node,
+        source,
+        file_path,
+        symbols,
+        Some(file_index),
+        from_fn,
+        language,
+        relations,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_call_relation_from_opt_index(
+    node: Node,
+    source: &[u8],
+    file_path: &Path,
+    symbols: &[Symbol],
+    file_index: Option<&CallFileIndex<'_>>,
+    from_fn: &Symbol,
+    language: &str,
+    relations: &mut Vec<Relation>,
+) {
     let callee = if language == "ruby" && node.kind() == "call" {
         ruby_call_callee(node, source)
     } else if language == "kotlin" && node.kind() == "call_expression" {
@@ -393,52 +477,76 @@ pub fn push_call_relation_from(
         _ => (None, None),
     };
 
-    let mut meta = serde_json::json!({ "language": language });
-    if inferred_owner {
-        meta["inferred_callable_owner"] = serde_json::Value::Bool(true);
+    let mut meta = serde_json::Value::Null;
+    #[inline]
+    fn ensure_meta_obj(
+        meta: &mut serde_json::Value,
+    ) -> &mut serde_json::Map<String, serde_json::Value> {
+        if !meta.is_object() {
+            *meta = serde_json::Value::Object(serde_json::Map::new());
+        }
+        match meta {
+            serde_json::Value::Object(map) => map,
+            _ => unreachable!(),
+        }
     }
+
     if language == "cpp" && cpp_call_is_operator(node, source) {
-        meta["is_operator"] = serde_json::Value::Bool(true);
+        ensure_meta_obj(&mut meta).insert("is_operator".to_string(), serde_json::Value::Bool(true));
     }
     if language == "go"
         && let Some((recv_ty, field)) = go_field_selector_meta(node, source, from_fn)
     {
-        meta["go_recv_type"] = serde_json::Value::String(recv_ty);
-        meta["go_field"] = serde_json::Value::String(field);
-        meta["go_callee"] = serde_json::Value::String(callee.clone());
+        let map = ensure_meta_obj(&mut meta);
+        map.insert(
+            "go_recv_type".to_string(),
+            serde_json::Value::String(recv_ty),
+        );
+        map.insert("go_field".to_string(), serde_json::Value::String(field));
+        map.insert(
+            "go_callee".to_string(),
+            serde_json::Value::String(callee.clone()),
+        );
     }
-    if language == "rust"
-        && let Some(unresolved) = rust_call_unresolved(node, source)
-    {
-        meta["unresolved"] = serde_json::Value::Bool(unresolved);
+    let unresolved = match language {
+        "rust" => rust_call_unresolved(node, source) == Some(true),
+        "c" => c_call_unresolved(node, source, from_fn) == Some(true),
+        "python" => python_call_unresolved(node, source) == Some(true),
+        "ruby" => ruby_call_unresolved(node, source),
+        _ => false,
+    };
+    if unresolved {
+        ensure_meta_obj(&mut meta).insert("unresolved".to_string(), serde_json::Value::Bool(true));
     }
-    if language == "c"
-        && let Some(unresolved) = c_call_unresolved(node, source, from_fn)
-    {
-        meta["unresolved"] = serde_json::Value::Bool(unresolved);
-    }
-    if language == "python"
-        && let Some(unresolved) = python_call_unresolved(node, source)
-    {
-        meta["unresolved"] = serde_json::Value::Bool(unresolved);
-    }
-    if language == "ruby" && ruby_call_unresolved(node, source) {
-        meta["unresolved"] = serde_json::Value::Bool(true);
-    }
+
+    let file_cow = match file_index {
+        Some(idx) => Cow::Borrowed(idx.file_str()),
+        None => file_path.to_string_lossy(),
+    };
 
     // Prefer a unique same-file match unless an MRO type hint points to a different owner
     // (otherwise an unrelated `Other.save` in the same file would hijack `this.save()`
     // on `Impl extends Base` when `Base` lives in another file).
-    let same_file_matches: Vec<_> = symbols
-        .iter()
-        .filter(|s| {
-            s.name == callee
+    let unique_only: Option<&Symbol> = if let Some(idx) = file_index {
+        idx.unique_same_file_fn(&callee)
+    } else {
+        let mut found: Option<&Symbol> = None;
+        for s in symbols {
+            if s.name == callee
                 && s.symbol_type == SymbolType::Function
-                && s.location.file == file_path.to_string_lossy()
-        })
-        .collect();
-    let local_target = match same_file_matches.as_slice() {
-        [only]
+                && s.location.file == file_cow
+            {
+                if found.is_some() {
+                    found = None;
+                    break;
+                }
+                found = Some(s);
+            }
+        }
+        found
+    };
+    let local_target = match unique_only {
+        Some(only)
             if to_type_hint.as_deref().is_none_or(|hint_ty| {
                 same_file_match_compatible_with_hint(only, symbols, hint_ty)
             }) =>
@@ -447,7 +555,7 @@ pub fn push_call_relation_from(
                 .clone()
                 .unwrap_or_else(|| callee.clone())
         }
-        _ => callee.clone(),
+        _ => callee,
     };
 
     let (call_site_start_byte, call_site_byte_len) = call_site_span(node);
@@ -456,7 +564,7 @@ pub fn push_call_relation_from(
         to: local_target,
         relation_type: RelationType::Calls,
         location: SourceLocation {
-            file: file_path.to_string_lossy().to_string(),
+            file: file_cow.into_owned(),
             start_line: node.start_position().row + 1,
             end_line: node.end_position().row + 1,
             start_column: node.start_position().column,
@@ -467,6 +575,9 @@ pub fn push_call_relation_from(
         to_type_hint,
         call_site_start_byte,
         call_site_byte_len,
+        language: Some(intern_language_cow(language)),
+        inferred_callable_owner: inferred_owner,
+        ..Default::default()
     });
 }
 
@@ -1433,6 +1544,7 @@ pub fn walk_calls(
         .iter()
         .filter(|s| s.symbol_type == SymbolType::Function)
         .collect();
+    let file_index = CallFileIndex::new(file_path, symbols);
     let mut stack = vec![(root, 0usize)];
 
     while let Some((node, depth)) = stack.pop() {
@@ -1445,16 +1557,20 @@ pub fn walk_calls(
             continue;
         }
 
-        push_call_relation(
-            node,
-            source,
-            file_path,
-            symbols,
-            &function_symbols,
-            call_kinds,
-            language,
-            relations,
-        );
+        if call_kinds.contains(&node.kind())
+            && let Some(from_fn) = containing_function(node, &function_symbols)
+        {
+            push_call_relation_from_indexed(
+                node,
+                source,
+                file_path,
+                symbols,
+                &file_index,
+                from_fn,
+                language,
+                relations,
+            );
+        }
 
         let child_count = node.child_count();
         for i in (0..child_count).rev() {

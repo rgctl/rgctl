@@ -151,6 +151,8 @@ pub struct MetricsArgs {
     pub communities: bool,
     /// Include test / intrinsic nodes in PageRank hotspots.
     pub include_tests: bool,
+    /// Optional PageRank iteration cap (defaults to 20).
+    pub iterations: Option<usize>,
 }
 
 /// Hybrid CPG / inspect / slice.

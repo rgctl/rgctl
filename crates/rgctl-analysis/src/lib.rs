@@ -112,9 +112,10 @@ pub use centrality::{
 };
 pub use centrality_approx::{
     BetweennessMode, CentralityApproxStats, DEFAULT_EXACT_CENTRALITY_LIMIT,
-    DEFAULT_HYPERBALL_ROUNDS, DEFAULT_SAMPLE_PIVOTS, HYPERBALL_EXACT_THRESHOLD,
-    HYPERLOGLOG_PRECISION, HarmonicMode, HyperBallHarmonic, LARGE_GRAPH_HYPERBALL_NODE_LIMIT,
-    LARGE_GRAPH_HYPERBALL_ROUNDS, SampledBetweenness,
+    DEFAULT_HYPERBALL_ROUNDS, DEFAULT_SAMPLE_PIVOTS, DEFAULT_SAMPLE_SEED,
+    HYPERBALL_EXACT_THRESHOLD, HYPERLOGLOG_PRECISION, HarmonicMode, HyperBallHarmonic,
+    LARGE_GRAPH_HYPERBALL_NODE_LIMIT, LARGE_GRAPH_HYPERBALL_ROUNDS, SampledBetweenness,
+    adaptive_betweenness_pivots,
 };
 pub use cfg::{
     BasicBlock, BlockId, CfgEdge, CfgEdgeType, ControlFlowGraph, DefVar, Statement, StatementKind,
@@ -126,7 +127,8 @@ pub use cfg_builder::{
 };
 pub use cfg_pdg_archive::{
     ARCHIVE_VERSION, CFG_PDG_ARCHIVE_FILE, CfgPdgArchive, CfgPdgArchiveMmap, CfgPdgRecord,
-    EnsureCfgPdgOpts, TocEntry, ensure_cfg_pdg_for_source, stable_record_uuid,
+    EnsureCfgPdgOpts, StreamingCfgPdgArchiveWriter, TocEntry, ensure_cfg_pdg_for_source,
+    stable_record_uuid,
 };
 pub use clones::{
     BloomCloneOptions, CLONE_REPORT_SCHEMA_VERSION, CLONE_REPORT_SCHEMA_VERSION_V2,

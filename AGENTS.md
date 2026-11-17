@@ -16,7 +16,8 @@
 - **Parallel ingest:** Per-file plugin extraction runs on the discover worker pool. Do not replace with a serial whole-repo walk when parallel ingest exists.
 - **Streaming commits:** Emit symbols/relations file-by-file; avoid unbounded `Vec<Relation>` / whole-repo ASTs before commit (`rgctl-extraction` spill patterns).
 - **Clone hygiene:** Prefer `&[u8]` / `Cow` / borrows in tree-sitter walkers; `Vec::with_capacity` when sizes are known; no `unwrap()` in library paths.
-- **Ingest hot path:** Follow **Ingest hot-path practices** below (no per-symbol heap strings, hash/prep once on workers, spill scratch reuse, tracker mapping without re-scan).
+- **Ingest, CFG & query hot paths:** Follow **Ingest, CFG & query hot-path practices** below and the full **[PR Review & Coding Practices Checklist](docs/internal/pr-review-checklist.md)** — both when writing code and whenever asked to review a PR or branch.
+- **PR review protocol (mandatory when reviewing PRs):** Every PR review on `rgctl` must audit the diff against [docs/internal/pr-review-checklist.md](docs/internal/pr-review-checklist.md) (no `serde_json::Map` on hot `Symbol`/`Relation` fields, no `O(calls × symbols)` scans, no cold `NodeExtension` scans or whole-repo source preloads, bounded iterative AST/CFG recursion, zero silent `limit: Some(N)` correctness caps, and `< 0.5 s` `[profile]` stage accounting).
 - **Typed graph:** Respect `EdgeType` / node kinds; do not invent ad-hoc string edges for hot paths.
 - **No `rgctl gql` in tests (`gql` is deprecated):** `rgctl gql` is deprecated. Never write new tests or migrate existing correctness/QE/integration tests to execute `rgctl gql`. Always test canonical structured JSON verbs (`rgctl -f json find`, `callers`, `callees`, `relations`, `inventory`, `blast-radius`, `inspect`, `slice`, `cpg`, `security`, `clones`, `semantic`, `review`) or typed Rust snapshot APIs (`ColumnarGraphSnapshot`, `GraphView`, `structured_query`).
 - **Artifacts:** Session data lives in `{repo}/.rgctl/`. Warm caches invalidate wall-time claims.
@@ -50,24 +51,30 @@ Applies to all extraction / language / discover hot-path work (and OpenSpec `*-e
 3. **Streaming** — incremental graph commit; match extraction spill/channel patterns.
 4. **Idiomatic Rust** — `Result` + `thiserror`; follow `rgctl-lang-java` / `rgctl-extraction` conventions.
 
-### Ingest hot-path practices
+### Ingest, CFG & query hot-path practices
 
-Rules distilled from linux cold-discover work (`index_extract` / pass-1 / spill / `save_tracker`). Breaking these usually shows up as Gate A wall or RSS regressions — treat O(files)×O(symbols) heap work as a bug.
+Rules distilled from cold-discover & runtime reviews (`index_extract` / pass-1 / pass-2 / spill / `--with-cfg` / CLI queries). Breaking these shows up as Gate A wall/RSS regressions, worker stack overflows, or silent query truncation — treat `O(files)×O(symbols)` or `O(calls)×O(symbols)` heap/scan work as a bug. Full review guide: [docs/internal/pr-review-checklist.md](docs/internal/pr-review-checklist.md).
 
 | Practice | Do | Don't |
 |----------|----|-------|
-| **No heap strings per symbol** | Pass `&str` / slices into pass-1 (`add_symbol_with_prep`); borrow file bytes | `String::from` / `to_string()` for every symbol body or path key on the merge thread |
-| **Prep on workers** | Compute line offsets, BLAKE3 `code_hash`, token bloom in `SymbolPass1Prep` on extract workers | Re-walk source / re-hash on the sequential pass-1 thread |
-| **Hash once** | Set `FileExtraction.file_hash` from bytes already in memory; thread through `StreamStats` / `PipelineStats` into `FileTracker::index_files_with_mapping` | Re-`fs::read` + BLAKE3 all files in `save_tracker` after extract already hashed them |
-| **Empty-tracker short-circuit** | When `file_hashes.json` is empty, `detect_changes` marks all paths **added** without hashing (keeps ChangeSet non-empty so a stale snapshot is not reused) | Hash the whole tree twice on cold discover (detect + index) |
-| **Normalize / map once per file** | `begin_file_batch` → push into `active_tracker_ids`; flush once in `end_file_batch`; accumulate mapping at commit | Per-symbol `HashMap::get_mut` / `normalize_path_str(...).into_owned()`; full mmap node scan/sort just to rebuild file→node ids |
-| **Reuse tree-sitter parsers** | Call `rgctl_plugin_helpers::parse_source` (thread-local `Parser` per Rayon worker); never `Parser::new()` per file on the extract hot path | Fresh `Parser::new` + `set_language` inside `extract_*` / `parse` for every file (linux: ~71k×) |
-| **Spill alloc reuse** | `SegmentedSpill` scratch `Vec` + `bincode::serialize_into`; keep sort runs at `DEFAULT_SORT_RUN_BYTES` (256 MiB) unless profiling says otherwise | Fresh `bincode::serialize` → new `Vec<u8>` per node/edge; shrinking sort runs without a cold gate |
-| **CodeIndex bodies off by default** | Default discover: no body-storing `CodeIndex` (no multi-GB `code_index.json`); nodes still get `code_hash` from prep | Attach a full CodeIndex on the cold path “for convenience” |
+| **Typed hot structs (no JSON maps)** | Put callable discriminators, roles, parameter identities, language, and complexity in typed `Symbol` / `Relation` fields (`Option<Box<str>>`, `Cow<'static, str>`, `u8`, `bool`); bump `facts_cache::FORMAT_VERSION` on layout changes | Populate `symbol.metadata[...]` / `relation.metadata[...]` (`serde_json::Map` / `BTreeMap`) on every symbol or `Calls` relation |
+| **No heap strings per symbol** | Pass `&str` / slices into pass-1 (`add_symbol_with_prep`); intern `file_id: u32` in `symbol_files`; key secondary maps by `Uuid` (`FxHashMap`) | `String::from` / `to_string()` per symbol path or duplicate `(String, NodeType)` map keys; unguarded `edge.properties` allocs when `spill.is_some()` |
+| **`O(1)` per-file call & scope lookup** | Build `CallFileIndex` once per file (`push_call_relation_from_indexed`) and track enclosing owners with `ScopeStack`; walk CST children via `node.children(&mut cursor)` | Scan `symbols.iter().filter(...)` per call site; walk parent chains per call; `.collect::<Vec<_>>()` on CST children (`kids()`) |
+| **Prep & hot summaries on workers** | Compute line offsets, BLAKE3 `code_hash`, token bloom in `SymbolPass1Prep` and emit `HotFunctionSummary` from Pass 1 so complexity + structural sketches touch zero cold extensions | Re-walk source on pass-1 or deserialize `950k+` cold `NodeExtension` blobs during default `discover` |
+| **Parallel Pass 2 + deterministic commit** | Resolve non-inheritance endpoints in parallel across path-sorted `ExtractionTail` chunks (`Pass2WorkerScratch` caches), prefer implementations over `declaration_ids`, then materialize stubs & commit edges sequentially (`#125`) | Mutate stub/edge order across threads or let `.h` prototypes shadow `.c` implementations |
+| **Background table teardown** | Drop multi-million-entry `GraphBuilder` / tail maps on a background thread after snapshot compile | Block post-index analytics for `1.5–2 s` freeing hash buckets synchronously |
+| **Hash & walk once** | Set `FileExtraction.file_hash` from bytes already in memory; reuse Stage-1 `discovered_files` across `--full` Stage 2/3; short-circuit empty `file_hashes.json` | Re-`fs::read` + BLAKE3 all files in `save_tracker` or walk the directory tree three times in `discover --full` |
+| **Normalize / map once per file** | `begin_file_batch` → push into `active_tracker_ids` & `active_line_spans`; flush once in `end_file_batch` | Per-symbol `HashMap::get_mut` / `normalize_path_str(...).into_owned()` |
+| **Reuse tree-sitter parsers** | Call `rgctl_plugin_helpers::parse_source` (thread-local `Parser` per Rayon worker) | Fresh `Parser::new` + `set_language` per file |
+| **Spill alloc reuse & CodeIndex off** | `SegmentedSpill` scratch `Vec` + `bincode::serialize_into` (`DEFAULT_SORT_RUN_BYTES` = 256 MiB); keep body-storing `CodeIndex` off by default | Fresh `bincode::serialize` per node/edge or multi-GB `code_index.json` on default discover |
+| **Streaming `--with-cfg`** | Group by file from hot `ColumnarGraphMmap` columns, read source & materialize `Node`s per `FileWorkGroup` on workers, skip bodiless declarations (`callable_role == "declaration"`) without recording `analysis_error`, encode `(CFG, PDG)` once, and stream over bounded `sync_channel` to `AnalysisStorage` + `StreamingCfgPdgArchiveWriter` | Whole-repo `preload_file_sources`, eager `collect_nodes_by_type(Function)`, `.collect::<Vec<_>>()` of encoded records, double `bincode::serialize` of `(CFG, PDG)`, or `bincode::deserialize` on archive writers |
+| **Bounded AST & CFG recursion** | Explicit iterative `Vec<(Node, ...)>` stacks capped at `MAX_AST_WALK_DEPTH = 2048` (skipping nested `reset_kinds` functions) + iterative `if/elsif` lowering and `MAX_CFG_STATEMENT_DEPTH = 1024` in `CfgBuilder` | Unbounded recursive `visit_*` / `walk_*` functions that overflow worker stacks on deep method chains or `2,500`-arm `elsif` ladders |
+| **Query scale & zero silent caps** | Stream hot snapshot columns without `limit` on internal correctness scans (`vuln`, `dead-code`, `review`); use `FlatGraphIndex::from_snapshot_store` + `SampledBetweenness`; match repo-relative `--file` on `/` segment boundaries | `limit: Some(5_000)` on `Import`/caller scans, single-threaded `BetweennessCentrality::compute_unbounded`, or flags ignored in `-f json` |
+| **100% `[profile]` stage accounting** | Wrap every top-level `discover` / `--full` phase in `DiscoverStageReport` so `\|wall_secs - accounted_secs\| < 0.5 s` (`tests/profile_stage_accounting.rs`) | Unprofiled "dark-matter" phases between `run_start`, `index_secs`, and `post_index_secs` |
 
-When adding extract or graph-commit code, ask: *does this allocate or re-read once per symbol/file on the sequential merge thread?* If yes, move it to workers or reuse an existing buffer/key.
+When adding extract, graph-commit, CFG, or query code, ask: *does this allocate, scan, or buffer `O(repo)` state where per-file streaming or hot-column indexing suffices?* If yes, stream or pre-index it.
 
-Stage meanings and current linux notes: [docs/internal/profile.md](docs/internal/profile.md).
+Stage meanings and current linux notes: [docs/internal/profile.md](docs/internal/profile.md) · PR review checklist: [docs/internal/pr-review-checklist.md](docs/internal/pr-review-checklist.md).
 
 ### Cold profile (mandatory for scale / perf claims)
 
@@ -82,7 +89,10 @@ Deep stage timings and reference machine notes: [docs/internal/profile.md](docs/
 
 | Corpus | Test gate | Discover | Baseline (ref M3 Pro, +10%) |
 |--------|-----------|----------|------------------------------|
-| Linux kernel | `linux_cold_discover_within_baseline` | default | **75 s** wall (2026-10-21; post single-pass AST) |
+| Linux kernel | `linux_cold_discover_within_baseline` | default | **48 s** wall (2026-11-17; ~40.9 s measured, ~7.4 GB peak footprint) |
+| Apache Kafka | `kafka_cold_discover_within_baseline` | default | **9.5 s** wall (2026-11-17; ~8.7 s measured) |
+| metasfresh | `metasfresh_cold_discover_within_baseline` | `--full` | **38 s** process elapsed (2026-11-17; ~32.3–35.7 s across all 3 passes) |
+| Discourse | `discourse_cold_discover_with_cfg_within_baseline` | `-l ruby --with-cfg` | **7 s** wall (2026-11-17; ~4.6 s measured, bounded AST/CFG recursion) |
 
 ```bash
 cargo build --release --bin rgctl
@@ -161,6 +171,7 @@ Baselines and notes: [docs/internal/profile.md](docs/internal/profile.md#snapsho
 | [docs/analysis-architecture.md](docs/analysis-architecture.md) | Graph tiers, spill, CSR |
 | [docs/design/lossless-writeback-architecture.md](docs/design/lossless-writeback-architecture.md) | Red-Green `NodeRow` spans, RGCS/RGCT, `rgctl writeback` |
 | [docs/design/blast-radius-design.md](docs/design/blast-radius-design.md) | Reachability / SCC |
+| [docs/internal/pr-review-checklist.md](docs/internal/pr-review-checklist.md) | **Mandatory** PR review red-flag table & coding practices (ingest, streaming CFG, AST bounds, query correctness) |
 | [docs/internal/profile.md](docs/internal/profile.md) | Cold profile deep dive |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, tests, PR norms |
 | [docs/contributor-checklist.md](docs/contributor-checklist.md) | Language / feature checklist |

@@ -18,12 +18,16 @@ use memmap2::Mmap;
 use rgctl_error::{Error, Result};
 use rgctl_graph::backend::MemoryBackend;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
+
+static NEXT_ARCHIVE_TMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Magic bytes for CFG/PDG archive files (`RBCP`).
 pub const ARCHIVE_MAGIC: [u8; 4] = *b"RBCP";
@@ -144,11 +148,13 @@ impl TocEntry {
         Uuid::from_bytes(self.uuid)
     }
 
-    fn write_to(self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.uuid);
-        out.extend_from_slice(&self.offset.to_le_bytes());
-        out.extend_from_slice(&self.len.to_le_bytes());
-        out.extend_from_slice(&self.flags.to_le_bytes());
+    fn to_bytes(self) -> [u8; TOC_ENTRY_SIZE] {
+        let mut out = [0u8; TOC_ENTRY_SIZE];
+        out[0..16].copy_from_slice(&self.uuid);
+        out[16..24].copy_from_slice(&self.offset.to_le_bytes());
+        out[24..28].copy_from_slice(&self.len.to_le_bytes());
+        out[28..32].copy_from_slice(&self.flags.to_le_bytes());
+        out
     }
 
     fn read_from(bytes: &[u8]) -> Result<Self> {
@@ -416,6 +422,30 @@ impl CfgPdgArchiveMmap {
         deserialize_record_slice(&self.mmap, entry)
     }
 
+    /// Borrow raw serialized [`CfgPdgRecord`] bytes without deserializing (v3 zero-copy).
+    pub fn raw_record_bytes(&self, function_id: Uuid) -> Result<Option<Cow<'_, [u8]>>> {
+        if let Some(eager) = &self.eager {
+            let Some(record) = eager.records.get(&function_id) else {
+                return Ok(None);
+            };
+            return bincode::serialize(record)
+                .map(Cow::Owned)
+                .map(Some)
+                .map_err(serde_err);
+        }
+        let Some(entry) = self.toc_lookup(function_id) else {
+            return Ok(None);
+        };
+        let start = entry.offset as usize;
+        let end = start
+            .checked_add(entry.len as usize)
+            .ok_or_else(|| Error::SerdeError("cfg_pdg record length overflow".into()))?;
+        if end > self.mmap.len() {
+            return Err(Error::SerdeError("cfg_pdg record truncated".into()));
+        }
+        Ok(Some(Cow::Borrowed(&self.mmap[start..end])))
+    }
+
     /// Primary function ids in TOC order (stable aliases excluded).
     pub fn function_ids(&self) -> Vec<Uuid> {
         if let Some(eager) = &self.eager {
@@ -664,70 +694,171 @@ fn find_record_by_stable_key(
     None
 }
 
+/// Streaming v3 CFG/PDG archive writer (`O(F)` TOC memory, zero payload buffering).
+pub struct StreamingCfgPdgArchiveWriter {
+    file: BufWriter<File>,
+    tmp_path: PathBuf,
+    final_path: PathBuf,
+    abs_offset: u64,
+    toc_entries: Vec<TocEntry>,
+    records_written: usize,
+}
+
+impl StreamingCfgPdgArchiveWriter {
+    /// Open a streaming v3 archive writer at `path` (atomic temp-file + rename on [`Self::finish`]),
+    /// optionally copying untouched `retained` `(function_id, alias_uuid)` records from an existing
+    /// archive at `path` without deserializing their CFG/PDG payloads.
+    pub fn create_preserving(
+        path: &Path,
+        graph_digest: Option<&str>,
+        retained: &[(Uuid, Option<Uuid>)],
+    ) -> Result<Self> {
+        Self::create_with_buffer_size(path, graph_digest, retained, 4 * 1024 * 1024)
+    }
+
+    fn create_with_buffer_size(
+        path: &Path,
+        graph_digest: Option<&str>,
+        retained: &[(Uuid, Option<Uuid>)],
+        buf_capacity: usize,
+    ) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let existing = if !retained.is_empty() && path.is_file() {
+            CfgPdgArchiveMmap::open(path).ok()
+        } else {
+            None
+        };
+        let preserved_digest = if graph_digest.is_none() {
+            existing
+                .as_ref()
+                .and_then(|v| v.graph_digest().map(str::to_string))
+        } else {
+            None
+        };
+        let digest_bytes = graph_digest
+            .or(preserved_digest.as_deref())
+            .unwrap_or("")
+            .as_bytes();
+        let digest_len = u32::try_from(digest_bytes.len())
+            .map_err(|_| Error::SerdeError("graph digest too long".into()))?;
+
+        let seq = NEXT_ARCHIVE_TMP_ID.fetch_add(1, Ordering::Relaxed);
+        let tmp_name = format!(
+            "{}.{}.{}.tmp",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(CFG_PDG_ARCHIVE_FILE),
+            std::process::id(),
+            seq
+        );
+        let tmp_path = path.with_file_name(tmp_name);
+        let mut file = BufWriter::with_capacity(buf_capacity, File::create(&tmp_path)?);
+        file.write_all(&ARCHIVE_MAGIC)?;
+        file.write_all(&ARCHIVE_VERSION.to_le_bytes())?;
+        file.write_all(&digest_len.to_le_bytes())?;
+        file.write_all(digest_bytes)?;
+
+        let header_len = 4 + 4 + 4 + digest_bytes.len();
+        let mut writer = Self {
+            file,
+            tmp_path,
+            final_path: path.to_path_buf(),
+            abs_offset: header_len as u64,
+            toc_entries: Vec::with_capacity(retained.len().saturating_mul(2)),
+            records_written: 0,
+        };
+
+        if let Some(view) = existing {
+            for &(id, alias_hint) in retained {
+                if let Ok(Some(raw)) = view.raw_record_bytes(id) {
+                    let alias = alias_hint.or_else(|| stable_alias_uuid_from_payload(&raw));
+                    writer.append(id, alias, &raw)?;
+                }
+            }
+        }
+
+        Ok(writer)
+    }
+
+    /// Append one pre-encoded [`CfgPdgRecord`] payload directly to disk.
+    pub fn append(
+        &mut self,
+        function_id: Uuid,
+        alias_uuid: Option<Uuid>,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let length = u32::try_from(bytes.len())
+            .map_err(|_| Error::SerdeError("cfg_pdg record exceeds u32::MAX".into()))?;
+        self.toc_entries.push(TocEntry {
+            uuid: *function_id.as_bytes(),
+            offset: self.abs_offset,
+            len: length,
+            flags: TOC_FLAG_PRIMARY,
+        });
+        if let Some(alias) = alias_uuid
+            && alias != function_id
+        {
+            self.toc_entries.push(TocEntry {
+                uuid: *alias.as_bytes(),
+                offset: self.abs_offset,
+                len: length,
+                flags: TOC_FLAG_STABLE_ALIAS,
+            });
+        }
+        self.file.write_all(bytes)?;
+        self.abs_offset += u64::from(length);
+        self.records_written += 1;
+        Ok(())
+    }
+
+    /// Number of primary records appended so far.
+    pub fn records_written(&self) -> usize {
+        self.records_written
+    }
+
+    /// Pad to 8-byte alignment, write sorted v3 TOC + trailer, flush, and atomically rename.
+    pub fn finish(mut self) -> Result<usize> {
+        let toc_offset = (self.abs_offset + 7) & !7;
+        let pad = (toc_offset - self.abs_offset) as usize;
+        if pad > 0 {
+            const ZEROS: [u8; 8] = [0u8; 8];
+            self.file.write_all(&ZEROS[..pad])?;
+        }
+        self.toc_entries.sort_by_key(|a| a.uuid);
+        let count = u32::try_from(self.toc_entries.len())
+            .map_err(|_| Error::SerdeError("cfg_pdg archive too many records".into()))?;
+        for entry in &self.toc_entries {
+            self.file.write_all(&entry.to_bytes())?;
+        }
+        self.file.write_all(&toc_offset.to_le_bytes())?;
+        self.file.write_all(&count.to_le_bytes())?;
+        self.file.write_all(&TOC_FOOTER_MAGIC.to_le_bytes())?;
+        self.file.flush()?;
+        drop(self.file);
+        std::fs::rename(&self.tmp_path, &self.final_path)?;
+        Ok(self.records_written)
+    }
+}
+
 fn write_v3_archive(
     path: &Path,
     graph_digest: Option<&str>,
     record_bytes: &[(Uuid, Vec<u8>)],
 ) -> Result<()> {
-    let digest_bytes = graph_digest.unwrap_or("").as_bytes();
-    let digest_len = u32::try_from(digest_bytes.len())
-        .map_err(|_| Error::SerdeError("graph digest too long".into()))?;
-
-    // Header: magic + version + digest_len + digest
-    let header_len = 4 + 4 + 4 + digest_bytes.len();
-    let mut payload = Vec::new();
-    // Primary + optional stable-alias TOC rows (alias shares primary payload).
-    let mut toc_entries: Vec<TocEntry> = Vec::with_capacity(record_bytes.len().saturating_mul(2));
-    let mut abs_offset = header_len as u64;
+    let buf_cap = if record_bytes.len() <= 64 {
+        64 * 1024
+    } else {
+        4 * 1024 * 1024
+    };
+    let mut writer =
+        StreamingCfgPdgArchiveWriter::create_with_buffer_size(path, graph_digest, &[], buf_cap)?;
     for (id, bytes) in record_bytes {
-        let length = u32::try_from(bytes.len())
-            .map_err(|_| Error::SerdeError("cfg_pdg record exceeds u32::MAX".into()))?;
-        toc_entries.push(TocEntry {
-            uuid: *id.as_bytes(),
-            offset: abs_offset,
-            len: length,
-            flags: TOC_FLAG_PRIMARY,
-        });
-        if let Some(alias) = stable_alias_uuid_from_payload(bytes)
-            && alias != *id
-        {
-            toc_entries.push(TocEntry {
-                uuid: *alias.as_bytes(),
-                offset: abs_offset,
-                len: length,
-                flags: TOC_FLAG_STABLE_ALIAS,
-            });
-        }
-        payload.extend_from_slice(bytes);
-        abs_offset += u64::from(length);
+        let alias = stable_alias_uuid_from_payload(bytes);
+        writer.append(*id, alias, bytes)?;
     }
-    toc_entries.sort_by_key(|a| a.uuid);
-
-    let payload_end = header_len + payload.len();
-    let toc_offset = (payload_end + 7) & !7; // 8-byte align
-    let pad = toc_offset - payload_end;
-
-    let count = u32::try_from(toc_entries.len())
-        .map_err(|_| Error::SerdeError("cfg_pdg archive too many records".into()))?;
-
-    let mut file = BufWriter::with_capacity(4 * 1024 * 1024, File::create(path)?);
-    file.write_all(&ARCHIVE_MAGIC)?;
-    file.write_all(&ARCHIVE_VERSION.to_le_bytes())?;
-    file.write_all(&digest_len.to_le_bytes())?;
-    file.write_all(digest_bytes)?;
-    file.write_all(&payload)?;
-    if pad > 0 {
-        file.write_all(&vec![0u8; pad])?;
-    }
-    let mut toc_bytes = Vec::with_capacity(toc_entries.len() * TOC_ENTRY_SIZE);
-    for entry in &toc_entries {
-        entry.write_to(&mut toc_bytes);
-    }
-    file.write_all(&toc_bytes)?;
-    file.write_all(&(toc_offset as u64).to_le_bytes())?;
-    file.write_all(&count.to_le_bytes())?;
-    file.write_all(&TOC_FOOTER_MAGIC.to_le_bytes())?;
-    file.flush()?;
+    writer.finish()?;
     Ok(())
 }
 

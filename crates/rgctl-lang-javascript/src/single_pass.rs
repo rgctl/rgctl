@@ -345,6 +345,7 @@ pub fn extract_all_single_pass(
     }
 
     // Flush calls (forward-ref safe). Prefer shared helper; enrich JS unresolved.
+    let call_file_index = CallFileIndex::new(file_path, &ctx.symbols);
     for pending in pending_calls {
         let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
@@ -361,11 +362,12 @@ pub fn extract_all_single_pass(
         );
         // Fallback if custom emitter skipped — shared path for ordinary calls.
         if relations.len() == before {
-            push_call_relation_from(
+            push_call_relation_from_indexed(
                 pending.node,
                 source,
                 file_path,
                 &ctx.symbols,
+                &call_file_index,
                 from_fn,
                 "javascript",
                 &mut relations,

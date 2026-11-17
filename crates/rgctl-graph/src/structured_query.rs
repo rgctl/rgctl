@@ -426,6 +426,20 @@ impl<'a> StructuredQuery<'a> {
         if glob_match(&pat, path) {
             return true;
         }
+        // Repo-relative path fallback (e.g. `crates/foo/src/lib.rs` against `/abs/repo/crates/foo/src/lib.rs`):
+        // match on a `/` path-segment boundary when the user passed a literal relative path with separators.
+        let norm_raw = raw.replace('\\', "/");
+        let norm_raw = norm_raw.trim_start_matches("./");
+        if (norm_raw.contains('/')) && !is_glob_pattern(norm_raw) {
+            let norm_path = path.replace('\\', "/");
+            if norm_path == norm_raw
+                || norm_path
+                    .strip_suffix(norm_raw)
+                    .is_some_and(|prefix| prefix.ends_with('/'))
+            {
+                return true;
+            }
+        }
         // Basename fallback when pattern has no path separator.
         if !raw.contains('/') && !raw.contains('\\') {
             let base = path.rsplit(['/', '\\']).next().unwrap_or(path);

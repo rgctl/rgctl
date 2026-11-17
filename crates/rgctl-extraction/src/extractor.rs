@@ -411,6 +411,8 @@ impl Extractor {
         tails: &[ExtractionTail],
         builder: &mut GraphBuilder,
     ) -> Result<Pass2Profile> {
+        use crate::graph_builder::{NonInheritancePlan, Pass2WorkerScratch};
+        use rayon::prelude::*;
         use std::time::Instant;
 
         let mut ordered: Vec<&ExtractionTail> = tails.iter().collect();
@@ -430,30 +432,126 @@ impl Extractor {
             }
             profile.relation_resolution += relation_start.elapsed();
         }
-        for tail in &ordered {
-            if !tail.relations.is_empty() {
-                let relation_start = Instant::now();
-                for relation in &tail.relations {
-                    if !is_inheritance_relation(relation.relation_type) {
-                        builder.add_relation(relation)?;
-                    }
+        builder.warm_mro_cache();
+
+        let non_inh_total: usize = ordered
+            .iter()
+            .map(|t| {
+                t.relations
+                    .iter()
+                    .filter(|r| !is_inheritance_relation(r.relation_type))
+                    .count()
+            })
+            .sum();
+
+        let mut runtime_stub_qns = rustc_hash::FxHashSet::default();
+        let num_threads = rayon::current_num_threads();
+        if num_threads > 1 && non_inh_total >= 1024 {
+            let relation_start = Instant::now();
+            let target_chunks = (num_threads * 4).max(4);
+            let per_chunk = (non_inh_total / target_chunks).max(256);
+            let mut ranges: Vec<(usize, usize)> = Vec::with_capacity(target_chunks + 1);
+            let mut chunk_start = 0usize;
+            let mut acc = 0usize;
+            for (idx, tail) in ordered.iter().enumerate() {
+                acc += tail.relations.len();
+                if acc >= per_chunk {
+                    ranges.push((chunk_start, idx + 1));
+                    chunk_start = idx + 1;
+                    acc = 0;
                 }
-                profile.relation_resolution += relation_start.elapsed();
+            }
+            if chunk_start < ordered.len() {
+                ranges.push((chunk_start, ordered.len()));
             }
 
-            if !tail.config_usages.is_empty() {
-                let config_usage_start = Instant::now();
-                for usage in &tail.config_usages {
-                    builder.link_config_usage(
-                        &usage.file,
-                        usage.line,
-                        &usage.key,
-                        usage.usage_type,
-                    );
+            let builder_ref: &GraphBuilder = &*builder;
+            let chunk_plans: Vec<Vec<NonInheritancePlan>> = ranges
+                .par_iter()
+                .map(|&(start, end)| {
+                    let mut scratch = Pass2WorkerScratch::default();
+                    let cap: usize = ordered[start..end].iter().map(|t| t.relations.len()).sum();
+                    let mut plans = Vec::with_capacity(cap);
+                    for tail in &ordered[start..end] {
+                        for relation in &tail.relations {
+                            if !is_inheritance_relation(relation.relation_type) {
+                                plans.push(
+                                    builder_ref
+                                        .resolve_non_inheritance_relation(relation, &mut scratch),
+                                );
+                            }
+                        }
+                    }
+                    plans
+                })
+                .collect();
+
+            for ((start, end), plans) in ranges.into_iter().zip(chunk_plans) {
+                let mut plan_iter = plans.into_iter();
+                for tail in &ordered[start..end] {
+                    for relation in &tail.relations {
+                        if !is_inheritance_relation(relation.relation_type)
+                            && let Some(plan) = plan_iter.next()
+                        {
+                            builder.apply_non_inheritance_plan(
+                                relation,
+                                plan,
+                                &mut runtime_stub_qns,
+                            )?;
+                        }
+                    }
                 }
-                profile.config_usage_resolution += config_usage_start.elapsed();
+            }
+            profile.relation_resolution += relation_start.elapsed();
+
+            for tail in &ordered {
+                if !tail.config_usages.is_empty() {
+                    let config_usage_start = Instant::now();
+                    for usage in &tail.config_usages {
+                        builder.link_config_usage(
+                            &usage.file,
+                            usage.line,
+                            &usage.key,
+                            usage.usage_type,
+                        );
+                    }
+                    profile.config_usage_resolution += config_usage_start.elapsed();
+                }
+            }
+        } else {
+            let mut scratch = Pass2WorkerScratch::default();
+            for tail in &ordered {
+                if !tail.relations.is_empty() {
+                    let relation_start = Instant::now();
+                    for relation in &tail.relations {
+                        if !is_inheritance_relation(relation.relation_type) {
+                            let plan =
+                                builder.resolve_non_inheritance_relation(relation, &mut scratch);
+                            builder.apply_non_inheritance_plan(
+                                relation,
+                                plan,
+                                &mut runtime_stub_qns,
+                            )?;
+                        }
+                    }
+                    profile.relation_resolution += relation_start.elapsed();
+                }
+
+                if !tail.config_usages.is_empty() {
+                    let config_usage_start = Instant::now();
+                    for usage in &tail.config_usages {
+                        builder.link_config_usage(
+                            &usage.file,
+                            usage.line,
+                            &usage.key,
+                            usage.usage_type,
+                        );
+                    }
+                    profile.config_usage_resolution += config_usage_start.elapsed();
+                }
             }
         }
+
         builder.emit_mro_overrides();
         Ok(profile)
     }
@@ -539,8 +637,8 @@ fn symbol_body_from_source<'a>(
 ) -> Option<&'a str> {
     // Shared callable extraction opts into exact-byte hashing. Other plugins'
     // scalar writeback ranges must not change their existing line-based hashes.
-    let exact_callable = symbol.metadata.get("callable_role").is_some()
-        || symbol.metadata.get("identity_discriminator").is_some();
+    let exact_callable =
+        symbol.callable_role_str().is_some() || symbol.identity_discriminator_str().is_some();
     if exact_callable && let (Some(start), Some(end)) = (symbol.start_byte, symbol.end_byte) {
         return std::str::from_utf8(source.get(start as usize..end as usize)?)
             .ok()

@@ -2,7 +2,7 @@
 
 use crate::plugin::{
     PHP_COMPLEXITY_BRANCH_KINDS, PHP_FUNCTION_KINDS, PhpPlugin, import_map_from_symbols,
-    normalize_namespace, php_grammar, push_php_call_relation,
+    normalize_namespace, php_grammar, push_php_call_relation_from,
 };
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
@@ -122,7 +122,6 @@ fn php_dispatch() -> &'static KindDispatchTable {
 struct PendingCall<'a> {
     node: Node<'a>,
     /// Enclosing function at call site (forward-ref flush uses full symbol list).
-    #[allow(dead_code)]
     from_symbol_idx: usize,
 }
 
@@ -514,19 +513,17 @@ pub fn extract_all_single_pass(
     }
 
     let import_map = import_map_from_symbols(&ctx.symbols);
-    let function_symbols: Vec<&Symbol> = ctx
-        .symbols
-        .iter()
-        .filter(|s| s.symbol_type == SymbolType::Function)
-        .collect();
+    let file_index = CallFileIndex::new(file_path, &ctx.symbols);
     for pending in pending_calls {
+        let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
+            continue;
+        };
         let identity_relation_start = relations.len();
-        push_php_call_relation(
+        push_php_call_relation_from(
             pending.node,
             source,
-            file_path,
-            &ctx.symbols,
-            &function_symbols,
+            &file_index,
+            from_fn,
             &import_map,
             &mut relations,
         );

@@ -1,9 +1,9 @@
 //! Language-selected callable identity contracts, independent of display
 //! signatures, parameter spelling, body text and source coordinates.
-use rgctl_plugin_api::{Relation, RelationType, Result, Symbol, SymbolType};
+use rgctl_plugin_api::{CallableRole, Relation, RelationType, Result, Symbol, SymbolType};
 
 pub mod java;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use tree_sitter::Node;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Policy {
@@ -254,20 +254,24 @@ fn parameter_type(parameter: Node<'_>, source: &[u8], policy: Policy) -> String 
     result
 }
 fn has_body(node: Node<'_>) -> bool {
-    node.child_by_field_name("body").is_some()
-        || kids(node).iter().any(|n| {
-            n.kind().ends_with("_body")
-                || n.kind().ends_with("_block")
-                || matches!(
-                    n.kind(),
-                    "block"
-                        | "compound_statement"
-                        | "statement_block"
-                        | "function_body"
-                        | "do_block"
-                        | "keywords"
-                )
-        })
+    if node.child_by_field_name("body").is_some() {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).any(|n| {
+        let kind = n.kind();
+        kind.ends_with("_body")
+            || kind.ends_with("_block")
+            || matches!(
+                kind,
+                "block"
+                    | "compound_statement"
+                    | "statement_block"
+                    | "function_body"
+                    | "do_block"
+                    | "keywords"
+            )
+    })
 }
 fn generic_context(node: Node<'_>, source: &[u8]) -> (Vec<String>, Vec<(String, String)>, String) {
     let mut containers = header_nodes(node, |n| {
@@ -390,11 +394,12 @@ pub fn try_symbol(
     source_span(&mut symbol, node);
     match node.kind() {
         "method_declaration" | "constructor_declaration" | "compact_constructor_declaration" => {
-            symbol.metadata["identity_discriminator"] = java::discriminator(node, source)?.into();
+            symbol.identity_discriminator =
+                Some(java::discriminator(node, source)?.into_boxed_str());
         }
         "lambda_expression" => {
-            symbol.metadata["identity_discriminator"] =
-                java::enclosing_discriminator(node, source)?.into();
+            symbol.identity_discriminator =
+                java::enclosing_discriminator(node, source)?.map(String::into_boxed_str);
         }
         _ => {}
     }
@@ -415,6 +420,99 @@ pub fn symbol(mut symbol: Symbol, node: Node<'_>, source: &[u8], policy: Policy)
         return symbol;
     }
     source_span(&mut symbol, node);
+    let declaration = !has_body(node);
+    symbol.callable_role = Some(if declaration {
+        CallableRole::Declaration
+    } else {
+        CallableRole::Implementation
+    });
+
+    if policy == Policy::Elixir {
+        let arguments = node.child_by_field_name("arguments").or_else(|| {
+            let mut c = node.walk();
+            node.named_children(&mut c)
+                .find(|n| n.kind() == "arguments")
+        });
+        let mut head = arguments.and_then(|n| {
+            let mut c = n.walk();
+            n.named_children(&mut c).next()
+        });
+        while let Some(n) = head {
+            if n.kind() == "binary_operator" {
+                head = n.child_by_field_name("left");
+            } else {
+                break;
+            }
+        }
+        if let Some(head) = head {
+            let args = head.child_by_field_name("arguments").or_else(|| {
+                let mut c = head.walk();
+                head.named_children(&mut c)
+                    .find(|n| n.kind() == "arguments")
+            });
+            let args = args.map(kids).unwrap_or_default();
+            let mut patterns = Vec::with_capacity(args.len());
+            for arg in &args {
+                patterns.push(if arg.kind() == "identifier" {
+                    "_".into()
+                } else {
+                    normalized(*arg, source, None)
+                });
+            }
+            let variables: std::collections::HashSet<_> = args
+                .iter()
+                .filter(|n| n.kind() == "identifier")
+                .map(|n| text(*n, source))
+                .collect();
+            let guard_node = arguments
+                .and_then(|n| {
+                    let mut c = n.walk();
+                    n.named_children(&mut c).next()
+                })
+                .filter(|n| n.kind() == "binary_operator")
+                .and_then(|n| n.child_by_field_name("right"));
+            let mut guard = String::new();
+            if let Some(guard_node) = guard_node {
+                let mut stack = vec![guard_node];
+                while let Some(n) = stack.pop() {
+                    if n.child_count() == 0 {
+                        guard.push_str(
+                            if n.kind() == "identifier" && variables.contains(text(n, source)) {
+                                "_"
+                            } else {
+                                text(n, source)
+                            },
+                        );
+                    } else {
+                        for i in (0..n.child_count()).rev() {
+                            if let Some(child) = n.child(i) {
+                                stack.push(child);
+                            }
+                        }
+                    }
+                }
+            }
+            symbol.identity_discriminator = Some(
+                format!(
+                    "arity:{}:clause:({}):{guard}",
+                    args.len(),
+                    patterns.join(",")
+                )
+                .into_boxed_str(),
+            );
+            symbol.override_identity = Some(format!("arity:{}", args.len()).into_boxed_str());
+            symbol.metadata["arity"] = args.len().into();
+        }
+        return symbol;
+    }
+
+    let needs_tuple = policy.typed()
+        || matches!(policy, Policy::Rust | Policy::Typescript)
+        || (policy == Policy::C && declaration);
+    if !needs_tuple {
+        return symbol;
+    }
+
     let groups = parameter_groups(node, policy);
     let parameters: Vec<Vec<_>> = groups
         .iter()
@@ -456,20 +554,15 @@ pub fn symbol(mut symbol: Symbol, node: Node<'_>, source: &[u8], policy: Policy)
         })
         .collect();
     if !generic_shapes.is_empty() {
-        symbol.metadata["generic_arity"] = generic_shapes.len().into();
+        symbol.generic_arity = u8::try_from(generic_shapes.len()).ok();
     }
     let tuple = parameters
         .iter()
         .map(|p| format!("({})", p.join(",")))
         .collect::<String>();
-    symbol.metadata["parameter_identity"] = tuple.clone().into();
-    let declaration = !has_body(node);
-    symbol.metadata["callable_role"] = if declaration {
-        "declaration"
-    } else {
-        "implementation"
+    if policy.typed() || policy == Policy::Typescript {
+        symbol.parameter_identity = Some(tuple.clone().into_boxed_str());
     }
-    .into();
     if policy.typed() {
         let mut identity = if generic_shapes.is_empty() {
             tuple.clone()
@@ -487,8 +580,9 @@ pub fn symbol(mut symbol: Symbol, node: Node<'_>, source: &[u8], policy: Policy)
                 .into_iter()
                 .next();
             if let Some(declarator) = declarator {
-                for qualifier in kids(declarator)
-                    .into_iter()
+                let mut cursor = declarator.walk();
+                for qualifier in declarator
+                    .named_children(&mut cursor)
                     .filter(|n| matches!(n.kind(), "type_qualifier" | "ref_qualifier"))
                 {
                     identity.push_str(&normalized(qualifier, source, None));
@@ -497,21 +591,22 @@ pub fn symbol(mut symbol: Symbol, node: Node<'_>, source: &[u8], policy: Policy)
         }
         if policy == Policy::Kotlin {
             let name = node.child_by_field_name("name");
-            if let Some(receiver) = kids(node).into_iter().find(|n| {
+            let mut cursor = node.walk();
+            if let Some(receiver) = node.named_children(&mut cursor).find(|n| {
                 name.is_some_and(|name| n.end_byte() < name.start_byte())
                     && matches!(n.kind(), "user_type" | "nullable_type")
             }) {
                 identity = format!("receiver:{}:{identity}", normalized(receiver, source, None));
             }
         }
-        symbol.metadata["override_identity"] = identity.clone().into();
+        symbol.override_identity = Some(identity.clone().into_boxed_str());
         if declaration {
             identity = format!("declaration:{identity}");
         }
-        symbol.metadata["identity_discriminator"] = identity.into();
+        symbol.identity_discriminator = Some(identity.into_boxed_str());
     }
     if policy == Policy::C && declaration {
-        symbol.metadata["identity_discriminator"] = format!("declaration:{tuple}").into();
+        symbol.identity_discriminator = Some(format!("declaration:{tuple}").into_boxed_str());
     }
     if policy == Policy::Rust {
         let mut ancestor = node.parent();
@@ -526,15 +621,14 @@ pub fn symbol(mut symbol: Symbol, node: Node<'_>, source: &[u8], policy: Policy)
         if let Some(implementation) = implementation {
             if let Some(trait_name) = implementation.child_by_field_name("trait") {
                 let owner = normalized(trait_name, source, None);
-                symbol.metadata["identity_discriminator"] = format!("trait:{owner}").into();
-                symbol.metadata["override_owner"] = owner.into();
+                symbol.identity_discriminator = Some(format!("trait:{owner}").into_boxed_str());
+                symbol.override_owner = Some(owner.into_boxed_str());
             } else {
-                symbol.metadata["override_owner"] = "<inherent>".into();
+                symbol.override_owner = Some(Box::from("<inherent>"));
             }
         }
-        symbol.metadata["override_identity"] = tuple.clone().into();
-    }
-    if policy == Policy::Typescript {
+        symbol.override_identity = Some(tuple.into_boxed_str());
+    } else if policy == Policy::Typescript {
         let identity = if declaration {
             format!(
                 "declaration:{tuple}->{}",
@@ -549,131 +643,55 @@ pub fn symbol(mut symbol: Symbol, node: Node<'_>, source: &[u8], policy: Policy)
         } else {
             "implementation".into()
         };
-        symbol.metadata["identity_discriminator"] = identity.into();
-        symbol.metadata["override_identity"] = "".into();
-    }
-    if policy == Policy::Elixir {
-        let arguments = node
-            .child_by_field_name("arguments")
-            .or_else(|| kids(node).into_iter().find(|n| n.kind() == "arguments"));
-        let mut head = arguments.and_then(|n| kids(n).into_iter().next());
-        while let Some(n) = head {
-            if n.kind() == "binary_operator" {
-                head = n.child_by_field_name("left");
-            } else {
-                break;
-            }
-        }
-        if let Some(head) = head {
-            let args = head
-                .child_by_field_name("arguments")
-                .or_else(|| kids(head).into_iter().find(|n| n.kind() == "arguments"));
-            let args = args.map(kids).unwrap_or_default();
-            let mut patterns = Vec::new();
-            for arg in &args {
-                patterns.push(if arg.kind() == "identifier" {
-                    "_".into()
-                } else {
-                    normalized(*arg, source, None)
-                });
-            }
-            let variables: std::collections::HashSet<_> = args
-                .iter()
-                .filter(|n| n.kind() == "identifier")
-                .map(|n| text(*n, source))
-                .collect();
-            let guard_node = arguments
-                .and_then(|n| kids(n).into_iter().next())
-                .filter(|n| n.kind() == "binary_operator")
-                .and_then(|n| n.child_by_field_name("right"));
-            let mut guard = String::new();
-            if let Some(guard_node) = guard_node {
-                let mut stack = vec![guard_node];
-                while let Some(n) = stack.pop() {
-                    if n.child_count() == 0 {
-                        guard.push_str(
-                            if n.kind() == "identifier" && variables.contains(text(n, source)) {
-                                "_"
-                            } else {
-                                text(n, source)
-                            },
-                        );
-                    } else {
-                        for i in (0..n.child_count()).rev() {
-                            if let Some(child) = n.child(i) {
-                                stack.push(child);
-                            }
-                        }
-                    }
-                }
-            }
-            symbol.metadata["identity_discriminator"] = format!(
-                "arity:{}:clause:({}):{guard}",
-                args.len(),
-                patterns.join(",")
-            )
-            .into();
-            symbol.metadata["override_identity"] = format!("arity:{}", args.len()).into();
-            symbol.metadata["arity"] = args.len().into();
-        }
+        symbol.identity_discriminator = Some(identity.into_boxed_str());
+        symbol.override_identity = Some(Box::from(""));
     }
     symbol
 }
+
 /// Finalize redefinition groups and annotate relation sources from exact spans.
 /// This runs on extraction workers and never reparses or traverses the CST.
 pub fn finish(policy: Policy, symbols: &mut [Symbol], relations: &mut [Relation]) {
-    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut groups: HashMap<String, Vec<usize>> = HashMap::with_capacity(symbols.len());
     for (index, symbol) in symbols
         .iter()
         .enumerate()
         .filter(|(_, s)| matches!(s.symbol_type, SymbolType::Function | SymbolType::Method))
     {
-        groups
-            .entry(
-                symbol
-                    .qualified_name
-                    .as_deref()
-                    .unwrap_or(&symbol.name)
-                    .into(),
-            )
-            .or_default()
-            .push(index);
+        let key = symbol.qualified_name.as_deref().unwrap_or(&symbol.name);
+        if let Some(list) = groups.get_mut(key) {
+            list.push(index);
+        } else {
+            groups.insert(key.to_owned(), vec![index]);
+        }
     }
     for indices in groups.values_mut() {
-        indices.sort_by_key(|i| symbols[*i].start_byte.unwrap_or(0));
-        if policy.dynamic() && indices.len() > 1 {
-            for (ordinal, &index) in indices.iter().enumerate() {
-                if ordinal > 0 {
-                    symbols[index].metadata["identity_discriminator"] =
-                        format!("definition:{ordinal}").into();
+        if indices.len() > 1 {
+            indices.sort_by_key(|i| symbols[*i].start_byte.unwrap_or(0));
+            if policy.dynamic() {
+                let len = indices.len();
+                for (ordinal, &index) in indices.iter().enumerate() {
+                    if ordinal > 0 {
+                        symbols[index].identity_discriminator =
+                            Some(format!("definition:{ordinal}").into_boxed_str());
+                    }
+                    symbols[index].override_identity = Some(Box::from(""));
+                    symbols[index].superseded_definition = ordinal + 1 < len;
                 }
-                symbols[index].metadata["override_identity"] = "".into();
-                symbols[index].metadata["superseded_definition"] =
-                    (ordinal + 1 < indices.len()).into();
             }
         }
     }
-    let names: HashMap<String, Vec<&Symbol>> = groups
-        .into_iter()
-        .map(|(name, indices)| (name, indices.into_iter().map(|i| &symbols[i]).collect()))
-        .collect();
+    let symbols_ref: &[Symbol] = symbols;
     for relation in relations {
-        let from_candidates = names.get(&relation.from);
-        let from = from_candidates
-            .and_then(|candidates| {
-                let mut matches = candidates.iter().copied().filter(|s| {
+        let from_indices = groups.get(relation.from.as_str()).map(Vec::as_slice);
+        let rel_from_disc = relation.from_identity_discriminator_str();
+        let from = from_indices
+            .and_then(|indices| {
+                let mut matches = indices.iter().map(|&i| &symbols_ref[i]).filter(|s| {
                     s.location.file == relation.location.file
-                        && relation
-                            .metadata
-                            .get("from_identity_discriminator")
-                            .and_then(|v| v.as_str())
-                            .is_none_or(|identity| {
-                                s.metadata
-                                    .get("identity_discriminator")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    == identity
-                            })
+                        && rel_from_disc.is_none_or(|identity| {
+                            s.identity_discriminator_str().unwrap_or("") == identity
+                        })
                         && s.location.start_line <= relation.location.start_line
                         && s.location.end_line >= relation.location.end_line
                         && (s.location.start_line != relation.location.start_line
@@ -688,89 +706,77 @@ pub fn finish(policy: Policy, symbols: &mut [Symbol], relations: &mut [Relation]
                     Some(first)
                 }
             })
-            .or_else(|| from_candidates.and_then(|c| if c.len() == 1 { Some(c[0]) } else { None }));
+            .or_else(|| {
+                from_indices.and_then(|c| {
+                    if c.len() == 1 {
+                        Some(&symbols_ref[c[0]])
+                    } else {
+                        None
+                    }
+                })
+            });
         if let Some(from) = from
-            && relation
-                .metadata
-                .get("from_identity_discriminator")
-                .and_then(|v| v.as_str())
-                .is_none()
+            && rel_from_disc.is_none()
         {
-            relation.metadata["from_identity_discriminator"] = from
-                .metadata
-                .get("identity_discriminator")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .into();
+            let disc = from.identity_discriminator_str().unwrap_or("");
+            relation.from_identity_discriminator = Some(Box::from(disc));
         }
         if relation.relation_type == RelationType::Calls {
             if relation.to_qualified_hint.is_none() && !relation.to.contains(['.', ':', '#']) {
-                if let Some(from) = from.and_then(|s| s.qualified_name.as_deref()) {
-                    let owner = from
+                if let Some(from_qn) = from.and_then(|s| s.qualified_name.as_deref()) {
+                    let owner = from_qn
                         .rsplit_once("::")
                         .map(|(owner, _)| (owner, "::"))
-                        .or_else(|| from.rsplit_once('.').map(|(owner, _)| (owner, ".")))
-                        .or_else(|| from.rsplit_once('#').map(|(owner, _)| (owner, "#")));
+                        .or_else(|| from_qn.rsplit_once('.').map(|(owner, _)| (owner, ".")))
+                        .or_else(|| from_qn.rsplit_once('#').map(|(owner, _)| (owner, "#")));
                     if let Some((owner, separator)) = owner {
                         let target = format!("{owner}{separator}{}", relation.to);
                         relation.to_type_hint = Some(owner.to_owned());
                         relation.to_qualified_hint = Some(target);
-                        relation.metadata["inferred_callable_owner"] = true.into();
+                        relation.inferred_callable_owner = true;
                     }
                 }
             }
-            relation.metadata["exact_callable_resolution"] = true.into();
+            relation.exact_callable_resolution = true;
             let target = relation
                 .to_qualified_hint
                 .as_deref()
                 .unwrap_or(&relation.to);
-            if let Some(candidates) = names.get(target) {
-                let implementations: Vec<_> = candidates
-                    .iter()
-                    .filter(|s| {
-                        s.metadata["callable_role"] != "declaration"
-                            && s.metadata["superseded_definition"] != true
-                            && relation
-                                .metadata
-                                .get("explicit_generic_arity")
-                                .is_none_or(|arity| s.metadata.get("generic_arity") == Some(arity))
-                    })
-                    .collect();
-                let argument = relation
-                    .metadata
-                    .get("argument_identity_discriminator")
-                    .and_then(|v| v.as_str());
-                let matching: Vec<_> = implementations
-                    .iter()
-                    .filter(|s| {
-                        argument.is_some()
-                            && s.metadata
-                                .get("parameter_identity")
-                                .and_then(|v| v.as_str())
-                                == argument
-                    })
-                    .collect();
-                let selected = if let [only] = matching.as_slice() {
-                    Some(**only)
-                } else if let [only] = implementations.as_slice() {
-                    if !policy.typed()
-                        || argument.is_none()
-                        || relation.metadata.get("explicit_generic_arity").is_some()
+            if let Some(indices) = groups.get(target) {
+                let explicit_arity = relation.explicit_generic_arity_val();
+                let argument = relation.argument_identity_discriminator_str();
+                let mut impl_only: Option<&Symbol> = None;
+                let mut impl_count = 0usize;
+                let mut match_only: Option<&Symbol> = None;
+                let mut match_count = 0usize;
+                for &idx in indices {
+                    let s = &symbols_ref[idx];
+                    if s.callable_role_str() == Some("declaration") || s.is_superseded_definition()
                     {
-                        Some(*only)
-                    } else {
-                        None
+                        continue;
                     }
+                    if explicit_arity.is_some_and(|arity| s.generic_arity_val() != Some(arity)) {
+                        continue;
+                    }
+                    impl_count += 1;
+                    impl_only = if impl_count == 1 { Some(s) } else { None };
+                    if argument.is_some() && s.parameter_identity_str() == argument {
+                        match_count += 1;
+                        match_only = if match_count == 1 { Some(s) } else { None };
+                    }
+                }
+                let selected = if match_count == 1 {
+                    match_only
+                } else if impl_count == 1
+                    && (!policy.typed() || argument.is_none() || explicit_arity.is_some())
+                {
+                    impl_only
                 } else {
                     None
                 };
                 if let Some(only) = selected {
-                    relation.metadata["to_identity_discriminator"] = only
-                        .metadata
-                        .get("identity_discriminator")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .into();
+                    let disc = only.identity_discriminator_str().unwrap_or("");
+                    relation.to_identity_discriminator = Some(Box::from(disc));
                 }
             }
         }
@@ -803,16 +809,12 @@ pub fn call_with_local_types(
         let Some(from) = from else {
             return;
         };
-        if let Some(identity) = from
-            .metadata
-            .get("identity_discriminator")
-            .and_then(|v| v.as_str())
-        {
+        if let Some(identity) = from.identity_discriminator_str() {
             for relation in relations
                 .iter_mut()
                 .filter(|r| r.relation_type == RelationType::Calls)
             {
-                relation.metadata["from_identity_discriminator"] = identity.into();
+                relation.from_identity_discriminator = Some(Box::from(identity));
             }
         }
         if let Some(identity) = java::argument_identity(node, source, from, local_type) {
@@ -837,7 +839,8 @@ pub fn call_with_local_types(
                 .next()
             })
             .or_else(|| {
-                kids(node).into_iter().find(|n| {
+                let mut c = node.walk();
+                node.named_children(&mut c).find(|n| {
                     matches!(
                         n.kind(),
                         "type_arguments" | "type_argument_list" | "template_argument_list"
@@ -846,9 +849,12 @@ pub fn call_with_local_types(
             })
     });
     if let Some(generics) = generics {
-        let arity = kids(generics).len();
-        for relation in relations.iter_mut() {
-            relation.metadata["explicit_generic_arity"] = arity.into();
+        let mut c = generics.walk();
+        let arity = generics.named_children(&mut c).count();
+        if let Ok(arity_u8) = u8::try_from(arity) {
+            for relation in relations.iter_mut() {
+                relation.explicit_generic_arity = Some(arity_u8);
+            }
         }
     }
     let arguments = node.child_by_field_name("arguments").or_else(|| {
@@ -865,14 +871,18 @@ pub fn call_with_local_types(
         return;
     };
     let mut types = Vec::new();
-    for argument in kids(arguments)
-        .into_iter()
+    let mut arg_cursor = arguments.walk();
+    for argument in arguments
+        .named_children(&mut arg_cursor)
         .filter(|n| n.kind() != "comment")
     {
         let value = if matches!(argument.kind(), "value_argument" | "argument") {
             argument
                 .child_by_field_name("value")
-                .or_else(|| kids(argument).into_iter().last())
+                .or_else(|| {
+                    let mut vc = argument.walk();
+                    argument.named_children(&mut vc).last()
+                })
                 .unwrap_or(argument)
         } else {
             argument
@@ -960,7 +970,7 @@ fn attach_argument_identity(relations: &mut [Relation], identity: &str) {
         .iter_mut()
         .filter(|r| r.relation_type == RelationType::Calls)
     {
-        relation.metadata["argument_identity_discriminator"] = identity.into();
+        relation.argument_identity_discriminator = Some(Box::from(identity));
     }
 }
 
@@ -982,11 +992,11 @@ mod tests {
         let mut symbols = [declaration(80, 1), declaration(10, 100)];
         finish(Policy::Python, &mut symbols, &mut []);
         assert_eq!(
-            symbols[0].metadata["identity_discriminator"],
-            "definition:1"
+            symbols[0].identity_discriminator_str(),
+            Some("definition:1")
         );
-        assert_eq!(symbols[0].metadata["superseded_definition"], false);
-        assert!(symbols[1].metadata.get("identity_discriminator").is_none());
-        assert_eq!(symbols[1].metadata["superseded_definition"], true);
+        assert!(!symbols[0].is_superseded_definition());
+        assert!(symbols[1].identity_discriminator_str().is_none());
+        assert!(symbols[1].is_superseded_definition());
     }
 }

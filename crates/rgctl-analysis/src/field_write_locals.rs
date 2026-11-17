@@ -87,6 +87,9 @@ pub fn language_visit_fn(language: &str) -> Option<VisitFn> {
     })
 }
 
+/// Maximum AST traversal depth for local-variable type recovery.
+pub const MAX_AST_WALK_DEPTH: usize = 2048;
+
 /// Single AST walk: local-type maps keyed by `(start_line, function_name)`.
 pub fn build_file_local_types_from_tree(
     language: &str,
@@ -100,8 +103,12 @@ pub fn build_file_local_types_from_tree(
         return FxHashMap::default();
     };
     let mut out: FxHashMap<(usize, String), HashMap<String, String>> = FxHashMap::default();
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
+    let mut stack = vec![(root, 0usize)];
+    let mut children_buf: Vec<Node<'_>> = Vec::with_capacity(16);
+    while let Some((node, depth)) = stack.pop() {
+        if depth > MAX_AST_WALK_DEPTH {
+            continue;
+        }
         if kinds.contains(&node.kind())
             && let Some(name) = function_name_for_locals(language, node, source)
         {
@@ -113,9 +120,11 @@ pub fn build_file_local_types_from_tree(
                 out.insert((start_line, name), env);
             }
         }
+        children_buf.clear();
         let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            stack.push(child);
+        children_buf.extend(node.children(&mut cursor));
+        for &child in children_buf.iter().rev() {
+            stack.push((child, depth + 1));
         }
     }
     out
@@ -324,21 +333,37 @@ fn text_of(node: Node, source: &[u8]) -> Option<String> {
     node.utf8_text(source).ok().map(|s| s.to_string())
 }
 
-fn walk_children(
-    node: Node,
+type StepFn =
+    fn(Node, &[u8], &str, &mut HashMap<String, String>, bool) -> (bool, &'static [&'static str]);
+
+fn run_visit_iterative(
+    root: Node,
     source: &[u8],
     function_name: &str,
     env: &mut HashMap<String, String>,
-    in_target: bool,
-    visit: fn(Node, &[u8], &str, &mut HashMap<String, String>, bool),
-    reset_kinds: &[&str],
+    initial_in_target: bool,
+    step: StepFn,
 ) {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if reset_kinds.iter().any(|k| child.kind() == *k) {
-            visit(child, source, function_name, env, false);
-        } else {
-            visit(child, source, function_name, env, in_target);
+    let mut stack: Vec<(Node, bool, usize)> = Vec::with_capacity(64);
+    stack.push((root, initial_in_target, 0));
+    let mut children_buf: Vec<Node> = Vec::with_capacity(16);
+    while let Some((node, in_target, depth)) = stack.pop() {
+        if depth > MAX_AST_WALK_DEPTH {
+            continue;
+        }
+        let (now_in, reset_kinds) = step(node, source, function_name, env, in_target);
+        children_buf.clear();
+        let mut cursor = node.walk();
+        children_buf.extend(node.children(&mut cursor));
+        for &child in children_buf.iter().rev() {
+            if reset_kinds.contains(&child.kind()) {
+                if now_in {
+                    continue;
+                }
+                stack.push((child, false, depth + 1));
+            } else {
+                stack.push((child, now_in, depth + 1));
+            }
         }
     }
 }
@@ -350,6 +375,16 @@ fn visit_java(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_java);
+}
+
+fn step_java(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if kind == "method_declaration" || kind == "constructor_declaration" {
@@ -403,15 +438,7 @@ fn visit_java(
     {
         insert_ty(env, &name, &ty);
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
-        now_in,
-        visit_java,
-        &["method_declaration", "constructor_declaration"],
-    );
+    (now_in, &["method_declaration", "constructor_declaration"])
 }
 
 fn strip_java_type_sugar(raw: &str) -> String {
@@ -610,6 +637,16 @@ fn visit_csharp(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_csharp);
+}
+
+fn step_csharp(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if matches!(
@@ -652,19 +689,14 @@ fn visit_csharp(
     {
         insert_ty(env, &name, &ty);
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
+    (
         now_in,
-        visit_csharp,
         &[
             "method_declaration",
             "local_function_statement",
             "constructor_declaration",
         ],
-    );
+    )
 }
 
 fn collect_csharp_var_decl(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
@@ -693,6 +725,16 @@ fn visit_go(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_go);
+}
+
+fn step_go(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if matches!(kind, "function_declaration" | "method_declaration") {
@@ -728,15 +770,7 @@ fn visit_go(
             }
         }
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
-        now_in,
-        visit_go,
-        &["function_declaration", "method_declaration"],
-    );
+    (now_in, &["function_declaration", "method_declaration"])
 }
 
 fn visit_rust(
@@ -746,6 +780,16 @@ fn visit_rust(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_rust);
+}
+
+fn step_rust(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if kind == "function_item" {
@@ -782,15 +826,7 @@ fn visit_rust(
             insert_ty(env, name.trim(), &t);
         }
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
-        now_in,
-        visit_rust,
-        &["function_item"],
-    );
+    (now_in, &["function_item"])
 }
 
 fn visit_python(
@@ -800,6 +836,16 @@ fn visit_python(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_python);
+}
+
+fn step_python(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if kind == "function_definition" {
@@ -839,15 +885,7 @@ fn visit_python(
             insert_ty(env, &name, &ty);
         }
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
-        now_in,
-        visit_python,
-        &["function_definition"],
-    );
+    (now_in, &["function_definition"])
 }
 
 fn visit_php(
@@ -857,6 +895,16 @@ fn visit_php(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_php);
+}
+
+fn step_php(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if matches!(kind, "function_definition" | "method_declaration") {
@@ -897,15 +945,7 @@ fn visit_php(
             insert_ty(env, dst, &ty);
         }
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
-        now_in,
-        visit_php,
-        &["function_definition", "method_declaration"],
-    );
+    (now_in, &["function_definition", "method_declaration"])
 }
 
 fn visit_ruby(
@@ -915,6 +955,16 @@ fn visit_ruby(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_ruby);
+}
+
+fn step_ruby(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if matches!(kind, "method" | "singleton_method") {
@@ -947,15 +997,7 @@ fn visit_ruby(
             cur = n.parent();
         }
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
-        now_in,
-        visit_ruby,
-        &["method", "singleton_method"],
-    );
+    (now_in, &["method", "singleton_method"])
 }
 
 fn visit_kotlin(
@@ -965,6 +1007,16 @@ fn visit_kotlin(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_kotlin);
+}
+
+fn step_kotlin(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if matches!(
@@ -1001,20 +1053,15 @@ fn visit_kotlin(
     if now_in && kind == "property_declaration" {
         collect_kotlin_property_local(node, source, env);
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
+    (
         now_in,
-        visit_kotlin,
         &[
             "function_declaration",
             "primary_constructor",
             "secondary_constructor",
             "anonymous_function",
         ],
-    );
+    )
 }
 
 fn collect_kotlin_param(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
@@ -1099,6 +1146,16 @@ fn visit_groovy(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_groovy);
+}
+
+fn step_groovy(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if matches!(
@@ -1136,20 +1193,15 @@ fn visit_groovy(
     {
         insert_ty(env, &name, &ty);
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
+    (
         now_in,
-        visit_groovy,
         &[
             "method_declaration",
             "function_definition",
             "constructor_declaration",
             "compact_constructor_declaration",
         ],
-    );
+    )
 }
 
 /// Puppet: merge typed parameters from class / define / function hosts into `env`.
@@ -1160,6 +1212,16 @@ fn visit_puppet(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_puppet);
+}
+
+fn step_puppet(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if matches!(
@@ -1221,20 +1283,15 @@ fn visit_puppet(
             }
         }
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
+    (
         now_in,
-        visit_puppet,
         &[
             "class_definition",
             "defined_resource_type",
             "function_declaration",
             "node_definition",
         ],
-    );
+    )
 }
 
 /// Lua: parameters + `local` bindings (dynamic — empty type OK).
@@ -1245,6 +1302,16 @@ fn visit_lua(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_lua);
+}
+
+fn step_lua(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if matches!(kind, "function_declaration" | "function_definition") {
@@ -1291,15 +1358,7 @@ fn visit_lua(
     if now_in && kind == "assignment_statement" {
         collect_lua_assignment_names(node, source, env);
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
-        now_in,
-        visit_lua,
-        &["function_declaration", "function_definition"],
-    );
+    (now_in, &["function_declaration", "function_definition"])
 }
 
 fn collect_lua_assignment_names(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
@@ -1327,6 +1386,16 @@ fn visit_elixir(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_elixir);
+}
+
+fn step_elixir(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if kind == "call" {
@@ -1357,15 +1426,7 @@ fn visit_elixir(
             insert_ty(env, &n, &ty);
         }
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
-        now_in,
-        visit_elixir,
-        &["call"],
-    );
+    (now_in, &["call"])
 }
 
 fn elixir_def_callable_name(node: Node<'_>, source: &[u8]) -> Option<String> {
@@ -1460,6 +1521,16 @@ fn visit_bash(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_bash);
+}
+
+fn step_bash(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if kind == "function_definition" {
@@ -1482,15 +1553,7 @@ fn visit_bash(
     if now_in && matches!(kind, "variable_assignment" | "declaration_command") {
         collect_bash_var_names(node, source, env);
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
-        now_in,
-        visit_bash,
-        &["function_definition"],
-    );
+    (now_in, &["function_definition"])
 }
 
 fn collect_bash_var_names(node: Node, source: &[u8], env: &mut HashMap<String, String>) {
@@ -1529,6 +1592,16 @@ fn visit_scala(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_scala);
+}
+
+fn step_scala(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if matches!(kind, "function_definition" | "function_declaration") {
@@ -1564,15 +1637,7 @@ fn visit_scala(
             insert_ty(env, &n, ty.as_deref().unwrap_or(""));
         }
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
-        now_in,
-        visit_scala,
-        &["function_definition", "function_declaration"],
-    );
+    (now_in, &["function_definition", "function_declaration"])
 }
 
 /// Swift: typed parameters + `let`/`var` property_declaration locals.
@@ -1583,6 +1648,16 @@ fn visit_swift(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_swift);
+}
+
+fn step_swift(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if matches!(
@@ -1683,20 +1758,15 @@ fn visit_swift(
             insert_ty(env, &n, ty.as_deref().unwrap_or(""));
         }
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
+    (
         now_in,
-        visit_swift,
         &[
             "function_declaration",
             "init_declaration",
             "deinit_declaration",
             "subscript_declaration",
         ],
-    );
+    )
 }
 
 /// Dart: typed formals + local variable declarations.
@@ -1707,6 +1777,16 @@ fn visit_dart(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_dart);
+}
+
+fn step_dart(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if matches!(
@@ -1758,19 +1838,14 @@ fn visit_dart(
             insert_ty(env, &n, ty.as_deref().unwrap_or(""));
         }
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
+    (
         now_in,
-        visit_dart,
         &[
             "function_declaration",
             "method_declaration",
             "function_expression",
         ],
-    );
+    )
 }
 
 fn dart_callable_name(node: Node<'_>, source: &[u8]) -> Option<String> {
@@ -1813,7 +1888,7 @@ fn visit_javascript(
     in_target: bool,
 ) {
     // JS has no static types — copy-assign inference only: `const other = order` when order already typed.
-    visit_js_ts_like(node, source, function_name, env, in_target, false);
+    run_visit_iterative(node, source, function_name, env, in_target, step_javascript);
 }
 
 fn visit_typescript(
@@ -1823,17 +1898,37 @@ fn visit_typescript(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
-    visit_js_ts_like(node, source, function_name, env, in_target, true);
+    run_visit_iterative(node, source, function_name, env, in_target, step_typescript);
 }
 
-fn visit_js_ts_like(
+fn step_javascript(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
+    step_js_ts_like(node, source, function_name, env, in_target, false)
+}
+
+fn step_typescript(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
+    step_js_ts_like(node, source, function_name, env, in_target, true)
+}
+
+fn step_js_ts_like(
     node: Node,
     source: &[u8],
     function_name: &str,
     env: &mut HashMap<String, String>,
     in_target: bool,
     with_types: bool,
-) {
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if matches!(
@@ -1907,24 +2002,14 @@ fn visit_js_ts_like(
             }
         }
     }
-    let visit = if with_types {
-        visit_typescript
-    } else {
-        visit_javascript
-    };
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
+    (
         now_in,
-        visit,
         &[
             "function_declaration",
             "method_definition",
             "function_expression",
         ],
-    );
+    )
 }
 
 fn visit_c_family(
@@ -1934,6 +2019,16 @@ fn visit_c_family(
     env: &mut HashMap<String, String>,
     in_target: bool,
 ) {
+    run_visit_iterative(node, source, function_name, env, in_target, step_c_family);
+}
+
+fn step_c_family(
+    node: Node,
+    source: &[u8],
+    function_name: &str,
+    env: &mut HashMap<String, String>,
+    in_target: bool,
+) -> (bool, &'static [&'static str]) {
     let kind = node.kind();
     let mut now_in = in_target;
     if kind == "function_definition" {
@@ -1964,15 +2059,7 @@ fn visit_c_family(
             }
         }
     }
-    walk_children(
-        node,
-        source,
-        function_name,
-        env,
-        now_in,
-        visit_c_family,
-        &["function_definition"],
-    );
+    (now_in, &["function_definition"])
 }
 
 fn function_declarator_name(node: Node, source: &[u8]) -> Option<String> {
@@ -2283,5 +2370,41 @@ public class Dual {
             env_second.get("x").is_none(),
             "second must not see first locals"
         );
+    }
+
+    #[test]
+    fn ruby_2500_deep_chained_call_and_elsif_do_not_overflow_worker_stack() {
+        let mut chain = String::from("def deep_builder(seed)\n  x = seed");
+        for _ in 0..2500 {
+            chain.push_str(".step");
+        }
+        chain.push_str("\n  if x\n    1");
+        for i in 0..2500 {
+            chain.push_str(&format!("\n  elsif seed == {i}\n    {i}"));
+        }
+        chain.push_str("\n  else\n    0\n  end\nend\n");
+
+        // Run inside a constrained 2 MiB thread stack (smaller than default worker stack)
+        // to prove iterative locals walk + bounded CFG recursion never overflow.
+        let handle = std::thread::Builder::new()
+            .name("constrained-ast-test".into())
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let tree = parse_source("ruby", chain.as_bytes()).expect("parse deep ruby");
+                let locals =
+                    build_file_local_types_from_tree("ruby", tree.root_node(), chain.as_bytes());
+                assert!(
+                    locals.contains_key(&(1, "deep_builder".to_string())),
+                    "expected formal param recovery on deep_builder"
+                );
+                let cfg =
+                    crate::cfg_builder::build_cfg_for_function("ruby", &chain, "deep_builder")
+                        .expect("build_cfg_for_function must succeed on 2500-deep Ruby AST");
+                assert!(!cfg.blocks.is_empty());
+            })
+            .expect("spawn thread");
+        handle
+            .join()
+            .expect("deep Ruby AST must not overflow stack");
     }
 }

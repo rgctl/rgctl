@@ -1563,21 +1563,16 @@ fn walk_php_calls(
         .iter()
         .filter(|s| s.symbol_type == SymbolType::Function)
         .collect();
+    let file_index = rgctl_plugin_api::CallFileIndex::new(file_path, symbols);
     let mut stack = vec![(root, 0usize)];
     while let Some((node, depth)) = stack.pop() {
         if depth > MAX_DEPTH {
             continue;
         }
-        if PHP_CALL_KINDS.contains(&node.kind()) {
-            push_php_call_relation(
-                node,
-                source,
-                file_path,
-                symbols,
-                &function_symbols,
-                import_map,
-                relations,
-            );
+        if PHP_CALL_KINDS.contains(&node.kind())
+            && let Some(from_fn) = containing_function(node, &function_symbols)
+        {
+            push_php_call_relation_from(node, source, &file_index, from_fn, import_map, relations);
         }
         for i in (0..node.child_count()).rev() {
             if let Some(child) = node.child(i) {
@@ -1587,12 +1582,11 @@ fn walk_php_calls(
     }
 }
 
-pub(crate) fn push_php_call_relation(
+pub(crate) fn push_php_call_relation_from(
     node: Node,
     source: &[u8],
-    file_path: &Path,
-    symbols: &[Symbol],
-    function_symbols: &[&Symbol],
+    file_index: &rgctl_plugin_api::CallFileIndex<'_>,
+    from_fn: &Symbol,
     import_map: &HashMap<String, String>,
     relations: &mut Vec<Relation>,
 ) {
@@ -1602,9 +1596,6 @@ pub(crate) fn push_php_call_relation(
     if callee.is_empty() {
         return;
     }
-    let Some(from_fn) = containing_function(node, function_symbols) else {
-        return;
-    };
     let from = from_fn
         .qualified_name
         .clone()
@@ -1614,25 +1605,18 @@ pub(crate) fn push_php_call_relation(
         .as_ref()
         .and_then(|cls| import_map.get(cls).map(|fqn| format!("{fqn}.{callee}")));
 
-    let mut meta = serde_json::json!({ "language": "php" });
-    if unresolved {
-        meta["unresolved"] = serde_json::json!(true);
-    }
+    let meta = if unresolved {
+        serde_json::json!({ "unresolved": true })
+    } else {
+        serde_json::Value::Null
+    };
 
-    let same_file_matches: Vec<_> = symbols
-        .iter()
-        .filter(|s| {
-            s.name == callee
-                && s.symbol_type == SymbolType::Function
-                && s.location.file == file_path.to_string_lossy()
-        })
-        .collect();
-    let local_target = match same_file_matches.as_slice() {
-        [only] => only
+    let local_target = match file_index.unique_same_file_fn(&callee) {
+        Some(only) => only
             .qualified_name
             .clone()
             .unwrap_or_else(|| callee.clone()),
-        _ => to_qualified_hint.clone().unwrap_or_else(|| callee.clone()),
+        None => to_qualified_hint.clone().unwrap_or_else(|| callee.clone()),
     };
 
     relations.push(Relation {
@@ -1640,7 +1624,7 @@ pub(crate) fn push_php_call_relation(
         to: local_target,
         relation_type: RelationType::Calls,
         location: SourceLocation {
-            file: file_path.to_string_lossy().to_string(),
+            file: file_index.file_str().to_string(),
             start_line: node.start_position().row + 1,
             end_line: node.end_position().row + 1,
             start_column: node.start_position().column,
@@ -1649,6 +1633,7 @@ pub(crate) fn push_php_call_relation(
         metadata: meta,
         to_qualified_hint,
         to_type_hint: None,
+        language: Some(std::borrow::Cow::Borrowed("php")),
         ..Default::default()
     });
 }

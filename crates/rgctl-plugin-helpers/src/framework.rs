@@ -1082,6 +1082,7 @@ fn exposes_route_relation_with_spans(
         to_type_hint: Some("route".to_string()),
         call_site_start_byte,
         call_site_byte_len,
+        ..Default::default()
     }
 }
 
@@ -1131,6 +1132,7 @@ fn injects_relation_with_spans(
         to_type_hint: to_type_hint.map(str::to_string),
         call_site_start_byte,
         call_site_byte_len,
+        ..Default::default()
     }
 }
 

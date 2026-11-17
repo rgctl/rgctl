@@ -30,79 +30,125 @@ struct OverloadedCallableSpan {
     span: LineSpan,
 }
 
+/// Lightweight hot summary emitted per unique `NodeType::Function` during Pass 1/2 so
+/// post-index analytics (`complexity`, `structural_sketch`, `blast_query`) avoid deserializing
+/// cold `NodeExtension` blobs on default `discover`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HotFunctionSummary {
+    pub id: Uuid,
+    pub cyclomatic: u32,
+    pub cognitive: u32,
+    pub loc: u32,
+    pub token_bloom: Option<[u64; 4]>,
+}
+
+/// Thread-local / per-chunk read-only memoization caches for parallel Pass-2 endpoint resolution.
+#[derive(Default)]
+pub(crate) struct Pass2WorkerScratch {
+    /// Bare `Function` suffix lookup cache (`Some(id)` or `None`).
+    bare_fn_cache: FxHashMap<String, Option<Uuid>>,
+    /// `resolve_scoped_callable` cache when `identity == None && arguments == None && !free_only`.
+    scoped_none_cache: FxHashMap<String, Option<Option<Uuid>>>,
+}
+
+/// Deterministic Pass-2 resolution plan computed read-only against `&GraphBuilder`.
+pub(crate) enum NonInheritancePlan {
+    Skip,
+    FastRejectPark {
+        from_id: Option<Uuid>,
+    },
+    Standard {
+        from_id: Option<Uuid>,
+        to_id: Option<Uuid>,
+        to_type_hint: Option<String>,
+        to_qualified_hint: Option<String>,
+        signature_call: bool,
+    },
+}
+
 /// Builds graph nodes and edges from extracted data.
 #[derive(Default)]
 pub struct GraphBuilder {
-    symbol_index: HashMap<(String, NodeType), Uuid>,
-    /// First callable `(signature_hash, line_span)` for non-discriminated `symbol_index` keys.
-    ///
-    /// Tier-1 plugins carry canonical `identity_discriminator`; Tier-2 / synthetic
-    /// callables without one fall back to signature-hash disambiguation here.
-    callable_disc: HashMap<(String, NodeType), (u64, LineSpan)>,
+    symbol_index: FxHashMap<(String, NodeType), Uuid>,
+    /// First callable `(signature_hash, line_span)` keyed by first node `Uuid`
+    /// for non-discriminated `symbol_index` keys (zero duplicate key `String` clones).
+    callable_disc: FxHashMap<Uuid, (u64, LineSpan)>,
     /// Per-file line spans for non-discriminated overloaded callables.
     /// Empty when callables carry `identity_discriminator` or have no same-file overloads.
     overloaded_callables: FxHashMap<String, Vec<OverloadedCallableSpan>>,
-    file_nodes: HashMap<String, Uuid>,
+    file_nodes: FxHashMap<String, Uuid>,
     /// Normalized path + component-boundary suffixes → file node id (O(1) lookup).
-    file_path_lookup: HashMap<String, Uuid>,
-    config_key_nodes: HashMap<String, Uuid>,
-    env_nodes: HashMap<String, Uuid>,
+    file_path_lookup: FxHashMap<String, Uuid>,
+    config_key_nodes: FxHashMap<String, Uuid>,
+    env_nodes: FxHashMap<String, Uuid>,
     nodes: Vec<Node>,
     edges: Vec<Edge>,
     /// Lazily populated `Uuid -> self.nodes index` map when `append_target_vocab` runs.
-    node_index_by_id: HashMap<Uuid, usize>,
+    node_index_by_id: FxHashMap<Uuid, usize>,
     /// Optional disk spill — when set, nodes/edges are not kept in `Vec`s.
     spill: Option<SegmentedSpill>,
     spill_error: Option<String>,
     spilled_nodes: usize,
     spilled_edges: usize,
     /// Line ranges for config-usage resolution when nodes are spilled.
-    file_line_spans: HashMap<String, Vec<LineSpan>>,
+    file_line_spans: FxHashMap<String, Vec<LineSpan>>,
     code_index: Option<CodeIndex>,
     content_store: Option<ContentStore>,
     // Resolution performance tracking
     resolution_stats: ResolutionStats,
     // Fast resolution indexes (built on demand)
     /// Qualified name → candidate UUIDs (may be ambiguous when FQNs collide).
-    symbols_by_qualified: HashMap<String, Vec<Uuid>>,
-    symbols_by_suffix: HashMap<String, Vec<Uuid>>,
+    symbols_by_qualified: FxHashMap<String, Vec<Uuid>>,
+    symbols_by_suffix: FxHashMap<String, Vec<Uuid>>,
     indexes_built: bool,
     /// `OwnerType.field` → simple field type (for late Go selector resolution; spill-safe).
-    field_type_index: HashMap<String, String>,
-    /// Symbol node id → defining file path (for C header/.c disambiguation).
-    symbol_files: HashMap<Uuid, String>,
+    field_type_index: FxHashMap<String, String>,
+    /// Interned defining file paths (`u32 -> Box<str>`).
+    interned_files: Vec<Box<str>>,
+    /// Parallel flag table (`interned_files[idx].ends_with(".c")`).
+    interned_file_is_dot_c: Vec<bool>,
+    /// Path string → interned file index.
+    file_intern_map: FxHashMap<String, u32>,
+    /// Symbol node id → interned defining file index (for C header/.c disambiguation).
+    symbol_files: FxHashMap<Uuid, u32>,
     /// Node id → kind (spill-safe; used to reject non-callable `Calls` targets).
-    node_types: HashMap<Uuid, NodeType>,
+    node_types: FxHashMap<Uuid, NodeType>,
     /// Precomputed bare-name → `.c` implementation when header/translation-unit pairs collide.
-    c_preferred_impl: HashMap<String, Uuid>,
-    /// Lazy cache for bare suffix lookups during pass 2 (positive hits only).
-    suffix_resolve_cache: HashMap<String, Uuid>,
+    c_preferred_impl: FxHashMap<String, Uuid>,
+    /// Lazy cache for bare suffix lookups during single-call `add_relation` (positive hits only).
+    suffix_resolve_cache: FxHashMap<String, Uuid>,
     /// When false (default discover), `Symbol.fields` stay on symbols only — no Variable nodes.
     materialize_fields: bool,
     /// Path → node ids accumulated during commit (feeds FileTracker without a full mmap scan).
     tracker_mapping: HashMap<String, Vec<Uuid>>,
     /// Normalized path for the current pass-1 file (avoids re-normalize + re-hash per symbol).
     active_tracker_key: Option<String>,
+    /// Raw file path + interned index for the active pass-1 file batch.
+    active_file_raw: Option<(String, u32)>,
+    /// Buffered line spans for the active pass-1 file batch (flushed once in `end_file_batch`).
+    active_line_spans: Vec<LineSpan>,
     /// Node ids for the active file batch — flushed once in [`Self::end_file_batch`].
     active_tracker_ids: Vec<Uuid>,
+    /// Hot function complexity + bloom summaries collected at node creation.
+    hot_functions: Vec<HotFunctionSummary>,
     /// AnnotatedWith argument text keyed for sidecar (columnar edges drop properties).
     annotation_args: Vec<AnnotationArgEntry>,
     /// Child type simple name → direct bases `(base_simple_name, is_interface)`.
     /// Populated from Extends / Implements / IncludesClass / InheritsClass in pass 2.
     inheritance_bases: HashMap<String, Vec<(String, bool)>>,
     /// Owner simple name → `(method_simple_name, function_node_id)` declared on that type.
-    type_methods: HashMap<String, Vec<(String, Uuid)>>,
+    type_methods: FxHashMap<String, Vec<(String, Uuid)>>,
     /// Cached MRO chains (simple type names, self first).
-    mro_cache: HashMap<String, Vec<String>>,
+    mro_cache: FxHashMap<String, Vec<String>>,
     /// Unresolved / external-stub relations parked for cross-repo merge.
     parked_relations: Vec<ParkedRelationRecord>,
     declaration_ids: FxHashSet<Uuid>,
-    callable_parameters: HashMap<Uuid, String>,
+    callable_parameters: FxHashMap<Uuid, String>,
     /// Shared dispatch contracts, available even when graph nodes spill to disk.
-    method_identities: HashMap<Uuid, String>,
+    method_identities: FxHashMap<Uuid, String>,
     /// Type members cannot be selected as free functions by lexical fallback.
     member_method_ids: FxHashSet<Uuid>,
-    method_override_owners: HashMap<Uuid, String>,
+    method_override_owners: FxHashMap<Uuid, String>,
     signature_families: FxHashSet<Uuid>,
     unresolved_calls: usize,
     callable_resolution_samples: Vec<Relation>,
@@ -181,18 +227,61 @@ impl GraphBuilder {
         }
     }
 
+    /// Take hot function summaries collected during node materialization.
+    pub fn take_hot_functions(&mut self) -> Vec<HotFunctionSummary> {
+        std::mem::take(&mut self.hot_functions)
+    }
+
+    #[inline]
+    fn intern_file(&mut self, file: &str) -> u32 {
+        if let Some((ref active_path, idx)) = self.active_file_raw
+            && active_path == file
+        {
+            return idx;
+        }
+        if let Some(&idx) = self.file_intern_map.get(file) {
+            return idx;
+        }
+        let idx = self.interned_files.len() as u32;
+        self.interned_file_is_dot_c.push(file.ends_with(".c"));
+        self.interned_files.push(Box::from(file));
+        self.file_intern_map.insert(file.to_owned(), idx);
+        idx
+    }
+
+    #[inline]
+    fn file_str(&self, idx: u32) -> Option<&str> {
+        self.interned_files.get(idx as usize).map(Box::as_ref)
+    }
+
     /// Pin tracker mapping key for the duration of one file's pass-1 insert.
     pub fn begin_file_batch(&mut self, path: &Path) {
         if self.active_tracker_key.is_some() {
             self.end_file_batch();
         }
-        let key = normalize_path_str(&path.to_string_lossy()).into_owned();
+        let raw = path.to_string_lossy().into_owned();
+        let key = normalize_path_str(&raw).into_owned();
+        let idx = self.intern_file(&raw);
+        self.active_file_raw = Some((raw, idx));
         self.active_tracker_key = Some(key);
         self.active_tracker_ids.clear();
+        self.active_line_spans.clear();
     }
 
     /// Flush active file node ids into `tracker_mapping` (once per file, not per symbol).
     pub fn end_file_batch(&mut self) {
+        if let Some((raw, _)) = self.active_file_raw.take() {
+            if !self.active_line_spans.is_empty() {
+                let spans = std::mem::take(&mut self.active_line_spans);
+                if let Some(existing) = self.file_line_spans.get_mut(&raw) {
+                    existing.extend(spans);
+                } else {
+                    self.file_line_spans.insert(raw, spans);
+                }
+            }
+        } else {
+            self.active_line_spans.clear();
+        }
         if let Some(key) = self.active_tracker_key.take() {
             if !self.active_tracker_ids.is_empty() {
                 let ids = std::mem::take(&mut self.active_tracker_ids);
@@ -216,6 +305,12 @@ impl GraphBuilder {
             end,
             id: node.id,
         };
+        if let Some((ref active_raw, _)) = self.active_file_raw
+            && active_raw == file
+        {
+            self.active_line_spans.push(span);
+            return;
+        }
         if let Some(spans) = self.file_line_spans.get_mut(file) {
             spans.push(span);
         } else {
@@ -483,20 +578,19 @@ impl GraphBuilder {
         body: Option<&str>,
         prep: Option<&SymbolPass1Prep>,
     ) -> Uuid {
+        let node_type = symbol_type_to_node_type(symbol.symbol_type);
+        let discriminator_opt = symbol
+            .identity_discriminator_str()
+            .filter(|v| !v.is_empty());
         let mut key = (
             symbol_key(
                 &symbol.location.file,
                 &symbol.name,
                 symbol.qualified_name.as_deref(),
             ),
-            symbol_type_to_node_type(symbol.symbol_type),
+            node_type,
         );
-        let has_identity_discriminator = if let Some(discriminator) = symbol
-            .metadata
-            .get("identity_discriminator")
-            .and_then(|v| v.as_str())
-            .filter(|v| !v.is_empty())
-        {
+        let has_identity_discriminator = if let Some(discriminator) = discriminator_opt {
             key.0.push('\u{1f}');
             key.0.push_str(discriminator);
             true
@@ -506,6 +600,7 @@ impl GraphBuilder {
         // C `#include` paths are per-translation-unit; dedupe globally by path string
         // so kernel-scale repos do not materialize one Import node per occurrence.
         if symbol.symbol_type == SymbolType::Import
+            && !symbol.metadata.is_null()
             && symbol.metadata.get("kind").and_then(|v| v.as_str()) == Some("include")
         {
             key.0 = format!("c_include::{}", symbol.name);
@@ -541,19 +636,16 @@ impl GraphBuilder {
             .and_then(|p| p.name_span_overflow)
             .or(symbol.name_span_overflow);
 
-        let mut node = Node::new(
-            symbol_type_to_node_type(symbol.symbol_type),
-            symbol.name.clone(),
-        )
-        .with_file_path(symbol.location.file.clone())
-        .with_location(symbol.location.start_line, symbol.location.end_line)
-        .with_byte_spans(
-            start_byte,
-            end_byte,
-            name_rel_offset,
-            name_token_len,
-            name_span_overflow,
-        );
+        let mut node = Node::new(node_type, symbol.name.clone())
+            .with_file_path(symbol.location.file.clone())
+            .with_location(symbol.location.start_line, symbol.location.end_line)
+            .with_byte_spans(
+                start_byte,
+                end_byte,
+                name_rel_offset,
+                name_token_len,
+                name_span_overflow,
+            );
 
         if let Some(qn) = qn_override.as_deref().or(symbol.qualified_name.as_deref()) {
             node = node.with_qualified_name(qn);
@@ -588,11 +680,15 @@ impl GraphBuilder {
             node = node.with_code_hash(code_hash);
         }
 
-        let semantic_tags = symbol
-            .metadata
-            .get("semantic_tags")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
+        let semantic_tags = if symbol.metadata.is_null() {
+            None
+        } else {
+            symbol
+                .metadata
+                .get("semantic_tags")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        };
         if let Some(bloom) = prep.and_then(|p| p.token_bloom) {
             node = node.with_token_bloom(bloom);
         } else if should_sketch_symbol(symbol.symbol_type, semantic_tags.is_some()) {
@@ -605,45 +701,95 @@ impl GraphBuilder {
             );
             node = node.with_token_bloom(bloom);
         }
+
+        let metrics = rgctl_plugin_api::complexity_from_metadata(symbol);
+        let lang_str = symbol.language_str();
+        let role_str = symbol.callable_role_str();
+        let superseded = symbol.is_superseded_definition();
+        let override_id = symbol.override_identity_str();
+        let override_owner = symbol.override_owner_str();
+        let param_id = symbol.parameter_identity_str();
+        let generic_arity = symbol.generic_arity_val();
+
+        let prop_cap = usize::from(!symbol.modifiers.is_empty())
+            + usize::from(symbol.documentation.is_some())
+            + if metrics.is_some() { 5 } else { 0 }
+            + usize::from(lang_str.is_some())
+            + usize::from(role_str == Some("declaration"))
+            + usize::from(superseded)
+            + usize::from(override_id.is_some())
+            + usize::from(override_owner.is_some())
+            + usize::from(param_id.is_some())
+            + usize::from(generic_arity.is_some());
+        if prop_cap > 0 {
+            node.properties.reserve(prop_cap);
+        }
+
+        if let Some(lang) = lang_str {
+            node.properties
+                .insert("language".to_string(), lang.to_owned());
+        }
         if !symbol.modifiers.is_empty() {
-            node = node.with_property("modifiers".to_string(), symbol.modifiers.join(" "));
+            node.properties
+                .insert("modifiers".to_string(), symbol.modifiers.join(" "));
         }
         if let Some(doc) = &symbol.documentation {
-            node = node.with_property("documentation".to_string(), doc.clone());
+            node.properties
+                .insert("documentation".to_string(), doc.clone());
         }
-        if let Some(metrics) = rgctl_plugin_api::complexity_from_metadata(symbol) {
-            node = node
-                .with_property("cyclomatic".to_string(), metrics.cyclomatic.to_string())
-                .with_property("cognitive".to_string(), metrics.cognitive.to_string())
-                .with_property("loc".to_string(), metrics.loc.to_string())
-                .with_property(
-                    "nesting_depth".to_string(),
-                    metrics.nesting_depth.to_string(),
-                )
-                .with_property("returns".to_string(), metrics.returns.to_string());
+        if let Some(ref m) = metrics {
+            node.properties
+                .insert("cyclomatic".to_string(), m.cyclomatic.to_string());
+            node.properties
+                .insert("cognitive".to_string(), m.cognitive.to_string());
+            node.properties.insert("loc".to_string(), m.loc.to_string());
+            node.properties
+                .insert("nesting_depth".to_string(), m.nesting_depth.to_string());
+            node.properties
+                .insert("returns".to_string(), m.returns.to_string());
+        }
+        if role_str == Some("declaration") {
+            node.properties
+                .insert("callable_role".to_string(), "declaration".to_string());
+        }
+        if superseded {
+            node.properties
+                .insert("superseded_definition".to_string(), "true".to_string());
+        }
+        if let Some(dispatch) = override_id
+            && (dispatch.is_empty() || discriminator_opt != Some(dispatch))
+        {
+            node.properties
+                .insert("override_identity".to_string(), dispatch.to_owned());
+        }
+        if let Some(owner) = override_owner {
+            node.properties
+                .insert("override_owner".to_string(), owner.to_owned());
+        }
+        if let Some(params) = param_id {
+            node.properties
+                .insert("parameter_identity".to_string(), params.to_owned());
+        }
+        if let Some(arity) = generic_arity {
+            node.properties
+                .insert("generic_arity".to_string(), arity.to_string());
         }
         if let Some(obj) = symbol.metadata.as_object() {
             for (k, v) in obj {
                 if k == rgctl_plugin_api::COMPLEXITY_META_KEY
                     || matches!(
                         k.as_str(),
-                        "source_start_byte" | "source_end_byte" | "identity_discriminator"
+                        "source_start_byte"
+                            | "source_end_byte"
+                            | "identity_discriminator"
+                            | "language"
+                            | "callable_role"
+                            | "override_identity"
+                            | "override_owner"
+                            | "parameter_identity"
+                            | "generic_arity"
+                            | "superseded_definition"
                     )
-                {
-                    continue;
-                }
-                // The canonical identity is stored by with_identity_discriminator
-                // below. Dispatch identity only needs its own property when it
-                // differs; an explicit empty value intentionally blocks fallback.
-                if k == "override_identity"
-                    && v.as_str().is_some_and(|dispatch| {
-                        !dispatch.is_empty()
-                            && symbol
-                                .metadata
-                                .get("identity_discriminator")
-                                .and_then(|value| value.as_str())
-                                == Some(dispatch)
-                    })
                 {
                     continue;
                 }
@@ -657,20 +803,29 @@ impl GraphBuilder {
                     if k == "kind" && s == "field" {
                         node = node.with_label("field".to_string());
                     }
-                    node = node.with_property(k.clone(), s);
+                    node.properties.insert(k.clone(), s);
                 }
             }
         }
 
-        if let Some(discriminator) = symbol
-            .metadata
-            .get("identity_discriminator")
-            .and_then(|v| v.as_str())
-            .filter(|v| !v.is_empty())
-        {
+        if let Some(discriminator) = discriminator_opt {
             node = node.with_identity_discriminator(discriminator);
         }
         let id = node.id;
+        if node_type == NodeType::Function && !self.node_types.contains_key(&id) {
+            let cyclomatic = metrics.as_ref().map_or(1, |m| m.cyclomatic) as u32;
+            let cognitive = metrics
+                .as_ref()
+                .map_or(cyclomatic as usize, |m| m.cognitive) as u32;
+            let loc = metrics.as_ref().map_or(0, |m| m.loc) as u32;
+            self.hot_functions.push(HotFunctionSummary {
+                id,
+                cyclomatic,
+                cognitive,
+                loc,
+                token_bloom: node.token_bloom,
+            });
+        }
         if !has_identity_discriminator
             && matches!(
                 symbol.symbol_type,
@@ -682,8 +837,7 @@ impl GraphBuilder {
                 end: symbol.location.end_line.max(symbol.location.start_line),
                 id,
             };
-            self.callable_disc
-                .insert(key.clone(), (overload_disc(symbol), span));
+            self.callable_disc.insert(id, (overload_disc(symbol), span));
             if let Some(base_qn) = overloaded_base_qn {
                 let entries = self
                     .overloaded_callables
@@ -698,21 +852,19 @@ impl GraphBuilder {
                 }
             }
         }
-        if symbol.metadata["callable_role"] == "declaration" {
+        if role_str == Some("declaration") {
             self.declaration_ids.insert(id);
         }
-        if symbol.metadata["callable_role"] == "implementation"
-            && symbol.metadata["superseded_definition"] != true
-            && let Some(parameters) = symbol
-                .metadata
-                .get("parameter_identity")
-                .and_then(|v| v.as_str())
+        if role_str == Some("implementation")
+            && !superseded
+            && let Some(parameters) = param_id
         {
             self.callable_parameters.insert(id, parameters.to_owned());
         }
-        self.symbol_index.insert(key.clone(), id);
-        self.symbol_files.insert(id, symbol.location.file.clone());
+        let file_intern = self.intern_file(&symbol.location.file);
+        self.symbol_files.insert(id, file_intern);
         self.index_symbol_resolution(&key.0, &node);
+        self.symbol_index.insert(key, id);
         self.index_type_method(symbol, id);
         self.index_import_binding(symbol);
         self.commit_node(node);
@@ -795,26 +947,20 @@ impl GraphBuilder {
         ) {
             return;
         }
-        if symbol.metadata["superseded_definition"] == true {
+        if symbol.is_superseded_definition() {
             return;
         }
         if let Some(identity) = symbol
-            .metadata
-            .get("override_identity")
-            .or_else(|| symbol.metadata.get("identity_discriminator"))
-            .and_then(|v| v.as_str())
+            .override_identity_str()
+            .or_else(|| symbol.identity_discriminator_str())
             .filter(|s| !s.is_empty())
         {
             self.method_identities.insert(id, identity.to_owned());
         }
-        if let Some(owner) = symbol
-            .metadata
-            .get("override_owner")
-            .and_then(|v| v.as_str())
-        {
+        if let Some(owner) = symbol.override_owner_str() {
             self.method_override_owners.insert(id, owner.to_owned());
         }
-        if symbol.metadata["language"] == "typescript" {
+        if symbol.language_str() == Some("typescript") {
             self.signature_families.insert(id);
         }
         let Some(qn) = symbol.qualified_name.as_deref() else {
@@ -855,7 +1001,7 @@ impl GraphBuilder {
             return Some(existing);
         }
         let disc = overload_disc(symbol);
-        if let Some(&(first_disc, first_span)) = self.callable_disc.get(key)
+        if let Some(&(first_disc, first_span)) = self.callable_disc.get(&existing)
             && first_disc != disc
         {
             let base = symbol
@@ -868,7 +1014,7 @@ impl GraphBuilder {
                 key.1,
             );
             if let Some(&id) = self.symbol_index.get(&next_key) {
-                if self.callable_disc.get(&next_key).map(|(d, _)| *d) == Some(disc) {
+                if self.callable_disc.get(&id).map(|(d, _)| *d) == Some(disc) {
                     return Some(id);
                 }
                 overloaded = format!("{overloaded}#{disc:x}");
@@ -948,11 +1094,12 @@ impl GraphBuilder {
                 .with_label("field".to_string())
                 .with_property("member_of".to_string(), symbol.name.clone())
                 .with_property("owner_qualified_name".to_string(), owner_qn.clone());
-            if let Some(fqn) = symbol
-                .metadata
-                .get("field_type_fqns")
-                .and_then(|v| v.get(&field.name))
-                .and_then(|v| v.as_str())
+            if !symbol.metadata.is_null()
+                && let Some(fqn) = symbol
+                    .metadata
+                    .get("field_type_fqns")
+                    .and_then(|v| v.get(&field.name))
+                    .and_then(|v| v.as_str())
             {
                 node = node.with_property("field_type_fqn".into(), fqn.to_owned());
             }
@@ -980,8 +1127,8 @@ impl GraphBuilder {
                 node = node.with_property("visibility".to_string(), vis.clone());
             }
             let field_id = node.id;
-            self.symbol_index.insert(key.clone(), field_id);
             self.index_symbol_resolution(&key.0, &node);
+            self.symbol_index.insert(key, field_id);
             self.commit_node(node);
             self.add_edge(field_id, file_id, EdgeType::DefinedIn);
             self.add_edge(file_id, field_id, EdgeType::Contains);
@@ -1005,9 +1152,7 @@ impl GraphBuilder {
             symbol_type_to_node_type(symbol.symbol_type),
         );
         if let Some(discriminator) = symbol
-            .metadata
-            .get("identity_discriminator")
-            .and_then(|v| v.as_str())
+            .identity_discriminator_str()
             .filter(|v| !v.is_empty())
         {
             key.0.push('\u{1f}');
@@ -1103,9 +1248,12 @@ impl GraphBuilder {
             if unique_resolved(ids).is_some() {
                 continue;
             }
-            if let Some(id) =
-                single_c_preferred_impl(ids, &self.symbol_files, &self.declaration_ids)
-            {
+            if let Some(id) = single_c_preferred_impl(
+                ids,
+                &self.symbol_files,
+                &self.interned_file_is_dot_c,
+                &self.declaration_ids,
+            ) {
                 self.c_preferred_impl.insert(suffix.clone(), id);
             }
         }
@@ -1196,7 +1344,12 @@ impl GraphBuilder {
                 } else {
                     global = Some(*id);
                 }
-                if self.symbol_files.get(id).is_some_and(|path| path == file) {
+                if self
+                    .symbol_files
+                    .get(id)
+                    .and_then(|&idx| self.file_str(idx))
+                    == Some(file)
+                {
                     if local.is_some_and(|old| old != *id) {
                         local_ambiguous = true;
                     } else {
@@ -1269,7 +1422,20 @@ impl GraphBuilder {
                         }),
                 );
             }
-            Some(unique_matching(candidates, eligible))
+            let chosen = unique_matching(candidates, eligible).or_else(|| {
+                // Prefer a unique non-declaration implementation over paired header/overload declarations.
+                unique_matching(candidates, |id| {
+                    eligible(id) && !self.declaration_ids.contains(id)
+                })
+                .or_else(|| {
+                    if !free_only {
+                        self.c_preferred_impl.get(name).copied().filter(eligible)
+                    } else {
+                        None
+                    }
+                })
+            });
+            Some(chosen)
         };
         let local = direct(name);
         if local.is_some_and(|found| found.is_some())
@@ -1281,10 +1447,17 @@ impl GraphBuilder {
         let Some((owner, method)) = split_owner_method(name) else {
             return local;
         };
-        if !self.inheritance_bases.contains_key(type_simple_name(owner)) {
+        let owner_simple = type_simple_name(owner);
+        if !self.inheritance_bases.contains_key(owner_simple) {
             return local;
         }
-        let chain = compute_mro_chain(owner, &self.inheritance_bases);
+        let cached_chain;
+        let chain: &[String] = if let Some(cached) = self.mro_cache.get(owner_simple) {
+            cached.as_slice()
+        } else {
+            cached_chain = compute_mro_chain(owner, &self.inheritance_bases);
+            cached_chain.as_slice()
+        };
         let mut key = String::with_capacity(name.len());
         for ancestor in chain.iter().skip(1) {
             for separator in [".", "::", "#"] {
@@ -1306,6 +1479,284 @@ impl GraphBuilder {
         local
     }
 
+    /// Pre-warm MRO chains after inheritance relations finish so parallel Pass-2 reads `&self` lock-free.
+    pub(crate) fn warm_mro_cache(&mut self) {
+        if self.inheritance_bases.is_empty() {
+            return;
+        }
+        let keys: Vec<String> = self.inheritance_bases.keys().cloned().collect();
+        for key in keys {
+            if !self.mro_cache.contains_key(key.as_str()) {
+                let chain = compute_mro_chain(&key, &self.inheritance_bases);
+                self.mro_cache.insert(key, chain);
+            }
+        }
+    }
+
+    fn resolve_from_endpoint_readonly(&self, relation: &Relation, is_calls: bool) -> Option<Uuid> {
+        let expected_callable = is_calls.then_some(NodeType::Function);
+        let exact_from = relation.from_identity_discriminator_str();
+        let mut from_id = if let Some(identity) = exact_from {
+            self.resolve_callable_identity(&relation.from, &relation.location.file, identity)
+        } else {
+            self.resolve_overloaded_source(
+                &relation.from,
+                &relation.location.file,
+                relation.location.start_line,
+            )
+            .or_else(|| {
+                self.resolve_symbol_readonly_typed(
+                    &relation.from,
+                    &relation.location.file,
+                    None,
+                    None,
+                    expected_callable,
+                    None,
+                )
+            })
+        };
+        if from_id.is_none() && exact_from.is_none() {
+            from_id =
+                self.unique_same_file_symbol(&relation.from, &relation.location.file, is_calls);
+        }
+        if from_id.is_none() && exact_from.is_none() {
+            from_id = self
+                .symbols_by_qualified
+                .get(&relation.from)
+                .and_then(|ids| self.unique_typed(ids, expected_callable));
+        }
+        if from_id.is_none() && exact_from.is_none() && !is_calls {
+            from_id = self.lookup_file_node(&relation.from, &relation.location.file);
+        }
+        from_id
+    }
+
+    /// Read-only Pass-2 endpoint resolution for non-inheritance relations (parallelizable across Rayon workers).
+    pub(crate) fn resolve_non_inheritance_relation(
+        &self,
+        relation: &Relation,
+        scratch: &mut Pass2WorkerScratch,
+    ) -> NonInheritancePlan {
+        let is_calls = relation.relation_type == RelationType::Calls;
+        let lang = relation.language_str();
+        if is_calls && lang == Some("c") && !self.c_preferred_impl.contains_key(&relation.to) {
+            let can_resolve = if let Some(&cached) = scratch.bare_fn_cache.get(relation.to.as_str())
+            {
+                cached.is_some()
+            } else {
+                let resolved = self.symbols_by_suffix.get(&relation.to).and_then(|ids| {
+                    self.unique_typed(ids, Some(NodeType::Function))
+                        .or_else(|| {
+                            single_c_preferred_impl(
+                                ids,
+                                &self.symbol_files,
+                                &self.interned_file_is_dot_c,
+                                &self.declaration_ids,
+                            )
+                        })
+                });
+                scratch.bare_fn_cache.insert(relation.to.clone(), resolved);
+                resolved.is_some()
+            };
+            if !can_resolve {
+                let mut from_id = self.resolve_symbol_readonly_typed(
+                    &relation.from,
+                    &relation.location.file,
+                    None,
+                    None,
+                    Some(NodeType::Function),
+                    Some(&mut scratch.bare_fn_cache),
+                );
+                if from_id.is_none() {
+                    from_id =
+                        self.unique_same_file_symbol(&relation.from, &relation.location.file, true);
+                }
+                if from_id.is_none() {
+                    from_id = self
+                        .symbols_by_qualified
+                        .get(&relation.from)
+                        .and_then(|ids| self.unique_typed(ids, Some(NodeType::Function)));
+                }
+                return NonInheritancePlan::FastRejectPark { from_id };
+            }
+        }
+
+        let expected_callable = is_calls.then_some(NodeType::Function);
+        let from_id = self.resolve_from_endpoint_readonly(relation, is_calls);
+        let (to_type_hint, to_qualified_hint) = self.enrich_go_type_hints(relation);
+
+        let java_call = is_calls && lang == Some("java");
+        let target = to_qualified_hint
+            .as_deref()
+            .or(relation.to_qualified_hint.as_deref())
+            .unwrap_or(&relation.to);
+        let explicit_to = relation.to_identity_discriminator_str();
+        let argument_to = relation.argument_identity_discriminator_str();
+        let unresolved_generic =
+            relation.explicit_generic_arity_val().is_some() && explicit_to.is_none();
+
+        let mut scoped = if is_calls {
+            if explicit_to.is_none() && argument_to.is_none() {
+                if let Some(&cached) = scratch.scoped_none_cache.get(target) {
+                    cached
+                } else {
+                    let res = self.resolve_scoped_callable(
+                        target,
+                        &relation.location.file,
+                        None,
+                        None,
+                        java_call,
+                        false,
+                    );
+                    scratch.scoped_none_cache.insert(target.to_owned(), res);
+                    res
+                }
+            } else {
+                self.resolve_scoped_callable(
+                    target,
+                    &relation.location.file,
+                    explicit_to,
+                    argument_to,
+                    java_call,
+                    false,
+                )
+            }
+        } else {
+            None
+        };
+
+        let inferred_owner = relation.is_inferred_callable_owner();
+        if scoped.is_none() && inferred_owner && explicit_to.is_none() {
+            scoped = self.resolve_scoped_callable(
+                &relation.to,
+                &relation.location.file,
+                None,
+                argument_to,
+                java_call,
+                true,
+            );
+        }
+        let exact_id = if unresolved_generic {
+            None
+        } else {
+            scoped.flatten()
+        };
+        let signature_call = java_call || (is_calls && relation.is_exact_callable_resolution());
+        let ambiguous_java = signature_call
+            && exact_id.is_none()
+            && self
+                .symbols_by_qualified
+                .get(target)
+                .or_else(|| self.symbols_by_suffix.get(target))
+                .is_some_and(|ids| self.unique_typed(ids, Some(NodeType::Function)).is_none());
+        let mut to_id = if exact_id.is_some() {
+            exact_id
+        } else if explicit_to.is_some()
+            || ambiguous_java
+            || signature_call && (argument_to.is_some() || scoped == Some(None))
+        {
+            None
+        } else {
+            let fn_cache = is_calls.then_some(&mut scratch.bare_fn_cache);
+            self.resolve_symbol_readonly_typed(
+                &relation.to,
+                &relation.location.file,
+                to_qualified_hint
+                    .as_deref()
+                    .or(relation.to_qualified_hint.as_deref()),
+                to_type_hint.as_deref().or(relation.to_type_hint.as_deref()),
+                expected_callable,
+                fn_cache,
+            )
+        };
+        if to_id.is_none() && is_mainframe_relation(relation) {
+            to_id = self.unique_same_file_symbol(&relation.to, &relation.location.file, is_calls);
+        }
+        if to_id.is_none() {
+            if let Some(id) = self.lookup_file_node(&relation.to, &relation.location.file) {
+                to_id = Some(id);
+            } else if relation
+                .to_type_hint
+                .as_deref()
+                .is_some_and(|hint| hint.eq_ignore_ascii_case("file"))
+            {
+                return NonInheritancePlan::Skip;
+            }
+        }
+
+        NonInheritancePlan::Standard {
+            from_id,
+            to_id,
+            to_type_hint,
+            to_qualified_hint,
+            signature_call,
+        }
+    }
+
+    /// Sequentially materialize external stubs (if needed), park unresolved relations, and commit the edge.
+    pub(crate) fn apply_non_inheritance_plan(
+        &mut self,
+        relation: &Relation,
+        plan: NonInheritancePlan,
+        runtime_stub_qns: &mut FxHashSet<String>,
+    ) -> Result<()> {
+        match plan {
+            NonInheritancePlan::Skip => Ok(()),
+            NonInheritancePlan::FastRejectPark { from_id } => {
+                if let Some(from) = from_id {
+                    self.park_relation_if_needed(
+                        relation,
+                        from,
+                        None,
+                        relation.to_type_hint.clone(),
+                        relation.to_qualified_hint.clone(),
+                    );
+                }
+                Ok(())
+            }
+            NonInheritancePlan::Standard {
+                from_id,
+                mut to_id,
+                to_type_hint,
+                to_qualified_hint,
+                signature_call,
+            } => {
+                // Reconcile rare case where an earlier non-inheritance relation in Pass 2 created
+                // an external stub in `symbols_by_qualified` that a later relation references.
+                if !runtime_stub_qns.is_empty() && (from_id.is_none() || to_id.is_none()) {
+                    let target_probe = to_qualified_hint
+                        .as_deref()
+                        .or(relation.to_qualified_hint.as_deref())
+                        .unwrap_or(&relation.to);
+                    let touches_stub = (from_id.is_none()
+                        && runtime_stub_qns.contains(relation.from.as_str()))
+                        || (to_id.is_none()
+                            && (runtime_stub_qns.contains(target_probe)
+                                || runtime_stub_qns.contains(relation.to.as_str())
+                                || to_type_hint
+                                    .as_deref()
+                                    .or(relation.to_type_hint.as_deref())
+                                    .is_some_and(|h| {
+                                        runtime_stub_qns.contains(h)
+                                            || runtime_stub_qns.contains(type_simple_name(h))
+                                    })));
+                    if touches_stub {
+                        return self.add_relation_recording_stubs(relation, Some(runtime_stub_qns));
+                    }
+                }
+                self.finish_resolved_relation(
+                    relation,
+                    from_id,
+                    &mut to_id,
+                    to_type_hint,
+                    to_qualified_hint,
+                    signature_call,
+                    Some(runtime_stub_qns),
+                )
+            }
+        }
+    }
+
     /// Add a relation between symbols when endpoints resolve.
     ///
     /// For allowlisted relation kinds, missing endpoints become deduplicated
@@ -1316,18 +1767,30 @@ impl GraphBuilder {
     /// Unresolved or stubbed `Calls`/`Uses`/`Extends`/`Implements`/`Injects`
     /// from in-repo nodes are also parked for cross-repo `rgctl merge`.
     pub fn add_relation(&mut self, relation: &Relation) -> Result<()> {
-        // Fast reject: unresolved cross-file C calls (no stub policy for Calls).
-        // Still park when `from` resolves so cross-repo merge can recover.
+        self.add_relation_recording_stubs(relation, None)
+    }
+
+    fn add_relation_recording_stubs(
+        &mut self,
+        relation: &Relation,
+        runtime_stub_qns: Option<&mut FxHashSet<String>>,
+    ) -> Result<()> {
         let is_calls = relation.relation_type == RelationType::Calls;
+        let lang = relation.language_str();
         if is_calls
-            && relation.metadata.get("language").and_then(|v| v.as_str()) == Some("c")
+            && lang == Some("c")
             && !self.c_preferred_impl.contains_key(&relation.to)
             && !self.suffix_resolve_cache.contains_key(&relation.to)
         {
             let can_resolve = self.symbols_by_suffix.get(&relation.to).is_some_and(|ids| {
                 self.unique_typed(ids, Some(NodeType::Function)).is_some()
-                    || single_c_preferred_impl(ids, &self.symbol_files, &self.declaration_ids)
-                        .is_some()
+                    || single_c_preferred_impl(
+                        ids,
+                        &self.symbol_files,
+                        &self.interned_file_is_dot_c,
+                        &self.declaration_ids,
+                    )
+                    .is_some()
             });
             if !can_resolve {
                 let mut from_id = self.resolve_symbol_tracked_typed(
@@ -1361,10 +1824,7 @@ impl GraphBuilder {
         }
 
         let expected_callable = is_calls.then_some(NodeType::Function);
-        let exact_from = relation
-            .metadata
-            .get("from_identity_discriminator")
-            .and_then(|v| v.as_str());
+        let exact_from = relation.from_identity_discriminator_str();
         let mut from_id = if let Some(identity) = exact_from {
             self.resolve_callable_identity(&relation.from, &relation.location.file, identity)
         } else {
@@ -1384,9 +1844,6 @@ impl GraphBuilder {
             })
         };
         if from_id.is_none() && exact_from.is_none() {
-            // `relation.from` is always declared in `relation.location.file`; prefer the unique
-            // same-file symbol when container qualification (`Container::name`) missed Step 1 and
-            // multiple files across the repository share `relation.from`'s bare name.
             from_id =
                 self.unique_same_file_symbol(&relation.from, &relation.location.file, is_calls);
         }
@@ -1402,22 +1859,15 @@ impl GraphBuilder {
 
         let (to_type_hint, to_qualified_hint) = self.enrich_go_type_hints(relation);
 
-        let java_call =
-            is_calls && relation.metadata.get("language").and_then(|v| v.as_str()) == Some("java");
+        let java_call = is_calls && lang == Some("java");
         let target = to_qualified_hint
             .as_deref()
             .or(relation.to_qualified_hint.as_deref())
             .unwrap_or(&relation.to);
-        let explicit_to = relation
-            .metadata
-            .get("to_identity_discriminator")
-            .and_then(|v| v.as_str());
-        let argument_to = relation
-            .metadata
-            .get("argument_identity_discriminator")
-            .and_then(|v| v.as_str());
+        let explicit_to = relation.to_identity_discriminator_str();
+        let argument_to = relation.argument_identity_discriminator_str();
         let unresolved_generic =
-            relation.metadata.get("explicit_generic_arity").is_some() && explicit_to.is_none();
+            relation.explicit_generic_arity_val().is_some() && explicit_to.is_none();
         let mut scoped = if is_calls {
             self.resolve_scoped_callable(
                 target,
@@ -1430,9 +1880,7 @@ impl GraphBuilder {
         } else {
             None
         };
-        // Only a helper-inferred owner may fall back to the unqualified name.
-        // Explicit receiver hints and known-but-incompatible families are final.
-        let inferred_owner = relation.metadata["inferred_callable_owner"] == true;
+        let inferred_owner = relation.is_inferred_callable_owner();
         if scoped.is_none() && inferred_owner && explicit_to.is_none() {
             scoped = self.resolve_scoped_callable(
                 &relation.to,
@@ -1448,14 +1896,9 @@ impl GraphBuilder {
         } else {
             scoped.flatten()
         };
-        let signature_call = java_call
-            || is_calls
-                && relation
-                    .metadata
-                    .get("exact_callable_resolution")
-                    .and_then(|v| v.as_bool())
-                    == Some(true);
+        let signature_call = java_call || (is_calls && relation.is_exact_callable_resolution());
         let ambiguous_java = signature_call
+            && exact_id.is_none()
             && self
                 .symbols_by_qualified
                 .get(target)
@@ -1480,8 +1923,6 @@ impl GraphBuilder {
             )
         };
         if to_id.is_none() && is_mainframe_relation(relation) {
-            // Same-file COBOL `PERFORM PARA` / PL/I `CALL PROC` / JCL `EXEC PROC=...` when
-            // multiple mainframe files in the repo share common paragraph/step names (`STEP1`).
             to_id = self.unique_same_file_symbol(&relation.to, &relation.location.file, is_calls);
         }
         if to_id.is_none() {
@@ -1496,8 +1937,6 @@ impl GraphBuilder {
             }
         }
 
-        // Signature text can contain namespace separators (for example Rust
-        // trait names). A suffix candidate must still satisfy the typed edge.
         if is_inheritance_relation(relation.relation_type)
             && let Some(to) = to_id
             && !matches!(
@@ -1516,13 +1955,36 @@ impl GraphBuilder {
             to_id = None;
         }
 
+        self.finish_resolved_relation(
+            relation,
+            from_id,
+            &mut to_id,
+            to_type_hint,
+            to_qualified_hint,
+            signature_call,
+            runtime_stub_qns,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_resolved_relation(
+        &mut self,
+        relation: &Relation,
+        from_id: Option<Uuid>,
+        to_id: &mut Option<Uuid>,
+        to_type_hint: Option<String>,
+        to_qualified_hint: Option<String>,
+        signature_call: bool,
+        mut runtime_stub_qns: Option<&mut FxHashSet<String>>,
+    ) -> Result<()> {
         if relation_allows_external_stub(relation) {
             // Only stub unresolved *targets*. Stubbing missing `from` when
             // resolution is ambiguous invents phantom callers and inflates
             // Function counts on large Java repos.
             if from_id.is_some() && to_id.is_none() {
-                let md_url = (relation.metadata.get("kind").and_then(|v| v.as_str())
-                    == Some("markdown_link"))
+                let md_url = (!relation.metadata.is_null()
+                    && relation.metadata.get("kind").and_then(|v| v.as_str())
+                        == Some("markdown_link"))
                 .then(|| {
                     relation
                         .metadata
@@ -1547,33 +2009,46 @@ impl GraphBuilder {
                     None => self.has_in_repo_candidate(stub_name, target_nt),
                 };
                 if !shadows_in_repo {
-                    to_id = Some(self.ensure_external_stub(stub_name, qn, target_nt));
+                    let prev_stubs = self.external_stub_ids.len();
+                    let id = self.ensure_external_stub(stub_name, qn, target_nt);
+                    if self.external_stub_ids.len() > prev_stubs
+                        && let Some(ref mut stub_qns) = runtime_stub_qns
+                    {
+                        let effective_qn = qn.filter(|s| !s.is_empty()).unwrap_or(stub_name);
+                        stub_qns.insert(effective_qn.to_string());
+                        stub_qns.insert(type_simple_name(effective_qn).to_string());
+                    }
+                    *to_id = Some(id);
                 }
             }
         }
 
         // Calls must target callables only — never Class field stubs via fuzzy suffix.
         if relation.relation_type == RelationType::Calls
-            && let Some(to) = to_id
+            && let Some(to) = *to_id
             && !self.is_callable_id(to)
         {
-            to_id = None;
+            *to_id = None;
         }
 
         if let Some(from) = from_id {
             self.park_relation_if_needed(
                 relation,
                 from,
-                to_id,
+                *to_id,
                 to_type_hint
                     .clone()
                     .or_else(|| relation.to_type_hint.clone())
                     .or_else(|| {
-                        relation
-                            .metadata
-                            .get("to_type_hint")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string)
+                        if relation.metadata.is_null() {
+                            None
+                        } else {
+                            relation
+                                .metadata
+                                .get("to_type_hint")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string)
+                        }
                     }),
                 to_qualified_hint
                     .clone()
@@ -1586,12 +2061,15 @@ impl GraphBuilder {
             if self.callable_resolution_samples.len() < crate::callable_resolution::DIAGNOSTIC_LIMIT
             {
                 let mut sample = relation.clone();
+                if !sample.metadata.is_object() {
+                    sample.metadata = serde_json::Value::Object(serde_json::Map::new());
+                }
                 sample.metadata["resolution_reason"]="No unique canonical callable matched the available source evidence; no name-only overload fallback was applied".into();
                 self.callable_resolution_samples.push(sample);
             }
         }
 
-        if let (Some(from), Some(to)) = (from_id, to_id) {
+        if let (Some(from), Some(to)) = (from_id, *to_id) {
             let mut edge_type = relation_type_to_edge_type(relation.relation_type);
             let target_is_interface_node =
                 self.node_types.get(&to).copied() == Some(NodeType::Interface);
@@ -1604,13 +2082,14 @@ impl GraphBuilder {
             {
                 edge_type = EdgeType::Implements;
             }
+            let spilling = self.spill.is_some();
             let mut edge = Edge::new(from, to, edge_type);
-            if relation.relation_type == RelationType::Calls {
+            if !spilling && relation.relation_type == RelationType::Calls {
                 edge = edge.with_property(
                     "call_site_line".to_string(),
                     relation.location.start_line.to_string(),
                 );
-                // Persist receiver type / callee for post-ingest MRO retargeting.
+                // Persist receiver type / callee for post-ingest MRO retargeting (in-memory mode).
                 let hint = to_type_hint
                     .as_deref()
                     .or(relation.to_type_hint.as_deref())
@@ -1647,14 +2126,16 @@ impl GraphBuilder {
                             "interface" | "trait" | "module" | "annotation"
                         )
                     });
-                let prepend_front = relation
-                    .metadata
-                    .get("mixin")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|m| matches!(m, "include" | "prepend"));
+                let prepend_front = !relation.metadata.is_null()
+                    && relation
+                        .metadata
+                        .get("mixin")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|m| matches!(m, "include" | "prepend"));
                 self.record_inheritance(child, parent, is_iface, prepend_front);
             }
             if relation.relation_type == RelationType::AnnotatedWith
+                && !relation.metadata.is_null()
                 && let Some(args) = relation
                     .metadata
                     .get("arguments")
@@ -1667,17 +2148,22 @@ impl GraphBuilder {
                     .next()
                     .filter(|s| !s.is_empty())
                     .unwrap_or(relation.to.as_str());
-                edge = edge.with_property("arguments".into(), args.to_string());
+                if !spilling {
+                    edge = edge.with_property("arguments".into(), args.to_string());
+                }
                 self.annotation_args.push(AnnotationArgEntry {
                     source_id: from.to_string(),
                     annotation: ann.to_string(),
                     arguments: args.to_string(),
                 });
             }
-            if matches!(
-                relation.relation_type,
-                RelationType::ExposesRoute | RelationType::Injects
-            ) {
+            if !spilling
+                && !relation.metadata.is_null()
+                && matches!(
+                    relation.relation_type,
+                    RelationType::ExposesRoute | RelationType::Injects
+                )
+            {
                 for key in [
                     "http_method",
                     "route_path",
@@ -1696,6 +2182,7 @@ impl GraphBuilder {
                 }
             }
             if relation.relation_type == RelationType::Injects
+                && !relation.metadata.is_null()
                 && let Some(target_vocab) = relation
                     .metadata
                     .get("target_vocab")
@@ -1880,7 +2367,8 @@ impl GraphBuilder {
         if self.inheritance_bases.is_empty() || self.type_methods.is_empty() {
             return;
         }
-        let owners: Vec<String> = self.type_methods.keys().cloned().collect();
+        let mut owners: Vec<String> = self.type_methods.keys().cloned().collect();
+        owners.sort_unstable();
         let mut edges = Vec::new();
         for owner in owners {
             let methods = match self.type_methods.get(&owner) {
@@ -2095,6 +2583,15 @@ impl GraphBuilder {
             node = node.with_label("route".to_string());
         }
         let id = node.id;
+        if node_type == NodeType::Function && !self.node_types.contains_key(&id) {
+            self.hot_functions.push(HotFunctionSummary {
+                id,
+                cyclomatic: 1,
+                cognitive: 1,
+                loc: 0,
+                token_bloom: node.token_bloom,
+            });
+        }
         self.symbol_index.insert(key, id);
         self.external_stub_ids.insert(id);
         self.symbols_by_qualified.entry(qn).or_default().push(id);
@@ -2127,15 +2624,11 @@ impl GraphBuilder {
             self.lookup_import_module_hint(file_path, &relation.to, to_type_hint.as_deref());
 
         let identity = relation
-            .metadata
-            .get("to_identity_discriminator")
-            .and_then(|v| v.as_str())
+            .to_identity_discriminator_str()
             .map(str::to_owned)
             .or_else(|| {
                 relation
-                    .metadata
-                    .get("argument_identity_discriminator")
-                    .and_then(|v| v.as_str())
+                    .argument_identity_discriminator_str()
                     .map(|arguments| format!("args:{arguments}"))
             });
         let to_qualified_hint = identity
@@ -2238,10 +2731,10 @@ impl GraphBuilder {
 
     /// Late-bind Go `recv.field.Method` using field Variable nodes from Pass 1.
     fn enrich_go_type_hints(&self, relation: &Relation) -> (Option<String>, Option<String>) {
-        if relation.to_type_hint.is_some() {
+        if relation.to_type_hint.is_some() || relation.metadata.is_null() {
             return (None, None);
         }
-        let lang = relation.metadata.get("language").and_then(|v| v.as_str());
+        let lang = relation.language_str();
         if lang != Some("go") {
             return (None, None);
         }
@@ -2437,9 +2930,14 @@ impl GraphBuilder {
 
     fn unique_same_file_symbol(&self, name: &str, file: &str, calls_only: bool) -> Option<Uuid> {
         let ids = self.symbols_by_suffix.get(name)?;
+        let file_idx = self.file_intern_map.get(file).copied();
         let mut found: Option<Uuid> = None;
         for &id in ids {
-            if self.symbol_files.get(&id).map(String::as_str) != Some(file) {
+            let same_file = match file_idx {
+                Some(idx) => self.symbol_files.get(&id).copied() == Some(idx),
+                None => false,
+            };
+            if !same_file {
                 continue;
             }
             if calls_only && !self.is_callable_id(id) {
@@ -2493,6 +2991,127 @@ impl GraphBuilder {
         result
     }
 
+    /// Lock-free read-only symbol resolution used by parallel Pass-2 workers.
+    fn resolve_symbol_readonly_typed(
+        &self,
+        name: &str,
+        file: &str,
+        qualified_hint: Option<&str>,
+        type_hint: Option<&str>,
+        expected: Option<NodeType>,
+        bare_fn_cache: Option<&mut FxHashMap<String, Option<Uuid>>>,
+    ) -> Option<Uuid> {
+        // 1. Try exact match in current file
+        if let Some(id) = self.exact_symbol(name, file, expected) {
+            return Some(id);
+        }
+
+        // 2. Try qualified hint direct lookup (O(1)); prefer same-file exact match first
+        if let Some(hint) = qualified_hint {
+            if let Some(id) = self.exact_symbol(hint, file, expected) {
+                return Some(id);
+            }
+            if let Some(id) = self
+                .symbols_by_qualified
+                .get(hint)
+                .and_then(|ids| self.unique_typed(ids, expected))
+            {
+                return Some(id);
+            }
+            if let Some(id) = self
+                .symbols_by_suffix
+                .get(hint)
+                .and_then(|ids| self.unique_typed(ids, expected))
+            {
+                return Some(id);
+            }
+        }
+
+        // 3. Try type hint + simple name (O(1)); walk MRO when subtype did not declare method.
+        if let Some(type_name) = type_hint {
+            let simple_name = method_simple_name(name, qualified_hint);
+            let type_name = type_simple_name(type_name);
+            let skip_self = is_super_call(name, qualified_hint, type_name);
+
+            let mut type_qualified = String::with_capacity(type_name.len() + simple_name.len() + 2);
+            for sep in [".", "::", "#"] {
+                type_qualified.clear();
+                type_qualified.push_str(type_name);
+                type_qualified.push_str(sep);
+                type_qualified.push_str(simple_name);
+                if let Some(id) = self
+                    .symbols_by_suffix
+                    .get(&type_qualified)
+                    .and_then(|ids| self.unique_typed(ids, expected))
+                    .or_else(|| {
+                        self.symbols_by_qualified
+                            .get(&type_qualified)
+                            .and_then(|ids| self.unique_typed(ids, expected))
+                    })
+                {
+                    return Some(id);
+                }
+            }
+
+            if let Some(id) = self.resolve_via_mro_ref(type_name, simple_name, skip_self) {
+                return Some(id);
+            }
+        } else if let Some(hint) = qualified_hint
+            && let Some((owner, method)) = split_owner_method(hint)
+        {
+            let skip_self = is_super_call(name, Some(hint), owner);
+            if let Some(id) = self.resolve_via_mro_ref(owner, method, skip_self) {
+                return Some(id);
+            }
+        }
+
+        // 4. Fallback: suffix index — `.c` preference map, worker cache, then live lookup.
+        if qualified_hint.is_none() && type_hint.is_none() {
+            if let Some(&id) = self
+                .c_preferred_impl
+                .get(name)
+                .filter(|id| self.matches_expected(id, expected))
+            {
+                return Some(id);
+            }
+            if expected == Some(NodeType::Function)
+                && let Some(cache) = bare_fn_cache
+            {
+                if let Some(&cached) = cache.get(name) {
+                    return cached;
+                }
+                let resolved = self.symbols_by_suffix.get(name).and_then(|ids| {
+                    self.unique_typed(ids, expected).or_else(|| {
+                        single_c_preferred_impl(
+                            ids,
+                            &self.symbol_files,
+                            &self.interned_file_is_dot_c,
+                            &self.declaration_ids,
+                        )
+                        .filter(|id| self.matches_expected(id, expected))
+                    })
+                });
+                cache.insert(name.to_string(), resolved);
+                return resolved;
+            }
+            self.symbols_by_suffix.get(name).and_then(|ids| {
+                self.unique_typed(ids, expected).or_else(|| {
+                    single_c_preferred_impl(
+                        ids,
+                        &self.symbol_files,
+                        &self.interned_file_is_dot_c,
+                        &self.declaration_ids,
+                    )
+                    .filter(|id| self.matches_expected(id, expected))
+                })
+            })
+        } else {
+            self.symbols_by_suffix
+                .get(name)
+                .and_then(|ids| self.unique_typed(ids, expected))
+        }
+    }
+
     /// Resolve a symbol name to its UUID with performance tracking.
     ///
     /// Ambiguous qualified-name or suffix matches return `None` (do not pick arbitrarily).
@@ -2515,15 +3134,11 @@ impl GraphBuilder {
         type_hint: Option<&str>,
         expected: Option<NodeType>,
     ) -> Option<Uuid> {
-        use std::time::Instant;
-
-        let start = Instant::now();
         self.resolution_stats.total_calls += 1;
 
         // 1. Try exact match in current file
         if let Some(id) = self.exact_symbol(name, file, expected) {
             self.resolution_stats.hashmap_hits += 1;
-            self.resolution_stats.total_time += start.elapsed();
             return Some(id);
         }
 
@@ -2533,7 +3148,6 @@ impl GraphBuilder {
 
             if let Some(id) = self.exact_symbol(hint, file, expected) {
                 self.resolution_stats.qualified_hint_hits += 1;
-                self.resolution_stats.total_time += start.elapsed();
                 return Some(id);
             }
 
@@ -2543,7 +3157,6 @@ impl GraphBuilder {
                 .and_then(|ids| self.unique_typed(ids, expected))
             {
                 self.resolution_stats.qualified_hint_hits += 1;
-                self.resolution_stats.total_time += start.elapsed();
                 return Some(id);
             }
 
@@ -2553,7 +3166,6 @@ impl GraphBuilder {
                 .and_then(|ids| self.unique_typed(ids, expected))
             {
                 self.resolution_stats.qualified_hint_hits += 1;
-                self.resolution_stats.total_time += start.elapsed();
                 return Some(id);
             }
         }
@@ -2583,14 +3195,12 @@ impl GraphBuilder {
                     })
                 {
                     self.resolution_stats.type_hint_hits += 1;
-                    self.resolution_stats.total_time += start.elapsed();
                     return Some(id);
                 }
             }
 
             if let Some(id) = self.resolve_via_mro(type_name, simple_name, skip_self) {
                 self.resolution_stats.type_hint_hits += 1;
-                self.resolution_stats.total_time += start.elapsed();
                 return Some(id);
             }
         } else if let Some(hint) = qualified_hint
@@ -2601,7 +3211,6 @@ impl GraphBuilder {
             let skip_self = is_super_call(name, Some(hint), owner);
             if let Some(id) = self.resolve_via_mro(owner, method, skip_self) {
                 self.resolution_stats.type_hint_hits += 1;
-                self.resolution_stats.total_time += start.elapsed();
                 return Some(id);
             }
         }
@@ -2624,8 +3233,13 @@ impl GraphBuilder {
             } else {
                 let resolved = self.symbols_by_suffix.get(name).and_then(|ids| {
                     self.unique_typed(ids, expected).or_else(|| {
-                        single_c_preferred_impl(ids, &self.symbol_files, &self.declaration_ids)
-                            .filter(|id| self.matches_expected(id, expected))
+                        single_c_preferred_impl(
+                            ids,
+                            &self.symbol_files,
+                            &self.interned_file_is_dot_c,
+                            &self.declaration_ids,
+                        )
+                        .filter(|id| self.matches_expected(id, expected))
                     })
                 });
                 if let Some(id) = resolved.filter(|_| expected.is_none()) {
@@ -2642,8 +3256,6 @@ impl GraphBuilder {
         if result.is_some() {
             self.resolution_stats.fuzzy_hits += 1;
         }
-
-        self.resolution_stats.total_time += start.elapsed();
         result
     }
 
@@ -2803,6 +3415,12 @@ impl GraphBuilder {
             .spill
             .take()
             .ok_or_else(|| Error::SerdeError("finish_spill called without spill mode".into()))?;
+        // Offload multi-million-entry GraphBuilder resolution table deallocation off the critical path.
+        if self.symbol_index.len() >= 10_000 {
+            std::thread::spawn(move || drop(self));
+        } else {
+            drop(self);
+        }
         spill.finish()
     }
 }
@@ -2943,7 +3561,8 @@ fn unique_method_id(ms: &[(String, Uuid)], method: &str) -> Option<Uuid> {
 /// When a C symbol appears in both `.h` and `.c`, prefer the sole `.c` definition.
 fn single_c_preferred_impl(
     ids: &[Uuid],
-    symbol_files: &HashMap<Uuid, String>,
+    symbol_files: &FxHashMap<Uuid, u32>,
+    interned_file_is_dot_c: &[bool],
     declarations: &FxHashSet<Uuid>,
 ) -> Option<Uuid> {
     let mut c_impl = None;
@@ -2951,7 +3570,9 @@ fn single_c_preferred_impl(
         if !declarations.contains(id)
             && symbol_files
                 .get(id)
-                .is_some_and(|path| path.ends_with(".c"))
+                .and_then(|&idx| interned_file_is_dot_c.get(idx as usize))
+                .copied()
+                == Some(true)
         {
             if c_impl.is_some() {
                 return None;
@@ -3013,7 +3634,7 @@ fn symbol_type_to_node_type(symbol_type: SymbolType) -> NodeType {
 
 const MAX_FILE_LOOKUP_SUFFIX_KEYS: usize = 8;
 
-fn register_file_lookup_keys(index: &mut HashMap<String, Uuid>, norm_path: &str, id: Uuid) {
+fn register_file_lookup_keys(index: &mut FxHashMap<String, Uuid>, norm_path: &str, id: Uuid) {
     if norm_path.is_empty() {
         return;
     }
@@ -3176,10 +3797,7 @@ fn infer_import_binding_from_name(name: &str, cleaned_module: &str) -> Option<St
 }
 
 fn is_mainframe_relation(relation: &Relation) -> bool {
-    matches!(
-        relation.metadata.get("language").and_then(|v| v.as_str()),
-        Some("cobol" | "pli" | "jcl")
-    )
+    matches!(relation.language_str(), Some("cobol" | "pli" | "jcl"))
 }
 
 fn relation_allows_external_stub(relation: &Relation) -> bool {
@@ -3204,16 +3822,17 @@ fn relation_allows_external_stub(relation: &Relation) -> bool {
 }
 
 fn references_allows_external_stub(relation: &Relation) -> bool {
-    if relation
-        .metadata
-        .get("throws")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-        || relation
+    if !relation.metadata.is_null()
+        && (relation
             .metadata
-            .get("class_literal")
+            .get("throws")
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
+            || relation
+                .metadata
+                .get("class_literal")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false))
     {
         return true;
     }
@@ -5522,7 +6141,7 @@ class Library {
 
     #[test]
     fn test_file_lookup_suffix_keys_are_bounded() {
-        let mut index = HashMap::new();
+        let mut index = FxHashMap::default();
         let id = Uuid::new_v4();
         let deep = "a/b/c/d/e/f/g/h/i/j/k/l/m.rs";
         register_file_lookup_keys(&mut index, deep, id);
@@ -6014,6 +6633,128 @@ class Library {
         assert_eq!(
             parked[2].import_module_hint.as_deref(),
             Some("openssl/ssl.h")
+        );
+    }
+
+    #[test]
+    fn tier1_c_extraction_avoids_json_metadata_and_resolves_header_impl_calls() {
+        let registry = std::sync::Arc::new(rgctl_languages::default_registry());
+        let extractor = crate::Extractor::new(registry);
+        let hdr = extractor
+            .extract_file_with_source(
+                Path::new("include/helper.h"),
+                b"int helper_calc(int x);\n".to_vec(),
+            )
+            .unwrap();
+        let impl_c = extractor
+            .extract_file_with_source(
+                Path::new("src/helper.c"),
+                b"int helper_calc(int x) { if (x > 0) { return x + 1; } return 0; }\n".to_vec(),
+            )
+            .unwrap();
+        let caller_c = extractor
+            .extract_file_with_source(
+                Path::new("src/main.c"),
+                b"int run_main(void) { return helper_calc(42); }\n".to_vec(),
+            )
+            .unwrap();
+
+        for ext in [&hdr, &impl_c, &caller_c] {
+            for sym in &ext.symbols {
+                if sym.symbol_type == SymbolType::Function {
+                    assert!(
+                        sym.metadata.is_null(),
+                        "C function symbol should keep metadata == Null (got {:?})",
+                        sym.metadata
+                    );
+                }
+            }
+            for rel in &ext.relations {
+                if rel.relation_type == RelationType::Calls {
+                    assert!(
+                        rel.metadata.is_null(),
+                        "static C call relation should keep metadata == Null (got {:?})",
+                        rel.metadata
+                    );
+                    assert_eq!(rel.language_str(), Some("c"));
+                }
+            }
+        }
+
+        let mut builder = GraphBuilder::new();
+        extractor
+            .populate_graph(&[hdr, impl_c, caller_c], &mut builder)
+            .unwrap();
+        let hot = builder.take_hot_functions();
+        let (nodes, edges) = builder.into_graph();
+
+        let impl_node = nodes
+            .iter()
+            .find(|n| n.name == "helper_calc" && n.file_path.as_deref() == Some("src/helper.c"))
+            .expect("impl node");
+        let caller_node = nodes
+            .iter()
+            .find(|n| n.name == "run_main")
+            .expect("caller node");
+        assert!(
+            edges.iter().any(|e| {
+                e.edge_type == EdgeType::Calls && e.from == caller_node.id && e.to == impl_node.id
+            }),
+            "cross-file C call with paired .h prototype must bind to .c implementation"
+        );
+        let impl_hot = hot
+            .iter()
+            .find(|h| h.id == impl_node.id)
+            .expect("hot summary for impl");
+        assert!(impl_hot.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn parallel_pass2_matches_single_thread_snapshot_digest_bit_for_bit() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        // Generate > 1,024 relations across multiple files including cross-file calls & external stubs
+        std::fs::write(
+            src_dir.join("Base.java"),
+            "package demo;\npublic class Base { public int compute(int v) { return v + 1; } }\n",
+        )
+        .unwrap();
+        for f_idx in 0..16 {
+            let mut body =
+                String::from("package demo;\nimport ext.ExternalClient;\npublic class Worker");
+            body.push_str(&format!("{f_idx} extends Base {{\n"));
+            body.push_str(
+                "  public void run(int x) {\n    ExternalClient c = new ExternalClient();\n",
+            );
+            for c_idx in 0..80 {
+                body.push_str(&format!("    compute({c_idx});\n"));
+            }
+            body.push_str("  }\n}\n");
+            std::fs::write(src_dir.join(format!("Worker{f_idx}.java")), body).unwrap();
+        }
+
+        let run_with_threads = |threads: usize| -> String {
+            let out_dir = tempfile::tempdir().unwrap();
+            let snap = out_dir.path().join("graph.snapshot.bin");
+            let mut cfg = rgctl_pipeline::PipelineConfig::default();
+            cfg.show_progress = false;
+            cfg.thread_count = Some(threads);
+            let pipeline = rgctl_pipeline::ProcessingPipeline::with_config(
+                std::sync::Arc::new(rgctl_languages::default_registry()),
+                cfg,
+            );
+            let (_stats, digest) = pipeline
+                .process_repository_to_snapshot(&src_dir, &snap, Some(out_dir.path()))
+                .unwrap();
+            digest
+        };
+
+        let single_digest = run_with_threads(1);
+        let multi_digest = run_with_threads(4);
+        assert_eq!(
+            single_digest, multi_digest,
+            "1-thread and 4-thread Pass-2 snapshot digests must match bit-for-bit"
         );
     }
 }

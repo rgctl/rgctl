@@ -196,6 +196,21 @@ jobs:
           cargo install cargo-zigbuild
           cargo zigbuild --release ${{ matrix.cargo_args }} --target ${{ matrix.target }} --bin rgctl
 
+      # ort-sys 2.0.0-rc.13 copies ONNX DLLs into release/, release/build,
+      # release/deps, and release/examples. GitHub runners cannot symlink, and
+      # a --bin build has not created examples/ yet, so the copy panics.
+      - name: Prepare Windows ONNX library directories
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dest = "target/${{ matrix.target }}/release"
+          New-Item -ItemType Directory -Force -Path @(
+            $dest,
+            "$dest/build",
+            "$dest/deps",
+            "$dest/examples"
+          ) | Out-Null
+
       - name: Build release binary
         if: ${{ !endsWith(matrix.target, '-musl') }}
         run: cargo build --release ${{ matrix.cargo_args }} --target ${{ matrix.target }} --bin rgctl
@@ -223,10 +238,16 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ needs.prepare.outputs.version }}"
+          $release = "target/${{ matrix.target }}/release"
           New-Item -ItemType Directory -Force -Path package | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin }}" "package/rgctl.exe"
+          Copy-Item "$release/${{ matrix.bin }}" "package/rgctl.exe"
+          $dlls = @(Get-ChildItem $release -Filter *.dll -File)
+          if ($dlls.Count -eq 0) {
+            throw "Windows semantic-onnx build produced no DLLs next to rgctl.exe"
+          }
+          Copy-Item $dlls.FullName -Destination package
           $archive = "rgctl-${version}-${{ matrix.target }}.zip"
-          Compress-Archive -Path package/rgctl.exe -DestinationPath $archive -Force
+          Compress-Archive -Path (Join-Path (Resolve-Path package) '*') -DestinationPath $archive -Force
           echo "ARCHIVE=$archive" >> $env:GITHUB_ENV
 
       - name: Upload build artifact

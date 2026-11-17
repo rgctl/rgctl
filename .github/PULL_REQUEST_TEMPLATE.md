@@ -37,23 +37,20 @@ How has this been tested?
 
 ## Checklist
 
-- [ ] My code follows the style guidelines (ran `cargo fmt`)
-- [ ] I have performed a self-review of my code
-- [ ] I have commented my code where necessary
-- [ ] I have added tests that prove my fix/feature works
-- [ ] All new and existing tests pass (`cargo test`)
-- [ ] No clippy warnings (`cargo clippy --all-targets -- -D warnings`)
-- [ ] Documentation updated (if applicable)
-- [ ] CONTRIBUTING.md guidelines followed
+- [ ] `./scripts/preflight-pr.sh` passes (formatting, `RGCTL_AST_COVERAGE_STRICT=1`, clippy `--all-targets -- -D warnings`, unit & core integration tests)
+- [ ] Reviewed diff against the **[PR Review & Coding Practices Checklist](../docs/internal/pr-review-checklist.md)** (no `serde_json::Map` on hot `Symbol`/`Relation` paths, no `O(calls × symbols)` scans, streaming `--with-cfg`, bounded AST/CFG recursion, no silent `limit: Some(N)` correctness caps)
+- [ ] I have added tests that prove my fix/feature works (using canonical `-f json` verbs / Rust snapshot APIs — never `rgctl gql`)
+- [ ] Documentation updated and all CLI flags/examples verified (if applicable)
+- [ ] CONTRIBUTING.md guidelines followed (no AI commit trailers)
 - [ ] All commits are **signed** and include **DCO sign-off** (`Signed-off-by:`) — see [Developer Certificate of Origin](https://developercertificate.org/) and [contributor checklist §6](../docs/contributor-checklist.md#6-documentation--pr)
 
 ## Performance Impact
 
-If this PR affects performance:
+If this PR touches extraction, `GraphBuilder`, `discover`, `--with-cfg`, or query engines:
 
-- [ ] Benchmarks run (attach results if significant)
-- [ ] No measurable performance regression
-- [ ] Performance improvement measured: X%
+- [ ] Cold `[profile]` run (`cargo build --release --bin rgctl` + fresh `rm -rf .rgctl/`) verified against [docs/internal/profile.md](../docs/internal/profile.md) / `tests/cold_profile_gates.rs`
+- [ ] `[profile]` stage accounting holds (`|wall_secs - accounted_secs| < 0.5 s`, `cargo test --test profile_stage_accounting`)
+- [ ] No measurable wall-time or peak-RSS regression (attach before/after `[profile] discover summary` if significant)
 
 ## Breaking Changes
 

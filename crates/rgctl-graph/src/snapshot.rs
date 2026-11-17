@@ -294,6 +294,26 @@ impl SnapshotNodeStore {
             .unwrap_or_default()
     }
 
+    /// All node UUIDs matching `node_type` from hot columns only (no `cold_ext` decode).
+    pub fn node_ids_for_type(&self, node_type: NodeType) -> Vec<Uuid> {
+        if let Some(col) = self.snapshot.columnar() {
+            let want = crate::columnar_snapshot::node_type_to_u16(node_type);
+            let mut out = Vec::new();
+            for idx in 0..col.node_count() {
+                if let Ok(row) = col.node_row_at(idx)
+                    && row.node_type == want
+                    && let Ok(id) = col.node_id_at(idx)
+                {
+                    out.push(id);
+                }
+            }
+            return out;
+        }
+        self.collect_nodes_by_type(node_type)
+            .map(|ns| ns.into_iter().map(|n| n.id).collect())
+            .unwrap_or_default()
+    }
+
     /// Collect nodes of `node_type` without deserializing cold_ext for non-matches.
     ///
     /// Columnar path: sequential scan of fixed-width hot rows, materialize only

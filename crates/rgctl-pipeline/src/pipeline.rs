@@ -2,11 +2,12 @@
 //!
 //! Task 1.6.2: Parallel file parsing with rayon
 
+use crate::parallel::with_pool;
 use crate::stream::{DEFAULT_STREAM_CHANNEL_CAPACITY, LosslessSidecarBatch, stream_into_graph};
 use indicatif::{ProgressBar, ProgressStyle};
 use rgctl_error::Result;
 use rgctl_extraction::discovery::{DiscoveryConfig, FileDiscoverer};
-use rgctl_extraction::{Extractor, FactsCache, GraphBuilder};
+use rgctl_extraction::{Extractor, FactsCache, GraphBuilder, HotFunctionSummary};
 use rgctl_graph::code_graph::CodeGraph;
 use rgctl_graph::content_store::ContentStore;
 use rgctl_graph::schema::{Edge, Node};
@@ -89,10 +90,14 @@ pub struct PipelineStats {
     pub graph_pass2: Duration,
     /// Spill finish + columnar snapshot compile (snapshot path only)
     pub graph_spill_columnar: Duration,
+    /// Parked relations + callable resolution sidecar persistence (subset of [`Self::graph_build_duration`])
+    pub parked_save: Duration,
     /// Path → node ids collected during extract (skips full mmap scan in save_tracker)
     pub node_path_mapping: HashMap<String, Vec<Uuid>>,
     /// Absolute path → BLAKE3 hex from extract workers (skips re-hash in save_tracker)
     pub file_hashes: HashMap<String, String>,
+    /// Hot per-function summaries (complexity + token bloom) emitted during Pass 1/2
+    pub hot_functions: Vec<HotFunctionSummary>,
 }
 
 /// End-to-end repository processing pipeline.
@@ -234,9 +239,19 @@ impl ProcessingPipeline {
         builder.build_resolution_indexes();
         let index_elapsed = index_start.elapsed();
         let pass2_start = Instant::now();
-        extractor.populate_pass2(&tails, &mut builder)?;
+        with_pool(self.config.thread_count, || {
+            extractor.populate_pass2(&tails, &mut builder)
+        })?;
         let pass2_elapsed = pass2_start.elapsed();
+        // Free multi-million-relation ExtractionTail vectors off the critical path on large repos.
+        if tails.len() >= 10_000 {
+            std::thread::spawn(move || drop(tails));
+        } else {
+            drop(tails);
+        }
+        let parked_start = Instant::now();
         rgctl_extraction::callable_resolution::save(store, &mut builder)?;
+        let mut parked_elapsed = parked_start.elapsed();
         builder.log_resolution_stats();
         let nodes_created = builder.node_count();
         let edges_created = builder.edge_count();
@@ -244,9 +259,12 @@ impl ProcessingPipeline {
         let node_path_mapping = builder.take_tracker_mapping();
         let annotation_args = builder.take_annotation_args();
         let parked_relations = builder.take_parked_relations();
+        let hot_functions = builder.take_hot_functions();
         let spill_start = Instant::now();
         let finished = builder.finish_spill()?;
         let digest = write_columnar_from_spill(finished, snapshot_path)?;
+        let spill_elapsed = spill_start.elapsed();
+        let sidecar_start = Instant::now();
         rgctl_extraction::callable_resolution::mark_current(store)?;
         if !annotation_args.is_empty()
             && let Some(parent) = snapshot_path.parent()
@@ -277,11 +295,17 @@ impl ProcessingPipeline {
                 );
             }
         }
-        let spill_elapsed = spill_start.elapsed();
+        parked_elapsed += sidecar_start.elapsed();
+        if parked_relations.len() >= 10_000 {
+            std::thread::spawn(move || drop(parked_relations));
+        } else {
+            drop(parked_relations);
+        }
         tracing::info!(
             resolution_index_secs = index_elapsed.as_secs_f64(),
             pass2_relation_resolution_secs = pass2_elapsed.as_secs_f64(),
             spill_and_columnar_secs = spill_elapsed.as_secs_f64(),
+            parked_save_secs = parked_elapsed.as_secs_f64(),
             extract_read_cpu_secs = extract_phases.read_cpu.as_secs_f64(),
             extract_parse_cpu_secs = extract_phases.parse_cpu.as_secs_f64(),
             extract_pass1_wall_secs = extract_phases.pass1_wall.as_secs_f64(),
@@ -320,8 +344,10 @@ impl ProcessingPipeline {
                 graph_resolution_index: index_elapsed,
                 graph_pass2: pass2_elapsed,
                 graph_spill_columnar: spill_elapsed,
+                parked_save: parked_elapsed,
                 node_path_mapping,
                 file_hashes,
+                hot_functions,
             },
             digest,
         ))
@@ -405,7 +431,9 @@ impl ProcessingPipeline {
         builder.build_resolution_indexes();
         let index_elapsed = index_start.elapsed();
         let pass2_start = Instant::now();
-        extractor.populate_pass2(&tails, &mut builder)?;
+        with_pool(self.config.thread_count, || {
+            extractor.populate_pass2(&tails, &mut builder)
+        })?;
         let pass2_elapsed = pass2_start.elapsed();
         rgctl_extraction::callable_resolution::save(root, &mut builder)?;
         if let Some(store) = builder.take_content_store() {
@@ -417,6 +445,7 @@ impl ProcessingPipeline {
             tracing::warn!(error = %err, "failed to persist facts.bin cache");
         }
         let node_path_mapping = builder.take_tracker_mapping();
+        let hot_functions = builder.take_hot_functions();
         let (nodes, edges): (Vec<Node>, Vec<Edge>) = builder.into_graph();
         let graph_build_duration = graph_start.elapsed();
 
@@ -440,8 +469,10 @@ impl ProcessingPipeline {
                 graph_resolution_index: index_elapsed,
                 graph_pass2: pass2_elapsed,
                 graph_spill_columnar: Duration::ZERO,
+                parked_save: Duration::ZERO,
                 node_path_mapping,
                 file_hashes,
+                hot_functions,
             },
         ))
     }
