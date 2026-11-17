@@ -158,6 +158,7 @@ rgctl serve --query-only --host 127.0.0.1 --port 8080
 - **Lazy rooms:** Architecture, Migration, and Taint are `React.lazy` chunks with a shell-level `Suspense` fallback. A direct `/understand` link does not parse the Architecture room or its Three.js scene.
 - **Shared worker:** `expandEngine` owns one module-level worker for Architecture member expansion and blast queries. Blast lenses no longer create per-mount Workers, so `graph_payload.bin` is downloaded and parsed once.
 - **Detail caches:** CFG detail promises and DFG detail promises are cached by function id (DFG also by detail directory and graph digest); in-flight requests are deduplicated.
+- **Worker-side detail parsing:** CFG archive records are decoded with `parseCfgDetail` inside the shared worker; PDG record-pack JSON is decoded and parsed there too. The main thread receives plain objects, and the worker caches parsed details by function id.
 - **Bounded UI work:** Focus resolution uses a `Map`, palette filtering uses `useDeferredValue`, and Migration plan/layout recomputation is debounced by 200 ms.
 - **Compressed static JSON:** `serve` applies gzip content encoding when the client advertises support.
 - **Function data over the API:** the shell asks `GET /api/functions` for a 500-row directory and for palette search; it resolves an out-of-directory Focus by UUID through the same endpoint. The 67 MB `cfg_index.json` / `slice_index.json` pair is not a startup dependency.

@@ -15,6 +15,7 @@ import {
   loadSliceJsonFromArchive,
   type SliceIndexMeta,
 } from "../cfgArchive";
+import { loadDfgDetailFromWorker } from "../expandEngine";
 
 export type DfgState =
   | { kind: "idle" }
@@ -173,10 +174,17 @@ export function useDfgDetail(
     const cacheKey = `${detailDir}\x1f${functionId}\x1f${resolvedManifest?.graph?.digest ?? ""}`;
     let pending = dfgCache.get(cacheKey);
     if (!pending) {
-      pending = loadDfgDetail(functionId, detailDir, fetch, resolvedManifest);
-      dfgCache.set(cacheKey, pending);
+      const fallback = () => loadDfgDetail(functionId, detailDir, fetch, resolvedManifest);
+      const created: Promise<DfgDetail | null> =
+        typeof Worker === "undefined"
+          ? fallback()
+          : loadDfgDetailFromWorker(functionId, detailDir)
+              .then((raw) => (raw ? toDfg(raw as SliceBundle) : null))
+              .catch(fallback);
+      dfgCache.set(cacheKey, created);
       // A failed read is not a cache entry: a retry after the bundle/server recovers should try again.
-      pending.catch(() => dfgCache.delete(cacheKey));
+      created.catch(() => dfgCache.delete(cacheKey));
+      pending = created;
     }
     pending
       .then((dfg) => {
