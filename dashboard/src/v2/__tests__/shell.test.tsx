@@ -149,7 +149,7 @@ describe("the function index is view-scoped", () => {
     renderApp("/architecture");
     await screen.findByText(/This bundle carries no architecture dataset/);
     const urls = stub.mock.calls.map(([input]) => String(input));
-    expect(urls.some((u) => u.includes("cfg_index.json"))).toBe(false);
+    expect(urls.some((u) => u.includes("/api/functions"))).toBe(false);
     expect(urls.some((u) => u.includes("slice_index.json"))).toBe(false);
   });
 
@@ -160,7 +160,7 @@ describe("the function index is view-scoped", () => {
     fireEvent.click(screen.getByRole("button", { name: /Search symbols, communities/ }));
     await screen.findByText(/of 2 candidates/);
     const urls = stub.mock.calls.map(([input]) => String(input));
-    expect(urls.some((u) => u.includes("cfg_index.json"))).toBe(true);
+    expect(urls.some((u) => u.includes("/api/functions"))).toBe(true);
   });
 });
 

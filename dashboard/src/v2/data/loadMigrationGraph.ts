@@ -6,7 +6,6 @@
  * Present with communities → `{ kind: "ready", graph }`.
  */
 import type { MigrationGraphPayload } from "../../migration/types";
-import { bundleUrl } from "../data";
 
 export type MigrationGraphLoad =
   | { kind: "missing" }
@@ -33,8 +32,7 @@ async function loadMigrationGraphUncached(
   fetchImpl: typeof fetch,
 ): Promise<MigrationGraphLoad> {
   try {
-    let res = await fetchImpl("/api/migration");
-    if (!res.ok) res = await fetchImpl(bundleUrl("migration_graph.json"), { cache: "no-store" });
+    const res = await fetchImpl("/api/migration");
     if (!res.ok) return { kind: "missing" };
     const raw: unknown = await res.json();
     return classifyMigrationGraph(raw);

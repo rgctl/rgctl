@@ -53,8 +53,7 @@ export type TaintIndexLoad =
 
 export async function loadTaintIndex(fetchImpl: typeof fetch = fetch): Promise<TaintIndexLoad> {
   try {
-    let res = await fetchImpl("/api/taint/index");
-    if (!res.ok) res = await fetchImpl(bundleUrl("taint_index.json"), { cache: "no-store" });
+    const res = await fetchImpl("/api/taint/index");
     if (!res.ok) return { kind: "missing" };
     const raw: unknown = await res.json();
     return classifyTaintIndex(raw);

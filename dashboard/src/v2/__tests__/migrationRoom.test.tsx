@@ -11,6 +11,11 @@ import migrationGraph from "./fixtures/migration_graph.json";
 function stubBundle(routes: Record<string, unknown>): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("/api/migration")) {
+      const graph = routes["migration_graph.json"];
+      if (!graph) return new Response("", { status: 404 });
+      return new Response(JSON.stringify(graph), { status: 200, headers: { "content-type": "application/json" } });
+    }
     const key = Object.keys(routes).find((name) => url.includes(name));
     if (!key) return new Response("", { status: 404 });
     return new Response(JSON.stringify(routes[key]), {

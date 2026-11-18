@@ -127,6 +127,11 @@ export function installFetchStub() {
   const stub = vi.fn(async (input: RequestInfo | URL) => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.pathname : String(input);
     const path = raw.startsWith("file:") ? new URL(raw).pathname : raw;
+    if (path.includes("/api/functions")) {
+      const q = new URL(path, "http://stub").searchParams.get("q") ?? "";
+      const rows = q ? FUNCTIONS.filter((f) => f.name.toLowerCase().includes(q.toLowerCase())) : FUNCTIONS;
+      return json({ functions: rows.slice(0, 500), total: rows.length });
+    }
     if (path.endsWith("/api/semantic/status")) {
       return json({
         available: true,

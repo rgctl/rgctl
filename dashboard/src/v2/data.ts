@@ -74,13 +74,6 @@ export interface FunctionEntry {
   data_edges?: number;
 }
 
-interface IndexPayload {
-  schema_version?: number;
-  available?: boolean;
-  function_count?: number;
-  functions?: FunctionEntry[];
-}
-
 export interface SourceFileEntry {
   source_id: string;
   file_path: string;
@@ -178,31 +171,7 @@ export async function loadFunctions(): Promise<FunctionEntry[]> {
   // The server has the graph in memory. Asking it for a small directory avoids fetching and parsing
   // the 67 MB cfg_index + 67 MB slice_index on every dashboard load. Static bundles fall back below.
   const api = await apiFunctions("?limit=500");
-  if (api) return api.functions;
-
-  return loadFunctionsFromBundle();
-}
-
-async function loadFunctionsFromBundle(): Promise<FunctionEntry[]> {
-  const [cfg, slice] = await Promise.all([
-    getJson<IndexPayload>("cfg_index.json"),
-    getJson<IndexPayload>("slice_index.json"),
-  ]);
-  const merged = new Map<string, FunctionEntry>();
-  for (const f of cfg?.functions ?? []) merged.set(f.function_id, { ...f });
-  for (const s of slice?.functions ?? []) {
-    merged.set(s.function_id, { ...(merged.get(s.function_id) ?? s), ...s });
-  }
-
-  // A lightweight `--with-universe` bundle has no CFG/slice sidecars, but it does carry a complete
-  // function index so semantic hits can resolve into the same Focus the rest of the shell uses.
-  // Fetch it only when the analysis indexes are empty; full bundles would duplicate the data.
-  if (merged.size === 0) {
-    const all = await getJson<IndexPayload>("function_index.json");
-    for (const f of all?.functions ?? []) merged.set(f.function_id, { ...f });
-  }
-
-  return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return api?.functions ?? [];
 }
 
 /** Test seam retained for callers that used to reset the CFG detail cache. */
