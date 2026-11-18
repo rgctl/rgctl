@@ -153,8 +153,8 @@ A dashboard artifact whose digest does not match `manifest.graph.digest` is stal
 | `taint/<id>.json` | per function | taint export | — | Taint | |
 | `dataflow_index.json` | 69 MB historical | dataflow export | — | — | **Not exported for v2**: Taint counts come from PDG detail |
 | `blast_index.json` | 82 B | blast export | — | Taint | Scores only |
-| `sources_index.json` | 5.5 MB | source catalog | — | coverage/source pane | |
-| `sources/<id>.txt` | source files | source catalog | — | source pane | |
+| `sources_index.json` | 5.5 MB | source catalog | — | coverage only | Source pane now prefers `/api/source`; static fallback remains |
+| `sources/<id>.txt` | source files | source catalog | — | static fallback | `/api/source` serves them server-side |
 | `mutations_index.json` | 24 MB historical | mutations export | — | — | **Not exported for v2**: no mutations view |
 | `function_index.json` | varies | light-bundle export | — | fallback | Only when no CFG/slice indexes |
 | `assets/`, `index.html` | UI build | dashboard build | `serve` static | shell | No data semantics |
@@ -164,6 +164,9 @@ A dashboard artifact whose digest does not match `manifest.graph.digest` is stal
 | Endpoint | Backing artifact | v2 consumer |
 |---|---|---|
 | `GET /api/functions` | `graph.snapshot.bin` | `useFocus`, Palette search, Focus resolution |
+| `GET /api/source`, `GET /api/source/root` | source catalog + `sources/` | Source pane / path display |
+| `GET /api/cfg`, `GET /api/pdg` | record packs | CFG/PDG lenses |
+| `GET /api/blast` | `blast_engine.snapshot.bin` + graph | Blast lens, no graph payload |
 | `GET /api/semantic/status` | `semantic_index.bin` metadata | Ask availability |
 | `POST /api/semantic/query` | `semantic_index.bin` + `analysis_results.bin` | Ask retrieval |
 | `POST /api/query` | `graph.snapshot.bin` | not used by v2; CLI/service consumers |

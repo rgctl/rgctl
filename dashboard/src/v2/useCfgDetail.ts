@@ -35,12 +35,16 @@ export function useCfgDetail(functionId: string): CfgState {
     }
     let cancelled = false;
     setState({ kind: "loading" });
-    const pending =
+    const fallback = () =>
       typeof Worker === "undefined"
         ? loadCfgDetail(functionId)
         : loadCfgDetailFromWorker(functionId)
             .then((raw) => raw as CfgDetail | null)
             .catch(() => loadCfgDetail(functionId));
+    const pending = fetch(`/api/cfg?id=${encodeURIComponent(functionId)}`)
+      .then(async (res) => (res.ok ? ((await res.json()) as CfgDetail) : null))
+      .catch(() => null)
+      .then((detail) => detail ?? fallback());
     pending
       .then((detail) => {
         if (cancelled) return;

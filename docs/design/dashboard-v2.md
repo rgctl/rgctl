@@ -132,6 +132,10 @@ rgctl serve --query-only --host 127.0.0.1 --port 8080
 | :--- | :--- | :--- |
 | `/` | `GET` | Serves the Universe Dashboard SPA (`.rgctl/dashboard/` + embedded bundle). |
 | `/api/query` (alias `/graphql`) | `POST` | Executes structured queries or GQL queries against the live snapshot. |
+| `/api/functions` | `GET` | Compact function directory/search/UUID resolve. |
+| `/api/source`, `/api/source/root` | `GET` | Source text and shared repo prefix. |
+| `/api/cfg`, `/api/pdg` | `GET` | CFG/PDG records from the server-side record packs. |
+| `/api/blast` | `GET` | Blast-radius result from the server-side SCC snapshot + graph; avoids the 538 MB client payload for Blast. |
 | `/api/cpg` | `POST` | Executes Hybrid CPG operations (`status`, `function`, `calls`, `mutations`, `flows`, `pdg`, `slice`). |
 | `/api/semantic/status` | `GET` | Reports `.rgctl/semantic_index.bin` readiness, model ID, and row count. |
 | `/api/semantic/query` | `POST` | Runs two-stage Hamming + late-fusion semantic search. |

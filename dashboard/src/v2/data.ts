@@ -253,6 +253,13 @@ const sourceText = new Map<string, string>();
 
 /** Source text for a repo path, or `null` when this bundle did not export it. */
 export async function loadSourceForPath(filePath: string): Promise<string | null> {
+  // Server path: the source catalog is cached in `serve`, so the browser does not fetch 5.5 MB of it.
+  try {
+    const res = await fetch(`/api/source?path=${encodeURIComponent(filePath)}`);
+    if (res.ok) return await res.text();
+  } catch {
+    // Static bundle fallback below.
+  }
   const index = await loadSourceIndex();
   const entry = index.find((e) => e.file_path === filePath);
   if (!entry) return null;
@@ -276,6 +283,15 @@ let repoPrefix: string | null = null;
 
 export async function repoRoot(): Promise<string> {
   if (repoPrefix !== null) return repoPrefix;
+  try {
+    const res = await fetch("/api/source/root");
+    if (res.ok) {
+      repoPrefix = (await res.text()).trim();
+      return repoPrefix;
+    }
+  } catch {
+    // Static bundle fallback below.
+  }
   const index = await loadSourceIndex();
   if (index.length === 0) {
     repoPrefix = "";

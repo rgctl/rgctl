@@ -10,12 +10,13 @@
     "test": "vitest run",
     "test:unit": "vitest run src/migration src/MutationsPanel.test.ts",
     "test:mutations": "node scripts/test-mutations-panel.mjs",
-    "build:v2": "vite build --config vite.config.v2.ts && node scripts/check-v2-bundle.mjs",
+    "build:v2": "vite build --config vite.config.v2.ts && node scripts/check-v2-bundle.mjs && node scripts/check-artifact-consumers.mjs",
     "dev:v2": "vite --config vite.config.v2.ts",
     "typecheck:v2": "tsc -p tsconfig.v2.json --noEmit",
     "build:all": "npm run build && npm run build:v2",
     "test:v2": "vitest run --config vitest.config.v2.ts",
-    "check:v2-bundle": "node scripts/check-v2-bundle.mjs"
+    "check:v2-bundle": "node scripts/check-v2-bundle.mjs",
+    "check:artifacts": "node scripts/check-artifact-consumers.mjs"
   },
   "dependencies": {
     "@codemirror/lang-java": "^6.0.2",

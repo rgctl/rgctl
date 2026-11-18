@@ -175,12 +175,18 @@ export function useDfgDetail(
     let pending = dfgCache.get(cacheKey);
     if (!pending) {
       const fallback = () => loadDfgDetail(functionId, detailDir, fetch, resolvedManifest);
-      const created: Promise<DfgDetail | null> =
+      const workerFallback = () =>
         typeof Worker === "undefined"
           ? fallback()
           : loadDfgDetailFromWorker(functionId, detailDir)
               .then((raw) => (raw ? toDfg(raw as SliceBundle) : null))
               .catch(fallback);
+      const created: Promise<DfgDetail | null> = fetch(
+        `/api/pdg?id=${encodeURIComponent(functionId)}`,
+      )
+        .then(async (res) => (res.ok ? toDfg((await res.json()) as SliceBundle) : null))
+        .catch(() => null)
+        .then((dfg) => dfg ?? workerFallback());
       dfgCache.set(cacheKey, created);
       // A failed read is not a cache entry: a retry after the bundle/server recovers should try again.
       created.catch(() => dfgCache.delete(cacheKey));

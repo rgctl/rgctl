@@ -53,7 +53,12 @@ export function useBlastRadius(
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const payload = await blastByUuid(functionId, depth);
+          const response = await fetch(
+            `/api/blast?id=${encodeURIComponent(functionId)}&depth=${depth}`,
+          );
+          const payload = response.ok
+            ? ((await response.json()) as BlastPayload)
+            : await blastByUuid(functionId, depth);
           if (cancelled) return;
           setState({ kind: "ready", payload });
         } catch (error) {
