@@ -3,10 +3,8 @@
 use rgctl_plugin_api::{
     ExtractAllResult, QualifiedNameOrigin, Relation, SourceLocation, Symbol, SymbolType,
 };
-use std::{
-    collections::HashMap,
-    path::{Component, Path},
-};
+use rustc_hash::FxHashMap;
+use std::path::{Component, Path};
 
 type Point = (usize, usize);
 fn start(p: &SourceLocation) -> Point {
@@ -259,8 +257,8 @@ fn rewrite_endpoints(
     old_names: &[Option<String>],
     file_prefix: &str,
 ) {
-    let mut sources: HashMap<(&str, &str, Option<&str>), Candidates> = HashMap::new();
-    let mut targets: HashMap<(&str, &str), Option<usize>> = HashMap::new();
+    let mut sources: FxHashMap<(&str, &str, Option<&str>), Candidates> = FxHashMap::default();
+    let mut targets: FxHashMap<(&str, &str), Option<usize>> = FxHashMap::default();
     for (i, symbol) in symbols.iter().enumerate() {
         let aliases = [
             Some(symbol.name.as_str()),
