@@ -1,5 +1,6 @@
 //! Stream CFG/PDG dashboard export from per-function `.analysis.bin` files (no monolithic archive load).
 
+use crate::bundle::{BundleVersion, selected_version};
 use crate::cfg_export::{
     CFG_DETAIL_DIR, CFG_DETAIL_INLINE_LIMIT, CFG_INDEX_FILE, CfgExportSummary, CfgFunctionEntry,
     CfgIndexPayload, cfg_detail_light, write_empty_cfg_index,
@@ -212,7 +213,13 @@ pub fn export_cfg_slice_from_storage_with_index(
         } else {
             None
         },
-        functions: slice_functions.clone(),
+        // V2 resolves functions through /api/functions; the 66 MB index array is fallback-only
+        // and no longer worth shipping. The header/meta still carries the counts and record paths.
+        functions: if selected_version() == BundleVersion::V2 {
+            Vec::new()
+        } else {
+            slice_functions.clone()
+        },
     };
     write_json_compact(&out_dir.join(SLICE_INDEX_FILE), &slice_payload)?;
     crate::slice_export::write_slice_meta(out_dir, &slice_payload)?;
@@ -242,7 +249,11 @@ pub fn export_cfg_slice_from_storage_with_index(
             None
         },
         function_count: cfg_functions.len(),
-        functions: cfg_functions,
+        functions: if selected_version() == BundleVersion::V2 {
+            Vec::new()
+        } else {
+            cfg_functions
+        },
     };
     write_json_compact(&out_dir.join(CFG_INDEX_FILE), &cfg_payload)?;
     crate::cfg_export::write_cfg_meta(out_dir, &cfg_payload)?;

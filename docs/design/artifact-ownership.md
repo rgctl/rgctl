@@ -139,13 +139,13 @@ A dashboard artifact whose digest does not match `manifest.graph.digest` is stal
 | `migration_graph.json` | 197 KB | `migration_export.rs` | — | Architecture/Migration | |
 | `migration_plan.json` | 62 KB historical | `migration_export.rs` | pipeline/status only | — | **Not exported for v2**: plan is computed locally |
 | `cfg_meta.json` | 219 B | `cfg_export.rs` | — | CFG worker | Preferred over index |
-| `cfg_index.json` | 67 MB | CFG export | — | fallback only | Used if `cfg_meta` missing or API unavailable |
+| `cfg_index.json` | 67 MB historical | CFG export | — | fallback header only | V2 writes no function array; static symbol fallback is unavailable |
 | `cfg/<id>.json` | per function | CFG export | — | CFG per-file | Not used in archive-only bundles |
 | `cfg_pdg.record_index.bin` | 6.4 MB | CFG export | — | CFG worker | Range index |
 | `cfg_pdg.record_data.bin` | 265 MB | CFG export | — | CFG worker | Range data |
 | `cfg_pdg.archive.bin` (bundle) | 1.9 GB | exporter copy | — | — | **No longer copied**: v2 uses record packs; CLI uses `.rgctl/analysis/cfg_pdg.archive.bin` |
 | `slice_meta.json` | 178 B | slice export | — | PDG worker | Preferred over index |
-| `slice_index.json` | 66 MB | slice export | — | fallback only | |
+| `slice_index.json` | 66 MB historical | slice export | — | fallback header only | V2 writes no function array |
 | `slice/<id>.json` | per function | slice export | — | PDG per-file | |
 | `slice.record_index.bin` | 6.4 MB | slice export | — | PDG worker | Range index |
 | `slice.record_data.bin` | 1.25 GB | slice export | — | PDG worker | Range data |
@@ -253,7 +253,7 @@ Automated checks to keep in place:
 
 1. **The dashboard bundle is a projection, not a database.** It may omit data the CLI has.
 2. **Static hosting is a second-class path.** The API/Range path is the fast path; static fallbacks still exist for `cfg_index` / `slice_index` / `function_index`.
-3. **V2 cleanups are landing.** The dashboard `cfg_pdg.archive.bin` copy, `dataflow_index.json`, `mutations_index.json`, and `migration_plan.json` are no longer written for v2. The v1 bundle retains its existing behavior.
+3. **V2 cleanups are landing.** The dashboard `cfg_pdg.archive.bin` copy, `dataflow_index.json`, `mutations_index.json`, and `migration_plan.json` are no longer written for v2. `cfg_index.json` / `slice_index.json` keep only their headers for v2; function search requires `/api/functions`. The v1 bundle retains its existing behavior.
 4. **Some CLI paths are library-only.** `analysis.pack*` is not the primary `cpg`/`slice` path; those read `analysis/cfg_pdg.archive.bin`.
 5. **Manifest path fields are not authoritative in the browser.** Much of the v2 client still hardcodes filenames (`cfg_meta.json`, `slice_meta.json`, etc.), which is why the artifact map and the code can drift.
 6. **`/api/cpg` is documented but not routed.** `dashboard-v2.md` lists it, but `http_serve.rs` routes only `/api/query`, `/api/functions`, and `/api/semantic/*`.
