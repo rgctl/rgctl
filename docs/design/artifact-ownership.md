@@ -137,7 +137,7 @@ A dashboard artifact whose digest does not match `manifest.graph.digest` is stal
 | `communities.json` | 6.8 KB | `communities.rs` | — | Architecture | |
 | `metanode_members.bin` | 1.7 MB | `metagraph.rs` | — | Architecture | Membership sidecar |
 | `migration_graph.json` | 197 KB | `migration_export.rs` | — | Architecture/Migration | |
-| `migration_plan.json` | 62 KB | `migration_export.rs` | pipeline/status only | — | v2 computes plan locally |
+| `migration_plan.json` | 62 KB historical | `migration_export.rs` | pipeline/status only | — | **Not exported for v2**: plan is computed locally |
 | `cfg_meta.json` | 219 B | `cfg_export.rs` | — | CFG worker | Preferred over index |
 | `cfg_index.json` | 67 MB | CFG export | — | fallback only | Used if `cfg_meta` missing or API unavailable |
 | `cfg/<id>.json` | per function | CFG export | — | CFG per-file | Not used in archive-only bundles |
@@ -151,11 +151,11 @@ A dashboard artifact whose digest does not match `manifest.graph.digest` is stal
 | `slice.record_data.bin` | 1.25 GB | slice export | — | PDG worker | Range data |
 | `taint_index.json` | 142 KB | taint export | pipeline skip check | Taint | |
 | `taint/<id>.json` | per function | taint export | — | Taint | |
-| `dataflow_index.json` | 69 MB | dataflow export | — | — | **No v2 reader now**: Taint counts come from PDG detail; remove from bundle |
+| `dataflow_index.json` | 69 MB historical | dataflow export | — | — | **Not exported for v2**: Taint counts come from PDG detail |
 | `blast_index.json` | 82 B | blast export | — | Taint | Scores only |
 | `sources_index.json` | 5.5 MB | source catalog | — | coverage/source pane | |
 | `sources/<id>.txt` | source files | source catalog | — | source pane | |
-| `mutations_index.json` | 24 MB | mutations export | — | — | No v2 view yet |
+| `mutations_index.json` | 24 MB historical | mutations export | — | — | **Not exported for v2**: no mutations view |
 | `function_index.json` | varies | light-bundle export | — | fallback | Only when no CFG/slice indexes |
 | `assets/`, `index.html` | UI build | dashboard build | `serve` static | shell | No data semantics |
 
@@ -253,7 +253,7 @@ Automated checks to keep in place:
 
 1. **The dashboard bundle is a projection, not a database.** It may omit data the CLI has.
 2. **Static hosting is a second-class path.** The API/Range path is the fast path; static fallbacks still exist for `cfg_index` / `slice_index` / `function_index`.
-3. **Some dashboard files are currently dead.** `mutations_index.json`, `migration_plan.json`, and `dataflow_index.json` have no current v2 reader; the dashboard `cfg_pdg.archive.bin` copy is no longer written by the exporter. Verify v1/external consumers before removing the remaining three.
+3. **V2 cleanups are landing.** The dashboard `cfg_pdg.archive.bin` copy, `dataflow_index.json`, `mutations_index.json`, and `migration_plan.json` are no longer written for v2. The v1 bundle retains its existing behavior.
 4. **Some CLI paths are library-only.** `analysis.pack*` is not the primary `cpg`/`slice` path; those read `analysis/cfg_pdg.archive.bin`.
 5. **Manifest path fields are not authoritative in the browser.** Much of the v2 client still hardcodes filenames (`cfg_meta.json`, `slice_meta.json`, etc.), which is why the artifact map and the code can drift.
 6. **`/api/cpg` is documented but not routed.** `dashboard-v2.md` lists it, but `http_serve.rs` routes only `/api/query`, `/api/functions`, and `/api/semantic/*`.

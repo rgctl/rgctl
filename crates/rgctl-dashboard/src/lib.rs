@@ -234,9 +234,11 @@ fn export_dashboard_bundle_inner(
         })
     })?;
     if let Some(ref graph) = sidecars.migration_graph {
-        profile_stage("export_migration_plan", || {
-            migration_export::export_default_migration_plan(graph, &out_dir)
-        })?;
+        if selected_version() != BundleVersion::V2 {
+            profile_stage("export_migration_plan", || {
+                migration_export::export_default_migration_plan(graph, &out_dir)
+            })?;
+        }
     }
 
     // Lightweight discover has no CFG/slice sidecars, but the shell still needs a complete function
@@ -347,14 +349,24 @@ fn export_sidecars_parallel(job: SidecarJob<'_>) -> Result<SidecarExport, String
         || {
             rayon::join(
                 || {
-                    profile_stage("export_dataflow", || {
-                        export_dataflow_index(dataflow_rows, out_dir)
-                    })
+                    if selected_version() == BundleVersion::V2 {
+                        // V2 derives PDG counts from per-function detail and has no mutations view.
+                        // The full dataflow/mutations JSON indexes were 69 MB + 24 MB of dead weight.
+                        Ok(DataflowExportSummary::default())
+                    } else {
+                        profile_stage("export_dataflow", || {
+                            export_dataflow_index(dataflow_rows, out_dir)
+                        })
+                    }
                 },
                 || {
-                    profile_stage("export_mutations", || {
-                        export_mutations_index_with_analysis(repo_root, out_dir, analysis_index)
-                    })
+                    if selected_version() == BundleVersion::V2 {
+                        Ok(MutationsExportSummary::default())
+                    } else {
+                        profile_stage("export_mutations", || {
+                            export_mutations_index_with_analysis(repo_root, out_dir, analysis_index)
+                        })
+                    }
                 },
             )
         },
