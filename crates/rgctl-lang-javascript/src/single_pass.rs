@@ -406,7 +406,6 @@ pub fn extract_all_single_pass(
     let mut result = ExtractAllResult::from_parts(ctx.symbols, relations);
     result.file_namespace = rgctl_plugin_helpers::qualified_names::qualify_file(
         file_path,
-        source,
         &mut result.symbols,
         &mut result.relations,
     );

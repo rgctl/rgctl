@@ -11,15 +11,18 @@ not reparse source, read package-manager files, or load repository-wide state.
 A sorted scope stack fills missing names; preindexed aliases rewrite local
 relation sources and unambiguous target hints. Repeated source aliases use an
 interval tree rather than scanning every symbol per call. Ambiguous owners or
-identities are not guessed, and receiver-qualified calls do not acquire bare
-local function hints. Existing typed call-site spans identify bare callees.
+identities are not guessed. Existing unambiguous local bindings are normalized
+to their full names, including receiver calls; explicit external hints are
+preserved. This does not add receiver inference. The graph does not expand file
+path components into package suffixes or receiver-type indexes.
 
 Standalone absolute paths lack a repository context, so their initial namespace
 uses the file stem. The extraction worker rebases generated names to the logical
 repository-relative path after fresh extraction or a raw facts-cache hit.
 `ExtractAllResult.file_namespace` stores the prefix once per file. A typed
-`Symbol.generated_qualified_name` flag distinguishes generated names from native
-owner names across combined/split APIs and cache reuse. No per-symbol namespace
+`Symbol.qualified_name_origin` enum distinguishes file-generated, lexical and native
+owner names across combined/split APIs and cache reuse. An explicit namespace is
+never rebased, even when its name matches the file stem. No per-symbol namespace
 JSON map or duplicate prefix string is introduced. Other Tier 1 language
 policies leave both markers unset.
 

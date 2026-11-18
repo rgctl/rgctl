@@ -40,6 +40,24 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Ownership of a declaration's qualified name, independent of its spelling.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QualifiedNameOrigin {
+    /// Explicit name supplied by the language plugin.
+    #[default]
+    Native,
+    /// Generated name rooted in the logical file module; may be rebased.
+    File,
+    /// Generated name under an explicit lexical owner; never rebased.
+    Lexical,
+}
+impl QualifiedNameOrigin {
+    fn is_native(&self) -> bool {
+        *self == Self::Native
+    }
+}
+
 /// A symbol extracted from source code (function, class, struct, variable, etc.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Symbol {
@@ -52,9 +70,9 @@ pub struct Symbol {
     /// Fully qualified name including module/namespace path
     pub qualified_name: Option<String>,
 
-    /// Qualified name supplied by file qualification rather than native ownership.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub generated_qualified_name: bool,
+    /// Provenance used to preserve native owners across logical-path rebasing.
+    #[serde(default, skip_serializing_if = "QualifiedNameOrigin::is_native")]
+    pub qualified_name_origin: QualifiedNameOrigin,
 
     /// Source location
     pub location: SourceLocation,
@@ -270,7 +288,7 @@ impl Default for Symbol {
             name: String::new(),
             symbol_type: SymbolType::Variable,
             qualified_name: None,
-            generated_qualified_name: false,
+            qualified_name_origin: QualifiedNameOrigin::Native,
             location: SourceLocation {
                 file: String::new(),
                 start_line: 0,

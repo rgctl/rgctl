@@ -1,7 +1,7 @@
 //! File namespaces for declarations without a language-owned qualified name.
 //! Provenance is stored once per file; relation lookups never scan all symbols.
 use rgctl_plugin_api::{
-    ExtractAllResult, Relation, RelationType, SourceLocation, Symbol, SymbolType,
+    ExtractAllResult, QualifiedNameOrigin, Relation, SourceLocation, Symbol, SymbolType,
 };
 use std::{
     collections::HashMap,
@@ -59,7 +59,6 @@ pub fn file_module(path: &Path) -> String {
 /// owner names and callable identities. Return compact, per-file provenance.
 pub fn qualify_file(
     path: &Path,
-    source: &[u8],
     symbols: &mut [Symbol],
     relations: &mut [Relation],
 ) -> Option<Box<str>> {
@@ -88,19 +87,25 @@ pub fn qualify_file(
             stack.pop();
         }
         if symbols[i].qualified_name.is_none() {
+            let origin = match stack.last() {
+                Some(&p) if symbols[p].qualified_name_origin != QualifiedNameOrigin::File => {
+                    QualifiedNameOrigin::Lexical
+                }
+                _ => QualifiedNameOrigin::File,
+            };
             let owner = stack
                 .last()
                 .and_then(|&p| symbols[p].qualified_name.as_deref())
                 .unwrap_or(&module);
             symbols[i].qualified_name = Some(format!("{owner}.{}", symbols[i].name));
-            symbols[i].generated_qualified_name = true;
-            generated = true;
+            symbols[i].qualified_name_origin = origin;
+            generated |= origin == QualifiedNameOrigin::File;
         }
         if scope(&symbols[i]) {
             stack.push(i);
         }
     }
-    rewrite_endpoints(symbols, relations, &[], source);
+    rewrite_endpoints(symbols, relations, &[], &module);
     if !generated {
         None
     } else {
@@ -110,12 +115,7 @@ pub fn qualify_file(
 
 /// Rebase generated names after fresh extraction OR a raw facts-cache hit.
 /// Other languages and their native qualified names pass through unchanged.
-pub fn qualify_in_repo(
-    language: &str,
-    logical_path: &Path,
-    result: &mut ExtractAllResult,
-    source: &[u8],
-) {
+pub fn qualify_in_repo(language: &str, logical_path: &Path, result: &mut ExtractAllResult) {
     if !matches!(language, "javascript" | "typescript") {
         return;
     }
@@ -128,7 +128,7 @@ pub fn qualify_in_repo(
     }
     let mut old_names = vec![None; result.symbols.len()];
     for (i, symbol) in result.symbols.iter_mut().enumerate() {
-        if !symbol.generated_qualified_name {
+        if symbol.qualified_name_origin != QualifiedNameOrigin::File {
             continue;
         }
         let Some(suffix) = symbol
@@ -142,7 +142,7 @@ pub fn qualify_in_repo(
         let replacement = format!("{module}.{suffix}");
         old_names[i] = symbol.qualified_name.replace(replacement);
     }
-    rewrite_endpoints(&result.symbols, &mut result.relations, &old_names, source);
+    rewrite_endpoints(&result.symbols, &mut result.relations, &old_names, &module);
     *context = module.into_boxed_str();
 }
 
@@ -257,7 +257,7 @@ fn rewrite_endpoints(
     symbols: &[Symbol],
     relations: &mut [Relation],
     old_names: &[Option<String>],
-    source: &[u8],
+    file_prefix: &str,
 ) {
     let mut sources: HashMap<(&str, &str, Option<&str>), Candidates> = HashMap::new();
     let mut targets: HashMap<(&str, &str), Option<usize>> = HashMap::new();
@@ -266,6 +266,17 @@ fn rewrite_endpoints(
             Some(symbol.name.as_str()),
             symbol.qualified_name.as_deref(),
             old_names.get(i).and_then(|n| n.as_deref()),
+            // Existing receiver hints may carry a lexical owner without the
+            // generated file prefix (e.g. Foo.methodA in prototype code).
+            (symbol.qualified_name_origin == QualifiedNameOrigin::File)
+                .then(|| {
+                    symbol
+                        .qualified_name
+                        .as_deref()?
+                        .strip_prefix(file_prefix)?
+                        .strip_prefix('.')
+                })
+                .flatten(),
         ];
         for (slot, alias) in aliases.iter().enumerate() {
             let Some(alias) = *alias else {
@@ -276,7 +287,7 @@ fn rewrite_endpoints(
             }
             let bare_alias = slot == 0 && symbol.qualified_name.as_deref() != Some(alias);
             if !bare_alias
-                || symbol.generated_qualified_name
+                || symbol.qualified_name_origin != QualifiedNameOrigin::Native
                 || symbol.qualified_name.is_none()
                 || symbol.symbol_type == SymbolType::Import
             {
@@ -297,7 +308,7 @@ fn rewrite_endpoints(
                     })
                     .or_insert(value);
             }
-            if bare_alias && !symbol.generated_qualified_name {
+            if bare_alias && symbol.qualified_name_origin == QualifiedNameOrigin::Native {
                 continue;
             }
             if symbol.qualified_name.is_none() {
@@ -339,13 +350,6 @@ fn rewrite_endpoints(
                 relation.to.clone_from(name);
             }
         }
-        // A receiver hint must not become a same-named local function hint.
-        if relation.to_qualified_hint.is_none()
-            && (relation.to_type_hint.is_some()
-                || (relation.relation_type == RelationType::Calls && !bare_call(relation, source)))
-        {
-            continue;
-        }
         let hint = relation
             .to_qualified_hint
             .as_deref()
@@ -358,34 +362,6 @@ fn rewrite_endpoints(
     }
 }
 
-fn bare_call(relation: &Relation, source: &[u8]) -> bool {
-    let Some((start, len)) = relation
-        .call_site_start_byte
-        .zip(relation.call_site_byte_len)
-    else {
-        return false;
-    };
-    let start = start as usize;
-    let Some(end) = start.checked_add(usize::from(len)) else {
-        return false;
-    };
-    let Some(bytes) = source.get(start..end) else {
-        return false;
-    };
-    let Ok(mut text) = std::str::from_utf8(bytes) else {
-        return false;
-    };
-    text = text.trim();
-    while text.starts_with('(') && text.ends_with(')') {
-        text = text[1..text.len() - 1].trim();
-    }
-    text = text.trim_end_matches('!');
-    !text.is_empty()
-        && text
-            .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '$'))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,7 +369,7 @@ mod tests {
         Symbol {
             name: name.into(),
             qualified_name: Some(qualified.into()),
-            generated_qualified_name: true,
+            qualified_name_origin: QualifiedNameOrigin::File,
             symbol_type: SymbolType::Function,
             location: SourceLocation {
                 file: "test.js".into(),
@@ -446,7 +422,7 @@ mod tests {
                     .unwrap()
             })
             .collect();
-        qualify_file(Path::new("test.js"), b"", &mut symbols, &mut relations);
+        qualify_file(Path::new("test.js"), &mut symbols, &mut relations);
         assert_eq!(
             relations.iter().map(|r| r.from.clone()).collect::<Vec<_>>(),
             expected
@@ -463,7 +439,7 @@ mod tests {
         let mut relations = vec![relation(1, 2), relation(1, 2), relation(1, 2)];
         relations[1].from_identity_discriminator = Some("(int)".into());
         relations[2].from_identity_discriminator = Some("(unknown)".into());
-        qualify_file(Path::new("test.js"), b"", &mut symbols, &mut relations);
+        qualify_file(Path::new("test.js"), &mut symbols, &mut relations);
         assert_eq!(relations[0].from, "same");
         assert_eq!(relations[1].from, "first");
         assert_eq!(relations[2].from, "same");
@@ -477,17 +453,17 @@ mod tests {
         let mut generated = symbol("same", 21, 40, "unused");
         generated.qualified_name = None;
         let mut explicit = symbol("native", 0, 20, "Owner.native");
-        explicit.generated_qualified_name = false;
+        explicit.qualified_name_origin = QualifiedNameOrigin::Native;
         let mut symbols = vec![generated, explicit];
         let mut relations = vec![relation(22, 23)];
         for symbol in &mut symbols {
             symbol.location.file = "app.js".into();
         }
         relations[0].location.file = "app.js".into();
-        let context = qualify_file(Path::new("app.js"), b"", &mut symbols, &mut relations);
+        let context = qualify_file(Path::new("app.js"), &mut symbols, &mut relations);
         let mut result = ExtractAllResult::from_parts(symbols, relations);
         result.file_namespace = context;
-        qualify_in_repo("javascript", Path::new("src/app.js"), &mut result, b"");
+        qualify_in_repo("javascript", Path::new("src/app.js"), &mut result);
         assert_eq!(
             result.symbols[0].qualified_name.as_deref(),
             Some("src.app.same")
@@ -498,12 +474,12 @@ mod tests {
         );
         assert_eq!(result.relations[0].from, "src.app.same");
         let previous = result.clone();
-        qualify_in_repo("javascript", Path::new("src/app.js"), &mut result, b"");
+        qualify_in_repo("javascript", Path::new("src/app.js"), &mut result);
         assert_eq!(previous, result);
         assert!(result.symbols.iter().all(|s| s.metadata.is_null()));
     }
     #[test]
-    fn receiver_calls_do_not_acquire_local_module_hints() {
+    fn normalization_preserves_local_bindings_and_explicit_receiver_hints() {
         let mut helper = symbol("helper", 100, 120, "unused");
         helper.qualified_name = None;
         let mut symbols = vec![symbol("same", 0, 99, "Caller"), helper];
@@ -515,15 +491,17 @@ mod tests {
         relations[0].call_site_byte_len = Some(10); // obj.helper
         relations[1].call_site_byte_len = Some(6);
         relations[1].to_type_hint = Some("Other".into());
+        relations[1].to_qualified_hint = Some("Other.helper".into());
         relations[2].to_qualified_hint = Some("External.helper".into());
-        qualify_file(
-            Path::new("test.js"),
-            b"obj.helper()",
-            &mut symbols,
-            &mut relations,
+        qualify_file(Path::new("test.js"), &mut symbols, &mut relations);
+        assert_eq!(
+            relations[0].to_qualified_hint.as_deref(),
+            Some("test.helper")
         );
-        assert!(relations[0].to_qualified_hint.is_none());
-        assert!(relations[1].to_qualified_hint.is_none());
+        assert_eq!(
+            relations[1].to_qualified_hint.as_deref(),
+            Some("Other.helper")
+        );
         assert_eq!(
             relations[2].to_qualified_hint.as_deref(),
             Some("External.helper")
@@ -534,7 +512,6 @@ mod tests {
         plain.call_site_byte_len = Some(6);
         qualify_file(
             Path::new("test.js"),
-            b"helper()",
             &mut symbols,
             std::slice::from_mut(&mut plain),
         );

@@ -273,12 +273,7 @@ fn every_tier1_language_round_trips_and_preserves_native_names() {
                 "{language}: unexpected module policy"
             );
             let original = result.clone();
-            qualify_in_repo(
-                language,
-                Path::new("moved/file"),
-                &mut result,
-                source.as_bytes(),
-            );
+            qualify_in_repo(language, Path::new("moved/file"), &mut result);
             assert_eq!(
                 result, original,
                 "{language}: native qualification was rewritten"
@@ -314,6 +309,53 @@ fn nested_declarations_and_explicit_method_owners_are_preserved() {
                     && r.to_qualified_hint.as_deref()
                         == Some(format!("{module}.outer.inner").as_str()))
         );
+        let source = b"var Foo = (function () { function Foo() { this.methodA(); } Foo.prototype.methodA = function () {}; return Foo; }());";
+        let extractor =
+            Extractor::new(Arc::new(rgctl_languages::default_registry())).with_repo_root("/repo");
+        let files: Vec<_> = ["first", "second"]
+            .into_iter()
+            .map(|dir| {
+                extractor
+                    .extract_file_with_source(
+                        &Path::new("/repo").join(dir).join(path),
+                        source.to_vec(),
+                    )
+                    .unwrap()
+            })
+            .collect();
+        let mut builder = GraphBuilder::new();
+        extractor.populate_graph(&files, &mut builder).unwrap();
+        let (nodes, edges) = builder.into_graph();
+        let calls: Vec<_> = edges
+            .iter()
+            .filter_map(|edge| {
+                if edge.edge_type != EdgeType::Calls {
+                    return None;
+                }
+                let from = nodes.iter().find(|node| node.id == edge.from).unwrap();
+                let to = nodes.iter().find(|node| node.id == edge.to).unwrap();
+                (from.name.as_str() == "Foo" && to.name.as_str() == "methodA").then_some((from, to))
+            })
+            .collect();
+        assert_eq!(
+            calls.len(),
+            2,
+            "{}: prototype receiver calls were lost",
+            plugin.language_id()
+        );
+        for (from, to) in calls {
+            assert_eq!(
+                from.file_path, to.file_path,
+                "prototype call crossed modules"
+            );
+            let file = Path::new(to.file_path.as_deref().unwrap())
+                .strip_prefix("/repo")
+                .unwrap();
+            let prefix = rgctl_plugin_helpers::qualified_names::file_module(file);
+            let qualified = to.qualified_name.as_deref().unwrap();
+            assert!(qualified.starts_with(&format!("{prefix}.")), "{qualified}");
+            assert!(qualified.ends_with(".methodA"), "{qualified}");
+        }
     }
     let plugin = rgctl_lang_typescript::TypeScriptPlugin::default();
     let result = plugin
@@ -324,6 +366,27 @@ fn nested_declarations_and_explicit_method_owners_are_preserved() {
         .unwrap();
     let helper = result.symbols.iter().find(|s| s.name == "helper").unwrap();
     assert_eq!(helper.qualified_name.as_deref(), Some("Api.helper"));
+
+    let source = b"namespace app { export function helper(){ function nested(){return 1;} return nested(); } } function exercise(){return 2;}";
+    let mut result = plugin.extract_all(Path::new("app.ts"), source).unwrap();
+    result = serde_json::from_slice(&serde_json::to_vec(&result).unwrap()).unwrap();
+    rgctl_plugin_helpers::qualified_names::qualify_in_repo(
+        "typescript",
+        Path::new("src/app.ts"),
+        &mut result,
+    );
+    for (name, qualified) in [
+        ("helper", "app.helper"),
+        ("nested", "app.helper.nested"),
+        ("exercise", "src.app.exercise"),
+    ] {
+        let symbol = result.symbols.iter().find(|s| s.name == name).unwrap();
+        assert_eq!(symbol.qualified_name.as_deref(), Some(qualified));
+    }
+    assert!(
+        result.relations.iter().any(|r| r.from == "app.helper"
+            && r.to_qualified_hint.as_deref() == Some("app.helper.nested"))
+    );
 }
 
 #[test]

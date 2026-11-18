@@ -216,7 +216,6 @@ impl Extractor {
                 plugin.language_id(),
                 logical_path,
                 &mut extracted,
-                &source,
             );
             let config_usages = ConfigUsageDetector::detect(plugin.language_id(), &source, path);
             let symbol_preps = prepare_symbol_pass1(&source, &extracted.symbols);

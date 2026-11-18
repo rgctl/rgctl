@@ -318,7 +318,7 @@ impl GraphBuilder {
         }
     }
 
-    fn index_symbol_resolution(&mut self, key: &str, node: &Node) {
+    fn index_symbol_resolution(&mut self, key: &str, node: &Node, file_qualified: bool) {
         if let Some(qualified) = &node.qualified_name {
             self.symbols_by_qualified
                 .entry(qualified.to_string())
@@ -328,8 +328,15 @@ impl GraphBuilder {
             // Skip for C struct field nodes (`Struct.field`, label `field`) — bare names
             // like `data` would collide across the whole kernel.
             let is_field_member = node.has_label("field");
-            let parts: Vec<&str> = qualified.split('.').collect();
-            if !is_field_member && parts.len() >= 3 {
+            // File path components are not package or receiver aliases. Keep
+            // the full qualified identity and bare lookup without expanding
+            // every suffix of every path for file-generated names.
+            let parts: Vec<&str> = if !is_field_member && !file_qualified {
+                qualified.split('.').collect()
+            } else {
+                Vec::new()
+            };
+            if parts.len() >= 3 {
                 for i in 0..parts.len() {
                     let suffix = parts[i..].join(".");
                     self.symbols_by_suffix
@@ -396,6 +403,9 @@ impl GraphBuilder {
                 .entry(node.name.to_string())
                 .or_default()
                 .push(node.id);
+        }
+        if file_qualified {
+            return;
         }
         // `symbol_key` is `file::name` or `file::a::b::…` / `file::Qualified.Name`.
         // Strip internal `#field` partition tag before populating suffix lookup keys.
@@ -863,7 +873,11 @@ impl GraphBuilder {
         }
         let file_intern = self.intern_file(&symbol.location.file);
         self.symbol_files.insert(id, file_intern);
-        self.index_symbol_resolution(&key.0, &node);
+        self.index_symbol_resolution(
+            &key.0,
+            &node,
+            symbol.qualified_name_origin == rgctl_plugin_api::QualifiedNameOrigin::File,
+        );
         self.symbol_index.insert(key, id);
         self.index_type_method(symbol, id);
         self.index_import_binding(symbol);
@@ -962,6 +976,10 @@ impl GraphBuilder {
         }
         if symbol.language_str() == Some("typescript") {
             self.signature_families.insert(id);
+        }
+        // A logical module or lexical function prefix is not a receiver type.
+        if symbol.qualified_name_origin == rgctl_plugin_api::QualifiedNameOrigin::File {
+            return;
         }
         let Some(qn) = symbol.qualified_name.as_deref() else {
             return;
@@ -1127,7 +1145,7 @@ impl GraphBuilder {
                 node = node.with_property("visibility".to_string(), vis.clone());
             }
             let field_id = node.id;
-            self.index_symbol_resolution(&key.0, &node);
+            self.index_symbol_resolution(&key.0, &node, false);
             self.symbol_index.insert(key, field_id);
             self.commit_node(node);
             self.add_edge(field_id, file_id, EdgeType::DefinedIn);
