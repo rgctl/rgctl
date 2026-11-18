@@ -178,6 +178,10 @@ export function installFetchStub() {
         },
       });
     }
+    const apiUrl = new URL(path, "http://stub");
+    const apiId = apiUrl.searchParams.get("id");
+    if (path.includes("/api/cfg") && apiId === SUBJECT) return json(BODIES[`cfg/${SUBJECT}.json`]);
+    if (path.includes("/api/pdg") && apiId === SUBJECT) return json(BODIES[`slice/${SUBJECT}.json`]);
     for (const [name, body] of Object.entries(BODIES)) {
       if (path.endsWith(name)) return json(body);
     }

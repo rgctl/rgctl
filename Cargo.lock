@@ -2500,6 +2500,7 @@ dependencies = [
  "rgctl-security",
  "rgctl-semantic",
  "rgctl-service",
+ "rgctl-wasm",
  "serde",
  "serde_json",
  "serde_yaml",

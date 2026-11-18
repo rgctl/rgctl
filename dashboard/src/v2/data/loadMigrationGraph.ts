@@ -33,7 +33,8 @@ async function loadMigrationGraphUncached(
   fetchImpl: typeof fetch,
 ): Promise<MigrationGraphLoad> {
   try {
-    const res = await fetchImpl(bundleUrl("migration_graph.json"), { cache: "no-store" });
+    let res = await fetchImpl("/api/migration");
+    if (!res.ok) res = await fetchImpl(bundleUrl("migration_graph.json"), { cache: "no-store" });
     if (!res.ok) return { kind: "missing" };
     const raw: unknown = await res.json();
     return classifyMigrationGraph(raw);

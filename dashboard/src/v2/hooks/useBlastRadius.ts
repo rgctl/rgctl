@@ -6,7 +6,7 @@
  * graph payload on every Blast mount (Understand -> CFG -> Blast, Taint -> Understand -> Blast).
  */
 import { useEffect, useState } from "react";
-import { blastByUuid, type SharedBlastPayload } from "../expandEngine";
+
 
 export interface BlastCaller {
   index: number;
@@ -16,7 +16,15 @@ export interface BlastCaller {
   node_type_name: string;
 }
 
-export type BlastPayload = SharedBlastPayload;
+export interface BlastPayload {
+  seed_index: number;
+  seed_name: string;
+  depth_limit: number;
+  direct_caller_count: number;
+  impact_zone_count: number;
+  score: number;
+  callers: BlastCaller[];
+}
 
 export type BlastRadiusState =
   | { kind: "idle" }
@@ -56,9 +64,8 @@ export function useBlastRadius(
           const response = await fetch(
             `/api/blast?id=${encodeURIComponent(functionId)}&depth=${depth}`,
           );
-          const payload = response.ok
-            ? ((await response.json()) as BlastPayload)
-            : await blastByUuid(functionId, depth);
+          if (!response.ok) throw new Error(`blast: HTTP ${response.status}`);
+          const payload = (await response.json()) as BlastPayload;
           if (cancelled) return;
           setState({ kind: "ready", payload });
         } catch (error) {

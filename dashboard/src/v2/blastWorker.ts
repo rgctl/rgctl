@@ -236,7 +236,7 @@ async function ensureEngine(): Promise<EngineContext> {
   if (!initPromise) {
     initPromise = (async () => {
       await init();
-      const bytes = await downloadWithProgress(bundleDataUrl("graph_payload.bin"));
+      const bytes = await downloadWithProgress(new URL("/api/graph-payload", self.location.origin));
       // No progress hook exists inside the WASM parse; say which phase this is rather than faking a number.
       emitProgress("parsing", bytes.byteLength, bytes.byteLength);
       engine = new EngineContext(bytes);

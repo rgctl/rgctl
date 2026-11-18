@@ -53,7 +53,8 @@ export type TaintIndexLoad =
 
 export async function loadTaintIndex(fetchImpl: typeof fetch = fetch): Promise<TaintIndexLoad> {
   try {
-    const res = await fetchImpl(bundleUrl("taint_index.json"), { cache: "no-store" });
+    let res = await fetchImpl("/api/taint/index");
+    if (!res.ok) res = await fetchImpl(bundleUrl("taint_index.json"), { cache: "no-store" });
     if (!res.ok) return { kind: "missing" };
     const raw: unknown = await res.json();
     return classifyTaintIndex(raw);
@@ -85,7 +86,8 @@ export async function loadTaintBundle(
   fetchImpl: typeof fetch = fetch,
 ): Promise<TaintBundlePayload | null> {
   try {
-    const res = await fetchImpl(bundleUrl(`${detailDir}/${functionId}.json`), { cache: "no-store" });
+    let res = await fetchImpl(`/api/taint/detail?id=${encodeURIComponent(functionId)}`);
+    if (!res.ok) res = await fetchImpl(bundleUrl(`${detailDir}/${functionId}.json`), { cache: "no-store" });
     if (!res.ok) return null;
     const raw: unknown = await res.json();
     if (!raw || typeof raw !== "object") return null;
@@ -142,7 +144,8 @@ export async function loadBlastIndex(
   fetchImpl: typeof fetch = fetch,
 ): Promise<BlastIndexPayload | null> {
   try {
-    const res = await fetchImpl(bundleUrl("blast_index.json"), { cache: "no-store" });
+    let res = await fetchImpl("/api/blast-index");
+    if (!res.ok) res = await fetchImpl(bundleUrl("blast_index.json"), { cache: "no-store" });
     if (!res.ok) return null;
     return (await res.json()) as BlastIndexPayload;
   } catch {

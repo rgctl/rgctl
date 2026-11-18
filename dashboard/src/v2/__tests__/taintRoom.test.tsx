@@ -22,7 +22,18 @@ const FN = "8fcef6c3-dfc0-5338-ba7b-e14cc4816997";
 function stubBundle(routes: Record<string, unknown>): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const url = String(input);
-    const key = Object.keys(routes).find((name) => url.includes(name));
+    const apiAlias = url.includes("/api/taint/index")
+      ? "taint_index.json"
+      : url.includes("/api/taint/detail")
+        ? `taint/${FN}.json`
+        : url.includes("/api/blast-index")
+          ? "blast_index.json"
+          : url.includes("/api/cfg")
+            ? `cfg/${FN}.json`
+            : url.includes("/api/pdg")
+              ? `slice/${FN}.json`
+              : null;
+    const key = apiAlias && routes[apiAlias] ? apiAlias : Object.keys(routes).find((name) => url.includes(name));
     if (!key) return new Response("", { status: 404 });
     return new Response(JSON.stringify(routes[key]), {
       status: 200,

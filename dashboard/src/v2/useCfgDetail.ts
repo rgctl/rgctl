@@ -11,8 +11,7 @@
  * cannot tell "not built yet" from "built and found nothing".
  */
 import { useEffect, useState } from "react";
-import { loadCfgDetail, type CfgDetail } from "./data";
-import { loadCfgDetailFromWorker } from "./expandEngine";
+import type { CfgDetail } from "./data";
 
 export type CfgState =
   | { kind: "loading" }
@@ -35,16 +34,8 @@ export function useCfgDetail(functionId: string): CfgState {
     }
     let cancelled = false;
     setState({ kind: "loading" });
-    const fallback = () =>
-      typeof Worker === "undefined"
-        ? loadCfgDetail(functionId)
-        : loadCfgDetailFromWorker(functionId)
-            .then((raw) => raw as CfgDetail | null)
-            .catch(() => loadCfgDetail(functionId));
     const pending = fetch(`/api/cfg?id=${encodeURIComponent(functionId)}`)
-      .then(async (res) => (res.ok ? ((await res.json()) as CfgDetail) : null))
-      .catch(() => null)
-      .then((detail) => detail ?? fallback());
+      .then(async (res) => (res.ok ? ((await res.json()) as CfgDetail) : null));
     pending
       .then((detail) => {
         if (cancelled) return;

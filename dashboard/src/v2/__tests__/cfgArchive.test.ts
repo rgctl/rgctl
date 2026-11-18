@@ -11,7 +11,7 @@ import {
   loadSliceIndexMeta,
   resetCfgArchiveCaches,
 } from "../cfgArchive";
-import { loadDfgDetail } from "../hooks/useDfgDetail";
+import { loadDfgDetail } from "../data/loadDfgDetail";
 
 const FN = "11111111-2222-4333-8444-555555555555";
 

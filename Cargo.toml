@@ -272,6 +272,7 @@ rgctl-analysis = { workspace = true }
 rgctl-gql = { workspace = true }
 rgctl-export = { workspace = true }
 rgctl-dashboard = { workspace = true }
+rgctl-wasm = { workspace = true }
 rgctl-security = { workspace = true }
 rgctl-project-config = { workspace = true }
 rgctl-incremental = { workspace = true }
@@ -332,6 +333,7 @@ insta = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rgctl-graph = { workspace = true }
 rgctl-dashboard = { workspace = true }
+rgctl-wasm = { workspace = true }
 rgctl-lang-go = { workspace = true }
 rgctl-lang-swift = { workspace = true }
 rgctl-lang-scala = { workspace = true }

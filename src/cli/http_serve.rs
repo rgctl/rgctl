@@ -38,7 +38,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tower::ServiceExt;
 use tower_http::compression::CompressionLayer;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
 /// Options for the unified HTTP `serve` command.
@@ -59,6 +59,7 @@ pub struct HttpServeArgs {
 pub(crate) struct AppState {
     repo: PathBuf,
     dashboard_dir: PathBuf,
+    data_dir: PathBuf,
     graph: RwLock<Option<CodeGraph>>,
     #[allow(dead_code)]
     registry: QueryMacroRegistry,
@@ -67,6 +68,7 @@ pub(crate) struct AppState {
     community: RwLock<Option<CommunityQueryContext>>,
     source_cache: RwLock<Option<Arc<SourceLookup>>>,
     record_cache: RwLock<Option<Arc<RecordPacks>>>,
+    engine_cache: RwLock<Option<Arc<rgctl_wasm::EngineContext>>>,
     dashboard_announced: AtomicBool,
 }
 
@@ -239,6 +241,7 @@ pub fn serve(ctx: &CliContext, args: HttpServeArgs) -> Result<()> {
     };
     let state = Arc::new(AppState {
         repo: session_root.clone(),
+        data_dir: dashboard_dir.with_file_name("dashboard-data"),
         dashboard_dir: dashboard_dir.clone(),
         graph: RwLock::new(graph),
         registry: QueryMacroRegistry::with_defaults(),
@@ -247,6 +250,7 @@ pub fn serve(ctx: &CliContext, args: HttpServeArgs) -> Result<()> {
         community: RwLock::new(community),
         source_cache: RwLock::new(None),
         record_cache: RwLock::new(None),
+        engine_cache: RwLock::new(None),
         dashboard_announced: AtomicBool::new(dashboard_dir.join("index.html").is_file()),
     });
 
@@ -302,9 +306,18 @@ async fn run_server(ctx: &CliContext, args: HttpServeArgs, state: Arc<AppState>)
     rest = rest
         .route("/api/query", post(api_query))
         .route("/graphql", post(api_query))
+        .route("/api/manifest", get(api_manifest))
+        .route("/api/graph-payload", get(api_graph_payload))
+        .route("/api/expand", get(api_expand))
+        .route("/api/architecture", get(api_architecture))
+        .route("/api/migration", get(api_migration))
+        .route("/api/taint/index", get(api_taint_index))
+        .route("/api/taint/detail", get(api_taint_detail))
+        .route("/api/blast-index", get(api_blast_index))
         .route("/api/functions", get(api_functions))
         .route("/api/source", get(api_source))
         .route("/api/source/root", get(api_source_root))
+        .route("/api/source/index", get(api_source_index))
         .route("/api/cfg", get(api_cfg))
         .route("/api/pdg", get(api_pdg))
         .route("/api/blast", get(api_blast))
@@ -571,6 +584,17 @@ async fn dashboard_fallback(
             return spa_index(&state.dashboard_dir).await;
         }
 
+        // API-first: static serving is the shell and its hashed assets only. Bundle data files are
+        // API-backed now and must not remain reachable as static JSON/bin endpoints.
+        let is_static_shell =
+            path == "/index.html" || path == "/favicon.ico" || path.starts_with("/assets/");
+        if !is_static_shell {
+            if is_client_route(&method, &path) {
+                return spa_index(&state.dashboard_dir).await;
+            }
+            return StatusCode::NOT_FOUND.into_response();
+        }
+
         let svc = ServeDir::new(&state.dashboard_dir).append_index_html_on_directories(true);
         let response = svc.oneshot(req).await.into_response();
         if response.status() == StatusCode::NOT_FOUND && is_client_route(&method, &path) {
@@ -685,7 +709,7 @@ async fn load_record_packs(state: &AppState) -> Result<Arc<RecordPacks>, (Status
     {
         return Ok(cache.clone());
     }
-    let dash = state.dashboard_dir.clone();
+    let dash = state.data_dir.clone();
     let packs = tokio::task::spawn_blocking(move || {
         let load = |index: &str, data: &str| -> Result<Option<RecordPack>, String> {
             let index_path = dash.join(index);
@@ -734,14 +758,17 @@ async fn api_cfg(
     let id = Uuid::parse_str(params.id.trim())
         .map_err(|_| (StatusCode::BAD_REQUEST, "id must be a UUID".into()))?;
     let packs = load_record_packs(&state).await?;
-    let pack = packs
-        .cfg
-        .as_ref()
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "CFG record pack not present".into()))?
-        .clone();
-    let bytes = tokio::task::spawn_blocking(move || read_record(&pack, id))
+    if let Some(pack) = packs.cfg.clone() {
+        let bytes = tokio::task::spawn_blocking(move || read_record(&pack, id))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+        return Ok(([(header::CONTENT_TYPE, "application/json")], bytes).into_response());
+    }
+    let path = state.data_dir.join("cfg").join(format!("{id}.json"));
+    let bytes = tokio::task::spawn_blocking(move || std::fs::read(path))
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
     Ok(([(header::CONTENT_TYPE, "application/json")], bytes).into_response())
 }
 
@@ -752,14 +779,17 @@ async fn api_pdg(
     let id = Uuid::parse_str(params.id.trim())
         .map_err(|_| (StatusCode::BAD_REQUEST, "id must be a UUID".into()))?;
     let packs = load_record_packs(&state).await?;
-    let pack = packs
-        .slice
-        .as_ref()
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "PDG record pack not present".into()))?
-        .clone();
-    let bytes = tokio::task::spawn_blocking(move || read_record(&pack, id))
+    if let Some(pack) = packs.slice.clone() {
+        let bytes = tokio::task::spawn_blocking(move || read_record(&pack, id))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+        return Ok(([(header::CONTENT_TYPE, "application/json")], bytes).into_response());
+    }
+    let path = state.data_dir.join("slice").join(format!("{id}.json"));
+    let bytes = tokio::task::spawn_blocking(move || std::fs::read(path))
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
     Ok(([(header::CONTENT_TYPE, "application/json")], bytes).into_response())
 }
 
@@ -882,7 +912,7 @@ async fn load_source_lookup(state: &AppState) -> Result<Arc<SourceLookup>, (Stat
     {
         return Ok(cache.clone());
     }
-    let dashboard = state.dashboard_dir.clone();
+    let dashboard = state.data_dir.clone();
     let lookup = tokio::task::spawn_blocking(move || {
         let bytes = std::fs::read(dashboard.join("sources_index.json"))
             .map_err(|e| format!("read sources_index.json: {e}"))?;
@@ -929,6 +959,12 @@ async fn load_source_lookup(state: &AppState) -> Result<Arc<SourceLookup>, (Stat
 }
 
 /// Repo-relative source root, computed once from the source catalog.
+async fn api_source_index(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    Ok(Json(dashboard_json(&state, "sources_index.json").await?))
+}
+
 async fn api_source_root(
     State(state): State<Arc<AppState>>,
 ) -> Result<String, (StatusCode, String)> {
@@ -951,10 +987,7 @@ async fn api_source(
         .get(&path)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "source path not found".into()))?
         .clone();
-    let file = state
-        .dashboard_dir
-        .join("sources")
-        .join(format!("{id}.txt"));
+    let file = state.data_dir.join("sources").join(format!("{id}.txt"));
     let text = tokio::task::spawn_blocking(move || std::fs::read_to_string(file))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -967,6 +1000,154 @@ async fn api_source(
 /// The browser must not fetch/parse `cfg_index.json` + `slice_index.json` (67 MB each on metasfresh)
 /// just to resolve a Focus or search the palette. The server already has the graph; this returns only
 /// the rows the shell needs. Static bundles still have the JSON index fallback.
+#[derive(Debug, Deserialize)]
+struct ExpandQuery {
+    indices: String,
+    #[serde(default)]
+    type_mask: u32,
+}
+
+async fn load_engine(
+    state: &AppState,
+) -> Result<Arc<rgctl_wasm::EngineContext>, (StatusCode, String)> {
+    if let Ok(guard) = state.engine_cache.read()
+        && let Some(engine) = guard.as_ref()
+    {
+        return Ok(engine.clone());
+    }
+    let path = state.data_dir.join("graph_payload.bin");
+    let engine = tokio::task::spawn_blocking(move || {
+        let bytes = std::fs::read(&path).map_err(|e| format!("read graph payload: {e}"))?;
+        rgctl_wasm::EngineContext::from_bytes(&bytes).map_err(|e| format!("{e:?}"))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let engine = Arc::new(engine);
+    if let Ok(mut guard) = state.engine_cache.write() {
+        *guard = Some(engine.clone());
+    }
+    Ok(engine)
+}
+
+async fn api_expand(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ExpandQuery>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let indices = params
+        .indices
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse::<u32>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "indices must be comma-separated u32".into(),
+            )
+        })?;
+    let engine = load_engine(&state).await?;
+    let json = tokio::task::spawn_blocking(move || {
+        engine
+            .expand_indices(&indices, params.type_mask)
+            .map_err(|e| format!("{e:?}"))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let value: Value = serde_json::from_str(&json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(value))
+}
+
+async fn api_graph_payload(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, String)> {
+    let path = state.data_dir.join("graph_payload.bin");
+    if !path.is_file() {
+        return Err((StatusCode::NOT_FOUND, "graph payload not present".into()));
+    }
+    let mut request = Request::builder()
+        .uri("/")
+        .body(Body::empty())
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    *request.headers_mut() = headers;
+    let response = ServeFile::new(path)
+        .oneshot(request)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(response.map(Body::new))
+}
+
+async fn dashboard_json(
+    state: &AppState,
+    name: &'static str,
+) -> Result<Value, (StatusCode, String)> {
+    let path = state.data_dir.join(name);
+    tokio::task::spawn_blocking(move || {
+        let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        serde_json::from_slice(&bytes).map_err(|e| format!("parse {}: {e}", path.display()))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::NOT_FOUND, e))
+}
+
+async fn api_manifest(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    Ok(Json(dashboard_json(&state, "manifest.json").await?))
+}
+
+async fn api_architecture(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let metagraph = dashboard_json(&state, "metagraph.json").await?;
+    let communities = dashboard_json(&state, "communities.json").await.ok();
+    let migration = dashboard_json(&state, "migration_graph.json").await.ok();
+    Ok(Json(serde_json::json!({
+        "metagraph": metagraph,
+        "communities": communities,
+        "migration_graph": migration,
+    })))
+}
+
+async fn api_migration(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    Ok(Json(dashboard_json(&state, "migration_graph.json").await?))
+}
+
+async fn api_taint_index(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    Ok(Json(dashboard_json(&state, "taint_index.json").await?))
+}
+
+async fn api_blast_index(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    Ok(Json(dashboard_json(&state, "blast_index.json").await?))
+}
+
+async fn api_taint_detail(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<RecordQuery>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let id = Uuid::parse_str(params.id.trim())
+        .map_err(|_| (StatusCode::BAD_REQUEST, "id must be a UUID".into()))?;
+    let path = state.data_dir.join("taint").join(format!("{id}.json"));
+    let value = tokio::task::spawn_blocking(move || {
+        let bytes = std::fs::read(&path).map_err(|e| format!("read taint detail: {e}"))?;
+        serde_json::from_slice(&bytes).map_err(|e| format!("parse taint detail: {e}"))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    Ok(Json(value))
+}
+
 async fn api_functions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<FunctionQuery>,

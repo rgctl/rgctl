@@ -118,7 +118,8 @@ pub fn export_dashboard_bundle_if_changed_with_context(
     bundle::warn_if_legacy_selected();
 
     let out_dir = bundle::default_dashboard_path(repo_root);
-    let manifest_path = out_dir.join("manifest.json");
+    let data_dir = out_dir.with_file_name("dashboard-data");
+    let manifest_path = data_dir.join("manifest.json");
     let fingerprint = compute_export_fingerprint(graph, repo_root);
     let version = bundle::selected_version_tag();
     if manifest_path.is_file() {
@@ -152,6 +153,11 @@ fn export_dashboard_bundle_inner(
     export_fingerprint: String,
 ) -> Result<(), String> {
     let out_dir = bundle::default_dashboard_path(repo_root);
+    let data_dir = out_dir.with_file_name("dashboard-data");
+    if replace_out_dir && data_dir.exists() {
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     let trash_handle = if replace_out_dir && out_dir.exists() {
         profile_stage("replace_out_dir", || {
             let trash = out_dir.with_file_name(format!(
@@ -202,7 +208,7 @@ fn export_dashboard_bundle_inner(
         write_metagraph(
             graph,
             snapshot_path,
-            &out_dir,
+            &data_dir,
             node_count,
             ctx.analysis,
             &uuid_to_index,
@@ -212,7 +218,7 @@ fn export_dashboard_bundle_inner(
         analysis_stream_export::export_cfg_slice_from_storage_with_index(
             graph,
             repo_root,
-            &out_dir,
+            &data_dir,
             analysis_index_ref,
         )
     })?;
@@ -224,7 +230,7 @@ fn export_dashboard_bundle_inner(
             graph,
             repo_root,
             snapshot_path,
-            out_dir: &out_dir,
+            out_dir: &data_dir,
             ctx,
             uuid_to_index: &uuid_to_index,
             node_count,
@@ -236,7 +242,7 @@ fn export_dashboard_bundle_inner(
     if let Some(ref graph) = sidecars.migration_graph {
         if selected_version() != BundleVersion::V2 {
             profile_stage("export_migration_plan", || {
-                migration_export::export_default_migration_plan(graph, &out_dir)
+                migration_export::export_default_migration_plan(graph, &data_dir)
             })?;
         }
     }
@@ -246,7 +252,7 @@ fn export_dashboard_bundle_inner(
     // cfg_index.json + slice_index.json, so this sidecar is only written when both are empty.
     if cfg_summary.function_count == 0 && slice_summary.function_count == 0 {
         profile_stage("export_function_index", || {
-            function_index_export::export_function_index(graph, &out_dir)
+            function_index_export::export_function_index(graph, &data_dir)
         })?;
     }
 
@@ -279,14 +285,14 @@ fn export_dashboard_bundle_inner(
         "[profile] save_dashboard json serialize"
     );
     profile_stage("manifest_write", || {
-        fs::write(out_dir.join("manifest.json"), &manifest_json).map_err(|e| e.to_string())
+        fs::write(data_dir.join("manifest.json"), &manifest_json).map_err(|e| e.to_string())
     })?;
     profile_stage("inject_manifest_bootstrap", || {
         inject_manifest_bootstrap(&out_dir, &manifest_json).map_err(|e| e.to_string())
     })?;
 
     profile_stage("copy_graph_payload", || {
-        copy_graph_payload(snapshot_path, &out_dir)
+        copy_graph_payload(snapshot_path, &data_dir)
     })?;
 
     if let Some(handle) = trash_handle {

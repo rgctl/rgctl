@@ -12,6 +12,18 @@ The short answer is: **canonical analysis artifacts belong to the CLI and server
 
 ## 1. System Overview & End-to-End Data Flow
 
+### Current API-first layout
+
+```text
+.rgctl/dashboard/        shell only: index.html + assets/
+.rgctl/dashboard-data/   server-only data: manifest, graph payload, metagraph,
+                         communities, migration, CFG/PDG, taint, sources
+```
+
+`rgctl serve` statically exposes only `/index.html`, `/favicon.ico`, and `/assets/*`. All data is served
+through `/api/manifest`, `/api/architecture`, `/api/migration`, `/api/taint/*`, `/api/functions`,
+`/api/source*`, `/api/cfg`, `/api/pdg`, `/api/blast`, `/api/expand`, and `/api/graph-payload`.
+
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ 1. CANONICAL ANALYSIS PLANE — `.rgctl/`                                     │

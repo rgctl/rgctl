@@ -104,23 +104,46 @@ export function loadArchitecture(): Promise<ArchitectureState> {
 }
 
 async function loadArchitectureUncached(): Promise<ArchitectureState> {
-  let metagraph: Metagraph | null;
+  let metagraph: Metagraph | null = null;
+  let summary: CommunitySummary | null = null;
+  let migration: MigrationSummary | null = null;
+
+  // API-first: one request carries the architecture payload. The static bundle remains a fallback
+  // for environments that still serve the pre-API export.
   try {
-    metagraph = await getJson<Metagraph>("metagraph.json");
-  } catch (error) {
-    return { kind: "unreadable", reason: (error as Error).message };
+    const res = await fetch("/api/architecture");
+    if (res.ok) {
+      const payload = (await res.json()) as {
+        metagraph?: Metagraph | null;
+        communities?: CommunitySummary | null;
+        migration_graph?: MigrationSummary | null;
+      };
+      metagraph = payload.metagraph ?? null;
+      summary = payload.communities ?? null;
+      migration = payload.migration_graph ?? null;
+    }
+  } catch {
+    // Fall through to the static bundle.
+  }
+
+  if (metagraph === null) {
+    try {
+      metagraph = await getJson<Metagraph>("metagraph.json");
+    } catch (error) {
+      return { kind: "unreadable", reason: (error as Error).message };
+    }
   }
   if (!metagraph || !Array.isArray(metagraph.nodes) || metagraph.nodes.length === 0) {
     return { kind: "no-metagraph" };
   }
 
-  let summary: CommunitySummary | null = null;
-  let migration: MigrationSummary | null = null;
-  try {
-    summary = await getJson<CommunitySummary>("communities.json");
-    migration = await getJson<MigrationSummary>("migration_graph.json");
-  } catch (error) {
-    return { kind: "unreadable", reason: (error as Error).message };
+  if (summary === null) {
+    try {
+      summary = await getJson<CommunitySummary>("communities.json");
+      migration = await getJson<MigrationSummary>("migration_graph.json");
+    } catch (error) {
+      return { kind: "unreadable", reason: (error as Error).message };
+    }
   }
 
   const view = buildView(metagraph, summary, migration);

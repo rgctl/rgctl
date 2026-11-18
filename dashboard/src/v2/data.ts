@@ -160,6 +160,12 @@ export async function fetchFunctionById(id: string): Promise<FunctionEntry | nul
 }
 
 export async function loadManifest(): Promise<Manifest | null> {
+  try {
+    const res = await fetch("/api/manifest");
+    if (res.ok) return (await res.json()) as Manifest;
+  } catch {
+    // Static fallback below.
+  }
   return getJson<Manifest>("manifest.json");
 }
 
@@ -199,52 +205,22 @@ async function loadFunctionsFromBundle(): Promise<FunctionEntry[]> {
   return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/**
- * Per-file JSON when the export wrote `cfg/<id>.json`; otherwise the archive
- * record pack decoded with WASM (`detail_mode: "archive_only"`, large repos).
- *
- * The promise is cached per function so switching Understand -> CFG -> elsewhere -> CFG does not
- * refetch and re-parse the same sidecar. `resetCfgDetailCache` is the test seam.
- */
-const cfgDetailCache = new Map<string, Promise<CfgDetail | null>>();
-
-export function resetCfgDetailCache(): void {
-  cfgDetailCache.clear();
-}
-
-export function loadCfgDetail(functionId: string): Promise<CfgDetail | null> {
-  const cached = cfgDetailCache.get(functionId);
-  if (cached) return cached;
-  const pending = loadCfgDetailUncached(functionId);
-  cfgDetailCache.set(functionId, pending);
-  return pending;
-}
-
-async function loadCfgDetailUncached(functionId: string): Promise<CfgDetail | null> {
-  const { isArchiveOnly, loadCfgDetailFromArchive, loadCfgIndexMeta } = await import("./cfgArchive");
-  const meta = await loadCfgIndexMeta();
-  if (isArchiveOnly(meta)) {
-    return loadCfgDetailFromArchive(functionId, meta);
-  }
-  const perFile = await getJson<CfgDetail>(`cfg/${functionId}.json`);
-  if (perFile) return perFile;
-  // Older / mixed bundles: try the pack if paths are present.
-  if (meta?.record_index_path && meta?.record_data_path) {
-    try {
-      return await loadCfgDetailFromArchive(functionId, meta);
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
+/** Test seam retained for callers that used to reset the CFG detail cache. */
+export function resetCfgDetailCache(): void {}
 
 let sourceIndex: SourceFileEntry[] | null = null;
 
 export async function loadSourceIndex(): Promise<SourceFileEntry[]> {
   if (sourceIndex) return sourceIndex;
+  let payload: { files?: SourceFileEntry[] } | null = null;
+  try {
+    const res = await fetch("/api/source/index");
+    if (res.ok) payload = (await res.json()) as { files?: SourceFileEntry[] };
+  } catch {
+    // Static fallback for older exports.
+  }
   // The real key is `files`.
-  const payload = await getJson<{ files?: SourceFileEntry[] }>("sources_index.json");
+  payload ??= await getJson<{ files?: SourceFileEntry[] }>("sources_index.json");
   sourceIndex = payload?.files ?? [];
   return sourceIndex;
 }

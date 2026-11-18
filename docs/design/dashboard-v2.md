@@ -10,7 +10,8 @@ This document specifies the **Universe Dashboard v2, Static Artifact Bundle (`rg
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ 1. BUNDLE GENERATION (`rgctl discover . --with-universe`)                    │
 │                                                                              │
-│  `crates/rgctl-dashboard` writes `.rgctl/dashboard/`:                        │
+│  `crates/rgctl-dashboard` writes `.rgctl/dashboard/` (shell only) and        │
+│  `.rgctl/dashboard-data/` (server-only API data):                            │
 │    ├─► `manifest.json` (`graph_digest`, coverage flags, mode = `"universe"`) │
 │    ├─► `graph_payload.bin` (compact binary topology for browser WASM engine) │
 │    ├─► `metagraph.json` & `communities.json` (L0 namespaces, L1 packages,    │
