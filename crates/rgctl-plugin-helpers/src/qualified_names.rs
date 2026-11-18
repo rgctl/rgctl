@@ -343,21 +343,33 @@ fn rewrite_endpoints(
                 relation.from.clone_from(name);
             }
         }
-        if let Some(Some(i)) = targets.get(&(relation.location.file.as_str(), relation.to.as_str()))
-            && old_names.get(*i).and_then(|name| name.as_deref()) == Some(relation.to.as_str())
+        if let Some(Some(target)) =
+            targets.get(&(relation.location.file.as_str(), relation.to.as_str()))
+            && old_names.get(*target).and_then(|name| name.as_deref()) == Some(relation.to.as_str())
         {
-            if let Some(name) = &symbols[*i].qualified_name {
+            if let Some(name) = &symbols[*target].qualified_name {
                 relation.to.clone_from(name);
             }
         }
-        let hint = relation
-            .to_qualified_hint
-            .as_deref()
-            .unwrap_or(&relation.to);
-        if let Some(Some(i)) = targets.get(&(relation.location.file.as_str(), hint)) {
+        let hint = if relation.is_inferred_callable_owner() {
+            // The generic callable pass may have guessed Box.inner for an
+            // unqualified call to a lexical Box.method.inner declaration.
+            // Preserve the emitter's local endpoint instead of that guess.
+            relation.to.as_str()
+        } else {
             relation
                 .to_qualified_hint
-                .clone_from(&symbols[*i].qualified_name);
+                .as_deref()
+                .unwrap_or(&relation.to)
+        };
+        if let Some(Some(target)) = targets
+            .get(&(relation.location.file.as_str(), hint))
+            .copied()
+        {
+            let symbol = &symbols[target];
+            relation
+                .to_qualified_hint
+                .clone_from(&symbol.qualified_name);
         }
     }
 }
@@ -365,6 +377,7 @@ fn rewrite_endpoints(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rgctl_plugin_api::RelationType;
     fn symbol(name: &str, lo: usize, hi: usize, qualified: &str) -> Symbol {
         Symbol {
             name: name.into(),
@@ -447,6 +460,37 @@ mod tests {
             relations[1].from_identity_discriminator.as_deref(),
             Some("(int)")
         );
+        for symbol in &mut symbols {
+            symbol.qualified_name = Some("test.same".into());
+        }
+        let mut call = relation(1, 2);
+        call.from = "caller".into();
+        call.to = "same".into();
+        call.relation_type = RelationType::Calls;
+        qualify_file(
+            Path::new("test.js"),
+            &mut symbols,
+            std::slice::from_mut(&mut call),
+        );
+        assert_eq!(call.to_qualified_hint.as_deref(), Some("test.same"));
+        assert!(
+            call.to_identity_discriminator.is_none(),
+            "must not select an overload"
+        );
+        symbols.truncate(1);
+        qualify_file(
+            Path::new("test.js"),
+            &mut symbols,
+            std::slice::from_mut(&mut call),
+        );
+        assert!(call.to_identity_discriminator.is_none());
+        call.to_identity_discriminator = Some("supplied".into());
+        qualify_file(
+            Path::new("test.js"),
+            &mut symbols,
+            std::slice::from_mut(&mut call),
+        );
+        assert_eq!(call.to_identity_discriminator.as_deref(), Some("supplied"));
     }
     #[test]
     fn rebasing_preserves_explicit_owners_and_only_updates_generated_names() {

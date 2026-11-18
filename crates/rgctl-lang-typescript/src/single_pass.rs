@@ -545,15 +545,14 @@ pub fn extract_all_single_pass(
         &mut relations,
     );
 
-    rgctl_plugin_helpers::callable_identity::finish(
-        rgctl_plugin_helpers::callable_identity::Policy::Typescript,
-        &mut ctx.symbols,
-        &mut relations,
-    );
-
     let mut result = ExtractAllResult::from_parts(ctx.symbols, relations);
     result.file_namespace = rgctl_plugin_helpers::qualified_names::qualify_file(
         file_path,
+        &mut result.symbols,
+        &mut result.relations,
+    );
+    rgctl_plugin_helpers::callable_identity::finish(
+        rgctl_plugin_helpers::callable_identity::Policy::Typescript,
         &mut result.symbols,
         &mut result.relations,
     );

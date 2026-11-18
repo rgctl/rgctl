@@ -13,8 +13,11 @@ relation sources and unambiguous target hints. Repeated source aliases use an
 interval tree rather than scanning every symbol per call. Ambiguous owners or
 identities are not guessed. Existing unambiguous local bindings are normalized
 to their full names, including receiver calls; explicit external hints are
-preserved. This does not add receiver inference. The graph does not expand file
-path components into package suffixes or receiver-type indexes.
+preserved. Combined and split APIs qualify names before the shared callable
+identity finish pass, so binding and overload/generic checks see the final names.
+This does not add receiver inference. The graph does not expand file
+path components or generated lexical owners into package suffixes or
+receiver-type indexes.
 
 Standalone absolute paths lack a repository context, so their initial namespace
 uses the file stem. The extraction worker rebases generated names to the logical

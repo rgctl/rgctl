@@ -1748,6 +1748,11 @@ impl LanguagePlugin for TypeScriptPlugin {
         let tree = self.parse(file_path, source)?;
         let mut symbols = self.symbols_from_tree(tree.root_node(), source, file_path)?;
         rgctl_plugin_helpers::qualified_names::qualify_file(file_path, &mut symbols, &mut []);
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Typescript,
+            &mut symbols,
+            &mut [],
+        );
         Ok(symbols)
     }
 
@@ -1770,6 +1775,11 @@ impl LanguagePlugin for TypeScriptPlugin {
         );
         rgctl_plugin_helpers::qualified_names::qualify_file(
             file_path,
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Typescript,
             &mut sym_copy,
             &mut relations,
         );

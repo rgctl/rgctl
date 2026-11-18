@@ -309,7 +309,25 @@ fn nested_declarations_and_explicit_method_owners_are_preserved() {
                     && r.to_qualified_hint.as_deref()
                         == Some(format!("{module}.outer.inner").as_str()))
         );
-        let source = b"var Foo = (function () { function Foo() { this.methodA(); } Foo.prototype.methodA = function () {}; return Foo; }());";
+        let scoped = plugin.extract_all(
+            Path::new(path),
+            b"function first(){function helper(){return 1;}} function second(){function helper(){return 2;}}",
+        ).unwrap();
+        let helpers: Vec<_> = scoped
+            .symbols
+            .iter()
+            .filter(|s| s.name == "helper")
+            .collect();
+        assert_eq!(helpers.len(), 2);
+        assert!(
+            helpers.iter().all(|s| !s.is_superseded_definition()),
+            "unrelated lexical declarations are not redefinitions"
+        );
+        assert_ne!(helpers[0].qualified_name, helpers[1].qualified_name);
+        for (source, caller, target, explicit_owner) in [
+            (&b"var Foo = (function () { function Foo() { this.methodA(); } Foo.prototype.methodA = function () {}; return Foo; }());"[..], "Foo", "methodA", None),
+            (&b"class Box { method(){ function inner(){return 1;} return inner(); } }"[..], "method", "inner", Some("Box.method.inner")),
+        ] {
         let extractor =
             Extractor::new(Arc::new(rgctl_languages::default_registry())).with_repo_root("/repo");
         let files: Vec<_> = ["first", "second"]
@@ -334,27 +352,32 @@ fn nested_declarations_and_explicit_method_owners_are_preserved() {
                 }
                 let from = nodes.iter().find(|node| node.id == edge.from).unwrap();
                 let to = nodes.iter().find(|node| node.id == edge.to).unwrap();
-                (from.name.as_str() == "Foo" && to.name.as_str() == "methodA").then_some((from, to))
+                (from.name.as_str() == caller && to.name.as_str() == target).then_some((from, to))
             })
             .collect();
         assert_eq!(
             calls.len(),
             2,
-            "{}: prototype receiver calls were lost",
+            "{}: {caller}->{target} qualified local calls were lost",
             plugin.language_id()
         );
         for (from, to) in calls {
             assert_eq!(
                 from.file_path, to.file_path,
-                "prototype call crossed modules"
+                "local call crossed modules"
             );
             let file = Path::new(to.file_path.as_deref().unwrap())
                 .strip_prefix("/repo")
                 .unwrap();
             let prefix = rgctl_plugin_helpers::qualified_names::file_module(file);
             let qualified = to.qualified_name.as_deref().unwrap();
-            assert!(qualified.starts_with(&format!("{prefix}.")), "{qualified}");
-            assert!(qualified.ends_with(".methodA"), "{qualified}");
+            if let Some(owner) = explicit_owner {
+                assert_eq!(qualified, owner);
+            } else {
+                assert!(qualified.starts_with(&format!("{prefix}.")), "{qualified}");
+                assert!(qualified.ends_with(".methodA"), "{qualified}");
+            }
+        }
         }
     }
     let plugin = rgctl_lang_typescript::TypeScriptPlugin::default();

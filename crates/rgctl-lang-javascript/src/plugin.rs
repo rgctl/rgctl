@@ -1105,6 +1105,11 @@ impl LanguagePlugin for JavaScriptPlugin {
         let tree = self.parse(file_path, source)?;
         let mut symbols = self.symbols_from_tree(tree.root_node(), source, file_path)?;
         rgctl_plugin_helpers::qualified_names::qualify_file(file_path, &mut symbols, &mut []);
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Javascript,
+            &mut symbols,
+            &mut [],
+        );
         Ok(symbols)
     }
 
@@ -1127,6 +1132,11 @@ impl LanguagePlugin for JavaScriptPlugin {
         );
         rgctl_plugin_helpers::qualified_names::qualify_file(
             file_path,
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Javascript,
             &mut sym_copy,
             &mut relations,
         );
