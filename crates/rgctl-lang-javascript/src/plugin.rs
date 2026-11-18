@@ -591,6 +591,12 @@ impl JavaScriptPlugin {
                             from,
                             to: local_target,
                             relation_type: RelationType::Calls,
+                            call_site_start_byte: node
+                                .child_by_field_name("function")
+                                .map(|f| f.start_byte() as u32),
+                            call_site_byte_len: node
+                                .child_by_field_name("function")
+                                .and_then(|f| u16::try_from(f.end_byte() - f.start_byte()).ok()),
                             location: source_location(node, &file_path_str),
                             metadata: meta,
                             to_qualified_hint: None,
@@ -677,6 +683,12 @@ impl JavaScriptPlugin {
             from,
             to: local_target,
             relation_type: RelationType::Calls,
+            call_site_start_byte: node
+                .child_by_field_name("function")
+                .map(|f| f.start_byte() as u32),
+            call_site_byte_len: node
+                .child_by_field_name("function")
+                .and_then(|f| u16::try_from(f.end_byte() - f.start_byte()).ok()),
             location: source_location(node, &file_path_str),
             metadata: meta,
             to_qualified_hint: None,
@@ -1103,7 +1115,14 @@ impl LanguagePlugin for JavaScriptPlugin {
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let tree = self.parse(file_path, source)?;
-        self.symbols_from_tree(tree.root_node(), source, file_path)
+        let mut symbols = self.symbols_from_tree(tree.root_node(), source, file_path)?;
+        rgctl_plugin_helpers::qualified_names::qualify_file(
+            file_path,
+            source,
+            &mut symbols,
+            &mut [],
+        );
+        Ok(symbols)
     }
 
     fn extract_relations(
@@ -1120,6 +1139,12 @@ impl LanguagePlugin for JavaScriptPlugin {
             "javascript",
             source,
             Some(root),
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::qualified_names::qualify_file(
+            file_path,
+            source,
             &mut sym_copy,
             &mut relations,
         );
@@ -1346,7 +1371,7 @@ function helper() {}
         assert!(
             relations
                 .iter()
-                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "helper"),
+                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "test.helper"),
             "expected Calls -> helper, got {relations:?}"
         );
     }

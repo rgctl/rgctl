@@ -52,6 +52,10 @@ pub struct Symbol {
     /// Fully qualified name including module/namespace path
     pub qualified_name: Option<String>,
 
+    /// Qualified name supplied by file qualification rather than native ownership.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub generated_qualified_name: bool,
+
     /// Source location
     pub location: SourceLocation,
 
@@ -266,6 +270,7 @@ impl Default for Symbol {
             name: String::new(),
             symbol_type: SymbolType::Variable,
             qualified_name: None,
+            generated_qualified_name: false,
             location: SourceLocation {
                 file: String::new(),
                 start_line: 0,
@@ -664,6 +669,9 @@ pub struct ExtractAllResult {
     pub relations: Vec<Relation>,
     /// Out-of-line content blobs keyed by Blake3 hex (`body_ref` / `blob_ref`).
     pub content_blobs: HashMap<String, String>,
+    /// Optional per-file module qualification provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_namespace: Option<Box<str>>,
 }
 
 impl ExtractAllResult {
@@ -673,6 +681,7 @@ impl ExtractAllResult {
             symbols,
             relations,
             content_blobs: HashMap::new(),
+            file_namespace: None,
         }
     }
 }
@@ -873,6 +882,7 @@ pub trait LanguagePlugin: Send + Sync {
             symbols,
             relations,
             content_blobs: HashMap::new(),
+            file_namespace: None,
         })
     }
 
