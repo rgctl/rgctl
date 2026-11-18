@@ -1,15 +1,15 @@
 //! Stream CFG/PDG dashboard export from per-function `.analysis.bin` files (no monolithic archive load).
 
 use crate::cfg_export::{
-    CFG_ARCHIVE_BUNDLE_NAME, CFG_DETAIL_DIR, CFG_DETAIL_INLINE_LIMIT, CFG_INDEX_FILE,
-    CfgExportSummary, CfgFunctionEntry, CfgIndexPayload, cfg_detail_light, write_empty_cfg_index,
+    CFG_DETAIL_DIR, CFG_DETAIL_INLINE_LIMIT, CFG_INDEX_FILE, CfgExportSummary, CfgFunctionEntry,
+    CfgIndexPayload, cfg_detail_light, write_empty_cfg_index,
 };
 use crate::cfg_record_pack::{
     CFG_RECORD_DATA_FILE, CFG_RECORD_INDEX_FILE, CfgRecordPackWriter, SLICE_RECORD_DATA_FILE,
     SLICE_RECORD_INDEX_FILE,
 };
 use crate::dataflow_export::DataflowFunctionEntry;
-use crate::export_util::{link_or_copy, write_json_compact};
+use crate::export_util::write_json_compact;
 use crate::function_meta::{FunctionMeta, function_meta_map_with_index, resolve_function_meta};
 use crate::slice_export::{
     SLICE_DETAIL_DIR, SLICE_INDEX_FILE, SliceBundlePayload, SliceExportSummary, SliceFunctionEntry,
@@ -19,7 +19,6 @@ use crate::source_catalog::{
     SourceCatalog, SourceFileEntry, build_source_catalog, write_source_index,
 };
 use rayon::prelude::*;
-use rgctl_analysis::cfg_pdg_archive::CfgPdgArchive;
 use rgctl_analysis::storage::{AnalysisIndexEntry, AnalysisStorage};
 use rgctl_graph::graph_source::GraphSource;
 use std::borrow::Cow;
@@ -218,23 +217,15 @@ pub fn export_cfg_slice_from_storage_with_index(
     write_json_compact(&out_dir.join(SLICE_INDEX_FILE), &slice_payload)?;
     crate::slice_export::write_slice_meta(out_dir, &slice_payload)?;
 
-    let archive_path = CfgPdgArchive::default_path(repo_root);
-    let archive_copied = if archive_path.is_file() {
-        link_or_copy(&archive_path, &out_dir.join(CFG_ARCHIVE_BUNDLE_NAME))?;
-        true
-    } else {
-        false
-    };
+    // V2 reads CFG details from the record packs; the 1.9 GB archive stays in `.rgctl/analysis/`
+    // for the CLI. Copying it into the browser bundle was pure duplication.
+    let archive_copied = false;
 
     let cfg_available = !cfg_functions.is_empty();
     let cfg_payload = CfgIndexPayload {
         schema_version: 2,
         available: cfg_available,
-        archive_path: if archive_copied {
-            Some(CFG_ARCHIVE_BUNDLE_NAME.into())
-        } else {
-            None
-        },
+        archive_path: None,
         detail_mode: if write_cfg_details {
             "per_file".into()
         } else {
@@ -449,7 +440,7 @@ mod tests {
         );
         assert!(out.path().join("slice_index.json").is_file());
         assert!(out.path().join("cfg_index.json").is_file());
-        assert!(out.path().join("cfg_pdg.archive.bin").is_file());
+        assert!(!out.path().join("cfg_pdg.archive.bin").exists());
         // Large corpora must use the slice record pack (no per-file JSON flood).
         assert!(
             result.slice.record_pack,

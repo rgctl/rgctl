@@ -53,6 +53,7 @@ Internals and contribution bars — not the default agent reading path.
 | [Tier 1 language support](tier-1-language-support.md) | Layer A–F bar for Tier 1 languages |
 | [Code structure](Code_structure.md) | Crate layout |
 | [Analysis architecture](analysis-architecture.md) | CFG / PDG / taint |
+| [Artifact ownership & consumers](design/artifact-ownership.md) | Which `.rgctl/` artifacts the CLI, `serve`, and dashboard read; canonical vs derived |
 | [Graph storage architecture](graph-storage-architecture.md) | Snapshots, blast cache |
 | [Integration test matrix](internal/integration-tests.md) | Tier A/B/C — in-repo artifacts, HTTP serve, CLI subprocess · golden CLI: `tests/cli_output/` |
 | [HTTP server and dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/) | Serve / dashboard UI |

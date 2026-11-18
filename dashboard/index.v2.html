@@ -4,9 +4,56 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>rgctl</title>
+  <style>
+    html, body, #root { height: 100%; margin: 0; background: #0b0e13; color: #d4d4d8;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .boot-shell { display: flex; flex-direction: column; height: 100%; min-height: 100vh; }
+    .boot-top { display: flex; align-items: center; gap: .75rem; height: 42px; padding: 0 .75rem;
+      border-bottom: 1px solid rgba(255,255,255,.08); background: #0e1116; box-sizing: border-box; }
+    .boot-brand { color: #7dd3fc; font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
+    .boot-muted { color: #71717a; font-size: 11px; }
+    .boot-body { display: flex; flex: 1; min-height: 0; }
+    .boot-rail { width: 210px; flex: 0 0 210px; padding: .75rem; border-right: 1px solid rgba(255,255,255,.08);
+      background: #0b0e13; box-sizing: border-box; }
+    .boot-rail-label { margin: 0 0 .5rem; color: #52525b; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+    .boot-rail-item { padding: .4rem .55rem; margin-bottom: .3rem; border: 1px solid rgba(29,75,94,.6);
+      border-radius: 6px; color: #a1a1aa; font-size: 12px; }
+    .boot-rail-item.is-home { border-color: rgba(56,189,248,.55); color: #e4e4e7; }
+    .boot-main { flex: 1; min-width: 0; padding: .75rem; box-sizing: border-box; }
+    .boot-card { border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(255,255,255,.02);
+      padding: .75rem; max-width: 720px; }
+    .boot-card-title { margin: 0; color: #e4e4e7; font-size: 12px; font-weight: 500; }
+    .boot-card-copy { margin: .35rem 0 0; color: #71717a; font-size: 11px; }
+    @media (max-width: 640px) { .boot-rail { display: none; } }
+  </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-shell" aria-busy="true">
+        <header class="boot-top">
+          <span class="boot-brand">rgctl</span>
+          <span class="boot-muted">loading dashboard…</span>
+        </header>
+        <div class="boot-body">
+          <aside class="boot-rail" aria-label="Rooms">
+            <p class="boot-rail-label">Rooms</p>
+            <div class="boot-rail-item is-home">Architecture</div>
+            <div class="boot-rail-item">Repo</div>
+            <div class="boot-rail-item">Understand</div>
+            <div class="boot-rail-item">Review</div>
+            <div class="boot-rail-item">Taint</div>
+            <div class="boot-rail-item">Migration</div>
+            <div class="boot-rail-item">Proof</div>
+          </aside>
+          <main class="boot-main">
+            <div class="boot-card">
+              <p class="boot-card-title">Loading room…</p>
+              <p class="boot-card-copy">Preparing the shell and bundle metadata.</p>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/v2/main.tsx"></script>
   </body>
 </html>

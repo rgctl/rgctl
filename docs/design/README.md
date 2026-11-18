@@ -18,6 +18,7 @@ Every engineering design document in this directory follows the **6-section `rgc
 | :--- | :--- |
 | [**Graph Storage & Extraction Architecture**](../graph-storage-architecture.md) | `RGCL` v2 (`136B` header, `64B NodeRow`, `40B EdgeRow`), `SegmentedSpill` external sort, `ColdMetadataDb` (`NodeExtension` + 14B Green span tail), `RBPK` parked relations, `RGCS` v2 / `RGCT` v1 lossless sidecars, and `DeltaSegment` compaction. |
 | [**Graph Analysis, CPG & Reachability Architecture**](../analysis-architecture.md) | 3-tier memory model, `StructuralTopology` / `CodeGraphCsr` / `FlatGraphIndex`, verified centrality & HyperBall constants, Fast-Leiden communities, SCC blast radius, and the v3 `cfg_pdg.archive.bin` archive. |
+| [**Artifact Ownership & Consumers**](artifact-ownership.md) | Canonical `.rgctl/` artifacts vs the dashboard bundle vs HTTP API: producer, CLI/serve/browser readers, digest invalidation, and same-name traps. |
 | [**Workspace Code Structure**](../Code_structure.md) | Crate dependency graph, layer responsibilities, CLI command dispatch map, and `.rgctl/` artifact inventory. |
 
 ---
