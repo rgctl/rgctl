@@ -71,8 +71,8 @@ export function TaintRoom() {
 
   const activeId = view.kind === "ready" ? view.activeFunctionId : null;
   const cfg = useCfgDetail(activeId ?? "");
-  const detailDir = view.kind === "ready" ? (view.dataflow?.detail_dir ?? "slice") : "slice";
-  const dfg = useDfgDetail(activeId, canvasMode === "dfg", detailDir);
+  const detailDir = "slice";
+  const dfg = useDfgDetail(activeId, Boolean(activeId) && view.kind === "ready", detailDir);
   const blastLive = useBlastRadius(activeId, blastDepth, canvasMode === "blast");
 
   if (view.kind === "loading") {
@@ -194,8 +194,12 @@ export function TaintRoom() {
           cfg={cfg}
           blast={view.blastForActive}
           blastLive={blastLive}
-          dataflowEntry={view.dataflowForActive}
-          dataflowAvailable={view.dataflow?.available === true}
+          dataflowEntry={
+            dfg.kind === "ready"
+              ? { pdg_nodes: dfg.dfg.nodes.length, data_edges: dfg.dfg.edges.length }
+              : null
+          }
+          dataflowAvailable={dfg.kind === "ready" || dfg.kind === "absent"}
         />
       </div>
     </div>

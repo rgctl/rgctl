@@ -151,7 +151,7 @@ A dashboard artifact whose digest does not match `manifest.graph.digest` is stal
 | `slice.record_data.bin` | 1.25 GB | slice export | — | PDG worker | Range data |
 | `taint_index.json` | 142 KB | taint export | pipeline skip check | Taint | |
 | `taint/<id>.json` | per function | taint export | — | Taint | |
-| `dataflow_index.json` | 69 MB | dataflow export | — | Taint | Large JSON; API candidate |
+| `dataflow_index.json` | 69 MB | dataflow export | — | — | **No v2 reader now**: Taint counts come from PDG detail; remove from bundle |
 | `blast_index.json` | 82 B | blast export | — | Taint | Scores only |
 | `sources_index.json` | 5.5 MB | source catalog | — | coverage/source pane | |
 | `sources/<id>.txt` | source files | source catalog | — | source pane | |
@@ -253,7 +253,7 @@ Automated checks to keep in place:
 
 1. **The dashboard bundle is a projection, not a database.** It may omit data the CLI has.
 2. **Static hosting is a second-class path.** The API/Range path is the fast path; static fallbacks still exist for `cfg_index` / `slice_index` / `function_index`.
-3. **Some dashboard files are currently dead.** `mutations_index.json` and `migration_plan.json` have no current v2 reader; the dashboard `cfg_pdg.archive.bin` copy is no longer written by the exporter. Verify v1/external consumers before removing the remaining two.
+3. **Some dashboard files are currently dead.** `mutations_index.json`, `migration_plan.json`, and `dataflow_index.json` have no current v2 reader; the dashboard `cfg_pdg.archive.bin` copy is no longer written by the exporter. Verify v1/external consumers before removing the remaining three.
 4. **Some CLI paths are library-only.** `analysis.pack*` is not the primary `cpg`/`slice` path; those read `analysis/cfg_pdg.archive.bin`.
 5. **Manifest path fields are not authoritative in the browser.** Much of the v2 client still hardcodes filenames (`cfg_meta.json`, `slice_meta.json`, etc.), which is why the artifact map and the code can drift.
 6. **`/api/cpg` is documented but not routed.** `dashboard-v2.md` lists it, but `http_serve.rs` routes only `/api/query`, `/api/functions`, and `/api/semantic/*`.

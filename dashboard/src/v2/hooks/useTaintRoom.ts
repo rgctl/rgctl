@@ -6,11 +6,9 @@ import type { Focus } from "../focus";
 import {
   blastForFunction,
   loadBlastIndex,
-  loadDataflowIndex,
   loadTaintBundle,
   loadTaintIndex,
   type BlastIndexPayload,
-  type DataflowIndexPayload,
   type TaintBundlePayload,
   type TaintFlowView,
   type TaintFunctionEntry,
@@ -40,10 +38,8 @@ export type TaintRoomView =
       flows: TaintFlowView[];
       selectedFlowId: number | null;
       selectedFlow: TaintFlowView | null;
-      dataflow: DataflowIndexPayload | null;
       blast: BlastIndexPayload | null;
       blastForActive: ReturnType<typeof blastForFunction>;
-      dataflowForActive: DataflowIndexPayload["functions"][0] | null;
     };
 
 export interface UseTaintRoom {
@@ -63,20 +59,16 @@ export function useTaintRoom(focus: Focus | null): UseTaintRoom {
   const [bundle, setBundle] = useState<TaintBundlePayload | null>(null);
   const [bundleLoading, setBundleLoading] = useState(false);
   const [selectedFlowId, setSelectedFlowId] = useState<number | null>(null);
-  const [dataflow, setDataflow] = useState<DataflowIndexPayload | null>(null);
   const [blast, setBlast] = useState<BlastIndexPayload | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoad(null);
-    void Promise.all([loadTaintIndex(), loadDataflowIndex(), loadBlastIndex()]).then(
-      ([taint, df, bl]) => {
-        if (cancelled) return;
-        setLoad(taint);
-        setDataflow(df);
-        setBlast(bl);
-      },
-    );
+    void Promise.all([loadTaintIndex(), loadBlastIndex()]).then(([taint, bl]) => {
+      if (cancelled) return;
+      setLoad(taint);
+      setBlast(bl);
+    });
     return () => {
       cancelled = true;
     };
@@ -154,10 +146,6 @@ export function useTaintRoom(focus: Focus | null): UseTaintRoom {
     if (load.kind === "missing") return { kind: "missing" };
     if (load.kind === "unavailable") return { kind: "unavailable", index: load.index };
     if (load.kind === "empty") return { kind: "empty", index: load.index };
-    const dataflowForActive =
-      activeFunctionId && dataflow?.available
-        ? (dataflow.functions.find((f) => f.function_id === activeFunctionId) ?? null)
-        : null;
     return {
       kind: "ready",
       index: load.index,
@@ -169,10 +157,8 @@ export function useTaintRoom(focus: Focus | null): UseTaintRoom {
       flows,
       selectedFlowId,
       selectedFlow,
-      dataflow,
       blast,
       blastForActive: blastForFunction(blast, activeFunctionId ?? "", null),
-      dataflowForActive,
     };
   }, [
     load,
@@ -184,7 +170,6 @@ export function useTaintRoom(focus: Focus | null): UseTaintRoom {
     flows,
     selectedFlowId,
     selectedFlow,
-    dataflow,
     blast,
   ]);
 
