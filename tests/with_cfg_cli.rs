@@ -73,6 +73,55 @@ fn discover_cfg_alias_still_works() {
 }
 
 #[test]
+fn ruby_plain_begin_supports_eager_and_lazy_cfg_and_slices() {
+    let source =
+        "def example\n enabled = false\n begin\n  enabled = true\n end\n consume(enabled)\nend\n";
+    for eager in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        std::fs::write(repo.join("demo.rb"), source).unwrap();
+        let mut discover = Command::new(rgctl_bin());
+        discover
+            .current_dir(repo)
+            .args(["-f", "json", "discover", ".", "-l", "ruby"]);
+        if eager {
+            discover.arg("--with-cfg");
+        }
+        assert_ok(&discover.output().unwrap(), "Ruby begin discovery");
+        let inspect = Command::new(rgctl_bin())
+            .current_dir(repo)
+            .args(["-f", "json", "inspect", "example", "cfg"])
+            .output()
+            .unwrap();
+        assert_ok(&inspect, "Ruby begin CFG inspection");
+        let cfg: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+        assert_eq!(cfg["layer"], "cfg");
+        assert!(!cfg["nodes"].as_array().unwrap().is_empty());
+        let slice = Command::new(rgctl_bin())
+            .current_dir(repo)
+            .args([
+                "-f",
+                "json",
+                "slice",
+                "demo.rb",
+                "--function",
+                "example",
+                "--line",
+                "6",
+                "--variable",
+                "enabled",
+            ])
+            .output()
+            .unwrap();
+        assert_ok(&slice, "Ruby begin backward slice");
+        let result: serde_json::Value = serde_json::from_slice(&slice.stdout).unwrap();
+        let lines = result["lines"].as_array().unwrap();
+        assert!(lines.contains(&serde_json::json!(4)));
+        assert!(lines.contains(&serde_json::json!(6)));
+    }
+}
+
+#[test]
 fn discover_with_dfg_loops_requires_cfg_pass() {
     let (_tmp, repo) = materialize();
     let output = run_discover(&repo, &["--with-dfg-loops", "--with-cfg"]);

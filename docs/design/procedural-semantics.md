@@ -34,6 +34,12 @@ reaching definition of `enabled`, short-circuit operands retain their individual
 uses, and assignment conditions retain both the assignment and RHS use.
 Constant-condition pruning is unchanged.
 
+Ruby `begin` expressions without `rescue` or `ensure` descend into their child
+statements directly. Redispatching the same `begin` node through generic block
+handling previously caused infinite recursion in eager CFG discovery and lazy
+inspection or slicing. Empty, assigned and nested blocks retain local-variable
+dependencies and return termination without changing generic block scoping.
+
 Regressions exercise reaching definitions and backward slices in all 20
 procedural Tier 1 languages, HCL external conditional inputs, and SQL opaque-body
 serialization. The inventory test explicitly classifies ERB and Markdown as
