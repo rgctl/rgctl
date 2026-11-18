@@ -17,7 +17,8 @@ preserved. Combined and split APIs qualify names before the shared callable
 identity finish pass, so binding and overload/generic checks see the final names.
 This does not add receiver inference. The graph does not expand file
 path components or generated lexical owners into package suffixes or
-receiver-type indexes.
+receiver-type indexes. Shared call binding also avoids inferring a receiver
+owner from a generated name; native owner inference remains available.
 
 Standalone absolute paths lack a repository context, so their initial namespace
 uses the file stem. The extraction worker rebases generated names to the logical
