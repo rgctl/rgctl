@@ -466,6 +466,102 @@ fn same_stem_modules_do_not_cross_wire_calls() {
 }
 
 #[test]
+fn native_member_names_do_not_merge_free_functions_or_depend_on_cache_order() {
+    for (plugin, path, _, _) in plugins() {
+        let suffix = Path::new(path).extension().unwrap().to_str().unwrap();
+        let source = b"class Foo { static create(){return 1;} } function create(){function helper(){return 2;} return helper();} function run(){return create();}";
+        let cache = Arc::new(FactsCache::new());
+        let extractor = Extractor::new(Arc::new(rgctl_languages::default_registry()))
+            .with_repo_root("/repo")
+            .with_facts_cache(cache.clone());
+        for name in ["Other", "Foo"] {
+            let file = extractor
+                .extract_file_with_source(
+                    &Path::new("/repo").join(format!("src/{name}.{suffix}")),
+                    source.to_vec(),
+                )
+                .unwrap();
+            let fresh = Extractor::new(Arc::new(rgctl_languages::default_registry()))
+                .with_repo_root("/repo")
+                .extract_file_with_source(
+                    &Path::new("/repo").join(format!("src/{name}.{suffix}")),
+                    source.to_vec(),
+                )
+                .unwrap();
+            assert_eq!(
+                file.symbols, fresh.symbols,
+                "cache-dependent declaration names"
+            );
+            assert_eq!(
+                file.relations, fresh.relations,
+                "cache-dependent call endpoints"
+            );
+            assert!(
+                file.symbols
+                    .iter()
+                    .find(|s| s.name == "helper")
+                    .unwrap()
+                    .qualified_name
+                    .is_none()
+            );
+            let mut builder = GraphBuilder::new();
+            extractor.populate_graph(&[file], &mut builder).unwrap();
+            let (nodes, edges) = builder.into_graph();
+            let creates: Vec<_> = nodes
+                .iter()
+                .filter(|n| n.node_type == NodeType::Function && n.name.as_str() == "create")
+                .collect();
+            assert_eq!(
+                creates.len(),
+                2,
+                "{}: declaration bodies merged",
+                plugin.language_id()
+            );
+            let free = creates.iter().find(|n| n.qualified_name.is_none()).unwrap();
+            let member = creates
+                .iter()
+                .find(|n| n.qualified_name.as_deref() == Some("Foo.create"))
+                .unwrap();
+            assert_ne!(free.id, member.id);
+            let caller = nodes.iter().find(|n| n.name.as_str() == "run").unwrap();
+            assert!(
+                edges.iter().any(|e| e.edge_type == EdgeType::Calls
+                    && e.from == caller.id
+                    && e.to == free.id)
+            );
+        }
+        for source in [
+            &b"class Foo { constructor(){} } const obj = { '<init>': () => 2 };"[..],
+            &b"const obj = { 'outer.inner': () => 2 }; function outer(){function inner(){return 1;}}"[..],
+        ] {
+            let result = plugin.extract_all(Path::new(&format!("Foo.{suffix}")), source).unwrap();
+            assert!(result.symbols.iter().filter(|s| s.name == "<init>" || s.name == "outer.inner").all(|s| s.qualified_name.is_none()));
+            assert!(result.symbols.iter().all(|s| !s.is_superseded_definition()));
+        }
+        if plugin.language_id() == "typescript" {
+            let source = b"namespace app { export function helper(){return 1;} } function helper(){return 2;} function run(){return helper();}";
+            let cache = Arc::new(FactsCache::new());
+            let extractor = Extractor::new(Arc::new(rgctl_languages::default_registry()))
+                .with_repo_root("/repo")
+                .with_facts_cache(cache);
+            for name in ["Other", "app"] {
+                let path = Path::new("/repo/src").join(format!("{name}.ts"));
+                let cached = extractor
+                    .extract_file_with_source(&path, source.to_vec())
+                    .unwrap();
+                let fresh = Extractor::new(Arc::new(rgctl_languages::default_registry()))
+                    .with_repo_root("/repo")
+                    .extract_file_with_source(&path, source.to_vec())
+                    .unwrap();
+                assert_eq!(cached.symbols, fresh.symbols);
+                assert_eq!(cached.relations, fresh.relations);
+            }
+        }
+        assert!(cache.hit_count() > 0);
+    }
+}
+
+#[test]
 fn persisted_cache_rebases_names_and_call_endpoints_for_both_languages() {
     for (plugin, path, source, _) in plugins() {
         let registry = Arc::new(rgctl_languages::default_registry());

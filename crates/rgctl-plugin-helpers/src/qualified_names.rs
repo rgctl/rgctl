@@ -3,7 +3,7 @@
 use rgctl_plugin_api::{
     ExtractAllResult, QualifiedNameOrigin, Relation, SourceLocation, Symbol, SymbolType,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Component, Path};
 
 type Point = (usize, usize);
@@ -74,7 +74,49 @@ pub fn qualify_file(
             std::cmp::Reverse(end(&symbols[i].location)),
         )
     });
+    // Cache keys omit file paths. Conservatively retain short names that
+    // overlap file-derived and native-owned scopes, independent of the stem
+    // used for the first cache entry (e.g. free create vs Foo.create).
+    let conflicts_with_member: Vec<bool> = {
+        let mut file_names = FxHashSet::default();
+        let mut native_names = FxHashSet::default();
+        let mut frames: Vec<(usize, bool)> = Vec::new();
+        for &i in &order {
+            while frames.last().is_some_and(|&(p, _)| {
+                !contains(&symbols[p].location, &symbols[i].location)
+                    || (start(&symbols[p].location), end(&symbols[p].location))
+                        == (start(&symbols[i].location), end(&symbols[i].location))
+            }) {
+                frames.pop();
+            }
+            let s = &symbols[i];
+            let native = frames.last().is_some_and(|&(_, native)| native)
+                || (s.qualified_name_origin == QualifiedNameOrigin::Native
+                    && s.qualified_name.is_some());
+            if matches!(s.symbol_type, SymbolType::Function | SymbolType::Method) {
+                if native {
+                    if let Some(name) = s.qualified_name.as_deref() {
+                        if let Some((_, leaf)) = name.rsplit_once('.') {
+                            native_names.insert(leaf);
+                        }
+                    } else {
+                        native_names.insert(s.name.as_str());
+                    }
+                } else if s.qualified_name.is_none() {
+                    file_names.insert(s.name.as_str());
+                }
+            }
+            if scope(s) {
+                frames.push((i, native));
+            }
+        }
+        symbols
+            .iter()
+            .map(|s| file_names.contains(s.name.as_str()) && native_names.contains(s.name.as_str()))
+            .collect()
+    };
     let mut stack: Vec<usize> = Vec::new();
+    let mut deferred = Vec::new();
     let mut generated = false;
     for i in order {
         while stack.last().is_some_and(|&p| {
@@ -83,8 +125,16 @@ pub fn qualify_file(
                     == (start(&symbols[i].location), end(&symbols[i].location))
         }) {
             stack.pop();
+            deferred.pop();
         }
-        if symbols[i].qualified_name.is_none() {
+        let defer = deferred.last().copied().unwrap_or(false)
+            || (symbols[i].qualified_name.is_none()
+                && (conflicts_with_member[i] || symbols[i].name.contains('.'))
+                && matches!(
+                    symbols[i].symbol_type,
+                    SymbolType::Function | SymbolType::Method
+                ));
+        if symbols[i].qualified_name.is_none() && !defer {
             let origin = match stack.last() {
                 Some(&p) if symbols[p].qualified_name_origin != QualifiedNameOrigin::File => {
                     QualifiedNameOrigin::Lexical
@@ -101,6 +151,7 @@ pub fn qualify_file(
         }
         if scope(&symbols[i]) {
             stack.push(i);
+            deferred.push(defer);
         }
     }
     rewrite_endpoints(symbols, relations, &[], &module);

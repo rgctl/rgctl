@@ -6,6 +6,15 @@ inside that function includes its lexical owner. Existing explicit owner names
 and callable identity discriminators are preserved. Python and Go qualification
 remain separate follow-ups under issue #204.
 
+Callables whose short names overlap file-derived and native-owned scopes
+keep their existing unqualified representation, together with their lexical
+descendants. For example, a free `create()`
+in `Foo.ts` must not merge with the native `Foo.create` method. This conservative
+exception is independent of file stem and cache order. Literal callable names
+containing dots also retain their existing representation, so a property such
+as `outer.inner` cannot merge with a nested `inner` function. Fully namespacing native
+members is a separate ownership-policy change.
+
 The qualifier runs on extraction workers after the existing tree walk. It does
 not reparse source, read package-manager files, or load repository-wide state.
 A sorted scope stack fills missing names; preindexed aliases rewrite local
