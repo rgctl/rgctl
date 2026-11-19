@@ -24,6 +24,12 @@ fn plugins() -> Vec<Case> {
             "function helper():number{return 1;} function exercise():number{return helper();}",
             "src.app",
         ),
+        (
+            "python",
+            "src/app.py",
+            "def helper():\n    return 1\ndef exercise():\n    return helper()\n",
+            "src.app",
+        ),
     ]
     .into_iter()
     .map(|(language, path, source, module)| {
@@ -262,7 +268,7 @@ fn every_tier1_language_round_trips_and_preserves_native_names() {
                 .all(|s| s.metadata.get("module_namespace").is_none()),
             "{language}: per-symbol namespace metadata"
         );
-        if matches!(language, "javascript" | "typescript") {
+        if matches!(language, "javascript" | "typescript" | "python") {
             assert!(
                 result.file_namespace.is_some(),
                 "{language}: qualification has no provenance"
@@ -284,7 +290,10 @@ fn every_tier1_language_round_trips_and_preserves_native_names() {
 
 #[test]
 fn nested_declarations_and_explicit_method_owners_are_preserved() {
-    for (plugin, path, _, module) in plugins() {
+    for (plugin, path, _, module) in plugins()
+        .into_iter()
+        .filter(|(p, _, _, _)| p.language_id() != "python")
+    {
         let source = b"function outer(){ function inner(){ return 1; } return inner(); } class Box { method(){ return outer(); } }";
         let result = plugin.extract_all(Path::new(path), source).unwrap();
         let name = |bare: &str| {
@@ -467,7 +476,10 @@ fn same_stem_modules_do_not_cross_wire_calls() {
 
 #[test]
 fn native_member_names_do_not_merge_free_functions_or_depend_on_cache_order() {
-    for (plugin, path, _, _) in plugins() {
+    for (plugin, path, _, _) in plugins()
+        .into_iter()
+        .filter(|(p, _, _, _)| p.language_id() != "python")
+    {
         let suffix = Path::new(path).extension().unwrap().to_str().unwrap();
         let source = b"class Foo { static create(){return 1;} } function create(){function helper(){return 2;} return helper();} function run(){return create();}";
         let cache = Arc::new(FactsCache::new());
@@ -615,4 +627,173 @@ fn persisted_cache_rebases_names_and_call_endpoints_for_both_languages() {
                     .is_some_and(|name| name.starts_with("first."))
         }));
     }
+}
+
+#[test]
+fn python_packages_nested_functions_and_native_owners_agree_across_apis() {
+    let plugin = rgctl_languages::default_registry()
+        .get_language_plugin("python")
+        .unwrap();
+    let source = b"def outer():\n    def inner():\n        return 1\n    return inner()\n\nclass Owner:\n    def __init__(self):\n        pass\n    def method(self):\n        return outer()\n";
+    for (path, module) in [
+        ("pkg/__init__.py", "pkg"),
+        ("pkg/deep/app.py", "pkg.deep.app"),
+        ("app.pyw", "app"),
+    ] {
+        let all = plugin.extract_all(Path::new(path), source).unwrap();
+        let split = plugin.extract_symbols(Path::new(path), source).unwrap();
+        for symbols in [&all.symbols, &split] {
+            for (name, expected) in [
+                ("outer", format!("{module}.outer")),
+                ("inner", format!("{module}.outer.inner")),
+                ("Owner", format!("{module}.Owner")),
+                ("__init__", "Owner.<init>".into()),
+                ("method", "Owner.method".into()),
+            ] {
+                let symbol = symbols.iter().find(|s| s.name == name).unwrap();
+                assert_eq!(
+                    symbol.qualified_name.as_deref(),
+                    Some(expected.as_str()),
+                    "{path}: {name}"
+                );
+            }
+        }
+        let relations = plugin
+            .extract_relations(Path::new(path), source, &split)
+            .unwrap();
+        for relations in [&all.relations, &relations] {
+            assert!(
+                relations.iter().any(|r| r.from == format!("{module}.outer")
+                    && r.to_qualified_hint.as_deref()
+                        == Some(format!("{module}.outer.inner").as_str())),
+                "{path}: {relations:?}"
+            );
+            assert!(
+                relations.iter().any(|r| r.from == "Owner.method"
+                    && r.to_qualified_hint.as_deref() == Some(format!("{module}.outer").as_str())),
+                "{path}: {relations:?}"
+            );
+        }
+    }
+    let repeated = plugin.extract_all(Path::new("pkg/app.py"), b"def first():\n    def helper():\n        return 1\ndef second():\n    def helper():\n        return 2\n").unwrap();
+    let helpers: Vec<_> = repeated
+        .symbols
+        .iter()
+        .filter(|s| s.name == "helper")
+        .collect();
+    assert_eq!(helpers.len(), 2);
+    assert_ne!(helpers[0].qualified_name, helpers[1].qualified_name);
+    assert!(helpers.iter().all(|s| !s.is_superseded_definition()));
+}
+
+#[test]
+fn python_package_cache_rebases_file_names_and_preserves_native_members() {
+    let source = b"def outer():\n    def inner():\n        return 1\n    return inner()\nclass Owner:\n    def method(self):\n        return outer()\n";
+    let cache = Arc::new(FactsCache::new());
+    let registry = Arc::new(rgctl_languages::default_registry());
+    let before = Extractor::new(registry.clone())
+        .with_repo_root("/before")
+        .with_facts_cache(cache.clone());
+    before
+        .extract_file_with_source(Path::new("/before/first/__init__.py"), source.to_vec())
+        .unwrap();
+    let saved = tempfile::tempdir().unwrap();
+    cache.save(saved.path()).unwrap();
+    let restored = Arc::new(FactsCache::load(saved.path()));
+    let after = Extractor::new(registry.clone())
+        .with_repo_root("/after")
+        .with_facts_cache(restored.clone());
+    let path = Path::new("/after/second/nested/__init__.py");
+    let cached = after
+        .extract_file_with_source(path, source.to_vec())
+        .unwrap();
+    let fresh = Extractor::new(registry)
+        .with_repo_root("/after")
+        .extract_file_with_source(path, source.to_vec())
+        .unwrap();
+    assert_eq!(restored.hit_count(), 1);
+    assert_eq!(cached.symbols, fresh.symbols);
+    assert_eq!(cached.relations, fresh.relations);
+    for (name, expected) in [
+        ("outer", "second.nested.outer"),
+        ("inner", "second.nested.outer.inner"),
+        ("method", "Owner.method"),
+    ] {
+        assert_eq!(
+            cached
+                .symbols
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap()
+                .qualified_name
+                .as_deref(),
+            Some(expected)
+        );
+    }
+    assert!(
+        cached
+            .relations
+            .iter()
+            .any(|r| r.from == "second.nested.outer"
+                && r.to_qualified_hint.as_deref() == Some("second.nested.outer.inner"))
+    );
+}
+
+#[test]
+fn python_native_member_collision_keeps_distinct_bodies_and_cache_order() {
+    let source = b"class Native:\n    @staticmethod\n    def create():\n        return 1\ndef create():\n    def nested():\n        return 2\n    return nested()\ndef exercise():\n    return create()\n";
+    let registry = Arc::new(rgctl_languages::default_registry());
+    let cache = Arc::new(FactsCache::new());
+    let extractor = Extractor::new(registry.clone())
+        .with_repo_root("/repo")
+        .with_facts_cache(cache.clone());
+    for stem in ["Other", "Native"] {
+        let path = Path::new("/repo/src").join(format!("{stem}.py"));
+        let file = extractor
+            .extract_file_with_source(&path, source.to_vec())
+            .unwrap();
+        let fresh = Extractor::new(registry.clone())
+            .with_repo_root("/repo")
+            .extract_file_with_source(&path, source.to_vec())
+            .unwrap();
+        assert_eq!(file.symbols, fresh.symbols);
+        assert_eq!(file.relations, fresh.relations);
+        assert!(
+            file.symbols
+                .iter()
+                .find(|s| s.name == "nested")
+                .unwrap()
+                .qualified_name
+                .is_none()
+        );
+        let mut builder = GraphBuilder::new();
+        extractor.populate_graph(&[file], &mut builder).unwrap();
+        let (nodes, edges) = builder.into_graph();
+        let creates: Vec<_> = nodes
+            .iter()
+            .filter(|n| n.node_type == NodeType::Function && n.name.as_str() == "create")
+            .collect();
+        assert_eq!(creates.len(), 2);
+        let free = creates.iter().find(|n| n.qualified_name.is_none()).unwrap();
+        let native = creates
+            .iter()
+            .find(|n| n.qualified_name.as_deref() == Some("Native.create"))
+            .unwrap();
+        let caller = nodes
+            .iter()
+            .find(|n| n.name.as_str() == "exercise")
+            .unwrap();
+        assert_ne!(free.id, native.id);
+        assert!(
+            edges
+                .iter()
+                .any(|e| e.edge_type == EdgeType::Calls && e.from == caller.id && e.to == free.id)
+        );
+        assert!(
+            !edges.iter().any(|e| e.edge_type == EdgeType::Calls
+                && e.from == caller.id
+                && e.to == native.id)
+        );
+    }
+    assert!(cache.hit_count() > 0);
 }

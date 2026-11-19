@@ -60,7 +60,34 @@ pub fn qualify_file(
     symbols: &mut [Symbol],
     relations: &mut [Relation],
 ) -> Option<Box<str>> {
+    qualify_file_module(path, file_module(path), symbols, relations)
+}
+
+fn python_file_module(path: &Path) -> String {
     let module = file_module(path);
+    if path.file_stem().is_some_and(|stem| stem == "__init__")
+        && let Some((package, _)) = module.rsplit_once('.')
+    {
+        return package.to_owned();
+    }
+    module
+}
+
+/// Python package initializers use their package's logical namespace.
+pub fn qualify_python_file(
+    path: &Path,
+    symbols: &mut [Symbol],
+    relations: &mut [Relation],
+) -> Option<Box<str>> {
+    qualify_file_module(path, python_file_module(path), symbols, relations)
+}
+
+fn qualify_file_module(
+    path: &Path,
+    module: String,
+    symbols: &mut [Symbol],
+    relations: &mut [Relation],
+) -> Option<Box<str>> {
     if module.is_empty() {
         return None;
     }
@@ -165,13 +192,17 @@ pub fn qualify_file(
 /// Rebase generated names after fresh extraction OR a raw facts-cache hit.
 /// Other languages and their native qualified names pass through unchanged.
 pub fn qualify_in_repo(language: &str, logical_path: &Path, result: &mut ExtractAllResult) {
-    if !matches!(language, "javascript" | "typescript") {
+    if !matches!(language, "javascript" | "typescript" | "python") {
         return;
     }
     let Some(context) = result.file_namespace.as_mut() else {
         return;
     };
-    let module = file_module(logical_path);
+    let module = if language == "python" {
+        python_file_module(logical_path)
+    } else {
+        file_module(logical_path)
+    };
     if module.is_empty() || module == context.as_ref() {
         return;
     }
