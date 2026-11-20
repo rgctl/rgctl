@@ -276,3 +276,131 @@ fn dead_code_analyzer_cold_ext_bounded_by_findings() {
         "columnar dead-code must build findings from hot columns only (0 cold decodes), got {cold}"
     );
 }
+
+#[test]
+fn incremental_update_repo_zero_cold_ext() {
+    use rgctl::incremental::{FileTracker, IncrementalUpdater, UpdateOptions};
+    use rgctl::languages::registry::LanguageRegistry;
+    use rgctl::pipeline::{PipelineConfig, ProcessingPipeline};
+    use rgctl_graph::MmappedGraphSnapshot;
+    use std::fs;
+    use std::sync::Arc;
+
+    let _cold = lock_cold_counter();
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join("src")).unwrap();
+
+    let mut lib_src = String::new();
+    for i in 0..80 {
+        lib_src.push_str(&format!("pub mod f{i};\n"));
+        fs::write(
+            root.join(format!("src/f{i}.rs")),
+            format!("pub fn func_{i}() -> i32 {{ {i} }}\n"),
+        )
+        .unwrap();
+    }
+    fs::write(root.join("src/lib.rs"), lib_src).unwrap();
+
+    let registry: Arc<rgctl_registry::LanguageRegistry> = LanguageRegistry::new().into();
+    let pipeline = ProcessingPipeline::with_config(
+        Arc::clone(&registry),
+        PipelineConfig {
+            show_progress: false,
+            ..PipelineConfig::default()
+        },
+    );
+    let snapshot_path = MmappedGraphSnapshot::default_path(root);
+    let (stats, _) = pipeline
+        .process_repository_to_snapshot(root, &snapshot_path, None)
+        .unwrap();
+
+    let discoverer = rgctl::discovery::FileDiscoverer::new(Arc::clone(&registry));
+    let files = discoverer.discover(root).unwrap();
+    let mut tracker = FileTracker::new(root);
+    tracker
+        .index_files_with_mapping(&files, stats.node_path_mapping, Some(&stats.file_hashes))
+        .unwrap();
+    tracker.save().unwrap();
+
+    let updater = IncrementalUpdater::with_options(
+        Arc::clone(&registry),
+        UpdateOptions {
+            show_progress: false,
+            cascade_depth: 1,
+            ..Default::default()
+        },
+    );
+
+    // 1. No-op `update_repo` must touch 0 cold extensions.
+    reset_cold_ext_deserialization_count();
+    let noop = updater.update_repo(root).unwrap();
+    assert_eq!(noop.files_affected(), 0);
+    assert_eq!(
+        cold_ext_deserialization_count(),
+        0,
+        "no-op update_repo must decode 0 cold extensions"
+    );
+
+    // 2. Edit f10.rs to call untouched base function func_50 -> 0 cold extensions on compaction + cross-file resolve.
+    fs::write(
+        root.join("src/f10.rs"),
+        "pub fn func_10() -> i32 { crate::f50::func_50() + 1 }\n",
+    )
+    .unwrap();
+
+    reset_cold_ext_deserialization_count();
+    let res = updater.update_repo(root).unwrap();
+    assert_eq!(res.files_changed, 1);
+    assert_eq!(
+        cold_ext_deserialization_count(),
+        0,
+        "incremental update_repo + GraphCompactor + cross-file call resolution must decode 0 cold extensions"
+    );
+
+    // Verify cross-file edge func_10 -> func_50 exists in compacted snapshot without hydrating MemoryBackend.
+    let snap = MmappedGraphSnapshot::open(&snapshot_path).unwrap();
+    let col = snap.columnar().unwrap();
+    let mut f10_id = None;
+    let mut f50_id = None;
+    for idx in 0..col.node_count() {
+        if col.node_type_at(idx).unwrap() == NodeType::Function {
+            match col.node_name_str(idx).unwrap() {
+                "func_10" => f10_id = Some(col.node_id_at(idx).unwrap()),
+                "func_50" => f50_id = Some(col.node_id_at(idx).unwrap()),
+                _ => {}
+            }
+        }
+    }
+    let (f10_id, f50_id) = (f10_id.expect("func_10"), f50_id.expect("func_50"));
+    let mut has_call = false;
+    col.for_each_edge(|from, to, et| {
+        if from == f10_id && to == f50_id && et == EdgeType::Calls {
+            has_call = true;
+        }
+        Ok(())
+    })
+    .unwrap();
+    drop(snap);
+    assert!(
+        has_call,
+        "compacted snapshot must contain cross-file Calls edge func_10 -> func_50"
+    );
+
+    // 3. Explicit `--files` / watch path (`update_repo_files`) must also decode 0 cold extensions.
+    fs::write(
+        root.join("src/f20.rs"),
+        "pub fn func_20() -> i32 { crate::f60::func_60() }\n",
+    )
+    .unwrap();
+    reset_cold_ext_deserialization_count();
+    let watch_res = updater
+        .update_repo_files(root, &["src/f20.rs".into()])
+        .unwrap();
+    assert_eq!(watch_res.files_changed, 1);
+    assert_eq!(
+        cold_ext_deserialization_count(),
+        0,
+        "watch / --files update_repo_files must decode 0 cold extensions"
+    );
+}

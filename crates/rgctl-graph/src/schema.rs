@@ -443,6 +443,12 @@ pub struct Node {
     /// Normalized visibility (2 hot bits in the columnar `NodeRow`; derived
     /// once at extraction from plugin-typed visibility, `modifiers`, or
     /// language rules — never re-derived from cold properties on query paths).
+    ///
+    /// Always serialized (bincode is not self-describing — `skip_serializing_if`
+    /// would break symmetric roundtrips), so content digests computed by this
+    /// build differ from pre-v4 builds by this one field. Cross-version
+    /// incremental updates treat that as "changed" and re-extract — acceptable
+    /// alongside the `facts_cache` FORMAT_VERSION and snapshot format bumps.
     #[serde(default)]
     pub visibility: rgctl_plugin_api::SymbolVisibility,
 }

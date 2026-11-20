@@ -357,3 +357,123 @@ fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
         }
     }
 }
+
+/// Snapshot-native `update_repo` must match a clean cold discover across modify + cross-file call
+/// + callee rename cascade + add + delete + root/nested `mod.rs` & `foo_mod.rs` disambiguation.
+#[test]
+fn snapshot_update_repo_matches_cold_discover_and_avoids_zombie_nodes() {
+    use rgctl::graph::MmappedGraphSnapshot;
+
+    let warm = TempDir::new().unwrap();
+    let root = warm.path();
+
+    write(&root.join("mod.rs"), "pub fn root_mod_fn() -> i32 { 1 }\n");
+    write(
+        &root.join("src/sub/mod.rs"),
+        "pub fn nested_mod_fn() -> i32 { 2 }\n",
+    );
+    write(
+        &root.join("src/foo_mod.rs"),
+        "pub fn foo_mod_helper() -> i32 { 3 }\n",
+    );
+    write(
+        &root.join("src/caller_foo.rs"),
+        "pub fn call_foo() -> i32 { crate::foo_mod::foo_mod_helper() }\n",
+    );
+    write(
+        &root.join("src/auth.rs"),
+        "pub fn login() -> bool { true }\n",
+    );
+    write(
+        &root.join("src/main_flow.rs"),
+        "pub fn entry() -> bool { crate::auth::login() }\n",
+    );
+    write(&root.join("src/obsolete.rs"), "pub fn doomed_symbol() {}\n");
+
+    let registry = LanguageRegistry::new().into();
+    let pipeline = ProcessingPipeline::with_config(
+        Arc::clone(&registry),
+        PipelineConfig {
+            show_progress: false,
+            facts_cache: true,
+            ..PipelineConfig::default()
+        },
+    );
+    let snapshot_path = MmappedGraphSnapshot::default_path(root);
+    let (stats, _) = pipeline
+        .process_repository_to_snapshot(root, &snapshot_path, None)
+        .unwrap();
+
+    let discoverer = rgctl::discovery::FileDiscoverer::new(Arc::clone(&registry));
+    let files = discoverer.discover(root).unwrap();
+    let mut tracker = FileTracker::new(root);
+    tracker
+        .index_files_with_mapping(&files, stats.node_path_mapping, Some(&stats.file_hashes))
+        .unwrap();
+    tracker.save().unwrap();
+
+    // Edit root `mod.rs`, rename `login` -> `authenticate` in `src/auth.rs` + update caller,
+    // delete `src/obsolete.rs`, and add `src/new_feature.rs` calling kept `foo_mod_helper`.
+    write(
+        &root.join("mod.rs"),
+        "pub fn root_mod_fn_v2() -> i32 { 10 }\n",
+    );
+    write(
+        &root.join("src/auth.rs"),
+        "pub fn authenticate() -> bool { true }\n",
+    );
+    write(
+        &root.join("src/main_flow.rs"),
+        "pub fn entry() -> bool { crate::auth::authenticate() }\n",
+    );
+    fs::remove_file(root.join("src/obsolete.rs")).unwrap();
+    write(
+        &root.join("src/new_feature.rs"),
+        "pub fn feature() -> i32 { crate::foo_mod::foo_mod_helper() }\n",
+    );
+
+    let updater = IncrementalUpdater::with_options(
+        Arc::clone(&registry),
+        UpdateOptions {
+            show_progress: false,
+            cascade_depth: 1,
+            ..Default::default()
+        },
+    );
+    let res = updater.update_repo(root).unwrap();
+    assert_eq!(res.files_added, 1);
+    assert_eq!(res.files_changed, 3);
+    assert_eq!(res.files_deleted, 1);
+
+    let warm_graph = CodeGraph::open_snapshot(&snapshot_path).unwrap();
+    let (warm_nodes, warm_calls) = graph_signature(&warm_graph);
+
+    // Cold rediscover on a clean copy of the post-edit tree.
+    let cold = TempDir::new().unwrap();
+    let cold_root = cold.path();
+    for ent in fs::read_dir(root).unwrap() {
+        let ent = ent.unwrap();
+        let name = ent.file_name();
+        if name == ".rgctl" {
+            continue;
+        }
+        let from = ent.path();
+        let to = cold_root.join(&name);
+        if from.is_dir() {
+            copy_dir(&from, &to);
+        } else {
+            fs::copy(&from, &to).unwrap();
+        }
+    }
+    let (cold_graph, _) = pipeline.process_repository(cold_root).unwrap();
+    let (cold_nodes, cold_calls) = graph_signature(&cold_graph);
+
+    assert_eq!(
+        warm_nodes, cold_nodes,
+        "snapshot-compacted node set must match clean cold discover (no zombie symbols or dropped nested mod.rs)"
+    );
+    assert_eq!(
+        warm_calls, cold_calls,
+        "snapshot-compacted Calls edges must match clean cold discover"
+    );
+}
