@@ -379,3 +379,142 @@ fn test_stale_watch_lock_allows_local_update() {
     drop(result);
     let _ = try_acquire_watch_lock(root).expect("lock free or reclaimable after update");
 }
+
+#[test]
+fn test_standalone_watch_holds_lock_and_queues_updates() {
+    use rgctl::cli::pipeline_status::watch_lock_path;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let outer = TempDir::new().unwrap();
+    let repo = outer.path().join("subrepo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(repo.join("tiny.py"), "def ping():\n    return 1\n").unwrap();
+
+    let bin = env!("CARGO_BIN_EXE_rgctl");
+    let discover_out = Command::new(bin)
+        .current_dir(&repo)
+        .args(["discover", "."])
+        .output()
+        .unwrap();
+    assert!(
+        discover_out.status.success(),
+        "discover failed: {}",
+        String::from_utf8_lossy(&discover_out.stderr)
+    );
+
+    // Launch `rgctl watch subrepo` from parent dir to also verify relative `PATH` resolution.
+    let mut watcher = ChildGuard(
+        Command::new(bin)
+            .current_dir(outer.path())
+            .args(["watch", "subrepo"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+
+    let lock_file = watch_lock_path(&repo);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !lock_file.is_file() {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for .rgctl/watch.lock to appear"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // 1. `rgctl -f json status` must report `watcher_alive: true`.
+    let status_out = Command::new(bin)
+        .current_dir(&repo)
+        .args(["-f", "json", "status"])
+        .output()
+        .unwrap();
+    assert!(status_out.status.success());
+    let status_json: serde_json::Value = serde_json::from_slice(&status_out.stdout).unwrap();
+    assert_eq!(status_json["watcher_alive"], serde_json::Value::Bool(true));
+
+    // 2. Starting a second `rgctl watch` against the same repo must fail fast.
+    let dup_watch = Command::new(bin)
+        .current_dir(&repo)
+        .arg("watch")
+        .output()
+        .unwrap();
+    assert!(
+        !dup_watch.status.success(),
+        "duplicate rgctl watch should fail when lock is held"
+    );
+
+    // 3. `rgctl -f json update --no-wait` must enqueue and return a receipt.
+    let nowait_out = Command::new(bin)
+        .current_dir(&repo)
+        .args(["-f", "json", "update", "--no-wait"])
+        .output()
+        .unwrap();
+    assert!(
+        nowait_out.status.success(),
+        "update --no-wait failed: {}",
+        String::from_utf8_lossy(&nowait_out.stderr)
+    );
+    let nowait_json: serde_json::Value = serde_json::from_slice(&nowait_out.stdout).unwrap();
+    assert_eq!(nowait_json["queued"], serde_json::Value::Bool(true));
+    assert!(
+        nowait_json["request_id"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()),
+        "expected request_id in {nowait_json}"
+    );
+
+    // 4. Waiting `rgctl -f json update` after editing a file must drain via `watch_queue`.
+    fs::write(
+        repo.join("tiny.py"),
+        "def ping():\n    return 2\n\ndef pong():\n    return ping()\n",
+    )
+    .unwrap();
+    let upd_out = Command::new(bin)
+        .current_dir(&repo)
+        .args(["-f", "json", "update"])
+        .output()
+        .unwrap();
+    assert!(
+        upd_out.status.success(),
+        "queued update failed: {}",
+        String::from_utf8_lossy(&upd_out.stderr)
+    );
+    let upd_json: serde_json::Value = serde_json::from_slice(&upd_out.stdout).unwrap();
+    assert_eq!(
+        upd_json["source"],
+        serde_json::Value::String("watch_queue".into())
+    );
+
+    // 5. On Unix, SIGTERM triggers graceful shutdown and removes `.rgctl/watch.lock`.
+    #[cfg(unix)]
+    {
+        let pid = watcher.0.id().to_string();
+        let _ = Command::new("kill").args(["-TERM", &pid]).status();
+        let stop_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(exit) = watcher.0.try_wait().unwrap() {
+                assert!(exit.success(), "expected clean SIGTERM exit, got {exit}");
+                break;
+            }
+            assert!(
+                Instant::now() < stop_deadline,
+                "timed out waiting for rgctl watch to exit on SIGTERM"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !lock_file.exists(),
+            "expected .rgctl/watch.lock to be removed on graceful shutdown"
+        );
+    }
+}

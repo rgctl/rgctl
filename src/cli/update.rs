@@ -115,14 +115,14 @@ pub fn run(ctx: &CliContext, args: UpdateArgs) -> Result<()> {
 fn run_queued(ctx: &CliContext, root: &Path, args: &UpdateArgs, watcher_pid: u32) -> Result<()> {
     if args.force {
         bail!(
-            "rgctl update --force cannot run while serve --watch is active (pid {watcher_pid}).\n\
+            "rgctl update --force cannot run while rgctl watch / serve --watch is active (pid {watcher_pid}).\n\
              Stop the watcher, or run a full `rgctl discover` in another session after stopping watch."
         );
     }
 
     let request = request_from_args(root, args)?;
     let request_id = request.request_id.clone();
-    enqueue(root, &request).context("enqueue update for serve --watch")?;
+    enqueue(root, &request).context("enqueue update for active watcher")?;
 
     if args.no_wait {
         if ctx.format == OutputFormat::Json {
@@ -132,12 +132,12 @@ fn run_queued(ctx: &CliContext, root: &Path, args: &UpdateArgs, watcher_pid: u32
                 queued: true,
                 request_id: request_id.clone(),
                 message: Some(format!(
-                    "enqueued for serve --watch (pid {watcher_pid}); not waiting for result"
+                    "enqueued for active watcher (pid {watcher_pid}); not waiting for result"
                 )),
             };
             ctx.emit_json_value(&serde_json::to_value(&payload)?)?;
         } else {
-            println!("Queued update request {request_id} for serve --watch (pid {watcher_pid})");
+            println!("Queued update request {request_id} for active watcher (pid {watcher_pid})");
         }
         return Ok(());
     }
@@ -186,11 +186,12 @@ fn request_from_args(root: &Path, args: &UpdateArgs) -> Result<UpdateQueueReques
     )
 }
 
-/// Shared entry used by CLI and `serve --watch`.
+/// Shared entry used by CLI, `rgctl watch`, and `serve --watch`.
 ///
 /// When `acquire_lock` is true (CLI `rgctl update` with no live watcher), takes
-/// `.rgctl/watch.lock` for the duration of the in-process compact. The watch loop
-/// passes `false` because serve already holds that lock for the process lifetime.
+/// `.rgctl/watch.lock` with `update:<pid>` for the duration of the in-process compact.
+/// The watch loop passes `false` because `rgctl watch` / `serve --watch` already
+/// holds the watcher lock for the process lifetime.
 pub fn run_update_at(
     root: &Path,
     args: &UpdateArgs,
@@ -199,7 +200,7 @@ pub fn run_update_at(
 ) -> Result<UpdateResult> {
     let _lock = if acquire_lock {
         Some(
-            super::pipeline_status::try_acquire_watch_lock(root)
+            super::pipeline_status::try_acquire_update_writer_lock(root)
                 .context("cannot run rgctl update while another watch/update holds the lock")?,
         )
     } else {

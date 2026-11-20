@@ -7,6 +7,7 @@ use rgctl_project_config::RgctlConfig;
 use rgctl_service::update_queue::{self, drain_queue, prune_old_results, queue_nonempty};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -22,19 +23,63 @@ const SKIP_DIR_NAMES: &[&str] = &[".git", "target", "node_modules", ".rgctl"];
 
 /// Run `rgctl watch` in the foreground until the process is interrupted.
 pub fn run_watch_foreground(repo: PathBuf) -> Result<()> {
+    let repo = repo.canonicalize().unwrap_or(repo);
+    let _watch_lock = super::pipeline_status::try_acquire_watch_lock(&repo)
+        .with_context(|| format!("cannot start rgctl watch for {}", repo.display()))?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let handle = spawn_repo_watcher_until(repo.clone(), Arc::clone(&stop))?;
     info!(
         "rgctl watch: monitoring {} (debounce from rgctl.toml [watch], default 25ms)",
         repo.display()
     );
-    let handle = spawn_repo_watcher(repo)?;
-    handle
+    wait_for_shutdown_signal(&stop)?;
+    let join_res = handle
         .join()
-        .map_err(|_| anyhow::anyhow!("watch thread panicked"))?;
+        .map_err(|_| anyhow::anyhow!("watch thread panicked"));
+    drop(_watch_lock);
+    join_res
+}
+
+fn wait_for_shutdown_signal(stop: &Arc<AtomicBool>) -> Result<()> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("create signal runtime for rgctl watch")?;
+    rt.block_on(async {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            match signal(SignalKind::terminate()) {
+                Ok(mut sigterm) => {
+                    tokio::select! {
+                        _ = tokio::signal::ctrl_c() => {}
+                        _ = sigterm.recv() => {}
+                    }
+                }
+                Err(_) => {
+                    let _ = tokio::signal::ctrl_c().await;
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+    });
+    stop.store(true, Ordering::SeqCst);
     Ok(())
 }
 
 /// Start a background watcher thread. Returns a join handle (detached by caller).
 pub fn spawn_repo_watcher(repo: PathBuf) -> Result<thread::JoinHandle<()>> {
+    spawn_repo_watcher_until(repo, Arc::new(AtomicBool::new(false)))
+}
+
+fn spawn_repo_watcher_until(
+    repo: PathBuf,
+    stop: Arc<AtomicBool>,
+) -> Result<thread::JoinHandle<()>> {
+    let repo = repo.canonicalize().unwrap_or(repo);
     let debounce_ms = RgctlConfig::load(&repo)
         .unwrap_or_default()
         .watch
@@ -78,7 +123,13 @@ pub fn spawn_repo_watcher(repo: PathBuf) -> Result<thread::JoinHandle<()>> {
         .name("rgctl-file-watch".into())
         .spawn(move || {
             let _keeper = watcher_keep;
-            watch_loop(repo, rx, extensions, Duration::from_millis(debounce_ms));
+            watch_loop(
+                repo,
+                rx,
+                extensions,
+                Duration::from_millis(debounce_ms),
+                stop,
+            );
         })
         .context("spawn watch thread")?;
 
@@ -105,12 +156,13 @@ fn watch_loop(
     rx: mpsc::Receiver<PathBuf>,
     extensions: HashSet<String>,
     debounce: Duration,
+    stop: Arc<AtomicBool>,
 ) {
     let mut pending: HashSet<String> = HashSet::new();
     let mut deadline: Option<Instant> = None;
     let queue_poll = poll_interval(debounce);
 
-    loop {
+    while !stop.load(Ordering::Relaxed) {
         let timeout = match deadline {
             Some(d) => {
                 let until_debounce = d.saturating_duration_since(Instant::now());
@@ -125,6 +177,9 @@ fn watch_loop(
         };
 
         let recv = rx.recv_timeout(timeout);
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
 
         match recv {
             Ok(path) => {

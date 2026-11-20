@@ -133,21 +133,36 @@ pub fn watch_lock_path(repo: &Path) -> PathBuf {
     rgctl_graph::paths::artifact_path(repo, WATCH_LOCK_FILE)
 }
 
-/// Try to acquire the exclusive watch/update lock. Only one `serve --watch` or
-/// concurrent `rgctl update` may hold it per repository.
+/// Try to acquire the exclusive watcher lock (`rgctl watch` / `rgctl serve --watch`).
+///
+/// Only one watcher or concurrent `rgctl update` writer may hold `.rgctl/watch.lock`
+/// per repository. Watcher locks record the bare PID (or `watch:<pid>`) so
+/// [`detect_live_watcher`] routes `rgctl update` requests through the update queue.
 ///
 /// If the lock file exists but its PID is not alive, the stale file is removed
 /// and acquisition is retried once.
 pub fn try_acquire_watch_lock(repo: &Path) -> Result<WatchLock> {
+    try_acquire_writer_lock_inner(repo, true)
+}
+
+/// Try to acquire the exclusive writer lock for a one-shot `rgctl update`.
+///
+/// Records `update:<pid>` in `.rgctl/watch.lock` so concurrent writers are blocked
+/// while [`detect_live_watcher`] knows no queue-draining watcher daemon is active.
+pub fn try_acquire_update_writer_lock(repo: &Path) -> Result<WatchLock> {
+    try_acquire_writer_lock_inner(repo, false)
+}
+
+fn try_acquire_writer_lock_inner(repo: &Path, is_watcher: bool) -> Result<WatchLock> {
     let dir = rgctl_graph::paths::artifact_dir(repo);
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("create artifact dir {}", dir.display()))?;
     let path = dir.join(WATCH_LOCK_FILE);
-    match try_create_watch_lock(&path) {
+    match try_create_watch_lock(&path, is_watcher) {
         Ok(lock) => Ok(lock),
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
             if reclaim_stale_watch_lock_at(&path) {
-                match try_create_watch_lock(&path) {
+                match try_create_watch_lock(&path, is_watcher) {
                     Ok(lock) => return Ok(lock),
                     Err(err2) if err2.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(err2) => {
@@ -156,20 +171,24 @@ pub fn try_acquire_watch_lock(repo: &Path) -> Result<WatchLock> {
                     }
                 }
             }
-            let holder = std::fs::read_to_string(&path)
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            let holder_note = if holder.is_empty() {
-                String::new()
-            } else {
-                format!(" (held by pid {holder})")
+            let raw_holder = std::fs::read_to_string(&path).unwrap_or_default();
+            let holder_note = match parse_watch_lock_text(&raw_holder) {
+                Some((pid, true)) => format!(" (held by watcher pid {pid})"),
+                Some((pid, false)) => format!(" (held by update pid {pid})"),
+                None => {
+                    let trimmed = raw_holder.trim();
+                    if trimmed.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (held by pid {trimmed})")
+                    }
+                }
             };
             bail!(
                 "another rgctl watch/update already active for {}{holder_note}\n\
                  lock: {}\n\
                  Only one watcher (or update writer) is allowed per repo. \
-                 Stop the other `rgctl serve --watch`, wait for `rgctl update` to finish, \
+                 Stop the other `rgctl watch` / `rgctl serve --watch`, wait for `rgctl update` to finish, \
                  or omit --watch.",
                 repo.display(),
                 path.display()
@@ -179,12 +198,28 @@ pub fn try_acquire_watch_lock(repo: &Path) -> Result<WatchLock> {
     }
 }
 
-fn try_create_watch_lock(path: &Path) -> std::io::Result<WatchLock> {
+fn try_create_watch_lock(path: &Path, is_watcher: bool) -> std::io::Result<WatchLock> {
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-    let _ = writeln!(file, "{}", std::process::id());
+    let pid = std::process::id();
+    if is_watcher {
+        let _ = writeln!(file, "{pid}");
+    } else {
+        let _ = writeln!(file, "update:{pid}");
+    }
     Ok(WatchLock {
         path: path.to_path_buf(),
     })
+}
+
+fn parse_watch_lock_text(text: &str) -> Option<(u32, bool)> {
+    let trimmed = text.trim();
+    if let Some(rest) = trimmed.strip_prefix("update:") {
+        return rest.trim().parse::<u32>().ok().map(|pid| (pid, false));
+    }
+    if let Some(rest) = trimmed.strip_prefix("watch:") {
+        return rest.trim().parse::<u32>().ok().map(|pid| (pid, true));
+    }
+    trimmed.parse::<u32>().ok().map(|pid| (pid, true))
 }
 
 fn reclaim_stale_watch_lock_at(path: &Path) -> bool {
@@ -196,7 +231,7 @@ fn reclaim_stale_watch_lock_at(path: &Path) -> bool {
     if trimmed.is_empty() {
         return std::fs::remove_file(path).is_ok();
     }
-    let Ok(pid) = trimmed.parse::<u32>() else {
+    let Some((pid, _)) = parse_watch_lock_text(trimmed) else {
         return false;
     };
     if pid == std::process::id() || process_alive(pid) {
@@ -212,13 +247,16 @@ pub struct LiveWatcherInfo {
     pub pid: u32,
 }
 
-/// Read the pid from `watch.lock` if the file exists and parses.
+/// Read the watcher pid from `watch.lock` if held by a watcher (`rgctl watch` / `serve --watch`).
+///
+/// One-shot `rgctl update` writer locks (`update:<pid>`) return `None` because
+/// they do not drain the update queue.
 #[must_use]
 pub fn read_watch_lock_pid(repo: &Path) -> Option<LiveWatcherInfo> {
     let path = watch_lock_path(repo);
     let text = std::fs::read_to_string(path).ok()?;
-    let pid: u32 = text.trim().parse().ok()?;
-    Some(LiveWatcherInfo { pid })
+    let (pid, is_watcher) = parse_watch_lock_text(&text)?;
+    is_watcher.then_some(LiveWatcherInfo { pid })
 }
 
 /// True if `pid` appears to refer to a running process.
@@ -236,31 +274,27 @@ pub fn process_alive(pid: u32) -> bool {
 
 /// Detect a live external watcher holding `watch.lock`.
 ///
-/// - Missing lock → `None`
+/// - Missing lock or one-shot `update:<pid>` lock → `None`
 /// - Lock held by **this** process → `None` (not an external watcher)
-/// - Lock pid alive → `Some(info)`
+/// - Watcher lock pid alive → `Some(info)`
 /// - Lock pid dead → remove stale lock, return `None`
 pub fn detect_live_watcher(repo: &Path) -> Option<LiveWatcherInfo> {
-    let info = read_watch_lock_pid(repo)?;
-    if info.pid == std::process::id() {
+    let path = watch_lock_path(repo);
+    let text = std::fs::read_to_string(&path).ok()?;
+    let (pid, is_watcher) = parse_watch_lock_text(&text)?;
+    if pid == std::process::id() {
         return None;
     }
-    if process_alive(info.pid) {
-        return Some(info);
+    if !process_alive(pid) {
+        let _ = std::fs::remove_file(path);
+        return None;
     }
-    let _ = std::fs::remove_file(watch_lock_path(repo));
-    None
+    is_watcher.then_some(LiveWatcherInfo { pid })
 }
 
-/// Reclaim a stale watch lock (pid dead). Returns true if a lock file was removed.
+/// Reclaim a stale watch/update lock (pid dead). Returns true if a lock file was removed.
 pub fn reclaim_stale_watch_lock(repo: &Path) -> bool {
-    let Some(info) = read_watch_lock_pid(repo) else {
-        return false;
-    };
-    if info.pid == std::process::id() || process_alive(info.pid) {
-        return false;
-    }
-    std::fs::remove_file(watch_lock_path(repo)).is_ok()
+    reclaim_stale_watch_lock_at(&watch_lock_path(repo))
 }
 
 /// Initial plan with all stages pending.
@@ -469,5 +503,34 @@ mod tests {
         }
         std::fs::write(&path, format!("{dead_pid}\n")).unwrap();
         let _lock = try_acquire_watch_lock(repo).expect("reclaim stale");
+    }
+
+    #[test]
+    fn update_writer_lock_blocks_writers_without_advertising_watcher() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path();
+        let path = watch_lock_path(repo);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+
+        // Simulate an external one-shot `rgctl update` process (pid 1).
+        let external_pid = 1u32;
+        if process_alive(external_pid) && external_pid != std::process::id() {
+            std::fs::write(&path, format!("update:{external_pid}\n")).expect("write lock");
+            assert!(
+                detect_live_watcher(repo).is_none(),
+                "one-shot update lock must not advertise a live queue-draining watcher"
+            );
+            let err = try_acquire_update_writer_lock(repo).expect_err("concurrent update blocked");
+            assert!(format!("{err:#}").contains("held by update pid"));
+            let err2 = try_acquire_watch_lock(repo).expect_err("concurrent watch blocked");
+            assert!(format!("{err2:#}").contains("held by update pid"));
+            std::fs::remove_file(&path).expect("cleanup");
+        }
+
+        let dead_pid = 4_294_967_294u32;
+        if !process_alive(dead_pid) {
+            std::fs::write(&path, format!("update:{dead_pid}\n")).expect("write dead lock");
+            let _lock = try_acquire_update_writer_lock(repo).expect("reclaim stale update lock");
+        }
     }
 }
