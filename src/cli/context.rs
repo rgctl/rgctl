@@ -222,6 +222,16 @@ impl CliContext {
             }
         }
     }
+
+    /// Serialize a `Serialize` payload directly to JSON output.
+    ///
+    /// Streams the payload without building an intermediate
+    /// `serde_json::Value` tree — the memory-efficient path for large
+    /// report types (e.g. `dead-code` findings on kernel-scale repos).
+    pub fn emit_serializable<T: serde::Serialize>(&self, payload: &T) -> Result<()> {
+        let text = serde_json::to_string_pretty(payload)?;
+        self.emit(&text)
+    }
 }
 
 fn classify_cli_error(message: &str) -> (&'static str, &'static str, Option<&'static str>) {

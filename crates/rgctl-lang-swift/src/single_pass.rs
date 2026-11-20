@@ -105,15 +105,16 @@ fn class_decl_symbol_type(node: Node) -> (SymbolType, &'static str) {
 
 /// Simple name of a Swift `attribute` node (`@main` → `main`,
 /// `@available(iOS, *)` → `available`), without the leading `@` or any
-/// argument list.
-fn swift_attribute_name(node: Node, source: &[u8]) -> Option<String> {
+/// argument list. Borrowed slice — no allocation (Swift codebases carry
+/// many attributes; only `@main` is ever promoted to a relation).
+fn swift_attribute_name<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
     let text = node.utf8_text(source).ok()?.trim();
     let name = text.strip_prefix('@').unwrap_or(text);
     let end = name
         .find(|c: char| c == '(' || c.is_whitespace())
         .unwrap_or(name.len());
     let name = &name[..end];
-    (!name.is_empty()).then(|| name.to_string())
+    (!name.is_empty()).then_some(name)
 }
 
 /// Callee name for a `call_expression` — member segment, not the receiver.
@@ -905,14 +906,15 @@ pub fn extract_all_single_pass(
                                     let spelled = format!("@{name}");
                                     relations.push(Relation {
                                         from,
-                                        to: spelled.clone(),
+                                        to: spelled,
                                         relation_type: RelationType::AnnotatedWith,
                                         location: node_to_location(node, &file_path_str),
-                                        metadata: serde_json::json!({
-                                            "language": "swift",
-                                            "kind": "annotation",
-                                        }),
-                                        to_qualified_hint: Some(spelled),
+                                        // `Relation.metadata` is discarded by
+                                        // `SegmentedSpill::append_edge` on
+                                        // spilled discover — keep it `Null`
+                                        // (no per-relation `serde_json::Map`).
+                                        metadata: serde_json::Value::Null,
+                                        to_qualified_hint: Some(format!("@{name}")),
                                         to_type_hint: Some("annotation".to_string()),
                                         ..Default::default()
                                     });

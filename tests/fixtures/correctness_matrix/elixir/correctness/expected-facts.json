@@ -182,8 +182,8 @@
       {
         "name": "audit_weight",
         "kind": "unreferenced_function",
-        "confidence": "high",
-        "file": "ledger_base.ex"
+        "confidence": "low",
+        "file": "correctness_harness.ex"
       }
     ],
     "must_not_contain": [

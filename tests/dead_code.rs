@@ -131,7 +131,7 @@ fn unreferenced_public_fn_reported_as_low_confidence() {
     let mut backend = MemoryBackend::new();
     let public_fn = Node::new(NodeType::Function, "exported_api")
         .with_file_path("src/api.rs")
-        .with_property("visibility".to_string(), "pub".to_string());
+        .with_visibility(rgctl::graph::schema::SymbolVisibility::Public);
 
     backend.insert_node(public_fn).unwrap();
 
@@ -159,7 +159,7 @@ fn public_fn_callees_still_reachable() {
     let mut backend = MemoryBackend::new();
     let public_fn = Node::new(NodeType::Function, "exported_api")
         .with_file_path("src/api.rs")
-        .with_property("visibility".to_string(), "pub".to_string());
+        .with_visibility(rgctl::graph::schema::SymbolVisibility::Public);
     let callee_fn = Node::new(NodeType::Function, "called_from_pub").with_file_path("src/api.rs");
 
     let main_fn = Node::new(NodeType::Function, "main").with_file_path("src/main.rs");
@@ -198,27 +198,28 @@ fn public_fn_callees_still_reachable() {
 }
 
 #[test]
-fn entry_point_class_methods_reachable_via_contains() {
+fn entry_point_class_methods_reachable_via_qn_prefix() {
+    // Real `discover` graphs carry `Contains` only for File→Symbol (never
+    // Type→Method), so methods of entry-point types are reached through
+    // qualified-name prefix propagation.
     let mut backend = MemoryBackend::new();
     let class = Node::new(NodeType::Class, "MyController")
         .with_file_path("src/controller.rs")
-        .with_property("visibility".to_string(), "pub".to_string());
+        .with_qualified_name("MyController")
+        .with_visibility(rgctl::graph::schema::SymbolVisibility::Public);
     let annotation = Node::new(NodeType::Annotation, "RestController");
-    let method =
-        Node::new(NodeType::Function, "handle_request").with_file_path("src/controller.rs");
+    let method = Node::new(NodeType::Function, "handle_request")
+        .with_file_path("src/controller.rs")
+        .with_qualified_name("MyController.handle_request");
 
     let class_id = class.id;
     let ann_id = annotation.id;
-    let method_id = method.id;
 
     backend.insert_node(class).unwrap();
     backend.insert_node(annotation).unwrap();
     backend.insert_node(method).unwrap();
     backend
         .insert_edge(Edge::new(class_id, ann_id, EdgeType::AnnotatedWith))
-        .unwrap();
-    backend
-        .insert_edge(Edge::new(class_id, method_id, EdgeType::Contains))
         .unwrap();
 
     let (report, path) = analyze(&backend);
@@ -228,7 +229,7 @@ fn entry_point_class_methods_reachable_via_contains() {
             .findings
             .iter()
             .any(|f| f.symbol_name == "handle_request"),
-        "methods on entry-point classes should be reachable via Contains"
+        "methods on entry-point classes should be reachable via qn prefix propagation"
     );
 
     let _ = std::fs::remove_file(&path);
@@ -341,4 +342,282 @@ fn machine_readable_json_output() {
     }
 
     let _ = std::fs::remove_file(&path);
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end `discover` + `dead-code` tests (real pipeline graphs — no
+// hand-crafted `Contains` edges; the graph builder's actual output shape).
+// ---------------------------------------------------------------------------
+
+use std::process::Command;
+
+fn rgctl_bin() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_rgctl"))
+}
+
+/// Discover a scratch repo and return the parsed `dead-code` report.
+fn discover_and_analyze(repo: &std::path::Path, extra_args: &[&str]) -> DeadCodeReport {
+    let out = Command::new(rgctl_bin())
+        .current_dir(repo)
+        .args(["discover", "."])
+        .output()
+        .expect("spawn discover");
+    assert!(
+        out.status.success(),
+        "discover failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut args = vec!["-f", "json", "dead-code"];
+    args.extend_from_slice(extra_args);
+    let out = Command::new(rgctl_bin())
+        .current_dir(repo)
+        .args(&args)
+        .output()
+        .expect("spawn dead-code");
+    assert!(
+        out.status.success(),
+        "dead-code failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).expect("parse dead-code report")
+}
+
+#[test]
+fn e2e_swift_main_struct_methods_reachable() {
+    // `@main struct` with **no** `static func main()` — the attribute itself
+    // is the program entry; its members must not be flagged.
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("swiftapp");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join("App.swift"),
+        r#"@main
+struct MySwiftUIApp {
+    func setupAppearance() {
+        print("setup")
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    let report = discover_and_analyze(&repo, &[]);
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.symbol_name == "setupAppearance"),
+        "@main struct members must be reachable; got {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| f.symbol_name.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn e2e_scala_extends_app_members_reachable() {
+    // `extends App` and `extends Base with App` (the latter emits
+    // `Implements`, not `Extends`) — object bodies run at startup.
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("scalaapp");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join("Main.scala"),
+        r#"trait Base
+
+object Main extends App {
+  def run(): Unit = ()
+}
+
+object WithApp extends Base with App {
+  def boot(): Unit = ()
+}
+"#,
+    )
+    .unwrap();
+
+    let report = discover_and_analyze(&repo, &[]);
+    let flagged: Vec<&str> = report
+        .findings
+        .iter()
+        .map(|f| f.symbol_name.as_str())
+        .collect();
+    assert!(
+        !flagged.contains(&"run") && !flagged.contains(&"boot"),
+        "`extends App` object members must be reachable; got {flagged:?}"
+    );
+}
+
+#[test]
+fn e2e_scala3_main_annotation_no_collision_with_def_main() {
+    // Scala 3 `@main def runTool()` alongside a classic `def main(...)` in
+    // another file — the `AnnotatedWith` edge must resolve to an Annotation
+    // node (not the `main` function), so `runTool` is an entry point.
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("scalatool");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("Tool.scala"), "@main def runTool(): Unit = ()\n").unwrap();
+    std::fs::write(
+        repo.join("Classic.scala"),
+        "object Classic {\n  def main(args: Array[String]): Unit = ()\n}\n",
+    )
+    .unwrap();
+
+    let report = discover_and_analyze(&repo, &[]);
+    assert!(
+        !report.findings.iter().any(|f| f.symbol_name == "runTool"),
+        "@main def runTool must not collide with def main; got {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| f.symbol_name.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn e2e_rust_pub_fn_classifies_low() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("rustapi");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn exported_fn() -> u32 { 1 }\nfn private_fn() -> u32 { 2 }\n",
+    )
+    .unwrap();
+
+    let report = discover_and_analyze(&repo, &[]);
+    let exported = report
+        .findings
+        .iter()
+        .find(|f| f.symbol_name == "exported_fn")
+        .expect("exported_fn reported");
+    assert_eq!(exported.confidence, DeadCodeConfidence::Low);
+    let private = report
+        .findings
+        .iter()
+        .find(|f| f.symbol_name == "private_fn")
+        .expect("private_fn reported");
+    assert_eq!(private.confidence, DeadCodeConfidence::High);
+}
+
+#[test]
+fn e2e_c_linkage_and_live_header_prototypes() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("caproject");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join("main.c"),
+        "#include \"api.h\"\nint main(void) { return live_api(1); }\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("api.h"), "int live_api(int x);\n").unwrap();
+    std::fs::write(
+        repo.join("impl.c"),
+        "#include \"api.h\"\nint live_api(int x) { return x; }\nstatic int dead_static_fn(void) { return 0; }\nint dead_external_fn(void) { return 1; }\n",
+    )
+    .unwrap();
+
+    let report = discover_and_analyze(&repo, &[]);
+    let names: Vec<&str> = report
+        .findings
+        .iter()
+        .map(|f| f.symbol_name.as_str())
+        .collect();
+    // Live header prototype: callers bind to the .c implementation, so the
+    // bodiless declaration must not be flagged.
+    assert!(
+        !names.contains(&"live_api")
+            || report.findings.iter().any(|f| f.symbol_name == "live_api"
+                && f.file_path
+                    .as_deref()
+                    .is_some_and(|p| p.ends_with("impl.c"))),
+        "live .h prototypes must not be flagged as dead code; got {names:?}"
+    );
+    let static_fn = report
+        .findings
+        .iter()
+        .find(|f| f.symbol_name == "dead_static_fn")
+        .expect("dead_static_fn reported");
+    assert_eq!(static_fn.confidence, DeadCodeConfidence::High);
+    let external_fn = report
+        .findings
+        .iter()
+        .find(|f| f.symbol_name == "dead_external_fn")
+        .expect("dead_external_fn reported");
+    assert_eq!(external_fn.confidence, DeadCodeConfidence::Low);
+}
+
+#[test]
+fn e2e_elixir_full_otp_callback_set_seeded() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("exotp");
+    std::fs::create_dir_all(repo.join("lib")).unwrap();
+    std::fs::write(
+        repo.join("lib/worker.ex"),
+        r#"defmodule Worker do
+  use GenServer
+
+  def init(args), do: {:ok, args}
+  def handle_call(:ping, _from, state), do: {:reply, :pong, state}
+  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_continue(_cont, state), do: {:noreply, state}
+  def terminate(_reason, _state), do: :ok
+  def code_change(_old, state, _extra), do: {:ok, state}
+end
+
+defmodule Plain do
+  def handle_call(x), do: x
+end
+"#,
+    )
+    .unwrap();
+
+    let report = discover_and_analyze(&repo, &[]);
+    let flagged: Vec<&str> = report
+        .findings
+        .iter()
+        .map(|f| f.qualified_name.as_deref().unwrap_or(""))
+        .collect();
+    for cb in [
+        "Worker.init",
+        "Worker.handle_call",
+        "Worker.handle_info",
+        "Worker.handle_continue",
+        "Worker.terminate",
+        "Worker.code_change",
+    ] {
+        assert!(
+            !flagged.contains(&cb),
+            "GenServer callback {cb} must not be flagged; got {flagged:?}"
+        );
+    }
+    assert!(
+        flagged.contains(&"Plain.handle_call"),
+        "Plain.handle_call (no behaviour) stays a dead-code candidate; got {flagged:?}"
+    );
+}
+
+#[test]
+fn e2e_entry_point_flag_wins_on_otp_callback_names() {
+    // `--entry-point` must not be bypassed by the OTP-callback deferral.
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("exentry");
+    std::fs::create_dir_all(repo.join("lib")).unwrap();
+    std::fs::write(
+        repo.join("lib/plain.ex"),
+        "defmodule Plain do\n  def handle_call(msg), do: inner(msg)\n  defp inner(x), do: x\nend\n",
+    )
+    .unwrap();
+
+    let report = discover_and_analyze(&repo, &["--entry-point", "Plain.handle_call"]);
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.qualified_name.as_deref() == Some("Plain.handle_call")),
+        "--entry-point Plain.handle_call must seed reachability"
+    );
 }

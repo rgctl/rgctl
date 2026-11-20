@@ -1,11 +1,12 @@
 //! Graph-based dead-code detection via reachability analysis.
 
 use crate::centrality::{NodeRole, classify_node_role};
-use crate::graph_utils::PetGraphView;
-use petgraph::graph::NodeIndex;
+use crate::hash_maps::FxHashSet;
+use crate::structural_topology::StructuralTopology;
 use rgctl_error::Result;
 use rgctl_graph::SnapshotNodeStore;
 use rgctl_graph::schema::{EdgeType, Node, NodeType};
+use rgctl_plugin_api::SymbolVisibility;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use uuid::Uuid;
@@ -146,22 +147,28 @@ pub struct DeadCodeReport {
 /// Graph-based dead-code analyzer over a snapshot store.
 pub struct DeadCodeAnalyzer<'a> {
     store: &'a SnapshotNodeStore,
-    view: PetGraphView,
+    /// Typed CSR topology (one UUID map; no `PetGraphView` duplicate index).
+    topo: StructuralTopology,
     entry_points: Vec<String>,
     exclude_patterns: Vec<String>,
     include_tests: bool,
+    /// Optional confidence tier filter (`[high, medium, low]` keep-set).
+    /// Applied *before* finding allocation so excluded tiers never pay
+    /// string formatting or cold decodes.
+    confidence_filter: Option<Vec<DeadCodeConfidence>>,
 }
 
 impl<'a> DeadCodeAnalyzer<'a> {
     /// Build a new analyzer over the given snapshot store.
     pub fn new(store: &'a SnapshotNodeStore) -> Result<Self> {
-        let view = PetGraphView::from_snapshot_store(store)?;
+        let topo = StructuralTopology::from_snapshot_store(store)?;
         Ok(Self {
             store,
-            view,
+            topo,
             entry_points: Vec::new(),
             exclude_patterns: Vec::new(),
             include_tests: false,
+            confidence_filter: None,
         })
     }
 
@@ -183,15 +190,31 @@ impl<'a> DeadCodeAnalyzer<'a> {
         self
     }
 
+    /// Restrict findings to the given confidence tiers (empty = all).
+    pub fn with_confidence_filter(mut self, tiers: Vec<DeadCodeConfidence>) -> Self {
+        if tiers.is_empty() || tiers.len() == 3 {
+            self.confidence_filter = None;
+        } else {
+            self.confidence_filter = Some(tiers);
+        }
+        self
+    }
+
+    fn keeps_confidence(&self, c: DeadCodeConfidence) -> bool {
+        self.confidence_filter
+            .as_ref()
+            .is_none_or(|keep| keep.contains(&c))
+    }
+
     /// Run the dead-code analysis and return a report.
     pub fn analyze(&self) -> Result<DeadCodeReport> {
-        let n = self.view.node_count();
+        let n = self.topo.node_count();
         let mut analyzable = vec![false; n];
         let mut candidate_roots = vec![false; n];
         let mut framework_annotations: Vec<usize> = Vec::new();
         let mut app_trait_indices: Vec<usize> = Vec::new();
-        // Scala-file indices (bounded by the number of `.scala` sources, not
-        // the full node count) for the `extends App` scan.
+        // Scala-file indices — collected only on legacy v1 snapshots (the
+        // columnar path checks the source file directly at scan time).
         let mut scala_file_indices: Vec<usize> = Vec::new();
         // Elixir OTP callback candidates (`(idx, module prefix)`) — resolved
         // against `use GenServer` / `@behaviour` edges after Pass 1 so a
@@ -201,36 +224,34 @@ impl<'a> DeadCodeAnalyzer<'a> {
         let mut behaviour_targets: Vec<usize> = Vec::new();
 
         // Pass 1: single scan collecting analyzable nodes, root candidates,
-        // and framework annotation indices. On columnar v2 snapshots this is
+        // and framework annotation indices. On columnar v2+ snapshots this is
         // zero-cold-touch (hot `NodeRow` columns only — no `NodeExtension`
-        // bincode deserializations, no per-node `HashMap` index lookups since
-        // the dense PetGraph index equals the columnar row index). Legacy v1
-        // snapshots fall back to `for_each_node_seq`.
+        // bincode deserializations; the dense CSR index equals the columnar
+        // row index). Legacy v1 snapshots fall back to `for_each_node_seq`.
         if let Some(col) = self.store.columnar() {
             for i in 0..col.node_count() {
                 let nt = col.node_type_at(i)?;
+                let name = col.node_name_str(i)?;
                 if nt == NodeType::Annotation {
-                    if is_framework_annotation(col.node_name_str(i)?) {
+                    if is_framework_annotation(name) {
                         framework_annotations.push(i);
                     }
                     continue;
                 }
-                if matches!(nt, NodeType::Class | NodeType::Interface)
-                    && col.node_name_str(i)? == "App"
-                {
-                    // Scala `object Main extends App` candidates — resolved
-                    // against incoming `Extends` edges after Pass 1.
+                if is_type_kind(nt) && simple_name_segment(name) == "App" {
+                    // Scala `object Main extends App` candidates (also matches
+                    // qualified `scala.App`) — resolved against incoming
+                    // `Extends`/`Implements` edges after Pass 1.
                     app_trait_indices.push(i);
                 }
-                if matches!(col.node_name_str(i)?, "GenServer" | "Supervisor") {
+                if is_otp_behaviour_target(name) {
                     // Elixir behaviour targets (`use GenServer` resolves to a
-                    // Class/Import node — matched by name, not type).
+                    // Class/Import node — matched by simple name, not type).
                     behaviour_targets.push(i);
                 }
                 if !is_analyzable_type(nt) {
                     continue;
                 }
-                let name = col.node_name_str(i)?;
                 let file_path = col.node_file_path_str(i)?;
                 if self.should_exclude(name, file_path) {
                     continue;
@@ -243,9 +264,6 @@ impl<'a> DeadCodeAnalyzer<'a> {
                 if !self.include_tests && role == NodeRole::Test {
                     continue;
                 }
-                if file_path.is_some_and(is_scala_source) {
-                    scala_file_indices.push(i);
-                }
                 let is_elixir = is_elixir_source(file_path);
                 let needs_qualified_name = !self.entry_points.is_empty()
                     || (is_elixir
@@ -255,14 +273,20 @@ impl<'a> DeadCodeAnalyzer<'a> {
                 } else {
                     None
                 };
-                if is_elixir && let Some(module) = qualified_name.and_then(elixir_module_prefix) {
-                    if is_otp_callback_name(name) {
-                        // Deferred: only a root once the enclosing module is
-                        // known to adopt GenServer/Supervisor.
+                if is_elixir
+                    && is_otp_callback_name(name)
+                    && let Some(module) = qualified_name.and_then(elixir_module_prefix)
+                {
+                    // Deferred: only a root once the enclosing module is
+                    // known to adopt a behaviour — but explicit
+                    // `--entry-point` patterns always win.
+                    if self.is_configured_entry_point(name, qualified_name, file_path) {
+                        candidate_roots[i] = true;
+                    } else {
                         otp_callback_candidates.push((i, module.to_string()));
-                        analyzable[i] = true;
-                        continue;
                     }
+                    analyzable[i] = true;
+                    continue;
                 }
                 analyzable[i] = true;
                 candidate_roots[i] = self.is_root_candidate(name, qualified_name, file_path);
@@ -271,24 +295,21 @@ impl<'a> DeadCodeAnalyzer<'a> {
             self.store.for_each_node_seq(|node| {
                 if node.node_type == NodeType::Annotation {
                     if is_framework_annotation(node.name.as_str()) {
-                        if let Some(idx) = self.view.get_index(node.id) {
-                            framework_annotations.push(idx.index());
+                        if let Some(idx) = self.legacy_index(node.id) {
+                            framework_annotations.push(idx);
                         }
                     }
                     return;
                 }
-                if matches!(node.node_type, NodeType::Class | NodeType::Interface)
-                    && node.name.as_str() == "App"
+                if is_type_kind(node.node_type) && simple_name_segment(node.name.as_str()) == "App"
                 {
-                    if let Some(idx) = self.view.get_index(node.id) {
-                        app_trait_indices.push(idx.index());
+                    if let Some(idx) = self.legacy_index(node.id) {
+                        app_trait_indices.push(idx);
                     }
                 }
-                if matches!(node.name.as_str(), "GenServer" | "Supervisor") {
-                    // Elixir behaviour targets (`use GenServer` resolves to a
-                    // Class/Import node — matched by name, not type).
-                    if let Some(idx) = self.view.get_index(node.id) {
-                        behaviour_targets.push(idx.index());
+                if is_otp_behaviour_target(node.name.as_str()) {
+                    if let Some(idx) = self.legacy_index(node.id) {
+                        behaviour_targets.push(idx);
                     }
                 }
                 if !is_analyzable_type(node.node_type) {
@@ -310,11 +331,11 @@ impl<'a> DeadCodeAnalyzer<'a> {
                 if !self.include_tests && role == NodeRole::Test {
                     return;
                 }
-                let Some(idx) = self.view.get_index(node.id) else {
+                let Some(idx) = self.legacy_index(node.id) else {
                     return;
                 };
                 if file_path.is_some_and(is_scala_source) {
-                    scala_file_indices.push(idx.index());
+                    scala_file_indices.push(idx);
                 }
                 let is_elixir = is_elixir_source(file_path);
                 if is_elixir
@@ -325,13 +346,22 @@ impl<'a> DeadCodeAnalyzer<'a> {
                         .and_then(elixir_module_prefix)
                 {
                     // Deferred: only a root once the enclosing module is
-                    // known to adopt GenServer/Supervisor.
-                    otp_callback_candidates.push((idx.index(), module.to_string()));
-                    analyzable[idx.index()] = true;
+                    // known to adopt a behaviour — but explicit
+                    // `--entry-point` patterns always win.
+                    if self.is_configured_entry_point(
+                        name,
+                        node.qualified_name.as_deref(),
+                        file_path,
+                    ) {
+                        candidate_roots[idx] = true;
+                    } else {
+                        otp_callback_candidates.push((idx, module.to_string()));
+                    }
+                    analyzable[idx] = true;
                     return;
                 }
-                analyzable[idx.index()] = true;
-                candidate_roots[idx.index()] =
+                analyzable[idx] = true;
+                candidate_roots[idx] =
                     self.is_root_candidate(name, node.qualified_name.as_deref(), file_path);
             })?;
         }
@@ -340,60 +370,50 @@ impl<'a> DeadCodeAnalyzer<'a> {
         // against modules that actually adopt a behaviour (`use GenServer`
         // emits an `Extends` edge, `@behaviour GenServer` an `Implements`
         // edge from the module node). Enclosing modules are matched by the
-        // qualified-name prefix recorded in Pass 1; a dedicated scan is only
-        // paid when OTP-named candidates exist.
+        // qualified-name prefix recorded in Pass 1.
         if !otp_callback_candidates.is_empty() {
-            let mut otp_modules: Vec<String> = Vec::new();
-            let mut otp_module_indices: Vec<usize> = Vec::new();
+            let mut otp_module_indices: Vec<u32> = Vec::new();
             for target in &behaviour_targets {
                 for edge_type in [EdgeType::Extends, EdgeType::Implements] {
-                    for src in self
-                        .view
-                        .incoming_filtered(NodeIndex::new(*target), &[edge_type])
-                    {
-                        otp_module_indices.push(src.index());
+                    for src in self.topo.in_filtered(*target as u32, &[edge_type]) {
+                        otp_module_indices.push(src);
                     }
                 }
             }
             if !otp_module_indices.is_empty() {
-                // Map module qualified names → whether the module adopts a
-                // behaviour (hot columns; Module-type nodes only).
+                let mut otp_modules: FxHashSet<String> = FxHashSet::default();
                 if let Some(col) = self.store.columnar() {
-                    for i in 0..col.node_count() {
-                        if col.node_type_at(i)? != NodeType::Module {
-                            continue;
-                        }
-                        if !is_elixir_source(col.node_file_path_str(i)?) {
-                            continue;
-                        }
-                        if !otp_module_indices.contains(&i) {
-                            continue;
-                        }
-                        if let Some(qn) = col.node_qualified_name_str(i)? {
-                            otp_modules.push(qn.to_string());
+                    // Index directly by the resolved module rows — no full
+                    // `node_count` re-scan, no linear `contains`.
+                    for &i in &otp_module_indices {
+                        let i = i as usize;
+                        if i < n
+                            && col.node_type_at(i)? == NodeType::Module
+                            && is_elixir_source(col.node_file_path_str(i)?)
+                            && let Some(qn) = col.node_qualified_name_str(i)?
+                        {
+                            otp_modules.insert(qn.to_string());
                         }
                     }
                 } else {
                     self.store.for_each_node_seq(|node| {
-                        if node.node_type != NodeType::Module {
+                        if node.node_type != NodeType::Module
+                            || !is_elixir_source(node.file_path.as_deref())
+                        {
                             return;
                         }
-                        if !is_elixir_source(node.file_path.as_deref()) {
-                            return;
-                        }
-                        let Some(idx) = self.view.get_index(node.id) else {
+                        let Some(idx) = self.legacy_index(node.id) else {
                             return;
                         };
-                        if !otp_module_indices.contains(&idx.index()) {
-                            return;
-                        }
-                        if let Some(qn) = node.qualified_name.as_deref() {
-                            otp_modules.push(qn.to_string());
+                        if otp_module_indices.contains(&(idx as u32)) {
+                            if let Some(qn) = node.qualified_name.as_deref() {
+                                otp_modules.insert(qn.to_string());
+                            }
                         }
                     })?;
                 }
                 for (i, module) in &otp_callback_candidates {
-                    if otp_modules.iter().any(|qn| qn == module) {
+                    if otp_modules.contains(module.as_str()) {
                         candidate_roots[*i] = true;
                     }
                 }
@@ -405,47 +425,70 @@ impl<'a> DeadCodeAnalyzer<'a> {
         let mut is_framework_entry = vec![false; n];
         for ann in framework_annotations {
             for neighbor in self
-                .view
-                .incoming_filtered(NodeIndex::new(ann), &[EdgeType::AnnotatedWith])
+                .topo
+                .in_filtered(ann as u32, &[EdgeType::AnnotatedWith])
             {
-                let ni = neighbor.index();
+                let ni = neighbor as usize;
                 if ni < n {
                     is_framework_entry[ni] = true;
                 }
             }
         }
 
-        // Scala `extends App`: an object subclassing the `App` trait executes
-        // its body at startup, so it (and everything it calls) is reachable.
+        // Scala `extends App` (and `extends Base with App`, which emits
+        // `Implements`): an object subclassing the `App` trait executes its
+        // body at startup, so it (and everything it calls) is reachable.
+        let col = self.store.columnar();
         for app in app_trait_indices {
-            for neighbor in self
-                .view
-                .incoming_filtered(NodeIndex::new(app), &[EdgeType::Extends])
-            {
-                let ni = neighbor.index();
-                if ni < n && scala_file_indices.contains(&ni) {
-                    is_framework_entry[ni] = true;
+            for edge_type in [EdgeType::Extends, EdgeType::Implements] {
+                for neighbor in self.topo.in_filtered(app as u32, &[edge_type]) {
+                    let ni = neighbor as usize;
+                    if ni >= n {
+                        continue;
+                    }
+                    let is_scala = match col {
+                        Some(col) => is_scala_source(col.node_file_path_str(ni)?.unwrap_or("")),
+                        None => scala_file_indices.contains(&ni),
+                    };
+                    if is_scala {
+                        is_framework_entry[ni] = true;
+                    }
                 }
             }
         }
 
-        let mut root_indices: Vec<NodeIndex> = Vec::new();
+        let mut root_indices: Vec<u32> = Vec::new();
+
         for i in 0..n {
             if !analyzable[i] {
                 continue;
             }
-            let idx = NodeIndex::new(i);
             if candidate_roots[i]
                 || is_framework_entry[i]
                 || self
-                    .view
-                    .outgoing_filtered(idx, &[EdgeType::ExposesRoute])
+                    .topo
+                    .out_filtered(i as u32, &[EdgeType::ExposesRoute])
                     .next()
                     .is_some()
             {
-                root_indices.push(idx);
+                root_indices.push(i as u32);
             }
         }
+
+        // Type-root → member propagation. Real `discover` graphs carry
+        // `Contains` edges only for File→Symbol (never Type→Method), so a
+        // root *type* (annotated class, `@main` struct, `extends App`
+        // object) must propagate reachability to its member symbols by
+        // qualified-name prefix within the same file. Propagated members
+        // seed the BFS but are not counted as entry points.
+        let mut propagated_roots: Vec<u32> = Vec::new();
+        self.propagate_type_roots_to_members(
+            &analyzable,
+            &candidate_roots,
+            &is_framework_entry,
+            &mut propagated_roots,
+        )?;
+        root_indices.extend_from_slice(&propagated_roots);
 
         let total_symbols = analyzable.iter().filter(|&&a| a).count();
         let entry_point_count = root_indices.len();
@@ -454,46 +497,81 @@ impl<'a> DeadCodeAnalyzer<'a> {
 
         let reachable_symbols = (0..n).filter(|&i| analyzable[i] && reachable[i]).count();
 
-        // Pass 3: classify unreachable nodes. CSR edge prechecks (inbound
-        // reference edges, import outbound references) run *before* any cold
-        // `Node` materialization so external imports and unreachable internal
-        // cycles never pay the bincode decode. Isolated dead cycles (e.g.
+        // Pass 3: classify unreachable nodes. All prechecks (inbound
+        // reference edges, import outbound references, declaration role,
+        // confidence tier) run on hot columns / the CSR *before* any
+        // allocation, so excluded tiers and bodiless declarations never pay
+        // string formatting — and the columnar path never decodes cold
+        // `NodeExtension` payloads at all. Isolated dead cycles (e.g.
         // `dead_a <-> dead_b` mutual recursion with zero external callers)
         // are reported as root SCCs while downstream callees of a dead root
         // stay suppressed.
-        let cycle_members = self.isolated_dead_cycles(&analyzable, &reachable);
+        let (inbound_members, cycle_members) = self.isolated_dead_cycles(&analyzable, &reachable);
         let mut findings: Vec<DeadCodeFinding> = Vec::new();
         for (i, &is_analyzable) in analyzable.iter().enumerate() {
             if !is_analyzable || reachable[i] {
                 continue;
             }
-            let idx = NodeIndex::new(i);
+            let has_inbound = inbound_members.binary_search(&i).is_ok();
             let in_cycle = cycle_members.binary_search(&i).is_ok();
-            if !in_cycle
-                && self
-                    .view
-                    .incoming_filtered(idx, REFERENCE_EDGE_TYPES)
-                    .next()
-                    .is_some()
-            {
+            if has_inbound && !in_cycle {
                 continue;
             }
-            if let Some(col) = self.store.columnar() {
-                if col.node_type_at(i)? == NodeType::Import && !self.has_outbound_reference(idx) {
+            if let Some(col) = col {
+                if col.node_type_at(i)? == NodeType::Import
+                    && !self.has_outbound_reference(i as u32)
+                {
                     continue;
                 }
-                let node = col.materialize_node_at(i)?;
-                if let Some(finding) = self.classify_finding(&node, in_cycle) {
-                    findings.push(finding);
+                // Bodiless declarations (`.h` prototypes, interface
+                // signatures) are API surface, not dead code.
+                if col.node_is_declaration_at(i)? {
+                    continue;
                 }
-            } else if let Some(uid) = self.view.get_uuid(idx) {
-                if let Ok(Some(node)) = self.store.get_node(uid) {
-                    if node.node_type == NodeType::Import && !self.has_outbound_reference(idx) {
+                let nt = col.node_type_at(i)?;
+                let is_public = col.node_visibility_at(i)? == SymbolVisibility::Public;
+                let Some((kind, confidence)) = Self::classify_tier_of(nt, is_public) else {
+                    continue;
+                };
+                if !self.keeps_confidence(confidence) {
+                    continue;
+                }
+                // Hot-only construction: every finding field (name,
+                // qualified name, file, lines, id, type, visibility) lives
+                // in `NodeRow` / zero-copy extension string reads.
+                let node = col.materialize_node_hot_at(i)?;
+                let qualified_name = col.node_qualified_name_str(i)?;
+                findings.push(self.build_finding(
+                    &node,
+                    qualified_name,
+                    kind,
+                    confidence,
+                    in_cycle,
+                ));
+            } else if let Some(idx) = self.legacy_index_of(i) {
+                if let Ok(Some(node)) = self.store.get_node(idx) {
+                    if node.node_type == NodeType::Import && !self.has_outbound_reference(i as u32)
+                    {
                         continue;
                     }
-                    if let Some(finding) = self.classify_finding(&node, in_cycle) {
-                        findings.push(finding);
+                    if node.get_property("callable_role") == Some("declaration") {
+                        continue;
                     }
+                    let Some((kind, confidence)) =
+                        Self::classify_tier_of(node.node_type, is_public_symbol(&node))
+                    else {
+                        continue;
+                    };
+                    if !self.keeps_confidence(confidence) {
+                        continue;
+                    }
+                    findings.push(self.build_finding(
+                        &node,
+                        node.qualified_name.as_deref(),
+                        kind,
+                        confidence,
+                        in_cycle,
+                    ));
                 }
             }
         }
@@ -517,6 +595,109 @@ impl<'a> DeadCodeAnalyzer<'a> {
             },
             findings,
         })
+    }
+
+    /// Dense CSR index for a node UUID (legacy v1 snapshots only).
+    fn legacy_index(&self, id: Uuid) -> Option<usize> {
+        self.topo.uuid_to_index.get(&id).map(|&i| i as usize)
+    }
+
+    /// UUID for a dense CSR index (legacy v1 snapshots only).
+    fn legacy_index_of(&self, idx: usize) -> Option<Uuid> {
+        self.topo.index_to_uuid.get(idx).copied()
+    }
+
+    /// Propagate root status from root *types* (Class/Struct/Interface/Enum/
+    /// Module) to their member symbols. Real graphs have no Type→Method
+    /// `Contains` edges, so membership is matched by qualified-name prefix
+    /// within the same source file. Propagated members are appended to
+    /// `propagated_roots` (BFS seeds, not entry-point counts).
+    #[allow(clippy::too_many_arguments)]
+    fn propagate_type_roots_to_members(
+        &self,
+        analyzable: &[bool],
+        candidate_roots: &[bool],
+        is_framework_entry: &[bool],
+        propagated_roots: &mut Vec<u32>,
+    ) -> Result<()> {
+        let n = analyzable.len();
+        // (qualified name, file) of root types — same-file + prefix match.
+        let mut root_types: Vec<(String, String)> = Vec::new();
+        if let Some(col) = self.store.columnar() {
+            for i in 0..n {
+                if !analyzable[i] || !(candidate_roots[i] || is_framework_entry[i]) {
+                    continue;
+                }
+                if !is_type_kind(col.node_type_at(i)?) {
+                    continue;
+                }
+                if let (Some(qn), Some(fp)) =
+                    (col.node_qualified_name_str(i)?, col.node_file_path_str(i)?)
+                {
+                    root_types.push((qn.to_string(), fp.to_string()));
+                }
+            }
+        } else {
+            self.store.for_each_node_seq(|node| {
+                let Some(idx) = self.legacy_index(node.id) else {
+                    return;
+                };
+                if idx >= n
+                    || !analyzable[idx]
+                    || !(candidate_roots[idx] || is_framework_entry[idx])
+                    || !is_type_kind(node.node_type)
+                {
+                    return;
+                }
+                if let (Some(qn), Some(fp)) =
+                    (node.qualified_name.as_deref(), node.file_path.as_deref())
+                {
+                    root_types.push((qn.to_string(), fp.to_string()));
+                }
+            })?;
+        }
+        if root_types.is_empty() {
+            return Ok(());
+        }
+        let roots: FxHashSet<(&str, &str)> = root_types
+            .iter()
+            .map(|(qn, fp)| (qn.as_str(), fp.as_str()))
+            .collect();
+        // One scan: mark member symbols whose qualified name has a root-type
+        // ancestor in the same file.
+        if let Some(col) = self.store.columnar() {
+            for i in 0..n {
+                if !analyzable[i] || candidate_roots[i] || is_framework_entry[i] {
+                    continue;
+                }
+                let (Some(qn), Some(fp)) =
+                    (col.node_qualified_name_str(i)?, col.node_file_path_str(i)?)
+                else {
+                    continue;
+                };
+                if has_root_ancestor_in_file(qn, fp, &roots) {
+                    propagated_roots.push(i as u32);
+                }
+            }
+        } else {
+            self.store.for_each_node_seq(|node| {
+                let Some(idx) = self.legacy_index(node.id) else {
+                    return;
+                };
+                if idx >= n || !analyzable[idx] || candidate_roots[idx] || is_framework_entry[idx] {
+                    return;
+                }
+                let (Some(qn), Some(fp)) =
+                    (node.qualified_name.as_deref(), node.file_path.as_deref())
+                else {
+                    return;
+                };
+                if has_root_ancestor_in_file(qn, fp, &roots) {
+                    propagated_roots.push(idx as u32);
+                }
+            })?;
+        }
+        Ok(())
     }
 
     /// Cheap root predicates evaluated during Pass 1: language-level
@@ -566,26 +747,32 @@ impl<'a> DeadCodeAnalyzer<'a> {
     /// bounded by the dead subgraph — the returned member list and the
     /// internal dense arrays are sized by the number of unreachable symbols
     /// with inbound reference edges, never by the full node count.
-    fn isolated_dead_cycles(&self, analyzable: &[bool], reachable: &[bool]) -> Vec<usize> {
+    fn isolated_dead_cycles(
+        &self,
+        analyzable: &[bool],
+        reachable: &[bool],
+    ) -> (Vec<usize>, Vec<usize>) {
         let n = analyzable.len();
         // Dead nodes that have at least one inbound reference edge — the only
         // candidates for cycle membership (dead roots are reported directly).
         // Ascending by construction, so binary search maps graph index →
-        // dense member index without an O(n) side table.
+        // dense member index without an O(n) side table. Returned to the
+        // caller so Pass 3 reuses the same inbound scan instead of paying a
+        // second CSR pass.
         let members: Vec<usize> = (0..n)
             .filter(|&i| {
                 analyzable[i]
                     && !reachable[i]
                     && self
-                        .view
-                        .incoming_filtered(NodeIndex::new(i), REFERENCE_EDGE_TYPES)
+                        .topo
+                        .in_filtered(i as u32, REFERENCE_EDGE_TYPES)
                         .next()
                         .is_some()
             })
             .collect();
         let m = members.len();
         if m == 0 {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
         let member_pos =
             |graph_idx: usize| -> Option<usize> { members.binary_search(&graph_idx).ok() };
@@ -593,11 +780,8 @@ impl<'a> DeadCodeAnalyzer<'a> {
         let mut adj: Vec<Vec<u32>> = vec![Vec::new(); m];
         let mut self_loop = vec![false; m];
         for (ci, &i) in members.iter().enumerate() {
-            for nb in self
-                .view
-                .outgoing_filtered(NodeIndex::new(i), REFERENCE_EDGE_TYPES)
-            {
-                let nj = nb.index();
+            for nb in self.topo.out_filtered(i as u32, REFERENCE_EDGE_TYPES) {
+                let nj = nb as usize;
                 if nj == i {
                     self_loop[ci] = true;
                 }
@@ -663,18 +847,15 @@ impl<'a> DeadCodeAnalyzer<'a> {
                         let cyclic = scc.len() > 1 || self_loop[scc[0]];
                         if cyclic {
                             let external_inbound = scc.iter().any(|&ci| {
-                                self.view
-                                    .incoming_filtered(
-                                        NodeIndex::new(members[ci]),
-                                        REFERENCE_EDGE_TYPES,
-                                    )
+                                self.topo
+                                    .in_filtered(members[ci] as u32, REFERENCE_EDGE_TYPES)
                                     .any(|src| {
                                         // `scc_of` is only assigned when an SCC
                                         // is popped: a source in a not-yet-
                                         // popped SCC still carries `-1`, which
                                         // casts to a value != `scc_count` and
                                         // correctly counts as external.
-                                        member_pos(src.index())
+                                        member_pos(src as usize)
                                             .is_none_or(|cs| scc_of[cs] as usize != scc_count)
                                     })
                             });
@@ -689,7 +870,7 @@ impl<'a> DeadCodeAnalyzer<'a> {
         }
         // Ascending order so callers can use binary search for membership.
         return_members.sort_unstable();
-        return_members
+        (members, return_members)
     }
 
     fn is_configured_entry_point(
@@ -712,21 +893,21 @@ impl<'a> DeadCodeAnalyzer<'a> {
         })
     }
 
-    fn bfs_reachable(&self, root_indices: &[NodeIndex]) -> Vec<bool> {
-        let n = self.view.node_count();
+    fn bfs_reachable(&self, root_indices: &[u32]) -> Vec<bool> {
+        let n = self.topo.node_count();
         let mut visited = vec![false; n];
         let mut queue = VecDeque::with_capacity(root_indices.len());
 
         for &root in root_indices {
-            if !visited[root.index()] {
-                visited[root.index()] = true;
+            if !visited[root as usize] {
+                visited[root as usize] = true;
                 queue.push_back(root);
             }
         }
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in self.view.outgoing_filtered(current, BFS_EDGE_TYPES) {
-                let ni = neighbor.index();
+            for neighbor in self.topo.out_filtered(current, BFS_EDGE_TYPES) {
+                let ni = neighbor as usize;
                 if !visited[ni] {
                     visited[ni] = true;
                     queue.push_back(neighbor);
@@ -740,9 +921,9 @@ impl<'a> DeadCodeAnalyzer<'a> {
     /// Whether an import node has at least one outbound
     /// `Uses`/`References`/`Calls` edge (i.e. it resolves to an internal
     /// symbol). Checked against the CSR before any cold node materialization.
-    fn has_outbound_reference(&self, idx: NodeIndex) -> bool {
-        self.view
-            .outgoing_filtered(
+    fn has_outbound_reference(&self, idx: u32) -> bool {
+        self.topo
+            .out_filtered(
                 idx,
                 &[EdgeType::Uses, EdgeType::References, EdgeType::Calls],
             )
@@ -750,86 +931,125 @@ impl<'a> DeadCodeAnalyzer<'a> {
             .is_some()
     }
 
-    /// Classify an unreachable node into a finding.
+    /// Classify an unreachable node's kind and confidence tier from hot
+    /// data only (node type + typed visibility). Returns `None` for
+    /// non-analyzable leftovers. Called *before* any finding allocation so
+    /// filtered tiers cost nothing.
+    fn classify_tier_of(
+        node_type: NodeType,
+        is_public: bool,
+    ) -> Option<(DeadCodeKind, DeadCodeConfidence)> {
+        Some(match node_type {
+            NodeType::Import => (DeadCodeKind::UnusedImport, DeadCodeConfidence::High),
+            NodeType::Function => (
+                DeadCodeKind::UnreferencedFunction,
+                if is_public {
+                    DeadCodeConfidence::Low
+                } else {
+                    DeadCodeConfidence::High
+                },
+            ),
+            NodeType::Class | NodeType::Struct | NodeType::Interface | NodeType::Enum => (
+                DeadCodeKind::UnreferencedClass,
+                if is_public {
+                    DeadCodeConfidence::Low
+                } else {
+                    DeadCodeConfidence::Medium
+                },
+            ),
+            NodeType::Variable => (
+                DeadCodeKind::UnreferencedVariable,
+                if is_public {
+                    DeadCodeConfidence::Low
+                } else {
+                    DeadCodeConfidence::High
+                },
+            ),
+            NodeType::Module => (DeadCodeKind::UnreferencedModule, DeadCodeConfidence::Medium),
+            NodeType::TypeAlias => (
+                DeadCodeKind::UnreferencedType,
+                if is_public {
+                    DeadCodeConfidence::Low
+                } else {
+                    DeadCodeConfidence::Medium
+                },
+            ),
+            _ => return None,
+        })
+    }
+
+    /// Build the finding payload once kind/confidence are known.
     ///
-    /// CSR edge prechecks (non-structural inbound edges, import outbound
-    /// references) run in `analyze` *before* the node is materialized, so
-    /// they are not repeated here.
-    fn classify_finding(&self, node: &Node, in_isolated_cycle: bool) -> Option<DeadCodeFinding> {
+    /// On columnar v2+ snapshots `node` comes from `materialize_node_hot_at`
+    /// (hot `NodeRow` columns only — zero cold `NodeExtension` decodes) and
+    /// `qualified_name` from the zero-copy extension string read.
+    fn build_finding(
+        &self,
+        node: &Node,
+        qualified_name: Option<&str>,
+        kind: DeadCodeKind,
+        confidence: DeadCodeConfidence,
+        in_isolated_cycle: bool,
+    ) -> DeadCodeFinding {
         let cycle_note = if in_isolated_cycle {
             " (isolated dead cycle — no callers outside the cycle)"
         } else {
             ""
         };
-        let (kind, confidence, reason) = match node.node_type {
-            NodeType::Import => (
-                DeadCodeKind::UnusedImport,
-                DeadCodeConfidence::High,
-                "Import resolves to an internal symbol but has no references".to_string(),
-            ),
-            NodeType::Function => {
-                if is_public_symbol(node) {
-                    (
-                        DeadCodeKind::UnreferencedFunction,
-                        DeadCodeConfidence::Low,
-                        format!(
-                            "Public/exported function with no internal callers — may be an \
-                             intentional API seam{cycle_note}"
-                        ),
+        let reason = match kind {
+            DeadCodeKind::UnusedImport => {
+                "Import resolves to an internal symbol but has no references".to_string()
+            }
+            DeadCodeKind::UnreferencedFunction => {
+                if confidence == DeadCodeConfidence::Low {
+                    format!(
+                        "Public/exported function with no internal callers — may be an \
+                         intentional API seam{cycle_note}"
                     )
                 } else {
-                    (
-                        DeadCodeKind::UnreferencedFunction,
-                        DeadCodeConfidence::High,
-                        format!("Function has no callers or references{cycle_note}"),
-                    )
+                    format!("Function has no callers or references{cycle_note}")
                 }
             }
-            NodeType::Class | NodeType::Struct | NodeType::Interface | NodeType::Enum => {
-                let conf = if is_public_symbol(node) {
-                    DeadCodeConfidence::Low
-                } else {
-                    DeadCodeConfidence::Medium
-                };
-                (
-                    DeadCodeKind::UnreferencedClass,
-                    conf,
+            DeadCodeKind::UnreferencedClass => format!(
+                "{} has no references, instantiations, or extensions{cycle_note}",
+                node_type_label(node.node_type)
+            ),
+            DeadCodeKind::UnreferencedVariable => {
+                if confidence == DeadCodeConfidence::Low {
                     format!(
-                        "{} has no references, instantiations, or extensions{cycle_note}",
-                        node_type_label(node.node_type)
-                    ),
-                )
+                        "Public/exported variable/constant with no references — may be an \
+                         intentional API seam{cycle_note}"
+                    )
+                } else {
+                    format!("Variable/constant has no references{cycle_note}")
+                }
             }
-            NodeType::Variable => (
-                DeadCodeKind::UnreferencedVariable,
-                DeadCodeConfidence::High,
-                format!("Variable/constant has no references{cycle_note}"),
-            ),
-            NodeType::Module => (
-                DeadCodeKind::UnreferencedModule,
-                DeadCodeConfidence::Medium,
-                format!("Module has no imports or references from other modules{cycle_note}"),
-            ),
-            NodeType::TypeAlias => (
-                DeadCodeKind::UnreferencedType,
-                DeadCodeConfidence::Medium,
-                format!("Type alias has no references{cycle_note}"),
-            ),
-            _ => return None,
+            DeadCodeKind::UnreferencedModule => {
+                format!("Module has no imports or references from other modules{cycle_note}")
+            }
+            DeadCodeKind::UnreferencedType => {
+                if confidence == DeadCodeConfidence::Low {
+                    format!(
+                        "Public/exported type alias with no references — may be an \
+                         intentional API seam{cycle_note}"
+                    )
+                } else {
+                    format!("Type alias has no references{cycle_note}")
+                }
+            }
         };
-
-        Some(DeadCodeFinding {
+        DeadCodeFinding {
             symbol_name: node.name.as_str().to_string(),
-            qualified_name: node.qualified_name.as_ref().map(|q| q.as_str().to_string()),
+            qualified_name: qualified_name.map(str::to_string),
             file_path: node.file_path.as_ref().map(|p| p.as_str().to_string()),
             start_line: node.start_line,
             end_line: node.end_line,
-            node_type: format!("{:?}", node.node_type),
+            node_type: node_type_label(node.node_type).to_string(),
             kind,
             confidence,
             reason,
             node_id: node.id,
-        })
+        }
     }
 
     fn should_exclude(&self, name: &str, file_path: Option<&str>) -> bool {
@@ -918,7 +1138,61 @@ fn is_csharp_like_source(file_path: Option<&str>) -> bool {
 /// Supervisor), never by intra-repo callers. Seeded only when the enclosing
 /// module adopts the behaviour (see `analyze`).
 fn is_otp_callback_name(name: &str) -> bool {
-    matches!(name, "init" | "handle_call" | "handle_cast" | "handle_info")
+    matches!(
+        name,
+        "init"
+            | "handle_call"
+            | "handle_cast"
+            | "handle_info"
+            | "handle_continue"
+            | "terminate"
+            | "code_change"
+            | "format_status"
+            | "child_spec"
+    )
+}
+
+/// Standard OTP behaviour modules whose callbacks the BEAM invokes. Matched
+/// on the simple name segment so qualified aliases (`Elixir.GenServer`)
+/// resolve too.
+fn is_otp_behaviour_target(name: &str) -> bool {
+    matches!(
+        simple_name_segment(name),
+        "GenServer"
+            | "Supervisor"
+            | "DynamicSupervisor"
+            | "Application"
+            | "Agent"
+            | "Task"
+            | "gen_statem"
+    )
+}
+
+/// Type-like nodes whose root status propagates to member symbols
+/// (`Contains` edges are File→Symbol only in real discover graphs).
+fn is_type_kind(nt: NodeType) -> bool {
+    matches!(
+        nt,
+        NodeType::Class
+            | NodeType::Struct
+            | NodeType::Interface
+            | NodeType::Enum
+            | NodeType::Module
+    )
+}
+
+/// Whether `qn` has an ancestor segment chain present in `roots` for the
+/// same file. Ancestors are `qn` substrings (any separator depth), so
+/// `MyApp.Inner.method` matches the root type `MyApp`.
+fn has_root_ancestor_in_file(qn: &str, file: &str, roots: &FxHashSet<(&str, &str)>) -> bool {
+    let mut rest = qn;
+    while let Some(pos) = rest.rfind(['.', ':', '#']) {
+        rest = &rest[..pos];
+        if roots.contains(&(rest, file)) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Module segment of an Elixir qualified name (`Server.handle_call` →
@@ -980,19 +1254,36 @@ fn node_type_label(nt: NodeType) -> &'static str {
 ///   recorded in the `kind` property.
 /// - C: functions without the `static` storage class have external linkage.
 fn is_public_symbol(node: &Node) -> bool {
+    match node.visibility {
+        SymbolVisibility::Public => return true,
+        SymbolVisibility::Private | SymbolVisibility::Internal => return false,
+        // Unknown: fall through to legacy token inspection so mixed-version
+        // (pre-typed-visibility) snapshots still classify sanely.
+        SymbolVisibility::Unknown => {}
+    }
     if let Some(vis) = node.get_property("visibility") {
         match vis {
             "public" | "pub" | "exported" | "open" | "global" => return true,
             "private" | "internal" | "fileprivate" | "protected" | "package"
             | "package-private" => return false,
-            // Unrecognized marker: fall through to the language rules
-            // instead of silently classifying as private.
-            other => {
+            _ => {
                 tracing::trace!(
                     symbol = %node.name.as_str(),
-                    visibility = other,
-                    "unrecognized visibility marker; using language rules"
+                    visibility = vis,
+                    "unrecognized visibility marker; using modifier tokens"
                 );
+            }
+        }
+    }
+    // `GraphBuilder` writes visibility keywords into `properties["modifiers"]`
+    // (joined tokens) — scan them before the language rules.
+    if let Some(mods) = node.get_property("modifiers") {
+        for token in mods.split(' ') {
+            match token.trim() {
+                "pub" | "public" | "export" | "exported" | "open" | "global" => return true,
+                "private" | "protected" | "fileprivate" | "internal" | "pub(crate)"
+                | "pub(super)" | "package" | "package-private" => return false,
+                _ => {}
             }
         }
     }
@@ -1004,14 +1295,6 @@ fn is_public_symbol(node: &Node) -> bool {
             .next()
             .is_some_and(|c| c.is_ascii_uppercase()),
         Some("elixir") => matches!(node.get_property("kind"), Some("def") | Some("defmacro")),
-        Some("c") => {
-            // `static` functions have internal linkage; everything else
-            // (including implicitly-external definitions) may be called from
-            // other translation units.
-            !node
-                .get_property("modifiers")
-                .is_some_and(|m| m.split(' ').any(|tok| tok == "static"))
-        }
         _ => false,
     }
 }
@@ -1133,7 +1416,7 @@ mod tests {
         let public_fn = Node::new(NodeType::Function, "api_handler")
             .with_file_path("src/api.rs")
             .with_location(1, 10)
-            .with_property("visibility".to_string(), "pub".to_string());
+            .with_visibility(SymbolVisibility::Public);
         backend.insert_node(public_fn).unwrap();
 
         let (store, path) = temp_snapshot(&backend);
@@ -1180,27 +1463,28 @@ mod tests {
     }
 
     #[test]
-    fn entry_point_class_methods_reachable_via_contains() {
+    fn entry_point_class_methods_reachable_via_qn_prefix() {
+        // Real `discover` graphs carry `Contains` only for File→Symbol (never
+        // Type→Method), so methods of entry-point types are reached through
+        // qualified-name prefix propagation.
         let mut backend = MemoryBackend::new();
         let class = Node::new(NodeType::Class, "MyController")
             .with_file_path("src/controller.rs")
-            .with_property("visibility".to_string(), "pub".to_string());
+            .with_qualified_name("MyController")
+            .with_visibility(SymbolVisibility::Public);
         let annotation = Node::new(NodeType::Annotation, "RestController");
-        let method =
-            Node::new(NodeType::Function, "handle_request").with_file_path("src/controller.rs");
+        let method = Node::new(NodeType::Function, "handle_request")
+            .with_file_path("src/controller.rs")
+            .with_qualified_name("MyController.handle_request");
 
         let class_id = class.id;
         let ann_id = annotation.id;
-        let method_id = method.id;
 
         backend.insert_node(class).unwrap();
         backend.insert_node(annotation).unwrap();
         backend.insert_node(method).unwrap();
         backend
             .insert_edge(Edge::new(class_id, ann_id, EdgeType::AnnotatedWith))
-            .unwrap();
-        backend
-            .insert_edge(Edge::new(class_id, method_id, EdgeType::Contains))
             .unwrap();
 
         let (store, path) = temp_snapshot(&backend);
@@ -1211,7 +1495,7 @@ mod tests {
                 .findings
                 .iter()
                 .any(|f| f.symbol_name == "handle_request"),
-            "methods on entry-point classes should be reachable via Contains"
+            "methods on entry-point classes should be reachable via qn prefix propagation"
         );
 
         let _ = std::fs::remove_file(&path);
@@ -1452,19 +1736,19 @@ mod tests {
         // startup, so it and its callees are reachable.
         let mut backend = MemoryBackend::new();
         let app_trait = Node::new(NodeType::Class, "App").with_file_path("<external>");
-        let main_obj = Node::new(NodeType::Class, "Main").with_file_path("src/Main.scala");
-        let method = Node::new(NodeType::Function, "run").with_file_path("src/Main.scala");
+        let main_obj = Node::new(NodeType::Class, "Main")
+            .with_file_path("src/Main.scala")
+            .with_qualified_name("Main");
+        let method = Node::new(NodeType::Function, "run")
+            .with_file_path("src/Main.scala")
+            .with_qualified_name("Main.run");
         let app_id = app_trait.id;
         let main_id = main_obj.id;
-        let method_id = method.id;
         backend.insert_node(app_trait).unwrap();
         backend.insert_node(main_obj).unwrap();
         backend.insert_node(method).unwrap();
         backend
             .insert_edge(Edge::new(main_id, app_id, EdgeType::Extends))
-            .unwrap();
-        backend
-            .insert_edge(Edge::new(main_id, method_id, EdgeType::Contains))
             .unwrap();
 
         let (store, path) = temp_snapshot(&backend);
@@ -1483,19 +1767,19 @@ mod tests {
         // program entry point.
         let mut backend = MemoryBackend::new();
         let annotation = Node::new(NodeType::Annotation, "main");
-        let app_struct = Node::new(NodeType::Struct, "MyApp").with_file_path("src/Main.swift");
-        let method = Node::new(NodeType::Function, "start").with_file_path("src/Main.swift");
+        let app_struct = Node::new(NodeType::Struct, "MyApp")
+            .with_file_path("src/Main.swift")
+            .with_qualified_name("MyApp");
+        let method = Node::new(NodeType::Function, "start")
+            .with_file_path("src/Main.swift")
+            .with_qualified_name("MyApp.start");
         let ann_id = annotation.id;
         let struct_id = app_struct.id;
-        let method_id = method.id;
         backend.insert_node(annotation).unwrap();
         backend.insert_node(app_struct).unwrap();
         backend.insert_node(method).unwrap();
         backend
             .insert_edge(Edge::new(struct_id, ann_id, EdgeType::AnnotatedWith))
-            .unwrap();
-        backend
-            .insert_edge(Edge::new(struct_id, method_id, EdgeType::Contains))
             .unwrap();
 
         let (store, path) = temp_snapshot(&backend);
@@ -1514,7 +1798,7 @@ mod tests {
         let mut backend = MemoryBackend::new();
         let exported = Node::new(NodeType::Function, "CorrectnessRoot")
             .with_file_path("src/harness.go")
-            .with_property("language".to_string(), "go".to_string());
+            .with_visibility(SymbolVisibility::Public);
         backend.insert_node(exported).unwrap();
 
         let (store, path) = temp_snapshot(&backend);
@@ -1539,12 +1823,10 @@ mod tests {
         let mut backend = MemoryBackend::new();
         let public = Node::new(NodeType::Function, "public_fn")
             .with_file_path("lib/mod.ex")
-            .with_property("language".to_string(), "elixir".to_string())
-            .with_property("kind".to_string(), "def".to_string());
+            .with_visibility(SymbolVisibility::Public);
         let private = Node::new(NodeType::Function, "private_fn")
             .with_file_path("lib/mod.ex")
-            .with_property("language".to_string(), "elixir".to_string())
-            .with_property("kind".to_string(), "defp".to_string());
+            .with_visibility(SymbolVisibility::Private);
         backend.insert_node(public).unwrap();
         backend.insert_node(private).unwrap();
 
@@ -1573,11 +1855,10 @@ mod tests {
         let mut backend = MemoryBackend::new();
         let static_fn = Node::new(NodeType::Function, "helper")
             .with_file_path("src/a.c")
-            .with_property("language".to_string(), "c".to_string())
-            .with_property("modifiers".to_string(), "static".to_string());
+            .with_visibility(SymbolVisibility::Private);
         let extern_fn = Node::new(NodeType::Function, "api")
             .with_file_path("src/a.c")
-            .with_property("language".to_string(), "c".to_string());
+            .with_visibility(SymbolVisibility::Public);
         backend.insert_node(static_fn).unwrap();
         backend.insert_node(extern_fn).unwrap();
 

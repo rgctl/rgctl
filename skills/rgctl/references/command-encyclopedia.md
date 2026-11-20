@@ -668,7 +668,7 @@ rgctl cpg export --format graphson --output cpg.json [--path-contains src/] \
 
 **Entry points seeded automatically:** lowercase `main` on the simple name segment (Rust `crate::main`, Go, Bash/Lua/Dart `main`), PascalCase `Main` in C#/F# sources (`Program.Main`), Python `__init__`, Swift / Scala 3 `@main`, Scala `extends App`, Elixir `Application.start/2` + GenServer/Supervisor callbacks in modules that adopt the behaviour, framework annotations (`@RestController`, `@Service`, `@Scheduled`, JAX-RS `@Path`/`@GET`/`@POST`, JUnit `@Test`, …), `ExposesRoute` edges, and explicit `--entry-point` patterns.
 
-**Confidence tiers:** `high` = private unreferenced symbols; `medium` = unreferenced types/modules; `low` = public/exported symbols with no internal callers (Go uppercase exports, Elixir `def`, C non-`static`, `visibility=public|pub`) — likely intentional API seams.
+**Confidence tiers:** `high` = private unreferenced symbols; `medium` = unreferenced types/modules; `low` = public/exported symbols with no internal callers (typed `SymbolVisibility` derived at extraction: Go uppercase exports, Elixir `def`, C non-`static`, `pub`/`public`/`export` modifiers) — likely intentional API seams. Bodiless declarations (`.h` prototypes, interface signatures) are never reported.
 
 **Examples:**
 ```bash

@@ -5,14 +5,6 @@ use super::dead_code_output;
 use anyhow::{Result, bail};
 use rgctl_analysis::dead_code::{DeadCodeAnalyzer, DeadCodeConfidence};
 
-fn confidence_str(c: DeadCodeConfidence) -> &'static str {
-    match c {
-        DeadCodeConfidence::High => "high",
-        DeadCodeConfidence::Medium => "medium",
-        DeadCodeConfidence::Low => "low",
-    }
-}
-
 /// Parse a comma-separated `--confidence` spec into canonical level names.
 ///
 /// Unknown level names are rejected so a typo (e.g. `--confidence hig`)
@@ -69,14 +61,22 @@ pub fn run(ctx: &CliContext, args: DeadCodeArgs) -> Result<()> {
         analyzer = analyzer.with_entry_points(args.entry_points);
     }
 
-    let mut report = analyzer.analyze()?;
-
-    if let Some(keep) = &confidence_filter {
-        report
-            .findings
-            .retain(|f| keep.contains(&confidence_str(f.confidence)));
-        report.summary.dead_symbols = report.findings.len();
+    // Push the tier filter into the analyzer: excluded tiers never allocate
+    // findings (and on columnar v2+ snapshots never decode cold extensions).
+    if let Some(levels) = &confidence_filter {
+        let tiers = levels
+            .iter()
+            .filter_map(|&l| match l {
+                "high" => Some(DeadCodeConfidence::High),
+                "medium" => Some(DeadCodeConfidence::Medium),
+                "low" => Some(DeadCodeConfidence::Low),
+                _ => None,
+            })
+            .collect();
+        analyzer = analyzer.with_confidence_filter(tiers);
     }
+
+    let mut report = analyzer.analyze()?;
 
     if let Some(limit) = args.limit {
         report.findings.truncate(limit);
@@ -88,8 +88,9 @@ pub fn run(ctx: &CliContext, args: DeadCodeArgs) -> Result<()> {
 
     match ctx.format {
         super::OutputFormat::Json => {
-            let json = dead_code_output::report_to_json(&report);
-            ctx.emit_json_value(&json)?;
+            // Serialize the report directly — no intermediate
+            // `serde_json::Value` tree (kernel-scale reports stay ~GB smaller).
+            ctx.emit_serializable(&report)?;
         }
         _ => {
             let text = dead_code_output::emit_text(&report);

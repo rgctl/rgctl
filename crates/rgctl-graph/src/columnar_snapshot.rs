@@ -38,7 +38,20 @@ pub fn reset_cold_ext_deserialization_count() {
     COLD_EXT_DESERIALIZATIONS.store(0, AtomicOrdering::Relaxed);
 }
 /// Snapshot file format version for columnar layout.
-pub const COLUMNAR_SNAPSHOT_VERSION: u32 = 3;
+///
+/// v4 packs 2 visibility bits into the `NodeRow.node_type` `u16` high bits
+/// (bits 14–15; `NodeType` ids stay below `0x3FFF`), enabling hot-column
+/// public/export classification without cold `NodeExtension` decodes.
+pub const COLUMNAR_SNAPSHOT_VERSION: u32 = 4;
+
+/// Mask isolating the `NodeType` id from the packed `NodeRow.node_type`.
+pub(crate) const NODE_TYPE_MASK: u16 = 0x0FFF;
+/// Packed bit: symbol is a bodiless declaration (`callable_role ==
+/// "declaration"` — header prototype, interface signature). Lets query
+/// paths skip declaration-role symbols without cold `NodeExtension` decodes.
+pub(crate) const NODE_DECLARATION_BIT: u16 = 1 << 12;
+/// Bit offset of the visibility bits inside `NodeRow.node_type`.
+const NODE_VISIBILITY_SHIFT: u16 = 14;
 
 const HEADER_SIZE: usize = 136;
 const NODE_ROW_SIZE: usize = 64;
@@ -439,7 +452,7 @@ impl ColumnarGraphMmap {
             return Err(Error::SerdeError("invalid graph snapshot magic".into()));
         }
         let version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
-        if !matches!(version, 2 | COLUMNAR_SNAPSHOT_VERSION) {
+        if !matches!(version, 2 | 3 | COLUMNAR_SNAPSHOT_VERSION) {
             return Err(Error::SerdeError(format!(
                 "expected columnar snapshot version {}, got {version}",
                 COLUMNAR_SNAPSHOT_VERSION
@@ -704,7 +717,7 @@ impl ColumnarGraphMmap {
 
         Ok(Node {
             id,
-            node_type: node_type_from_u16(row.node_type)?,
+            node_type: node_type_from_u16(row.node_type & NODE_TYPE_MASK)?,
             name: SharedStr::from(name),
             qualified_name: None,
             signature: signature.map(SharedStr::from),
@@ -723,6 +736,7 @@ impl ColumnarGraphMmap {
             name_token_len,
             properties: LazyStringMap::new(),
             labels: Vec::new(),
+            visibility: self.node_visibility_at(idx)?,
         })
     }
 
@@ -763,7 +777,26 @@ impl ColumnarGraphMmap {
 
     /// Hot-column [`NodeType`] at index (no cold_ext).
     pub fn node_type_at(&self, idx: usize) -> Result<NodeType> {
-        node_type_from_u16(self.node_row_at(idx)?.node_type)
+        node_type_from_u16(self.node_row_at(idx)?.node_type & NODE_TYPE_MASK)
+    }
+
+    /// Packed bit: this symbol is a bodiless declaration (header prototype /
+    /// interface signature). Hot column read — no `NodeExtension` decode.
+    pub fn node_is_declaration_at(&self, idx: usize) -> Result<bool> {
+        Ok(self.node_row_at(idx)?.node_type & NODE_DECLARATION_BIT != 0)
+    }
+
+    /// Normalized visibility bits packed in the `NodeRow.node_type` high bits
+    /// (hot column read — no `NodeExtension` decode). Snapshots written
+    /// before v4 carry zero bits, i.e. [`SymbolVisibility::Unknown`].
+    pub fn node_visibility_at(&self, idx: usize) -> Result<rgctl_plugin_api::SymbolVisibility> {
+        let raw = (self.node_row_at(idx)?.node_type >> NODE_VISIBILITY_SHIFT) & 0b11;
+        Ok(match raw {
+            1 => rgctl_plugin_api::SymbolVisibility::Public,
+            2 => rgctl_plugin_api::SymbolVisibility::Private,
+            3 => rgctl_plugin_api::SymbolVisibility::Internal,
+            _ => rgctl_plugin_api::SymbolVisibility::Unknown,
+        })
     }
 
     /// String pool base offset and byte length for [`string_at`].
@@ -834,7 +867,7 @@ impl ColumnarGraphMmap {
             return Ok(false);
         }
         let row = read_node_row(self.mmap.as_ref(), self.offset_nodes as usize, idx)?;
-        let node_type = node_type_from_u16(row.node_type)?;
+        let node_type = node_type_from_u16(row.node_type & NODE_TYPE_MASK)?;
         let name = read_string(
             self.mmap.as_ref(),
             self.offset_strings as usize,
@@ -969,7 +1002,7 @@ impl ColumnarGraphMmap {
         }
         Ok(Node {
             id,
-            node_type: node_type_from_u16(row.node_type)?,
+            node_type: node_type_from_u16(row.node_type & NODE_TYPE_MASK)?,
             name: SharedStr::from(name),
             qualified_name: extension.qualified_name.map(SharedStr::from),
             signature: signature.map(SharedStr::from),
@@ -988,6 +1021,7 @@ impl ColumnarGraphMmap {
             name_token_len,
             properties: extension.properties,
             labels: extension.labels,
+            visibility: self.node_visibility_at(idx)?,
         })
     }
 
@@ -1628,9 +1662,12 @@ fn node_to_row(
 ) -> NodeRow {
     let name_rel_offset = node.name_rel_offset.unwrap_or(NodeRow::NAME_REL_NONE);
     let start_byte = node.start_byte.unwrap_or(NodeRow::START_BYTE_NONE);
+    let declaration_bit = u16::from(node.get_property("callable_role") == Some("declaration"));
     NodeRow {
         id: *node.id.as_bytes(),
-        node_type: node_type_to_u16(node.node_type),
+        node_type: node_type_to_u16(node.node_type)
+            | (declaration_bit << 12)
+            | ((node.visibility as u16) << NODE_VISIBILITY_SHIFT),
         name_rel_offset,
         name_off: name_off.off,
         name_len: name_off.len,

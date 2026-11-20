@@ -249,9 +249,11 @@ fn dead_code_analyzer_zero_cold_ext_on_fully_reachable_graph() {
 
 #[test]
 fn dead_code_analyzer_cold_ext_bounded_by_findings() {
-    // With unreachable nodes, cold decodes are allowed only for confirmed
-    // findings (CSR prechecks filter reachable / import / referenced nodes
-    // before materialization), never O(N).
+    // With unreachable nodes, the v2+ columnar path builds findings purely
+    // from hot `NodeRow` columns (typed visibility + declaration bits) and
+    // zero-copy extension string reads — zero cold decodes regardless of
+    // the finding count. (Legacy v1 snapshots still materialize per
+    // finding.)
     let _cold = lock_cold_counter();
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("g.bin");
@@ -263,14 +265,14 @@ fn dead_code_analyzer_cold_ext_bounded_by_findings() {
     let report = analyzer.analyze().unwrap();
     let cold = cold_ext_deserialization_count();
     // No `main` root in this graph: every chain node is unreachable, but only
-    // f0 has no inbound reference edge, so exactly one finding materializes.
+    // f0 has no inbound reference edge, so exactly one finding is reported.
     assert_eq!(
         report.summary.dead_symbols, 1,
         "only the chain head is dead"
     );
     assert_eq!(report.findings[0].symbol_name, "f0");
     assert_eq!(
-        cold, 1,
-        "cold decodes must equal the finding count (sparse materialization), got {cold}"
+        cold, 0,
+        "columnar dead-code must build findings from hot columns only (0 cold decodes), got {cold}"
     );
 }

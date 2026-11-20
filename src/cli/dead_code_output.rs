@@ -1,38 +1,13 @@
 //! JSON and text output formatting for `rgctl dead-code`.
+//!
+//! JSON output serializes [`DeadCodeReport`] directly (the struct already
+//! derives `Serialize` with the documented snake_case field names), so
+//! kernel-scale reports never build an intermediate `serde_json::Value`
+//! tree.
 
 use rgctl_analysis::dead_code::{
     DeadCodeConfidence, DeadCodeFinding, DeadCodeKind, DeadCodeReport,
 };
-use serde_json::json;
-
-pub fn report_to_json(report: &DeadCodeReport) -> serde_json::Value {
-    json!({
-        "schema_version": report.schema_version,
-        "summary": {
-            "total_symbols": report.summary.total_symbols,
-            "reachable_symbols": report.summary.reachable_symbols,
-            "dead_symbols": report.summary.dead_symbols,
-            "entry_points": report.summary.entry_points,
-            "returned": report.summary.returned,
-        },
-        "findings": report.findings.iter().map(finding_to_json).collect::<Vec<_>>(),
-    })
-}
-
-fn finding_to_json(f: &DeadCodeFinding) -> serde_json::Value {
-    json!({
-        "symbol_name": f.symbol_name,
-        "qualified_name": f.qualified_name,
-        "file_path": f.file_path,
-        "start_line": f.start_line,
-        "end_line": f.end_line,
-        "node_type": f.node_type,
-        "kind": f.kind,
-        "confidence": f.confidence,
-        "reason": f.reason,
-        "node_id": f.node_id.to_string(),
-    })
-}
 
 pub fn emit_text(report: &DeadCodeReport) -> String {
     let mut out = String::new();
