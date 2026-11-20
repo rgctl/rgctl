@@ -17,6 +17,10 @@ pub const UPDATE_QUEUE_FILE: &str = "update_queue.jsonl";
 /// Temporary name while the watcher drains the queue.
 pub const UPDATE_QUEUE_PROCESSING_FILE: &str = "update_queue.jsonl.processing";
 
+/// Advisory OS lock file serializing `enqueue` against `drain_queue` so an appending
+/// CLI process can never write into an unlinked `.processing` inode.
+const UPDATE_QUEUE_LOCK_FILE: &str = "update_queue.lock";
+
 /// Directory under `.rgctl/` for per-request results.
 pub const UPDATE_RESULTS_DIR: &str = "update_results";
 
@@ -244,13 +248,29 @@ fn count_lines(path: &Path) -> Result<usize> {
         .count())
 }
 
+fn lock_queue_file(dir: &Path) -> Result<fs::File> {
+    fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let lock_path = dir.join(UPDATE_QUEUE_LOCK_FILE);
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("open queue lock {}", lock_path.display()))?;
+    lock_file
+        .lock()
+        .with_context(|| format!("lock {}", lock_path.display()))?;
+    Ok(lock_file)
+}
+
 /// Append one request line to the queue. Fails if size/line limits would be exceeded.
 pub fn enqueue(repo: &Path, request: &UpdateQueueRequest) -> Result<()> {
     let mut validated = request.clone();
     validate_request(&mut validated)?;
 
     let dir = rgctl_graph::paths::artifact_dir(repo);
-    fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    let _queue_lock = lock_queue_file(&dir)?;
     let path = dir.join(UPDATE_QUEUE_FILE);
 
     let line = serde_json::to_string(&validated).context("serialize update queue request")?;
@@ -280,7 +300,7 @@ pub fn enqueue(repo: &Path, request: &UpdateQueueRequest) -> Result<()> {
         .append(true)
         .open(&path)
         .with_context(|| format!("open queue {}", path.display()))?;
-    // Single write with trailing newline for atomic-ish append of one JSONL record.
+    // Single write with trailing newline while holding `_queue_lock`.
     file.write_all(format!("{line}\n").as_bytes())
         .with_context(|| format!("append queue {}", path.display()))?;
     file.flush()?;
@@ -290,11 +310,9 @@ pub fn enqueue(repo: &Path, request: &UpdateQueueRequest) -> Result<()> {
 /// Whether a non-empty queue file exists (for poll wake).
 #[must_use]
 pub fn queue_nonempty(repo: &Path) -> bool {
-    let path = queue_path(repo);
-    match fs::metadata(&path) {
-        Ok(m) => m.len() > 0,
-        Err(_) => false,
-    }
+    let dir = rgctl_graph::paths::artifact_dir(repo);
+    let has_src = fs::metadata(dir.join(UPDATE_QUEUE_FILE)).is_ok_and(|m| m.len() > 0);
+    has_src || fs::metadata(dir.join(UPDATE_QUEUE_PROCESSING_FILE)).is_ok_and(|m| m.len() > 0)
 }
 
 /// Cheap pending line count for status (0 if missing).
@@ -307,7 +325,7 @@ pub fn queue_pending_count(repo: &Path) -> usize {
     count_lines(&path).unwrap_or(0)
 }
 
-/// Atomically drain the queue: rename → read → delete processing.
+/// Atomically drain the queue: lock → read leftover processing + rename/read queue → unlock.
 ///
 /// Malformed lines are skipped and reported in [`CoalescedBatch::drain_warnings`].
 pub fn drain_queue(repo: &Path) -> Result<CoalescedBatch> {
@@ -315,30 +333,46 @@ pub fn drain_queue(repo: &Path) -> Result<CoalescedBatch> {
     let src = dir.join(UPDATE_QUEUE_FILE);
     let processing = dir.join(UPDATE_QUEUE_PROCESSING_FILE);
 
-    if !src.is_file() {
+    if !src.is_file() && !processing.is_file() {
         return Ok(CoalescedBatch::default());
-    }
-
-    // Recover a previous crash: prefer re-reading leftover processing first.
-    if processing.is_file() {
-        // Leave existing processing; still try to rename new queue afterward.
-    } else if let Err(err) = fs::rename(&src, &processing) {
-        if err.kind() == std::io::ErrorKind::NotFound {
-            return Ok(CoalescedBatch::default());
-        }
-        return Err(err)
-            .with_context(|| format!("rename queue {} → {}", src.display(), processing.display()));
     }
 
     let mut bytes = Vec::new();
     {
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open(&processing)
-            .with_context(|| format!("open {}", processing.display()))?;
-        file.read_to_end(&mut bytes)?;
+        let _queue_lock = lock_queue_file(&dir)?;
+        if processing.is_file() {
+            let mut prev = OpenOptions::new()
+                .read(true)
+                .open(&processing)
+                .with_context(|| format!("open {}", processing.display()))?;
+            prev.read_to_end(&mut bytes)?;
+            if bytes.last().is_some_and(|&b| b != b'\n') {
+                bytes.push(b'\n');
+            }
+            let _ = fs::remove_file(&processing);
+        }
+        if src.is_file() {
+            match fs::rename(&src, &processing) {
+                Ok(()) => {
+                    let mut file = OpenOptions::new()
+                        .read(true)
+                        .open(&processing)
+                        .with_context(|| format!("open {}", processing.display()))?;
+                    file.read_to_end(&mut bytes)?;
+                    let _ = fs::remove_file(&processing);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!("rename queue {} → {}", src.display(), processing.display())
+                    });
+                }
+            }
+        }
     }
-    let _ = fs::remove_file(&processing);
+    if bytes.is_empty() {
+        return Ok(CoalescedBatch::default());
+    }
 
     let text = String::from_utf8_lossy(&bytes);
     let mut batch = CoalescedBatch::default();

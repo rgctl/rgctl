@@ -229,14 +229,38 @@ pub fn run_update_at(
         },
     );
 
-    if let Some(files) = &args.files {
+    let result = if let Some(files) = &args.files {
         updater
             .update_repo_files(root, files)
-            .with_context(|| "incremental file update")
+            .with_context(|| "incremental file update")?
     } else {
         updater
             .update_repo(root)
-            .with_context(|| "incremental graph update")
+            .with_context(|| "incremental graph update")?
+    };
+
+    if result.files_affected() > 0 {
+        refresh_pipeline_status_digest(root);
+    }
+    Ok(result)
+}
+
+fn refresh_pipeline_status_digest(root: &Path) {
+    let status_path =
+        rgctl_graph::paths::artifact_path(root, rgctl_service::status::PIPELINE_STATUS_FILE);
+    if !status_path.is_file() {
+        return;
+    }
+    let Ok(store) = rgctl_graph::SnapshotNodeStore::open_from_repo(root) else {
+        return;
+    };
+    let Ok(digest) = store.content_digest() else {
+        return;
+    };
+    let mut status = super::pipeline_status::read_status(root);
+    if status.graph_digest.as_deref() != Some(digest) {
+        status.graph_digest = Some(digest.to_owned());
+        let _ = super::pipeline_status::write_status(root, &status);
     }
 }
 

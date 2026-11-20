@@ -308,11 +308,20 @@ async fn run_server(ctx: &CliContext, args: HttpServeArgs, state: Arc<AppState>)
     Ok(())
 }
 
+fn current_repo_graph_digest(repo: &Path) -> Option<String> {
+    if let Ok(store) = rgctl_graph::SnapshotNodeStore::open_from_repo(repo)
+        && let Ok(digest) = store.content_digest()
+    {
+        return Some(digest.to_owned());
+    }
+    pipeline_status::read_status(repo).graph_digest
+}
+
 async fn pipeline_watch_loop(state: Arc<AppState>, public_url: String) {
-    let mut last_digest: Option<String> = None;
+    let mut last_digest: Option<String> = current_repo_graph_digest(&state.repo);
     loop {
         tokio::time::sleep(Duration::from_millis(400)).await;
-        reload_graph_if_needed(&state, &mut last_digest);
+        reload_graph_if_needed(&state, &mut last_digest).await;
         let ready = state.dashboard_dir.join("index.html").is_file();
         if ready && !state.dashboard_announced.swap(true, Ordering::SeqCst) {
             eprintln!("[✓] Dashboard ready: {public_url}");
@@ -320,26 +329,36 @@ async fn pipeline_watch_loop(state: Arc<AppState>, public_url: String) {
     }
 }
 
-fn reload_graph_if_needed(state: &AppState, last_digest: &mut Option<String>) {
-    let status = pipeline_status::read_status(&state.repo);
-    if status.graph_digest == *last_digest {
+async fn reload_graph_if_needed(state: &Arc<AppState>, last_digest: &mut Option<String>) {
+    let current_digest = current_repo_graph_digest(&state.repo);
+    if current_digest == *last_digest {
         return;
     }
-    let snapshot = rgctl_graph::snapshot::MmappedGraphSnapshot::default_path(&state.repo);
-    if !snapshot.is_file() {
-        return;
-    }
-    let Ok(graph) = CodeGraph::open_snapshot(&snapshot) else {
+    let state_clone = Arc::clone(state);
+    let loaded = tokio::task::spawn_blocking(move || {
+        let snapshot = rgctl_graph::snapshot::MmappedGraphSnapshot::default_path(&state_clone.repo);
+        if !snapshot.is_file() {
+            return None;
+        }
+        let graph = CodeGraph::open_snapshot(&snapshot).ok()?;
+        let ctx = CliContext::new(
+            Some(state_clone.repo.clone()),
+            None,
+            super::args::OutputFormat::Text,
+            None,
+            false,
+        );
+        let community = super::gql::load_community_context(&ctx, graph.backend());
+        let semantic = load_semantic_index(&state_clone.repo).map(Arc::new);
+        Some((graph, community, semantic))
+    })
+    .await
+    .ok()
+    .flatten();
+
+    let Some((graph, community, semantic)) = loaded else {
         return;
     };
-    let ctx = CliContext::new(
-        Some(state.repo.clone()),
-        None,
-        super::args::OutputFormat::Text,
-        None,
-        false,
-    );
-    let community = super::gql::load_community_context(&ctx, graph.backend());
     if let Ok(mut guard) = state.graph.write() {
         *guard = Some(graph);
     }
@@ -347,9 +366,9 @@ fn reload_graph_if_needed(state: &AppState, last_digest: &mut Option<String>) {
         *guard = community;
     }
     if let Ok(mut guard) = state.semantic.write() {
-        *guard = load_semantic_index(&state.repo).map(Arc::new);
+        *guard = semantic;
     }
-    *last_digest = status.graph_digest;
+    *last_digest = current_digest;
 }
 
 async fn api_pipeline_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {

@@ -518,3 +518,236 @@ fn test_standalone_watch_holds_lock_and_queues_updates() {
         );
     }
 }
+
+/// Stress-tests a live `rgctl watch` daemon under simultaneous:
+/// 1. Rapid filesystem edits across 10 files (debounce + coalescing),
+/// 2. 8 concurrent CLI `rgctl update` / `--files` / `--no-wait` queue writers racing `drain_queue`,
+/// 3. 4 concurrent CLI reader loops (`find` + `status`) opening `.rgctl/graph.snapshot.bin` mid-compact.
+#[test]
+fn test_watch_heavy_fs_queue_and_reader_contention() {
+    use std::process::{Command, Stdio};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|_| tmp.path().to_path_buf());
+    for i in 0..10 {
+        fs::write(
+            repo.join(format!("mod_{i}.py")),
+            format!("def sym_{i}_v0():\n    return {i}\n"),
+        )
+        .unwrap();
+    }
+    fs::write(
+        repo.join("hub.py"),
+        "def hub_entry():\n    return sym_0_v0()\n",
+    )
+    .unwrap();
+
+    let bin = env!("CARGO_BIN_EXE_rgctl");
+    let discover = Command::new(bin)
+        .current_dir(&repo)
+        .args(["discover", "."])
+        .output()
+        .unwrap();
+    assert!(
+        discover.status.success(),
+        "discover failed: {}",
+        String::from_utf8_lossy(&discover.stderr)
+    );
+
+    let mut watcher = ChildGuard(
+        Command::new(bin)
+            .current_dir(&repo)
+            .arg("watch")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+
+    let lock_file = rgctl_service::status::watch_lock_path(&repo);
+    let wait_lock = Instant::now() + Duration::from_secs(5);
+    while !lock_file.is_file() {
+        assert!(
+            Instant::now() < wait_lock,
+            "timed out waiting for watch.lock"
+        );
+        std::thread::sleep(Duration::from_millis(15));
+    }
+
+    let stop_readers = Arc::new(AtomicBool::new(false));
+    let reader_queries = Arc::new(AtomicUsize::new(0));
+
+    // Spawn 4 concurrent reader threads hammering `find` and `status` across atomic snapshot swaps.
+    let mut reader_handles = Vec::new();
+    for reader_idx in 0..4 {
+        let repo_r = repo.clone();
+        let stop_r = Arc::clone(&stop_readers);
+        let count_r = Arc::clone(&reader_queries);
+        reader_handles.push(std::thread::spawn(move || {
+            while !stop_r.load(Ordering::Relaxed) {
+                let args: &[&str] = if reader_idx % 2 == 0 {
+                    &["-f", "json", "find", "hub_entry"]
+                } else {
+                    &["-f", "json", "status"]
+                };
+                let out = Command::new(bin)
+                    .current_dir(&repo_r)
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(
+                    out.status.success(),
+                    "concurrent reader `{args:?}` failed mid-compact (ENOENT/torn snapshot): {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                let parsed: serde_json::Value =
+                    serde_json::from_slice(&out.stdout).expect("reader output must be valid JSON");
+                assert!(
+                    parsed["schema_version"].as_u64().is_some_and(|v| v >= 1),
+                    "expected schema_version in {parsed}"
+                );
+                count_r.fetch_add(1, Ordering::Relaxed);
+            }
+        }));
+    }
+
+    // Spawn rapid FS writer editing all 10 files across 3 waves.
+    let repo_fs = repo.clone();
+    let fs_writer = std::thread::spawn(move || {
+        for wave in 1..=3 {
+            for i in 0..10 {
+                fs::write(
+                    repo_fs.join(format!("mod_{i}.py")),
+                    format!("def sym_{i}_v{wave}():\n    return {}\n", i + wave),
+                )
+                .unwrap();
+            }
+            fs::write(
+                repo_fs.join("hub.py"),
+                format!("def hub_entry():\n    return sym_0_v{wave}()\n"),
+            )
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    });
+
+    // Spawn 8 concurrent CLI `rgctl update` callers racing `enqueue` against `drain_queue`.
+    let mut queue_handles = Vec::new();
+    for q_idx in 0..8 {
+        let repo_q = repo.clone();
+        queue_handles.push(std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis((q_idx * 12) as u64));
+            let args: Vec<&str> = match q_idx % 3 {
+                0 => vec!["-f", "json", "update", "--wait-timeout", "15"],
+                1 => vec![
+                    "-f",
+                    "json",
+                    "update",
+                    "--files",
+                    "mod_0.py",
+                    "--wait-timeout",
+                    "15",
+                ],
+                _ => vec!["-f", "json", "update", "--no-wait"],
+            };
+            let out = Command::new(bin)
+                .current_dir(&repo_q)
+                .args(&args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "concurrent queued update #{q_idx} (`{args:?}`) failed or timed out: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            if q_idx % 3 == 2 {
+                assert_eq!(json["queued"], serde_json::json!(true));
+            } else {
+                assert_eq!(json["source"], serde_json::json!("watch_queue"));
+            }
+        }));
+    }
+
+    fs_writer.join().expect("fs writer thread panicked");
+    for h in queue_handles {
+        h.join().expect("queued update thread panicked");
+    }
+
+    // Final barrier update through `watch_queue` so wave 3 edits are guaranteed committed.
+    let barrier = Command::new(bin)
+        .current_dir(&repo)
+        .args(["-f", "json", "update", "--wait-timeout", "15"])
+        .output()
+        .unwrap();
+    assert!(
+        barrier.status.success(),
+        "barrier update failed: {}",
+        String::from_utf8_lossy(&barrier.stderr)
+    );
+
+    stop_readers.store(true, Ordering::Relaxed);
+    for h in reader_handles {
+        h.join().expect("reader thread panicked");
+    }
+    assert!(
+        reader_queries.load(Ordering::Relaxed) >= 4,
+        "expected concurrent readers to execute during contention window"
+    );
+
+    // Verify final graph reflects wave-3 symbols (`sym_9_v3`) and dropped wave-0 symbols (`sym_9_v0`).
+    let find_v3 = Command::new(bin)
+        .current_dir(&repo)
+        .args(["-f", "json", "find", "sym_9_v3"])
+        .output()
+        .unwrap();
+    assert!(find_v3.status.success());
+    let v3_json: serde_json::Value = serde_json::from_slice(&find_v3.stdout).unwrap();
+    assert_eq!(
+        v3_json["returned"],
+        serde_json::json!(1),
+        "expected sym_9_v3 in compacted snapshot after contention storm, got {v3_json}"
+    );
+
+    let find_v0 = Command::new(bin)
+        .current_dir(&repo)
+        .args(["-f", "json", "find", "sym_9_v0"])
+        .output()
+        .unwrap();
+    assert!(find_v0.status.success());
+    let v0_json: serde_json::Value = serde_json::from_slice(&find_v0.stdout).unwrap();
+    assert_eq!(
+        v0_json["returned"],
+        serde_json::json!(0),
+        "stale sym_9_v0 must not remain after contention storm, got {v0_json}"
+    );
+
+    #[cfg(unix)]
+    {
+        let pid = watcher.0.id().to_string();
+        let _ = Command::new("kill").args(["-TERM", &pid]).status();
+        let stop_deadline = Instant::now() + Duration::from_secs(5);
+        while watcher.0.try_wait().unwrap().is_none() {
+            assert!(
+                Instant::now() < stop_deadline,
+                "watch did not exit on SIGTERM"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!lock_file.exists(), "watch.lock must be removed on exit");
+    }
+}
