@@ -64,3 +64,10 @@ class Widget: Named {
     return tern + cast.hashValue + ranged.count + nav.count
   }
 }
+
+@main
+struct CorpusApp {
+  static func main() {
+    print("corpus")
+  }
+}

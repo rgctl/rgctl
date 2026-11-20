@@ -86,7 +86,10 @@ impl CPlugin {
             return_type: None,
             parameters,
             fields: vec![],
-            modifiers: vec![],
+            // `static` storage class (internal linkage) is recorded so
+            // consumers can distinguish file-local functions from
+            // externally-linkable ones without re-parsing the source.
+            modifiers: static_storage_class(node, source),
             documentation: None,
             metadata: serde_json::Value::Null,
             language: Some(std::borrow::Cow::Borrowed("c")),
@@ -412,6 +415,33 @@ fn function_name_from_node(node: Node, source: &[u8]) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// `["static"]` when the function definition / prototype carries the
+/// `static` storage class specifier (internal linkage), empty otherwise.
+///
+/// tree-sitter-c puts `storage_class_specifier` directly under
+/// `function_definition`, but under `declaration_specifiers` for prototypes
+/// (`declaration` nodes) — both shapes are scanned.
+fn static_storage_class(node: Node, source: &[u8]) -> Vec<String> {
+    let is_static = |spec: Node| {
+        spec.kind() == "storage_class_specifier" && spec.utf8_text(source) == Ok("static")
+    };
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if is_static(child) {
+            return vec!["static".to_string()];
+        }
+        if child.kind() == "declaration_specifiers" {
+            let mut spec_cursor = child.walk();
+            for spec in child.children(&mut spec_cursor) {
+                if is_static(spec) {
+                    return vec!["static".to_string()];
+                }
+            }
+        }
+    }
+    Vec::new()
 }
 
 /// Walk a function/declaration node's declarator chain to its `parameter_list`.
@@ -894,6 +924,40 @@ void dispatch(void (*handler)(void)) {
             .extract_symbols(Path::new("order.h"), source)
             .unwrap();
         assert!(symbols.iter().any(|s| s.name == "checkout"));
+    }
+
+    #[test]
+    fn test_static_storage_class_recorded_in_modifiers() {
+        let source = br#"
+static int internal_helper(int x) {
+    return x + 1;
+}
+
+int external_api(int x) {
+    return internal_helper(x);
+}
+"#;
+        let plugin = CPlugin::new().unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("linkage.c"), source)
+            .unwrap();
+        let helper = symbols
+            .iter()
+            .find(|s| s.name == "internal_helper")
+            .expect("internal_helper symbol");
+        assert_eq!(
+            helper.modifiers,
+            vec!["static".to_string()],
+            "static storage class must be recorded in modifiers"
+        );
+        let api = symbols
+            .iter()
+            .find(|s| s.name == "external_api")
+            .expect("external_api symbol");
+        assert!(
+            api.modifiers.is_empty(),
+            "non-static functions must not carry the static modifier"
+        );
     }
 
     #[test]

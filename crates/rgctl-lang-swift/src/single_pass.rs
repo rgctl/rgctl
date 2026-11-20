@@ -21,6 +21,7 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("additive_expression", HandlerMask::CFG_STMT),
     ("as_expression", HandlerMask::CFG_STMT),
     ("associatedtype_declaration", HandlerMask::SYMBOL),
+    ("attribute", HandlerMask::RELATION),
     ("await_expression", HandlerMask::CFG_STMT),
     ("call_expression", HandlerMask::RELATION),
     ("catch_block", HandlerMask::CFG_STMT),
@@ -100,6 +101,19 @@ fn class_decl_symbol_type(node: Node) -> (SymbolType, &'static str) {
         }
     }
     (SymbolType::Class, "class")
+}
+
+/// Simple name of a Swift `attribute` node (`@main` → `main`,
+/// `@available(iOS, *)` → `available`), without the leading `@` or any
+/// argument list.
+fn swift_attribute_name(node: Node, source: &[u8]) -> Option<String> {
+    let text = node.utf8_text(source).ok()?.trim();
+    let name = text.strip_prefix('@').unwrap_or(text);
+    let end = name
+        .find(|c: char| c == '(' || c.is_whitespace())
+        .unwrap_or(name.len());
+    let name = &name[..end];
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Callee name for a `call_expression` — member segment, not the receiver.
@@ -864,6 +878,46 @@ pub fn extract_all_single_pass(
                             };
                             record_symbol_spans_from_source(&mut sym, node, source);
                             ctx.symbols.push(sym);
+                        }
+                    }
+                    "attribute" => {
+                        // Swift attributes (`@main`, `@objc`, `@State`, …).
+                        // Only entry-relevant attributes (`@main`, the Swift
+                        // program-entry point) become `AnnotatedWith`
+                        // relations — common property wrappers would add
+                        // graph noise without reachability value. The target
+                        // keeps the `@`-spelled form so it cannot collide
+                        // with a same-file `static func main()` during
+                        // pass-2 name resolution (it resolves to an
+                        // `Annotation` stub instead).
+                        if let Some(name) = swift_attribute_name(node, source) {
+                            if name.eq_ignore_ascii_case("main") {
+                                if let Some(from) = ctx
+                                    .scopes
+                                    .current_function()
+                                    .map(|f| f.qualified_prefix.clone())
+                                    .or_else(|| {
+                                        ctx.scopes
+                                            .current_type()
+                                            .map(|t| t.qualified_prefix.clone())
+                                    })
+                                {
+                                    let spelled = format!("@{name}");
+                                    relations.push(Relation {
+                                        from,
+                                        to: spelled.clone(),
+                                        relation_type: RelationType::AnnotatedWith,
+                                        location: node_to_location(node, &file_path_str),
+                                        metadata: serde_json::json!({
+                                            "language": "swift",
+                                            "kind": "annotation",
+                                        }),
+                                        to_qualified_hint: Some(spelled),
+                                        to_type_hint: Some("annotation".to_string()),
+                                        ..Default::default()
+                                    });
+                                }
+                            }
                         }
                     }
                     "inheritance_specifier" => {

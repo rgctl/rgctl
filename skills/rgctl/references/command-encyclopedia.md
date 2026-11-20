@@ -22,6 +22,7 @@ Prefer the **Canonical** column in examples and agent workflows. Aliases/façade
 | Impact | `blast-radius` | — |
 | Hotspots / churn | `metrics` (`--pagerank`, `--churn`, …) | — |
 | Exact / bloom / fragment clones | `clones` (`--mode fragment --seed`) | — (not `semantic query`) |
+| Dead code (reachability) | `dead-code` (`--confidence`, `--entry-point`) | — |
 | OSV feed fetch | `vuln fetch` | `security vuln fetch` |
 | OSV repo batch scan | `vuln scan` (`-f json\|sarif`, `--offline`, `--from-report`) | `security vuln scan` |
 | OSV → OpenVEX / SARIF | `vuln analyze` (`-f json\|sarif`, `--strict-reachability`) | `security vuln analyze` |
@@ -49,6 +50,7 @@ Prefer the **Canonical** column in examples and agent workflows. Aliases/façade
 - [communities](#communities)
 - [clones](#clones)
 - [cpg](#cpg)
+- [dead-code](#dead-code)
 - [check](#check)
 - [vuln analyze](#vuln-analyze)
 - [review](#review)
@@ -653,6 +655,58 @@ rgctl cpg export --format graphson --output cpg.json [--path-contains src/] \
 **Agent should report:** output path + format.
 
 **General cpg pitfalls:** Archive IO errors mean re-run `discover --with-cfg` (and ensure write permissions under `.rgctl/analysis/`).
+
+---
+
+## dead-code
+
+**Command:** `rgctl -f json dead-code [--confidence high,medium,low] [--entry-point PAT]... [--exclude PAT]... [--include-tests] [--limit N]`
+
+**Purpose:** Graph-reachability dead-code detection — symbols unreachable from any entry point and reported as dead roots (no inbound reference edges) or isolated dead cycles (e.g. mutual recursion with zero external callers). Downstream callees of a dead root are suppressed.
+
+**Prerequisites:** `discover` done.
+
+**Entry points seeded automatically:** lowercase `main` on the simple name segment (Rust `crate::main`, Go, Bash/Lua/Dart `main`), PascalCase `Main` in C#/F# sources (`Program.Main`), Python `__init__`, Swift / Scala 3 `@main`, Scala `extends App`, Elixir `Application.start/2` + GenServer/Supervisor callbacks in modules that adopt the behaviour, framework annotations (`@RestController`, `@Service`, `@Scheduled`, JAX-RS `@Path`/`@GET`/`@POST`, JUnit `@Test`, …), `ExposesRoute` edges, and explicit `--entry-point` patterns.
+
+**Confidence tiers:** `high` = private unreferenced symbols; `medium` = unreferenced types/modules; `low` = public/exported symbols with no internal callers (Go uppercase exports, Elixir `def`, C non-`static`, `visibility=public|pub`) — likely intentional API seams.
+
+**Examples:**
+```bash
+rgctl -f json dead-code
+rgctl -f json dead-code --confidence high --exclude "*_test*"
+rgctl -f json dead-code --entry-point main --limit 50
+```
+
+**Sample** (truncated):
+
+```json
+{
+  "schema_version": 1,
+  "summary": {
+    "total_symbols": 840,
+    "reachable_symbols": 263,
+    "dead_symbols": 210,
+    "entry_points": 64,
+    "returned": 210
+  },
+  "findings": [{
+    "symbol_name": "unused_helper",
+    "qualified_name": "crate::unused_helper",
+    "file_path": "src/lib.rs",
+    "start_line": 10,
+    "end_line": 15,
+    "node_type": "Function",
+    "kind": "unreferenced_function",
+    "confidence": "high",
+    "reason": "Function has no callers or references",
+    "node_id": "<uuid>"
+  }]
+}
+```
+
+**Pitfalls:** Invalid `--confidence` tokens exit non-zero (no silent empty report). `summary.dead_symbols` is the confidence-filtered total; `summary.returned` reflects `--limit` truncation. Findings are ordered high → medium → low confidence, then file/line.
+
+**Agent should report:** dead-symbol counts by confidence tier and the top `high`-confidence findings (name, file, line) — treat `low`-confidence findings as API-seam candidates, not deletions.
 
 ---
 

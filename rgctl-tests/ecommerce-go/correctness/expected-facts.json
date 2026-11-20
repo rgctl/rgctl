@@ -538,7 +538,7 @@
       {
         "name": "CorrectnessRoot",
         "kind": "unreferenced_function",
-        "confidence": "high",
+        "confidence": "low",
         "file": "harness.go"
       }
     ],

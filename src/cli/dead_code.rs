@@ -82,6 +82,10 @@ pub fn run(ctx: &CliContext, args: DeadCodeArgs) -> Result<()> {
         report.findings.truncate(limit);
     }
 
+    // `dead_symbols` keeps the full (confidence-filtered) dead count;
+    // `returned` reflects what is actually in the payload after `--limit`.
+    report.summary.returned = report.findings.len();
+
     match ctx.format {
         super::OutputFormat::Json => {
             let json = dead_code_output::report_to_json(&report);
