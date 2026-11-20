@@ -248,10 +248,12 @@ impl<'a> GraphCompactor<'a> {
             &content_digest,
         )?;
 
-        if output_path.exists() {
-            std::fs::remove_file(output_path)?;
+        if cfg!(windows) && output_path.exists() {
+            let _ = std::fs::remove_file(output_path);
         }
-        std::fs::rename(&tmp_path, output_path)?;
+        std::fs::rename(&tmp_path, output_path).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp_path);
+        })?;
 
         Ok(stats)
     }
