@@ -5,7 +5,6 @@ use super::context::CliContext;
 use crate::discovery::DiscoveryConfig;
 use crate::languages::registry::LanguageRegistry;
 use anyhow::{Context, Result, bail};
-use rgctl_graph::code_graph::CodeGraph;
 use rgctl_graph::snapshot::MmappedGraphSnapshot;
 use rgctl_incremental::{IncrementalUpdater, UpdateOptions, UpdateResult};
 use rgctl_service::status::detect_live_watcher;
@@ -217,8 +216,6 @@ pub fn run_update_at(
 
     let discovery = discovery_from_args(args);
     let registry: Arc<rgctl_registry::LanguageRegistry> = LanguageRegistry::new().into();
-    let mut graph = CodeGraph::open_snapshot(&snapshot)
-        .with_context(|| format!("open snapshot {}", snapshot.display()))?;
 
     let updater = IncrementalUpdater::with_options(
         registry,
@@ -234,11 +231,11 @@ pub fn run_update_at(
 
     if let Some(files) = &args.files {
         updater
-            .update_files(&mut graph, root, files)
+            .update_repo_files(root, files)
             .with_context(|| "incremental file update")
     } else {
         updater
-            .update(&mut graph, root)
+            .update_repo(root)
             .with_context(|| "incremental graph update")
     }
 }

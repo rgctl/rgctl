@@ -2765,6 +2765,8 @@ version = "0.4.29"
 dependencies = [
  "blake3",
  "indicatif",
+ "memmap2",
+ "rayon",
  "rgctl-analysis",
  "rgctl-error",
  "rgctl-extraction",
@@ -2774,8 +2776,10 @@ dependencies = [
  "rgctl-plugin-api",
  "rgctl-project-config",
  "rgctl-registry",
+ "rustc-hash",
  "serde",
  "serde_json",
+ "smallvec",
  "tempfile",
  "uuid",
 ]

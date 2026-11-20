@@ -339,6 +339,113 @@ fn borrowed_optional_string<'a>(bytes: &'a [u8], offset: &mut usize) -> Result<O
     Ok(Some(text))
 }
 
+struct V3ExtensionSlices<'a> {
+    qn: &'a [u8],
+    ret: &'a [u8],
+    ch_bloom: &'a [u8],
+    params: &'a [u8],
+    props_and_labels: &'a [u8],
+}
+
+#[inline]
+fn skip_bincode_str(bytes: &[u8], offset: &mut usize, limit: usize) -> Option<()> {
+    let len_end = offset.checked_add(8)?;
+    if len_end > limit {
+        return None;
+    }
+    let len = usize::try_from(u64::from_le_bytes(
+        bytes.get(*offset..len_end)?.try_into().ok()?,
+    ))
+    .ok()?;
+    let str_end = len_end.checked_add(len)?;
+    if str_end > limit {
+        return None;
+    }
+    *offset = str_end;
+    Some(())
+}
+
+#[inline]
+fn skip_bincode_opt_str(bytes: &[u8], offset: &mut usize, limit: usize) -> Option<()> {
+    if *offset >= limit {
+        return None;
+    }
+    let tag = *bytes.get(*offset)?;
+    *offset += 1;
+    match tag {
+        0 => Some(()),
+        1 => skip_bincode_str(bytes, offset, limit),
+        _ => None,
+    }
+}
+
+#[inline]
+fn split_v3_extension_slices(bytes: &[u8]) -> Option<V3ExtensionSlices<'_>> {
+    if bytes.len() < EXTENSION_SPAN_TAIL_BYTES {
+        return None;
+    }
+    let body_end = bytes.len() - EXTENSION_SPAN_TAIL_BYTES;
+    let mut off = 0usize;
+
+    skip_bincode_opt_str(bytes, &mut off, body_end)?;
+    let qn = &bytes[0..off];
+
+    // Skip `identity_discriminator` (not a top-level field on `Node`).
+    skip_bincode_opt_str(bytes, &mut off, body_end)?;
+
+    let ret_start = off;
+    skip_bincode_opt_str(bytes, &mut off, body_end)?;
+    let ret = &bytes[ret_start..off];
+
+    let ch_bloom_start = off;
+    skip_bincode_opt_str(bytes, &mut off, body_end)?;
+    if off >= body_end {
+        return None;
+    }
+    let bloom_tag = *bytes.get(off)?;
+    off += 1;
+    match bloom_tag {
+        0 => {}
+        1 => {
+            off = off.checked_add(32)?;
+            if off > body_end {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+    let ch_bloom = &bytes[ch_bloom_start..off];
+
+    let params_start = off;
+    let count_end = off.checked_add(8)?;
+    if count_end > body_end {
+        return None;
+    }
+    let param_count = usize::try_from(u64::from_le_bytes(
+        bytes.get(off..count_end)?.try_into().ok()?,
+    ))
+    .ok()?;
+    off = count_end;
+    for _ in 0..param_count {
+        skip_bincode_str(bytes, &mut off, body_end)?;
+        skip_bincode_opt_str(bytes, &mut off, body_end)?;
+        skip_bincode_opt_str(bytes, &mut off, body_end)?;
+    }
+    let params = &bytes[params_start..off];
+
+    if off > body_end {
+        return None;
+    }
+    let props_and_labels = &bytes[off..body_end];
+    Some(V3ExtensionSlices {
+        qn,
+        ret,
+        ch_bloom,
+        params,
+        props_and_labels,
+    })
+}
+
 /// Fixed-width node column (64 bytes).
 ///
 /// Red-Green span packing (lossless write-back):
@@ -627,7 +734,7 @@ impl ColumnarGraphMmap {
     }
 
     /// Node id at column index (no string pool reads).
-    pub(crate) fn node_id_at(&self, idx: usize) -> Result<Uuid> {
+    pub fn node_id_at(&self, idx: usize) -> Result<Uuid> {
         if idx >= self.node_count {
             return Err(Error::SerdeError(format!(
                 "node index {idx} out of range (count={})",
@@ -825,6 +932,15 @@ impl ColumnarGraphMmap {
     }
 
     /// Whether a base node should be dropped for invalidated file paths (no full materialize).
+    pub fn is_node_invalidated_at(
+        &self,
+        idx: usize,
+        invalidated: &std::collections::HashSet<String>,
+    ) -> Result<bool> {
+        self.node_invalidated_at(idx, invalidated)
+    }
+
+    /// Whether a base node should be dropped for invalidated file paths (no full materialize).
     pub(crate) fn node_invalidated_at(
         &self,
         idx: usize,
@@ -835,14 +951,14 @@ impl ColumnarGraphMmap {
         }
         let row = read_node_row(self.mmap.as_ref(), self.offset_nodes as usize, idx)?;
         let node_type = node_type_from_u16(row.node_type)?;
-        let name = read_string(
+        let name = string_at(
             self.mmap.as_ref(),
             self.offset_strings as usize,
             self.offset_strings_len as usize,
             row.name_off,
             row.name_len,
         )?;
-        let file_path = optional_string(
+        let file_path = optional_string_at(
             self.mmap.as_ref(),
             self.offset_strings as usize,
             self.offset_strings_len as usize,
@@ -850,14 +966,18 @@ impl ColumnarGraphMmap {
             row.file_path_len,
         )?;
         Ok(node_matches_invalidated_path(
-            file_path.as_deref(),
-            &name,
+            file_path,
+            name,
             node_type,
             invalidated,
         ))
     }
 
     /// Append a kept base node into a columnar build, copying extension bytes verbatim.
+    ///
+    /// On v3 snapshots, hashes the exact `bincode::serialize(&Node)` representation directly
+    /// from hot string-pool slices + raw extension slices without deserializing cold
+    /// `NodeExtension` blobs (`0` `COLD_EXT_DESERIALIZATIONS`, `0` heap map/vec clones).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_node_for_build(
         &self,
@@ -870,6 +990,119 @@ impl ColumnarGraphMmap {
         node_rows: &mut Vec<NodeRow>,
         scratch: &mut Vec<u8>,
     ) -> Result<()> {
+        if self.format_version >= 3 {
+            let row = read_node_row(self.mmap.as_ref(), self.offset_nodes as usize, idx)?;
+            let id = Uuid::from_bytes(row.id);
+            let node_type = node_type_from_u16(row.node_type)?;
+            let name = string_at(
+                self.mmap.as_ref(),
+                self.offset_strings as usize,
+                self.offset_strings_len as usize,
+                row.name_off,
+                row.name_len,
+            )?;
+            let file_path = optional_string_at(
+                self.mmap.as_ref(),
+                self.offset_strings as usize,
+                self.offset_strings_len as usize,
+                row.file_path_off,
+                row.file_path_len,
+            )?;
+            let signature = optional_string_at(
+                self.mmap.as_ref(),
+                self.offset_strings as usize,
+                self.offset_strings_len as usize,
+                row.signature_off,
+                row.signature_len,
+            )?;
+            let ext_bytes = self.extension_bytes_at(idx)?;
+            let parsed_slices = match ext_bytes {
+                Some(bytes) => split_v3_extension_slices(bytes),
+                None => Some(V3ExtensionSlices {
+                    qn: &[0],
+                    ret: &[0],
+                    ch_bloom: &[0, 0],
+                    params: &[0; 8],
+                    props_and_labels: &[0; 16],
+                }),
+            };
+            if let Some(slices) = parsed_slices {
+                let start_byte =
+                    (row.start_byte != NodeRow::START_BYTE_NONE).then_some(row.start_byte);
+                let (end_byte, name_span_overflow, name_token_len) =
+                    decode_extension_span_tail(ext_bytes, start_byte);
+                let start_line = (row.start_line > 0).then_some(row.start_line as usize);
+                let end_line = (row.end_line > 0).then_some(row.end_line as usize);
+                let name_rel_offset =
+                    (row.name_rel_offset != NodeRow::NAME_REL_NONE).then_some(row.name_rel_offset);
+
+                scratch.clear();
+                bincode::serialize_into(&mut *scratch, &(id, node_type, name))
+                    .map_err(bincode_err)?;
+                scratch.extend_from_slice(slices.qn);
+                bincode::serialize_into(&mut *scratch, &signature).map_err(bincode_err)?;
+                scratch.extend_from_slice(slices.ret);
+                scratch.extend_from_slice(slices.params);
+                scratch.extend_from_slice(slices.ch_bloom);
+                bincode::serialize_into(
+                    &mut *scratch,
+                    &(
+                        file_path,
+                        start_line,
+                        end_line,
+                        start_byte,
+                        end_byte,
+                        name_rel_offset,
+                        name_span_overflow,
+                        name_token_len,
+                    ),
+                )
+                .map_err(bincode_err)?;
+                scratch.extend_from_slice(slices.props_and_labels);
+                hasher.update(scratch);
+
+                let name_off = strings.intern(name);
+                let file_path_off = strings.intern_opt(file_path);
+                let signature_off = strings.intern_opt(signature);
+                let extension_off = extensions_blob.len() as u32;
+                let extension_len = match ext_bytes {
+                    Some(bytes) => {
+                        extensions_blob.extend_from_slice(bytes);
+                        bytes.len() as u32
+                    }
+                    None => {
+                        let start = extensions_blob.len();
+                        bincode::serialize_into(&mut *extensions_blob, &NodeExtension::default())
+                            .map_err(bincode_err)?;
+                        (extensions_blob.len() - start) as u32
+                    }
+                };
+                node_rows.push(NodeRow {
+                    id: row.id,
+                    node_type: row.node_type,
+                    name_rel_offset: row.name_rel_offset,
+                    name_off: name_off.off,
+                    name_len: name_off.len,
+                    file_path_off: file_path_off.off,
+                    file_path_len: file_path_off.len,
+                    signature_off: signature_off.off,
+                    signature_len: signature_off.len,
+                    start_line: row.start_line,
+                    end_line: row.end_line,
+                    extension_off,
+                    extension_len,
+                    start_byte: row.start_byte,
+                });
+                if let Some(ids) = name_index.get_mut(name) {
+                    ids.push(id);
+                } else {
+                    name_index.insert(name.to_owned(), vec![id]);
+                }
+                type_index.entry(node_type).or_default().push(id);
+                return Ok(());
+            }
+        }
+
         let node = self.materialize_node(idx)?;
         scratch.clear();
         bincode::serialize_into(&mut *scratch, &node).map_err(bincode_err)?;
@@ -1291,12 +1524,17 @@ fn node_matches_invalidated_path(
     };
 
     let norm = normalize_path_str(path);
-    if invalidated.contains(norm.as_ref()) {
+    let s = norm.as_ref();
+    if invalidated.contains(s) {
         return true;
     }
 
-    norm.rsplit_once('/')
-        .is_some_and(|(_, basename)| invalidated.contains(basename))
+    for (idx, byte) in s.bytes().enumerate() {
+        if byte == b'/' && invalidated.contains(&s[idx + 1..]) {
+            return true;
+        }
+    }
+    false
 }
 
 fn index_section_byte_len(tail: &[u8], cursor: usize) -> Result<usize> {
@@ -2501,5 +2739,68 @@ mod tests {
     fn decode_node_extension_handles_empty_slice_gracefully() {
         let result = decode_node_extension(&[], 3);
         assert!(result.is_err(), "empty slice must not panic");
+    }
+
+    #[test]
+    fn v3_compactor_append_preserves_digest_with_zero_cold_ext_decodes() {
+        use crate::graph_compactor::{DeltaSegment, GraphCompactor};
+
+        let mut rich = Node::new(NodeType::Function, "overload")
+            .with_file_path("/repo/src/sub/service.java")
+            .with_qualified_name("pkg.Service.overload")
+            .with_identity_discriminator("(int,java.lang.String)")
+            .with_location(10, 42)
+            .with_byte_spans(Some(100), Some(450), None, Some(8), Some((70_000, 8)))
+            .with_property("cyclomatic".into(), "5".into())
+            .with_property("parameter_identity".into(), "(int,String)".into())
+            .with_label("method".into());
+        rich.signature = Some(SharedStr::from("void overload(int x, String s)"));
+        rich.return_type = Some(SharedStr::from("void"));
+        rich.code_hash = Some(SharedStr::from("deadbeefcafe"));
+        rich.token_bloom = Some([1, 2, 3, 4]);
+        rich.parameters = vec![
+            GraphParameter {
+                name: "x".into(),
+                param_type: Some("int".into()),
+                default_value: None,
+            },
+            GraphParameter {
+                name: "s".into(),
+                param_type: Some("String".into()),
+                default_value: Some("\"hi\"".into()),
+            },
+        ];
+        let plain = Node::new(NodeType::File, "/repo/src/sub/service.java");
+
+        let tmp = TempDir::new().unwrap();
+        let base_path = tmp.path().join("base.bin");
+        let expected_digest =
+            write_columnar_from_nodes_edges(vec![rich, plain], vec![], &base_path).unwrap();
+
+        let file = std::fs::File::open(&base_path).unwrap();
+        // SAFETY: test file is read-only; mapping covers the written snapshot bytes only.
+        let mmap = Arc::new(unsafe { Mmap::map(&file).unwrap() });
+        let base = ColumnarGraphMmap::open(mmap).unwrap();
+
+        assert!(
+            split_v3_extension_slices(base.extension_bytes_at(0).unwrap().unwrap()).is_some(),
+            "v3 extension must take zero-decode fast slice path"
+        );
+        let out_path = tmp.path().join("compacted.bin");
+        let scratch_dir = tmp.path().join("scratch");
+        let stats = GraphCompactor::new(&base, DeltaSegment::default())
+            .compact_to_path(&out_path, &scratch_dir)
+            .unwrap();
+        assert_eq!(stats.content_digest, expected_digest);
+
+        // Also verify repo-relative multi-segment invalidation drops `/repo/src/sub/service.java`.
+        let mut delta = DeltaSegment::new();
+        delta.invalidate_file("src/sub/service.java");
+        let out2 = tmp.path().join("compacted2.bin");
+        let stats2 = GraphCompactor::new(&base, delta)
+            .compact_to_path(&out2, &scratch_dir)
+            .unwrap();
+        assert_eq!(stats2.nodes_dropped, 2);
+        assert_eq!(stats2.nodes_kept, 0);
     }
 }

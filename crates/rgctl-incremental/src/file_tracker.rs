@@ -2,10 +2,12 @@
 //!
 //! Task 5.1.1: Track file hashes to detect changes
 
+use rayon::prelude::*;
 use rgctl_error::{Error, Result};
 use rgctl_graph::code_graph::{CodeGraph, GRAPH_DIR};
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -63,9 +65,9 @@ impl FileTracker {
             return Ok(Self::new(repo_root));
         }
 
-        let json = std::fs::read_to_string(path)?;
+        let bytes = std::fs::read(path)?;
         let metadata: FileHashMetadata =
-            serde_json::from_str(&json).map_err(|e| Error::SerdeError(e.to_string()))?;
+            serde_json::from_slice(&bytes).map_err(|e| Error::SerdeError(e.to_string()))?;
 
         Ok(Self {
             repo_root,
@@ -81,24 +83,14 @@ impl FileTracker {
 
     /// Record hashes for all discovered files and build node-to-file mapping from the graph.
     pub fn index_files(&mut self, files: &[PathBuf], graph: &CodeGraph) -> Result<()> {
-        self.metadata.files.clear();
-        self.metadata.node_mapping = build_node_mapping(graph);
-
-        for file in files {
-            let rel = relative_path(&self.repo_root, file)?;
-            self.metadata.files.insert(rel, Self::hash_file(file)?);
-        }
-
-        self.metadata.indexed_at = chrono_lite_now();
-        self.metadata.last_commit = current_git_commit(&self.repo_root);
-        self.metadata.version = env!("CARGO_PKG_VERSION").to_string();
-        Ok(())
+        let mapping = build_node_mapping(graph);
+        self.index_files_with_mapping(files, mapping, None)
     }
 
     /// Index files using a precomputed node→file mapping (cold discover path).
     ///
     /// When `precomputed_hashes` is provided, keys are absolute path strings (as from
-    /// extract workers). Missing entries fall back to reading/hashing the file.
+    /// extract workers). Missing entries fall back to parallel BLAKE3 hashing.
     pub fn index_files_with_mapping(
         &mut self,
         files: &[PathBuf],
@@ -108,13 +100,83 @@ impl FileTracker {
         self.metadata.files.clear();
         self.metadata.node_mapping = node_mapping;
 
-        for file in files {
-            let rel = relative_path(&self.repo_root, file)?;
-            let hash = precomputed_hashes
-                .and_then(|m| m.get(file.to_string_lossy().as_ref()).cloned())
-                .map(Ok)
-                .unwrap_or_else(|| Self::hash_file(file))?;
+        let pairs: Vec<Result<(String, String)>> = files
+            .par_iter()
+            .map(|file| {
+                let rel = relative_path(&self.repo_root, file)?;
+                let hash =
+                    match precomputed_hashes.and_then(|m| m.get(file.to_string_lossy().as_ref())) {
+                        Some(existing) => existing.clone(),
+                        None => Self::hash_file(file)?,
+                    };
+                Ok((rel, hash))
+            })
+            .collect();
+
+        self.metadata.files.reserve(pairs.len());
+        for pair in pairs {
+            let (rel, hash) = pair?;
             self.metadata.files.insert(rel, hash);
+        }
+
+        self.metadata.indexed_at = chrono_lite_now();
+        self.metadata.last_commit = current_git_commit(&self.repo_root);
+        self.metadata.version = env!("CARGO_PKG_VERSION").to_string();
+        Ok(())
+    }
+
+    /// Patch only changed/added/deleted entries in `O(|delta|)` without re-hashing
+    /// untouched repository files or scanning `all_nodes()`.
+    pub fn apply_delta_update(
+        &mut self,
+        deleted_paths: &[String],
+        extract_paths: &[String],
+        new_nodes: &[rgctl_graph::schema::Node],
+        worker_hashes: &HashMap<String, String>,
+        precomputed_rel_hashes: &FxHashMap<String, String>,
+    ) -> Result<()> {
+        for rel in deleted_paths.iter().chain(extract_paths.iter()) {
+            let norm_rel = normalize_path_str(rel);
+            let abs = resolve_path(&self.repo_root, &norm_rel);
+            let norm_abs = normalize_path_str(&abs.to_string_lossy());
+            self.metadata.files.remove(&norm_rel);
+            self.metadata.node_mapping.remove(&norm_rel);
+            self.metadata.node_mapping.remove(&norm_abs);
+        }
+
+        let updated_hashes: Vec<Result<Option<(String, String)>>> = extract_paths
+            .par_iter()
+            .map(|rel| {
+                let norm_rel = normalize_path_str(rel);
+                if let Some(hash) = precomputed_rel_hashes.get(&norm_rel) {
+                    return Ok(Some((norm_rel, hash.clone())));
+                }
+                let abs = resolve_path(&self.repo_root, &norm_rel);
+                if let Some(hash) = worker_hashes.get(abs.to_string_lossy().as_ref()) {
+                    return Ok(Some((norm_rel, hash.clone())));
+                }
+                if !abs.is_file() {
+                    return Ok(None);
+                }
+                Ok(Some((norm_rel, Self::hash_file(&abs)?)))
+            })
+            .collect();
+
+        for item in updated_hashes {
+            if let Some((rel, hash)) = item? {
+                self.metadata.files.insert(rel, hash);
+            }
+        }
+
+        let mut pairs: Vec<(String, Uuid)> = Vec::with_capacity(new_nodes.len());
+        for node in new_nodes {
+            if let Some(path) = node_file_path(node) {
+                pairs.push((normalize_path_str(path), node.id));
+            }
+        }
+        pairs.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        for (path, ids) in group_sorted_node_paths(pairs) {
+            self.metadata.node_mapping.insert(path, ids);
         }
 
         self.metadata.indexed_at = chrono_lite_now();
@@ -125,6 +187,16 @@ impl FileTracker {
 
     /// Compare current file hashes against stored metadata.
     pub fn detect_changes(&self, files: &[PathBuf]) -> Result<ChangeSet> {
+        let (changes, _) = self.detect_changes_with_hashes(files)?;
+        Ok(changes)
+    }
+
+    /// Compare current file hashes in parallel and return precomputed hashes for
+    /// added/changed files so incremental updates never read+hash them twice.
+    pub fn detect_changes_with_hashes(
+        &self,
+        files: &[PathBuf],
+    ) -> Result<(ChangeSet, FxHashMap<String, String>)> {
         // Cold / empty tracker: treat every file as added without hashing.
         // Returning a non-empty ChangeSet prevents false snapshot reuse when
         // `file_hashes.json` is missing but a stale snapshot file remains.
@@ -133,48 +205,63 @@ impl FileTracker {
                 .iter()
                 .filter_map(|path| relative_path(&self.repo_root, path).ok())
                 .collect();
-            return Ok(ChangeSet {
-                added,
-                changed: Vec::new(),
-                deleted: Vec::new(),
-                renamed: Vec::new(),
-            });
+            return Ok((
+                ChangeSet {
+                    added,
+                    changed: Vec::new(),
+                    deleted: Vec::new(),
+                    renamed: Vec::new(),
+                },
+                FxHashMap::default(),
+            ));
         }
 
-        let current: HashMap<String, String> = files
-            .iter()
+        let current: Vec<(String, String)> = files
+            .par_iter()
             .filter_map(|path| {
-                relative_path(&self.repo_root, path)
-                    .ok()
-                    .map(|rel| (rel, Self::hash_file(path).unwrap_or_default()))
+                let rel = relative_path(&self.repo_root, path).ok()?;
+                let hash = Self::hash_file(path).unwrap_or_default();
+                Some((rel, hash))
             })
             .collect();
 
-        let previous: HashSet<&str> = self.metadata.files.keys().map(String::as_str).collect();
-        let current_keys: HashSet<&str> = current.keys().map(String::as_str).collect();
-
+        let mut current_keys: FxHashSet<&str> =
+            FxHashSet::with_capacity_and_hasher(current.len(), Default::default());
         let mut added = Vec::new();
         let mut changed = Vec::new();
-        let mut deleted = Vec::new();
+        let mut dirty_hashes: FxHashMap<String, String> = FxHashMap::default();
 
         for (rel, hash) in &current {
+            current_keys.insert(rel.as_str());
             match self.metadata.files.get(rel.as_str()) {
-                None => added.push(rel.clone()),
-                Some(prev) if prev != hash => changed.push(rel.clone()),
+                None => {
+                    added.push(rel.clone());
+                    dirty_hashes.insert(rel.clone(), hash.clone());
+                }
+                Some(prev) if prev != hash => {
+                    changed.push(rel.clone());
+                    dirty_hashes.insert(rel.clone(), hash.clone());
+                }
                 _ => {}
             }
         }
 
-        for rel in previous.difference(&current_keys) {
-            deleted.push((*rel).to_string());
+        let mut deleted = Vec::new();
+        for prev_rel in self.metadata.files.keys() {
+            if !current_keys.contains(prev_rel.as_str()) {
+                deleted.push(prev_rel.clone());
+            }
         }
 
-        Ok(ChangeSet {
-            added,
-            changed,
-            deleted,
-            renamed: Vec::new(),
-        })
+        Ok((
+            ChangeSet {
+                added,
+                changed,
+                deleted,
+                renamed: Vec::new(),
+            },
+            dirty_hashes,
+        ))
     }
 
     /// Return node IDs associated with a relative file path.
@@ -186,14 +273,21 @@ impl FileTracker {
             .unwrap_or(&[])
     }
 
-    /// Persist hash metadata to disk.
+    /// Persist hash metadata to disk atomically.
     pub fn save(&self) -> Result<PathBuf> {
         let dir = self.repo_root.join(GRAPH_DIR);
         std::fs::create_dir_all(&dir)?;
         let path = dir.join(FILE_HASHES_FILE);
-        let json = serde_json::to_string_pretty(&self.metadata)
-            .map_err(|e| Error::SerdeError(e.to_string()))?;
-        std::fs::write(&path, json)?;
+        let tmp = dir.join(format!("{FILE_HASHES_FILE}.tmp"));
+        let json =
+            serde_json::to_vec(&self.metadata).map_err(|e| Error::SerdeError(e.to_string()))?;
+        std::fs::write(&tmp, json)?;
+        if cfg!(windows) && path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+        std::fs::rename(&tmp, &path).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })?;
         Ok(path)
     }
 
