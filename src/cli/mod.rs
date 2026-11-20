@@ -2147,8 +2147,11 @@ impl Cli {
                 prefix,
             ),
             Commands::Status => session_status::run_status(&ctx),
-            Commands::Watch { path: _ } => file_watch::run_watch_foreground(ctx.repo.clone())
-                .map_err(|e| anyhow::anyhow!("{e:#}")),
+            Commands::Watch { path } => {
+                let root =
+                    std::path::PathBuf::from(discover::resolve_session_root(&ctx, path.as_deref()));
+                file_watch::run_watch_foreground(root).map_err(|e| anyhow::anyhow!("{e:#}"))
+            }
             Commands::Update {
                 path,
                 files,

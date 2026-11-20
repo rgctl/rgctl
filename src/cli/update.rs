@@ -5,7 +5,6 @@ use super::context::CliContext;
 use crate::discovery::DiscoveryConfig;
 use crate::languages::registry::LanguageRegistry;
 use anyhow::{Context, Result, bail};
-use rgctl_graph::code_graph::CodeGraph;
 use rgctl_graph::snapshot::MmappedGraphSnapshot;
 use rgctl_incremental::{IncrementalUpdater, UpdateOptions, UpdateResult};
 use rgctl_service::status::detect_live_watcher;
@@ -115,14 +114,14 @@ pub fn run(ctx: &CliContext, args: UpdateArgs) -> Result<()> {
 fn run_queued(ctx: &CliContext, root: &Path, args: &UpdateArgs, watcher_pid: u32) -> Result<()> {
     if args.force {
         bail!(
-            "rgctl update --force cannot run while serve --watch is active (pid {watcher_pid}).\n\
+            "rgctl update --force cannot run while rgctl watch / serve --watch is active (pid {watcher_pid}).\n\
              Stop the watcher, or run a full `rgctl discover` in another session after stopping watch."
         );
     }
 
     let request = request_from_args(root, args)?;
     let request_id = request.request_id.clone();
-    enqueue(root, &request).context("enqueue update for serve --watch")?;
+    enqueue(root, &request).context("enqueue update for active watcher")?;
 
     if args.no_wait {
         if ctx.format == OutputFormat::Json {
@@ -132,12 +131,12 @@ fn run_queued(ctx: &CliContext, root: &Path, args: &UpdateArgs, watcher_pid: u32
                 queued: true,
                 request_id: request_id.clone(),
                 message: Some(format!(
-                    "enqueued for serve --watch (pid {watcher_pid}); not waiting for result"
+                    "enqueued for active watcher (pid {watcher_pid}); not waiting for result"
                 )),
             };
             ctx.emit_json_value(&serde_json::to_value(&payload)?)?;
         } else {
-            println!("Queued update request {request_id} for serve --watch (pid {watcher_pid})");
+            println!("Queued update request {request_id} for active watcher (pid {watcher_pid})");
         }
         return Ok(());
     }
@@ -186,11 +185,12 @@ fn request_from_args(root: &Path, args: &UpdateArgs) -> Result<UpdateQueueReques
     )
 }
 
-/// Shared entry used by CLI and `serve --watch`.
+/// Shared entry used by CLI, `rgctl watch`, and `serve --watch`.
 ///
 /// When `acquire_lock` is true (CLI `rgctl update` with no live watcher), takes
-/// `.rgctl/watch.lock` for the duration of the in-process compact. The watch loop
-/// passes `false` because serve already holds that lock for the process lifetime.
+/// `.rgctl/watch.lock` with `update:<pid>` for the duration of the in-process compact.
+/// The watch loop passes `false` because `rgctl watch` / `serve --watch` already
+/// holds the watcher lock for the process lifetime.
 pub fn run_update_at(
     root: &Path,
     args: &UpdateArgs,
@@ -199,7 +199,7 @@ pub fn run_update_at(
 ) -> Result<UpdateResult> {
     let _lock = if acquire_lock {
         Some(
-            super::pipeline_status::try_acquire_watch_lock(root)
+            super::pipeline_status::try_acquire_update_writer_lock(root)
                 .context("cannot run rgctl update while another watch/update holds the lock")?,
         )
     } else {
@@ -216,8 +216,6 @@ pub fn run_update_at(
 
     let discovery = discovery_from_args(args);
     let registry: Arc<rgctl_registry::LanguageRegistry> = LanguageRegistry::new().into();
-    let mut graph = CodeGraph::open_snapshot(&snapshot)
-        .with_context(|| format!("open snapshot {}", snapshot.display()))?;
 
     let updater = IncrementalUpdater::with_options(
         registry,
@@ -233,11 +231,11 @@ pub fn run_update_at(
 
     if let Some(files) = &args.files {
         updater
-            .update_files(&mut graph, root, files)
+            .update_repo_files(root, files)
             .with_context(|| "incremental file update")
     } else {
         updater
-            .update(&mut graph, root)
+            .update_repo(root)
             .with_context(|| "incremental graph update")
     }
 }

@@ -7,7 +7,9 @@ pub mod pr_scope;
 pub mod synthesize_head;
 pub mod updater;
 
-pub use cascade::{incoming_callers_files, incoming_callers_files_depth};
+pub use cascade::{
+    incoming_callers_files, incoming_callers_files_depth, incoming_callers_files_depth_in_repo,
+};
 pub use changes::{ChangeDetail, ChangeDetectionResult, ChangeDetector, ChangeSummary};
 pub use file_tracker::{
     ChangeSet, FileTracker, changes_for_paths, group_sorted_node_paths, merge_change_sets,

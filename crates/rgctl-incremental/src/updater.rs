@@ -2,31 +2,43 @@
 //!
 //! Task 5.1.2: Update graph for changed files only (CRITICAL)
 
-use crate::cascade::incoming_callers_files_depth;
-use crate::file_tracker::{ChangeSet, FileTracker, merge_change_sets, relative_path, resolve_path};
+use crate::cascade::incoming_callers_files_depth_in_repo;
+use crate::file_tracker::{
+    ChangeSet, FileTracker, changes_for_paths, merge_change_sets, normalize_path_str,
+    relative_path, resolve_path,
+};
 use crate::pr_scope::git_diff_name_status;
 use indicatif::{ProgressBar, ProgressStyle};
+use memmap2::Mmap;
 use rgctl_analysis::{
     BlastEngineSnapshot, CfgPdgArchive, MacroCallIndex, MacroCallLookupDb, SemanticIndex,
 };
 use rgctl_error::Result;
 use rgctl_extraction::discovery::{DiscoveryConfig, FileDiscoverer};
-use rgctl_extraction::{Extractor, FactsCache, GraphBuilder};
+use rgctl_extraction::{ExtractionTail, Extractor, FactsCache, GraphBuilder};
 use rgctl_graph::code_graph::CodeGraph;
-use rgctl_graph::schema::{EdgeType, Node, NodeType, SharedStr};
-use rgctl_graph::{
-    DeltaSegment, MmappedGraphSnapshot, compact_repo_snapshot, compact_snapshot_file,
-    write_columnar_from_backend,
-};
+use rgctl_graph::columnar_snapshot::ColumnarGraphMmap;
+use rgctl_graph::csr::edge_type_to_u8;
+use rgctl_graph::schema::{Edge, EdgeType, Node, NodeType, SharedStr};
+use rgctl_graph::{DeltaSegment, GraphCompactor, MmappedGraphSnapshot};
 use rgctl_pipeline::parallel::par_map;
 use rgctl_pipeline::stream::{DEFAULT_STREAM_CHANNEL_CAPACITY, stream_into_graph};
 use rgctl_pipeline::{PipelineConfig, ProcessingPipeline};
 use rgctl_registry::LanguageRegistry;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+/// Minimum repository size before considering a full streaming rebuild over delta compaction.
+const LARGE_DELTA_MIN_REPO_FILES: usize = 500;
+/// Absolute extracted-file count above which streaming snapshot rebuild beats delta compaction.
+const LARGE_DELTA_ABS_THRESHOLD: usize = 5_000;
+/// Fraction numerator (`/ 10` = 30%) of repo files above which streaming rebuild is used.
+const LARGE_DELTA_RATIO_TENTHS: usize = 3;
 
 /// Options for an incremental update run.
 #[derive(Debug, Clone)]
@@ -123,23 +135,36 @@ impl IncrementalUpdater {
         Self { registry, config }
     }
 
-    /// Update the graph for a repository, returning statistics.
-    pub fn update(&self, graph: &mut CodeGraph, repo_root: &Path) -> Result<UpdateResult> {
+    /// Update `.rgctl/graph.snapshot.bin` in place without hydrating [`CodeGraph`] into RAM.
+    pub fn update_repo(&self, repo_root: &Path) -> Result<UpdateResult> {
         let start = Instant::now();
+        let snapshot_path = MmappedGraphSnapshot::default_path(repo_root);
 
         if self.config.force {
-            return self.full_rebuild(graph, repo_root, start);
+            let discoverer = FileDiscoverer::with_config(
+                Arc::clone(&self.registry),
+                self.config.discovery.clone(),
+            );
+            let all_files = discoverer.discover(repo_root)?;
+            return self.full_rebuild_to_snapshot(repo_root, &all_files, None, start);
+        }
+
+        if !snapshot_path.is_file() {
+            return Err(rgctl_error::Error::NotFound(format!(
+                "snapshot not found at {}",
+                snapshot_path.display()
+            )));
         }
 
         let discoverer =
             FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
         let all_files = discoverer.discover(repo_root)?;
+        let mut tracker = FileTracker::load(repo_root)?;
 
-        let changes = if let Some(ref since) = self.config.since {
-            self.changes_from_git(repo_root, since, &all_files)?
+        let (changes, dirty_hashes) = if let Some(ref since) = self.config.since {
+            self.changes_from_git(repo_root, since, &all_files, &tracker)?
         } else {
-            let tracker = FileTracker::load(repo_root)?;
-            tracker.detect_changes(&all_files)?
+            tracker.detect_changes_with_hashes(&all_files)?
         };
 
         if changes.is_empty() {
@@ -149,7 +174,110 @@ impl IncrementalUpdater {
             });
         }
 
-        self.apply_changes(graph, repo_root, &all_files, changes, start)
+        self.apply_changes_to_repo_snapshot(
+            repo_root,
+            &snapshot_path,
+            Some(&all_files),
+            &mut tracker,
+            changes,
+            dirty_hashes,
+            start,
+        )
+    }
+
+    /// Update only the given repo-relative file paths directly on `.rgctl/graph.snapshot.bin`
+    /// without hydrating [`CodeGraph`] or walking the repository directory tree.
+    pub fn update_repo_files(
+        &self,
+        repo_root: &Path,
+        relative_paths: &[String],
+    ) -> Result<UpdateResult> {
+        let start = Instant::now();
+        if relative_paths.is_empty() {
+            return Ok(UpdateResult {
+                duration: start.elapsed(),
+                ..Default::default()
+            });
+        }
+
+        let snapshot_path = MmappedGraphSnapshot::default_path(repo_root);
+        if !snapshot_path.is_file() {
+            return Err(rgctl_error::Error::NotFound(format!(
+                "snapshot not found at {}",
+                snapshot_path.display()
+            )));
+        }
+
+        let changes = changes_for_paths(repo_root, relative_paths)?;
+        if changes.is_empty() {
+            return Ok(UpdateResult {
+                duration: start.elapsed(),
+                ..Default::default()
+            });
+        }
+
+        let mut tracker =
+            FileTracker::load(repo_root).unwrap_or_else(|_| FileTracker::new(repo_root));
+        self.apply_changes_to_repo_snapshot(
+            repo_root,
+            &snapshot_path,
+            None,
+            &mut tracker,
+            changes,
+            FxHashMap::default(),
+            start,
+        )
+    }
+
+    /// Update the graph for a repository, returning statistics.
+    pub fn update(&self, graph: &mut CodeGraph, repo_root: &Path) -> Result<UpdateResult> {
+        let start = Instant::now();
+        let snapshot_path = MmappedGraphSnapshot::default_path(repo_root);
+
+        if self.config.force {
+            let discoverer = FileDiscoverer::with_config(
+                Arc::clone(&self.registry),
+                self.config.discovery.clone(),
+            );
+            let all_files = discoverer.discover(repo_root)?;
+            let prev_counts =
+                (!snapshot_path.is_file()).then(|| (graph.node_count(), graph.edge_count()));
+            let mut result = self.full_rebuild_to_snapshot(repo_root, &all_files, None, start)?;
+            if let Some((prev_nodes, prev_edges)) = prev_counts {
+                result.nodes_removed = prev_nodes;
+                result.edges_removed = prev_edges;
+            }
+            *graph = CodeGraph::open_snapshot(&snapshot_path)?;
+            result.duration = start.elapsed();
+            return Ok(result);
+        }
+
+        if snapshot_path.is_file() {
+            let result = self.update_repo(repo_root)?;
+            if result.files_affected() > 0 {
+                *graph = CodeGraph::open_snapshot(&snapshot_path)?;
+            }
+            return Ok(result);
+        }
+
+        let discoverer =
+            FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
+        let all_files = discoverer.discover(repo_root)?;
+        let tracker = FileTracker::load(repo_root)?;
+        let (changes, _) = if let Some(ref since) = self.config.since {
+            self.changes_from_git(repo_root, since, &all_files, &tracker)?
+        } else {
+            tracker.detect_changes_with_hashes(&all_files)?
+        };
+
+        if changes.is_empty() {
+            return Ok(UpdateResult {
+                duration: start.elapsed(),
+                ..Default::default()
+            });
+        }
+
+        self.apply_changes_in_memory(graph, repo_root, &all_files, changes, start)
     }
 
     /// Apply a pre-built git or tracker [`ChangeSet`] to the repo snapshot.
@@ -166,10 +294,28 @@ impl IncrementalUpdater {
                 ..Default::default()
             });
         }
+        let snapshot_path = MmappedGraphSnapshot::default_path(repo_root);
         let discoverer =
             FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
         let all_files = discoverer.discover(repo_root)?;
-        self.apply_changes(graph, repo_root, &all_files, changes, start)
+
+        if snapshot_path.is_file() {
+            let mut tracker =
+                FileTracker::load(repo_root).unwrap_or_else(|_| FileTracker::new(repo_root));
+            let result = self.apply_changes_to_repo_snapshot(
+                repo_root,
+                &snapshot_path,
+                Some(&all_files),
+                &mut tracker,
+                changes,
+                FxHashMap::default(),
+                start,
+            )?;
+            *graph = CodeGraph::open_snapshot(&snapshot_path)?;
+            return Ok(result);
+        }
+
+        self.apply_changes_in_memory(graph, repo_root, &all_files, changes, start)
     }
 
     /// Compact `base_snapshot` + `changes` into `output_snapshot` without mutating the live
@@ -212,7 +358,8 @@ impl IncrementalUpdater {
             ..Default::default()
         };
 
-        let extract_paths = self.expand_extract_paths(repo_root, base_snapshot, &changes)?;
+        let base = open_columnar_mmap(base_snapshot)?;
+        let extract_paths = self.expand_extract_paths_with_col(repo_root, &base, &changes)?;
         let paths_to_update: Vec<PathBuf> = extract_paths
             .iter()
             .map(|rel| resolve_path(repo_root, rel))
@@ -243,25 +390,29 @@ impl IncrementalUpdater {
         let (new_nodes, new_edges) =
             rgctl_graph::segmented_spill::materialize_sorted_graph(&finished)?;
         finished.cleanup()?;
-        result.nodes_added = new_nodes.len();
-        result.edges_added = new_edges.len();
 
-        let mut delta = DeltaSegment::new();
-        for rel in extract_paths.iter().chain(changes.deleted.iter()) {
-            delta.invalidate_file(rel);
-        }
-        delta.new_nodes = new_nodes;
-        delta.new_edges = new_edges;
+        let mut delta = build_delta_segment(
+            repo_root,
+            &base,
+            &extract_paths,
+            &changes.deleted,
+            new_nodes,
+            new_edges,
+        );
+        resolve_cross_file_edges_from_tails(
+            &base,
+            &mut delta,
+            &tails,
+            repo_root,
+            self.config.thread_count,
+        )?;
+        result.nodes_added = delta.new_nodes.len();
+        result.edges_added = delta.new_edges.len();
 
         let scratch = work_root.join("compact-scratch");
-        let _stats = compact_snapshot_file(base_snapshot, delta, output_snapshot, &scratch)?;
-
-        let mut graph = CodeGraph::open_snapshot(output_snapshot)?;
-        let relation_edges = self.rebuild_relations(&mut graph, repo_root, &paths_to_update)?;
-        result.edges_added += relation_edges;
-        if relation_edges > 0 {
-            let _ = write_columnar_from_backend(graph.backend(), output_snapshot)?;
-        }
+        let stats = GraphCompactor::new(&base, delta).compact_to_path(output_snapshot, &scratch)?;
+        result.nodes_removed = stats.nodes_dropped;
+        result.edges_removed = stats.edges_dropped;
 
         let _ = facts.save(repo_root);
 
@@ -284,10 +435,19 @@ impl IncrementalUpdater {
             });
         }
 
+        let snapshot_path = MmappedGraphSnapshot::default_path(repo_root);
+        if snapshot_path.is_file() {
+            let result = self.update_repo_files(repo_root, relative_paths)?;
+            if result.files_affected() > 0 {
+                *graph = CodeGraph::open_snapshot(&snapshot_path)?;
+            }
+            return Ok(result);
+        }
+
         let discoverer =
             FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
         let all_files = discoverer.discover(repo_root)?;
-        let changes = crate::file_tracker::changes_for_paths(repo_root, relative_paths)?;
+        let changes = changes_for_paths(repo_root, relative_paths)?;
 
         if changes.is_empty() {
             return Ok(UpdateResult {
@@ -296,15 +456,25 @@ impl IncrementalUpdater {
             });
         }
 
-        self.apply_changes(graph, repo_root, &all_files, changes, start)
+        self.apply_changes_in_memory(graph, repo_root, &all_files, changes, start)
     }
 
-    fn full_rebuild(
+    fn full_rebuild_to_snapshot(
         &self,
-        graph: &mut CodeGraph,
         repo_root: &Path,
+        all_files: &[PathBuf],
+        trigger_changes: Option<&ChangeSet>,
         start: Instant,
     ) -> Result<UpdateResult> {
+        let snapshot_path = MmappedGraphSnapshot::default_path(repo_root);
+        let (nodes_removed, edges_removed) = if snapshot_path.is_file()
+            && let Ok(prev) = open_columnar_mmap(&snapshot_path)
+        {
+            (prev.node_count(), prev.edge_count())
+        } else {
+            (0, 0)
+        };
+
         let pipeline = ProcessingPipeline::with_config(
             Arc::clone(&self.registry),
             PipelineConfig {
@@ -316,32 +486,36 @@ impl IncrementalUpdater {
             },
         );
 
-        let snapshot_path = MmappedGraphSnapshot::default_path(repo_root);
         std::fs::create_dir_all(repo_root.join(".rgctl"))?;
         rgctl_graph::paths::ensure_rgctl_git_exclude(repo_root);
-        let nodes_removed = graph.node_count();
-        let edges_removed = graph.edge_count();
 
         let (stats, _digest) =
-            pipeline.process_repository_to_snapshot(repo_root, &snapshot_path, None)?;
-        *graph = CodeGraph::open_snapshot(&snapshot_path)?;
+            pipeline.process_files_to_snapshot(repo_root, all_files, &snapshot_path, None)?;
+
+        invalidate_digest_sidecars(repo_root);
 
         let mut tracker = FileTracker::new(repo_root);
-        let discoverer =
-            FileDiscoverer::with_config(Arc::clone(&self.registry), self.config.discovery.clone());
-        let files = discoverer.discover(repo_root)?;
-        tracker.index_files(&files, graph)?;
+        tracker.index_files_with_mapping(
+            all_files,
+            stats.node_path_mapping,
+            Some(&stats.file_hashes),
+        )?;
         tracker.save()?;
 
         Self::refresh_fields_marker(repo_root);
+        let (files_added, files_changed, files_deleted) = match trigger_changes {
+            Some(cs) => (cs.added.len(), cs.changed.len(), cs.deleted.len()),
+            None => (0, stats.files_processed, 0),
+        };
         Ok(UpdateResult {
-            files_changed: stats.files_processed,
+            files_added,
+            files_changed,
+            files_deleted,
             nodes_removed,
-            nodes_added: graph.node_count(),
+            nodes_added: stats.nodes_created,
             edges_removed,
-            edges_added: graph.edge_count(),
+            edges_added: stats.edges_created,
             duration: start.elapsed(),
-            ..Default::default()
         })
     }
 
@@ -350,45 +524,40 @@ impl IncrementalUpdater {
         repo_root: &Path,
         since: &str,
         all_files: &[PathBuf],
-    ) -> Result<ChangeSet> {
+        tracker: &FileTracker,
+    ) -> Result<(ChangeSet, FxHashMap<String, String>)> {
         let git_changes = git_diff_name_status(repo_root, since, "HEAD")?;
-        let tracker = FileTracker::load(repo_root)?;
-        let hash_changes = tracker.detect_changes(all_files)?;
-        Ok(merge_change_sets(git_changes, hash_changes))
+        let (hash_changes, dirty_hashes) = tracker.detect_changes_with_hashes(all_files)?;
+        Ok((merge_change_sets(git_changes, hash_changes), dirty_hashes))
     }
 
-    fn apply_changes(
+    /// Zero-hydration snapshot compaction path:
+    /// 1. Open base mmap once for reverse-CALLS cascade + pre-compaction cross-file resolution.
+    /// 2. Extract `paths_to_update` once via `stream_into_graph`.
+    /// 3. Resolve cross-file edges from `tails` directly against hot base columns + `delta.new_nodes`.
+    /// 4. Write `graph.snapshot.bin` once via `GraphCompactor` (zero `MemoryBackend` hydrations).
+    /// 5. Patch `FileTracker` in `O(|delta|)`.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_changes_to_repo_snapshot(
         &self,
-        graph: &mut CodeGraph,
         repo_root: &Path,
-        all_files: &[PathBuf],
-        changes: ChangeSet,
-        start: Instant,
-    ) -> Result<UpdateResult> {
-        let snapshot_path = MmappedGraphSnapshot::default_path(repo_root);
-        if snapshot_path.is_file() {
-            return self.apply_changes_via_compact(
-                graph,
-                repo_root,
-                all_files,
-                changes,
-                start,
-                &snapshot_path,
-            );
-        }
-        self.apply_changes_in_memory(graph, repo_root, all_files, changes, start)
-    }
-
-    /// Low-memory path: extract delta only, stream-compact into a new columnar snapshot.
-    fn apply_changes_via_compact(
-        &self,
-        graph: &mut CodeGraph,
-        repo_root: &Path,
-        all_files: &[PathBuf],
-        changes: ChangeSet,
-        start: Instant,
         snapshot_path: &Path,
+        all_files: Option<&[PathBuf]>,
+        tracker: &mut FileTracker,
+        changes: ChangeSet,
+        dirty_hashes: FxHashMap<String, String>,
+        start: Instant,
     ) -> Result<UpdateResult> {
+        let base = open_columnar_mmap(snapshot_path)?;
+        let extract_paths = self.expand_extract_paths_with_col(repo_root, &base, &changes)?;
+
+        if let Some(files) = all_files
+            && should_fallback_to_full_rebuild(extract_paths.len(), files.len())
+        {
+            drop(base);
+            return self.full_rebuild_to_snapshot(repo_root, files, Some(&changes), start);
+        }
+
         let mut result = UpdateResult {
             files_added: changes.added.len(),
             files_changed: changes.changed.len(),
@@ -398,19 +567,17 @@ impl IncrementalUpdater {
 
         let progress = if self.config.show_progress && !changes.is_empty() {
             let pb = ProgressBar::new(changes.len() as u64);
-            pb.set_style(
-                ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] {msg}").unwrap(),
-            );
-            pb.set_message("compacting");
+            if let Ok(style) =
+                ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] {msg}")
+            {
+                pb.set_style(style);
+            }
+            pb.set_message("extracting delta");
             Some(pb)
         } else {
             None
         };
 
-        let nodes_before = graph.node_count();
-        let edges_before = graph.edge_count();
-
-        let extract_paths = self.expand_extract_paths(repo_root, snapshot_path, &changes)?;
         let paths_to_update: Vec<PathBuf> = extract_paths
             .iter()
             .map(|rel| resolve_path(repo_root, rel))
@@ -426,7 +593,7 @@ impl IncrementalUpdater {
         std::fs::create_dir_all(&spill_dir)?;
         let mut builder = GraphBuilder::with_spill(&spill_dir)?;
         builder.set_materialize_fields(Self::fields_enabled(repo_root));
-        let (_stream_stats, tails, _lossless_sidecars) = stream_into_graph(
+        let (stream_stats, tails, _lossless_sidecars) = stream_into_graph(
             self.config.thread_count,
             &extractor,
             Arc::clone(&self.registry),
@@ -441,32 +608,55 @@ impl IncrementalUpdater {
         let (new_nodes, new_edges) =
             rgctl_graph::segmented_spill::materialize_sorted_graph(&finished)?;
         finished.cleanup()?;
-        result.nodes_added = new_nodes.len();
-        result.edges_added = new_edges.len();
 
-        let mut delta = DeltaSegment::new();
-        for rel in extract_paths.iter().chain(changes.deleted.iter()) {
-            delta.invalidate_file(rel);
+        let mut delta = build_delta_segment(
+            repo_root,
+            &base,
+            &extract_paths,
+            &changes.deleted,
+            new_nodes,
+            new_edges,
+        );
+
+        if let Some(pb) = &progress {
+            pb.set_message("resolving cross-file edges");
         }
-        delta.new_nodes = new_nodes;
-        delta.new_edges = new_edges;
+        resolve_cross_file_edges_from_tails(
+            &base,
+            &mut delta,
+            &tails,
+            repo_root,
+            self.config.thread_count,
+        )?;
+        drop(tails);
+
+        // Patch tracker before `delta.new_nodes` is moved into `GraphCompactor`.
+        let mut deleted_and_renamed_old = changes.deleted.clone();
+        for (old, _) in &changes.renamed {
+            if !deleted_and_renamed_old.contains(old) {
+                deleted_and_renamed_old.push(old.clone());
+            }
+        }
+        tracker.apply_delta_update(
+            &deleted_and_renamed_old,
+            &extract_paths,
+            &delta.new_nodes,
+            &stream_stats.file_hashes,
+            &dirty_hashes,
+        )?;
+
+        result.nodes_added = delta.new_nodes.len();
+        result.edges_added = delta.new_edges.len();
 
         if let Some(pb) = &progress {
             pb.set_message("streaming compact");
         }
-        let stats = compact_repo_snapshot(repo_root, delta)?;
-        let _ = stats.content_digest;
+        let scratch = repo_root.join(".rgctl").join("compact-scratch");
+        let stats = GraphCompactor::new(&base, delta).compact_to_path(snapshot_path, &scratch)?;
+        drop(base);
 
-        *graph = CodeGraph::open_snapshot(snapshot_path)?;
-
-        // Cross-file edges from changed and cascaded caller files into the rest of the graph.
-        let relation_edges = self.rebuild_relations(graph, repo_root, &paths_to_update)?;
-        result.edges_added += relation_edges;
-        if relation_edges > 0 {
-            // Keep columnar digest rules (topology-only edges), not PreparedGraphSnapshot hash.
-            let _ = write_columnar_from_backend(graph.backend(), snapshot_path)?;
-            *graph = CodeGraph::open_snapshot(snapshot_path)?;
-        }
+        result.nodes_removed = stats.nodes_dropped;
+        result.edges_removed = stats.edges_dropped;
 
         if let Err(err) = facts.save(repo_root) {
             eprintln!("warning: failed to persist facts.bin after update: {err}");
@@ -475,17 +665,10 @@ impl IncrementalUpdater {
         // Sidecars key off graph_digest — drop them so next discover/blast rebuilds cleanly.
         invalidate_digest_sidecars(repo_root);
 
-        result.nodes_removed =
-            nodes_before.saturating_sub(graph.node_count().saturating_sub(result.nodes_added));
-        result.edges_removed =
-            edges_before.saturating_sub(graph.edge_count().saturating_sub(result.edges_added));
-
         if let Some(pb) = progress {
             pb.finish_with_message("done");
         }
 
-        let mut tracker = FileTracker::new(repo_root);
-        tracker.index_files(all_files, graph)?;
         tracker.save()?;
         rgctl_graph::paths::ensure_rgctl_git_exclude(repo_root);
 
@@ -512,9 +695,11 @@ impl IncrementalUpdater {
 
         let progress = if self.config.show_progress && !changes.is_empty() {
             let pb = ProgressBar::new(changes.len() as u64);
-            pb.set_style(
-                ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] {msg}").unwrap(),
-            );
+            if let Ok(style) =
+                ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] {msg}")
+            {
+                pb.set_style(style);
+            }
             pb.set_message("updating");
             Some(pb)
         } else {
@@ -531,12 +716,7 @@ impl IncrementalUpdater {
             }
         }
 
-        let snapshot_path = MmappedGraphSnapshot::default_path(repo_root);
-        let extract_paths = if snapshot_path.is_file() {
-            self.expand_extract_paths(repo_root, &snapshot_path, &changes)?
-        } else {
-            changes.extract_paths()
-        };
+        let extract_paths = changes.extract_paths();
         let paths_to_update: Vec<PathBuf> = extract_paths
             .iter()
             .map(|rel| resolve_path(repo_root, rel))
@@ -576,6 +756,7 @@ impl IncrementalUpdater {
         let (new_nodes, new_edges) = builder.into_graph();
         let nodes_added = new_nodes.len();
         let edges_added = new_edges.len();
+        let delta_ids: FxHashSet<Uuid> = new_nodes.iter().map(|n| n.id).collect();
 
         {
             let backend = graph.backend_mut();
@@ -584,7 +765,8 @@ impl IncrementalUpdater {
         }
 
         result.nodes_added = nodes_added;
-        let relation_edges = self.rebuild_relations(graph, repo_root, &paths_to_update)?;
+        let relation_edges =
+            self.rebuild_relations_in_memory(graph, repo_root, &tails, &delta_ids)?;
         result.edges_added = edges_added + relation_edges;
         result.edges_removed = edges_before.saturating_sub(graph.edge_count());
 
@@ -602,10 +784,10 @@ impl IncrementalUpdater {
         Ok(result)
     }
 
-    fn expand_extract_paths(
+    fn expand_extract_paths_with_col(
         &self,
-        _repo_root: &Path,
-        snapshot_path: &Path,
+        repo_root: &Path,
+        col: &ColumnarGraphMmap,
         changes: &ChangeSet,
     ) -> Result<Vec<String>> {
         let mut paths = changes.extract_paths();
@@ -613,354 +795,891 @@ impl IncrementalUpdater {
             return Ok(paths);
         }
 
-        let mmap = MmappedGraphSnapshot::open(snapshot_path)?;
-        let col = mmap.columnar().ok_or_else(|| {
-            rgctl_error::Error::Other("cascade requires columnar snapshot".into())
-        })?;
         let seeds = changes.invalidation_paths();
-        let cascaded = incoming_callers_files_depth(col, &seeds, self.config.cascade_depth)?;
-        paths.extend(cascaded);
+        let cascaded = incoming_callers_files_depth_in_repo(
+            col,
+            Some(repo_root),
+            &seeds,
+            self.config.cascade_depth,
+        )?;
+        for c in cascaded {
+            let abs = resolve_path(repo_root, &c);
+            if abs.is_file() {
+                if let Ok(rel) = relative_path(repo_root, &abs) {
+                    paths.push(rel);
+                } else {
+                    paths.push(c);
+                }
+            }
+        }
         paths.sort();
         paths.dedup();
         Ok(paths)
     }
 
-    /// Re-extract relations for updated files and add missing edges.
-    fn rebuild_relations(
+    /// Resolve cross-file relations for the legacy in-memory backend using already-extracted `tails`.
+    fn rebuild_relations_in_memory(
         &self,
         graph: &mut CodeGraph,
         repo_root: &Path,
-        changed_files: &[PathBuf],
+        tails: &[ExtractionTail],
+        delta_ids: &FxHashSet<Uuid>,
     ) -> Result<usize> {
-        if changed_files.is_empty() {
+        if tails.is_empty() {
             return Ok(0);
         }
 
-        let facts = Arc::new(FactsCache::load(repo_root));
-        let extractor =
-            Extractor::new(Arc::clone(&self.registry)).with_facts_cache(Arc::clone(&facts));
-        // Preserve all kinds and overloads; a single-value name index silently
-        // overwrites same-named fields/methods before relation resolution.
-        let mut symbol_index: HashMap<SharedStr, Vec<Arc<RelationSymbol>>> = HashMap::new();
-        let mut type_names = HashMap::new();
-        for node in graph.backend().all_nodes()? {
-            let candidate = Arc::new(RelationSymbol::from(&node));
-            let name = node
-                .qualified_name
-                .clone()
-                .unwrap_or_else(|| node.name.clone());
-            if matches!(
-                node.node_type,
-                NodeType::Class | NodeType::Struct | NodeType::Interface | NodeType::Module
-            ) {
-                type_names.insert(node.id, name.clone());
-            }
-            if !node.has_label("field") {
-                let mut aliases = Vec::new();
-                if node.name != name {
-                    aliases.push(node.name.clone());
-                }
-                for (offset, ch) in name.char_indices() {
-                    let width = match ch {
-                        '.' | '#' => 1,
-                        ':' if name[offset..].starts_with("::") => 2,
-                        _ => continue,
-                    };
-                    let suffix = &name[offset + width..];
-                    if !suffix.is_empty() {
-                        aliases.push(SharedStr::from(suffix));
-                    }
-                }
-                for alias in aliases {
-                    let entries = symbol_index.entry(alias).or_default();
-                    if entries
-                        .last()
-                        .is_none_or(|previous| previous.id != candidate.id)
-                    {
-                        entries.push(Arc::clone(&candidate));
-                    }
-                }
-            }
-            let entries = symbol_index.entry(name).or_default();
-            if entries
-                .last()
-                .is_none_or(|previous| previous.id != candidate.id)
-            {
-                entries.push(candidate);
-            }
-        }
-        let mut bases: HashMap<SharedStr, Vec<(SharedStr, bool)>> = HashMap::new();
-        graph.backend().for_each_edge(|edge| {
-            if matches!(
-                edge.edge_type,
-                EdgeType::Extends
-                    | EdgeType::Implements
-                    | EdgeType::IncludesClass
-                    | EdgeType::InheritsClass
-            ) && let (Some(child), Some(parent)) =
-                (type_names.get(&edge.from), type_names.get(&edge.to))
-            {
-                bases.entry(child.clone()).or_default().push((
-                    parent.clone(),
-                    matches!(
-                        edge.edge_type,
-                        EdgeType::Implements | EdgeType::IncludesClass
-                    ),
-                ));
-            }
-        })?;
-        let mut member_methods = HashSet::new();
-        for (name, candidates) in &symbol_index {
-            if let Some((owner, _)) = split_callable_owner(name)
-                && symbol_index.get(owner).is_some_and(|nodes| {
-                    nodes.iter().any(|n| {
-                        matches!(
-                            n.node_type,
-                            NodeType::Class
-                                | NodeType::Struct
-                                | NodeType::Interface
-                                | NodeType::Enum
-                                | NodeType::Annotation
-                        )
-                    })
-                })
-            {
-                member_methods.extend(
-                    candidates
-                        .iter()
-                        .filter(|n| n.node_type == NodeType::Function)
-                        .map(|n| n.id),
-                );
-            }
-        }
-        let repo_root = repo_root.to_path_buf();
-
-        let pending_edges = par_map(self.config.thread_count, changed_files, |path| {
-            let Ok(extraction) = extractor.extract_file(path) else {
-                return Vec::new();
-            };
-
-            let file = relative_path(&repo_root, path)
-                .unwrap_or_else(|_| extraction.path.to_string_lossy().to_string());
-
-            let mut batch = Vec::new();
-            for relation in extraction.relations {
-                let callable = relation.relation_type == rgctl_plugin_api::RelationType::Calls;
-                let from_id = resolve_symbol(
-                    &symbol_index,
-                    &relation.from,
-                    &file,
-                    callable,
-                    relation.from_identity_discriminator_str(),
-                );
-                let to_id = if callable {
-                    resolve_call_target(&symbol_index, &bases, &member_methods, &relation, &file)
-                } else {
-                    resolve_symbol(
-                        &symbol_index,
-                        relation
-                            .to_qualified_hint
-                            .as_deref()
-                            .unwrap_or(&relation.to),
-                        &file,
-                        false,
-                        None,
-                    )
-                };
-
-                if let (Some(from), Some(to)) = (from_id, to_id) {
-                    batch.push((from, to, relation_type_to_edge(relation.relation_type)));
-                }
-            }
-            batch
-        });
-
-        let mut edges_to_add = Vec::new();
-        for batch in pending_edges {
-            edges_to_add.extend(batch);
+        let requirements = TailResolutionRequirements::from_tails(tails);
+        if requirements.tokens.is_empty() && !requirements.has_empty_method_probe {
+            return Ok(0);
         }
 
+        let nodes = graph.backend().all_nodes()?;
+        if nodes.iter().all(|n| delta_ids.contains(&n.id)) {
+            return Ok(0);
+        }
+        let mut builder = CompactRelationIndexBuilder::new(repo_root, &requirements);
+        for node in &nodes {
+            builder.observe_node(node, delta_ids.contains(&node.id));
+        }
+        let mut index = builder.finish();
+        if requirements.need_inheritance {
+            graph.backend().for_each_edge(|edge| {
+                index.record_inheritance_edge(edge.from, edge.to, edge.edge_type);
+            })?;
+        }
+
+        let edges_to_add =
+            resolve_tails_against_index(&index, tails, repo_root, self.config.thread_count);
         let mut added = 0usize;
         if !edges_to_add.is_empty() {
             let backend = graph.backend_mut();
             let mut new_edges = Vec::new();
             for (from, to, edge_type) in edges_to_add {
+                if delta_ids.contains(&from) && delta_ids.contains(&to) {
+                    continue;
+                }
                 if !backend.has_edge(from, to, edge_type) {
-                    new_edges.push(rgctl_graph::schema::Edge::new(from, to, edge_type));
+                    new_edges.push(Edge::new(from, to, edge_type));
                     added += 1;
                 }
             }
             backend.insert_edges_batch(new_edges)?;
             graph.backend_mut().prune_orphan_edges()?;
         }
-
-        let _ = facts.save(&repo_root);
-
         Ok(added)
     }
 }
 
-// Retain only resolution data, not whole nodes and their metadata/bodies.
-struct RelationSymbol {
-    id: Uuid,
-    node_type: NodeType,
-    file_path: Option<SharedStr>,
-    identity: Option<String>,
-    parameters: Option<String>,
+#[inline]
+fn should_fallback_to_full_rebuild(extract_count: usize, total_files: usize) -> bool {
+    total_files >= LARGE_DELTA_MIN_REPO_FILES
+        && (extract_count >= LARGE_DELTA_ABS_THRESHOLD
+            || extract_count.saturating_mul(10)
+                >= total_files.saturating_mul(LARGE_DELTA_RATIO_TENTHS))
 }
 
-impl From<&Node> for RelationSymbol {
-    fn from(node: &Node) -> Self {
-        Self {
-            id: node.id,
-            node_type: node.node_type,
-            file_path: node.file_path.clone(),
-            identity: node.identity_discriminator().map(str::to_owned),
-            parameters: node.get_property("parameter_identity").map(str::to_owned),
-        }
-    }
+fn open_columnar_mmap(path: &Path) -> Result<ColumnarGraphMmap> {
+    let file = File::open(path)?;
+    // SAFETY: snapshot file is read-only for the duration of inspection/compaction;
+    // replacement writes go to a sibling `.bin.tmp` and rename atomically.
+    let mmap = Arc::new(unsafe { Mmap::map(&file)? });
+    ColumnarGraphMmap::open(mmap)
 }
 
-fn resolve_symbol(
-    index: &HashMap<SharedStr, Vec<Arc<RelationSymbol>>>,
-    name: &str,
-    file: &str,
-    callable: bool,
-    identity: Option<&str>,
-) -> Option<Uuid> {
-    let candidates = index.get(name)?;
-    let eligible = |node: &&Arc<RelationSymbol>| {
-        (!callable || node.node_type == NodeType::Function)
-            && identity.is_none_or(|value| node.identity.as_deref().unwrap_or("") == value)
-    };
-    let mut local = candidates
-        .iter()
-        .filter(eligible)
-        .filter(|node| node.file_path.as_deref() == Some(file));
-    if let Some(first) = local.next() {
-        return local.all(|node| node.id == first.id).then_some(first.id);
-    }
-    let mut global = candidates.iter().filter(eligible);
-    let first = global.next()?;
-    global.all(|node| node.id == first.id).then_some(first.id)
-}
-
-// Incremental edge repair obeys the same identity/argument evidence as cold
-// discovery; a rejected overload must not be resurrected by a bare-name lookup.
-fn resolve_call_target(
-    index: &HashMap<SharedStr, Vec<Arc<RelationSymbol>>>,
-    bases: &HashMap<SharedStr, Vec<(SharedStr, bool)>>,
-    member_methods: &HashSet<Uuid>,
-    relation: &rgctl_plugin_api::Relation,
-    file: &str,
-) -> Option<Uuid> {
-    let identity = relation.to_identity_discriminator_str();
-    let arguments = relation.argument_identity_discriminator_str();
-    if relation.explicit_generic_arity_val().is_some() && identity.is_none() {
-        return None;
-    }
-    let direct = |name: &str, free_only: bool| -> Option<Option<Uuid>> {
-        let candidates = index.get(name)?;
-        if !candidates.iter().any(|n| n.node_type == NodeType::Function) {
-            return None;
-        }
-        let eligible = |n: &&Arc<RelationSymbol>| {
-            n.node_type == NodeType::Function
-                && (!free_only || !member_methods.contains(&n.id))
-                && identity.is_none_or(|value| n.identity.as_deref().unwrap_or("") == value)
-                && (identity.is_some()
-                    || arguments.is_none_or(|args| {
-                        n.identity.is_none()
-                            || n.parameters.as_deref().or(n.identity.as_deref()) == Some(args)
-                    }))
-        };
-        let mut local = candidates
-            .iter()
-            .filter(eligible)
-            .filter(|n| n.file_path.as_deref() == Some(file));
-        if let Some(first) = local.next() {
-            return Some(local.all(|n| n.id == first.id).then_some(first.id));
-        }
-        let mut global = candidates.iter().filter(eligible);
-        Some(
-            global
-                .next()
-                .map(|first| first.id)
-                .filter(|first| global.all(|n| n.id == *first)),
-        )
-    };
-    let target = relation
-        .to_qualified_hint
-        .as_deref()
-        .unwrap_or(&relation.to);
-    let inherited_overloads =
-        relation.language_str() == Some("java") && arguments.is_some() && identity.is_none();
-    let local = direct(target, false);
-    if let Some(found) = local
-        && (found.is_some() || !inherited_overloads)
-    {
-        return found;
-    }
-    if let Some((owner, method)) = split_callable_owner(target) {
-        let mut seen = HashSet::new();
-        let mut pending: Vec<_> = bases
-            .get(owner)
-            .into_iter()
-            .flatten()
-            .map(|(name, iface)| (name, *iface))
-            .collect();
-        let mut class_target = None;
-        let mut interface_target = None;
-        let mut class_ambiguous = false;
-        let mut interface_ambiguous = false;
-        while let Some((ancestor, interface_path)) = pending.pop() {
-            if !seen.insert((ancestor, interface_path)) {
-                continue;
+fn base_uses_foreign_or_relative_paths(base: &ColumnarGraphMmap, repo_prefix: &str) -> bool {
+    let limit = base.node_count().min(64);
+    for idx in 0..limit {
+        if let Ok(Some(fp)) = base.node_file_path_str(idx)
+            && !fp.is_empty()
+            && fp != "<external>"
+        {
+            let norm = rgctl_graph::normalize_path_str(fp);
+            let s = norm.as_ref();
+            if !s.starts_with('/') {
+                return true;
             }
-            let mut family = false;
-            for separator in [".", "::", "#"] {
-                if let Some(candidate) = direct(&format!("{ancestor}{separator}{method}"), false) {
-                    family = true;
-                    let Some(id) = candidate else {
-                        if inherited_overloads {
-                            family = false;
-                            break;
+            if !repo_prefix.is_empty()
+                && !s
+                    .strip_prefix(repo_prefix)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            {
+                return true;
+            }
+            return false;
+        }
+    }
+    true
+}
+
+fn build_delta_segment(
+    repo_root: &Path,
+    base: &ColumnarGraphMmap,
+    extract_paths: &[String],
+    deleted_paths: &[String],
+    new_nodes: Vec<Node>,
+    new_edges: Vec<Edge>,
+) -> DeltaSegment {
+    let repo_prefix = normalize_path_str(&repo_root.to_string_lossy());
+    let repo_prefix = repo_prefix.trim_end_matches('/');
+    let include_root_basenames = base_uses_foreign_or_relative_paths(base, repo_prefix);
+
+    let mut delta = DeltaSegment::new();
+    for rel in extract_paths.iter().chain(deleted_paths.iter()) {
+        let norm_rel = normalize_path_str(rel);
+        let abs = resolve_path(repo_root, &norm_rel);
+        delta.invalidate_file(abs.to_string_lossy());
+        if norm_rel.contains('/') || include_root_basenames {
+            delta.invalidate_file(&norm_rel);
+        }
+    }
+    delta.new_nodes = new_nodes;
+    delta.new_edges = new_edges;
+    delta
+}
+
+/// Demand-driven query requirements collected from `ExtractionTail` relations.
+struct TailResolutionRequirements<'a> {
+    tokens: FxHashSet<&'a str>,
+    has_empty_method_probe: bool,
+    need_inheritance: bool,
+    need_member_methods: bool,
+    need_param_identity: bool,
+}
+
+impl<'a> TailResolutionRequirements<'a> {
+    fn from_tails(tails: &'a [ExtractionTail]) -> Self {
+        let mut tokens = FxHashSet::default();
+        let mut has_empty_method_probe = false;
+        let mut need_inheritance = false;
+        let mut need_member_methods = false;
+        let mut need_param_identity = false;
+
+        for tail in tails {
+            for rel in &tail.relations {
+                if !rel.from.is_empty() {
+                    tokens.insert(rel.from.as_str());
+                }
+                if !rel.to.is_empty() {
+                    tokens.insert(rel.to.as_str());
+                }
+                if let Some(hint) = rel.to_qualified_hint.as_deref()
+                    && !hint.is_empty()
+                {
+                    tokens.insert(hint);
+                }
+                if rel.relation_type == rgctl_plugin_api::RelationType::Calls {
+                    let target = rel.to_qualified_hint.as_deref().unwrap_or(&rel.to);
+                    if let Some((_, method)) = split_callable_owner(target) {
+                        need_inheritance = true;
+                        if method.is_empty() {
+                            has_empty_method_probe = true;
+                        } else {
+                            tokens.insert(method);
                         }
-                        return None;
-                    };
-                    let (target, ambiguous) = if interface_path {
-                        (&mut interface_target, &mut interface_ambiguous)
-                    } else {
-                        (&mut class_target, &mut class_ambiguous)
-                    };
-                    if target.is_some_and(|previous| previous != id) {
-                        *ambiguous = true;
                     }
-                    *target = Some(id);
-                    break;
+                    if rel.is_inferred_callable_owner()
+                        && rel.to_identity_discriminator_str().is_none()
+                    {
+                        need_member_methods = true;
+                    }
+                    if rel.argument_identity_discriminator_str().is_some()
+                        && rel.to_identity_discriminator_str().is_none()
+                    {
+                        need_param_identity = true;
+                    }
                 }
             }
-            if !family {
-                pending.extend(
-                    bases
-                        .get(ancestor)
-                        .into_iter()
-                        .flatten()
-                        .map(|(name, iface)| (name, interface_path || *iface)),
-                );
+        }
+
+        Self {
+            tokens,
+            has_empty_method_probe,
+            need_inheritance,
+            need_member_methods,
+            need_param_identity,
+        }
+    }
+
+    #[inline]
+    fn matches_node_names(&self, name: &str, qname: Option<&str>, node_type: NodeType) -> bool {
+        if self.has_empty_method_probe && node_type == NodeType::Function {
+            return true;
+        }
+        let primary = qname.unwrap_or(name);
+        if self.tokens.contains(primary) || (name != primary && self.tokens.contains(name)) {
+            return true;
+        }
+        let mut matched = false;
+        for_each_symbol_suffix(primary, |suffix| {
+            if self.tokens.contains(suffix) {
+                matched = true;
+            }
+        });
+        matched
+    }
+}
+
+#[inline]
+fn for_each_symbol_suffix<'a>(name: &'a str, mut f: impl FnMut(&'a str)) {
+    for (offset, ch) in name.char_indices() {
+        let width = match ch {
+            '.' | '#' => 1,
+            ':' if name[offset..].starts_with("::") => 2,
+            _ => continue,
+        };
+        let suffix = &name[offset + width..];
+        if !suffix.is_empty() {
+            f(suffix);
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CandidateSym {
+    id: Uuid,
+    node_type: NodeType,
+    is_member_method: bool,
+    identity: Option<Box<str>>,
+    parameters: Option<Box<str>>,
+    /// True when >= 2 distinct node UUIDs share identical `(node_type, is_member_method, identity, parameters)`.
+    ambiguous: bool,
+}
+
+struct PendingMatchedNode {
+    id: Uuid,
+    node_type: NodeType,
+    name: SharedStr,
+    primary_name: SharedStr,
+    local_rel_file: Option<SharedStr>,
+    is_field: bool,
+    identity: Option<Box<str>>,
+    parameters: Option<Box<str>>,
+}
+
+/// Compact `O(1)` local + global symbol resolver without unbounded `100k`-entry alias `Vec`s.
+struct CompactRelationIndex {
+    local_by_file: FxHashMap<SharedStr, FxHashMap<SharedStr, SmallVec<[CandidateSym; 2]>>>,
+    global: FxHashMap<SharedStr, SmallVec<[CandidateSym; 2]>>,
+    type_names: FxHashMap<Uuid, SharedStr>,
+    bases: FxHashMap<SharedStr, Vec<(SharedStr, bool)>>,
+}
+
+struct CompactRelationIndexBuilder<'a> {
+    repo_prefix: String,
+    req: &'a TailResolutionRequirements<'a>,
+    matched: Vec<PendingMatchedNode>,
+    type_names: FxHashMap<Uuid, SharedStr>,
+    type_owner_aliases: FxHashSet<SharedStr>,
+}
+
+impl<'a> CompactRelationIndexBuilder<'a> {
+    fn new(repo_root: &Path, req: &'a TailResolutionRequirements<'a>) -> Self {
+        let repo_prefix = normalize_path_str(&repo_root.to_string_lossy())
+            .trim_end_matches('/')
+            .to_owned();
+        Self {
+            repo_prefix,
+            req,
+            matched: Vec::new(),
+            type_names: FxHashMap::default(),
+            type_owner_aliases: FxHashSet::default(),
+        }
+    }
+
+    fn canonical_rel_path(&self, raw: &str) -> SharedStr {
+        let norm = rgctl_graph::normalize_path_str(raw);
+        let s = norm.as_ref();
+        if !self.repo_prefix.is_empty()
+            && let Some(rest) = s.strip_prefix(self.repo_prefix.as_str())
+        {
+            let trimmed = rest.trim_start_matches('/');
+            if !trimmed.is_empty() {
+                return SharedStr::from(trimmed);
             }
         }
-        if class_target.is_some() || class_ambiguous {
-            return class_target.filter(|_| !class_ambiguous);
+        SharedStr::from(s.trim_start_matches("./"))
+    }
+
+    fn record_type_metadata(
+        &mut self,
+        id: Uuid,
+        node_type: NodeType,
+        name: &str,
+        qname: Option<&str>,
+    ) {
+        let primary = qname.unwrap_or(name);
+        if self.req.need_inheritance
+            && matches!(
+                node_type,
+                NodeType::Class | NodeType::Struct | NodeType::Interface | NodeType::Module
+            )
+        {
+            self.type_names.insert(id, SharedStr::from(primary));
         }
-        if interface_target.is_some() || interface_ambiguous {
-            return interface_target.filter(|_| !interface_ambiguous);
+        if self.req.need_member_methods
+            && matches!(
+                node_type,
+                NodeType::Class
+                    | NodeType::Struct
+                    | NodeType::Interface
+                    | NodeType::Enum
+                    | NodeType::Annotation
+            )
+        {
+            self.type_owner_aliases.insert(SharedStr::from(primary));
+            if name != primary {
+                self.type_owner_aliases.insert(SharedStr::from(name));
+            }
+            for_each_symbol_suffix(primary, |suffix| {
+                self.type_owner_aliases.insert(SharedStr::from(suffix));
+            });
         }
     }
-    if local.is_none() && relation.is_inferred_callable_owner() && identity.is_none() {
-        return direct(&relation.to, true).flatten();
+
+    fn observe_node(&mut self, node: &Node, include_in_local: bool) {
+        let name = node.name.as_str();
+        let qname = node.qualified_name.as_deref();
+        self.record_type_metadata(node.id, node.node_type, name, qname);
+
+        if !self.req.matches_node_names(name, qname, node.node_type) {
+            return;
+        }
+
+        let primary_name = node
+            .qualified_name
+            .clone()
+            .unwrap_or_else(|| node.name.clone());
+        let local_rel_file = if include_in_local {
+            node.file_path
+                .as_deref()
+                .map(|fp| self.canonical_rel_path(fp))
+        } else {
+            None
+        };
+        let identity = node.identity_discriminator().map(Box::<str>::from);
+        let parameters = if self.req.need_param_identity
+            && node.node_type == NodeType::Function
+            && identity.is_some()
+        {
+            node.get_property("parameter_identity")
+                .map(Box::<str>::from)
+        } else {
+            None
+        };
+
+        self.matched.push(PendingMatchedNode {
+            id: node.id,
+            node_type: node.node_type,
+            name: node.name.clone(),
+            primary_name,
+            local_rel_file,
+            is_field: node.has_label("field"),
+            identity,
+            parameters,
+        });
     }
-    None
+
+    fn observe_kept_base_row(&mut self, base: &ColumnarGraphMmap, idx: usize) -> Result<()> {
+        let node_type = base.node_type_at(idx)?;
+        let need_type = (self.req.need_inheritance
+            && matches!(
+                node_type,
+                NodeType::Class | NodeType::Struct | NodeType::Interface | NodeType::Module
+            ))
+            || (self.req.need_member_methods
+                && matches!(
+                    node_type,
+                    NodeType::Class
+                        | NodeType::Struct
+                        | NodeType::Interface
+                        | NodeType::Enum
+                        | NodeType::Annotation
+                ));
+
+        let name = base.node_name_str(idx)?;
+        let qname = base.node_qualified_name_str(idx)?;
+
+        if need_type {
+            let id = base.node_id_at(idx)?;
+            self.record_type_metadata(id, node_type, name, qname);
+        }
+
+        if !self.req.matches_node_names(name, qname, node_type) {
+            return Ok(());
+        }
+
+        let id = base.node_id_at(idx)?;
+        let identity = if node_type == NodeType::Function {
+            base.node_identity_discriminator_str(idx)?
+                .map(Box::<str>::from)
+        } else {
+            None
+        };
+
+        // Decode cold `NodeExtension` ONLY on the rare matched `Variable` (to check `"field"` label)
+        // or matched overloaded `Function` when `argument_identity_discriminator` is queried.
+        let (is_field, parameters) = if node_type == NodeType::Variable {
+            let materialized = base.materialize_node_at(idx)?;
+            (materialized.has_label("field"), None)
+        } else if self.req.need_param_identity
+            && node_type == NodeType::Function
+            && identity.is_some()
+        {
+            let materialized = base.materialize_node_at(idx)?;
+            (
+                false,
+                materialized
+                    .get_property("parameter_identity")
+                    .map(Box::<str>::from),
+            )
+        } else {
+            (false, None)
+        };
+
+        let name_shared = SharedStr::from(name);
+        let primary_name = qname
+            .map(SharedStr::from)
+            .unwrap_or_else(|| name_shared.clone());
+
+        self.matched.push(PendingMatchedNode {
+            id,
+            node_type,
+            name: name_shared,
+            primary_name,
+            local_rel_file: None,
+            is_field,
+            identity,
+            parameters,
+        });
+        Ok(())
+    }
+
+    fn is_member_method(&self, item: &PendingMatchedNode) -> bool {
+        if !self.req.need_member_methods || item.node_type != NodeType::Function {
+            return false;
+        }
+        let check_alias = |alias: &str| {
+            split_callable_owner(alias)
+                .is_some_and(|(owner, _)| self.type_owner_aliases.contains(owner))
+        };
+        if check_alias(&item.primary_name) {
+            return true;
+        }
+        if !item.is_field {
+            if item.name != item.primary_name && check_alias(&item.name) {
+                return true;
+            }
+            let mut found = false;
+            for_each_symbol_suffix(&item.primary_name, |suffix| {
+                if check_alias(suffix) {
+                    found = true;
+                }
+            });
+            if found {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn finish(self) -> CompactRelationIndex {
+        let mut local_by_file: FxHashMap<
+            SharedStr,
+            FxHashMap<SharedStr, SmallVec<[CandidateSym; 2]>>,
+        > = FxHashMap::default();
+        let mut global: FxHashMap<SharedStr, SmallVec<[CandidateSym; 2]>> = FxHashMap::default();
+
+        for item in &self.matched {
+            let is_member_method = self.is_member_method(item);
+            let cand = CandidateSym {
+                id: item.id,
+                node_type: item.node_type,
+                is_member_method,
+                identity: item.identity.clone(),
+                parameters: item.parameters.clone(),
+                ambiguous: false,
+            };
+
+            let mut push_alias = |alias: SharedStr| {
+                push_candidate_deduped(global.entry(alias.clone()).or_default(), &cand);
+                if let Some(ref file_key) = item.local_rel_file {
+                    let file_map = local_by_file.entry(file_key.clone()).or_default();
+                    push_candidate_deduped(file_map.entry(alias).or_default(), &cand);
+                }
+            };
+
+            if !item.is_field {
+                if item.name != item.primary_name {
+                    push_alias(item.name.clone());
+                }
+                for_each_symbol_suffix(&item.primary_name, |suffix| {
+                    push_alias(SharedStr::from(suffix));
+                });
+            }
+            push_alias(item.primary_name.clone());
+        }
+
+        CompactRelationIndex {
+            local_by_file,
+            global,
+            type_names: self.type_names,
+            bases: FxHashMap::default(),
+        }
+    }
+}
+
+#[inline]
+fn push_candidate_deduped(bucket: &mut SmallVec<[CandidateSym; 2]>, cand: &CandidateSym) {
+    if let Some(existing) = bucket.iter_mut().find(|c| {
+        c.node_type == cand.node_type
+            && c.is_member_method == cand.is_member_method
+            && c.identity == cand.identity
+            && c.parameters == cand.parameters
+    }) {
+        if existing.id != cand.id {
+            existing.ambiguous = true;
+        }
+        return;
+    }
+    bucket.push(cand.clone());
+}
+
+impl CompactRelationIndex {
+    #[cfg(test)]
+    fn from_nodes_for_test(nodes: &[Node]) -> Self {
+        let mut tokens = FxHashSet::default();
+        for n in nodes {
+            tokens.insert(n.name.as_str());
+            if let Some(qn) = n.qualified_name.as_deref() {
+                tokens.insert(qn);
+            }
+        }
+        let req = TailResolutionRequirements {
+            tokens,
+            has_empty_method_probe: true,
+            need_inheritance: true,
+            need_member_methods: true,
+            need_param_identity: true,
+        };
+        let mut builder = CompactRelationIndexBuilder::new(Path::new(""), &req);
+        for n in nodes {
+            builder.observe_node(n, true);
+        }
+        builder.finish()
+    }
+
+    #[inline]
+    fn record_inheritance_edge(&mut self, from: Uuid, to: Uuid, edge_type: EdgeType) {
+        if matches!(
+            edge_type,
+            EdgeType::Extends
+                | EdgeType::Implements
+                | EdgeType::IncludesClass
+                | EdgeType::InheritsClass
+        ) && let (Some(child), Some(parent)) =
+            (self.type_names.get(&from), self.type_names.get(&to))
+        {
+            self.bases.entry(child.clone()).or_default().push((
+                parent.clone(),
+                matches!(edge_type, EdgeType::Implements | EdgeType::IncludesClass),
+            ));
+        }
+    }
+
+    fn resolve_symbol(
+        &self,
+        name: &str,
+        file: &str,
+        callable: bool,
+        identity: Option<&str>,
+    ) -> Option<Uuid> {
+        let eligible = |node: &&CandidateSym| {
+            (!callable || node.node_type == NodeType::Function)
+                && identity.is_none_or(|value| node.identity.as_deref().unwrap_or("") == value)
+        };
+        if let Some(local_bucket) = self.local_by_file.get(file).and_then(|m| m.get(name)) {
+            let mut local = local_bucket.iter().filter(eligible);
+            if let Some(first) = local.next() {
+                return (!first.ambiguous && local.all(|n| !n.ambiguous && n.id == first.id))
+                    .then_some(first.id);
+            }
+        }
+        let global_bucket = self.global.get(name)?;
+        let mut global = global_bucket.iter().filter(eligible);
+        let first = global.next()?;
+        (!first.ambiguous && global.all(|n| !n.ambiguous && n.id == first.id)).then_some(first.id)
+    }
+
+    // Incremental edge repair obeys the same identity/argument evidence as cold
+    // discovery; a rejected overload must not be resurrected by a bare-name lookup.
+    fn resolve_call_target(
+        &self,
+        relation: &rgctl_plugin_api::Relation,
+        file: &str,
+    ) -> Option<Uuid> {
+        let identity = relation.to_identity_discriminator_str();
+        let arguments = relation.argument_identity_discriminator_str();
+        if relation.explicit_generic_arity_val().is_some() && identity.is_none() {
+            return None;
+        }
+        let direct = |name: &str, free_only: bool| -> Option<Option<Uuid>> {
+            let global_bucket = self.global.get(name)?;
+            if !global_bucket
+                .iter()
+                .any(|n| n.node_type == NodeType::Function)
+            {
+                return None;
+            }
+            let eligible = |n: &&CandidateSym| {
+                n.node_type == NodeType::Function
+                    && (!free_only || !n.is_member_method)
+                    && identity.is_none_or(|value| n.identity.as_deref().unwrap_or("") == value)
+                    && (identity.is_some()
+                        || arguments.is_none_or(|args| {
+                            n.identity.is_none()
+                                || n.parameters.as_deref().or(n.identity.as_deref()) == Some(args)
+                        }))
+            };
+            if let Some(local_bucket) = self.local_by_file.get(file).and_then(|m| m.get(name)) {
+                let mut local = local_bucket.iter().filter(eligible);
+                if let Some(first) = local.next() {
+                    return Some(
+                        (!first.ambiguous && local.all(|n| !n.ambiguous && n.id == first.id))
+                            .then_some(first.id),
+                    );
+                }
+            }
+            let mut global = global_bucket.iter().filter(eligible);
+            Some(
+                global
+                    .next()
+                    .filter(|first| {
+                        !first.ambiguous && global.all(|n| !n.ambiguous && n.id == first.id)
+                    })
+                    .map(|first| first.id),
+            )
+        };
+
+        let target = relation
+            .to_qualified_hint
+            .as_deref()
+            .unwrap_or(&relation.to);
+        let inherited_overloads =
+            relation.language_str() == Some("java") && arguments.is_some() && identity.is_none();
+        let local = direct(target, false);
+        if let Some(found) = local
+            && (found.is_some() || !inherited_overloads)
+        {
+            return found;
+        }
+        if let Some((owner, method)) = split_callable_owner(target)
+            && !self.bases.is_empty()
+        {
+            let mut seen = FxHashSet::default();
+            let mut pending: Vec<_> = self
+                .bases
+                .get(owner)
+                .into_iter()
+                .flatten()
+                .map(|(name, iface)| (name, *iface))
+                .collect();
+            let mut class_target = None;
+            let mut interface_target = None;
+            let mut class_ambiguous = false;
+            let mut interface_ambiguous = false;
+            let mut probe_buf = String::new();
+            while let Some((ancestor, interface_path)) = pending.pop() {
+                if !seen.insert((ancestor, interface_path)) {
+                    continue;
+                }
+                let mut family = false;
+                for separator in [".", "::", "#"] {
+                    probe_buf.clear();
+                    probe_buf.reserve(ancestor.len() + separator.len() + method.len());
+                    probe_buf.push_str(ancestor);
+                    probe_buf.push_str(separator);
+                    probe_buf.push_str(method);
+                    if let Some(candidate) = direct(&probe_buf, false) {
+                        family = true;
+                        let Some(id) = candidate else {
+                            if inherited_overloads {
+                                family = false;
+                                break;
+                            }
+                            return None;
+                        };
+                        let (slot, ambiguous) = if interface_path {
+                            (&mut interface_target, &mut interface_ambiguous)
+                        } else {
+                            (&mut class_target, &mut class_ambiguous)
+                        };
+                        if slot.is_some_and(|previous| previous != id) {
+                            *ambiguous = true;
+                        }
+                        *slot = Some(id);
+                        break;
+                    }
+                }
+                if !family {
+                    pending.extend(
+                        self.bases
+                            .get(ancestor)
+                            .into_iter()
+                            .flatten()
+                            .map(|(name, iface)| (name, interface_path || *iface)),
+                    );
+                }
+            }
+            if class_target.is_some() || class_ambiguous {
+                return class_target.filter(|_| !class_ambiguous);
+            }
+            if interface_target.is_some() || interface_ambiguous {
+                return interface_target.filter(|_| !interface_ambiguous);
+            }
+        }
+        if local.is_none() && relation.is_inferred_callable_owner() && identity.is_none() {
+            return direct(&relation.to, true).flatten();
+        }
+        None
+    }
+}
+
+fn resolve_tails_against_index(
+    index: &CompactRelationIndex,
+    tails: &[ExtractionTail],
+    repo_root: &Path,
+    thread_count: Option<usize>,
+) -> Vec<(Uuid, Uuid, EdgeType)> {
+    let per_file = par_map(thread_count, tails, |tail| {
+        if tail.relations.is_empty() {
+            return Vec::new();
+        }
+        let file = relative_path(repo_root, &tail.path)
+            .unwrap_or_else(|_| normalize_path_str(&tail.path.to_string_lossy()));
+        let mut batch = Vec::with_capacity(tail.relations.len());
+        for relation in &tail.relations {
+            let callable = relation.relation_type == rgctl_plugin_api::RelationType::Calls;
+            let from_id = index.resolve_symbol(
+                &relation.from,
+                &file,
+                callable,
+                relation.from_identity_discriminator_str(),
+            );
+            let to_id = if callable {
+                index.resolve_call_target(relation, &file)
+            } else {
+                index.resolve_symbol(
+                    relation
+                        .to_qualified_hint
+                        .as_deref()
+                        .unwrap_or(&relation.to),
+                    &file,
+                    false,
+                    None,
+                )
+            };
+            if let (Some(from), Some(to)) = (from_id, to_id) {
+                batch.push((from, to, relation_type_to_edge(relation.relation_type)));
+            }
+        }
+        batch
+    });
+
+    let total: usize = per_file.iter().map(Vec::len).sum();
+    let mut out = Vec::with_capacity(total);
+    for batch in per_file {
+        out.extend(batch);
+    }
+    out
+}
+
+/// Resolve cross-file edges from already-extracted `tails` directly against kept base mmap
+/// columns + `delta.new_nodes`, appending unique edges into `delta.new_edges` before compaction.
+fn resolve_cross_file_edges_from_tails(
+    base: &ColumnarGraphMmap,
+    delta: &mut DeltaSegment,
+    tails: &[ExtractionTail],
+    repo_root: &Path,
+    thread_count: Option<usize>,
+) -> Result<()> {
+    if tails.is_empty() {
+        return Ok(());
+    }
+    let requirements = TailResolutionRequirements::from_tails(tails);
+    if requirements.tokens.is_empty() && !requirements.has_empty_method_probe {
+        return Ok(());
+    }
+
+    let mut builder = CompactRelationIndexBuilder::new(repo_root, &requirements);
+    let base_count = base.node_count();
+    let mut kept_base_count = 0usize;
+    let mut kept_base_ids: FxHashSet<Uuid> = FxHashSet::default();
+    for idx in 0..base_count {
+        if base.is_node_invalidated_at(idx, &delta.invalidated_files)? {
+            continue;
+        }
+        kept_base_count += 1;
+        if requirements.need_inheritance {
+            kept_base_ids.insert(base.node_id_at(idx)?);
+        }
+        builder.observe_kept_base_row(base, idx)?;
+    }
+    // When every base node was invalidated, `GraphBuilder::populate_pass2` already had
+    // full visibility over the entire repository and resolved all edges authoritatively.
+    if kept_base_count == 0 {
+        return Ok(());
+    }
+    let delta_ids: FxHashSet<Uuid> = delta.new_nodes.iter().map(|n| n.id).collect();
+    for node in &delta.new_nodes {
+        builder.observe_node(node, true);
+    }
+
+    let mut index = builder.finish();
+    if requirements.need_inheritance {
+        base.for_each_edge(|from, to, edge_type| {
+            if matches!(
+                edge_type,
+                EdgeType::Extends
+                    | EdgeType::Implements
+                    | EdgeType::IncludesClass
+                    | EdgeType::InheritsClass
+            ) && kept_base_ids.contains(&from)
+                && !delta_ids.contains(&from)
+                && (kept_base_ids.contains(&to) || delta_ids.contains(&to))
+            {
+                index.record_inheritance_edge(from, to, edge_type);
+            }
+            Ok(())
+        })?;
+        for edge in &delta.new_edges {
+            index.record_inheritance_edge(edge.from, edge.to, edge.edge_type);
+        }
+    }
+
+    let resolved = resolve_tails_against_index(&index, tails, repo_root, thread_count);
+    if resolved.is_empty() {
+        return Ok(());
+    }
+
+    let mut existing: FxHashSet<(Uuid, Uuid, u8)> = FxHashSet::with_capacity_and_hasher(
+        delta.new_edges.len() + resolved.len(),
+        Default::default(),
+    );
+    for edge in &delta.new_edges {
+        existing.insert((edge.from, edge.to, edge_type_to_u8(edge.edge_type)));
+    }
+    for (from, to, edge_type) in resolved {
+        // Intra-delta edges (`from` and `to` both extracted in this delta) were already
+        // evaluated by `GraphBuilder::populate_pass2`; only stitch edges reaching kept base nodes.
+        if delta_ids.contains(&from) && delta_ids.contains(&to) {
+            continue;
+        }
+        if existing.insert((from, to, edge_type_to_u8(edge_type))) {
+            delta.new_edges.push(Edge::new(from, to, edge_type));
+        }
+    }
+    Ok(())
 }
 
 fn split_callable_owner(name: &str) -> Option<(&str, &str)> {
@@ -1026,7 +1745,6 @@ mod tests {
     use super::*;
     use crate::facts_key_for;
     use rgctl_graph::schema::NodeType;
-    use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
 
@@ -1035,29 +1753,14 @@ mod tests {
         let a = Node::new(NodeType::Function, "sibling_fn").with_file_path("a.rs");
         let b = Node::new(NodeType::Function, "sibling_fn").with_file_path("b.rs");
         let helper = Node::new(NodeType::Function, "helper").with_file_path("a.rs");
-        let index = HashMap::from([
-            (
-                SharedStr::from("sibling_fn"),
-                vec![
-                    Arc::new(RelationSymbol::from(&a)),
-                    Arc::new(RelationSymbol::from(&b)),
-                ],
-            ),
-            (
-                SharedStr::from("helper"),
-                vec![Arc::new(RelationSymbol::from(&helper))],
-            ),
-        ]);
+        let index = CompactRelationIndex::from_nodes_for_test(&[a.clone(), b, helper.clone()]);
         assert_eq!(
-            resolve_symbol(&index, "sibling_fn", "a.rs", true, None),
+            index.resolve_symbol("sibling_fn", "a.rs", true, None),
             Some(a.id)
         );
+        assert_eq!(index.resolve_symbol("sibling_fn", "c.rs", true, None), None);
         assert_eq!(
-            resolve_symbol(&index, "sibling_fn", "c.rs", true, None),
-            None
-        );
-        assert_eq!(
-            resolve_symbol(&index, "helper", "missing.rs", true, None),
+            index.resolve_symbol("helper", "missing.rs", true, None),
             Some(helper.id)
         );
     }
@@ -1066,27 +1769,48 @@ mod tests {
     fn relation_rebuild_preserves_kinds_and_rejects_ambiguous_overloads() {
         let field = Node::new(NodeType::Variable, "value").with_file_path("box.js");
         let method = Node::new(NodeType::Function, "value").with_file_path("box.js");
-        let overload = method.clone().with_identity_discriminator("(int)");
-        let mut index = HashMap::from([(
-            SharedStr::from("value"),
-            vec![
-                Arc::new(RelationSymbol::from(&field)),
-                Arc::new(RelationSymbol::from(&method)),
-            ],
-        )]);
+        let index = CompactRelationIndex::from_nodes_for_test(&[field.clone(), method.clone()]);
         assert_eq!(
-            resolve_symbol(&index, "value", "box.js", true, None),
+            index.resolve_symbol("value", "box.js", true, None),
             Some(method.id)
         );
-        assert_eq!(resolve_symbol(&index, "value", "box.js", false, None), None);
-        index
-            .get_mut("value")
-            .unwrap()
-            .push(Arc::new(RelationSymbol::from(&overload)));
-        assert_eq!(resolve_symbol(&index, "value", "box.js", true, None), None);
+        assert_eq!(index.resolve_symbol("value", "box.js", false, None), None);
+
+        let overload = method.clone().with_identity_discriminator("(int)");
+        let overloaded_index =
+            CompactRelationIndex::from_nodes_for_test(&[field, method, overload.clone()]);
         assert_eq!(
-            resolve_symbol(&index, "value", "box.js", true, Some("(int)")),
+            overloaded_index.resolve_symbol("value", "box.js", true, None),
+            None
+        );
+        assert_eq!(
+            overloaded_index.resolve_symbol("value", "box.js", true, Some("(int)")),
             Some(overload.id)
+        );
+    }
+
+    #[test]
+    fn global_bucket_caps_thousands_of_duplicate_names_to_single_ambiguous_slot() {
+        let mut nodes: Vec<Node> = (0..1_000)
+            .map(|i| Node::new(NodeType::Function, "new").with_file_path(format!("f{i}.rs")))
+            .collect();
+        let distinct_overload = Node::new(NodeType::Function, "new")
+            .with_file_path("overloaded.java")
+            .with_identity_discriminator("(int)");
+        let overload_id = distinct_overload.id;
+        nodes.push(distinct_overload);
+
+        let index = CompactRelationIndex::from_nodes_for_test(&nodes);
+        let bucket = index.global.get("new").expect("new bucket");
+        assert_eq!(
+            bucket.len(),
+            2,
+            "1000 non-overloaded `new` callables + 1 `(int)` overload must compress to 2 slots"
+        );
+        assert_eq!(index.resolve_symbol("new", "caller.rs", true, None), None);
+        assert_eq!(
+            index.resolve_symbol("new", "caller.rs", true, Some("(int)")),
+            Some(overload_id)
         );
     }
 
@@ -1193,6 +1917,10 @@ mod tests {
             .unwrap();
 
         let functions = graph.find_by_type(NodeType::Function).unwrap();
+        assert!(
+            !functions.iter().any(|n| &*n.name == "login"),
+            "renamed callee `login` must be dropped from src/auth.rs"
+        );
         assert!(
             functions.iter().any(|n| &*n.name == "main"),
             "expected main after cascade; got {:?}",
@@ -1361,6 +2089,10 @@ mod tests {
         assert!(
             functions.iter().any(|n| &*n.name == "new_helper"),
             "expected new_helper"
+        );
+        assert!(
+            !functions.iter().any(|n| &*n.name == "old_helper"),
+            "old_helper must be dropped on compact"
         );
         let main_id = functions.iter().find(|n| &*n.name == "main").unwrap().id;
         let new_id = functions
