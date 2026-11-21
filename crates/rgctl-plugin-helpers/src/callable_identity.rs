@@ -723,7 +723,12 @@ pub fn finish(policy: Policy, symbols: &mut [Symbol], relations: &mut [Relation]
         }
         if relation.relation_type == RelationType::Calls {
             if relation.to_qualified_hint.is_none() && !relation.to.contains(['.', ':', '#']) {
-                if let Some(from_qn) = from.and_then(|s| s.qualified_name.as_deref()) {
+                if let Some(from_qn) = from
+                    .filter(|s| {
+                        s.qualified_name_origin == rgctl_plugin_api::QualifiedNameOrigin::Native
+                    })
+                    .and_then(|s| s.qualified_name.as_deref())
+                {
                     let owner = from_qn
                         .rsplit_once("::")
                         .map(|(owner, _)| (owner, "::"))
@@ -977,6 +982,54 @@ fn attach_argument_identity(relations: &mut [Relation], identity: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receiver_inference_requires_native_ownership() {
+        use rgctl_plugin_api::{QualifiedNameOrigin, SourceLocation};
+        for (origin, qualified, expected_owner) in [
+            (QualifiedNameOrigin::Native, "Owner.run", Some("Owner")),
+            (QualifiedNameOrigin::File, "src.app.run", None),
+            (QualifiedNameOrigin::Lexical, "Owner.method.callback", None),
+        ] {
+            let mut symbols = [Symbol {
+                name: "run".into(),
+                symbol_type: SymbolType::Function,
+                qualified_name: Some(qualified.into()),
+                qualified_name_origin: origin,
+                location: SourceLocation {
+                    file: "app.js".into(),
+                    start_line: 1,
+                    end_line: 1,
+                    start_column: 0,
+                    end_column: 50,
+                },
+                ..Default::default()
+            }];
+            let mut relations = [Relation {
+                from: qualified.into(),
+                to: "unknown".into(),
+                relation_type: RelationType::Calls,
+                location: SourceLocation {
+                    file: "app.js".into(),
+                    start_line: 1,
+                    end_line: 1,
+                    start_column: 20,
+                    end_column: 30,
+                },
+                ..Default::default()
+            }];
+            finish(Policy::Javascript, &mut symbols, &mut relations);
+            assert_eq!(relations[0].to_type_hint.as_deref(), expected_owner);
+            assert_eq!(
+                relations[0].is_inferred_callable_owner(),
+                expected_owner.is_some()
+            );
+            assert_eq!(
+                relations[0].to_qualified_hint,
+                expected_owner.map(|owner| format!("{owner}.unknown"))
+            );
+        }
+    }
 
     #[test]
     fn dynamic_definition_order_uses_scalar_offsets_not_input_or_legacy_metadata_order() {
