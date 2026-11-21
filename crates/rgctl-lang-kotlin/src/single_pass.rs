@@ -118,10 +118,13 @@ enum Visit<'a> {
     LeaveGuard,
 }
 
-/// Typed visibility from a Kotlin declaration's `modifiers` child
-/// (`private`/`protected` → Private, `internal` → Internal, `public` or
-/// absent → Public — Kotlin declarations are public by default). Zero
-/// allocation — text comparison only.
+/// Typed visibility from a Kotlin declaration's `modifiers >
+/// visibility_modifier` child (`private`/`protected` → Private, `internal`
+/// → Internal, `public` or absent → Public — Kotlin declarations are public
+/// by default). Scans the *individual modifier children* so compound
+/// modifiers (`private suspend fun`, `internal inline fun`,
+/// `protected open fun`) classify by their visibility token, not the whole
+/// `modifiers` text. Zero allocation — text comparison only.
 fn kotlin_declaration_visibility(node: Node, source: &[u8]) -> rgctl_plugin_api::SymbolVisibility {
     use rgctl_plugin_api::SymbolVisibility as SV;
     let mut cursor = node.walk();
@@ -129,11 +132,19 @@ fn kotlin_declaration_visibility(node: Node, source: &[u8]) -> rgctl_plugin_api:
         if child.kind() != "modifiers" {
             continue;
         }
-        return match child.utf8_text(source).unwrap_or("").trim() {
-            "private" | "protected" => SV::Private,
-            "internal" => SV::Internal,
-            _ => SV::Public,
-        };
+        let mut mods_cursor = child.walk();
+        for m in child.children(&mut mods_cursor) {
+            if m.kind() != "visibility_modifier" {
+                continue;
+            }
+            return match m.utf8_text(source).unwrap_or("").trim() {
+                "private" | "protected" => SV::Private,
+                "internal" => SV::Internal,
+                _ => SV::Public,
+            };
+        }
+        // `modifiers` present but no visibility token — Kotlin default.
+        return SV::Public;
     }
     SV::Public
 }
