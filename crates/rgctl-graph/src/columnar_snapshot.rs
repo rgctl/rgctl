@@ -758,6 +758,16 @@ impl ColumnarGraphMmap {
         Ok(Uuid::from_bytes(row.id))
     }
 
+    /// Definition line span `(start, end)` (1-based, `None` when unset) at
+    /// column index — hot row read only, no string pool or extension access.
+    pub fn node_lines_at(&self, idx: usize) -> Result<(Option<usize>, Option<usize>)> {
+        let row = self.node_row_at(idx)?;
+        Ok((
+            (row.start_line > 0).then_some(row.start_line as usize),
+            (row.end_line > 0).then_some(row.end_line as usize),
+        ))
+    }
+
     /// Materialize a single node by column index.
     pub fn materialize_node_at(&self, idx: usize) -> Result<Node> {
         self.materialize_node(idx)

@@ -480,7 +480,11 @@ impl<'a> DeadCodeAnalyzer<'a> {
         // root *type* (annotated class, `@main` struct, `extends App`
         // object) must propagate reachability to its member symbols by
         // qualified-name prefix within the same file. Propagated members
-        // seed the BFS but are not counted as entry points.
+        // seed the BFS but are not counted as entry points, and *private*
+        // members are not propagated — DI containers never invoke
+        // unannotated private methods directly (annotated lifecycle methods
+        // are already seeded in Pass 1 via their own `AnnotatedWith` edge,
+        // and called helpers are reached via `Calls` BFS).
         let mut propagated_roots: Vec<u32> = Vec::new();
         self.propagate_type_roots_to_members(
             &analyzable,
@@ -488,10 +492,13 @@ impl<'a> DeadCodeAnalyzer<'a> {
             &is_framework_entry,
             &mut propagated_roots,
         )?;
+        // Entry-point count is captured *before* seeding the BFS with
+        // propagated members so `summary.entry_points` reflects real
+        // entry points only.
+        let entry_point_count = root_indices.len();
         root_indices.extend_from_slice(&propagated_roots);
 
         let total_symbols = analyzable.iter().filter(|&&a| a).count();
-        let entry_point_count = root_indices.len();
 
         let reachable = self.bfs_reachable(&root_indices);
 
@@ -537,17 +544,22 @@ impl<'a> DeadCodeAnalyzer<'a> {
                     continue;
                 }
                 // Hot-only construction: every finding field (name,
-                // qualified name, file, lines, id, type, visibility) lives
-                // in `NodeRow` / zero-copy extension string reads.
-                let node = col.materialize_node_hot_at(i)?;
-                let qualified_name = col.node_qualified_name_str(i)?;
-                findings.push(self.build_finding(
-                    &node,
-                    qualified_name,
+                // qualified name, file, lines, id, type, visibility) comes
+                // from direct row + zero-copy string reads — no
+                // `SharedStr` interning, no signature / span-tail decode.
+                let (start_line, end_line) = col.node_lines_at(i)?;
+                findings.push(DeadCodeFinding {
+                    symbol_name: col.node_name_str(i)?.to_string(),
+                    qualified_name: col.node_qualified_name_str(i)?.map(str::to_string),
+                    file_path: col.node_file_path_str(i)?.map(str::to_string),
+                    start_line,
+                    end_line,
+                    node_type: node_type_label(nt).to_string(),
                     kind,
                     confidence,
-                    in_cycle,
-                ));
+                    reason: finding_reason(kind, confidence, nt, in_cycle),
+                    node_id: col.node_id_at(i)?,
+                });
             } else if let Some(idx) = self.legacy_index_of(i) {
                 if let Ok(Some(node)) = self.store.get_node(idx) {
                     if node.node_type == NodeType::Import && !self.has_outbound_reference(i as u32)
@@ -664,10 +676,16 @@ impl<'a> DeadCodeAnalyzer<'a> {
             .map(|(qn, fp)| (qn.as_str(), fp.as_str()))
             .collect();
         // One scan: mark member symbols whose qualified name has a root-type
-        // ancestor in the same file.
+        // ancestor in the same file. Private members are NOT propagated —
+        // framework containers never invoke unannotated private methods
+        // directly, so a dead `private` helper inside a `@Service` class
+        // must stay reportable.
         if let Some(col) = self.store.columnar() {
             for i in 0..n {
                 if !analyzable[i] || candidate_roots[i] || is_framework_entry[i] {
+                    continue;
+                }
+                if col.node_visibility_at(i)? == SymbolVisibility::Private {
                     continue;
                 }
                 let (Some(qn), Some(fp)) =
@@ -685,6 +703,9 @@ impl<'a> DeadCodeAnalyzer<'a> {
                     return;
                 };
                 if idx >= n || !analyzable[idx] || candidate_roots[idx] || is_framework_entry[idx] {
+                    return;
+                }
+                if node.visibility == SymbolVisibility::Private {
                     return;
                 }
                 let (Some(qn), Some(fp)) =
@@ -978,11 +999,9 @@ impl<'a> DeadCodeAnalyzer<'a> {
         })
     }
 
-    /// Build the finding payload once kind/confidence are known.
-    ///
-    /// On columnar v2+ snapshots `node` comes from `materialize_node_hot_at`
-    /// (hot `NodeRow` columns only — zero cold `NodeExtension` decodes) and
-    /// `qualified_name` from the zero-copy extension string read.
+    /// Build the finding payload once kind/confidence are known (legacy v1
+    /// snapshots: full `Node` materialization; the columnar path builds
+    /// findings inline from hot columns).
     fn build_finding(
         &self,
         node: &Node,
@@ -991,53 +1010,6 @@ impl<'a> DeadCodeAnalyzer<'a> {
         confidence: DeadCodeConfidence,
         in_isolated_cycle: bool,
     ) -> DeadCodeFinding {
-        let cycle_note = if in_isolated_cycle {
-            " (isolated dead cycle — no callers outside the cycle)"
-        } else {
-            ""
-        };
-        let reason = match kind {
-            DeadCodeKind::UnusedImport => {
-                "Import resolves to an internal symbol but has no references".to_string()
-            }
-            DeadCodeKind::UnreferencedFunction => {
-                if confidence == DeadCodeConfidence::Low {
-                    format!(
-                        "Public/exported function with no internal callers — may be an \
-                         intentional API seam{cycle_note}"
-                    )
-                } else {
-                    format!("Function has no callers or references{cycle_note}")
-                }
-            }
-            DeadCodeKind::UnreferencedClass => format!(
-                "{} has no references, instantiations, or extensions{cycle_note}",
-                node_type_label(node.node_type)
-            ),
-            DeadCodeKind::UnreferencedVariable => {
-                if confidence == DeadCodeConfidence::Low {
-                    format!(
-                        "Public/exported variable/constant with no references — may be an \
-                         intentional API seam{cycle_note}"
-                    )
-                } else {
-                    format!("Variable/constant has no references{cycle_note}")
-                }
-            }
-            DeadCodeKind::UnreferencedModule => {
-                format!("Module has no imports or references from other modules{cycle_note}")
-            }
-            DeadCodeKind::UnreferencedType => {
-                if confidence == DeadCodeConfidence::Low {
-                    format!(
-                        "Public/exported type alias with no references — may be an \
-                         intentional API seam{cycle_note}"
-                    )
-                } else {
-                    format!("Type alias has no references{cycle_note}")
-                }
-            }
-        };
         DeadCodeFinding {
             symbol_name: node.name.as_str().to_string(),
             qualified_name: qualified_name.map(str::to_string),
@@ -1047,7 +1019,7 @@ impl<'a> DeadCodeAnalyzer<'a> {
             node_type: node_type_label(node.node_type).to_string(),
             kind,
             confidence,
-            reason,
+            reason: finding_reason(kind, confidence, node.node_type, in_isolated_cycle),
             node_id: node.id,
         }
     }
@@ -1224,6 +1196,63 @@ fn is_framework_annotation(name: &str) -> bool {
         // Framework endpoint annotations: `@Endpoint`,
         // `@ControllerEndpoint`, `@RestControllerEndpoint`, …
         || ends_with_ignore_ascii_case(simple, "endpoint")
+}
+
+/// Human-readable explanation for a finding tier (shared by the hot
+/// columnar path and the legacy materialized path).
+fn finding_reason(
+    kind: DeadCodeKind,
+    confidence: DeadCodeConfidence,
+    node_type: NodeType,
+    in_isolated_cycle: bool,
+) -> String {
+    let cycle_note = if in_isolated_cycle {
+        " (isolated dead cycle — no callers outside the cycle)"
+    } else {
+        ""
+    };
+    match kind {
+        DeadCodeKind::UnusedImport => {
+            "Import resolves to an internal symbol but has no references".to_string()
+        }
+        DeadCodeKind::UnreferencedFunction => {
+            if confidence == DeadCodeConfidence::Low {
+                format!(
+                    "Public/exported function with no internal callers — may be an \
+                     intentional API seam{cycle_note}"
+                )
+            } else {
+                format!("Function has no callers or references{cycle_note}")
+            }
+        }
+        DeadCodeKind::UnreferencedClass => format!(
+            "{} has no references, instantiations, or extensions{cycle_note}",
+            node_type_label(node_type)
+        ),
+        DeadCodeKind::UnreferencedVariable => {
+            if confidence == DeadCodeConfidence::Low {
+                format!(
+                    "Public/exported variable/constant with no references — may be an \
+                     intentional API seam{cycle_note}"
+                )
+            } else {
+                format!("Variable/constant has no references{cycle_note}")
+            }
+        }
+        DeadCodeKind::UnreferencedModule => {
+            format!("Module has no imports or references from other modules{cycle_note}")
+        }
+        DeadCodeKind::UnreferencedType => {
+            if confidence == DeadCodeConfidence::Low {
+                format!(
+                    "Public/exported type alias with no references — may be an \
+                     intentional API seam{cycle_note}"
+                )
+            } else {
+                format!("Type alias has no references{cycle_note}")
+            }
+        }
+    }
 }
 
 /// Human-readable label for a node type (matches the JSON `node_type`

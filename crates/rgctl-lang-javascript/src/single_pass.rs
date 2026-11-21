@@ -140,6 +140,19 @@ enum Visit<'a> {
     LeaveGuard,
 }
 
+/// `Public` when the declaration is directly wrapped in an `export_statement`
+/// (`export function …`, `export class …`) — no allocation, parent check only.
+fn exported_visibility(node: Node) -> rgctl_plugin_api::SymbolVisibility {
+    if node
+        .parent()
+        .is_some_and(|p| p.kind() == "export_statement")
+    {
+        rgctl_plugin_api::SymbolVisibility::Public
+    } else {
+        rgctl_plugin_api::SymbolVisibility::Unknown
+    }
+}
+
 /// Single iterative DFS: symbols + deferred calls + heritage/new + complexity.
 pub fn extract_all_single_pass(
     plugin: &JavaScriptPlugin,
@@ -191,7 +204,8 @@ pub fn extract_all_single_pass(
                 let mut pushed_scope = false;
 
                 if is_ecmascript_function_node(node) {
-                    let sym = plugin.extract_function(node, source, &file_path_str)?;
+                    let mut sym = plugin.extract_function(node, source, &file_path_str)?;
+                    sym.visibility = exported_visibility(node);
                     let params = sym.parameters.len() as u32;
                     let loc =
                         ((node.end_position().row - node.start_position().row) + 1).max(1) as u32;
@@ -211,7 +225,8 @@ pub fn extract_all_single_pass(
 
                 match kind {
                     "class_declaration" => {
-                        let sym = plugin.extract_class(node, source, &file_path_str)?;
+                        let mut sym = plugin.extract_class(node, source, &file_path_str)?;
+                        sym.visibility = exported_visibility(node);
                         let name = sym.name.clone();
                         ctx.symbols.push(sym);
                         ctx.enter_scope(

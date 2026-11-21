@@ -3821,13 +3821,14 @@ fn derive_symbol_visibility(
     if symbol.visibility != SV::Unknown {
         return symbol.visibility;
     }
-    // 2. Plugin metadata marker.
+    // 2. Plugin metadata marker (Java/PHP emit compound strings like
+    //    "public static" / "public const" — scan tokens).
     if !symbol.metadata.is_null() {
         if let Some(vis) = symbol
             .metadata
             .get("visibility")
             .and_then(|v| v.as_str())
-            .and_then(visibility_from_token)
+            .and_then(|v| v.split_whitespace().find_map(visibility_from_token))
         {
             return vis;
         }
@@ -3872,10 +3873,12 @@ fn derive_symbol_visibility(
 /// Map a visibility-ish modifier / metadata token to a tier.
 fn visibility_from_token(token: &str) -> Option<rgctl_plugin_api::SymbolVisibility> {
     use rgctl_plugin_api::SymbolVisibility as SV;
-    Some(match token.trim() {
+    let token = token.trim();
+    Some(match token {
         "pub" | "public" | "export" | "exported" | "open" | "global" => SV::Public,
-        "pub(crate)" | "pub(super)" | "pub(in crate)" | "internal" | "package"
-        | "package-private" | "module" => SV::Internal,
+        // Rust path-restricted visibility (`pub(crate)`, `pub(in crate::…)`).
+        _ if token.starts_with("pub(") => SV::Internal,
+        "internal" | "package" | "package-private" | "module" => SV::Internal,
         "private" | "protected" | "fileprivate" => SV::Private,
         _ => return None,
     })

@@ -621,3 +621,116 @@ fn e2e_entry_point_flag_wins_on_otp_callback_names() {
         "--entry-point Plain.handle_call must seed reachability"
     );
 }
+
+#[test]
+fn e2e_di_annotated_class_private_helper_stays_dead() {
+    // Round-2 review reproducer: a `private` helper inside a DI-annotated
+    // class must stay reportable — framework containers never invoke
+    // unannotated private methods directly.
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("javadi");
+    std::fs::create_dir_all(repo.join("src/main/java/com/acme")).unwrap();
+    std::fs::write(
+        repo.join("src/main/java/com/acme/OrderService.java"),
+        r#"package com.acme;
+
+@Service
+public class OrderService {
+    public String placeOrder() { return "ok"; }
+    private String deadPrivateHelperInService() { return "dead"; }
+}
+"#,
+    )
+    .unwrap();
+
+    let report = discover_and_analyze(&repo, &[]);
+    let priv_helper = report
+        .findings
+        .iter()
+        .find(|f| f.symbol_name == "deadPrivateHelperInService")
+        .expect("private helper inside @Service class must be reported");
+    assert_eq!(priv_helper.confidence, DeadCodeConfidence::High);
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.symbol_name == "placeOrder"),
+        "public members of annotated classes stay reachable via propagation"
+    );
+    // Propagated members seed the BFS but are not counted as entry points.
+    assert_eq!(
+        report.summary.entry_points, 1,
+        "only the @Service class itself is an entry point"
+    );
+}
+
+#[test]
+fn e2e_plugin_export_visibility_tiers() {
+    // Round-2 review reproducers: TS/JS `export`, Swift `public`, Kotlin
+    // default-`public`, and C++ external linkage must classify as `low`.
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("visapi");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join("api.ts"),
+        "export function exportedApi(): number { return 1; }\nfunction tsPrivateFn(): number { return 2; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("App.swift"),
+        "public func publicSwiftFn() -> Int { return 1 }\nfunc internalSwiftFn() -> Int { return 2 }\nprivate func privateSwiftFn() -> Int { return 3 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("Api.kt"),
+        "fun defaultApi(): Int = 1\npublic fun pubApi(): Int = 2\nprivate fun privApi(): Int = 3\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("impl.cpp"),
+        "int cpp_extern_fn() { return 1; }\nstatic int cpp_static_fn() { return 2; }\n",
+    )
+    .unwrap();
+
+    let report = discover_and_analyze(&repo, &[]);
+    let tier = |name: &str| {
+        report
+            .findings
+            .iter()
+            .find(|f| f.symbol_name == name)
+            .unwrap_or_else(|| panic!("{name} missing from findings"))
+            .confidence
+    };
+    // Exported / public-by-default / external linkage → Low.
+    assert_eq!(tier("exportedApi"), DeadCodeConfidence::Low, "TS export");
+    assert_eq!(
+        tier("publicSwiftFn"),
+        DeadCodeConfidence::Low,
+        "Swift public"
+    );
+    assert_eq!(
+        tier("defaultApi"),
+        DeadCodeConfidence::Low,
+        "Kotlin default"
+    );
+    assert_eq!(tier("pubApi"), DeadCodeConfidence::Low, "Kotlin public");
+    assert_eq!(
+        tier("cpp_extern_fn"),
+        DeadCodeConfidence::Low,
+        "C++ external linkage"
+    );
+    // Private / internal / non-exported → High.
+    assert_eq!(tier("tsPrivateFn"), DeadCodeConfidence::High);
+    assert_eq!(
+        tier("internalSwiftFn"),
+        DeadCodeConfidence::High,
+        "Swift internal default"
+    );
+    assert_eq!(tier("privateSwiftFn"), DeadCodeConfidence::High);
+    assert_eq!(tier("privApi"), DeadCodeConfidence::High);
+    assert_eq!(
+        tier("cpp_static_fn"),
+        DeadCodeConfidence::High,
+        "C++ static linkage"
+    );
+}

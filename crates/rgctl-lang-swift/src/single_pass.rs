@@ -103,6 +103,32 @@ fn class_decl_symbol_type(node: Node) -> (SymbolType, &'static str) {
     (SymbolType::Class, "class")
 }
 
+/// Typed visibility from a Swift declaration's `modifiers > visibility_modifier`
+/// child (`public`/`open` → Public, `private`/`fileprivate` → Private,
+/// `internal` → Internal). Unqualified declarations default to `internal`
+/// (Swift's module-internal default). Zero allocation — text comparison only.
+fn swift_declaration_visibility(node: Node, source: &[u8]) -> rgctl_plugin_api::SymbolVisibility {
+    use rgctl_plugin_api::SymbolVisibility as SV;
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() != "modifiers" {
+            continue;
+        }
+        let mut mods_cursor = child.walk();
+        for m in child.children(&mut mods_cursor) {
+            if m.kind() != "visibility_modifier" {
+                continue;
+            }
+            return match m.utf8_text(source).unwrap_or("").trim() {
+                "public" | "open" => SV::Public,
+                "private" | "fileprivate" => SV::Private,
+                _ => SV::Internal,
+            };
+        }
+    }
+    SV::Internal
+}
+
 /// Simple name of a Swift `attribute` node (`@main` → `main`,
 /// `@available(iOS, *)` → `available`), without the leading `@` or any
 /// argument list. Borrowed slice — no allocation (Swift codebases carry
@@ -434,6 +460,7 @@ fn push_named_symbol(
         parameters: vec![],
         fields: vec![],
         modifiers: vec![],
+        visibility: swift_declaration_visibility(node, source),
         documentation: None,
         metadata: serde_json::json!({
             "language": "swift",
@@ -605,6 +632,7 @@ pub fn extract_all_single_pass(
                             parameters: vec![],
                             fields: vec![],
                             modifiers: vec![],
+                            visibility: swift_declaration_visibility(node, source),
                             documentation: None,
                             metadata: serde_json::json!({
                                 "language": "swift",
@@ -654,6 +682,7 @@ pub fn extract_all_single_pass(
                                 parameters: vec![],
                                 fields: vec![],
                                 modifiers: vec![],
+                                visibility: swift_declaration_visibility(node, source),
                                 documentation: None,
                                 metadata: serde_json::json!({
                                     "language": "swift",
@@ -708,6 +737,7 @@ pub fn extract_all_single_pass(
                                 parameters: vec![],
                                 fields: vec![],
                                 modifiers: vec![],
+                                visibility: swift_declaration_visibility(node, source),
                                 documentation: None,
                                 metadata: serde_json::json!({
                                     "language": "swift",
@@ -746,6 +776,7 @@ pub fn extract_all_single_pass(
                             parameters: vec![],
                             fields: vec![],
                             modifiers: vec![],
+                            visibility: swift_declaration_visibility(node, source),
                             documentation: None,
                             metadata: serde_json::json!({
                                 "language": "swift",
@@ -785,6 +816,7 @@ pub fn extract_all_single_pass(
                                 parameters: vec![],
                                 fields: vec![],
                                 modifiers: vec![],
+                                visibility: swift_declaration_visibility(node, source),
                                 documentation: None,
                                 metadata: serde_json::json!({
                                     "language": "swift",
@@ -829,6 +861,7 @@ pub fn extract_all_single_pass(
                             parameters: vec![],
                             fields: vec![],
                             modifiers: vec![],
+                            visibility: swift_declaration_visibility(node, source),
                             documentation: None,
                             metadata: serde_json::json!({
                                 "language": "swift",
@@ -870,6 +903,7 @@ pub fn extract_all_single_pass(
                                 parameters: vec![],
                                 fields: vec![],
                                 modifiers: vec![],
+                                visibility: swift_declaration_visibility(node, source),
                                 documentation: None,
                                 metadata: serde_json::json!({
                                     "language": "swift",
