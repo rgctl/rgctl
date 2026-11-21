@@ -1,6 +1,6 @@
 use rgctl_extraction::{Extractor, GraphBuilder, facts_cache::FactsCache};
 use rgctl_graph::schema::{EdgeType, NodeType};
-use rgctl_plugin_api::{LanguagePlugin, SymbolType};
+use rgctl_plugin_api::{LanguagePlugin, RelationType, SymbolType};
 use std::{path::Path, sync::Arc};
 
 type Case = (
@@ -29,6 +29,12 @@ fn plugins() -> Vec<Case> {
             "src/app.py",
             "def helper():\n    return 1\ndef exercise():\n    return helper()\n",
             "src.app",
+        ),
+        (
+            "go",
+            "src/app.go",
+            "package demo\nfunc helper() int { return 1 }\nfunc exercise() int { return helper() }\n",
+            "demo",
         ),
     ]
     .into_iter()
@@ -268,7 +274,7 @@ fn every_tier1_language_round_trips_and_preserves_native_names() {
                 .all(|s| s.metadata.get("module_namespace").is_none()),
             "{language}: per-symbol namespace metadata"
         );
-        if matches!(language, "javascript" | "typescript" | "python") {
+        if matches!(language, "javascript" | "typescript" | "python" | "go") {
             assert!(
                 result.file_namespace.is_some(),
                 "{language}: qualification has no provenance"
@@ -292,7 +298,7 @@ fn every_tier1_language_round_trips_and_preserves_native_names() {
 fn nested_declarations_and_explicit_method_owners_are_preserved() {
     for (plugin, path, _, module) in plugins()
         .into_iter()
-        .filter(|(p, _, _, _)| p.language_id() != "python")
+        .filter(|(p, _, _, _)| matches!(p.language_id(), "javascript" | "typescript"))
     {
         let source = b"function outer(){ function inner(){ return 1; } return inner(); } class Box { method(){ return outer(); } }";
         let result = plugin.extract_all(Path::new(path), source).unwrap();
@@ -423,7 +429,10 @@ fn nested_declarations_and_explicit_method_owners_are_preserved() {
 
 #[test]
 fn same_stem_modules_do_not_cross_wire_calls() {
-    for (plugin, path, source, _) in plugins() {
+    for (plugin, path, source, _) in plugins()
+        .into_iter()
+        .filter(|(p, _, _, _)| p.language_id() != "go")
+    {
         let root = Path::new("/repo");
         let cache = Arc::new(FactsCache::new());
         let registry = Arc::new(rgctl_languages::default_registry());
@@ -478,7 +487,7 @@ fn same_stem_modules_do_not_cross_wire_calls() {
 fn native_member_names_do_not_merge_free_functions_or_depend_on_cache_order() {
     for (plugin, path, _, _) in plugins()
         .into_iter()
-        .filter(|(p, _, _, _)| p.language_id() != "python")
+        .filter(|(p, _, _, _)| matches!(p.language_id(), "javascript" | "typescript"))
     {
         let suffix = Path::new(path).extension().unwrap().to_str().unwrap();
         let source = b"class Foo { static create(){return 1;} } function create(){function helper(){return 2;} return helper();} function run(){return create();}";
@@ -575,7 +584,10 @@ fn native_member_names_do_not_merge_free_functions_or_depend_on_cache_order() {
 
 #[test]
 fn persisted_cache_rebases_names_and_call_endpoints_for_both_languages() {
-    for (plugin, path, source, _) in plugins() {
+    for (plugin, path, source, _) in plugins()
+        .into_iter()
+        .filter(|(p, _, _, _)| p.language_id() != "go")
+    {
         let registry = Arc::new(rgctl_languages::default_registry());
         let cache = Arc::new(FactsCache::new());
         let basename = Path::new(path).file_name().unwrap();
@@ -796,4 +808,316 @@ fn python_native_member_collision_keeps_distinct_bodies_and_cache_order() {
         );
     }
     assert!(cache.hit_count() > 0);
+}
+
+#[test]
+fn go_package_names_cache_moves_and_native_owners_are_consistent() {
+    use rgctl_plugin_api::QualifiedNameOrigin;
+    let plugin = rgctl_languages::default_registry()
+        .get_language_plugin("go")
+        .unwrap();
+    let source = b"package demo\nfunc Helper() int { return 1 }\nfunc Run() int { return Helper() }\nfunc ExternalRun() { External() }\ntype Widget struct {}\nfunc NewWidget() *Widget { return &Widget{} }\nfunc (w *Widget) Use() int { return Helper() }\n";
+    let path = Path::new("src/app.go");
+    let all = plugin.extract_all(path, source).unwrap();
+    let split = plugin.extract_symbols(path, source).unwrap();
+    for symbols in [&all.symbols, &split] {
+        for (name, expected) in [
+            ("Helper", "demo.Helper"),
+            ("Run", "demo.Run"),
+            ("Widget", "demo.Widget"),
+            ("NewWidget", "Widget.<init>"),
+            ("Use", "Widget.Use"),
+        ] {
+            assert_eq!(
+                symbols
+                    .iter()
+                    .find(|s| s.name == name)
+                    .unwrap()
+                    .qualified_name
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            symbols
+                .iter()
+                .find(|s| s.name == "Helper")
+                .unwrap()
+                .qualified_name_origin,
+            QualifiedNameOrigin::Package
+        );
+    }
+    let relations = plugin.extract_relations(path, source, &split).unwrap();
+    for relations in [&all.relations, &relations] {
+        assert!(
+            relations
+                .iter()
+                .any(|r| r.from == "demo.Run"
+                    && r.to_qualified_hint.as_deref() == Some("demo.Helper")),
+            "{relations:?}"
+        );
+    }
+    let cache = Arc::new(FactsCache::new());
+    let registry = Arc::new(rgctl_languages::default_registry());
+    Extractor::new(registry.clone())
+        .with_repo_root("/before")
+        .with_facts_cache(cache.clone())
+        .extract_file_with_source(Path::new("/before/first/tools/app.go"), source.to_vec())
+        .unwrap();
+    let saved = tempfile::tempdir().unwrap();
+    cache.save(saved.path()).unwrap();
+    let restored = Arc::new(FactsCache::load(saved.path()));
+    let current = Path::new("/after/second/demo/app.go");
+    let cached = Extractor::new(registry.clone())
+        .with_repo_root("/after")
+        .with_facts_cache(restored.clone())
+        .extract_file_with_source(current, source.to_vec())
+        .unwrap();
+    let fresh = Extractor::new(registry)
+        .with_repo_root("/after")
+        .extract_file_with_source(current, source.to_vec())
+        .unwrap();
+    assert_eq!(restored.hit_count(), 1);
+    assert_eq!(cached.symbols, fresh.symbols);
+    assert_eq!(cached.relations, fresh.relations);
+    assert!(
+        cached
+            .relations
+            .iter()
+            .any(|r| r.from == "second.demo.ExternalRun"
+                && r.to_qualified_hint.as_deref() == Some("second.demo.External")
+                && r.to_qualified_hint_origin == QualifiedNameOrigin::Package)
+    );
+    for (name, expected) in [
+        ("Helper", "second.demo.Helper"),
+        ("Widget", "second.demo.Widget"),
+        ("Use", "Widget.Use"),
+    ] {
+        assert_eq!(
+            cached
+                .symbols
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap()
+                .qualified_name
+                .as_deref(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn go_cross_file_package_calls_stay_in_their_declaring_directory() {
+    let extractor =
+        Extractor::new(Arc::new(rgctl_languages::default_registry())).with_repo_root("/repo");
+    let mut files = Vec::new();
+    for dir in ["first", "second"] {
+        for (name, source) in [
+            (
+                "caller.go",
+                &b"package demo\nfunc Run() int { return Helper() }\n"[..],
+            ),
+            (
+                "target.go",
+                &b"package demo\nfunc Helper() int { return 1 }\n"[..],
+            ),
+        ] {
+            files.push(
+                extractor
+                    .extract_file_with_source(
+                        &Path::new("/repo").join(dir).join(name),
+                        source.to_vec(),
+                    )
+                    .unwrap(),
+            );
+        }
+    }
+    files.push(
+        extractor
+            .extract_file_with_source(
+                Path::new("/repo/third/caller.go"),
+                b"package demo\nfunc Run() int { return Helper() }\n".to_vec(),
+            )
+            .unwrap(),
+    );
+    let mut builder = GraphBuilder::new();
+    extractor.populate_graph(&files, &mut builder).unwrap();
+    let (nodes, edges) = builder.into_graph();
+    for (own, other) in [("first", "second"), ("second", "first")] {
+        let id = |qn: &str| {
+            nodes
+                .iter()
+                .find(|n| n.qualified_name.as_deref() == Some(qn))
+                .unwrap()
+                .id
+        };
+        let caller = id(&format!("{own}.demo.Run"));
+        assert!(edges.iter().any(|e| e.edge_type == EdgeType::Calls
+            && e.from == caller
+            && e.to == id(&format!("{own}.demo.Helper"))));
+        assert!(!edges.iter().any(|e| e.edge_type == EdgeType::Calls
+            && e.from == caller
+            && e.to == id(&format!("{other}.demo.Helper"))));
+    }
+    let missing = nodes
+        .iter()
+        .find(|n| n.qualified_name.as_deref() == Some("third.demo.Run"))
+        .unwrap()
+        .id;
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e.edge_type == EdgeType::Calls && e.from == missing)
+    );
+}
+
+#[test]
+fn go_import_aliases_do_not_guess_between_unlinked_packages() {
+    let extractor =
+        Extractor::new(Arc::new(rgctl_languages::default_registry())).with_repo_root("/repo");
+    let files:Vec<_>=[("first/target.go",&b"package tools\nfunc Helper() int { return 1 }\n"[..]),("second/target.go",&b"package tools\nfunc Helper() int { return 2 }\n"[..]),("caller/app.go",&b"package app\nimport one \"example.org/project/first\"\nfunc Run() int { return one.Helper() }\n"[..])].into_iter().map(|(p,s)|extractor.extract_file_with_source(&Path::new("/repo").join(p),s.to_vec()).unwrap()).collect();
+    let mut builder = GraphBuilder::new();
+    extractor.populate_graph(&files, &mut builder).unwrap();
+    let (nodes, edges) = builder.into_graph();
+    let id = |qn: &str| {
+        nodes
+            .iter()
+            .find(|n| n.qualified_name.as_deref() == Some(qn))
+            .unwrap()
+            .id
+    };
+    let caller = id("caller.app.Run");
+    // Import-to-directory linking belongs to the module/environment slice.
+    // Until then an alias must not guess between packages with the same leaf name.
+    assert!(
+        !edges.iter().any(|e| e.edge_type == EdgeType::Calls
+            && e.from == caller
+            && e.to == id("first.tools.Helper")),
+        "{edges:?}"
+    );
+    assert!(!edges.iter().any(|e| e.edge_type == EdgeType::Calls
+        && e.from == caller
+        && e.to == id("second.tools.Helper")));
+}
+
+#[test]
+fn go_lexical_values_do_not_resolve_to_package_functions() {
+    let source = br#"package demo
+func Helper() int { return 1 }
+type Container[Helper any] struct { Value Helper }
+func Parameter(Helper func() int) int { return Helper() }
+func Parenthesized(Helper func() int) int { return ((Helper))() }
+func ParenthesizedDirect() int { return (Helper)() }
+func Local() int { Helper := func() int { return 2 }; return Helper() }
+func Typed() int { var Helper func() int = func() int { return 2 }; return Helper() }
+func Boundaries() int {
+    result := Helper()
+    { Helper := func() int { return 2 }; result += Helper() }
+    return result + Helper()
+}
+func NestedType(callback func(Helper int)) int { return Helper() }
+func Initializer() int { Helper := func() int { return Helper() }; return Helper() }
+func Range(values []func() int) int {
+    for _, Helper := range values { _ = Helper() }
+    return Helper()
+}
+func Select(values chan func() int) int {
+    select { case Helper := <-values: return Helper(); default: return Helper() }
+}
+func Condition() int {
+    if Helper := func() int { return 2 }; true { return Helper() }
+    return Helper()
+}
+func TypeSwitch(value any) int {
+    switch Helper := value.(type) { case func() int: return Helper() }
+    return Helper()
+}
+func Literal() int { return func(Helper func() int) int { return Helper() }(func() int { return 1 }) }
+"#;
+    let registry = Arc::new(rgctl_languages::default_registry());
+    let plugin = registry.get_language_plugin("go").unwrap();
+    let path = Path::new("src/caller.go");
+    let all = plugin.extract_all(path, source).unwrap();
+    let symbols = plugin.extract_symbols(path, source).unwrap();
+    let split = plugin.extract_relations(path, source, &symbols).unwrap();
+    for relations in [&all.relations, &split] {
+        for (owner, expected) in [
+            ("Parameter", vec![true]),
+            ("Parenthesized", vec![true]),
+            ("ParenthesizedDirect", vec![false]),
+            ("Local", vec![true]),
+            ("Typed", vec![true]),
+            ("Boundaries", vec![false, true, false]),
+            ("NestedType", vec![false]),
+            ("Initializer", vec![false, true]),
+            ("Range", vec![true, false]),
+            ("Select", vec![true, false]),
+            ("Condition", vec![true, false]),
+            ("TypeSwitch", vec![true, false]),
+            ("Literal", vec![true]),
+        ] {
+            let calls: Vec<_> = relations
+                .iter()
+                .filter(|r| {
+                    r.relation_type == RelationType::Calls
+                        && r.from == format!("demo.{owner}")
+                        && r.to.rsplit('.').next() == Some("Helper")
+                })
+                .collect();
+            assert_eq!(
+                calls.iter().map(|r| r.indirect_call).collect::<Vec<_>>(),
+                expected,
+                "{owner}: {calls:?}"
+            );
+            for call in calls.iter().filter(|r| r.indirect_call) {
+                assert_eq!(call.to, "Helper");
+                assert!(call.to_qualified_hint.is_none(), "{call:?}");
+                assert!(call.to_identity_discriminator.is_none(), "{call:?}");
+            }
+        }
+    }
+    let cache = Arc::new(FactsCache::new());
+    let extractor = Extractor::new(registry.clone())
+        .with_repo_root("/repo")
+        .with_facts_cache(cache.clone());
+    let first = extractor
+        .extract_file_with_source(Path::new("/repo/first/caller.go"), source.to_vec())
+        .unwrap();
+    let saved = tempfile::tempdir().unwrap();
+    cache.save(saved.path()).unwrap();
+    let restored = Arc::new(FactsCache::load(saved.path()));
+    let cached = Extractor::new(registry.clone())
+        .with_repo_root("/moved")
+        .with_facts_cache(restored.clone())
+        .extract_file_with_source(Path::new("/moved/second/caller.go"), source.to_vec())
+        .unwrap();
+    let fresh = Extractor::new(registry)
+        .with_repo_root("/moved")
+        .extract_file_with_source(Path::new("/moved/second/caller.go"), source.to_vec())
+        .unwrap();
+    assert_eq!(restored.hit_count(), 1);
+    assert_eq!(cached.symbols, fresh.symbols);
+    assert_eq!(cached.relations, fresh.relations);
+    let mut builder = GraphBuilder::new();
+    extractor.populate_graph(&[first], &mut builder).unwrap();
+    let report = builder.take_callable_resolution_report();
+    assert!(report.samples.iter().any(|r| r.indirect_call));
+    assert!(!builder.take_parked_relations().iter().any(|r| matches!(
+        r.from_qualified_name.as_str(),
+        "first.demo.Parameter" | "first.demo.Local" | "first.demo.Typed"
+    )));
+    let (nodes, edges) = builder.into_graph();
+    for owner in ["Parameter", "Parenthesized", "Local", "Typed"] {
+        let caller = nodes
+            .iter()
+            .find(|n| n.qualified_name.as_deref() == Some(format!("first.demo.{owner}").as_str()))
+            .unwrap()
+            .id;
+        assert!(
+            !edges
+                .iter()
+                .any(|e| e.edge_type == EdgeType::Calls && e.from == caller),
+            "{owner}"
+        );
+    }
 }

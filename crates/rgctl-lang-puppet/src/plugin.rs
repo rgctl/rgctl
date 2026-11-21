@@ -524,20 +524,6 @@ impl PuppetPlugin {
         }
     }
 
-    fn walk_relations(
-        &self,
-        node: Node,
-        source: &[u8],
-        file_path: &str,
-        relations: &mut Vec<Relation>,
-    ) {
-        self.walk_relations_node_only(node, source, file_path, relations);
-        let mut c = node.walk();
-        for child in node.children(&mut c).collect::<Vec<_>>() {
-            self.walk_relations(child, source, file_path, relations);
-        }
-    }
-
     pub(crate) fn walk_relations_node_only(
         &self,
         node: Node,
@@ -914,13 +900,7 @@ impl LanguagePlugin for PuppetPlugin {
         source: &[u8],
         _symbols: &[Symbol],
     ) -> Result<Vec<Relation>> {
-        let tree = self.parse(file_path, source)?;
-        let path_str = file_path.to_string_lossy();
-        let mut relations = Vec::new();
-        self.walk_relations(tree.root_node(), source, &path_str, &mut relations);
-        let mut _syms = Vec::new();
-        self.maybe_module_from_metadata(file_path, &mut _syms, &mut relations);
-        Ok(relations)
+        Ok(extract_all_single_pass(self, file_path, source)?.relations)
     }
 
     fn extract_all(&self, file_path: &Path, source: &[u8]) -> Result<ExtractAllResult> {

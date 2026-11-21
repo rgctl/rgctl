@@ -60,7 +60,13 @@ pub fn qualify_file(
     symbols: &mut [Symbol],
     relations: &mut [Relation],
 ) -> Option<Box<str>> {
-    qualify_file_module(path, file_module(path), symbols, relations)
+    qualify_file_module(
+        path,
+        file_module(path),
+        QualifiedNameOrigin::File,
+        symbols,
+        relations,
+    )
 }
 
 fn python_file_module(path: &Path) -> String {
@@ -79,12 +85,37 @@ pub fn qualify_python_file(
     symbols: &mut [Symbol],
     relations: &mut [Relation],
 ) -> Option<Box<str>> {
-    qualify_file_module(path, python_file_module(path), symbols, relations)
+    qualify_file_module(
+        path,
+        python_file_module(path),
+        QualifiedNameOrigin::File,
+        symbols,
+        relations,
+    )
+}
+
+/// Qualify declarations using the package clause from the caller's existing tree.
+pub fn qualify_go_file(
+    path: &Path,
+    package: Option<&str>,
+    symbols: &mut [Symbol],
+    relations: &mut [Relation],
+) -> Option<Box<str>> {
+    let package = package?;
+    qualify_file_module(
+        path,
+        package.to_owned(),
+        QualifiedNameOrigin::Package,
+        symbols,
+        relations,
+    );
+    Some(package.into())
 }
 
 fn qualify_file_module(
     path: &Path,
     module: String,
+    root_origin: QualifiedNameOrigin,
     symbols: &mut [Symbol],
     relations: &mut [Relation],
 ) -> Option<Box<str>> {
@@ -163,10 +194,15 @@ fn qualify_file_module(
                 ));
         if symbols[i].qualified_name.is_none() && !defer {
             let origin = match stack.last() {
-                Some(&p) if symbols[p].qualified_name_origin != QualifiedNameOrigin::File => {
+                Some(&p)
+                    if !matches!(
+                        symbols[p].qualified_name_origin,
+                        QualifiedNameOrigin::File | QualifiedNameOrigin::Package
+                    ) =>
+                {
                     QualifiedNameOrigin::Lexical
                 }
-                _ => QualifiedNameOrigin::File,
+                _ => root_origin,
             };
             let owner = stack
                 .last()
@@ -174,7 +210,10 @@ fn qualify_file_module(
                 .unwrap_or(&module);
             symbols[i].qualified_name = Some(format!("{owner}.{}", symbols[i].name));
             symbols[i].qualified_name_origin = origin;
-            generated |= origin == QualifiedNameOrigin::File;
+            generated |= matches!(
+                origin,
+                QualifiedNameOrigin::File | QualifiedNameOrigin::Package
+            );
         }
         if scope(&symbols[i]) {
             stack.push(i);
@@ -192,7 +231,7 @@ fn qualify_file_module(
 /// Rebase generated names after fresh extraction OR a raw facts-cache hit.
 /// Other languages and their native qualified names pass through unchanged.
 pub fn qualify_in_repo(language: &str, logical_path: &Path, result: &mut ExtractAllResult) {
-    if !matches!(language, "javascript" | "typescript" | "python") {
+    if !matches!(language, "javascript" | "typescript" | "python" | "go") {
         return;
     }
     let Some(context) = result.file_namespace.as_mut() else {
@@ -200,6 +239,8 @@ pub fn qualify_in_repo(language: &str, logical_path: &Path, result: &mut Extract
     };
     let module = if language == "python" {
         python_file_module(logical_path)
+    } else if language == "go" {
+        go_package_module(logical_path, context.rsplit('.').next().unwrap_or(context))
     } else {
         file_module(logical_path)
     };
@@ -207,8 +248,22 @@ pub fn qualify_in_repo(language: &str, logical_path: &Path, result: &mut Extract
         return;
     }
     let mut old_names = vec![None; result.symbols.len()];
+    for relation in &mut result.relations {
+        if relation.to_qualified_hint_origin == QualifiedNameOrigin::Package
+            && let Some(suffix) = relation
+                .to_qualified_hint
+                .as_deref()
+                .and_then(|hint| hint.strip_prefix(context.as_ref()))
+                .and_then(|hint| hint.strip_prefix('.'))
+        {
+            relation.to_qualified_hint = Some(format!("{module}.{suffix}"));
+        }
+    }
     for (i, symbol) in result.symbols.iter_mut().enumerate() {
-        if symbol.qualified_name_origin != QualifiedNameOrigin::File {
+        if !matches!(
+            symbol.qualified_name_origin,
+            QualifiedNameOrigin::File | QualifiedNameOrigin::Package
+        ) {
             continue;
         }
         let Some(suffix) = symbol
@@ -224,6 +279,26 @@ pub fn qualify_in_repo(language: &str, logical_path: &Path, result: &mut Extract
     }
     rewrite_endpoints(&result.symbols, &mut result.relations, &old_names, &module);
     *context = module.into_boxed_str();
+}
+
+fn go_package_module(path: &Path, package: &str) -> String {
+    if path.is_absolute() {
+        return package.to_owned();
+    }
+    let mut parts = Vec::new();
+    for part in path.parent().unwrap_or_else(|| Path::new("")).components() {
+        match part {
+            Component::Normal(s) => parts.push(s.to_string_lossy()),
+            Component::ParentDir => {
+                parts.pop();
+            }
+            _ => {}
+        }
+    }
+    if parts.last().is_none_or(|p| p != package) {
+        parts.push(package.into());
+    }
+    parts.join(".")
 }
 
 #[derive(Clone, Copy)]
@@ -423,6 +498,9 @@ fn rewrite_endpoints(
                 relation.from.clone_from(name);
             }
         }
+        if relation.indirect_call {
+            continue;
+        }
         if let Some(Some(target)) =
             targets.get(&(relation.location.file.as_str(), relation.to.as_str()))
             && old_names.get(*target).and_then(|name| name.as_deref()) == Some(relation.to.as_str())
@@ -450,6 +528,7 @@ fn rewrite_endpoints(
             relation
                 .to_qualified_hint
                 .clone_from(&symbol.qualified_name);
+            relation.to_qualified_hint_origin = symbol.qualified_name_origin;
         }
     }
 }

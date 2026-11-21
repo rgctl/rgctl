@@ -722,6 +722,10 @@ pub fn finish(policy: Policy, symbols: &mut [Symbol], relations: &mut [Relation]
             relation.from_identity_discriminator = Some(Box::from(disc));
         }
         if relation.relation_type == RelationType::Calls {
+            relation.exact_callable_resolution = true;
+            if relation.indirect_call {
+                continue;
+            }
             if relation.to_qualified_hint.is_none() && !relation.to.contains(['.', ':', '#']) {
                 if let Some(from_qn) = from
                     .filter(|s| {
@@ -742,7 +746,6 @@ pub fn finish(policy: Policy, symbols: &mut [Symbol], relations: &mut [Relation]
                     }
                 }
             }
-            relation.exact_callable_resolution = true;
             let target = relation
                 .to_qualified_hint
                 .as_deref()
@@ -990,6 +993,7 @@ mod tests {
             (QualifiedNameOrigin::Native, "Owner.run", Some("Owner")),
             (QualifiedNameOrigin::File, "src.app.run", None),
             (QualifiedNameOrigin::Lexical, "Owner.method.callback", None),
+            (QualifiedNameOrigin::Package, "demo.run", None),
         ] {
             let mut symbols = [Symbol {
                 name: "run".into(),

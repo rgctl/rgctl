@@ -798,9 +798,11 @@ impl PythonPlugin {
             .iter()
             .filter(|s| s.symbol_type == SymbolType::Function)
             .collect();
+        let mut lexical_targets = rgctl_plugin_api::LexicalCallTargets::new("python");
         let mut stack = vec![(root, 0usize)];
 
         while let Some((node, depth)) = stack.pop() {
+            lexical_targets.observe(node, source);
             if depth > MAX_DEPTH {
                 continue;
             }
@@ -860,6 +862,7 @@ impl PythonPlugin {
                 stack.push((child, depth + 1));
             }
         }
+        lexical_targets.apply(file_path, symbols, relations);
     }
 }
 

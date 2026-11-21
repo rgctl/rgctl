@@ -10,8 +10,32 @@
       {
         "from": "correctnessLeaf",
         "to": "correctnessRoot"
+      },
+      {
+        "from": "binding_parameter",
+        "to": "binding_helper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "binding_local",
+        "to": "binding_helper",
+        "edge_type": "calls"
       }
-    ]
+    ],
+    "expected_relations": [
+      {
+        "edge": "calls",
+        "from": "binding_direct",
+        "to": "binding_helper",
+        "severity": "required"
+      },
+    {
+      "edge": "calls",
+      "from": "binding_after",
+      "to": "binding_helper",
+      "severity": "required"
+    }
+  ]
   },
   "symbols": {
     "correctnessLeaf": {
@@ -177,6 +201,79 @@
         "replace": "return 43;",
         "must_contain": ["correctnessMid"]
       }
+    },
+    "tier1_lexical_binding_helper": {
+      "match": {
+        "name": "binding_helper",
+        "file": "correctness/binding_targets.dart"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_helper",
+        "file_suffix": "correctness/binding_targets.dart",
+        "language": "dart"
+      }
+    },
+    "tier1_lexical_binding_parameter": {
+      "match": {
+        "name": "binding_parameter",
+        "file": "correctness/binding_targets.dart"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_parameter",
+        "file_suffix": "correctness/binding_targets.dart",
+        "language": "dart"
+      },
+      "exact_callees": []
+    },
+    "tier1_lexical_binding_local": {
+      "match": {
+        "name": "binding_local",
+        "file": "correctness/binding_targets.dart"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_local",
+        "file_suffix": "correctness/binding_targets.dart",
+        "language": "dart"
+      },
+      "exact_callees": []
+    },
+    "tier1_lexical_binding_direct": {
+      "match": {
+        "name": "binding_direct",
+        "file": "correctness/binding_targets.dart"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_direct",
+        "file_suffix": "correctness/binding_targets.dart",
+        "language": "dart"
+      },
+      "exact_callees": [
+        "binding_helper"
+      ]
+    },
+    "tier1_lexical_binding_after": {
+      "match": {
+        "name": "binding_after",
+        "file": "correctness/binding_targets.dart"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_after",
+        "file_suffix": "correctness/binding_targets.dart",
+        "language": "dart"
+      },
+      "exact_callees": [
+        "binding_helper"
+      ]
     }
   },
   "invariants": {

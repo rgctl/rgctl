@@ -9,6 +9,13 @@ use rgctl_plugin_api::{Error, Result};
 use std::path::Path;
 use tree_sitter::Node;
 
+pub(crate) fn package_name<'s>(root: Node<'_>, source: &'s [u8]) -> Option<&'s str> {
+    root.named_children(&mut root.walk())
+        .find(|n| n.kind() == "package_clause")
+        .and_then(|n| n.named_child(0))
+        .and_then(|n| n.utf8_text(source).ok())
+}
+
 /// Go language plugin
 pub struct GoPlugin;
 
@@ -1148,7 +1155,19 @@ impl LanguagePlugin for GoPlugin {
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let tree = self.parse(file_path, source)?;
-        self.symbols_from_tree(tree.root_node(), source, file_path)
+        let mut symbols = self.symbols_from_tree(tree.root_node(), source, file_path)?;
+        rgctl_plugin_helpers::qualified_names::qualify_go_file(
+            file_path,
+            package_name(tree.root_node(), source),
+            &mut symbols,
+            &mut [],
+        );
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Go,
+            &mut symbols,
+            &mut [],
+        );
+        Ok(symbols)
     }
 
     fn extract_relations(
@@ -1165,6 +1184,17 @@ impl LanguagePlugin for GoPlugin {
             "go",
             source,
             Some(root),
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::qualified_names::qualify_go_file(
+            file_path,
+            package_name(root, source),
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Go,
             &mut sym_copy,
             &mut relations,
         );
@@ -1453,7 +1483,7 @@ func helper() {}
         assert!(
             relations
                 .iter()
-                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "helper"),
+                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "demo.helper"),
             "expected Calls -> helper, got {relations:?}"
         );
     }

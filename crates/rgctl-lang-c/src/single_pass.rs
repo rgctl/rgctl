@@ -165,6 +165,7 @@ pub fn extract_all_single_pass(
     let active_kinds = c_active_kinds();
 
     let mut ctx = SinglePassCtx::new(dispatch);
+    let mut lexical_targets = rgctl_plugin_api::LexicalCallTargets::new("c");
     let mut relations = Vec::new();
     let mut pending_calls: Vec<PendingCall<'_>> = Vec::new();
     let mut depth_warned = false;
@@ -202,6 +203,7 @@ pub fn extract_all_single_pass(
                 // no extract work. Keep `active_kinds` short-circuit below so
                 // AstSkeleton/CfgStatement expression nodes stay zero-cost on
                 // the Linux cold-discover hot path (CFG/DefUse run on --cfg/slice).
+                lexical_targets.observe(node, source);
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, kind_id);
                 if mask.is_passive() {
                     let base = stack.len();
@@ -493,6 +495,7 @@ pub fn extract_all_single_pass(
         &mut relations,
     );
 
+    lexical_targets.apply(file_path, &ctx.symbols, &mut relations);
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }
 

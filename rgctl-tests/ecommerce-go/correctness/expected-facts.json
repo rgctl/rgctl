@@ -5,7 +5,309 @@
   "graph": {
     "severity": "required",
     "min_functions": 40,
-    "min_calls_edges": 5
+    "min_calls_edges": 5,
+    "expected_relations": [
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.first.demo.PackageRun",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.second.demo.PackageRun",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.first.demo.PackageBoundaries",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.first.demo.PackageNestedType",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.first.demo.PackageRange",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.first.demo.PackageSelect",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.first.demo.PackageCondition",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.first.demo.PackageTypeSwitch",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.second.demo.PackageBoundaries",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.second.demo.PackageNestedType",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.second.demo.PackageRange",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.second.demo.PackageSelect",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.second.demo.PackageCondition",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.second.demo.PackageTypeSwitch",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.first.demo.PackageParenDirect",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "internal.modulequalification.second.demo.PackageParenDirect",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "binding_direct",
+        "to": "binding_helper",
+        "severity": "required"
+      },
+    {
+      "edge": "calls",
+      "from": "binding_after",
+      "to": "binding_helper",
+      "severity": "required"
+    }
+  ],
+    "forbidden_edges": [
+      {
+        "from": "internal.modulequalification.first.demo.PackageRun",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageRun",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageParameter",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageParameter",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageLocal",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageLocal",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageTyped",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageTyped",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageBoundaries",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageNestedType",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageRange",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageSelect",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageCondition",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageTypeSwitch",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageParameter",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageParameter",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageLocal",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageLocal",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageTyped",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageTyped",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageBoundaries",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageNestedType",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageRange",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageSelect",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageCondition",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageTypeSwitch",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageLiteral",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageLiteral",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageLiteral",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageLiteral",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageParen",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageParen",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.first.demo.PackageParenDirect",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageParen",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageParen",
+        "to": "internal.modulequalification.second.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "internal.modulequalification.second.demo.PackageParenDirect",
+        "to": "internal.modulequalification.first.demo.PackageHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "binding_parameter",
+        "to": "binding_helper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "binding_local",
+        "to": "binding_helper",
+        "edge_type": "calls"
+      }
+    ]
   },
   "symbols": {
     "lf_pkg_caller": {
@@ -183,8 +485,9 @@
       "unique": true,
       "identity": {
         "exact_name": "CorrectnessRoot",
-        "canonical_fqn": "CorrectnessRoot",
-        "file_suffix": "harness.go"
+        "canonical_fqn": "correctness::CorrectnessRoot",
+        "file_suffix": "harness.go",
+        "qualified_name": "internal.correctness.CorrectnessRoot"
       },
       "exact_callees": [
         "CorrectnessMid"
@@ -265,8 +568,9 @@
       "unique": true,
       "identity": {
         "exact_name": "CorrectnessMid",
-        "canonical_fqn": "CorrectnessMid",
-        "file_suffix": "harness.go"
+        "canonical_fqn": "correctness::CorrectnessMid",
+        "file_suffix": "harness.go",
+        "qualified_name": "internal.correctness.CorrectnessMid"
       },
       "exact_callees": [
         "CorrectnessLeaf"
@@ -335,8 +639,9 @@
       "unique": true,
       "identity": {
         "exact_name": "CorrectnessLeaf",
-        "canonical_fqn": "CorrectnessLeaf",
-        "file_suffix": "harness.go"
+        "canonical_fqn": "correctness::CorrectnessLeaf",
+        "file_suffix": "harness.go",
+        "qualified_name": "internal.correctness.CorrectnessLeaf"
       },
       "exact_callees": [],
       "exact_callers": [
@@ -390,7 +695,8 @@
         "exact_name": "LfShortCircuit",
         "file_suffix": "cfg_features.go",
         "language": "go",
-        "canonical_fqn": "LfShortCircuit"
+        "canonical_fqn": "langfeatures::LfShortCircuit",
+        "qualified_name": "internal.langfeatures.LfShortCircuit"
       },
       "cfg": {
         "min_blocks": 6,
@@ -411,7 +717,8 @@
         "exact_name": "LfForContinue",
         "file_suffix": "cfg_features.go",
         "language": "go",
-        "canonical_fqn": "LfForContinue"
+        "canonical_fqn": "langfeatures::LfForContinue",
+        "qualified_name": "internal.langfeatures.LfForContinue"
       },
       "cfg": {
         "min_blocks": 8,
@@ -528,12 +835,587 @@
           "CorrectnessMid"
         ]
       }
+    },
+    "qualification_first_PackageRun": {
+      "match": {
+        "name": "PackageRun",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageRun",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageRun"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_first_PackageHelper": {
+      "match": {
+        "name": "PackageHelper",
+        "file": "internal/modulequalification/first/target.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageHelper",
+        "file_suffix": "internal/modulequalification/first/target.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageHelper"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "PackageRun",
+        "PackageBoundaries",
+        "PackageNestedType",
+        "PackageRange",
+        "PackageSelect",
+        "PackageCondition",
+        "PackageTypeSwitch",
+        "PackageParenDirect"
+      ]
+    },
+    "qualification_second_demo_PackageRun": {
+      "match": {
+        "name": "PackageRun",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageRun",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageRun"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageHelper": {
+      "match": {
+        "name": "PackageHelper",
+        "file": "internal/modulequalification/second/demo/target.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageHelper",
+        "file_suffix": "internal/modulequalification/second/demo/target.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageHelper"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "PackageRun",
+        "PackageBoundaries",
+        "PackageNestedType",
+        "PackageRange",
+        "PackageSelect",
+        "PackageCondition",
+        "PackageTypeSwitch",
+        "PackageParenDirect"
+      ]
+    },
+    "qualification_first_PackageParameter": {
+      "match": {
+        "name": "PackageParameter",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageParameter",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageParameter"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_first_PackageLocal": {
+      "match": {
+        "name": "PackageLocal",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageLocal",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageLocal"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_first_PackageTyped": {
+      "match": {
+        "name": "PackageTyped",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageTyped",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageTyped"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_first_PackageBoundaries": {
+      "match": {
+        "name": "PackageBoundaries",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageBoundaries",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageBoundaries"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_first_PackageNestedType": {
+      "match": {
+        "name": "PackageNestedType",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageNestedType",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageNestedType"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_first_PackageRange": {
+      "match": {
+        "name": "PackageRange",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageRange",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageRange"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_first_PackageSelect": {
+      "match": {
+        "name": "PackageSelect",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageSelect",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageSelect"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_first_PackageCondition": {
+      "match": {
+        "name": "PackageCondition",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageCondition",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageCondition"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_first_PackageTypeSwitch": {
+      "match": {
+        "name": "PackageTypeSwitch",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageTypeSwitch",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageTypeSwitch"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageParameter": {
+      "match": {
+        "name": "PackageParameter",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageParameter",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageParameter"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageLocal": {
+      "match": {
+        "name": "PackageLocal",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageLocal",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageLocal"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageTyped": {
+      "match": {
+        "name": "PackageTyped",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageTyped",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageTyped"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageBoundaries": {
+      "match": {
+        "name": "PackageBoundaries",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageBoundaries",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageBoundaries"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageNestedType": {
+      "match": {
+        "name": "PackageNestedType",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageNestedType",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageNestedType"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageRange": {
+      "match": {
+        "name": "PackageRange",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageRange",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageRange"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageSelect": {
+      "match": {
+        "name": "PackageSelect",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageSelect",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageSelect"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageCondition": {
+      "match": {
+        "name": "PackageCondition",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageCondition",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageCondition"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageTypeSwitch": {
+      "match": {
+        "name": "PackageTypeSwitch",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageTypeSwitch",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageTypeSwitch"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_first_PackageLiteral": {
+      "match": {
+        "name": "PackageLiteral",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageLiteral",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageLiteral"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageLiteral": {
+      "match": {
+        "name": "PackageLiteral",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageLiteral",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageLiteral"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_first_PackageParen": {
+      "match": {
+        "name": "PackageParen",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageParen",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageParen"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_first_PackageParenDirect": {
+      "match": {
+        "name": "PackageParenDirect",
+        "file": "internal/modulequalification/first/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageParenDirect",
+        "file_suffix": "internal/modulequalification/first/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.first.demo.PackageParenDirect"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageParen": {
+      "match": {
+        "name": "PackageParen",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageParen",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageParen"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_second_demo_PackageParenDirect": {
+      "match": {
+        "name": "PackageParenDirect",
+        "file": "internal/modulequalification/second/demo/caller.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "PackageParenDirect",
+        "file_suffix": "internal/modulequalification/second/demo/caller.go",
+        "language": "go",
+        "qualified_name": "internal.modulequalification.second.demo.PackageParenDirect"
+      },
+      "exact_callees": [
+        "PackageHelper"
+      ],
+      "exact_callers": []
+    },
+    "tier1_lexical_binding_helper": {
+      "match": {
+        "name": "binding_helper",
+        "file": "correctness/binding_targets.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_helper",
+        "file_suffix": "correctness/binding_targets.go",
+        "language": "go"
+      }
+    },
+    "tier1_lexical_binding_parameter": {
+      "match": {
+        "name": "binding_parameter",
+        "file": "correctness/binding_targets.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_parameter",
+        "file_suffix": "correctness/binding_targets.go",
+        "language": "go"
+      },
+      "exact_callees": []
+    },
+    "tier1_lexical_binding_local": {
+      "match": {
+        "name": "binding_local",
+        "file": "correctness/binding_targets.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_local",
+        "file_suffix": "correctness/binding_targets.go",
+        "language": "go"
+      },
+      "exact_callees": []
+    },
+    "tier1_lexical_binding_direct": {
+      "match": {
+        "name": "binding_direct",
+        "file": "correctness/binding_targets.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_direct",
+        "file_suffix": "correctness/binding_targets.go",
+        "language": "go"
+      },
+      "exact_callees": [
+        "binding_helper"
+      ]
+    },
+    "tier1_lexical_binding_after": {
+      "match": {
+        "name": "binding_after",
+        "file": "correctness/binding_targets.go"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_after",
+        "file_suffix": "correctness/binding_targets.go",
+        "language": "go"
+      },
+      "exact_callees": [
+        "binding_helper"
+      ]
     }
   },
   "dead_code": {
     "severity": "required",
     "entry_point": "CorrectnessRoot",
-    "reachable_with_entry_point": ["CorrectnessRoot", "CorrectnessMid", "CorrectnessLeaf"],
+    "reachable_with_entry_point": [
+      "CorrectnessRoot",
+      "CorrectnessMid",
+      "CorrectnessLeaf"
+    ],
     "must_contain": [
       {
         "name": "CorrectnessRoot",

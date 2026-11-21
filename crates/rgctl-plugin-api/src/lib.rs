@@ -6,7 +6,9 @@
 mod ast_handlers;
 mod call_extraction;
 mod error;
+mod go_call_bindings;
 mod kind_dispatch;
+mod lexical_call_targets;
 mod parser_pool;
 mod registrar;
 mod scope_stack;
@@ -35,6 +37,8 @@ pub use call_extraction::{
 };
 
 pub use error::{Error, Result};
+pub use go_call_bindings::GoCallBindings;
+pub use lexical_call_targets::LexicalCallTargets;
 pub use registrar::ConfigFormatRegistrar;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -51,6 +55,8 @@ pub enum QualifiedNameOrigin {
     File,
     /// Generated name under an explicit lexical owner; never rebased.
     Lexical,
+    /// Generated logical package namespace; rebased with package aliases retained.
+    Package,
 }
 impl QualifiedNameOrigin {
     fn is_native(&self) -> bool {
@@ -484,6 +490,15 @@ pub struct Relation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_qualified_hint: Option<String>,
 
+    /// Provenance of a generated target namespace, used when rebasing cached facts.
+    #[serde(default, skip_serializing_if = "QualifiedNameOrigin::is_native")]
+    pub to_qualified_hint_origin: QualifiedNameOrigin,
+
+    /// The callee is a lexical value/type, not a directly named declaration.
+    /// Preserve the raw call fact without inventing a direct or external edge.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub indirect_call: bool,
+
     /// Best-effort hint for target's containing type/class (e.g., "Helper")
     /// Used when we can infer the class from variable type but not the full qualified name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -664,6 +679,8 @@ impl Default for Relation {
             },
             metadata: serde_json::Value::Null,
             to_qualified_hint: None,
+            to_qualified_hint_origin: QualifiedNameOrigin::Native,
+            indirect_call: false,
             to_type_hint: None,
             call_site_start_byte: None,
             call_site_byte_len: None,
@@ -687,7 +704,7 @@ pub struct ExtractAllResult {
     pub relations: Vec<Relation>,
     /// Out-of-line content blobs keyed by Blake3 hex (`body_ref` / `blob_ref`).
     pub content_blobs: HashMap<String, String>,
-    /// Optional per-file module qualification provenance.
+    /// Optional per-file module or package qualification provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_namespace: Option<Box<str>>,
 }

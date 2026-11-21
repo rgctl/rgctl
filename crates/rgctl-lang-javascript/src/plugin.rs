@@ -541,9 +541,11 @@ impl JavaScriptPlugin {
             .filter(|s| s.symbol_type == SymbolType::Function)
             .collect();
         let file_path_str = file_path.to_string_lossy();
+        let mut lexical_targets = rgctl_plugin_api::LexicalCallTargets::new("javascript");
         let mut stack = vec![(root, 0usize)];
 
         while let Some((node, depth)) = stack.pop() {
+            lexical_targets.observe(node, source);
             if depth > MAX_TREE_DEPTH {
                 continue;
             }
@@ -603,6 +605,7 @@ impl JavaScriptPlugin {
 
             push_tree_children(&mut stack, node, depth);
         }
+        lexical_targets.apply(file_path, symbols, relations);
     }
 
     pub(crate) fn is_unresolved_callee(&self, func: Node, source: &[u8]) -> bool {

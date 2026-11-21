@@ -1564,8 +1564,10 @@ fn walk_php_calls(
         .filter(|s| s.symbol_type == SymbolType::Function)
         .collect();
     let file_index = rgctl_plugin_api::CallFileIndex::new(file_path, symbols);
+    let mut lexical_targets = rgctl_plugin_api::LexicalCallTargets::new("php");
     let mut stack = vec![(root, 0usize)];
     while let Some((node, depth)) = stack.pop() {
+        lexical_targets.observe(node, source);
         if depth > MAX_DEPTH {
             continue;
         }
@@ -1580,6 +1582,7 @@ fn walk_php_calls(
             }
         }
     }
+    lexical_targets.apply(file_path, symbols, relations);
 }
 
 pub(crate) fn push_php_call_relation_from(
