@@ -541,9 +541,11 @@ impl JavaScriptPlugin {
             .filter(|s| s.symbol_type == SymbolType::Function)
             .collect();
         let file_path_str = file_path.to_string_lossy();
+        let mut lexical_targets = rgctl_plugin_api::LexicalCallTargets::new("javascript");
         let mut stack = vec![(root, 0usize)];
 
         while let Some((node, depth)) = stack.pop() {
+            lexical_targets.observe(node, source);
             if depth > MAX_TREE_DEPTH {
                 continue;
             }
@@ -603,6 +605,7 @@ impl JavaScriptPlugin {
 
             push_tree_children(&mut stack, node, depth);
         }
+        lexical_targets.apply(file_path, symbols, relations);
     }
 
     pub(crate) fn is_unresolved_callee(&self, func: Node, source: &[u8]) -> bool {
@@ -1103,7 +1106,14 @@ impl LanguagePlugin for JavaScriptPlugin {
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let tree = self.parse(file_path, source)?;
-        self.symbols_from_tree(tree.root_node(), source, file_path)
+        let mut symbols = self.symbols_from_tree(tree.root_node(), source, file_path)?;
+        rgctl_plugin_helpers::qualified_names::qualify_file(file_path, &mut symbols, &mut []);
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Javascript,
+            &mut symbols,
+            &mut [],
+        );
+        Ok(symbols)
     }
 
     fn extract_relations(
@@ -1120,6 +1130,16 @@ impl LanguagePlugin for JavaScriptPlugin {
             "javascript",
             source,
             Some(root),
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::qualified_names::qualify_file(
+            file_path,
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Javascript,
             &mut sym_copy,
             &mut relations,
         );
@@ -1346,7 +1366,7 @@ function helper() {}
         assert!(
             relations
                 .iter()
-                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "helper"),
+                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "test.helper"),
             "expected Calls -> helper, got {relations:?}"
         );
     }

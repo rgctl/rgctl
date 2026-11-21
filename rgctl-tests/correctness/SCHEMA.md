@@ -33,6 +33,8 @@ Projects without this file are skipped by the `graph_correctness` tests. Every p
 | `best_effort` | Reported only |
 | `unsupported` | Skipped |
 
+Graph `forbidden_edges` endpoints accept either an exact short name or an exact qualified name. Use qualified endpoints when checking that same-named functions in separate modules never acquire cross-file calls. `identity.qualified_name` asserts the exact language-native name from the graph; `identity.canonical_fqn` checks blast output, whose display normalization may shorten the owner. Symbol `match.file` selects a file suffix before uniqueness and caller/callee checks. Function and relation inventories fetch all CLI pages before assertions.
+
 ## Symbol entry (thorough)
 
 Prefer **exact** fields for harness symbols. Soft `min_*` / `*_any` remain for domain edges that are still noisy.

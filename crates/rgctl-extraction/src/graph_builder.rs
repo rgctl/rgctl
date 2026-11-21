@@ -318,7 +318,7 @@ impl GraphBuilder {
         }
     }
 
-    fn index_symbol_resolution(&mut self, key: &str, node: &Node) {
+    fn index_symbol_resolution(&mut self, key: &str, node: &Node, generated_qualified: bool) {
         if let Some(qualified) = &node.qualified_name {
             self.symbols_by_qualified
                 .entry(qualified.to_string())
@@ -328,8 +328,15 @@ impl GraphBuilder {
             // Skip for C struct field nodes (`Struct.field`, label `field`) — bare names
             // like `data` would collide across the whole kernel.
             let is_field_member = node.has_label("field");
-            let parts: Vec<&str> = qualified.split('.').collect();
-            if !is_field_member && parts.len() >= 3 {
+            // File path components are not package or receiver aliases. Keep
+            // the full qualified identity and bare lookup without expanding
+            // every suffix of every path for generated file or lexical names.
+            let parts: Vec<&str> = if !is_field_member && !generated_qualified {
+                qualified.split('.').collect()
+            } else {
+                Vec::new()
+            };
+            if parts.len() >= 3 {
                 for i in 0..parts.len() {
                     let suffix = parts[i..].join(".");
                     self.symbols_by_suffix
@@ -396,6 +403,9 @@ impl GraphBuilder {
                 .entry(node.name.to_string())
                 .or_default()
                 .push(node.id);
+        }
+        if generated_qualified {
+            return;
         }
         // `symbol_key` is `file::name` or `file::a::b::…` / `file::Qualified.Name`.
         // Strip internal `#field` partition tag before populating suffix lookup keys.
@@ -863,7 +873,15 @@ impl GraphBuilder {
         }
         let file_intern = self.intern_file(&symbol.location.file);
         self.symbol_files.insert(id, file_intern);
-        self.index_symbol_resolution(&key.0, &node);
+        self.index_symbol_resolution(
+            &key.0,
+            &node,
+            matches!(
+                symbol.qualified_name_origin,
+                rgctl_plugin_api::QualifiedNameOrigin::File
+                    | rgctl_plugin_api::QualifiedNameOrigin::Lexical
+            ),
+        );
         self.symbol_index.insert(key, id);
         self.index_type_method(symbol, id);
         self.index_import_binding(symbol);
@@ -962,6 +980,10 @@ impl GraphBuilder {
         }
         if symbol.language_str() == Some("typescript") {
             self.signature_families.insert(id);
+        }
+        // A logical module or lexical function prefix is not a receiver type.
+        if symbol.qualified_name_origin != rgctl_plugin_api::QualifiedNameOrigin::Native {
+            return;
         }
         let Some(qn) = symbol.qualified_name.as_deref() else {
             return;
@@ -1127,7 +1149,7 @@ impl GraphBuilder {
                 node = node.with_property("visibility".to_string(), vis.clone());
             }
             let field_id = node.id;
-            self.index_symbol_resolution(&key.0, &node);
+            self.index_symbol_resolution(&key.0, &node, false);
             self.symbol_index.insert(key, field_id);
             self.commit_node(node);
             self.add_edge(field_id, file_id, EdgeType::DefinedIn);
@@ -1595,7 +1617,7 @@ impl GraphBuilder {
         let unresolved_generic =
             relation.explicit_generic_arity_val().is_some() && explicit_to.is_none();
 
-        let mut scoped = if is_calls {
+        let mut scoped = if is_calls && !relation.indirect_call {
             if explicit_to.is_none() && argument_to.is_none() {
                 if let Some(&cached) = scratch.scoped_none_cache.get(target) {
                     cached
@@ -1651,7 +1673,11 @@ impl GraphBuilder {
                 .is_some_and(|ids| self.unique_typed(ids, Some(NodeType::Function)).is_none());
         let mut to_id = if exact_id.is_some() {
             exact_id
-        } else if explicit_to.is_some()
+        } else if relation.indirect_call
+            || explicit_to.is_some()
+            || (is_calls
+                && relation.to_qualified_hint_origin
+                    == rgctl_plugin_api::QualifiedNameOrigin::Package)
             || ambiguous_java
             || signature_call && (argument_to.is_some() || scoped == Some(None))
         {
@@ -1868,7 +1894,7 @@ impl GraphBuilder {
         let argument_to = relation.argument_identity_discriminator_str();
         let unresolved_generic =
             relation.explicit_generic_arity_val().is_some() && explicit_to.is_none();
-        let mut scoped = if is_calls {
+        let mut scoped = if is_calls && !relation.indirect_call {
             self.resolve_scoped_callable(
                 target,
                 &relation.location.file,
@@ -1906,7 +1932,11 @@ impl GraphBuilder {
                 .is_some_and(|ids| self.unique_typed(ids, Some(NodeType::Function)).is_none());
         let mut to_id = if exact_id.is_some() {
             exact_id
-        } else if explicit_to.is_some()
+        } else if relation.indirect_call
+            || explicit_to.is_some()
+            || (is_calls
+                && relation.to_qualified_hint_origin
+                    == rgctl_plugin_api::QualifiedNameOrigin::Package)
             || ambiguous_java
             || signature_call && (argument_to.is_some() || scoped == Some(None))
         {
@@ -1977,7 +2007,13 @@ impl GraphBuilder {
         signature_call: bool,
         mut runtime_stub_qns: Option<&mut FxHashSet<String>>,
     ) -> Result<()> {
-        if relation_allows_external_stub(relation) {
+        if relation.indirect_call {
+            // Lexical values are not external declaration names. Keep the raw
+            // fact and diagnostics, but never commit or park a guessed target
+            // for a later name-based module merge.
+            *to_id = None;
+        }
+        if !relation.indirect_call && relation_allows_external_stub(relation) {
             // Only stub unresolved *targets*. Stubbing missing `from` when
             // resolution is ambiguous invents phantom callers and inflates
             // Function counts on large Java repos.
@@ -2031,7 +2067,9 @@ impl GraphBuilder {
             *to_id = None;
         }
 
-        if let Some(from) = from_id {
+        if let Some(from) = from_id
+            && !relation.indirect_call
+        {
             self.park_relation_if_needed(
                 relation,
                 from,
@@ -2064,7 +2102,11 @@ impl GraphBuilder {
                 if !sample.metadata.is_object() {
                     sample.metadata = serde_json::Value::Object(serde_json::Map::new());
                 }
-                sample.metadata["resolution_reason"]="No unique canonical callable matched the available source evidence; no name-only overload fallback was applied".into();
+                sample.metadata["resolution_reason"] = if relation.indirect_call {
+                    "The callee is a lexical value; direct declaration lookup is not applicable"
+                } else {
+                    "No unique canonical callable matched the available source evidence; no name-only overload fallback was applied"
+                }.into();
                 self.callable_resolution_samples.push(sample);
             }
         }

@@ -143,6 +143,7 @@ pub fn extract_all_single_pass(
     let dispatch = java_dispatch();
 
     let mut ctx = SinglePassCtx::new(dispatch);
+    let mut lexical_targets = rgctl_plugin_api::LexicalCallTargets::new("java");
     let mut relations = Vec::new();
     let mut pending_calls: Vec<PendingCall<'_>> = Vec::new();
 
@@ -164,6 +165,7 @@ pub fn extract_all_single_pass(
                     continue;
                 }
 
+                lexical_targets.observe(node, source);
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
                 if mask.is_passive() {
                     for i in (0..node.child_count()).rev() {
@@ -473,6 +475,7 @@ pub fn extract_all_single_pass(
         &mut ctx.symbols,
         &mut relations,
     );
+    lexical_targets.apply(file_path, &ctx.symbols, &mut relations);
     Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
 }
 

@@ -1075,9 +1075,11 @@ impl TypeScriptPlugin {
             .filter(|s| s.symbol_type == SymbolType::Class)
             .map(|s| (s.name.clone(), s.fields.clone()))
             .collect();
+        let mut lexical_targets = rgctl_plugin_api::LexicalCallTargets::new("typescript");
         let mut stack = vec![(root, 0usize)];
 
         while let Some((node, depth)) = stack.pop() {
+            lexical_targets.observe(node, source);
             if depth > MAX_DEPTH {
                 continue;
             }
@@ -1134,6 +1136,7 @@ impl TypeScriptPlugin {
                 stack.push((child, depth + 1));
             }
         }
+        lexical_targets.apply(file_path, symbols, relations);
     }
 
     pub(crate) fn is_unresolved_call(&self, call: Node, source: &[u8]) -> bool {
@@ -1746,7 +1749,14 @@ impl LanguagePlugin for TypeScriptPlugin {
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let tree = self.parse(file_path, source)?;
-        self.symbols_from_tree(tree.root_node(), source, file_path)
+        let mut symbols = self.symbols_from_tree(tree.root_node(), source, file_path)?;
+        rgctl_plugin_helpers::qualified_names::qualify_file(file_path, &mut symbols, &mut []);
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Typescript,
+            &mut symbols,
+            &mut [],
+        );
+        Ok(symbols)
     }
 
     fn extract_relations(
@@ -1763,6 +1773,16 @@ impl LanguagePlugin for TypeScriptPlugin {
             "typescript",
             source,
             Some(root),
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::qualified_names::qualify_file(
+            file_path,
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Typescript,
             &mut sym_copy,
             &mut relations,
         );
@@ -2023,7 +2043,7 @@ function helper(): void {}
         assert!(
             relations
                 .iter()
-                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "helper"),
+                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "test.helper"),
             "expected Calls -> helper, got {relations:?}"
         );
     }
@@ -2227,7 +2247,7 @@ export class UserService {
             .map(|r| (r.from.as_str(), r.to.as_str()))
             .collect();
         assert!(
-            injects.contains(&("UsersController", "UserService")),
+            injects.contains(&("users.controller.UsersController", "UserService")),
             "expected Injects UsersController -> UserService, got {injects:?}"
         );
         let ctrl = result

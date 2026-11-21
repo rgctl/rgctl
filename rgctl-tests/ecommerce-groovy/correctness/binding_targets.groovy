@@ -1,0 +1,3 @@
+class BindingTargets { static int binding_helper(){return 111;} static def binding_parameter(Closure binding_helper){return binding_helper();} static def binding_direct(){return binding_helper();} static def binding_local(Closure callback){ def binding_helper=callback; return binding_helper(); } 
+static int binding_after(Closure callback) { if(true) { def binding_helper=callback; binding_helper(); } return binding_helper(); }
+}
