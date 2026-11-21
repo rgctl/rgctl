@@ -51,6 +51,7 @@ pub fn extract(
         symbols: ctx.symbols,
         relations: ctx.relations,
         content_blobs: ctx.content_blobs,
+        file_namespace: None,
     })
 }
 

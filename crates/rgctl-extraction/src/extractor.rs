@@ -172,7 +172,7 @@ impl Extractor {
             if self.lossless {
                 rgctl_plugin_api::set_capture_last_tree(true);
             }
-            let extracted = if let Some(facts) = &self.facts {
+            let mut extracted = if let Some(facts) = &self.facts {
                 let key = facts_key_for_hash(plugin.as_ref(), *digest.as_bytes());
                 let cached = facts.get(&key).and_then(|mut hit| {
                     let old_file = hit
@@ -207,6 +207,16 @@ impl Extractor {
             } else {
                 plugin.extract_all(path, &source)?
             };
+            let logical_path = self
+                .repo_root
+                .as_ref()
+                .and_then(|root| path.strip_prefix(root).ok())
+                .unwrap_or(path);
+            rgctl_plugin_helpers::qualified_names::qualify_in_repo(
+                plugin.language_id(),
+                logical_path,
+                &mut extracted,
+            );
             let config_usages = ConfigUsageDetector::detect(plugin.language_id(), &source, path);
             let symbol_preps = prepare_symbol_pass1(&source, &extracted.symbols);
             let (lossless_frame, green_cst) =

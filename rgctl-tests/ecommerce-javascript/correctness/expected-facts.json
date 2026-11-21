@@ -5,7 +5,72 @@
   "graph": {
     "severity": "required",
     "min_functions": 20,
-    "min_calls_edges": 1
+    "min_calls_edges": 1,
+    "expected_relations": [
+      {
+        "edge": "calls",
+        "from": "src.module_qualification.first.app.moduleExercise",
+        "to": "src.module_qualification.first.app.moduleHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "src.module_qualification.first.app.moduleOuter",
+        "to": "src.module_qualification.first.app.moduleOuter.moduleInner",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "src.module_qualification.second.app.moduleExercise",
+        "to": "src.module_qualification.second.app.moduleHelper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "src.module_qualification.second.app.moduleOuter",
+        "to": "src.module_qualification.second.app.moduleOuter.moduleInner",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "Foo.method",
+        "to": "Foo.method.nativeCallback",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "src.module_qualification.Foo.collisionCaller",
+        "to": "create",
+        "severity": "required"
+      }
+    ],
+    "forbidden_edges": [
+      {
+        "from": "src.module_qualification.first.app.moduleExercise",
+        "to": "src.module_qualification.second.app.moduleHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "src.module_qualification.first.app.moduleOuter",
+        "to": "src.module_qualification.second.app.moduleOuter.moduleInner",
+        "edge_type": "calls"
+      },
+      {
+        "from": "src.module_qualification.second.app.moduleExercise",
+        "to": "src.module_qualification.first.app.moduleHelper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "src.module_qualification.second.app.moduleOuter",
+        "to": "src.module_qualification.first.app.moduleOuter.moduleInner",
+        "edge_type": "calls"
+      },
+      {
+        "from": "src.module_qualification.Foo.collisionCaller",
+        "to": "Foo.create",
+        "edge_type": "calls"
+      }
+    ]
   },
   "symbols": {
     "correctnessRoot": {
@@ -16,8 +81,9 @@
       "unique": true,
       "identity": {
         "exact_name": "correctnessRoot",
-        "canonical_fqn": "correctnessRoot",
-        "file_suffix": "correctness.js"
+        "canonical_fqn": "correctness::correctnessRoot",
+        "file_suffix": "correctness.js",
+        "qualified_name": "src.correctness.correctnessRoot"
       },
       "exact_callees": [
         "correctnessMid"
@@ -97,8 +163,9 @@
       "unique": true,
       "identity": {
         "exact_name": "correctnessMid",
-        "canonical_fqn": "correctnessMid",
-        "file_suffix": "correctness.js"
+        "canonical_fqn": "correctness::correctnessMid",
+        "file_suffix": "correctness.js",
+        "qualified_name": "src.correctness.correctnessMid"
       },
       "exact_callees": [
         "correctnessLeaf"
@@ -163,8 +230,9 @@
       "unique": true,
       "identity": {
         "exact_name": "correctnessLeaf",
-        "canonical_fqn": "correctnessLeaf",
-        "file_suffix": "correctness.js"
+        "canonical_fqn": "correctness::correctnessLeaf",
+        "file_suffix": "correctness.js",
+        "qualified_name": "src.correctness.correctnessLeaf"
       },
       "exact_callees": [],
       "exact_callers": [
@@ -465,12 +533,286 @@
           "correctnessMid"
         ]
       }
+    },
+    "qualification_first_moduleHelper": {
+      "match": {
+        "name": "moduleHelper",
+        "file": "src/module_qualification/first/app.js"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "moduleHelper",
+        "canonical_fqn": "app::moduleHelper",
+        "file_suffix": "src/module_qualification/first/app.js",
+        "language": "javascript",
+        "qualified_name": "src.module_qualification.first.app.moduleHelper"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "moduleExercise"
+      ]
+    },
+    "qualification_first_moduleExercise": {
+      "match": {
+        "name": "moduleExercise",
+        "file": "src/module_qualification/first/app.js"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "moduleExercise",
+        "canonical_fqn": "app::moduleExercise",
+        "file_suffix": "src/module_qualification/first/app.js",
+        "language": "javascript",
+        "qualified_name": "src.module_qualification.first.app.moduleExercise"
+      },
+      "exact_callees": [
+        "moduleHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_first_moduleOuter": {
+      "match": {
+        "name": "moduleOuter",
+        "file": "src/module_qualification/first/app.js"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "moduleOuter",
+        "canonical_fqn": "app::moduleOuter",
+        "file_suffix": "src/module_qualification/first/app.js",
+        "language": "javascript",
+        "qualified_name": "src.module_qualification.first.app.moduleOuter"
+      },
+      "exact_callees": [
+        "moduleInner"
+      ],
+      "exact_callers": []
+    },
+    "qualification_first_moduleInner": {
+      "match": {
+        "name": "moduleInner",
+        "file": "src/module_qualification/first/app.js"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "moduleInner",
+        "canonical_fqn": "moduleOuter::moduleInner",
+        "file_suffix": "src/module_qualification/first/app.js",
+        "language": "javascript",
+        "qualified_name": "src.module_qualification.first.app.moduleOuter.moduleInner"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "moduleOuter"
+      ]
+    },
+    "qualification_second_moduleHelper": {
+      "match": {
+        "name": "moduleHelper",
+        "file": "src/module_qualification/second/app.js"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "moduleHelper",
+        "canonical_fqn": "app::moduleHelper",
+        "file_suffix": "src/module_qualification/second/app.js",
+        "language": "javascript",
+        "qualified_name": "src.module_qualification.second.app.moduleHelper"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "moduleExercise"
+      ]
+    },
+    "qualification_second_moduleExercise": {
+      "match": {
+        "name": "moduleExercise",
+        "file": "src/module_qualification/second/app.js"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "moduleExercise",
+        "canonical_fqn": "app::moduleExercise",
+        "file_suffix": "src/module_qualification/second/app.js",
+        "language": "javascript",
+        "qualified_name": "src.module_qualification.second.app.moduleExercise"
+      },
+      "exact_callees": [
+        "moduleHelper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_second_moduleOuter": {
+      "match": {
+        "name": "moduleOuter",
+        "file": "src/module_qualification/second/app.js"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "moduleOuter",
+        "canonical_fqn": "app::moduleOuter",
+        "file_suffix": "src/module_qualification/second/app.js",
+        "language": "javascript",
+        "qualified_name": "src.module_qualification.second.app.moduleOuter"
+      },
+      "exact_callees": [
+        "moduleInner"
+      ],
+      "exact_callers": []
+    },
+    "qualification_second_moduleInner": {
+      "match": {
+        "name": "moduleInner",
+        "file": "src/module_qualification/second/app.js"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "moduleInner",
+        "canonical_fqn": "moduleOuter::moduleInner",
+        "file_suffix": "src/module_qualification/second/app.js",
+        "language": "javascript",
+        "qualified_name": "src.module_qualification.second.app.moduleOuter.moduleInner"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "moduleOuter"
+      ]
+    },
+    "qualification_native_create": {
+      "match": {
+        "name": "create",
+        "file": "src/module_qualification/Foo.js",
+        "line": 2
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "create",
+        "canonical_fqn": "Foo::create",
+        "file_suffix": "src/module_qualification/Foo.js",
+        "language": "javascript",
+        "qualified_name": "Foo.create"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_free_create": {
+      "match": {
+        "name": "create",
+        "file": "src/module_qualification/Foo.js",
+        "line": 8
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "create",
+        "canonical_fqn": "create",
+        "file_suffix": "src/module_qualification/Foo.js",
+        "language": "javascript"
+      },
+      "exact_callees": [
+        "collisionInner"
+      ],
+      "exact_callers": [
+        "collisionCaller"
+      ]
+    },
+    "qualification_native_method": {
+      "match": {
+        "name": "method",
+        "file": "src/module_qualification/Foo.js",
+        "line": 3
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "method",
+        "canonical_fqn": "Foo::method",
+        "file_suffix": "src/module_qualification/Foo.js",
+        "language": "javascript",
+        "qualified_name": "Foo.method"
+      },
+      "exact_callees": [
+        "nativeCallback"
+      ],
+      "exact_callers": []
+    },
+    "qualification_native_callback": {
+      "match": {
+        "name": "nativeCallback",
+        "file": "src/module_qualification/Foo.js",
+        "line": 4
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "nativeCallback",
+        "canonical_fqn": "method::nativeCallback",
+        "file_suffix": "src/module_qualification/Foo.js",
+        "language": "javascript",
+        "qualified_name": "Foo.method.nativeCallback"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "method"
+      ]
+    },
+    "qualification_deferred_inner": {
+      "match": {
+        "name": "collisionInner",
+        "file": "src/module_qualification/Foo.js",
+        "line": 9
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "collisionInner",
+        "canonical_fqn": "collisionInner",
+        "file_suffix": "src/module_qualification/Foo.js",
+        "language": "javascript"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "create"
+      ]
+    },
+    "qualification_collision_caller": {
+      "match": {
+        "name": "collisionCaller",
+        "file": "src/module_qualification/Foo.js",
+        "line": 12
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "collisionCaller",
+        "canonical_fqn": "Foo::collisionCaller",
+        "file_suffix": "src/module_qualification/Foo.js",
+        "language": "javascript",
+        "qualified_name": "src.module_qualification.Foo.collisionCaller"
+      },
+      "exact_callees": [
+        "create"
+      ],
+      "exact_callers": []
     }
   },
   "dead_code": {
     "severity": "required",
     "entry_point": "correctnessRoot",
-    "reachable_with_entry_point": ["correctnessRoot", "correctnessMid", "correctnessLeaf"],
+    "reachable_with_entry_point": [
+      "correctnessRoot",
+      "correctnessMid",
+      "correctnessLeaf"
+    ],
     "must_contain": [
       {
         "name": "correctnessRoot",
