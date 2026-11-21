@@ -58,6 +58,37 @@ typealias UserId = Int
 }
 
 #[test]
+fn main_attribute_emits_annotated_with_relation() {
+    // Swift `@main` — the program entry attribute must surface as an
+    // `AnnotatedWith` relation so graph reachability (dead-code entry
+    // seeding) can see it.
+    let source = br#"
+@main
+struct MyApp {
+  static func main() {
+    print("hello")
+  }
+}
+"#;
+    let plugin = SwiftPlugin::new().expect("plugin");
+    let out = plugin
+        .extract_all(Path::new("main_attr.swift"), source)
+        .expect("extract_all");
+    assert!(
+        out.relations.iter().any(|r| {
+            r.relation_type == rgctl_plugin_api::RelationType::AnnotatedWith
+                && r.to == "@main"
+                && r.from.contains("MyApp")
+        }),
+        "expected MyApp -[AnnotatedWith]-> @main relation, got {:?}",
+        out.relations
+            .iter()
+            .map(|r| (&r.from, &r.to))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn ast_coverage_all_declared_handlers_exercised() {
     const MANIFEST: &str = include_str!("../swift-ast-coverage.json");
     let lang: tree_sitter::Language = tree_sitter_swift::LANGUAGE.into();

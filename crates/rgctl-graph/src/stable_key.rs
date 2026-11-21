@@ -172,7 +172,9 @@ pub fn stable_key_from_row(col: &ColumnarGraphMmap, idx: usize) -> Result<Stable
         row.file_path_off,
         row.file_path_len,
     )?;
-    let node_type = crate::columnar_snapshot::node_type_from_u16(row.node_type)?;
+    let node_type = crate::columnar_snapshot::node_type_from_u16(
+        row.node_type & crate::columnar_snapshot::NODE_TYPE_MASK,
+    )?;
     let qn = col.node_qualified_name_str(idx)?;
     Ok(stable_key_from_facets_with_discriminator(
         file_path,
@@ -196,7 +198,9 @@ pub fn node_scope_path_at(col: &ColumnarGraphMmap, idx: usize) -> Result<Option<
         row.file_path_off,
         row.file_path_len,
     )?;
-    let node_type = crate::columnar_snapshot::node_type_from_u16(row.node_type)?;
+    let node_type = crate::columnar_snapshot::node_type_from_u16(
+        row.node_type & crate::columnar_snapshot::NODE_TYPE_MASK,
+    )?;
     Ok(file_path.or_else(|| {
         if node_type == NodeType::File {
             Some(name)
@@ -209,7 +213,9 @@ pub fn node_scope_path_at(col: &ColumnarGraphMmap, idx: usize) -> Result<Option<
 /// Build [`NodeRowRef`] for diff classification.
 pub fn node_row_ref(col: &ColumnarGraphMmap, idx: usize) -> Result<NodeRowRef> {
     let row = col.node_row_at(idx)?;
-    let node_type = crate::columnar_snapshot::node_type_from_u16(row.node_type)?;
+    let node_type = crate::columnar_snapshot::node_type_from_u16(
+        row.node_type & crate::columnar_snapshot::NODE_TYPE_MASK,
+    )?;
     let ext_digest = extension_digest(col.extension_bytes_at(idx)?);
     Ok(NodeRowRef {
         idx,

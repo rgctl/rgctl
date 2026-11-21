@@ -118,6 +118,37 @@ enum Visit<'a> {
     LeaveGuard,
 }
 
+/// Typed visibility from a Kotlin declaration's `modifiers >
+/// visibility_modifier` child (`private`/`protected` → Private, `internal`
+/// → Internal, `public` or absent → Public — Kotlin declarations are public
+/// by default). Scans the *individual modifier children* so compound
+/// modifiers (`private suspend fun`, `internal inline fun`,
+/// `protected open fun`) classify by their visibility token, not the whole
+/// `modifiers` text. Zero allocation — text comparison only.
+fn kotlin_declaration_visibility(node: Node, source: &[u8]) -> rgctl_plugin_api::SymbolVisibility {
+    use rgctl_plugin_api::SymbolVisibility as SV;
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() != "modifiers" {
+            continue;
+        }
+        let mut mods_cursor = child.walk();
+        for m in child.children(&mut mods_cursor) {
+            if m.kind() != "visibility_modifier" {
+                continue;
+            }
+            return match m.utf8_text(source).unwrap_or("").trim() {
+                "private" | "protected" => SV::Private,
+                "internal" => SV::Internal,
+                _ => SV::Public,
+            };
+        }
+        // `modifiers` present but no visibility token — Kotlin default.
+        return SV::Public;
+    }
+    SV::Public
+}
+
 /// Single iterative DFS: symbols + deferred calls + complexity; then inheritance.
 pub fn extract_all_single_pass(
     plugin: &KotlinPlugin,
@@ -184,6 +215,10 @@ pub fn extract_all_single_pass(
                             &mut ctx.symbols,
                         );
                         if ctx.symbols.len() > before {
+                            let vis = kotlin_declaration_visibility(node, source);
+                            for sym in &mut ctx.symbols[before..] {
+                                sym.visibility = vis;
+                            }
                             let type_sym = &ctx.symbols[before];
                             let name = type_sym.name.clone();
                             let qn = type_sym
@@ -218,6 +253,8 @@ pub fn extract_all_single_pass(
                             package.as_deref(),
                             object_lit_idx,
                         ) {
+                            let mut sym = sym;
+                            sym.visibility = kotlin_declaration_visibility(node, source);
                             let name = sym.name.clone();
                             let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
                             ctx.symbols.push(sym);
@@ -239,6 +276,8 @@ pub fn extract_all_single_pass(
                         if let Some(sym) =
                             plugin.emit_function(node, source, &file_path_str, package.as_deref())
                         {
+                            let mut sym = sym;
+                            sym.visibility = kotlin_declaration_visibility(node, source);
                             let params = sym.parameters.len() as u32;
                             let loc = ((node.end_position().row - node.start_position().row) + 1)
                                 .max(1) as u32;
@@ -271,6 +310,8 @@ pub fn extract_all_single_pass(
                             lambda_idx,
                             "lambda",
                         ) {
+                            let mut sym = sym;
+                            sym.visibility = kotlin_declaration_visibility(node, source);
                             let name = sym.name.clone();
                             let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
                             ctx.symbols.push(sym);
@@ -298,6 +339,8 @@ pub fn extract_all_single_pass(
                             anon_fn_idx,
                             "anon_fn",
                         ) {
+                            let mut sym = sym;
+                            sym.visibility = kotlin_declaration_visibility(node, source);
                             let name = sym.name.clone();
                             let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
                             ctx.symbols.push(sym);
@@ -324,6 +367,8 @@ pub fn extract_all_single_pass(
                             package.as_deref(),
                             init_idx,
                         ) {
+                            let mut sym = sym;
+                            sym.visibility = kotlin_declaration_visibility(node, source);
                             let name = sym.name.clone();
                             let qn = sym.qualified_name.clone().unwrap_or_else(|| name.clone());
                             ctx.symbols.push(sym);
@@ -446,6 +491,7 @@ pub fn extract_all_single_pass(
                                     }),
                                     ..Default::default()
                                 };
+                                symbol.visibility = kotlin_declaration_visibility(node, source);
                                 record_symbol_spans(&mut symbol, node, Some(name_node));
                                 ctx.symbols.push(symbol);
                             }

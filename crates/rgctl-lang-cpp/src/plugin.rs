@@ -70,6 +70,14 @@ impl CppPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
+            // C++ linkage mirrors C: `static` functions have internal
+            // linkage (Private); everything else may be called from other
+            // translation units (Public). Typed — no `modifiers` join.
+            visibility: if has_static_storage_class(node, source) {
+                rgctl_plugin_api::SymbolVisibility::Private
+            } else {
+                rgctl_plugin_api::SymbolVisibility::Public
+            },
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, function_name_node(node));
@@ -1205,4 +1213,28 @@ void make() {
         );
         assert!(inst.len() >= 2, "expected heap + array new: {relations:?}");
     }
+}
+
+/// Whether the C++ function definition / declaration carries the `static`
+/// storage class specifier (internal linkage). Mirrors the C plugin helper:
+/// no allocation, boolean scan of specifier children.
+pub(crate) fn has_static_storage_class(node: Node, source: &[u8]) -> bool {
+    let is_static = |spec: Node| {
+        spec.kind() == "storage_class_specifier" && spec.utf8_text(source) == Ok("static")
+    };
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if is_static(child) {
+            return true;
+        }
+        if child.kind() == "declaration_specifiers" {
+            let mut spec_cursor = child.walk();
+            for spec in child.children(&mut spec_cursor) {
+                if is_static(spec) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }

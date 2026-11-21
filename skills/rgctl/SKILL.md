@@ -193,6 +193,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | Community stats (Fast-Leiden) | `metrics --communities` |
 | Git churn hotspots | `metrics --churn` (after `discover --with-git`) |
 | Fragment / exact / bloom clones | `clones --mode fragment --seed <SYM\|FILE:LINES>` (or `exact` / `bloom`) |
+| Dead code (unreferenced symbols) | `dead-code` (`--confidence high` for safe deletions; `low` = API-seam candidates) |
 
 `top[]` entries include `name`, `qualified_name`, `kind`, `file_path` alongside `node` (UUID) — no follow-up `cpg function` needed.
 
@@ -243,6 +244,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | "Where is X mutated?" | `cpg mutations --type X --exclude-ctors` (needs `--with-cfg`) |
 | "Slice / data flow for this line" | `slice FILE --line N --variable V` (lazy; optional `--with-alias`) |
 | "Duplicate code / copy-pasted loop or snippet" | `clones --mode fragment --seed <fn\|FILE:LINES>` (or `--mode exact` / `--mode bloom`) |
+| "Unused / dead code" | `dead-code -f json` (`--confidence high,medium` to skip API-seam candidates) |
 | "What co-changes with this file?" | `discover --with-git` then `relations FILE --edge cochangeswith` / `metrics --churn` |
 | "Override hierarchy for this method" | `relations <SYM> --edge overrides --direction both` |
 

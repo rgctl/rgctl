@@ -126,7 +126,7 @@ impl MmappedGraphSnapshot {
         let version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
         let backing = match version {
             SNAPSHOT_VERSION_V1 => SnapshotBacking::Legacy(parse_v1_payload(&mmap)?),
-            v if v == 2 || v == crate::columnar_snapshot::COLUMNAR_SNAPSHOT_VERSION => {
+            v if v == 2 || v == 3 || v == crate::columnar_snapshot::COLUMNAR_SNAPSHOT_VERSION => {
                 SnapshotBacking::Columnar(ColumnarGraphMmap::open(Arc::clone(&mmap))?)
             }
             other => {
@@ -301,7 +301,7 @@ impl SnapshotNodeStore {
             let mut out = Vec::new();
             for idx in 0..col.node_count() {
                 if let Ok(row) = col.node_row_at(idx)
-                    && row.node_type == want
+                    && row.node_type & crate::columnar_snapshot::NODE_TYPE_MASK == want
                     && let Ok(id) = col.node_id_at(idx)
                 {
                     out.push(id);
@@ -324,7 +324,7 @@ impl SnapshotNodeStore {
             let mut out = Vec::new();
             for idx in 0..col.node_count() {
                 let row = col.node_row_at(idx)?;
-                if row.node_type == want {
+                if row.node_type & crate::columnar_snapshot::NODE_TYPE_MASK == want {
                     out.push(col.materialize_node_at(idx)?);
                 }
             }
@@ -366,7 +366,7 @@ impl SnapshotNodeStore {
             let want = crate::columnar_snapshot::node_type_to_u16(node_type);
             for idx in 0..col.node_count() {
                 let row = col.node_row_at(idx)?;
-                if row.node_type == want {
+                if row.node_type & crate::columnar_snapshot::NODE_TYPE_MASK == want {
                     let node = col.materialize_node_at(idx)?;
                     f(&node);
                 }
