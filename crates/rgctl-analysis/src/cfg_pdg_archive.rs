@@ -6,9 +6,10 @@
 //! Format versions:
 //! - **v1**: monolithic bincode `CfgPdgArchive` payload.
 //! - **v2**: header TOC then contiguous record payloads.
-//! - **v3** (current): contiguous payloads + **8-byte-aligned sorted TOC footer**
+//! - **v3**: contiguous payloads + **8-byte-aligned sorted TOC footer**
 //!   (`Uuid`, `u64` offset, `u32` len, `u32` flags) so open is `O(1)` and a single
 //!   record is binary-search + zero-copy slice deserialize.
+//! - **v4** (current): same indexed layout, with versioned CFG semantics in records.
 
 use crate::cfg::ControlFlowGraph;
 use crate::hash_maps::FxHashMap;
@@ -31,8 +32,8 @@ static NEXT_ARCHIVE_TMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Magic bytes for CFG/PDG archive files (`RBCP`).
 pub const ARCHIVE_MAGIC: [u8; 4] = *b"RBCP";
-/// Current archive format version (v3 = footer TOC + lazy mmap open).
-pub const ARCHIVE_VERSION: u32 = 3;
+/// Current archive format (v4 = footer TOC and versioned CFG semantics).
+pub const ARCHIVE_VERSION: u32 = 4;
 /// Legacy monolithic bincode payload.
 pub const ARCHIVE_VERSION_V1: u32 = 1;
 /// Legacy header-TOC format.
@@ -178,10 +179,10 @@ impl TocEntry {
 /// Lazy mmap view: `O(1)` open, `O(log F)` record lookup via footer TOC binary search.
 pub struct CfgPdgArchiveMmap {
     mmap: Mmap,
-    /// Archive format version (v1/v2/v3).
+    /// Archive container version (legacy v1/v2 or current indexed format).
     #[allow(dead_code)]
     version: u32,
-    /// Absolute offset of first TOC entry (v3 only).
+    /// Absolute offset of first TOC entry (indexed footer layout).
     toc_offset: usize,
     toc_count: usize,
     graph_digest: Option<String>,
@@ -213,7 +214,7 @@ impl CfgPdgArchive {
         self.records.get(&function_id).map(|r| r.cfg.as_ref())
     }
 
-    /// Write archive with magic header and footer TOC (v3).
+    /// Write archive with magic header and indexed footer TOC.
     pub fn write_to_path(&self, path: &Path) -> Result<()> {
         let mut record_bytes: Vec<(Uuid, Vec<u8>)> = Vec::with_capacity(self.records.len());
         for (id, record) in &self.records {
@@ -332,7 +333,7 @@ impl CfgPdgArchive {
 }
 
 impl CfgPdgArchiveMmap {
-    /// Open an archive with `O(1)` work for v3 (footer read only).
+    /// Open a current archive with `O(1)` work (footer read only).
     pub fn open(path: &Path) -> Result<Self> {
         let file = File::open(path)?;
         let mmap = unsafe { Mmap::map(&file)? };
@@ -513,9 +514,11 @@ impl CfgPdgRecord {
     }
 }
 
-/// Deterministic archive key from `(file, name, code_hash)` (first 16 bytes of BLAKE3).
+/// Revision-scoped archive alias for `(file, name, code_hash)` (first 16 BLAKE3 bytes).
 pub fn stable_record_uuid(file_path: &str, function_name: &str, code_hash: &str) -> Uuid {
     let mut hasher = blake3::Hasher::new();
+    hasher.update(b"rgctl.cfg_pdg.record");
+    hasher.update(&crate::cfg::CFG_SEMANTICS_VERSION.to_le_bytes());
     hasher.update(file_path.as_bytes());
     hasher.update(&[0]);
     hasher.update(function_name.as_bytes());
@@ -923,51 +926,31 @@ fn load_raw_record_bytes(path: &Path) -> Result<FxHashMap<Uuid, Vec<u8>>> {
         return Err(Error::SerdeError("invalid cfg_pdg archive magic".into()));
     }
     let version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
-    match version {
-        ARCHIVE_VERSION_V1 => {
-            let archive = parse_payload(&mmap)?;
-            let mut out = FxHashMap::default();
-            for (id, record) in &archive.records {
-                out.insert(*id, bincode::serialize(record).map_err(serde_err)?);
-            }
-            Ok(out)
-        }
-        ARCHIVE_VERSION_V2 => {
-            let (_digest_len, toc, payload_start) = parse_v2_header(&mmap)?;
-            let mut out = FxHashMap::default();
-            for (id, entry) in toc {
-                let start = payload_start + entry.offset as usize;
-                let end = start + entry.length as usize;
-                if end > mmap.len() {
-                    return Err(Error::SerdeError("cfg_pdg record truncated".into()));
-                }
-                out.insert(id, mmap[start..end].to_vec());
-            }
-            Ok(out)
-        }
-        ARCHIVE_VERSION => {
-            let (toc_offset, toc_count, _) = parse_v3_footer(&mmap)?;
-            let mut out = FxHashMap::default();
-            for i in 0..toc_count {
-                let start = toc_offset + i * TOC_ENTRY_SIZE;
-                let entry = TocEntry::read_from(&mmap[start..start + TOC_ENTRY_SIZE])?;
-                // Skip stable-alias rows — payload is already keyed by primary UUID.
-                if !entry.is_primary() {
-                    continue;
-                }
-                let rec_start = entry.offset as usize;
-                let rec_end = rec_start + entry.len as usize;
-                if rec_end > mmap.len() {
-                    return Err(Error::SerdeError("cfg_pdg record truncated".into()));
-                }
-                out.insert(entry.function_id(), mmap[rec_start..rec_end].to_vec());
-            }
-            Ok(out)
-        }
-        other => Err(Error::SerdeError(format!(
-            "unsupported cfg_pdg archive version {other}"
-        ))),
+    // Raw migration cannot validate CFG semantics without decoding every
+    // record. Rebuild older archives rather than carrying stale records into
+    // the current file under a new header.
+    if version != ARCHIVE_VERSION {
+        return Err(Error::SerdeError(format!(
+            "incompatible procedural archive version {version}; rebuild with discover --with-cfg"
+        )));
     }
+    let (toc_offset, toc_count, _) = parse_v3_footer(&mmap)?;
+    let mut out = FxHashMap::default();
+    for i in 0..toc_count {
+        let start = toc_offset + i * TOC_ENTRY_SIZE;
+        let entry = TocEntry::read_from(&mmap[start..start + TOC_ENTRY_SIZE])?;
+        // Skip stable-alias rows — payload is already keyed by primary UUID.
+        if !entry.is_primary() {
+            continue;
+        }
+        let rec_start = entry.offset as usize;
+        let rec_end = rec_start + entry.len as usize;
+        if rec_end > mmap.len() {
+            return Err(Error::SerdeError("cfg_pdg record truncated".into()));
+        }
+        out.insert(entry.function_id(), mmap[rec_start..rec_end].to_vec());
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1119,39 +1102,93 @@ mod tests {
     }
 
     #[test]
-    fn archive_round_trip_v3() {
+    fn archive_round_trip_and_stale_rebuild() {
         let id = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let source = "fn example() { let enabled = true; if enabled { consume(); } }";
+        let cfg = build_cfg_for_function("rust", source, "example").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes()).unwrap();
         let mut archive = CfgPdgArchive::default();
-        archive.insert(sample_record(id, "add"));
-
+        for function_id in [id, other] {
+            archive.insert(CfgPdgRecord {
+                function_id,
+                code_hash: hash_code(source),
+                function_name: "example".into(),
+                file_path: Some("demo.rs".into()),
+                cfg: Arc::new(cfg.clone()),
+                pdg: Arc::new(pdg.clone()),
+            });
+        }
         let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join(CFG_PDG_ARCHIVE_FILE);
+        let path = CfgPdgArchive::default_path(tmp.path());
         archive.write_to_path(&path).unwrap();
-
-        let file = File::open(&path).unwrap();
-        let mmap = unsafe { Mmap::map(&file).unwrap() };
-        assert_eq!(&mmap[0..4], &ARCHIVE_MAGIC);
-        assert_eq!(
-            u32::from_le_bytes(mmap[4..8].try_into().unwrap()),
-            ARCHIVE_VERSION
+        {
+            let file = File::open(&path).unwrap();
+            let mmap = unsafe { Mmap::map(&file).unwrap() };
+            assert_eq!(&mmap[0..4], &ARCHIVE_MAGIC);
+            assert_eq!(
+                u32::from_le_bytes(mmap[4..8].try_into().unwrap()),
+                ARCHIVE_VERSION
+            );
+            let trailer = &mmap[mmap.len() - TOC_TRAILER_SIZE..];
+            let toc_offset = u64::from_le_bytes(trailer[0..8].try_into().unwrap());
+            assert_eq!(toc_offset % 8, 0);
+            assert_eq!(
+                u32::from_le_bytes(trailer[12..16].try_into().unwrap()),
+                TOC_FOOTER_MAGIC
+            );
+            let loaded = CfgPdgArchive::load_from_path(&path).unwrap();
+            assert!(loaded.get_pdg(id).is_some());
+            assert!(loaded.get_cfg(id).is_some());
+            let view = CfgPdgArchiveMmap::open(&path).unwrap();
+            assert!(view.contains(id));
+            assert_eq!(view.len(), 2);
+            let single = view.load_record(id).unwrap().expect("selective load");
+            assert_eq!(single.function_name, "example");
+            assert!(
+                single
+                    .pdg
+                    .nodes
+                    .values()
+                    .any(|n| n.statement.kind == crate::cfg::StatementKind::Branch
+                        && n.used_vars.contains("enabled"))
+            );
+        }
+        // The same source must rebuild after an archive semantics upgrade.
+        // Raw append must not relabel unrelated stale records as current.
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[4..8].copy_from_slice(&3u32.to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+        assert!(CfgPdgArchiveMmap::open(&path).is_err());
+        assert!(CfgPdgArchive::load_from_path(&path).is_err());
+        let rebuilt = ensure_cfg_pdg_for_source(EnsureCfgPdgOpts {
+            repo_root: tmp.path(),
+            language: "rust",
+            source,
+            function_name: "example",
+            file_path: Some("demo.rs"),
+            start_byte: None,
+            end_byte: None,
+            function_id: Some(id),
+            persist: true,
+        })
+        .unwrap();
+        assert!(
+            rebuilt
+                .pdg
+                .nodes
+                .values()
+                .any(|n| n.statement.kind == crate::cfg::StatementKind::Branch
+                    && n.used_vars.contains("enabled"))
         );
-        let trailer = &mmap[mmap.len() - TOC_TRAILER_SIZE..];
-        let toc_offset = u64::from_le_bytes(trailer[0..8].try_into().unwrap());
-        assert_eq!(toc_offset % 8, 0);
-        assert_eq!(
-            u32::from_le_bytes(trailer[12..16].try_into().unwrap()),
-            TOC_FOOTER_MAGIC
-        );
-
-        let loaded = CfgPdgArchive::load_from_path(&path).unwrap();
-        assert!(loaded.get_pdg(id).is_some());
-        assert!(loaded.get_cfg(id).is_some());
-
         let view = CfgPdgArchiveMmap::open(&path).unwrap();
         assert!(view.contains(id));
+        assert!(!view.contains(other));
         assert_eq!(view.len(), 1);
-        let single = view.load_record(id).unwrap().expect("selective load");
-        assert_eq!(single.function_name, "add");
+        assert_eq!(
+            u32::from_le_bytes(std::fs::read(&path).unwrap()[4..8].try_into().unwrap()),
+            ARCHIVE_VERSION
+        );
     }
 
     #[test]
