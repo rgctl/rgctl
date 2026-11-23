@@ -49,6 +49,7 @@ pub mod slice_output;
 mod stage_profile;
 mod structured_query;
 mod temporal_prep;
+mod threat_model;
 pub mod update;
 mod vuln_deps;
 mod writeback;
@@ -1177,6 +1178,47 @@ pub enum VulnCommands {
         #[arg(long = "strict-reachability", default_value_t = false)]
         strict_reachability: bool,
     },
+    /// Generate a deterministic threat-model evidence pack, Mermaid DFD, and STRIDE candidates
+    #[command(name = "threat-model", visible_alias = "surface")]
+    ThreatModel {
+        /// Local OSV JSON file or directory override (zero network calls)
+        #[arg(long = "osv", value_name = "PATH")]
+        osv: Option<std::path::PathBuf>,
+        /// Upstream scanner report override: Trivy, Grype, or OSV-Scanner JSON (zero network calls)
+        #[arg(long = "from-report", value_name = "PATH")]
+        from_report: Option<std::path::PathBuf>,
+        /// CycloneDX or SPDX JSON SBOM to merge into dependency inventory
+        #[arg(long = "sbom", value_name = "PATH")]
+        sbom: Option<std::path::PathBuf>,
+        /// Offline mode (default unless `--online` is passed): evaluate `.rgctl/osv/` with zero network calls
+        #[arg(long = "offline", default_value_t = false)]
+        offline: bool,
+        /// Opt into live OSV network queries if no local OSV cache or override is supplied
+        #[arg(long = "online", default_value_t = false)]
+        online: bool,
+        /// OSV API base URL when `--online` is enabled
+        #[arg(long = "osv-api-url", value_name = "URL")]
+        osv_api_url: Option<String>,
+        /// JAR/WAR roots (opt-in)
+        #[arg(long = "include-jars", value_name = "DIR", num_args = 1..)]
+        include_jars: Vec<std::path::PathBuf>,
+        /// node_modules roots (opt-in)
+        #[arg(long = "include-node-modules", value_name = "DIR", num_args = 1..)]
+        include_node_modules: Vec<std::path::PathBuf>,
+        /// Build/use `.rgctl/dep_stubs.bin` to stitch transitive calls across JARs and vendor caches
+        #[arg(long = "with-dep-stubs", default_value_t = false)]
+        with_dep_stubs: bool,
+        /// Maximum call-graph traversal hops from each entry point to sinks
+        #[arg(long = "max-depth", default_value_t = 8)]
+        max_depth: usize,
+        /// Maximum entry-reachable functions inspected with on-demand CFG/PDG taint (closest
+        /// first); any shortfall is reported as `PDG_BUDGET_EXHAUSTED` in `limitations_and_gaps`
+        #[arg(long = "max-pdg-functions", default_value_t = rgctl_security::DEFAULT_MAX_LAZY_PDG_FUNCTIONS)]
+        max_pdg_functions: usize,
+        /// Skip on-demand intra-procedural CFG/PDG taint evaluation for entry-reachable sinks
+        #[arg(long = "no-lazy-cfg", default_value_t = false)]
+        no_lazy_cfg: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1769,7 +1811,15 @@ impl Cli {
         let quiet_json = matches!(format, OutputFormat::Json | OutputFormat::Sarif) && !verbose;
         let discover_json =
             matches!(self.command, Commands::Discover { .. }) && format == OutputFormat::Json;
-        init_logging(verbose, discover_json);
+        let structured_stdout = self.output.is_none()
+            && matches!(
+                format,
+                OutputFormat::Json
+                    | OutputFormat::Sarif
+                    | OutputFormat::Mermaid
+                    | OutputFormat::Graphviz
+            );
+        init_logging(verbose, discover_json, structured_stdout);
 
         if !long_running && !quiet_json {
             eprintln!("[>] rgctl {command_label}");
@@ -2891,6 +2941,7 @@ fn command_label_for(command: &Commands) -> &'static str {
             VulnCommands::Fetch { .. } => "vuln fetch",
             VulnCommands::Analyze { .. } => "vuln analyze",
             VulnCommands::Scan { .. } => "vuln scan",
+            VulnCommands::ThreatModel { .. } => "vuln threat-model",
         },
         Commands::Deps { action } => match action {
             DepsCommands::Check { .. } => "deps check",
@@ -2901,6 +2952,7 @@ fn command_label_for(command: &Commands) -> &'static str {
                 VulnCommands::Fetch { .. } => "security vuln fetch",
                 VulnCommands::Analyze { .. } => "security vuln analyze",
                 VulnCommands::Scan { .. } => "security vuln scan",
+                VulnCommands::ThreatModel { .. } => "security vuln threat-model",
             },
             SecurityCommands::Deps { action } => match action {
                 DepsCommands::Check { .. } => "security deps check",
@@ -2930,16 +2982,18 @@ fn format_elapsed(elapsed: Duration) -> String {
     }
 }
 
-fn init_logging(verbose: bool, discover_json: bool) {
+fn init_logging(verbose: bool, discover_json: bool, structured_stdout: bool) {
     use std::io::IsTerminal;
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::fmt::format::FmtSpan;
 
-    let use_ansi =
-        !discover_json && std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal();
+    let use_ansi = !discover_json
+        && !structured_stdout
+        && std::env::var_os("NO_COLOR").is_none()
+        && std::io::stdout().is_terminal();
 
     if verbose {
-        tracing_subscriber::fmt()
+        let builder = tracing_subscriber::fmt()
             .with_env_filter(
                 EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| EnvFilter::new("info,rgctl=debug,profile=info")),
@@ -2947,13 +3001,18 @@ fn init_logging(verbose: bool, discover_json: bool) {
             .with_target(true)
             .with_level(true)
             .with_ansi(use_ansi)
-            .with_span_events(FmtSpan::CLOSE)
-            .init();
-    } else if discover_json {
+            .with_span_events(FmtSpan::CLOSE);
+        if structured_stdout {
+            builder.with_writer(std::io::stderr).init();
+        } else {
+            builder.init();
+        }
+    } else if discover_json || structured_stdout {
         tracing_subscriber::fmt()
             .with_env_filter(
                 EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("error")),
             )
+            .with_writer(std::io::stderr)
             .with_target(false)
             .with_level(false)
             .with_ansi(false)

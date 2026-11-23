@@ -571,7 +571,9 @@ impl AnalysisResults {
 
     /// Load analysis results from a binary file.
     pub fn load(path: &Path) -> Result<Self> {
-        let file = std::fs::File::open(path)?;
+        // Buffered: bincode issues one small read per field, so an unbuffered `File` turns a
+        // multi-hundred-MB blob into millions of `read(2)` syscalls (~13 s on linux).
+        let file = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(path)?);
         bincode::deserialize_from(file)
             .map_err(|e| rgctl_error::Error::SerdeError(format!("Failed to deserialize: {}", e)))
     }

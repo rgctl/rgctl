@@ -72,7 +72,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 2. **Step 0** — Ensure `.rgctl/graph.snapshot.bin` exists (`rgctl -f json status` → `rgctl discover .` if missing)
 3. **Fast path (existing index)** — Do **not** re-run full discover for ordinary questions. Route via workflow table; use CLI `-f json`.
    - **Staleness:** If `index_current` is `false`, run **`rgctl update`** once — works with or without `serve --watch` (under watch, update enqueues for the sole writer; do not stop serve). Do **not** loop full `discover` for dirty working trees.
-   - **Vuln / OSV / OpenVEX / SARIF:** route to **`/rgctl:vuln`** (`vuln fetch`, `vuln scan`, `vuln analyze`); lazy per-call-site CFG/PDG runs automatically on plain snapshots (use `--with-cfg` / `--full` only for standalone `taint --sink`).
+   - **Vuln / OSV / OpenVEX / SARIF / Threat Model:** route to **`/rgctl:vuln`** (`vuln fetch`, `vuln scan`, `vuln analyze`, `vuln threat-model`); lazy per-call-site CFG/PDG runs automatically on plain snapshots (use `--with-cfg` / `--full` only for standalone `taint --sink`).
 4. **Natural-language routing** — Map utterance with workflow table. Do not ask user to rephrase into CLI unless disambiguation required
 5. **Summarize** — Report key facts, not raw JSON dumps
 6. **Continuous sync** — Multi-wave edits → `rgctl serve --watch` or `rgctl update` between waves; verify with graph queries after edits
@@ -170,9 +170,10 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | Temporal PR policy / CI gate | `review check --policy-file policy.json` (alias: `pr-check`) |
 | Policy check (full codebase) | `check --policy-file policy.json` |
 | Policy check (one symbol) | `blast-radius <Symbol> --policy-file policy.json` |
-| **OSV / CVE / OpenVEX / SARIF** | **`/rgctl:vuln`** → skill `rgctl-vuln` |
+| **OSV / CVE / OpenVEX / SARIF / Threat Model** | **`/rgctl:vuln`** → skill `rgctl-vuln` |
 | OSV whole-repo scan / fetch | `vuln fetch` · `vuln scan [--offline \| --from-report trivy.json] [--with-dep-stubs] [--strict-reachability] [-f json\|sarif]` |
 | OSV single advisory | `vuln triage` → `deps check` → `vuln analyze --osv FILE [--include-jars lib] [--strict-reachability]` |
+| Threat model / attack surface / STRIDE / DFD | `vuln threat-model --offline [-f json\|mermaid\|text]` (alias: `vuln surface`) |
 
 **High-ceremony slash commands** (keep palette ≤3): **`/rgctl:review`**, **`/rgctl:vuln`**, **`/rgctl:migrate`**. Atomic lookups (`find`, `callers`, `blast-radius`, `slice`, …) stay in this meta-skill — never as slash commands.
 
@@ -235,6 +236,7 @@ Legacy daemon cache under `~/.rgctl/cache/` is obsolete; run `rgctl discover .` 
 | "How does this doc map to code?" | `discover . -l markdown,<lang>` → `find 'Heading*' --type module` → `relations … --edge references --direction out` |
 | "Impact if I change X" | `blast-radius X --depth 2 --summary` |
 | "Are we affected by this CVE / OSV?" | **`/rgctl:vuln`** (or vuln workflow in references) |
+| "Generate a threat model / attack surface / STRIDE" | **`/rgctl:vuln`** (`vuln threat-model --offline`) |
 | "Validate against policy" | `check --policy-file policy.json` |
 | "Review my uncommitted changes" | **`/rgctl:review`** → `review paths --synthetic-head worktree` |
 | "How did call paths change on this PR?" | **`/rgctl:review`** or `review paths --base-ref origin/main --head-ref HEAD` |

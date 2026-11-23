@@ -128,13 +128,15 @@ impl SemanticIndex {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let file = std::fs::File::create(path)?;
-        bincode::serialize_into(file, self).map_err(serde_err)
+        let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
+        bincode::serialize_into(&mut file, self).map_err(serde_err)?;
+        std::io::Write::flush(&mut file)?;
+        Ok(())
     }
 
     /// Load index from disk.
     pub fn load(path: &Path) -> Result<Self> {
-        let file = std::fs::File::open(path)?;
+        let file = std::io::BufReader::new(std::fs::File::open(path)?);
         bincode::deserialize_from(file).map_err(serde_err)
     }
 

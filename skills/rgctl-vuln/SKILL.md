@@ -1,24 +1,26 @@
 ---
 name: rgctl-vuln
 description: >-
-  Triage an OSV/CVE or scan an entire repo with rgctl vuln (fetch / scan /
-  triage → deps check → analyze): OSV network feed + offline/report overrides,
-  lockfile version matching, parked & transitive call-site reachability,
-  OpenVEX PURLs, SARIF 2.1.0, and a concise CVE Reachability report. Use when
-  asked about a CVE, OSV advisory, scanner report (Trivy/Grype/OSV-Scanner),
-  exploitability, or OpenVEX/SARIF for this repo.
+  Triage an OSV/CVE, scan an entire repo, or generate a threat model & attack-surface
+  review with rgctl vuln (fetch / scan / triage → deps check → analyze / threat-model):
+  OSV network feed + offline/report overrides, lockfile version matching, parked &
+  transitive call-site reachability, OpenVEX PURLs, SARIF 2.1.0, Mermaid DFD, and
+  evidence-backed STRIDE candidates. Use when asked about a CVE, OSV advisory,
+  scanner report (Trivy/Grype/OSV-Scanner), exploitability, OpenVEX/SARIF, or a
+  repository threat model / attack-surface analysis.
 rgctl-managed: true
 ---
 
 # rgctl-vuln (`/rgctl:vuln`)
 
-End-to-end OSV/CVE reachability, whole-repo vulnerability scanning, and OpenVEX/SARIF generation via **`vuln fetch`**, **`vuln scan`**, **`vuln triage`**, **`deps check`**, and **`vuln analyze`**. No forge posts; no `serve` / `--watch`.
+End-to-end OSV/CVE reachability, whole-repo vulnerability scanning, OpenVEX/SARIF generation, and deterministic threat-model / attack-surface synthesis via **`vuln fetch`**, **`vuln scan`**, **`vuln triage`**, **`deps check`**, **`vuln analyze`**, and **`vuln threat-model`** (alias **`vuln surface`**). No forge posts; no `serve` / `--watch`.
 
-Bound stdout on large repos: keep `--depth` small on follow-up `blast-radius` probes and `--limit` on `find`/`callers`; project JSON with `jq` (do not paste full analyze/scan envelopes into chat).
+Bound stdout on large repos: keep `--depth` small on follow-up `blast-radius` probes and `--limit` on `find`/`callers`; project JSON with `jq` (do not paste full analyze/scan/threat-model envelopes into chat).
 
 ## When to Use
 
 - User asks whether the repo is affected by a CVE / OSV advisory or wants a full repo vulnerability scan (`rgctl vuln scan`).
+- User asks to generate a **threat model**, **STRIDE analysis**, **Data-Flow Diagram (DFD)**, or **attack-surface inventory** (`rgctl vuln threat-model`).
 - User wants to enrich a Trivy, Grype, or OSV-Scanner JSON report (`--from-report`) or CycloneDX/SPDX SBOM (`--sbom`) with reachability proofs.
 - User wants OpenVEX v0.2.0 (`pkg:` PURLs), SARIF 2.1.0 (`-f sarif`), or concrete `file:line` call sites to a vulnerable sink.
 - User wants a fail-closed CI gate (`--strict-reachability`) or air-gapped evaluation (`--offline`, `--osv <file|dir>`).
@@ -137,6 +139,54 @@ Emit a concise **CVE Reachability & OpenVEX** report:
 
 ## Follow-ups
 ```
+
+---
+
+### Mode C: Threat Model & Attack-Surface Review (`vuln threat-model`)
+
+`rgctl vuln threat-model` (alias `rgctl vuln surface`) operates 100% read-only on `.rgctl/graph.snapshot.bin` + sidecars (no `--with-cfg` required; builds intra-procedural CFG/PDG lazily for entry-reachable sinks and defaults to offline OSV cache evaluation).
+
+#### Step 1: Extract deterministic threat-model evidence pack
+
+```bash
+cd "${REPO_PATH:-.}"
+test -f .rgctl/graph.snapshot.bin || rgctl -f json discover .
+
+# Optional: hydrate local OSV cache first if dependency CVEs should be joined:
+# rgctl -f json vuln fetch
+
+# Deterministic JSON evidence pack + STRIDE candidates (zero network calls by default):
+rgctl -f json vuln threat-model --offline > .rgctl/threat-model.json
+
+# Optional standalone Mermaid DFD or Markdown baseline:
+rgctl -f mermaid vuln threat-model --offline > .rgctl/threat-model.mmd
+rgctl vuln threat-model --offline -o THREAT_MODEL.md
+```
+
+Inspect concise projections with `jq`:
+
+```bash
+jq '.summary' .rgctl/threat-model.json
+jq '.entry_points[] | {id, kind, name, handler_symbol, observed_auth_controls}' .rgctl/threat-model.json
+jq '.threat_candidates[] | {id, stride, confidence, title, evidence_refs, assumptions}' .rgctl/threat-model.json
+jq '.limitations_and_gaps' .rgctl/threat-model.json
+```
+
+#### Step 2: Contextual synthesis & architecture cross-check (Agent Layer)
+
+1. **Architecture docs (if present):** Check `README.md`, `SECURITY.md`, or `docs/` (or index with `rgctl discover . -l markdown,<lang>`) to verify intended trust boundaries, public vs authenticated routes, and out-of-repo controls (API gateway, WAF, mTLS, IAM) before escalating `Spoofing` / `DenialOfService` candidates.
+2. **PR / branch differential mode (when reviewing changes):** Combine with `rgctl -f json review paths --base-ref <BASE> --head-ref HEAD` (or `--synthetic-head worktree`) to highlight **new** `entry_points`, **new** `data_flows` to sinks, or **removed** auth/sanitizer controls.
+3. **Targeted source verification:** For `high`/`medium` `threat_candidates`, read only the narrow `file:line` spans cited in `.evidence_index[<ref>]` (or run `rgctl -f json slice <file> --line <line> --variable <var>`) to verify whether custom framework middleware or parameterized wrappers already mitigate the candidate.
+
+#### Mandatory Epistemic & Privacy Rules (Mode C)
+
+- **Strict provenance separation:** Preserve the distinction between:
+  - **Observed facts:** `graph_fact`, `cpg_taint`, `osv_reachability` (`review_status: observed`)
+  - **Deterministic rule hypotheses:** `graph_rule` (`review_status: needs_review`)
+  - **Contextual agent refinements:** label any threat or business-logic hypothesis added by LLM reasoning as `agent_inference` (`needs_review`).
+- **Mandatory `evidence_refs`:** Every reported threat candidate **must** cite at least one concrete ID (`EP-*`, `SNK-*`, `DF-*`, `AST-*`, `TB-*`, `OSV-*`) resolving to `symbol` + `file:line` in `.evidence_index`, plus explicit `assumptions`. Never present rule or agent inferences as confirmed vulnerabilities without verified exploitability evidence.
+- **Always surface `limitations_and_gaps`:** Explicitly call out out-of-repo infrastructure controls (`OUT_OF_REPO_CONTROLS`), unresolved indirect/dynamic call sites (`DYNAMIC_OR_INDIRECT_CALLS`), coverage bounds (`CALL_DEPTH_LIMITED` → re-run with a larger `--max-depth`; `PDG_BUDGET_EXHAUSTED` → larger `--max-pdg-functions`, and treat affected sinks as graph-only evidence), and business-logic abuse that static graphs cannot prove.
+- **Privacy boundary:** Keep raw full-repo source out of prompts — rely on structured `.rgctl/threat-model.json` metadata and narrow `slice` excerpts, and respect organizational LLM data-handling policies on proprietary repositories.
 
 ## Gotchas
 

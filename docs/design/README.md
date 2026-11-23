@@ -42,6 +42,7 @@ Every engineering design document in this directory follows the **6-section `rgc
 | **Intra- & Inter-Procedural Program Slicing** | [**`program-slicing-design.md`**](program-slicing-design.md) | `rgctl slice <file> --line <N> --variable <V> [--with-alias]` |
 | **Hybrid Code Property Graph (CPG)** | [**`hybrid-cpg-plan.md`**](hybrid-cpg-plan.md) | `rgctl cpg status\|function\|calls\|mutations\|flows\|pdg\|slice\|ast\|export` |
 | **Taint Analysis & OSV/OpenVEX Reachability** | [**`taint-analysis-design.md`**](taint-analysis-design.md) | `rgctl taint --sink`, `rgctl slice --taint`, `rgctl vuln triage\|analyze`, `rgctl deps check` |
+| **Threat-Model Generation & STRIDE Synthesis** | [**`threat-model-generation.md`**](threat-model-generation.md) | `rgctl vuln threat-model` (`vuln surface`), `/rgctl:vuln` Mode C |
 
 ### 3. Macro Graph Analytics, Migration, Clones, Search & UI
 

@@ -19,6 +19,7 @@ pub mod osv;
 pub mod package_resolve;
 pub mod sarif;
 pub mod sink_taint;
+pub mod threat_model;
 pub mod version;
 pub mod vuln_analyze;
 pub mod vuln_rules;
@@ -56,6 +57,15 @@ pub use sarif::{SarifLog, analyze_result_to_sarif, analyze_results_to_sarif};
 pub use sink_taint::{
     SinkCallSite, SinkFirstTaintResult, SinkPathSummary, SinkResolution, build_sink_first_result,
     build_sink_first_result_with_sites, missing_cfg_error_message, rules_with_osv_overlays,
+};
+pub use threat_model::{
+    AssetEvidence, AssetKind, ConfidenceLevel, DEFAULT_MAX_LAZY_PDG_FUNCTIONS, DiscoveredPdgSink,
+    EntryPointEvidence, EntryPointKind, EvidenceProvenance, EvidenceRecord, FunctionPdgReport,
+    FunctionPdgRequest, LimitationNote, PdgSinkStatus, ReachableVulnEvidence, ReviewStatus,
+    SinkEvidence, StrideCategory, THREAT_MODEL_SCHEMA_VERSION, ThreatCandidate, ThreatDataFlow,
+    ThreatModelBuildOpts, ThreatModelReport, ThreatModelSummary, TrustBoundaryCandidate,
+    TrustBoundaryKind, build_threat_model, classify_callee_sanitizer, classify_callee_sink,
+    render_threat_model_markdown, render_threat_model_mermaid,
 };
 pub use version::{VersionEngine, engine_for_ecosystem};
 pub use vuln_analyze::{

@@ -93,6 +93,36 @@ pub fn dispatch_vuln_command(ctx: &CliContext, action: VulnCommands) -> Result<(
             },
             "vuln scan",
         ),
+        VulnCommands::ThreatModel {
+            osv,
+            from_report,
+            sbom,
+            offline,
+            online,
+            osv_api_url,
+            include_jars,
+            include_node_modules,
+            with_dep_stubs,
+            max_depth,
+            max_pdg_functions,
+            no_lazy_cfg,
+        } => super::threat_model::run_vuln_threat_model(
+            ctx,
+            super::threat_model::ThreatModelCliArgs {
+                osv,
+                from_report,
+                sbom,
+                offline,
+                online,
+                osv_api_url,
+                include_jars,
+                include_node_modules,
+                with_dep_stubs,
+                max_depth,
+                max_pdg_functions,
+                no_lazy_cfg,
+            },
+        ),
     }
 }
 
@@ -375,12 +405,11 @@ pub fn run_vuln_analyze(ctx: &CliContext, args: AnalyzeCliArgs) -> Result<()> {
     emit_analyze(ctx, &result)
 }
 
-/// `rgctl vuln scan` (and batch `vuln analyze`) — single-mmap + Rayon parallel evaluation.
-pub fn run_vuln_scan(
+/// Evaluate advisories against repo dependencies, graph, and lazy PDG taint (shared with `vuln threat-model`).
+pub(crate) fn evaluate_repo_vulns(
     ctx: &CliContext,
-    args: AnalyzeCliArgs,
-    command_label: &'static str,
-) -> Result<()> {
+    args: &AnalyzeCliArgs,
+) -> Result<Vec<VulnAnalyzeResult>> {
     let (advisories, inventory) = resolve_advisories_and_inventory(
         &ctx.repo,
         &AdvisorySourceOpts {
@@ -395,18 +424,30 @@ pub fn run_vuln_scan(
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let shared = SharedVulnGraphResources::open(ctx, &args)?;
-    let checked = build_checked_labels(&args);
+    if advisories.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let shared = SharedVulnGraphResources::open(ctx, args)?;
+    let checked = build_checked_labels(args);
     let persist_lazy_cfg = advisories.len() == 1;
 
     let evaluated: Result<Vec<VulnAnalyzeResult>> = advisories
         .par_iter()
         .map(|adv| {
-            evaluate_one_advisory(&shared, adv, &inventory, &checked, &args, persist_lazy_cfg)
+            evaluate_one_advisory(&shared, adv, &inventory, &checked, args, persist_lazy_cfg)
         })
         .collect();
-    let results = evaluated?;
+    evaluated
+}
 
+/// `rgctl vuln scan` (and batch `vuln analyze`) — single-mmap + Rayon parallel evaluation.
+pub fn run_vuln_scan(
+    ctx: &CliContext,
+    args: AnalyzeCliArgs,
+    command_label: &'static str,
+) -> Result<()> {
+    let results = evaluate_repo_vulns(ctx, &args)?;
     let scan = build_vuln_scan_result(command_label, results);
     emit_scan(ctx, &scan)
 }
@@ -1128,7 +1169,7 @@ enum SiteVerdict {
     Inconclusive,
 }
 
-fn line_start_byte(source: &str, line: usize) -> Option<usize> {
+pub(crate) fn line_start_byte(source: &str, line: usize) -> Option<usize> {
     if line == 0 {
         return None;
     }
@@ -1147,7 +1188,7 @@ fn line_start_byte(source: &str, line: usize) -> Option<usize> {
     None
 }
 
-fn function_containing_line(
+pub(crate) fn function_containing_line(
     locations: &HashMap<String, FunctionLocation>,
     offset: usize,
 ) -> Option<(String, FunctionLocation)> {

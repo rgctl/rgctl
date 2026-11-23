@@ -18,10 +18,12 @@ openvex = { workspace = true }
 rayon = { workspace = true }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 thiserror = { workspace = true }
+tracing = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 walkdir = { workspace = true }
 zip = { workspace = true }
