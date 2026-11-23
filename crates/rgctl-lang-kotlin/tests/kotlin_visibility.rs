@@ -61,3 +61,35 @@ class Svc {
     assert_eq!(vis("publicSuspend"), SymbolVisibility::Public);
     assert_eq!(vis("overridden"), SymbolVisibility::Public);
 }
+
+#[test]
+fn constructor_visibility_not_overwritten_by_enclosing_class() {
+    let source = br#"
+class Singleton private constructor(val id: Int)
+class InternalCtor internal constructor()
+class DefaultCtor constructor(val x: Int)
+"#;
+    let plugin = KotlinPlugin::new().expect("plugin");
+    let out = plugin
+        .extract_all(Path::new("ctors.kt"), source)
+        .expect("extract_all");
+
+    let by_qn = |qn: &str| {
+        out.symbols
+            .iter()
+            .find(|s| s.qualified_name.as_deref() == Some(qn))
+            .unwrap_or_else(|| panic!("missing symbol {qn}; got {:?}", out.symbols))
+            .visibility
+    };
+
+    assert_eq!(by_qn("Singleton"), SymbolVisibility::Public);
+    assert_eq!(
+        by_qn("Singleton.<init>"),
+        SymbolVisibility::Private,
+        "private primary constructor must not be overwritten by public class visibility"
+    );
+    assert_eq!(by_qn("InternalCtor"), SymbolVisibility::Public);
+    assert_eq!(by_qn("InternalCtor.<init>"), SymbolVisibility::Internal);
+    assert_eq!(by_qn("DefaultCtor"), SymbolVisibility::Public);
+    assert_eq!(by_qn("DefaultCtor.<init>"), SymbolVisibility::Public);
+}

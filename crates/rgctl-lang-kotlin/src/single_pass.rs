@@ -125,7 +125,10 @@ enum Visit<'a> {
 /// modifiers (`private suspend fun`, `internal inline fun`,
 /// `protected open fun`) classify by their visibility token, not the whole
 /// `modifiers` text. Zero allocation — text comparison only.
-fn kotlin_declaration_visibility(node: Node, source: &[u8]) -> rgctl_plugin_api::SymbolVisibility {
+pub(crate) fn kotlin_declaration_visibility(
+    node: Node,
+    source: &[u8],
+) -> rgctl_plugin_api::SymbolVisibility {
     use rgctl_plugin_api::SymbolVisibility as SV;
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -215,10 +218,8 @@ pub fn extract_all_single_pass(
                             &mut ctx.symbols,
                         );
                         if ctx.symbols.len() > before {
-                            let vis = kotlin_declaration_visibility(node, source);
-                            for sym in &mut ctx.symbols[before..] {
-                                sym.visibility = vis;
-                            }
+                            ctx.symbols[before].visibility =
+                                kotlin_declaration_visibility(node, source);
                             let type_sym = &ctx.symbols[before];
                             let name = type_sym.name.clone();
                             let qn = type_sym

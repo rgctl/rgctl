@@ -1018,9 +1018,12 @@ impl ColumnarGraphMmap {
 
     /// Append a kept base node into a columnar build, copying extension bytes verbatim.
     ///
-    /// On v3 snapshots, hashes the exact `bincode::serialize(&Node)` representation directly
-    /// from hot string-pool slices + raw extension slices without deserializing cold
-    /// `NodeExtension` blobs (`0` `COLD_EXT_DESERIALIZATIONS`, `0` heap map/vec clones).
+    /// On current-version (`COLUMNAR_SNAPSHOT_VERSION`) snapshots, hashes the exact
+    /// `bincode::serialize(&Node)` representation directly from hot string-pool slices + raw
+    /// extension slices without deserializing cold `NodeExtension` blobs
+    /// (`0` `COLD_EXT_DESERIALIZATIONS`, `0` heap map/vec clones). Older snapshot versions
+    /// materialize the node so packed `NodeRow.node_type` flags (`NODE_DECLARATION_BIT` /
+    /// visibility bits) are re-encoded rather than copied as zero bits from pre-v4 rows.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_node_for_build(
         &self,
@@ -1033,7 +1036,7 @@ impl ColumnarGraphMmap {
         node_rows: &mut Vec<NodeRow>,
         scratch: &mut Vec<u8>,
     ) -> Result<()> {
-        if self.format_version >= 3 {
+        if self.format_version == COLUMNAR_SNAPSHOT_VERSION {
             let row = read_node_row(self.mmap.as_ref(), self.offset_nodes as usize, idx)?;
             let id = Uuid::from_bytes(row.id);
             // Masked: v4 rows pack visibility/declaration bits into the

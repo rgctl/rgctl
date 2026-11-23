@@ -141,16 +141,38 @@ enum Visit<'a> {
 }
 
 /// `Public` when the declaration is directly wrapped in an `export_statement`
-/// (`export function …`, `export class …`) — no allocation, parent check only.
+/// (`export function …`, `export class …`, `export default …`) or bound via an
+/// exported `const`/`let`/`var` declaration (`export const f = () => …`,
+/// `export const f = function() {}`) — no allocation, parent hops only.
 fn exported_visibility(node: Node) -> rgctl_plugin_api::SymbolVisibility {
-    if node
-        .parent()
-        .is_some_and(|p| p.kind() == "export_statement")
-    {
-        rgctl_plugin_api::SymbolVisibility::Public
-    } else {
-        rgctl_plugin_api::SymbolVisibility::Unknown
+    let mut current = node;
+    for _ in 0..8 {
+        let Some(parent) = current.parent() else {
+            return rgctl_plugin_api::SymbolVisibility::Unknown;
+        };
+        match parent.kind() {
+            "export_statement" => return rgctl_plugin_api::SymbolVisibility::Public,
+            "variable_declarator" => {
+                let is_exported = parent
+                    .parent()
+                    .filter(|decl| {
+                        matches!(decl.kind(), "lexical_declaration" | "variable_declaration")
+                    })
+                    .and_then(|decl| decl.parent())
+                    .is_some_and(|gp| gp.kind() == "export_statement");
+                return if is_exported {
+                    rgctl_plugin_api::SymbolVisibility::Public
+                } else {
+                    rgctl_plugin_api::SymbolVisibility::Unknown
+                };
+            }
+            "parenthesized_expression" => {
+                current = parent;
+            }
+            _ => return rgctl_plugin_api::SymbolVisibility::Unknown,
+        }
     }
+    rgctl_plugin_api::SymbolVisibility::Unknown
 }
 
 /// Single iterative DFS: symbols + deferred calls + heritage/new + complexity.

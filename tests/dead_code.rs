@@ -734,3 +734,198 @@ fn e2e_plugin_export_visibility_tiers() {
         "C++ static linkage"
     );
 }
+
+#[test]
+fn e2e_round3_cpp_ts_js_kotlin_visibility_fixes() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("round3vis");
+    std::fs::create_dir_all(&repo).unwrap();
+
+    std::fs::write(
+        repo.join("widget.cpp"),
+        r#"class Widget {
+private:
+    int deadPrivateMethod() { return 1; }
+public:
+    static int publicStaticFactory() { return 2; }
+};
+struct Pod {
+    int implicitStructPub() { return 3; }
+};
+namespace {
+    int anonHelper() { return 4; }
+}
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        repo.join("arrows.ts"),
+        "export const exportedTsArrow = () => 1;\nexport const exportedTsFnExpr = function () { return 2; };\nconst localTsArrow = () => 3;\n",
+    )
+    .unwrap();
+
+    std::fs::write(
+        repo.join("arrows.js"),
+        "export const exportedJsArrow = () => 1;\nexport const exportedJsFnExpr = function () { return 2; };\nconst localJsArrow = () => 3;\n",
+    )
+    .unwrap();
+
+    std::fs::write(
+        repo.join("Singleton.kt"),
+        "class Singleton private constructor(val id: Int)\n",
+    )
+    .unwrap();
+
+    let report = discover_and_analyze(&repo, &[]);
+    let tier = |name: &str| {
+        report
+            .findings
+            .iter()
+            .find(|f| f.symbol_name == name)
+            .unwrap_or_else(|| panic!("{name} missing from findings: {:?}", report.findings))
+            .confidence
+    };
+
+    // C++ class/struct/anonymous-namespace visibility.
+    assert_eq!(tier("deadPrivateMethod"), DeadCodeConfidence::High);
+    assert_eq!(tier("publicStaticFactory"), DeadCodeConfidence::Low);
+    assert_eq!(tier("implicitStructPub"), DeadCodeConfidence::Low);
+    assert_eq!(tier("anonHelper"), DeadCodeConfidence::High);
+
+    // TS & JS exported arrow / function expressions vs unexported locals.
+    assert_eq!(tier("exportedTsArrow"), DeadCodeConfidence::Low);
+    assert_eq!(tier("exportedTsFnExpr"), DeadCodeConfidence::Low);
+    assert_eq!(tier("localTsArrow"), DeadCodeConfidence::High);
+    assert_eq!(tier("exportedJsArrow"), DeadCodeConfidence::Low);
+    assert_eq!(tier("exportedJsFnExpr"), DeadCodeConfidence::Low);
+    assert_eq!(tier("localJsArrow"), DeadCodeConfidence::High);
+
+    // Kotlin `class Singleton private constructor(...)` — class is Low, and
+    // the primary constructor row in `graph.snapshot.bin` preserves `Private`
+    // visibility (not overwritten by the outer class's `Public`).
+    let singleton_class = report
+        .findings
+        .iter()
+        .find(|f| f.qualified_name.as_deref() == Some("Singleton") && f.node_type == "Class")
+        .expect("Singleton class finding");
+    assert_eq!(singleton_class.confidence, DeadCodeConfidence::Low);
+
+    let store = rgctl_graph::SnapshotNodeStore::open(&repo.join(".rgctl/graph.snapshot.bin"))
+        .expect("open snapshot");
+    let col = store.columnar().expect("columnar");
+    let mut found_ctor = false;
+    for idx in 0..col.node_count() {
+        if col
+            .node_qualified_name_str(idx)
+            .unwrap()
+            .is_some_and(|qn| qn.starts_with("Singleton.<init>"))
+        {
+            assert_eq!(
+                col.node_visibility_at(idx).unwrap(),
+                rgctl_plugin_api::SymbolVisibility::Private,
+                "Singleton.<init> packed hot-column visibility must stay Private"
+            );
+            found_ctor = true;
+        }
+    }
+    assert!(found_ctor, "Singleton.<init> node must exist in snapshot");
+}
+
+#[test]
+fn e2e_v3_snapshot_incremental_update_upgrades_without_poisoning_rows() {
+    // Simulate upgrading from v0.4.30 (`format_version = 3`, zero packed
+    // visibility/declaration bits in `NodeRow.node_type`) and running
+    // incremental `rgctl update` / `rgctl update --files`. Untouched `.h`
+    // prototypes must not lose `NODE_DECLARATION_BIT` and untouched `pub fn`s
+    // must not lose their `Public` visibility bits.
+    let downgrade_snapshot_to_v3 = |snap_path: &std::path::Path| {
+        let mut bytes = std::fs::read(snap_path).expect("read snapshot");
+        bytes[4..8].copy_from_slice(&3u32.to_le_bytes());
+        let node_count = u64::from_le_bytes(bytes[12..20].try_into().unwrap()) as usize;
+        let offset_nodes = u64::from_le_bytes(bytes[92..100].try_into().unwrap()) as usize;
+        for i in 0..node_count {
+            let nt_off = offset_nodes + i * 64 + 16;
+            let raw = u16::from_le_bytes(bytes[nt_off..nt_off + 2].try_into().unwrap());
+            bytes[nt_off..nt_off + 2].copy_from_slice(&(raw & 0x0FFF).to_le_bytes());
+        }
+        std::fs::write(snap_path, bytes).expect("write downgraded v3 snapshot");
+    };
+
+    for use_files_flag in [false, true] {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo = dir.path().join("v3upgrade");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("api.h"), "int untouched_header_proto(int x);\n").unwrap();
+        std::fs::write(
+            repo.join("keep.rs"),
+            "pub fn untouched_pub_fn() -> i32 { 1 }\n",
+        )
+        .unwrap();
+        std::fs::write(repo.join("edit.rs"), "fn edited_local_fn() -> i32 { 2 }\n").unwrap();
+
+        let out = Command::new(rgctl_bin())
+            .current_dir(&repo)
+            .args(["discover", "."])
+            .output()
+            .expect("discover");
+        assert!(out.status.success());
+
+        let snap_path = repo.join(".rgctl/graph.snapshot.bin");
+        downgrade_snapshot_to_v3(&snap_path);
+
+        // Edit only `edit.rs`, leaving `api.h` and `keep.rs` untouched.
+        std::fs::write(repo.join("edit.rs"), "fn edited_local_fn() -> i32 { 3 }\n").unwrap();
+
+        let update_args: &[&str] = if use_files_flag {
+            &["update", ".", "--files", "edit.rs"]
+        } else {
+            &["update", "."]
+        };
+        let out = Command::new(rgctl_bin())
+            .current_dir(&repo)
+            .args(update_args)
+            .output()
+            .expect("update");
+        assert!(
+            out.status.success(),
+            "update failed ({update_args:?}): {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let store = rgctl_graph::SnapshotNodeStore::open(&snap_path).unwrap();
+        assert_eq!(
+            store.columnar().unwrap().format_version(),
+            rgctl_graph::COLUMNAR_SNAPSHOT_VERSION,
+            "snapshot must upgrade to v4 after update ({update_args:?})"
+        );
+        drop(store);
+
+        let out = Command::new(rgctl_bin())
+            .current_dir(&repo)
+            .args(["-f", "json", "dead-code"])
+            .output()
+            .expect("dead-code");
+        assert!(out.status.success());
+        let report: DeadCodeReport = serde_json::from_slice(&out.stdout).unwrap();
+
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.symbol_name == "untouched_header_proto"),
+            "untouched .h prototype must not be poisoned into a dead function ({update_args:?}): {:?}",
+            report.findings
+        );
+        let pub_fn = report
+            .findings
+            .iter()
+            .find(|f| f.symbol_name == "untouched_pub_fn")
+            .expect("untouched_pub_fn reported");
+        assert_eq!(
+            pub_fn.confidence,
+            DeadCodeConfidence::Low,
+            "untouched pub fn must retain Low confidence after v3->v4 update ({update_args:?})"
+        );
+    }
+}
