@@ -1,7 +1,6 @@
 # Source-native function operand records
 
-`ControlFlowGraph::operands` exposes compact per-callable syntax facts for Java,
-JavaScript, TypeScript, Python, Go and Rust. Lowering reuses the native parsed tree
+`ControlFlowGraph::operands` exposes compact per-callable syntax facts for the 20 procedural Tier 1 languages. Lowering reuses the native parsed tree
 selected by the CFG builder, including exact byte-range callable selection. It
 does not invoke a compiler, external indexer or an adapter-side source parser.
 
@@ -76,3 +75,17 @@ and owns only the persistent interned copy. Operand collection currently adds
 a bounded native AST traversal per CFG build. Default discovery without procedural
 analysis does not build these records. Whole-repository time, disk and allocator
 RSS still require measurement; record layout alone is not a performance claim.
+
+## Tier 1 applicability
+
+Canonical correctness fixtures cover native parameters, local aliases, invocation
+arguments and returned values across all 20 procedural Tier 1 languages. Shell
+positional parameters and arguments are captured, but exit status and output
+streams are not ordinary returned object values. SQL dollar-quoted routine bodies
+are opaque to the bundled grammar; HCL has no project-defined callable parameter
+bindings, and ERB/Markdown do not emit native procedural callable bodies. These
+boundaries must not be interpreted as complete negative flow results.
+
+Native lowering reports unsupported patterns, depth limits and malformed syntax.
+Expression descent stops at 64 frames to protect worker stacks, including C/C++
+method chains. Routine child lists use inline storage before spilling to the heap.

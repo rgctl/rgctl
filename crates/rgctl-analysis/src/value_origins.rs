@@ -271,6 +271,7 @@ struct Query<'a, C: InterproceduralCfgAccess + ?Sized> {
     bound_calls: HashSet<CallRef>,
     members: HashMap<CallRef, Vec<MemberCandidate>>,
     receivers: HashMap<ValueRef, Vec<CallRef>>,
+    projections: HashMap<(ValueRef, u32), Vec<ValueRef>>,
     receiver_evidence: HashSet<ReceiverTarget>,
     adjacency: HashMap<ValueRef, Vec<ValueRef>>,
     edge_pairs: HashSet<(ValueRef, ValueRef)>,
@@ -299,6 +300,7 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
             bound_calls: HashSet::new(),
             members: HashMap::new(),
             receivers: HashMap::new(),
+            projections: HashMap::new(),
             receiver_evidence: HashSet::new(),
             adjacency: HashMap::new(),
             edge_pairs: HashSet::new(),
@@ -372,6 +374,31 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
                 diagnostic: LocalFlowDiagnostic::LimitReached,
             });
             return;
+        }
+        for (index, expression) in cfg.operands.expressions.iter().enumerate() {
+            if !self.step() {
+                return;
+            }
+            if let ExpressionKind::Projection { position } = expression.kind
+                && let Some(&source) = expression
+                    .inputs
+                    .slice(&cfg.operands.inputs)
+                    .and_then(|s| s.first())
+            {
+                self.projections
+                    .entry((
+                        ValueRef {
+                            function,
+                            expression: source,
+                        },
+                        position,
+                    ))
+                    .or_default()
+                    .push(ValueRef {
+                        function,
+                        expression: ExpressionId(index as u32),
+                    });
+            }
         }
         for (index, call) in cfg.operands.calls.iter().enumerate() {
             if let Some(receiver) = call.receiver {
@@ -503,6 +530,43 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
         for transfer in transfers {
             if !self.step() {
                 break;
+            }
+            if let TransferKind::ReturnToResult { position } = transfer.kind
+                && !scalar_return
+            {
+                let projections = self
+                    .projections
+                    .get(&(transfer.to, position))
+                    .cloned()
+                    .unwrap_or_default();
+                if projections.is_empty() {
+                    self.diagnostic(OriginDiagnostic::UnsupportedTransfer {
+                        target,
+                        kind: transfer.kind,
+                    });
+                }
+                for to in projections {
+                    if !self.step() {
+                        break;
+                    }
+                    match transfer.from {
+                        BindingSource::Expression(from) => self.edge(
+                            from,
+                            to,
+                            OriginTransferCause::Invocation {
+                                target,
+                                kind: transfer.kind,
+                            },
+                        ),
+                        BindingSource::Implicit(_) => {
+                            self.diagnostic(OriginDiagnostic::ImplicitValue {
+                                target,
+                                kind: transfer.kind,
+                            })
+                        }
+                    }
+                }
+                continue;
             }
             let supported =
                 matches!(

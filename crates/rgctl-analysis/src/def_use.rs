@@ -754,8 +754,23 @@ fn collect_def_use_node<'a>(
             }
         }
 
-        // Kotlin local/member `val x = expr` / `var (a, b) = expr`
+        "val_definition" | "var_definition" => {
+            if let Some(pattern) = node.child_by_field_name("pattern") {
+                collect_pattern_defs(pattern, source, defined, depth + 1);
+            }
+            if let Some(value) = node.child_by_field_name("value") {
+                stack.push((value, false, depth + 1));
+            }
+        }
+        // Kotlin and Swift local/member declarations.
         "property_declaration" => {
+            if let Some(pattern) = node.child_by_field_name("name") {
+                collect_pattern_defs(pattern, source, defined, depth + 1);
+                if let Some(value) = node.child_by_field_name("value") {
+                    stack.push((value, false, depth + 1));
+                }
+                return;
+            }
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if !child.is_named() {

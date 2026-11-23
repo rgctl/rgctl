@@ -70,6 +70,34 @@ pub enum OperandLanguage {
     Go,
     /// Rust.
     Rust,
+    /// C native operands.
+    C,
+    /// Cpp native operands.
+    Cpp,
+    /// CSharp native operands.
+    CSharp,
+    /// Groovy native operands.
+    Groovy,
+    /// Kotlin native operands.
+    Kotlin,
+    /// Php native operands.
+    Php,
+    /// Puppet native operands.
+    Puppet,
+    /// Ruby native operands.
+    Ruby,
+    /// Swift native operands.
+    Swift,
+    /// Scala native operands.
+    Scala,
+    /// Dart native operands.
+    Dart,
+    /// Elixir native operands.
+    Elixir,
+    /// Lua native operands.
+    Lua,
+    /// Bash native operands.
+    Bash,
 }
 
 /// Scope of the syntactic operand capture, not a safety verdict.

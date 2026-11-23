@@ -1505,9 +1505,11 @@ mod overload_cache_tests {
         decl.properties
             .insert("callable_role".to_string(), "declaration".to_string());
 
-        let impl_fn = Node::new(rgctl_graph::schema::NodeType::Function, "handle")
+        let mut impl_fn = Node::new(rgctl_graph::schema::NodeType::Function, "handle")
             .with_file_path("Handler.java")
-            .with_code_hash("impl_hash");
+            .with_code_hash("impl_hash")
+            .with_byte_spans(Some(0), Some(40), None, None, None);
+        impl_fn.start_line = Some(1);
         let key = analysis_cache_key(impl_fn.id, "impl_hash");
         let cache = CfgIncrementalCache {
             index: std::collections::HashMap::from([(
@@ -1516,6 +1518,9 @@ mod overload_cache_tests {
                     stable_key: key,
                     function_id: impl_fn.id,
                     code_hash: "impl_hash".into(),
+                    source_location: crate::analysis::storage::AnalysisSourceLocation::from_node(
+                        &impl_fn,
+                    ),
                     flow_count: 2,
                     vulnerable_count: 1,
                 },

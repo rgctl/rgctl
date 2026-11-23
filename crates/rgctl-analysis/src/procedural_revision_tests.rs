@@ -2,10 +2,14 @@
 
 use super::*;
 use crate::cfg_builder::build_cfg_for_function;
-use crate::storage::{AnalysisStorage, AnalysisIndexEntry, ANALYSIS_INDEX_FILE, analysis_cache_key};
-use crate::cfg_pdg_archive::{CfgPdgArchive, CfgPdgArchiveMmap, CfgPdgRecord, ARCHIVE_VERSION};
-use crate::cfg_pdg_archive::{ensure_cfg_pdg_for_source, EnsureCfgPdgOpts};
+use crate::cfg_pdg_archive::{ARCHIVE_VERSION, CfgPdgArchive, CfgPdgArchiveMmap, CfgPdgRecord};
+use crate::cfg_pdg_archive::{EnsureCfgPdgOpts, ensure_cfg_pdg_for_source};
+use crate::storage::{
+    ANALYSIS_INDEX_FILE, AnalysisIndexEntry, AnalysisStorage, analysis_cache_key,
+};
+use crate::{FunctionAnalysis, ProgramDependenceGraph};
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[test]
 fn cfg_round_trip_preserves_predicates_and_rejects_unversioned_lowering() {

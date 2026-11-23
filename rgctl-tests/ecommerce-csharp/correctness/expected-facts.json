@@ -34,6 +34,19 @@
     ]
   },
   "symbols": {
+    "operand_relay": {
+      "match": {
+        "name": "operand_relay"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_calls": 1,
+        "operand_returns": 1,
+        "operand_min_writes": 2
+      }
+    },
     "correctnessRoot": {
       "match": {
         "name": "CorrectnessRoot",
@@ -85,14 +98,15 @@
         ]
       },
       "pdg": {
-        "exact_data_deps": 2,
+        "exact_data_deps": 3,
         "exact_control_deps": 2,
-        "exact_node_count": 4,
+        "exact_node_count": 5,
         "exact_node_kinds": [
           "Branch",
           "Declaration",
           "Return",
-          "Return"
+          "Return",
+          "Parameter(FormalId(0))"
         ],
         "data_edges": [
           {

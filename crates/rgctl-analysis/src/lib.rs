@@ -308,3 +308,6 @@ pub use wl_hash::{CanonicalEdgeTag, CanonicalStatementKind, WeisfeilerLehmanHash
 
 /// Bounded possible-type origins over native value transfers.
 pub mod value_origins;
+
+#[cfg(test)]
+mod tier1_operand_tests;

@@ -1391,7 +1391,7 @@ impl<'a> CfgBuilder<'a> {
                 }
                 Ok(())
             }
-            "property_declaration" => {
+            "property_declaration" | "val_definition" | "var_definition" => {
                 self.visit_declaration_initializers(node, source)?;
                 if !self.flow_active {
                     return Ok(());

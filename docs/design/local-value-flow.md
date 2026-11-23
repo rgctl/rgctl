@@ -68,7 +68,7 @@ in unordered map iteration order after archive loading.
 
 ## Compatibility, limits and consumers
 
-CFG semantics revision is **4**, archive format **RBCP v7**. Serialized local
+CFG semantics revision is **6**, archive format **RBCP v9**. Serialized local
 references are checked against the expression pools and actual CFG statements.
 Unreachable statement anchors are discarded with their pruned CFG blocks. Old
 source-identical procedural artifacts must be rebuilt through the existing
@@ -111,7 +111,7 @@ assertions and non-null assertions preserve the operand origin. Assertion failur
 is not an alternate object value; exception/panic effects remain separate work.
 Ordinary arithmetic and other computations are not aliases of their children.
 
-These persisted expression roles use CFG semantics 5 and RBCP v8; prior procedural
+These persisted expression roles use CFG semantics 6 and RBCP v9; prior procedural
 records are invalidated by the existing archive and source-revision guards.
 
 ## Possible-origin integration

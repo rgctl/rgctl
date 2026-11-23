@@ -262,6 +262,10 @@ struct CfgSpec {
     min_edges: Option<usize>,
     exact_edge_kinds: Option<Vec<String>>,
     statements_contain: Option<Vec<String>>,
+    operand_formals: Option<usize>,
+    operand_calls: Option<usize>,
+    operand_returns: Option<usize>,
+    operand_min_writes: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1919,6 +1923,38 @@ fn check_cfg(sid: &str, cs: &CfgSpec, cfg: &Value) -> Vec<CheckResult> {
         .and_then(|n| n.as_array())
         .map(|a| a.len())
         .unwrap_or(0);
+    for (pool, expected) in [
+        ("formals", cs.operand_formals),
+        ("calls", cs.operand_calls),
+        ("returns", cs.operand_returns),
+    ] {
+        if let Some(expected) = expected {
+            let actual = cfg
+                .get("operands")
+                .and_then(|o| o.get(pool))
+                .and_then(Value::as_array)
+                .map(Vec::len);
+            out.push(check(
+                format!("symbol.{sid}.cfg.operand_{pool}"),
+                sev,
+                actual == Some(expected),
+                format!("{pool}={actual:?} expected={expected}"),
+            ));
+        }
+    }
+    if let Some(min) = cs.operand_min_writes {
+        let actual = cfg
+            .get("operands")
+            .and_then(|o| o.get("local_writes"))
+            .and_then(Value::as_array)
+            .map(Vec::len);
+        out.push(check(
+            format!("symbol.{sid}.cfg.operand_local_writes"),
+            sev,
+            actual.is_some_and(|n| n >= min),
+            format!("local writes={actual:?} min={min}"),
+        ));
+    }
     let nedges = cfg
         .get("edges")
         .and_then(|n| n.as_array())

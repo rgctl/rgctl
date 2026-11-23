@@ -6,7 +6,7 @@ use rgctl_error::{Error, Result};
 use std::collections::HashMap;
 use tree_sitter::Node;
 
-const EXPRESSION_DEPTH_LIMIT: usize = 256;
+const EXPRESSION_DEPTH_LIMIT: usize = 64;
 
 fn index(value: usize) -> Result<u32> {
     u32::try_from(value).map_err(|_| Error::ParseError {
@@ -23,7 +23,7 @@ fn span(node: Node<'_>) -> Result<OperandSpan> {
     })
 }
 
-fn children(node: Node<'_>) -> Vec<Node<'_>> {
+fn children(node: Node<'_>) -> smallvec::SmallVec<[Node<'_>; 8]> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .filter(|n| n.kind() != "comment")
@@ -36,13 +36,29 @@ pub(crate) fn lower_function_operands(
     body: Node<'_>,
     source: &[u8],
 ) -> Result<FunctionOperands> {
-    let language = match canonical_language_id(language).unwrap_or("") {
+    let canonical = canonical_language_id(language).unwrap_or("");
+    let language = match canonical {
         "java" => OperandLanguage::Java,
         "javascript" => OperandLanguage::JavaScript,
         "typescript" | "tsx" => OperandLanguage::TypeScript,
         "python" => OperandLanguage::Python,
         "go" => OperandLanguage::Go,
         "rust" => OperandLanguage::Rust,
+        "c" => OperandLanguage::C,
+        "cpp" => OperandLanguage::Cpp,
+        "csharp" => OperandLanguage::CSharp,
+        "groovy" => OperandLanguage::Groovy,
+        "kotlin" => OperandLanguage::Kotlin,
+        "php" => OperandLanguage::Php,
+        "puppet" => OperandLanguage::Puppet,
+        "ruby" => OperandLanguage::Ruby,
+        "swift" => OperandLanguage::Swift,
+        "scala" => OperandLanguage::Scala,
+        "dart" => OperandLanguage::Dart,
+        "elixir" => OperandLanguage::Elixir,
+        "lua" => OperandLanguage::Lua,
+        "bash" => OperandLanguage::Bash,
+
         _ => {
             return Ok(FunctionOperands {
                 status: OperandStatus::UnsupportedLanguage,
@@ -63,15 +79,7 @@ pub(crate) fn lower_function_operands(
         source,
         names: HashMap::new(),
         expressions: HashMap::new(),
-        nested_kinds: function_kinds_for(match language {
-            OperandLanguage::Java => "java",
-            OperandLanguage::JavaScript => "javascript",
-            OperandLanguage::TypeScript => "typescript",
-            OperandLanguage::Python => "python",
-            OperandLanguage::Go => "go",
-            OperandLanguage::Rust => "rust",
-            _ => unreachable!(),
-        })?,
+        nested_kinds: function_kinds_for(canonical)?,
     };
     if function.has_error() {
         lowerer.diagnostic(function, OperandDiagnosticKind::MalformedSyntax)?;
@@ -126,14 +134,25 @@ pub(crate) fn lower_function_operands(
             lowerer.expression(condition, 0)?;
         }
         match node.kind() {
-            "call_expression"
+            "invocation_expression"
+            | "function_call_expression"
+            | "member_call_expression"
+            | "scoped_call_expression"
+            | "function_call"
+            | "command"
+            | "call_expression"
             | "call"
             | "method_invocation"
             | "object_creation_expression"
             | "new_expression" => {
                 lowerer.expression(node, 0)?;
             }
-            "return_statement" | "return_expression" => lowerer.return_site(node, false)?,
+            "return_statement" | "return_expression" | "return" => {
+                lowerer.return_site(node, false)?
+            }
+            "control_transfer_statement" if node.child_by_field_name("result").is_some() => {
+                lowerer.return_site(node, false)?
+            }
             _ => {}
         }
         // Reuse the traversal stack instead of allocating child vectors for
@@ -163,6 +182,20 @@ pub(crate) fn lower_function_operands(
     {
         lowerer.return_site(tail, true)?;
     }
+    if matches!(
+        language,
+        OperandLanguage::Ruby | OperandLanguage::Elixir | OperandLanguage::Puppet
+    ) {
+        if let Some(tail) = children(body).last().copied()
+            && !matches!(
+                tail.kind(),
+                "return" | "return_statement" | "return_expression"
+            )
+            && !lowerer.is_callable_boundary(tail)
+        {
+            lowerer.return_site(tail, true)?;
+        }
+    }
     Ok(lowerer.facts)
 }
 
@@ -176,7 +209,11 @@ struct Lowerer<'a> {
 
 impl<'a> Lowerer<'a> {
     fn is_callable_boundary(&self, node: Node<'_>) -> bool {
-        self.nested_kinds.contains(&node.kind())
+        (self.nested_kinds.contains(&node.kind())
+            && !(self.facts.language == OperandLanguage::Elixir
+                && node.kind() == "call"
+                && node.child_by_field_name("do_block").is_none()
+                && !children(node).iter().any(|n| n.kind() == "do_block")))
             || matches!(
                 node.kind(),
                 "lambda_expression"
@@ -200,7 +237,11 @@ impl<'a> Lowerer<'a> {
     }
 
     fn node_name(&mut self, node: Node<'_>) -> Result<OperandNameId> {
-        self.name(node.utf8_text(self.source).unwrap_or(""))
+        self.name(
+            node.utf8_text(self.source)
+                .unwrap_or("")
+                .trim_start_matches('$'),
+        )
     }
 
     fn diagnostic(&mut self, node: Node<'_>, kind: OperandDiagnosticKind) -> Result<()> {
@@ -254,13 +295,17 @@ impl<'a> Lowerer<'a> {
 
     fn parameters(&mut self, function: Node<'_>) -> Result<()> {
         let language = self.facts.language;
-        if language == OperandLanguage::Java {
+        if matches!(
+            language,
+            OperandLanguage::Java | OperandLanguage::Groovy | OperandLanguage::CSharp
+        ) {
             let is_static = children(function)
                 .into_iter()
-                .filter(|n| n.kind() == "modifiers")
+                .filter(|n| matches!(n.kind(), "modifiers" | "modifier"))
                 .any(|n| {
                     let mut cursor = n.walk();
-                    n.children(&mut cursor).any(|n| n.kind() == "static")
+                    n.kind() == "modifier" && n.utf8_text(self.source).ok() == Some("static")
+                        || n.children(&mut cursor).any(|n| n.kind() == "static")
                 });
             if !is_static
                 && matches!(
@@ -325,19 +370,78 @@ impl<'a> Lowerer<'a> {
                 self.parameter(param, FormalKind::Receiver)?;
             }
         }
-        let Some(parameters) = function
+        if language == OperandLanguage::Bash {
+            let mut positions = std::collections::BTreeSet::new();
+            let mut stack = vec![function];
+            while let Some(node) = stack.pop() {
+                if node.id() != function.id() && self.is_callable_boundary(node) {
+                    continue;
+                }
+                if node.kind() == "simple_expansion"
+                    && let Some(name) = node.named_child(0)
+                    && let Ok(text) = name.utf8_text(self.source)
+                    && let Ok(position) = text.parse::<u32>()
+                    && position > 0
+                {
+                    positions.insert((position, text));
+                }
+                let mut cursor = node.walk();
+                stack.extend(node.named_children(&mut cursor));
+            }
+            for (position, text) in positions {
+                self.formal(text, None, FormalKind::Positional(position - 1), None)?;
+            }
+            // Shell results are exit statuses and streams, not ordinary return values.
+            self.diagnostic(function, OperandDiagnosticKind::ReturnConvention)?;
+            return Ok(());
+        }
+        let parameters = function
             .child_by_field_name("parameters")
             .or_else(|| function.child_by_field_name("parameter"))
-        else {
+            .or_else(|| {
+                function
+                    .child_by_field_name("declarator")
+                    .and_then(|n| n.child_by_field_name("parameters"))
+            })
+            .or_else(|| {
+                function
+                    .child_by_field_name("signature")
+                    .and_then(|n| n.child_by_field_name("parameters"))
+            })
+            .or_else(|| {
+                children(function)
+                    .into_iter()
+                    .find(|n| matches!(n.kind(), "function_value_parameters" | "parameter_list"))
+            })
+            .or_else(|| {
+                if language == OperandLanguage::Elixir {
+                    children(function)
+                        .into_iter()
+                        .find(|n| n.kind() == "arguments")
+                        .and_then(|n| n.named_child(0))
+                        .and_then(|n| children(n).into_iter().find(|n| n.kind() == "arguments"))
+                } else {
+                    None
+                }
+            });
+        let direct_parameters;
+        let nodes = if language == OperandLanguage::Swift {
+            direct_parameters = children(function)
+                .into_iter()
+                .filter(|n| n.kind() == "parameter")
+                .collect::<smallvec::SmallVec<_>>();
+            direct_parameters
+        } else if let Some(parameters) = parameters {
+            if parameters.kind() == "identifier" {
+                smallvec::smallvec![parameters]
+            } else {
+                children(parameters)
+            }
+        } else {
             return Ok(());
         };
         let mut position = 0u32;
         let mut keyword_only = false;
-        let nodes = if matches!(parameters.kind(), "identifier") {
-            vec![parameters]
-        } else {
-            children(parameters)
-        };
         let mut positional_start = self.facts.formals.len();
         for param in nodes {
             match param.kind() {
@@ -405,15 +509,19 @@ impl<'a> Lowerer<'a> {
     fn parameter(&mut self, param: Node<'_>, kind: FormalKind) -> Result<()> {
         // Go may declare several names under one parameter declaration.
         let mut cursor = param.walk();
-        let names: Vec<_> = param.children_by_field_name("name", &mut cursor).collect();
+        let names: smallvec::SmallVec<[Node<'_>; 2]> = param
+            .children_by_field_name("name", &mut cursor)
+            .filter(|n| native_name(n.kind()))
+            .collect();
         let names = if !names.is_empty() {
             names
         } else {
             let pattern = param
                 .child_by_field_name("pattern")
+                .or_else(|| param.child_by_field_name("declarator"))
                 .or_else(|| param.child_by_field_name("left"))
                 .or_else(|| {
-                    if matches!(param.kind(), "identifier" | "self") {
+                    if native_name(param.kind()) {
                         Some(param)
                     } else {
                         None
@@ -423,7 +531,13 @@ impl<'a> Lowerer<'a> {
                     children(param).into_iter().find(|n| {
                         matches!(
                             n.kind(),
-                            "identifier" | "self" | "rest_pattern" | "variable_declarator"
+                            "identifier"
+                                | "simple_identifier"
+                                | "variable_name"
+                                | "variable"
+                                | "self"
+                                | "rest_pattern"
+                                | "variable_declarator"
                         )
                     })
                 });
@@ -433,8 +547,8 @@ impl<'a> Lowerer<'a> {
                     .or_else(|| n.named_child(0))
                     .into_iter()
                     .collect(),
-                Some(n) => vec![n],
-                None => vec![],
+                Some(n) => smallvec::smallvec![n],
+                None => smallvec::smallvec![],
             }
         };
         if names.is_empty() {
@@ -444,7 +558,7 @@ impl<'a> Lowerer<'a> {
             .child_by_field_name("value")
             .or_else(|| param.child_by_field_name("right"));
         for (offset, name) in names.into_iter().enumerate() {
-            if !matches!(name.kind(), "identifier" | "self") {
+            if !native_name(name.kind()) {
                 self.diagnostic(name, OperandDiagnosticKind::ParameterPattern)?;
                 continue;
             }
@@ -456,7 +570,10 @@ impl<'a> Lowerer<'a> {
                 ),
                 other => other,
             };
-            let text = name.utf8_text(self.source).unwrap_or("");
+            let text = name
+                .utf8_text(self.source)
+                .unwrap_or("")
+                .trim_start_matches('$');
             self.formal(text, Some(name), kind, default)?;
             if param.kind() == "optional_parameter"
                 && let Some(formal) = self.facts.formals.last_mut()
@@ -483,13 +600,19 @@ impl<'a> Lowerer<'a> {
             return Ok(id);
         }
         let kind = node.kind();
-        let mut inputs = Vec::new();
+        let mut inputs = smallvec::SmallVec::<[ExpressionId; 4]>::new();
         let expression_kind = if self.is_callable_boundary(node) {
             self.diagnostic(node, OperandDiagnosticKind::NestedCallable)?;
             ExpressionKind::Unknown
         } else if matches!(
             kind,
-            "call_expression"
+            "invocation_expression"
+                | "function_call_expression"
+                | "member_call_expression"
+                | "scoped_call_expression"
+                | "function_call"
+                | "command"
+                | "call_expression"
                 | "call"
                 | "method_invocation"
                 | "object_creation_expression"
@@ -505,6 +628,11 @@ impl<'a> Lowerer<'a> {
                 | "type_identifier"
                 | "property_identifier"
                 | "field_identifier"
+                | "simple_identifier"
+                | "name"
+                | "variable_name"
+                | "variable"
+                | "word"
         ) {
             ExpressionKind::Name(self.node_name(node)?)
         } else if let Some((receiver, member)) = member_parts(node) {
@@ -557,16 +685,24 @@ impl<'a> Lowerer<'a> {
                 | "raw_string_literal"
                 | "char_literal"
                 | "character_literal"
-        ) && !children(node)
-            .iter()
-            .any(|n| n.kind().contains("interpolation") || n.kind() == "template_substitution")
-        {
+        ) && !children(node).iter().any(|n| {
+            n.kind().contains("interpolation")
+                || matches!(
+                    n.kind(),
+                    "template_substitution" | "simple_expansion" | "expansion"
+                )
+        }) {
             ExpressionKind::Literal
         } else {
             for child in children(node) {
                 inputs.push(self.expression(child, depth + 1)?);
             }
-            if kind == "parenthesized_expression" {
+            if kind == "parenthesized_expression"
+                || (kind == "simple_expansion")
+                || (kind == "string"
+                    && children(node).len() == 1
+                    && children(node)[0].kind() == "simple_expansion")
+            {
                 ExpressionKind::Parenthesized
             } else {
                 ExpressionKind::Computation
@@ -600,12 +736,25 @@ impl<'a> Lowerer<'a> {
             .child_by_field_name("function")
             .or_else(|| node.child_by_field_name("constructor"))
             .or_else(|| node.child_by_field_name("name"))
-            .or_else(|| node.child_by_field_name("type"));
-        let receiver_node = node.child_by_field_name("object").or_else(|| {
-            callee_node
-                .and_then(member_parts)
-                .map(|(receiver, _)| receiver)
+            .or_else(|| node.child_by_field_name("type"))
+            .or_else(|| node.child_by_field_name("method"))
+            .or_else(|| node.child_by_field_name("target"))
+            .or_else(|| node.named_child(0));
+        let callee_node = callee_node.map(|n| {
+            if n.kind() == "command_name" {
+                n.named_child(0).unwrap_or(n)
+            } else {
+                n
+            }
         });
+        let receiver_node = node
+            .child_by_field_name("object")
+            .or_else(|| node.child_by_field_name("receiver"))
+            .or_else(|| {
+                callee_node
+                    .and_then(member_parts)
+                    .map(|(receiver, _)| receiver)
+            });
         let receiver = receiver_node
             .map(|n| self.expression(n, depth))
             .transpose()?;
@@ -618,9 +767,42 @@ impl<'a> Lowerer<'a> {
         };
         // Collect locally, then append after nested invocations have populated
         // their own argument ranges. Parent arguments stay contiguous.
-        let mut arguments = Vec::new();
-        if let Some(list) = node.child_by_field_name("arguments") {
-            for argument in children(list) {
+        let mut arguments = smallvec::SmallVec::<[ArgumentFact; 4]>::new();
+        let list = node
+            .child_by_field_name("arguments")
+            .or_else(|| {
+                children(node)
+                    .into_iter()
+                    .find(|n| matches!(n.kind(), "arguments" | "value_arguments"))
+            })
+            .or_else(|| {
+                children(node)
+                    .into_iter()
+                    .find(|n| n.kind() == "call_suffix")
+                    .and_then(|n| {
+                        children(n)
+                            .into_iter()
+                            .find(|n| n.kind() == "value_arguments")
+                    })
+            });
+        let actuals = if node.kind() == "command" {
+            let mut cursor = node.walk();
+            node.children_by_field_name("argument", &mut cursor)
+                .collect()
+        } else if self.facts.language == OperandLanguage::Puppet && node.kind() == "function_call" {
+            children(node).into_iter().skip(1).collect()
+        } else {
+            list.map(children).unwrap_or_default()
+        };
+        {
+            for argument in actuals {
+                let argument = if matches!(argument.kind(), "argument" | "value_argument")
+                    && argument.named_child_count() == 1
+                {
+                    argument.named_child(0).unwrap_or(argument)
+                } else {
+                    argument
+                };
                 let (value, kind) = match argument.kind() {
                     "keyword_argument" => {
                         let name = argument.child_by_field_name("name");
@@ -669,11 +851,13 @@ impl<'a> Lowerer<'a> {
 
     fn return_site(&mut self, node: Node<'_>, implicit: bool) -> Result<()> {
         let nodes = if implicit {
-            vec![node]
+            smallvec::smallvec![node]
         } else {
             let nodes = children(node);
-            if self.facts.language == OperandLanguage::Go
-                && nodes.first().is_some_and(|n| n.kind() == "expression_list")
+            if nodes.len() == 1
+                && nodes
+                    .first()
+                    .is_some_and(|n| matches!(n.kind(), "expression_list" | "argument_list"))
             {
                 children(nodes[0])
             } else {
@@ -697,18 +881,49 @@ impl<'a> Lowerer<'a> {
 fn member_parts(node: Node<'_>) -> Option<(Node<'_>, Node<'_>)> {
     if !matches!(
         node.kind(),
-        "member_expression" | "attribute" | "selector_expression" | "field_expression"
+        "member_expression"
+            | "attribute"
+            | "selector_expression"
+            | "field_expression"
+            | "member_access_expression"
+            | "navigation_expression"
+            | "method_index_expression"
+            | "dot_index_expression"
     ) {
         return None;
     }
     let object = node
         .child_by_field_name("object")
         .or_else(|| node.child_by_field_name("operand"))
-        .or_else(|| node.child_by_field_name("value"))?;
+        .or_else(|| node.child_by_field_name("value"))
+        .or_else(|| node.child_by_field_name("argument"))
+        .or_else(|| node.child_by_field_name("expression"))
+        .or_else(|| node.child_by_field_name("target"))
+        .or_else(|| node.child_by_field_name("table"))
+        .or_else(|| {
+            if node.kind() == "navigation_expression" {
+                node.named_child(0)
+            } else {
+                None
+            }
+        })?;
     let member = node
         .child_by_field_name("property")
         .or_else(|| node.child_by_field_name("attribute"))
-        .or_else(|| node.child_by_field_name("field"))?;
+        .or_else(|| node.child_by_field_name("field"))
+        .or_else(|| node.child_by_field_name("name"))
+        .or_else(|| node.child_by_field_name("method"))
+        .or_else(|| {
+            node.child_by_field_name("suffix")
+                .and_then(|n| n.child_by_field_name("suffix").or(Some(n)))
+        })
+        .or_else(|| {
+            if node.kind() == "navigation_expression" {
+                node.named_child(1)
+            } else {
+                None
+            }
+        })?;
     Some((object, member))
 }
 
@@ -727,6 +942,38 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
         }
     }
     match root.kind() {
+        "declaration" | "declaration_command" => children(root)
+            .into_iter()
+            .filter(|n| matches!(n.kind(), "init_declarator" | "variable_assignment"))
+            .map(|n| {
+                (
+                    n.child_by_field_name("declarator")
+                        .or_else(|| n.child_by_field_name("name"))
+                        .unwrap_or(n),
+                    n.child_by_field_name("value"),
+                )
+            })
+            .collect(),
+        "property_declaration" | "val_definition" | "var_definition" => {
+            let target = root
+                .child_by_field_name("pattern")
+                .or_else(|| root.child_by_field_name("name"))
+                .or_else(|| {
+                    children(root)
+                        .into_iter()
+                        .find(|n| n.kind() == "variable_declaration")
+                        .and_then(|n| n.named_child(0))
+                });
+            target
+                .map(|n| {
+                    vec![(
+                        n.child_by_field_name("bound_identifier").unwrap_or(n),
+                        root.child_by_field_name("value")
+                            .or_else(|| initializer_after_equals(root)),
+                    )]
+                })
+                .unwrap_or_default()
+        }
         "let_declaration" | "let_statement" => root
             .child_by_field_name("pattern")
             .map(|target| vec![(target, root.child_by_field_name("value").map(scalar))])
@@ -736,19 +983,32 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
             .flat_map(local_write_sources)
             .collect(),
         "variable_declaration"
+            if children(root)
+                .iter()
+                .any(|n| n.kind() == "assignment_statement") =>
+        {
+            children(root)
+                .into_iter()
+                .flat_map(local_write_sources)
+                .collect()
+        }
+        "variable_declaration"
         | "lexical_declaration"
         | "local_variable_declaration"
         | "local_declaration_statement" => children(root)
             .into_iter()
-            .filter(|n| n.kind() == "variable_declarator")
-            .filter_map(|n| {
-                n.child_by_field_name("name")
-                    .map(|name| (name, n.child_by_field_name("value")))
-            })
+            .flat_map(local_write_sources)
             .collect(),
-        "variable_declarator" | "var_spec" => root
+        "variable_declarator" | "initialized_variable_definition" | "var_spec" => root
             .child_by_field_name("name")
-            .map(|target| vec![(target, root.child_by_field_name("value").map(scalar))])
+            .map(|target| {
+                vec![(
+                    target,
+                    root.child_by_field_name("value")
+                        .or_else(|| initializer_after_equals(root))
+                        .map(scalar),
+                )]
+            })
             .unwrap_or_default(),
         "type_switch_statement" => root
             .child_by_field_name("alias")
@@ -758,22 +1018,51 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
         "assignment"
         | "assignment_expression"
         | "assignment_statement"
+        | "binary_operator"
         | "short_var_declaration" => {
-            let Some(left) = root.child_by_field_name("left") else {
+            let Some(left) = root
+                .child_by_field_name("left")
+                .or_else(|| {
+                    children(root)
+                        .into_iter()
+                        .find(|n| n.kind() == "variable_list")
+                })
+                .or_else(|| {
+                    if root.kind() == "assignment" {
+                        root.named_child(0)
+                    } else {
+                        None
+                    }
+                })
+            else {
                 return vec![];
             };
-            let Some(right) = root.child_by_field_name("right") else {
+            let Some(right) = root
+                .child_by_field_name("right")
+                .or_else(|| {
+                    children(root)
+                        .into_iter()
+                        .find(|n| n.kind() == "expression_list")
+                })
+                .or_else(|| {
+                    if root.kind() == "assignment" {
+                        root.named_child(1)
+                    } else {
+                        None
+                    }
+                })
+            else {
                 return vec![(left, None)];
             };
-            let lefts = if left.kind() == "expression_list" {
+            let lefts = if matches!(left.kind(), "expression_list" | "variable_list") {
                 children(left)
             } else {
-                vec![left]
+                smallvec::smallvec![left]
             };
             let rights = if right.kind() == "expression_list" {
                 children(right)
             } else {
-                vec![right]
+                smallvec::smallvec![right]
             };
             if lefts.len() != rights.len() {
                 return lefts.into_iter().map(|n| (n, None)).collect();
@@ -811,5 +1100,23 @@ fn asserted_value(node: Node<'_>) -> Option<Node<'_>> {
         "as_expression" | "non_null_expression" => node.named_child(0),
         "type_assertion" => node.named_child(node.named_child_count().checked_sub(1)?),
         _ => None,
+    }
+}
+
+fn native_name(kind: &str) -> bool {
+    matches!(
+        kind,
+        "identifier" | "simple_identifier" | "variable_name" | "variable" | "self" | "word"
+    )
+}
+
+// Some grammars (Kotlin/C#) leave initializers unnamed. Only an actual native
+// `=` token qualifies a final child as an initializer; type/pattern children do not.
+fn initializer_after_equals(node: Node<'_>) -> Option<Node<'_>> {
+    let mut cursor = node.walk();
+    if node.children(&mut cursor).any(|n| n.kind() == "=") {
+        node.named_child(node.named_child_count().checked_sub(1)?)
+    } else {
+        None
     }
 }

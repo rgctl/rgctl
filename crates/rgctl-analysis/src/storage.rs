@@ -1045,6 +1045,7 @@ mod tests {
             stable_key: analysis_cache_key(id, "same"),
             function_id: id,
             code_hash: "same".into(),
+            source_location: None,
             flow_count: 3,
             vulnerable_count: 1,
         };

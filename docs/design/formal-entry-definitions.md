@@ -45,7 +45,7 @@ not an end-to-end dispatch or dependency-impact qualification.
 
 ## Compatibility and limits
 
-CFG semantics revision is **4**, procedural archive format **RBCP v7**. Existing
+CFG semantics revision is **6**, procedural archive format **RBCP v9**. Existing
 revision guards invalidate older lowering even if source is unchanged. Formal
 statement IDs and CFG block shapes can change; use canonical callable IDs and
 typed local formal IDs rather than retaining statement UUIDs across revisions.

@@ -150,11 +150,13 @@ impl CfgBuilder<'_> {
                 continue;
             };
             let mut matches = candidates.iter().filter(|(target, _)| {
-                target.kind() == "identifier"
-                    && target
-                        .utf8_text(source)
-                        .ok()
-                        .is_some_and(|raw| self.resolve_local(raw) == *scoped)
+                matches!(
+                    target.kind(),
+                    "identifier" | "simple_identifier" | "variable_name" | "variable"
+                ) && target
+                    .utf8_text(source)
+                    .ok()
+                    .is_some_and(|raw| self.resolve_local(raw.trim_start_matches('$')) == *scoped)
             });
             let candidate = matches.next();
             let value = if matches.next().is_none() {

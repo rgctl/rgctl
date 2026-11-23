@@ -48,8 +48,9 @@ factory results that arrived before the target would be lost. Facts are deduped
 by `(value, origin)` and targets by canonical invocation/target/receiver convention.
 Recursion terminates at a fixed point or an explicit query budget.
 
-Rest/keyword membership, unknown spreads and multiple return-slot projections
-are diagnosed rather than equating an entire container or tuple with an element.
+Rest/keyword membership and unknown spreads are diagnosed rather than equating
+an entire container with an element. Native Go result projections retain their
+return-slot positions, as described below.
 Implicit values do not acquire fabricated object origins. Unsupported local,
 binding and missing-body evidence is retained while known paths continue.
 
@@ -89,3 +90,13 @@ The solver serializes explicit missing-function, local/binding coverage,
 unsupported-transfer, unresolved-call/receiver and limit diagnostics. Empty paths
 with missing inputs or unsupported handoffs must never be treated as successful
 negative results.
+
+## Go result projections
+
+A multi-value call result retains separate native assignment projections. The
+solver indexes those projections once per loaded callable and routes each
+`ReturnToResult { position }` transfer to its matching projection. It does not
+alias the tuple with its elements or mix different return positions. Missing
+projection consumers remain diagnosed. Type-switch aliases reuse the incoming
+origin within the switch scope. Instance-field and general aggregate storage
+remain separate extensions.

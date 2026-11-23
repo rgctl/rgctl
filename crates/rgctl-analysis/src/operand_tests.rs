@@ -427,7 +427,12 @@ fn unsupported_and_unbuilt_operands_are_distinct_from_an_empty_capture() {
         ControlFlowGraph::new().operands.status,
         OperandStatus::NotBuilt
     );
-    let unsupported = build_cfg_for_function("c", "void example() {}", "example").unwrap();
+    let unsupported = build_cfg_for_function(
+        "hcl",
+        "resource \"demo\" \"example\" {}",
+        "resource.demo.example",
+    )
+    .unwrap();
     assert_eq!(
         unsupported.operands.status,
         OperandStatus::UnsupportedLanguage
