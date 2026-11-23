@@ -245,7 +245,7 @@ fn is_field_access_kind(kind: &str) -> bool {
             | "selector_expression"
             | "attribute"
             // Kotlin: `order.status` / `this.status` (expression + identifier children).
-            | "navigation_expression"
+            | "navigation_expression" | "method_index_expression" | "dot_index_expression"
     )
 }
 
@@ -327,6 +327,20 @@ fn collect_field_access_base_uses<'a>(
         .or_else(|| node.child_by_field_name("argument"))
         .or_else(|| node.child_by_field_name("value"))
         .or_else(|| node.child_by_field_name("expression"))
+        .or_else(|| node.child_by_field_name("target"))
+        .or_else(|| node.child_by_field_name("table"))
+        .or_else(|| {
+            if node.kind() == "navigation_expression" {
+                node.named_child(0)
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            let mut cursor = node.walk();
+            node.children(&mut cursor)
+                .find(|n| matches!(n.kind(), "this" | "self"))
+        })
     {
         stack.push((object, false, depth + 1));
     }
@@ -956,7 +970,7 @@ fn collect_def_use_node<'a>(
 
         // Language-defined receiver tokens are values, even though Java/ECMA
         // `this` and Rust `self` are not ordinary identifier nodes.
-        "this" | "self" if !is_def_target => {
+        "this" | "self" | "this_expression" | "self_expression" if !is_def_target => {
             if let Ok(name) = node.utf8_text(source) {
                 used.insert(name.to_string());
             }

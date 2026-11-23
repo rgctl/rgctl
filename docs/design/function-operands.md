@@ -89,3 +89,9 @@ boundaries must not be interpreted as complete negative flow results.
 Native lowering reports unsupported patterns, depth limits and malformed syntax.
 Expression descent stops at 64 frames to protect worker stacks, including C/C++
 method chains. Routine child lists use inline storage before spilling to the heap.
+
+Class-method fixtures additionally qualify implicit `this`/`self` entry values in
+C++, C#, Groovy, Kotlin, PHP, Ruby, Swift, Scala, Dart and Lua. Lua colon-method
+CFG lookup retains the native qualified name. Conditional fixtures retain both
+selected values and exclude the condition across the languages with that native
+expression form; PHP's `body` field is also used by CFG branch lowering.

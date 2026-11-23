@@ -9,3 +9,7 @@ end
 function operand_member(value, other)
  return value:perform(other)
 end
+
+function OperandSelf:operand_instance(other)
+ return self:perform(other)
+end

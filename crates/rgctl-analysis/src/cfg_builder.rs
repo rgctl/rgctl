@@ -621,6 +621,10 @@ fn parse_language(language: &str, source: &[u8]) -> Result<Tree> {
 fn callable_name_for_cfg(node: Node<'_>, source: &[u8], language: &str) -> Option<String> {
     match language {
         "javascript" | "js" | "typescript" | "ts" => ecmascript_function_symbol_name(node, source),
+        "lua" if node.kind() == "function_declaration" => node
+            .child_by_field_name("name")
+            .and_then(|name| name.utf8_text(source).ok())
+            .map(str::to_owned),
         "puppet" => {
             // Prefer class_identifier / identifier / node_name over other children.
             let mut cursor = node.walk();
@@ -1896,7 +1900,10 @@ impl<'a> CfgBuilder<'a> {
 
         self.flow_active = true;
         self.current_block = true_block;
-        if let Some(cons) = node.child_by_field_name("consequence") {
+        if let Some(cons) = node
+            .child_by_field_name("consequence")
+            .or_else(|| node.child_by_field_name("body"))
+        {
             self.visit_expr_for_control_flow(cons, source)?;
             if self.flow_active {
                 self.add_statement(cons, source, StatementKind::Expression)?;

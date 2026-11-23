@@ -18,3 +18,5 @@ func operand_switch(value any) any {
 }
 
 func operand_member(value Receiver, other int) int { return value.perform(other) }
+
+func operand_choice(flag bool, left any, right any) any { if flag { return left }; return right }

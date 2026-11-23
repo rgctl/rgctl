@@ -34,6 +34,109 @@ fn check(language: &str) {
         );
     }
 
+    if source.contains("operand_instance") {
+        let cfg = build_cfg_for_function(
+            language,
+            &source,
+            if language == "lua" {
+                "OperandSelf:operand_instance"
+            } else {
+                "operand_instance"
+            },
+        )
+        .unwrap();
+        let formal = cfg
+            .operands
+            .formals
+            .iter()
+            .find(|f| f.kind == FormalKind::Receiver)
+            .unwrap_or_else(|| {
+                panic!("{language}: missing implicit receiver: {:#?}", cfg.operands)
+            });
+        let receiver = cfg
+            .operands
+            .calls
+            .iter()
+            .find_map(|c| c.receiver)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{language}: missing self/this invocation receiver: {:#?}",
+                    cfg.operands
+                )
+            });
+        let value = formal.value;
+        let mut backend = MemoryBackend::new();
+        let mut node = Node::new(NodeType::Function, "operand_instance");
+        node.id = Uuid::from_u128(4);
+        backend.insert_node(node.clone()).unwrap();
+        let icfg = InterproceduralCFG::from_cfg_archive(&backend, HashMap::from([(node.id, cfg)]))
+            .unwrap();
+        let seed = OriginSeed {
+            value: ValueRef {
+                function: node.id,
+                expression: value,
+            },
+            type_id: Uuid::from_u128(5),
+        };
+        let result = OriginAnalysis::build(&icfg, &[seed], &[], &[], OriginLimits::default());
+        assert!(
+            !result
+                .origins(ValueRef {
+                    function: node.id,
+                    expression: receiver
+                })
+                .is_empty(),
+            "{language}: receiver origin lost: {result:#?}"
+        );
+    }
+    if source.contains("operand_choice") {
+        let cfg = build_cfg_for_function(language, &source, "operand_choice").unwrap();
+        let mut backend = MemoryBackend::new();
+        let mut node = Node::new(NodeType::Function, "operand_choice");
+        node.id = Uuid::from_u128(6);
+        backend.insert_node(node.clone()).unwrap();
+        let seeds: Vec<_> = cfg
+            .operands
+            .formals
+            .iter()
+            .enumerate()
+            .map(|(i, f)| OriginSeed {
+                value: ValueRef {
+                    function: node.id,
+                    expression: f.value,
+                },
+                type_id: Uuid::from_u128(10 + i as u128),
+            })
+            .collect();
+        assert_eq!(seeds.len(), 3, "{language}: choice formals");
+        let returns: Vec<_> = cfg
+            .operands
+            .returns
+            .iter()
+            .flat_map(|r| r.values.slice(&cfg.operands.inputs).unwrap())
+            .copied()
+            .collect();
+        let icfg = InterproceduralCFG::from_cfg_archive(&backend, HashMap::from([(node.id, cfg)]))
+            .unwrap();
+        let result = OriginAnalysis::build(&icfg, &seeds, &[], &[], OriginLimits::default());
+        let types: std::collections::BTreeSet<_> = returns
+            .into_iter()
+            .flat_map(|expression| {
+                result.origins(ValueRef {
+                    function: node.id,
+                    expression,
+                })
+            })
+            .map(|origin| result.seeds[origin.0 as usize].type_id)
+            .collect();
+        assert_eq!(
+            types,
+            [Uuid::from_u128(11), Uuid::from_u128(12)]
+                .into_iter()
+                .collect(),
+            "{language}: condition must not become a selected result: {result:#?}"
+        );
+    }
     let facts = &caller_cfg.operands;
     assert_eq!(facts.status, OperandStatus::Captured, "{language}");
     assert!(facts.valid_references());

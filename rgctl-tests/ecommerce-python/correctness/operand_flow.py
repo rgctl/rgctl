@@ -6,3 +6,6 @@ def operand_relay(value):
 
 def operand_member(value, other):
     return value.perform(other)
+
+def operand_choice(flag, left, right):
+    return left if flag else right

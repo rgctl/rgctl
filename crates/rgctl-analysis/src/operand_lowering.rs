@@ -364,6 +364,47 @@ impl<'a> Lowerer<'a> {
                 }
             }
         }
+        if self.facts.receiver_convention == ReceiverConvention::None {
+            let parent = function.parent();
+            let class_method = match language {
+                OperandLanguage::Cpp => {
+                    parent.is_some_and(|n| n.kind() == "field_declaration_list")
+                }
+                OperandLanguage::Php => function.kind() == "method_declaration",
+                OperandLanguage::Kotlin | OperandLanguage::Swift => {
+                    parent.is_some_and(|n| n.kind() == "class_body")
+                }
+                OperandLanguage::Scala => parent
+                    .and_then(|n| n.parent())
+                    .is_some_and(|n| n.kind() == "class_definition"),
+                OperandLanguage::Ruby => parent
+                    .and_then(|n| n.parent())
+                    .is_some_and(|n| matches!(n.kind(), "class" | "module")),
+                OperandLanguage::Dart => function.kind() == "method_declaration",
+                OperandLanguage::Lua => function
+                    .child_by_field_name("name")
+                    .is_some_and(|n| n.kind() == "method_index_expression"),
+                _ => false,
+            };
+            let mut cursor = function.walk();
+            let is_static = function.children(&mut cursor).any(|n| {
+                n.kind() == "static"
+                    || matches!(n.kind(), "static_modifier" | "storage_class_specifier")
+                        && n.utf8_text(self.source).ok() == Some("static")
+            });
+            if class_method && !is_static {
+                self.facts.receiver_convention = ReceiverConvention::ImplicitThis;
+                let name = if matches!(
+                    language,
+                    OperandLanguage::Ruby | OperandLanguage::Swift | OperandLanguage::Lua
+                ) {
+                    "self"
+                } else {
+                    "this"
+                };
+                self.formal(name, None, FormalKind::Receiver, None)?;
+            }
+        }
         if let Some(receiver) = function.child_by_field_name("receiver") {
             self.facts.receiver_convention = ReceiverConvention::Explicit;
             for param in children(receiver) {
@@ -424,6 +465,16 @@ impl<'a> Lowerer<'a> {
                     None
                 }
             });
+        let parameters = parameters.or_else(|| {
+            function
+                .child_by_field_name("signature")
+                .and_then(|n| {
+                    children(n)
+                        .into_iter()
+                        .find(|n| n.kind() == "function_signature")
+                })
+                .and_then(|n| n.child_by_field_name("parameters"))
+        });
         let direct_parameters;
         let nodes = if language == OperandLanguage::Swift {
             direct_parameters = children(function)
@@ -628,6 +679,8 @@ impl<'a> Lowerer<'a> {
                 | "type_identifier"
                 | "property_identifier"
                 | "field_identifier"
+                | "this_expression"
+                | "self_expression"
                 | "simple_identifier"
                 | "name"
                 | "variable_name"
@@ -638,7 +691,9 @@ impl<'a> Lowerer<'a> {
         } else if let Some((receiver, member)) = member_parts(node) {
             inputs.push(self.expression(receiver, depth + 1)?);
             ExpressionKind::Member(self.node_name(member)?)
-        } else if let Some((condition, consequence, alternative)) = conditional_parts(node) {
+        } else if let Some((condition, consequence, alternative)) =
+            conditional_parts(node, self.facts.language)
+        {
             let condition = self.expression(condition, depth + 1)?;
             inputs.push(self.expression(consequence, depth + 1)?);
             inputs.push(self.expression(alternative, depth + 1)?);
@@ -901,6 +956,11 @@ fn member_parts(node: Node<'_>) -> Option<(Node<'_>, Node<'_>)> {
         .or_else(|| node.child_by_field_name("target"))
         .or_else(|| node.child_by_field_name("table"))
         .or_else(|| {
+            let mut cursor = node.walk();
+            node.children(&mut cursor)
+                .find(|n| matches!(n.kind(), "this" | "self"))
+        })
+        .or_else(|| {
             if node.kind() == "navigation_expression" {
                 node.named_child(0)
             } else {
@@ -1078,21 +1138,54 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
 
 // Only selected values flow through a conditional. Its condition remains a
 // separate native operand, preserving control/data distinctions for consumers.
-fn conditional_parts(node: Node<'_>) -> Option<(Node<'_>, Node<'_>, Node<'_>)> {
-    match node.kind() {
-        "ternary_expression" => Some((
-            node.child_by_field_name("condition")?,
-            node.child_by_field_name("consequence")?,
-            node.child_by_field_name("alternative")?,
-        )),
-        "conditional_expression" if node.named_child_count() == 3 => Some((
-            node.named_child(1)?,
-            node.named_child(0)?,
-            node.named_child(2)?,
-        )),
-        _ => None,
+fn conditional_parts(
+    node: Node<'_>,
+    language: OperandLanguage,
+) -> Option<(Node<'_>, Node<'_>, Node<'_>)> {
+    if matches!(
+        node.kind(),
+        "ternary_expression" | "conditional_expression" | "conditional" | "if_expression"
+    ) {
+        if let (Some(condition), Some(yes), Some(no)) = (
+            node.child_by_field_name("condition"),
+            node.child_by_field_name("consequence")
+                .or_else(|| node.child_by_field_name("body")),
+            node.child_by_field_name("alternative"),
+        ) {
+            return Some((condition, branch_value(yes)?, branch_value(no)?));
+        }
+        if node.named_child_count() == 3 {
+            return if language == OperandLanguage::Python {
+                Some((
+                    node.named_child(1)?,
+                    node.named_child(0)?,
+                    node.named_child(2)?,
+                ))
+            } else {
+                Some((
+                    node.named_child(0)?,
+                    branch_value(node.named_child(1)?)?,
+                    branch_value(node.named_child(2)?)?,
+                ))
+            };
+        }
     }
+    None
 }
+
+fn branch_value(mut node: Node<'_>) -> Option<Node<'_>> {
+    for _ in 0..EXPRESSION_DEPTH_LIMIT {
+        if !matches!(
+            node.kind(),
+            "block" | "statements" | "else_clause" | "else" | "control_structure_body"
+        ) {
+            return Some(node);
+        }
+        node = children(node).last().copied()?;
+    }
+    None
+}
+
 fn asserted_value(node: Node<'_>) -> Option<Node<'_>> {
     match node.kind() {
         "cast_expression" => node.child_by_field_name("value"),

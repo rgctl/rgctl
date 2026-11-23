@@ -9,3 +9,14 @@ end
 def operand_member(value, other)
  return value.perform(other)
 end
+
+class OperandSelf
+ def operand_instance(other)
+  return self.perform(other)
+ end
+end
+
+
+def operand_choice(flag, left, right)
+ return flag ? left : right
+end

@@ -1,2 +1,4 @@
 int operand_sink(int value) { return value; }
 int operand_relay(int value) { int alias = value; return operand_sink(alias); }
+
+int operand_choice(int flag, int left, int right) { return flag ? left : right; }
