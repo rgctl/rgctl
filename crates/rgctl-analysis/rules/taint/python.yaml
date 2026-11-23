@@ -11,6 +11,10 @@ rules:
     values:
     - request.GET
     - request.POST
+    - request.query_params
+    - request.args
+    - request.form
+    - request.json
 - id: py-src-file
   role: source
   kind: FileInput

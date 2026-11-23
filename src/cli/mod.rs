@@ -49,6 +49,7 @@ pub mod slice_output;
 mod stage_profile;
 mod structured_query;
 mod temporal_prep;
+mod threat_model;
 pub mod update;
 mod vuln_deps;
 mod writeback;
@@ -1176,6 +1177,43 @@ pub enum VulnCommands {
         /// Fail-closed escalation: promote under_investigation findings to exploitable
         #[arg(long = "strict-reachability", default_value_t = false)]
         strict_reachability: bool,
+    },
+    /// Generate a deterministic threat-model evidence pack, Mermaid DFD, and STRIDE candidates
+    #[command(name = "threat-model", visible_alias = "surface")]
+    ThreatModel {
+        /// Local OSV JSON file or directory override (zero network calls)
+        #[arg(long = "osv", value_name = "PATH")]
+        osv: Option<std::path::PathBuf>,
+        /// Upstream scanner report override: Trivy, Grype, or OSV-Scanner JSON (zero network calls)
+        #[arg(long = "from-report", value_name = "PATH")]
+        from_report: Option<std::path::PathBuf>,
+        /// CycloneDX or SPDX JSON SBOM to merge into dependency inventory
+        #[arg(long = "sbom", value_name = "PATH")]
+        sbom: Option<std::path::PathBuf>,
+        /// Offline mode (default unless `--online` is passed): evaluate `.rgctl/osv/` with zero network calls
+        #[arg(long = "offline", default_value_t = false)]
+        offline: bool,
+        /// Opt into live OSV network queries if no local OSV cache or override is supplied
+        #[arg(long = "online", default_value_t = false)]
+        online: bool,
+        /// OSV API base URL when `--online` is enabled
+        #[arg(long = "osv-api-url", value_name = "URL")]
+        osv_api_url: Option<String>,
+        /// JAR/WAR roots (opt-in)
+        #[arg(long = "include-jars", value_name = "DIR", num_args = 1..)]
+        include_jars: Vec<std::path::PathBuf>,
+        /// node_modules roots (opt-in)
+        #[arg(long = "include-node-modules", value_name = "DIR", num_args = 1..)]
+        include_node_modules: Vec<std::path::PathBuf>,
+        /// Build/use `.rgctl/dep_stubs.bin` to stitch transitive calls across JARs and vendor caches
+        #[arg(long = "with-dep-stubs", default_value_t = false)]
+        with_dep_stubs: bool,
+        /// Maximum call-graph traversal hops from each entry point to sinks
+        #[arg(long = "max-depth", default_value_t = 8)]
+        max_depth: usize,
+        /// Skip on-demand intra-procedural CFG/PDG taint evaluation for entry-reachable sinks
+        #[arg(long = "no-lazy-cfg", default_value_t = false)]
+        no_lazy_cfg: bool,
     },
 }
 
@@ -2891,6 +2929,7 @@ fn command_label_for(command: &Commands) -> &'static str {
             VulnCommands::Fetch { .. } => "vuln fetch",
             VulnCommands::Analyze { .. } => "vuln analyze",
             VulnCommands::Scan { .. } => "vuln scan",
+            VulnCommands::ThreatModel { .. } => "vuln threat-model",
         },
         Commands::Deps { action } => match action {
             DepsCommands::Check { .. } => "deps check",
@@ -2901,6 +2940,7 @@ fn command_label_for(command: &Commands) -> &'static str {
                 VulnCommands::Fetch { .. } => "security vuln fetch",
                 VulnCommands::Analyze { .. } => "security vuln analyze",
                 VulnCommands::Scan { .. } => "security vuln scan",
+                VulnCommands::ThreatModel { .. } => "security vuln threat-model",
             },
             SecurityCommands::Deps { action } => match action {
                 DepsCommands::Check { .. } => "security deps check",
