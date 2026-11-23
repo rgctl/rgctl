@@ -59,10 +59,10 @@ pub use sink_taint::{
     build_sink_first_result_with_sites, missing_cfg_error_message, rules_with_osv_overlays,
 };
 pub use threat_model::{
-    AssetEvidence, AssetKind, ConfidenceLevel, DiscoveredPdgSink, EntryPointEvidence,
-    EntryPointKind, EvidenceProvenance, EvidenceRecord, FunctionPdgReport, FunctionPdgRequest,
-    LimitationNote, PdgSinkStatus, ReachableVulnEvidence, ReviewStatus, SinkEvidence,
-    StrideCategory, THREAT_MODEL_SCHEMA_VERSION, ThreatCandidate, ThreatDataFlow,
+    AssetEvidence, AssetKind, ConfidenceLevel, DEFAULT_MAX_LAZY_PDG_FUNCTIONS, DiscoveredPdgSink,
+    EntryPointEvidence, EntryPointKind, EvidenceProvenance, EvidenceRecord, FunctionPdgReport,
+    FunctionPdgRequest, LimitationNote, PdgSinkStatus, ReachableVulnEvidence, ReviewStatus,
+    SinkEvidence, StrideCategory, THREAT_MODEL_SCHEMA_VERSION, ThreatCandidate, ThreatDataFlow,
     ThreatModelBuildOpts, ThreatModelReport, ThreatModelSummary, TrustBoundaryCandidate,
     TrustBoundaryKind, build_threat_model, classify_callee_sanitizer, classify_callee_sink,
     render_threat_model_markdown, render_threat_model_mermaid,

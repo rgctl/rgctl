@@ -478,3 +478,181 @@ fn missing_snapshot_emits_structured_graph_not_found_json_error() {
     assert_eq!(err_json["error_code"], "GRAPH_NOT_FOUND");
     assert_eq!(err_json["recovery_command"], "rgctl discover");
 }
+
+/// Regression: data-flow IDs used to be renumbered in place after a HashMap-ordered build, so
+/// swapped IDs overwrote each other's `evidence_index` records (dangling `evidence_refs`, wrong
+/// summaries) and output differed between runs. Also pins whole-token control matching:
+/// `get_author` / `invalidate_cache` must not count as auth / validation controls.
+#[test]
+fn multi_route_flows_keep_evidence_index_consistent_and_controls_token_exact() {
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::write(
+        repo.path().join("app.py"),
+        r#"import subprocess
+import os
+from fastapi import FastAPI
+
+app = FastAPI()
+
+def helper_a(x):
+    subprocess.run(x, shell=True)
+
+def helper_b(x):
+    os.system(x)
+
+def helper_c(x):
+    eval(x)
+
+def get_author(x):
+    return x
+
+def invalidate_cache(x):
+    return x
+
+@app.post("/a")
+def route_a(cmd: str):
+    get_author(cmd)
+    helper_a(cmd)
+    helper_c(cmd)
+
+@app.post("/b")
+def route_b(cmd: str):
+    invalidate_cache(cmd)
+    helper_b(cmd)
+    helper_a(cmd)
+    helper_c(cmd)
+
+@app.get("/c")
+def route_c(cmd: str):
+    helper_c(cmd)
+    helper_b(cmd)
+"#,
+    )
+    .unwrap();
+    run_discover_plain(repo.path());
+
+    let run = || {
+        rgctl()
+            .current_dir(repo.path())
+            .args(["-f", "json", "vuln", "threat-model", "--offline"])
+            .output()
+            .unwrap()
+    };
+    let first = run();
+    for _ in 0..3 {
+        assert_eq!(
+            first.stdout,
+            run().stdout,
+            "threat-model JSON must be byte-identical"
+        );
+    }
+    let report = stdout_json(first);
+    assert_epistemic_invariants(&report);
+
+    let index = report["evidence_index"].as_object().unwrap();
+    let eps = report["entry_points"].as_array().unwrap();
+    let sinks = report["sinks"].as_array().unwrap();
+    let flows = report["data_flows"].as_array().unwrap();
+    assert!(flows.len() >= 3, "expected several flows, got {flows:?}");
+    for df in flows {
+        let id = df["id"].as_str().unwrap();
+        let rec = index
+            .get(id)
+            .unwrap_or_else(|| panic!("{id} missing from evidence_index"));
+        assert_eq!(rec["id"], id);
+        assert_eq!(rec["kind"], "data_flow");
+        let ep = eps
+            .iter()
+            .find(|e| e["id"] == df["entry_point_id"])
+            .unwrap();
+        let sink = sinks.iter().find(|s| s["id"] == df["sink_id"]).unwrap();
+        assert_eq!(
+            rec["symbol_or_target"],
+            format!(
+                "{} -> {}",
+                ep["name"].as_str().unwrap(),
+                sink["callee"].as_str().unwrap()
+            ),
+            "{id} evidence record must describe its own flow"
+        );
+    }
+
+    for ep in eps {
+        assert!(
+            ep["observed_auth_controls"].as_array().unwrap().is_empty(),
+            "`get_author` must not be treated as auth: {ep}"
+        );
+        assert!(
+            ep["observed_validation_controls"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "`invalidate_cache` must not be treated as validation: {ep}"
+        );
+    }
+    let spoofing = report["threat_candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["stride"] == "spoofing")
+        .count();
+    assert_eq!(
+        spoofing,
+        eps.len(),
+        "every unauthenticated route yields Spoofing"
+    );
+}
+
+/// `@Scheduled` jobs are internally triggered: classified as `scheduled_job`, never as
+/// unauthenticated HTTP ingress (no Spoofing candidate).
+#[test]
+fn scheduled_jobs_are_not_http_ingress() {
+    let repo = tempfile::tempdir().unwrap();
+    let src = repo.path().join("src/main/java/com/acme");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("Jobs.java"),
+        r#"package com.acme;
+
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+@Component
+public class Jobs {
+    @Scheduled(cron = "0 0 * * * *")
+    public void nightlyCleanup() {
+        purge();
+    }
+
+    private void purge() {}
+}
+"#,
+    )
+    .unwrap();
+    run_discover_plain(repo.path());
+    let out = rgctl()
+        .current_dir(repo.path())
+        .args(["-f", "json", "vuln", "threat-model", "--offline"])
+        .output()
+        .unwrap();
+    let report = stdout_json(out);
+    assert_epistemic_invariants(&report);
+    let eps = report["entry_points"].as_array().unwrap();
+    let job = eps
+        .iter()
+        .find(|e| {
+            e["handler_symbol"]
+                .as_str()
+                .is_some_and(|h| h.contains("nightlyCleanup"))
+        })
+        .unwrap_or_else(|| panic!("scheduled job entry point missing: {eps:?}"));
+    assert_eq!(job["kind"], "scheduled_job");
+    assert!(
+        !report["threat_candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["stride"] == "spoofing"),
+        "scheduled jobs must not produce Spoofing candidates"
+    );
+}

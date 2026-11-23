@@ -33,6 +33,7 @@ pub struct ThreatModelCliArgs {
     pub include_node_modules: Vec<PathBuf>,
     pub with_dep_stubs: bool,
     pub max_depth: usize,
+    pub max_pdg_functions: usize,
     pub no_lazy_cfg: bool,
 }
 
@@ -95,6 +96,12 @@ fn extract_call_callee(stmt: &str, fallback: &str) -> String {
 
 /// Execute `rgctl vuln threat-model`.
 pub fn run_vuln_threat_model(ctx: &CliContext, args: ThreatModelCliArgs) -> Result<()> {
+    let run_start = std::time::Instant::now();
+    let mut stage = std::time::Instant::now();
+    let mut lap = |name: &str| {
+        tracing::info!(target: "profile", "[profile] threat-model stage {name}: {:.3}s", stage.elapsed().as_secs_f64());
+        stage = std::time::Instant::now();
+    };
     let Some(store) = ctx.open_snapshot_store()? else {
         bail!(
             "Graph not found at {} (run `rgctl discover` first)",
@@ -108,12 +115,16 @@ pub fn run_vuln_threat_model(ctx: &CliContext, args: ThreatModelCliArgs) -> Resu
         );
     };
 
+    lap("open_snapshot");
+
     let parked_path = artifact_path(&ctx.repo, rgctl_extraction::PARKED_RELATIONS_FILE);
     let parked_relations =
         rgctl_extraction::load_parked_relations(&parked_path).unwrap_or_default();
+    lap("load_parked_relations");
 
     let analysis_path = artifact_path(&ctx.repo, "analysis_results.bin");
     let analysis = AnalysisResults::load(&analysis_path).ok();
+    lap("load_analysis_results");
     let unresolved_calls_count = read_unresolved_calls_count(&ctx.repo);
 
     // Offline-by-default determinism: only evaluate OSV advisories when a local override,
@@ -140,6 +151,7 @@ pub fn run_vuln_threat_model(ctx: &CliContext, args: ThreatModelCliArgs) -> Resu
     } else {
         (Vec::new(), false)
     };
+    lap("osv_eval");
 
     let project_overlay_rules = ctx
         .repo
@@ -156,6 +168,7 @@ pub fn run_vuln_threat_model(ctx: &CliContext, args: ThreatModelCliArgs) -> Resu
 
     let mut file_cache: HashMap<String, Option<CachedFileSource>> = HashMap::new();
     let mut fn_cache: HashMap<(String, String), FunctionPdgReport> = HashMap::new();
+    let mut pdg_secs = 0.0f64;
 
     let report = build_threat_model(
         ThreatModelBuildOpts {
@@ -167,16 +180,33 @@ pub fn run_vuln_threat_model(ctx: &CliContext, args: ThreatModelCliArgs) -> Resu
             vuln_results: &vuln_results,
             osv_evaluated,
             max_depth: args.max_depth,
+            // `--no-lazy-cfg` means a zero PDG budget, so every skipped function is reported.
+            max_pdg_functions: if args.no_lazy_cfg {
+                0
+            } else {
+                args.max_pdg_functions
+            },
         },
         |req: FunctionPdgRequest<'_>| {
             if args.no_lazy_cfg {
                 return FunctionPdgReport::default();
             }
-            inspect_function_pdg_lazy(&ctx.repo, taint_rules, &mut file_cache, &mut fn_cache, &req)
+            let t = std::time::Instant::now();
+            let rep = inspect_function_pdg_lazy(
+                &ctx.repo,
+                taint_rules,
+                &mut file_cache,
+                &mut fn_cache,
+                &req,
+            );
+            pdg_secs += t.elapsed().as_secs_f64();
+            rep
         },
     )?;
+    tracing::info!(target: "profile", "[profile] threat-model lazy_pdg (inside build): {pdg_secs:.3}s");
+    lap("build_threat_model");
 
-    match ctx.format {
+    let emitted = match ctx.format {
         OutputFormat::Json => ctx.emit_serializable(&report),
         OutputFormat::Mermaid => ctx.emit(&render_threat_model_mermaid(&report)),
         OutputFormat::Sarif => bail!(
@@ -185,7 +215,10 @@ pub fn run_vuln_threat_model(ctx: &CliContext, args: ThreatModelCliArgs) -> Resu
         OutputFormat::Text | OutputFormat::Graphviz => {
             ctx.emit(&render_threat_model_markdown(&report))
         }
-    }
+    };
+    lap("emit");
+    tracing::info!(target: "profile", "[profile] threat-model total: {:.3}s", run_start.elapsed().as_secs_f64());
+    emitted
 }
 
 fn inspect_function_pdg_lazy(
@@ -279,7 +312,16 @@ fn inspect_function_pdg_lazy(
     let mut has_audit_log = false;
     let mut by_line: BTreeMap<(u32, String), DiscoveredPdgSink> = BTreeMap::new();
 
-    for (&node_id, node) in &pdg.nodes {
+    // `pdg.nodes` is a HashMap: visit statements in source order so same-line merges are stable.
+    let mut ordered_nodes: Vec<_> = pdg.nodes.iter().collect();
+    ordered_nodes.sort_by(|(ida, a), (idb, b)| {
+        (a.statement.line, a.statement.text.as_str(), **ida).cmp(&(
+            b.statement.line,
+            b.statement.text.as_str(),
+            **idb,
+        ))
+    });
+    for (&node_id, node) in ordered_nodes {
         let text = node.statement.text.trim();
         if text.is_empty() {
             continue;
@@ -315,7 +357,8 @@ fn inspect_function_pdg_lazy(
                         .get(&flow.source)
                         .map(|n| n.statement.line as u32)
                         .unwrap_or(line);
-                    vuln_src_line = Some(sline);
+                    // `flows` order is not stable: report the earliest proven source line.
+                    vuln_src_line = Some(vuln_src_line.map_or(sline, |cur| cur.min(sline)));
                 } else {
                     sanitizers.extend(flow.sanitizers.iter().map(|s| format!("{s:?}")));
                 }
@@ -332,16 +375,33 @@ fn inspect_function_pdg_lazy(
             PdgSinkStatus::NoLocalSourceFlow
         };
 
+        // Several statements can share a line: keep the strongest evidence
+        // (proven > sanitized > no local source), then the lexicographically first callee.
         let key = (line, format!("{sink_kind:?}"));
-        by_line.insert(
-            key,
-            DiscoveredPdgSink {
-                sink_kind,
-                callee: extracted_callee,
-                line,
-                status,
-            },
-        );
+        let candidate = DiscoveredPdgSink {
+            sink_kind,
+            callee: extracted_callee,
+            line,
+            status,
+        };
+        match by_line.entry(key) {
+            std::collections::btree_map::Entry::Vacant(e) => {
+                e.insert(candidate);
+            }
+            std::collections::btree_map::Entry::Occupied(mut e) => {
+                let rank = |s: &PdgSinkStatus| match s {
+                    PdgSinkStatus::ProvenUnsanitizedFlow { .. } => 0u8,
+                    PdgSinkStatus::SanitizedFlow { .. } => 1,
+                    _ => 2,
+                };
+                let cur = e.get();
+                if (rank(&candidate.status), candidate.callee.as_str())
+                    < (rank(&cur.status), cur.callee.as_str())
+                {
+                    e.insert(candidate);
+                }
+            }
+        }
     }
 
     let report = FunctionPdgReport {

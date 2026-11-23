@@ -483,10 +483,11 @@ impl MacroCallIndex {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let file = std::fs::File::create(path)?;
-        bincode::serialize_into(file, self).map_err(|e| {
+        let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
+        bincode::serialize_into(&mut file, self).map_err(|e| {
             rgctl_error::Error::SerdeError(format!("Failed to serialize macro_call_index: {e}"))
         })?;
+        std::io::Write::flush(&mut file)?;
         Ok(())
     }
 
@@ -495,7 +496,7 @@ impl MacroCallIndex {
         if !path.exists() {
             return Ok(None);
         }
-        let file = std::fs::File::open(path)?;
+        let file = std::io::BufReader::new(std::fs::File::open(path)?);
         let index = bincode::deserialize_from(file).map_err(|e| {
             rgctl_error::Error::SerdeError(format!("Failed to deserialize macro_call_index: {e}"))
         })?;

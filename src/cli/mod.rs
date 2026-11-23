@@ -1211,6 +1211,10 @@ pub enum VulnCommands {
         /// Maximum call-graph traversal hops from each entry point to sinks
         #[arg(long = "max-depth", default_value_t = 8)]
         max_depth: usize,
+        /// Maximum entry-reachable functions inspected with on-demand CFG/PDG taint (closest
+        /// first); any shortfall is reported as `PDG_BUDGET_EXHAUSTED` in `limitations_and_gaps`
+        #[arg(long = "max-pdg-functions", default_value_t = rgctl_security::DEFAULT_MAX_LAZY_PDG_FUNCTIONS)]
+        max_pdg_functions: usize,
         /// Skip on-demand intra-procedural CFG/PDG taint evaluation for entry-reachable sinks
         #[arg(long = "no-lazy-cfg", default_value_t = false)]
         no_lazy_cfg: bool,

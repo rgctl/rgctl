@@ -26,7 +26,7 @@
      │  rgctl_security::threat_model::build_threat_model (Layer 1)  │
      │  1. Entry Points: ExposesRoute, handler annotations, CLI main│
      │  2. Bounded BFS (max_depth=8): reachable call cones          │
-     │  3. Lazy CFG/PDG (<=64 closest reachable fns): TaintAnalyzer │
+     │  3. Lazy CFG/PDG (--max-pdg-functions, default 64)          │
      │  4. Assets: UsesConfig secrets/endpoints, Tables, Models     │
      │  5. Trust Boundaries: Ingress, Fast-Leiden bridges, Egress   │
      │  6. STRIDE Rules: graph_rule + needs_review + evidence_refs  │
@@ -85,7 +85,10 @@ Every record in `ThreatModelReport` carries an explicit [`EvidenceProvenance`](.
 
 - **Zero `discover` overhead:** `rgctl discover .` is completely untouched (0 bytes added to `Symbol`, `Relation`, `NodeRow`, or `EdgeRow`; Gate A cold baselines unaffected).
 - **Streaming hot-column scan:** `build_threat_model` reads `node_type_at`, `node_name_str`, `node_qualified_name_str`, `node_file_path_str`, `node_lines_at`, and `for_each_edge` directly from `ColumnarGraphMmap` without touching `ColdMetadataDb` (`NodeExtension` blobs).
-- **Bounded lazy CFG/PDG (`MAX_LAZY_PDG_FUNCTIONS = 64`):** Functions reachable from entry points are ordered by `(min_hops, file, start_line)` and evaluated lazily in memory (`persist: false`) up to 64 functions, keeping latency sub-second even on 50k-file monorepos while still scanning 100% of graph + parked sinks repo-wide.
+- **Bounded lazy CFG/PDG (`--max-pdg-functions`, default `DEFAULT_MAX_LAZY_PDG_FUNCTIONS = 64`):** Functions reachable from entry points are ordered by `(min_hops, file, start_line)` and evaluated lazily in memory (`persist: false`) up to the budget, while still scanning 100% of graph + parked sinks repo-wide.
+- **Measured scale (linux, 1.81M nodes, release, M-series):** ~6–7 s wall, ~2.4 GB peak, byte-identical JSON across runs. Sink classification is memoized per (callee, language) and parked calls are classified on Rayon then applied in record order; enable `RUST_LOG=profile=info` for per-stage `[profile] threat-model …` timings.
+- **No silent caps:** every bound that can hide evidence is reported in `limitations_and_gaps` with counts — `CALL_DEPTH_LIMITED` (BFS frontier hit `--max-depth` with unexplored callees) and `PDG_BUDGET_EXHAUSTED` (reachable functions beyond `--max-pdg-functions`, or all of them under `--no-lazy-cfg`). The Mermaid DFD caps nodes for legibility but always emits an `OMITTED` node with counts; JSON is never truncated.
+- **Sink lines:** PDG-verified and parked (external) sinks carry the exact statement line. Graph-only sinks (from a `Calls` edge, no PDG coverage) carry the **caller's start line**, because hot edge columns store no call-site line.
 - **Offline-by-default determinism:** Zero outbound HTTP requests occur unless `--online` is explicitly passed. All collections use canonical `(file, line, symbol)` / `BTreeMap` ordering so consecutive runs produce byte-identical JSON, Markdown, and Mermaid outputs.
 
 ---
@@ -220,7 +223,8 @@ rgctl vuln threat-model --offline -o THREAT_MODEL.md
     "EP-001": { "id": "EP-001", "provenance": "graph_fact", "kind": "entry_point", "symbol_or_target": "app.run_diag", "file": "app.py", "line": 19, "summary": "..." }
   },
   "limitations_and_gaps": [
-    { "code": "OUT_OF_REPO_CONTROLS", "category": "infrastructure_visibility", "detail": "..." }
+    { "code": "OUT_OF_REPO_CONTROLS", "category": "infrastructure_visibility", "detail": "..." },
+    { "code": "PDG_BUDGET_EXHAUSTED", "category": "data_flow_completeness", "detail": "..." }
   ]
 }
 ```
@@ -234,6 +238,7 @@ rgctl vuln threat-model --offline -o THREAT_MODEL.md
 | [`src/cli/mod.rs`](../../src/cli/mod.rs) & [`src/cli/vuln_deps.rs`](../../src/cli/vuln_deps.rs) | `VulnCommands::ThreatModel` (`visible_alias = "surface"`) and shared `evaluate_repo_vulns` batch pipeline. |
 | [`skills/rgctl-vuln/SKILL.md`](../../skills/rgctl-vuln/SKILL.md) & [`skills/rgctl/SKILL.md`](../../skills/rgctl/SKILL.md) | Layer-2 Mode C agent workflow, epistemic & privacy rules, and natural-language routing. |
 | [`tests/vuln_threat_model.rs`](../../tests/vuln_threat_model.rs) | End-to-end integration tests across Web/FastAPI, Java/Maven+OSV, and Rust CLI/batch archetypes + determinism & epistemic invariants. |
+| [`tests/threat_model_cli.rs`](../../tests/threat_model_cli.rs) | Fixture-scale gate on `rgctl-tests/ecommerce-{java,python,rust}`: contract, auth suppression, CLI `main`, byte-identical output, and reported depth / PDG-budget caps. |
 
 ---
 
@@ -241,13 +246,25 @@ rgctl vuln threat-model --offline -o THREAT_MODEL.md
 
 ### 5.1 Three Representative Application Archetypes
 
-Evaluated on both the dogfood multi-service fixtures (`rgctl-tests/ecommerce-*`) and the controlled E2E archetype fixtures in [`tests/vuln_threat_model.rs`](../../tests/vuln_threat_model.rs):
+Two layers of evidence: the dogfood multi-service fixtures (`rgctl-tests/ecommerce-*`, gated by [`tests/threat_model_cli.rs`](../../tests/threat_model_cli.rs)) and small controlled archetypes written inline in [`tests/vuln_threat_model.rs`](../../tests/vuln_threat_model.rs) that exercise sinks, taint, and OSV joins the fixtures do not contain. Fixture numbers below are from a cold `discover .` + `vuln threat-model --offline` (no OSV cache).
 
-| Archetype | Fixture | Entry Points | Assets | Sinks / Flows | Trust Boundaries | STRIDE Candidates | Key Highlights |
-| :--- | :--- | ---: | ---: | ---: | ---: | ---: | :--- |
-| **1. Web App (Python FastAPI)** | `rgctl-tests/ecommerce-python` + `archetype_1_python_web_app` | 27 HTTP routes (`ExposesRoute`) | `STRIPE_SECRET_KEY`, `DATABASE_URL` | `subprocess.run` (`proven_unsanitized_flow`) | 16 (`ExternalIngress` + Fast-Leiden clusters) | 14 `Spoofing` on unauth routes (13 auth routes suppressed); High-conf `Tampering` & `EoP` on `/exec` | Distinguishes `@require_auth` / `Depends(get_current_user)` routes from unauthenticated routes; proves taint without `--with-cfg`. |
-| **2. Backend / Enterprise API (Java Spring + Maven OSV)** | `rgctl-tests/ecommerce-java` + `archetype_2_java_enterprise` (`--osv jackson-CVE-2022-42004`) | 31 (30 REST routes + 1 `main`) | `spring.datasource.password`, `spring.datasource.url`, `app.jwt.*` | `ObjectMapper.readValue` joined to `OSV-001` | 23 (`ExternalIngress` + `SubsystemBridge`) | 25 `Spoofing`, 2 `InfoDisclosure`, + `EoP` linked to `OSV-001` (`EP-001` → `PayloadDecoder.decodeOrder`) | Joins Maven `pom.xml` + `jackson-databind@2.13.4` CVE reachability directly to the exposing `@PostMapping("/api/orders")` controller. |
-| **3. CLI / Batch App (Rust)** | `rgctl-tests/ecommerce-rust` + `archetype_3_rust_cli` | 1 (`CLI main::main`) | 3 (`JWT_SECRET`, `DATABASE_URL`, `BIND_ADDR`) | 27 (`sqlx::query`, `Command::new`, `fs::write`), 5 flows | 8 (`ExternalIngress`, `SubsystemBridge`, `ExternalEgress`) | `InfoDisclosure` (`JWT_SECRET`), `Tampering` (`main -> deploy_bundle -> Command::new`) | Suppresses HTTP `Spoofing` noise on local CLI `main`; surfaces callback indirection (`hook(target)`) in `DYNAMIC_OR_INDIRECT_CALLS`. |
+**Dogfood fixtures (`rgctl-tests/ecommerce-*`):**
+
+| Fixture | Entry Points | Assets | Sinks / Flows | Trust Boundaries | STRIDE Candidates | Limitations reported | Notes |
+| :--- | ---: | ---: | ---: | ---: | :--- | :--- | :--- |
+| `ecommerce-python` (FastAPI) | 27 HTTP routes (13 with observed auth) | 0 | 0 / 0 | 19 | 14 `Spoofing` (auth-guarded routes suppressed) | `OUT_OF_REPO_CONTROLS`, `DYNAMIC_OR_INDIRECT_CALLS`, `OSV_OFFLINE_EMPTY` | Persistence is SQLAlchemy ORM (parameterized), so no injection sinks. Pydantic `BaseSettings` fields (`jwt_secret`, `database_url`) are **not** extracted as config nodes, so no assets: an extraction gap, not a threat-model rule. |
+| `ecommerce-java` (Spring) | 31 (30 REST routes, 5 with observed auth, + 1 `main`) | 8 (`spring.datasource.*`, `app.jwt.*`, `User`, `Order`, …) | 0 / 0 | 22 | 25 `Spoofing`, 2 `InfoDisclosure` | + `PDG_BUDGET_EXHAUSTED` (reachable set exceeds the default 64) | Global `SecurityFilterChain` auth is invisible per-route, so most `Spoofing` candidates are `needs_review` framing, not findings. JPA repositories are parameterized, so no injection sinks. |
+| `ecommerce-rust` (CLI/batch) | 1 (`CLI main`) | 3 (`JWT_SECRET`, `DATABASE_URL`, `BIND_ADDR`) | 27 (26 `sqlx` queries, 1 log) / 5 | 8 | 1 `InfoDisclosure` (`JWT_SECRET`) | `OUT_OF_REPO_CONTROLS`, `DYNAMIC_OR_INDIRECT_CALLS`, `OSV_OFFLINE_EMPTY` | No HTTP `Spoofing` noise on a local CLI `main`. `sqlx` queries take literal SQL, so no `Tampering`. |
+
+**Controlled archetypes (`tests/vuln_threat_model.rs`):**
+
+| Archetype | What it proves |
+| :--- | :--- |
+| `archetype_1_python_web_app` | `request.query_params` → `subprocess.run` is `proven_unsanitized_flow` without `--with-cfg`; high-confidence `Tampering` + `EoP` on unauthenticated `POST /exec`; `require_auth` route suppresses `Spoofing`; env secrets become assets. |
+| `archetype_2_java_enterprise` (`--osv` jackson CVE-2022-42004) | Maven `pom.xml` + `jackson-databind@2.13.4` reachability joined to the exposing `@PostMapping("/api/orders")` controller as an `EoP` candidate linked to `OSV-001`. |
+| `archetype_3_rust_cli` | `main -> deploy_bundle -> Command::new` `Tampering`; callback indirection (`hook(target)`) surfaced as `DYNAMIC_OR_INDIRECT_CALLS`. |
+| `multi_route_flows_keep_evidence_index_consistent…` | Byte-identical output across runs; every `DF-*` evidence record describes its own flow; `get_author` / `invalidate_cache` are not auth / validation controls. |
+| `scheduled_jobs_are_not_http_ingress` | `@Scheduled` handlers are `scheduled_job` entry points and never yield `Spoofing`. |
 
 ### 5.2 Manual Threat-Model Baseline Comparison (Signal vs Noise)
 

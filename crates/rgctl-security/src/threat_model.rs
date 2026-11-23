@@ -13,13 +13,14 @@
 //!   `-f text`, and `-f mermaid` outputs are reproducible across runs for CI diffing.
 
 use crate::vuln_analyze::{ExploitabilityVerdict, VulnAnalyzeResult};
+use rayon::prelude::*;
 use rgctl_analysis::{AnalysisResults, CommunityQueryContext, TaintRuleSet, TaintSink};
 use rgctl_extraction::ParkedRelationRecord;
 use rgctl_graph::columnar_snapshot::ColumnarGraphMmap;
 use rgctl_graph::schema::{EdgeType, NodeType};
 use rgctl_plugin_api::RelationType;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::path::Path;
 use uuid::Uuid;
@@ -123,6 +124,8 @@ pub enum EntryPointKind {
     HttpRoute,
     RpcOrMessageHandler,
     CliEntrypoint,
+    /// Timer / cron-triggered job (`@Scheduled`): internally triggered, not network ingress.
+    ScheduledJob,
 }
 
 /// Externally reachable entry point observed in the graph.
@@ -192,6 +195,9 @@ pub struct SinkEvidence {
     pub callee: String,
     pub caller: String,
     pub file: String,
+    /// Exact statement line for PDG-verified and parked (external) sinks; the caller's start
+    /// line for graph-only sinks (`pdg_taint: not_evaluated` / `no_local_source_flow` from a
+    /// `Calls` edge), since hot edge columns carry no call-site line.
     pub line: u32,
     pub is_external_call: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -330,7 +336,13 @@ pub struct ThreatModelBuildOpts<'a> {
     pub vuln_results: &'a [VulnAnalyzeResult],
     pub osv_evaluated: bool,
     pub max_depth: usize,
+    /// Budget of entry-reachable functions inspected with lazy CFG/PDG (closest-first).
+    /// Functions beyond the budget are reported in `limitations_and_gaps`, never dropped silently.
+    pub max_pdg_functions: usize,
 }
+
+/// Default for [`ThreatModelBuildOpts::max_pdg_functions`].
+pub const DEFAULT_MAX_LAZY_PDG_FUNCTIONS: usize = 64;
 
 /// Request passed to the optional lazy per-function CFG/PDG evaluator callback.
 pub struct FunctionPdgRequest<'a> {
@@ -458,7 +470,8 @@ fn language_for_file(file: &str) -> &'static str {
         "lua" => "lua",
         "sh" | "bash" => "bash",
         "pp" => "puppet",
-        _ => "python",
+        // Unknown extensions get no language rules (generic fallbacks only) rather than Python's.
+        _ => "",
     }
 }
 
@@ -492,28 +505,50 @@ pub fn classify_callee_sink(rules: &TaintRuleSet, lang: &str, callee: &str) -> O
         .rsplit(['.', ':', '\\', '/'])
         .next()
         .unwrap_or(lower.as_str());
+    let tokens = identifier_tokens(callee);
+    // Receiver/module tokens (everything but the method name) qualify generic method names.
+    let qualifier_tokens = &tokens[..tokens.len().saturating_sub(1)];
+    let sqlish_receiver = qualifier_tokens.iter().any(|t| {
+        matches!(
+            t.as_str(),
+            "cursor"
+                | "conn"
+                | "connection"
+                | "db"
+                | "database"
+                | "session"
+                | "statement"
+                | "stmt"
+                | "sql"
+                | "jdbc"
+                | "engine"
+                | "pool"
+                | "tx"
+                | "transaction"
+                | "sqlx"
+                | "diesel"
+                | "query"
+                | "queryset"
+                | "objects"
+        )
+    });
     if matches!(
         tail,
-        "execute"
-            | "executequery"
-            | "executeupdate"
-            | "raw"
-            | "rawquery"
-            | "executesql"
-            | "query_raw"
-    ) {
+        "executequery" | "executeupdate" | "rawquery" | "executesql" | "query_raw"
+    ) || (matches!(tail, "execute" | "raw") && sqlish_receiver)
+    {
         Some(TaintSink::SqlQuery)
-    } else if matches!(
-        tail,
-        "popen" | "execve" | "execvp" | "spawn" | "runtimeshell"
-    ) || lower.contains("command::new")
+    } else if matches!(tail, "popen" | "execve" | "execvp" | "runtimeshell")
+        || lower.contains("command::new")
         || lower.contains("processbuilder")
         || lower.contains("runtime.getruntime().exec")
         || lower.contains("subprocess.")
         || lower.contains("child_process.")
     {
         Some(TaintSink::ShellCommand)
-    } else if matches!(tail, "eval" | "exec" | "unserialize" | "readobject")
+    } else if matches!(tail, "eval" | "unserialize" | "readobject")
+        // Bare / builtin `exec(...)` only: `RegExp.exec`, `stmt.exec` are not code evaluation.
+        || (tail == "exec" && (qualifier_tokens.is_empty() || qualifier_tokens == ["builtins"]))
         || lower.contains("pickle.loads")
         || lower.contains("yaml.unsafe_load")
     {
@@ -527,11 +562,21 @@ pub fn classify_callee_sink(rules: &TaintRuleSet, lang: &str, callee: &str) -> O
     } else if matches!(
         tail,
         "info" | "warn" | "error" | "audit" | "log" | "println"
-    ) && (lower.contains("log")
-        || lower.contains("audit")
-        || lower.contains("tracing")
-        || lower.contains("logger"))
-    {
+    ) && tokens.iter().any(|t| {
+        matches!(
+            t.as_str(),
+            "log"
+                | "logs"
+                | "logger"
+                | "logging"
+                | "audit"
+                | "tracing"
+                | "slf4j"
+                | "log4j"
+                | "logback"
+                | "println"
+        )
+    }) {
         Some(TaintSink::LogOutput)
     } else {
         None
@@ -559,31 +604,131 @@ pub fn classify_callee_sanitizer(rules: &TaintRuleSet, lang: &str, callee: &str)
         || tail == "shlex_quote"
 }
 
-fn is_auth_control_name(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.contains("auth")
-        || lower.contains("rolesallowed")
-        || lower.contains("preauthorize")
-        || lower.contains("secured")
-        || lower.contains("permission")
-        || lower.contains("login_required")
-        || lower.contains("current_user")
-        || lower.contains("jwt")
-        || lower.contains("oauth")
-        || lower.contains("bearer")
-        || lower.contains("csrf")
-        || lower.contains("apikey")
-        || lower.contains("guard")
+/// `[profile]` lap for `build_threat_model` stages (`RUST_LOG=profile=info`).
+fn profile_lap(clock: &mut std::time::Instant, stage: &str) {
+    tracing::info!(target: "profile", "[profile] threat-model build {stage}: {:.3}s", clock.elapsed().as_secs_f64());
+    *clock = std::time::Instant::now();
 }
 
+/// Owner (enclosing type) of a qualified symbol name: `a::B::f` -> `a::B`, `pkg.Cls.m` -> `pkg.Cls`.
+fn qualified_owner(qn: &str) -> Option<&str> {
+    if let Some((owner, _)) = qn.rsplit_once("::") {
+        return Some(owner);
+    }
+    qn.rsplit_once(['.', '#', '\\', ':'])
+        .map(|(owner, _)| owner)
+}
+
+fn qualified_owner_short_name(owner: &str) -> &str {
+    owner
+        .rsplit(['.', ':', '#', '\\'])
+        .find(|s| !s.is_empty())
+        .unwrap_or(owner)
+}
+
+/// Lowercased identifier tokens split on separators and camelCase boundaries
+/// (`HTTPBearer` -> `http`,`bearer`; `get_current_user` -> `get`,`current`,`user`).
+fn identifier_tokens(name: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let chars: Vec<char> = name.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if !c.is_ascii_alphanumeric() {
+            if !cur.is_empty() {
+                tokens.push(std::mem::take(&mut cur));
+            }
+            continue;
+        }
+        if c.is_ascii_uppercase() && !cur.is_empty() {
+            let prev = chars[i - 1];
+            let next_lower = chars.get(i + 1).is_some_and(|n| n.is_ascii_lowercase());
+            if prev.is_ascii_lowercase()
+                || prev.is_ascii_digit()
+                || (prev.is_ascii_uppercase() && next_lower)
+            {
+                tokens.push(std::mem::take(&mut cur));
+            }
+        }
+        cur.push(c.to_ascii_lowercase());
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
+}
+
+fn tokens_match(tokens: &[String], words: &[&str], pairs: &[(&str, &str)]) -> bool {
+    tokens.iter().any(|t| words.contains(&t.as_str()))
+        || tokens.windows(2).any(|w| {
+            pairs.contains(&(w[0].as_str(), w[1].as_str()))
+                // Joined pair catches camel splits like `OAuth2` -> `o`,`auth2`.
+                || words.contains(&format!("{}{}", w[0], w[1]).as_str())
+        })
+}
+
+/// Whole-token auth match: `@PreAuthorize`, `Depends(get_current_user)`, `jwt.verify`, `AuthGuard`
+/// match; `get_author`, `safeguard`, `authority_level` do not.
+fn is_auth_control_name(name: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "auth",
+        "authn",
+        "authz",
+        "authenticate",
+        "authenticated",
+        "authentication",
+        "authenticator",
+        "authorize",
+        "authorized",
+        "authorization",
+        "preauthorize",
+        "rolesallowed",
+        "secured",
+        "permission",
+        "permissions",
+        "oauth",
+        "oauth2",
+        "jwt",
+        "bearer",
+        "csrf",
+        "xsrf",
+        "apikey",
+        "guard",
+        "guards",
+    ];
+    const PAIRS: &[(&str, &str)] = &[
+        ("login", "required"),
+        ("current", "user"),
+        ("roles", "allowed"),
+        ("api", "key"),
+        ("has", "role"),
+        ("has", "authority"),
+        ("requires", "role"),
+    ];
+    tokens_match(&identifier_tokens(name), WORDS, PAIRS)
+}
+
+/// Whole-token validation / rate-limit match: `validate_input`, `@Valid`, `RateLimiter` match;
+/// `invalidate_cache`, `get_schema_version` do not.
 fn is_validation_or_ratelimit_name(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.contains("valid")
-        || lower.contains("ratelimit")
-        || lower.contains("rate_limit")
-        || lower.contains("throttle")
-        || lower.contains("sanitize")
-        || lower.contains("schema")
+    const WORDS: &[&str] = &[
+        "valid",
+        "validate",
+        "validated",
+        "validates",
+        "validation",
+        "validator",
+        "sanitize",
+        "sanitized",
+        "sanitizer",
+        "throttle",
+        "throttled",
+        "throttler",
+        "ratelimit",
+        "ratelimiter",
+        "limiter",
+    ];
+    const PAIRS: &[(&str, &str)] = &[("rate", "limit"), ("rate", "limiter"), ("rate", "limited")];
+    tokens_match(&identifier_tokens(name), WORDS, PAIRS)
 }
 
 fn is_handler_annotation(name: &str) -> bool {
@@ -692,10 +837,12 @@ where
     let col = opts.columnar;
     let canon_repo = opts.repo_root.canonicalize().ok();
     let n_count = col.node_count();
+    let mut stage_clock = std::time::Instant::now();
 
     let mut nodes: Vec<CompactNodeMeta> = Vec::with_capacity(n_count);
     let mut id_to_idx: HashMap<Uuid, usize> = HashMap::with_capacity(n_count);
     let mut class_by_qn: HashMap<String, usize> = HashMap::new();
+    let mut class_by_short_name: HashMap<String, Option<usize>> = HashMap::new();
 
     for idx in 0..n_count {
         let id = col.node_id_at(idx)?;
@@ -712,7 +859,11 @@ where
             if let Some(qn) = &qualified_name {
                 class_by_qn.insert(qn.clone(), idx);
             }
-            class_by_qn.entry(name.clone()).or_insert(idx);
+            // Short-name fallback only when unambiguous across the repo.
+            class_by_short_name
+                .entry(name.clone())
+                .and_modify(|slot| *slot = None)
+                .or_insert(Some(idx));
         }
 
         id_to_idx.insert(id, idx);
@@ -727,6 +878,7 @@ where
         });
     }
 
+    profile_lap(&mut stage_clock, "load_nodes");
     // Build typed adjacency lists in a single streaming edge pass.
     let mut calls_out: Vec<Vec<usize>> = vec![Vec::new(); n_count];
     let mut calls_in_count: Vec<usize> = vec![0; n_count];
@@ -776,6 +928,7 @@ where
         adj.dedup();
     }
 
+    profile_lap(&mut stage_clock, "edge_pass");
     // Community resolution from `.rgctl/analysis_results.bin` when present.
     let community_ctx = opts.analysis.map(|a| {
         CommunityQueryContext::from_analysis(a, |uuid| {
@@ -790,11 +943,23 @@ where
             community_labels_by_id.insert(c.id, (c.label.clone(), c.member_count));
         }
     }
+    // Resolve each node's (non-singleton) community once; hot loops compare ids, not labels.
+    let node_community: Vec<Option<usize>> = match &community_ctx {
+        Some(cctx) => nodes
+            .iter()
+            .map(|n| {
+                let &cid = cctx.uuid_to_community.get(&n.id)?;
+                let (_, count) = community_labels_by_id.get(&cid)?;
+                (*count > 1).then_some(cid)
+            })
+            .collect(),
+        None => vec![None; n_count],
+    };
     let community_for_idx = |idx: usize| -> Option<String> {
-        let cctx = community_ctx.as_ref()?;
-        let &cid = cctx.uuid_to_community.get(&nodes[idx].id)?;
-        let (label, count) = community_labels_by_id.get(&cid)?;
-        (*count > 1).then(|| label.clone())
+        let cid = node_community[idx]?;
+        community_labels_by_id
+            .get(&cid)
+            .map(|(label, _)| label.clone())
     };
 
     let mut parked_callees_by_caller: HashMap<usize, Vec<String>> = HashMap::new();
@@ -820,8 +985,11 @@ where
             candidates.extend(injs.iter().cloned());
         }
         if let Some(qn) = &nodes[h_idx].qualified_name
-            && let Some((owner, _)) = qn.rsplit_once(['.', ':'])
-            && let Some(&cls_idx) = class_by_qn.get(owner)
+            && let Some(owner) = qualified_owner(qn)
+            && let Some(cls_idx) = class_by_qn.get(owner).copied().or_else(|| {
+                let short = qualified_owner_short_name(owner);
+                class_by_short_name.get(short).copied().flatten()
+            })
         {
             if let Some(anns) = annotations_on.get(&cls_idx) {
                 candidates.extend(anns.iter().cloned());
@@ -847,6 +1015,7 @@ where
         (auth.into_iter().collect(), validation.into_iter().collect())
     };
 
+    profile_lap(&mut stage_clock, "communities");
     // 1. Discover Entry Points (ExposesRoute -> handler annotations -> CLI `main` entrypoints).
     #[derive(Clone)]
     struct RawEntry {
@@ -858,6 +1027,8 @@ where
     }
     let mut raw_entries: Vec<RawEntry> = Vec::new();
     let mut seen_entry_handlers: HashMap<(usize, String), ()> = HashMap::new();
+    // Handler indices already registered via `ExposesRoute` (O(1) membership, not a key scan).
+    let mut route_handlers: HashSet<usize> = HashSet::new();
 
     for &(h_idx, route_idx) in &exposes_routes {
         let h = &nodes[h_idx];
@@ -872,6 +1043,7 @@ where
             Some((m, p)) => (Some(m.trim().to_string()), Some(p.trim().to_string())),
             None => (None, Some(route_label.clone())),
         };
+        route_handlers.insert(h_idx);
         if seen_entry_handlers
             .insert((h_idx, route_label.clone()), ())
             .is_none()
@@ -886,7 +1058,10 @@ where
         }
     }
 
-    for (&h_idx, anns) in &annotations_on {
+    let mut annotated_handlers: Vec<usize> = annotations_on.keys().copied().collect();
+    annotated_handlers.sort_unstable();
+    for h_idx in annotated_handlers {
+        let anns = &annotations_on[&h_idx];
         let h = &nodes[h_idx];
         if h.node_type != NodeType::Function || h.is_declaration {
             continue;
@@ -897,7 +1072,7 @@ where
         if file == "<external>" || is_test_or_fixture_noise_file(file) {
             continue;
         }
-        if seen_entry_handlers.keys().any(|(idx, _)| *idx == h_idx) {
+        if route_handlers.contains(&h_idx) {
             continue;
         }
         if let Some(ann) = anns.iter().find(|a| is_handler_annotation(a)) {
@@ -906,9 +1081,12 @@ where
                 .insert((h_idx, label.clone()), ())
                 .is_none()
             {
-                let kind = if ann.to_ascii_lowercase().contains("listener")
-                    || ann.to_ascii_lowercase().contains("message")
-                    || ann.to_ascii_lowercase().contains("grpc")
+                let ann_lower = ann.to_ascii_lowercase();
+                let kind = if ann_lower.contains("scheduled") {
+                    EntryPointKind::ScheduledJob
+                } else if ann_lower.contains("listener")
+                    || ann_lower.contains("message")
+                    || ann_lower.contains("grpc")
                 {
                     EntryPointKind::RpcOrMessageHandler
                 } else {
@@ -1013,6 +1191,7 @@ where
         entry_handler_indices.push((pos, raw.handler_idx));
     }
 
+    profile_lap(&mut stage_clock, "entry_points");
     // 2. Bounded BFS from each entry point to find reachable functions & shortest call paths.
     let max_depth = opts.max_depth.max(1);
     struct ReachableTree {
@@ -1023,6 +1202,8 @@ where
     }
     let mut reachable_trees: Vec<ReachableTree> = Vec::with_capacity(entry_handler_indices.len());
     let mut min_depth_by_node: HashMap<usize, usize> = HashMap::new();
+    // Callees left unexplored because a BFS frontier hit `max_depth` (surfaced as a limitation).
+    let mut depth_truncated_nodes: HashSet<usize> = HashSet::new();
 
     for &(ep_pos, start_idx) in &entry_handler_indices {
         let mut parents: HashMap<usize, Option<usize>> = HashMap::new();
@@ -1038,6 +1219,12 @@ where
                 .and_modify(|prev| *prev = (*prev).min(d))
                 .or_insert(d);
             if d >= max_depth {
+                if calls_out[curr]
+                    .iter()
+                    .any(|next| !parents.contains_key(next))
+                {
+                    depth_truncated_nodes.insert(curr);
+                }
                 continue;
             }
             for &next in &calls_out[curr] {
@@ -1056,8 +1243,9 @@ where
         });
     }
 
+    profile_lap(&mut stage_clock, "bfs");
     // 3. Discover Sinks (graph `Calls` edges + external `parked_relations.bin` + lazy per-function
-    //    PDG inspection on up to 64 closest entry-reachable functions).
+    //    PDG inspection on the `max_pdg_functions` closest entry-reachable functions).
     let project_overlay_rules = opts
         .repo_root
         .join(".rgctl")
@@ -1088,7 +1276,8 @@ where
     let mut node_has_audit_log: Vec<bool> = vec![false; n_count];
     let mut node_has_sanitizer: Vec<bool> = vec![false; n_count];
 
-    const MAX_LAZY_PDG_FUNCTIONS: usize = 64;
+    let max_pdg_functions = opts.max_pdg_functions;
+    let mut pdg_budget_skipped: usize = 0;
     let mut ordered_reachable: Vec<(usize, usize)> = min_depth_by_node.into_iter().collect();
     ordered_reachable.sort_by(|&(idx_a, d_a), &(idx_b, d_b)| {
         let na = &nodes[idx_a];
@@ -1103,9 +1292,6 @@ where
 
     let mut pdg_evaluated_nodes: BTreeSet<usize> = BTreeSet::new();
     for (fn_idx, _) in ordered_reachable {
-        if pdg_evaluated_nodes.len() >= MAX_LAZY_PDG_FUNCTIONS {
-            break;
-        }
         let n = &nodes[fn_idx];
         if n.node_type != NodeType::Function || n.is_declaration {
             continue;
@@ -1114,6 +1300,10 @@ where
             continue;
         };
         if file == "<external>" || is_test_or_fixture_noise_file(file) {
+            continue;
+        }
+        if pdg_evaluated_nodes.len() >= max_pdg_functions {
+            pdg_budget_skipped += 1;
             continue;
         }
         pdg_evaluated_nodes.insert(fn_idx);
@@ -1151,6 +1341,17 @@ where
         }
     }
 
+    // (function, category) pairs already covered by a PDG-verified sink (exact statement line);
+    // graph-only edges add sinks only where the PDG found none. O(1) lookups, not a per-edge scan.
+    let pdg_fn_cats: HashSet<(usize, &'static str)> = raw_sinks
+        .iter()
+        .map(|s| (s.caller_idx, sink_category_str(s.sink_kind)))
+        .collect();
+    let mut graph_sink_seen: HashSet<(usize, usize)> = HashSet::new();
+    // Classification depends only on (callee, language): memoize it. Millions of `Calls` edges
+    // share a few hundred thousand distinct callees, and each classify call allocates.
+    let mut graph_classify_memo: HashMap<(usize, &'static str), (Option<TaintSink>, bool)> =
+        HashMap::new();
     for (u, callees) in calls_out.iter().enumerate() {
         let caller = &nodes[u];
         let Some(file) = caller.file.as_deref() else {
@@ -1163,16 +1364,22 @@ where
         for &v in callees {
             let callee_node = &nodes[v];
             let callee_label = callee_node.display_fqn();
-            if classify_callee_sanitizer(taint_rules, lang, callee_label) {
+            let (sink_opt, is_sanitizer) =
+                *graph_classify_memo.entry((v, lang)).or_insert_with(|| {
+                    (
+                        classify_callee_sink(taint_rules, lang, callee_label),
+                        classify_callee_sanitizer(taint_rules, lang, callee_label),
+                    )
+                });
+            if is_sanitizer {
                 node_has_sanitizer[u] = true;
             }
-            if let Some(sink_kind) = classify_callee_sink(taint_rules, lang, callee_label) {
-                let cat = sink_category_str(sink_kind).to_string();
-                let has_same_fn_cat = raw_sinks
-                    .iter()
-                    .any(|s| s.caller_idx == u && sink_category_str(s.sink_kind) == cat);
-                if !has_same_fn_cat {
-                    let loc_key = (u, cat, caller.start_line);
+            if let Some(sink_kind) = sink_opt {
+                let cat_str = sink_category_str(sink_kind);
+                // One graph sink per distinct (caller, callee); hot edge columns carry no
+                // call-site line, so `line` is the caller's start line for these sinks.
+                if !pdg_fn_cats.contains(&(u, cat_str)) && graph_sink_seen.insert((u, v)) {
+                    let loc_key = (u, cat_str.to_string(), caller.start_line);
                     let slot = raw_sinks.len();
                     sink_slot_by_loc.insert(loc_key, slot);
                     raw_sinks.push(RawSink {
@@ -1193,35 +1400,88 @@ where
         }
     }
 
-    for rec in opts.parked_relations {
-        if rec.relation_type != RelationType::Calls {
-            continue;
-        }
-        let Some(&caller_idx) = id_to_idx.get(&rec.from_node_id) else {
-            continue;
-        };
-        let rel_file = relativize_path(opts.repo_root, canon_repo.as_deref(), &rec.from_file);
-        if is_test_or_fixture_noise_file(&rel_file) {
-            continue;
-        }
-        let lang = language_for_file(&rel_file);
-        let candidates = parked_callee_candidates(rec);
-        if candidates
-            .iter()
-            .any(|c| classify_callee_sanitizer(taint_rules, lang, c))
-        {
+    // Per-file relativization and per-(candidate, language) classification are memoized:
+    // parked call records repeat the same files and callee names many times over.
+    // Parked (external) calls: classify in parallel (records are independent; per-worker memos
+    // for file relativization and per-(candidate, language) classification), then apply hits
+    // sequentially in record order so sink slots and output stay deterministic.
+    struct ParkedHit {
+        caller_idx: usize,
+        rel_file: String,
+        call_site_line: u32,
+        any_sanitizer: bool,
+        matched: Option<(TaintSink, String)>,
+    }
+    type RelMemo<'a> = HashMap<&'a str, Option<(String, &'static str)>>;
+    type ClassifyMemo = HashMap<(&'static str, String), (Option<TaintSink>, bool)>;
+    let parked_hits: Vec<ParkedHit> = opts
+        .parked_relations
+        .par_iter()
+        .map_init(
+            || (RelMemo::new(), ClassifyMemo::new()),
+            |(rel_memo, cls_memo), rec| -> Option<ParkedHit> {
+                if rec.relation_type != RelationType::Calls {
+                    return None;
+                }
+                let &caller_idx = id_to_idx.get(&rec.from_node_id)?;
+                let (rel_file, lang) = rel_memo
+                    .entry(rec.from_file.as_str())
+                    .or_insert_with(|| {
+                        let rel =
+                            relativize_path(opts.repo_root, canon_repo.as_deref(), &rec.from_file);
+                        (!is_test_or_fixture_noise_file(&rel)).then(|| {
+                            let lang = language_for_file(&rel);
+                            (rel, lang)
+                        })
+                    })
+                    .clone()?;
+                let mut any_sanitizer = false;
+                let mut matched: Option<(TaintSink, String)> = None;
+                for cand in parked_callee_candidates(rec) {
+                    let key = (lang, cand);
+                    let (sink_opt, is_sanitizer) = match cls_memo.get(&key) {
+                        Some(&hit) => hit,
+                        None => {
+                            let res = (
+                                classify_callee_sink(taint_rules, lang, &key.1),
+                                classify_callee_sanitizer(taint_rules, lang, &key.1),
+                            );
+                            cls_memo.insert(key.clone(), res);
+                            res
+                        }
+                    };
+                    any_sanitizer |= is_sanitizer;
+                    if matched.is_none()
+                        && let Some(sk) = sink_opt
+                    {
+                        matched = Some((sk, key.1));
+                    }
+                }
+                (any_sanitizer || matched.is_some()).then_some(ParkedHit {
+                    caller_idx,
+                    rel_file,
+                    call_site_line: rec.call_site_line,
+                    any_sanitizer,
+                    matched,
+                })
+            },
+        )
+        .flatten()
+        .collect();
+    for hit in parked_hits {
+        let ParkedHit {
+            caller_idx,
+            rel_file,
+            call_site_line,
+            any_sanitizer,
+            matched,
+        } = hit;
+        if any_sanitizer {
             node_has_sanitizer[caller_idx] = true;
-        }
-        let mut matched: Option<(TaintSink, String)> = None;
-        for cand in &candidates {
-            if let Some(sk) = classify_callee_sink(taint_rules, lang, cand) {
-                matched = Some((sk, cand.clone()));
-                break;
-            }
         }
         if let Some((sink_kind, callee_candidate)) = matched {
             let cat = sink_category_str(sink_kind).to_string();
-            let loc_key = (caller_idx, cat, rec.call_site_line);
+            let loc_key = (caller_idx, cat, call_site_line);
             if let std::collections::hash_map::Entry::Vacant(e) = sink_slot_by_loc.entry(loc_key) {
                 let slot = raw_sinks.len();
                 e.insert(slot);
@@ -1230,7 +1490,7 @@ where
                     sink_kind,
                     callee: callee_candidate,
                     file: rel_file,
-                    line: rec.call_site_line,
+                    line: call_site_line,
                     is_external: true,
                     pdg_taint: if pdg_evaluated_nodes.contains(&caller_idx) {
                         PdgSinkStatus::NoLocalSourceFlow
@@ -1244,7 +1504,7 @@ where
 
     raw_sinks.sort_by(|a, b| (&a.file, a.line, &a.callee).cmp(&(&b.file, b.line, &b.callee)));
 
-    let mut sinks_by_caller: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut sinks_by_caller: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (s_pos, rs) in raw_sinks.iter().enumerate() {
         sinks_by_caller
             .entry(rs.caller_idx)
@@ -1302,6 +1562,7 @@ where
         });
     }
 
+    profile_lap(&mut stage_clock, "sinks");
     // 4. Assets (`UsesConfig` / `ConfigKey`, `Table`, and sensitive domain models touched by reachable code).
     let mut config_consumers: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
     for &(u, cfg_idx) in &uses_config_edges {
@@ -1413,8 +1674,10 @@ where
         });
     }
 
+    profile_lap(&mut stage_clock, "assets");
     // 5. Data Flows (Entry Point -> Sink paths) & Trust Boundaries.
     let mut data_flows: Vec<ThreatDataFlow> = Vec::new();
+    let mut pending_flows: Vec<(ThreatDataFlow, EvidenceRecord)> = Vec::new();
     for tree in &reachable_trees {
         let ep = &entry_points[tree.ep_pos];
         let has_auth = !ep.observed_auth_controls.is_empty();
@@ -1454,59 +1717,64 @@ where
                 }
                 let has_san = path_has_sanitizer
                     || matches!(sink.pdg_taint, PdgSinkStatus::SanitizedFlow { .. });
-                let df_id = format!("DF-{:03}", data_flows.len() + 1);
                 let provenance = match &sink.pdg_taint {
                     PdgSinkStatus::ProvenUnsanitizedFlow { .. }
                     | PdgSinkStatus::SanitizedFlow { .. } => EvidenceProvenance::CpgTaint,
                     _ => EvidenceProvenance::GraphFact,
                 };
-                evidence_index.insert(
-                    df_id.clone(),
-                    EvidenceRecord {
-                        id: df_id.clone(),
-                        provenance,
-                        kind: "data_flow".into(),
-                        symbol_or_target: format!("{} -> {}", ep.name, sink.callee),
-                        file: Some(sink.file.clone()),
-                        line: Some(sink.line),
-                        summary: format!(
-                            "Flow `{}` -> `{}` ({} hops, sink `{}`)",
-                            ep.name, sink.callee, depth, sink.sink_category
-                        ),
-                    },
-                );
-                data_flows.push(ThreatDataFlow {
-                    id: df_id,
-                    entry_point_id: ep.id.clone(),
-                    sink_id: sink.id.clone(),
-                    sink_category: sink.sink_category.clone(),
-                    call_path: call_path.clone(),
-                    hops: depth,
-                    crossed_communities: crossed_communities.clone(),
-                    has_observed_auth: has_auth,
-                    has_observed_sanitizer: has_san,
-                    has_observed_audit_log: tree.has_audit_log,
-                    pdg_taint: sink.pdg_taint.clone(),
+                // IDs are assigned after the canonical sort below; the evidence record
+                // travels with its flow so renumbering can never cross-wire summaries.
+                let record = EvidenceRecord {
+                    id: String::new(),
                     provenance,
-                });
+                    kind: "data_flow".into(),
+                    symbol_or_target: format!("{} -> {}", ep.name, sink.callee),
+                    file: Some(sink.file.clone()),
+                    line: Some(sink.line),
+                    summary: format!(
+                        "Flow `{}` -> `{}` ({} hops, sink `{}`)",
+                        ep.name, sink.callee, depth, sink.sink_category
+                    ),
+                };
+                pending_flows.push((
+                    ThreatDataFlow {
+                        id: String::new(),
+                        entry_point_id: ep.id.clone(),
+                        sink_id: sink.id.clone(),
+                        sink_category: sink.sink_category.clone(),
+                        call_path: call_path.clone(),
+                        hops: depth,
+                        crossed_communities: crossed_communities.clone(),
+                        has_observed_auth: has_auth,
+                        has_observed_sanitizer: has_san,
+                        has_observed_audit_log: tree.has_audit_log,
+                        pdg_taint: sink.pdg_taint.clone(),
+                        provenance,
+                    },
+                    record,
+                ));
             }
         }
     }
-    data_flows.sort_by(|a, b| {
-        (&a.entry_point_id, &a.sink_id, a.hops).cmp(&(&b.entry_point_id, &b.sink_id, b.hops))
+    pending_flows.sort_by(|(a, _), (b, _)| {
+        (&a.entry_point_id, &a.sink_id, a.hops, &a.call_path).cmp(&(
+            &b.entry_point_id,
+            &b.sink_id,
+            b.hops,
+            &b.call_path,
+        ))
     });
-    // Re-number DF IDs deterministically after sort.
-    for (i, df) in data_flows.iter_mut().enumerate() {
-        let new_id = format!("DF-{:03}", i + 1);
-        if df.id != new_id {
-            if let Some(mut rec) = evidence_index.remove(&df.id) {
-                rec.id = new_id.clone();
-                evidence_index.insert(new_id.clone(), rec);
-            }
-            df.id = new_id;
-        }
+    // Assign DF IDs exactly once, in canonical order, together with their evidence records.
+    data_flows.reserve(pending_flows.len());
+    for (i, (mut df, mut record)) in pending_flows.into_iter().enumerate() {
+        let id = format!("DF-{:03}", i + 1);
+        record.id = id.clone();
+        df.id = id.clone();
+        evidence_index.insert(id, record);
+        data_flows.push(df);
     }
 
+    profile_lap(&mut stage_clock, "data_flows");
     // Trust Boundaries: (a) External Ingress, (b) Cross-Community Bridges, (c) External Egress.
     let mut trust_boundaries: Vec<TrustBoundaryCandidate> = Vec::new();
     if !entry_points.is_empty() {
@@ -1549,30 +1817,50 @@ where
         }
     }
 
-    let mut community_bridges: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    // Per community pair: total crossing count + first 5 sample edges (edge order is the
+    // deterministic snapshot order). Only the kept samples are formatted.
+    /// (crossing count, first sample `(caller, callee)` node indices).
+    type BridgeTally = (usize, Vec<(usize, usize)>);
+    let mut bridge_counts: HashMap<(usize, usize), BridgeTally> = HashMap::new();
     for (u, callees) in calls_out.iter().enumerate() {
-        let Some(c_from) = community_for_idx(u) else {
+        let Some(c_from) = node_community[u] else {
             continue;
         };
         for &v in callees {
-            let Some(c_to) = community_for_idx(v) else {
+            let Some(c_to) = node_community[v] else {
                 continue;
             };
             if c_from != c_to {
-                community_bridges
-                    .entry((c_from.clone(), c_to))
-                    .or_default()
-                    .push(format!(
-                        "{} -> {}",
-                        nodes[u].display_fqn(),
-                        nodes[v].display_fqn()
-                    ));
+                let (count, samples) = bridge_counts.entry((c_from, c_to)).or_default();
+                *count += 1;
+                if samples.len() < 5 {
+                    samples.push((u, v));
+                }
             }
         }
     }
-    for ((from_zone, to_zone), samples) in community_bridges {
+    let label_of = |cid: usize| -> String {
+        community_labels_by_id
+            .get(&cid)
+            .map(|(label, _)| label.clone())
+            .unwrap_or_default()
+    };
+    let mut community_bridges: BTreeMap<(String, String), (usize, Vec<String>)> = BTreeMap::new();
+    for ((c_from, c_to), (count, samples)) in bridge_counts {
+        let entry = community_bridges
+            .entry((label_of(c_from), label_of(c_to)))
+            .or_default();
+        entry.0 += count;
+        entry.1.extend(
+            samples
+                .into_iter()
+                .map(|(u, v)| format!("{} -> {}", nodes[u].display_fqn(), nodes[v].display_fqn())),
+        );
+    }
+    for ((from_zone, to_zone), (count, mut samples)) in community_bridges {
         let tb_id = format!("TB-{:03}", trust_boundaries.len() + 1);
-        let count = samples.len();
+        samples.sort();
+        samples.dedup();
         let sample_crossings: Vec<String> = samples.into_iter().take(5).collect();
         evidence_index.insert(
             tb_id.clone(),
@@ -1633,6 +1921,7 @@ where
         });
     }
 
+    profile_lap(&mut stage_clock, "trust_boundaries");
     // 6. Reachable OSV Vulnerabilities join.
     let mut reachable_vulnerabilities: Vec<ReachableVulnEvidence> = Vec::new();
     for vr in opts.vuln_results {
@@ -1695,6 +1984,7 @@ where
         });
     }
 
+    profile_lap(&mut stage_clock, "osv_join");
     // 7. Deterministic STRIDE Threat Candidates (`provenance: GraphRule`, `review_status: NeedsReview`).
     let mut threat_candidates: Vec<ThreatCandidate> = Vec::new();
     let ep_by_id: HashMap<&str, &EntryPointEvidence> =
@@ -1994,6 +2284,7 @@ where
         });
     }
 
+    profile_lap(&mut stage_clock, "stride");
     // 8. Explicit Limitations & Coverage Gaps.
     let mut limitations_and_gaps = vec![LimitationNote {
         code: "OUT_OF_REPO_CONTROLS".into(),
@@ -2015,6 +2306,25 @@ where
             code: "OSV_OFFLINE_EMPTY".into(),
             category: "dependency_vulnerabilities".into(),
             detail: "No local OSV advisories were evaluated (`.rgctl/osv/` empty and no `--osv` / `--from-report` supplied); run `rgctl vuln fetch` first to include CVE reachability.".into(),
+        });
+    }
+    if !depth_truncated_nodes.is_empty() {
+        limitations_and_gaps.push(LimitationNote {
+            code: "CALL_DEPTH_LIMITED".into(),
+            category: "call_graph_completeness".into(),
+            detail: format!(
+                "{} function(s) at the reachability depth limit ({max_depth} hops) have unexplored callees; sinks deeper than {max_depth} hops from an entry point are not reported. Re-run with a larger `--max-depth` for full coverage.",
+                depth_truncated_nodes.len()
+            ),
+        });
+    }
+    if pdg_budget_skipped > 0 {
+        limitations_and_gaps.push(LimitationNote {
+            code: "PDG_BUDGET_EXHAUSTED".into(),
+            category: "data_flow_completeness".into(),
+            detail: format!(
+                "Lazy CFG/PDG taint inspection covered the {max_pdg_functions} closest entry-reachable function(s); {pdg_budget_skipped} further reachable function(s) were not inspected, so their sinks carry graph-only evidence. Re-run with a larger `--max-pdg-functions` for full coverage.",
+            ),
         });
     }
     if community_ctx.is_none() {
@@ -2050,6 +2360,7 @@ where
         unresolved_or_indirect_calls: opts.unresolved_calls_count,
     };
 
+    profile_lap(&mut stage_clock, "limitations_summary");
     Ok(ThreatModelReport {
         schema_version: THREAT_MODEL_SCHEMA_VERSION,
         command: "vuln threat-model".into(),
@@ -2075,10 +2386,17 @@ fn sanitize_mermaid_label(raw: &str) -> String {
 
 /// Render a standalone Mermaid `flowchart LR` Data-Flow Diagram (DFD) from [`ThreatModelReport`].
 pub fn render_threat_model_mermaid(report: &ThreatModelReport) -> String {
+    // Diagram size caps keep the DFD legible; anything beyond them is counted in an explicit
+    // "omitted" node (the JSON output is always complete).
+    const MAX_EPS: usize = 20;
+    const MAX_SINKS: usize = 20;
+    const MAX_ASSETS: usize = 15;
+    const MAX_FLOWS: usize = 30;
+
     let mut out = String::from("flowchart LR\n");
     let _ = writeln!(out, "    EXT[\"External Caller / Actor\"]");
 
-    for ep in report.entry_points.iter().take(20) {
+    for ep in report.entry_points.iter().take(MAX_EPS) {
         let id = ep.id.replace('-', "_");
         let label = sanitize_mermaid_label(&format!("{}: {}", ep.id, ep.name));
         let _ = writeln!(out, "    {id}[\"{label}\"]");
@@ -2089,7 +2407,7 @@ pub fn render_threat_model_mermaid(report: &ThreatModelReport) -> String {
         .sinks
         .iter()
         .filter(|s| s.sink_category != "log_output")
-        .take(20)
+        .take(MAX_SINKS)
     {
         let id = sink.id.replace('-', "_");
         let label = sanitize_mermaid_label(&format!(
@@ -2099,7 +2417,7 @@ pub fn render_threat_model_mermaid(report: &ThreatModelReport) -> String {
         let _ = writeln!(out, "    {id}[\"{label}\"]");
     }
 
-    for asset in report.assets.iter().take(15) {
+    for asset in report.assets.iter().take(MAX_ASSETS) {
         let id = asset.id.replace('-', "_");
         let label = sanitize_mermaid_label(&format!("{}: {}", asset.id, asset.name));
         let _ = writeln!(out, "    {id}[(\"{label}\")]");
@@ -2108,25 +2426,63 @@ pub fn render_threat_model_mermaid(report: &ThreatModelReport) -> String {
     let shown_eps: BTreeSet<&str> = report
         .entry_points
         .iter()
-        .take(20)
+        .take(MAX_EPS)
         .map(|e| e.id.as_str())
         .collect();
     let shown_sinks: BTreeSet<&str> = report
         .sinks
         .iter()
         .filter(|s| s.sink_category != "log_output")
-        .take(20)
+        .take(MAX_SINKS)
         .map(|s| s.id.as_str())
         .collect();
 
-    for df in report.data_flows.iter().take(30) {
-        if shown_eps.contains(df.entry_point_id.as_str())
-            && shown_sinks.contains(df.sink_id.as_str())
-        {
-            let from = df.entry_point_id.replace('-', "_");
-            let to = df.sink_id.replace('-', "_");
-            let _ = writeln!(out, "    {from} -->|\"{} hop(s)\"| {to}", df.hops);
-        }
+    // Filter to drawable flows first, then cap, so edges between shown nodes are never lost.
+    let drawable: Vec<&ThreatDataFlow> = report
+        .data_flows
+        .iter()
+        .filter(|df| {
+            shown_eps.contains(df.entry_point_id.as_str())
+                && shown_sinks.contains(df.sink_id.as_str())
+        })
+        .collect();
+    for df in drawable.iter().take(MAX_FLOWS) {
+        let from = df.entry_point_id.replace('-', "_");
+        let to = df.sink_id.replace('-', "_");
+        let _ = writeln!(out, "    {from} -->|\"{} hop(s)\"| {to}", df.hops);
+    }
+
+    let total_sinks = report
+        .sinks
+        .iter()
+        .filter(|s| s.sink_category != "log_output")
+        .count();
+    let omitted = [
+        (
+            report.entry_points.len().saturating_sub(MAX_EPS),
+            "entry point(s)",
+        ),
+        (total_sinks.saturating_sub(MAX_SINKS), "sink(s)"),
+        (report.assets.len().saturating_sub(MAX_ASSETS), "asset(s)"),
+        (
+            report
+                .data_flows
+                .len()
+                .saturating_sub(drawable.len().min(MAX_FLOWS)),
+            "data flow(s)",
+        ),
+    ];
+    let parts: Vec<String> = omitted
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}"))
+        .collect();
+    if !parts.is_empty() {
+        let label = sanitize_mermaid_label(&format!(
+            "Omitted for legibility: {} (full list in JSON output)",
+            parts.join(", ")
+        ));
+        let _ = writeln!(out, "    OMITTED[\"{label}\"]");
     }
 
     out
@@ -2209,12 +2565,13 @@ pub fn render_threat_model_markdown(report: &ThreatModelReport) -> String {
             let consumers = if a.consumers.is_empty() {
                 "—".to_string()
             } else {
-                a.consumers
-                    .iter()
-                    .take(4)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                {
+                    let mut shown = a.consumers.iter().take(4).cloned().collect::<Vec<_>>();
+                    if a.consumers.len() > 4 {
+                        shown.push(format!("+{} more", a.consumers.len() - 4));
+                    }
+                    shown.join(", ")
+                }
             };
             let _ = writeln!(
                 md,
@@ -2291,6 +2648,116 @@ pub fn render_threat_model_markdown(report: &ThreatModelReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_and_validation_controls_match_whole_tokens_only() {
+        for yes in [
+            "PreAuthorize",
+            "org.springframework.security.access.prepost.PreAuthorize",
+            "RolesAllowed",
+            "Secured",
+            "get_current_user",
+            "login_required",
+            "jwt.verify",
+            "require_auth",
+            "AuthGuard",
+            "HTTPBearer",
+            "hasRole",
+            "OAuth2Client",
+        ] {
+            assert!(is_auth_control_name(yes), "{yes} should be an auth control");
+        }
+        for no in [
+            "get_author",
+            "safeguard_value",
+            "authority_level",
+            "AuthorService.find",
+        ] {
+            assert!(
+                !is_auth_control_name(no),
+                "{no} must not be an auth control"
+            );
+        }
+        for yes in [
+            "validate_input",
+            "Valid",
+            "RateLimiter",
+            "rate_limit",
+            "throttle",
+            "sanitize",
+        ] {
+            assert!(
+                is_validation_or_ratelimit_name(yes),
+                "{yes} should be validation"
+            );
+        }
+        for no in [
+            "invalidate_cache",
+            "get_schema_version",
+            "InvalidRequestError",
+        ] {
+            assert!(
+                !is_validation_or_ratelimit_name(no),
+                "{no} must not be a validation control"
+            );
+        }
+    }
+
+    #[test]
+    fn identifier_tokens_split_camel_acronyms_and_separators() {
+        assert_eq!(identifier_tokens("HTTPBearer"), ["http", "bearer"]);
+        assert_eq!(
+            identifier_tokens("get_current_user"),
+            ["get", "current", "user"]
+        );
+        assert_eq!(
+            identifier_tokens("a::B::preAuthorize"),
+            ["a", "b", "pre", "authorize"]
+        );
+        assert_eq!(identifier_tokens("OAuth2Client"), ["o", "auth2", "client"]);
+    }
+
+    #[test]
+    fn fallback_sink_heuristics_require_qualified_receivers() {
+        let rules = TaintRuleSet::default();
+        // Unqualified generic method names are not sinks.
+        assert_eq!(classify_callee_sink(&rules, "", "std::thread::spawn"), None);
+        assert_eq!(classify_callee_sink(&rules, "", "Executor::execute"), None);
+        assert_eq!(classify_callee_sink(&rules, "", "pattern.exec"), None);
+        assert_eq!(classify_callee_sink(&rules, "", "catalog.info"), None);
+        // Qualified ones still are.
+        assert_eq!(
+            classify_callee_sink(&rules, "", "cursor.execute"),
+            Some(TaintSink::SqlQuery)
+        );
+        assert_eq!(
+            classify_callee_sink(&rules, "", "std::process::Command::new"),
+            Some(TaintSink::ShellCommand)
+        );
+        assert_eq!(
+            classify_callee_sink(&rules, "", "exec"),
+            Some(TaintSink::CodeEval)
+        );
+        assert_eq!(
+            classify_callee_sink(&rules, "", "logger.info"),
+            Some(TaintSink::LogOutput)
+        );
+    }
+
+    #[test]
+    fn qualified_owner_handles_rust_paths_and_dotted_names() {
+        assert_eq!(qualified_owner("a::B::f"), Some("a::B"));
+        assert_eq!(
+            qualified_owner("com.acme.OrderController.create"),
+            Some("com.acme.OrderController")
+        );
+        assert_eq!(qualified_owner("main"), None);
+        assert_eq!(qualified_owner_short_name("a::B"), "B");
+        assert_eq!(
+            qualified_owner_short_name("com.acme.OrderController"),
+            "OrderController"
+        );
+    }
 
     #[test]
     fn config_asset_classification_distinguishes_secrets_endpoints_and_runtime_flags() {

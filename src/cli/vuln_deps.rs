@@ -104,6 +104,7 @@ pub fn dispatch_vuln_command(ctx: &CliContext, action: VulnCommands) -> Result<(
             include_node_modules,
             with_dep_stubs,
             max_depth,
+            max_pdg_functions,
             no_lazy_cfg,
         } => super::threat_model::run_vuln_threat_model(
             ctx,
@@ -118,6 +119,7 @@ pub fn dispatch_vuln_command(ctx: &CliContext, action: VulnCommands) -> Result<(
                 include_node_modules,
                 with_dep_stubs,
                 max_depth,
+                max_pdg_functions,
                 no_lazy_cfg,
             },
         ),

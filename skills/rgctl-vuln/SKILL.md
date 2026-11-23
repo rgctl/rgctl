@@ -185,7 +185,7 @@ jq '.limitations_and_gaps' .rgctl/threat-model.json
   - **Deterministic rule hypotheses:** `graph_rule` (`review_status: needs_review`)
   - **Contextual agent refinements:** label any threat or business-logic hypothesis added by LLM reasoning as `agent_inference` (`needs_review`).
 - **Mandatory `evidence_refs`:** Every reported threat candidate **must** cite at least one concrete ID (`EP-*`, `SNK-*`, `DF-*`, `AST-*`, `TB-*`, `OSV-*`) resolving to `symbol` + `file:line` in `.evidence_index`, plus explicit `assumptions`. Never present rule or agent inferences as confirmed vulnerabilities without verified exploitability evidence.
-- **Always surface `limitations_and_gaps`:** Explicitly call out out-of-repo infrastructure controls (`OUT_OF_REPO_CONTROLS`), unresolved indirect/dynamic call sites (`DYNAMIC_OR_INDIRECT_CALLS`), and business-logic abuse that static graphs cannot prove.
+- **Always surface `limitations_and_gaps`:** Explicitly call out out-of-repo infrastructure controls (`OUT_OF_REPO_CONTROLS`), unresolved indirect/dynamic call sites (`DYNAMIC_OR_INDIRECT_CALLS`), coverage bounds (`CALL_DEPTH_LIMITED` → re-run with a larger `--max-depth`; `PDG_BUDGET_EXHAUSTED` → larger `--max-pdg-functions`, and treat affected sinks as graph-only evidence), and business-logic abuse that static graphs cannot prove.
 - **Privacy boundary:** Keep raw full-repo source out of prompts — rely on structured `.rgctl/threat-model.json` metadata and narrow `slice` excerpts, and respect organizational LLM data-handling policies on proprietary repositories.
 
 ## Gotchas
