@@ -104,6 +104,50 @@ pub fn qualify_python_file(
     qualify_python_file_in_module(path, path, symbols, relations)
 }
 
+/// Derive a repository-relative Go package namespace (`dir.package`), avoiding
+/// duplicating the trailing directory segment when it already matches `package`.
+pub fn go_repo_package_module(module_path: &Path, package: &str) -> String {
+    if module_path.is_absolute() {
+        return package.to_owned();
+    }
+    let mut parts: Vec<std::borrow::Cow<'_, str>> = Vec::new();
+    for part in module_path
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .components()
+    {
+        match part {
+            Component::Normal(s) => parts.push(s.to_string_lossy()),
+            Component::ParentDir => {
+                parts.pop();
+            }
+            _ => {}
+        }
+    }
+    if parts.last().is_none_or(|p| p != package) {
+        parts.push(package.into());
+    }
+    parts.join(".")
+}
+
+/// Qualify Go declarations using `package` (standalone) or `module_path` + `package` (in-repo).
+pub fn qualify_go_file(
+    path: &Path,
+    package: Option<&str>,
+    symbols: &mut [Symbol],
+    relations: &mut [Relation],
+) -> Option<Box<str>> {
+    let package = package?;
+    qualify_with_module(
+        path,
+        package.to_owned(),
+        QualifiedNameOrigin::Package,
+        symbols,
+        relations,
+    );
+    Some(package.into())
+}
+
 /// Fill absent Python names while deriving the module prefix from `module_path`
 /// (`pkg/__init__.py` -> `pkg`).
 pub fn qualify_python_file_in_module(
@@ -120,7 +164,13 @@ pub fn qualify_python_file_in_module(
     {
         module.truncate(package.len());
     }
-    qualify_with_module(file_path, module, symbols, relations)
+    qualify_with_module(
+        file_path,
+        module,
+        QualifiedNameOrigin::File,
+        symbols,
+        relations,
+    )
 }
 
 /// Fill absent names using a sorted lexical scope stack, matching symbol
@@ -132,12 +182,19 @@ pub fn qualify_file_in_module(
     symbols: &mut [Symbol],
     relations: &mut [Relation],
 ) -> Option<Box<str>> {
-    qualify_with_module(file_path, file_module(module_path), symbols, relations)
+    qualify_with_module(
+        file_path,
+        file_module(module_path),
+        QualifiedNameOrigin::File,
+        symbols,
+        relations,
+    )
 }
 
 fn qualify_with_module(
     file_path: &Path,
     module: String,
+    root_origin: QualifiedNameOrigin,
     symbols: &mut [Symbol],
     relations: &mut [Relation],
 ) -> Option<Box<str>> {
@@ -166,7 +223,12 @@ fn qualify_with_module(
 
     let mut explicit_fqns: FxHashSet<String> = symbols
         .iter()
-        .filter(|s| s.qualified_name_origin != QualifiedNameOrigin::File)
+        .filter(|s| {
+            !matches!(
+                s.qualified_name_origin,
+                QualifiedNameOrigin::File | QualifiedNameOrigin::Package
+            )
+        })
         .filter_map(|s| s.qualified_name.clone())
         .collect();
 
@@ -198,16 +260,23 @@ fn qualify_with_module(
             if is_callable && symbols[i].name.contains('.') {
                 defer = true;
             } else {
-                let (candidate, origin) = build_qualified_candidate(&module, &stack, symbols, i);
+                let (candidate, origin) =
+                    build_qualified_candidate(&module, root_origin, &stack, symbols, i);
                 if is_callable && explicit_fqns.contains(&candidate) {
                     defer = true;
                 } else {
-                    if origin != QualifiedNameOrigin::File {
+                    if !matches!(
+                        origin,
+                        QualifiedNameOrigin::File | QualifiedNameOrigin::Package
+                    ) {
                         explicit_fqns.insert(candidate.clone());
                     }
                     symbols[i].qualified_name = Some(candidate);
                     symbols[i].qualified_name_origin = origin;
-                    generated |= origin == QualifiedNameOrigin::File;
+                    generated |= matches!(
+                        origin,
+                        QualifiedNameOrigin::File | QualifiedNameOrigin::Package
+                    );
                 }
             }
         }
@@ -226,6 +295,7 @@ fn qualify_with_module(
 
 fn build_qualified_candidate(
     module: &str,
+    root_origin: QualifiedNameOrigin,
     stack: &[usize],
     symbols: &[Symbol],
     sym_idx: usize,
@@ -237,14 +307,17 @@ fn build_qualified_candidate(
         Some(pos) => {
             let base = &symbols[stack[pos]];
             let qn = base.qualified_name.as_deref().unwrap_or(module);
-            let orig = if base.qualified_name_origin == QualifiedNameOrigin::File {
-                QualifiedNameOrigin::File
+            let orig = if matches!(
+                base.qualified_name_origin,
+                QualifiedNameOrigin::File | QualifiedNameOrigin::Package
+            ) {
+                base.qualified_name_origin
             } else {
                 QualifiedNameOrigin::Lexical
             };
             (qn, orig, &stack[pos + 1..])
         }
-        None => (module, QualifiedNameOrigin::File, stack),
+        None => (module, root_origin, stack),
     };
     let name = &symbols[sym_idx].name;
     let mut out = String::with_capacity(root_prefix.len() + anon_slice.len() * 6 + name.len() + 1);
@@ -260,21 +333,48 @@ fn build_qualified_candidate(
 /// Rebase generated names after a raw facts-cache hit (or stem-qualified extract).
 /// Other languages and their native qualified names pass through unchanged.
 pub fn qualify_in_repo(language: &str, logical_path: &Path, result: &mut ExtractAllResult) {
-    if !matches!(language, "javascript" | "typescript" | "python") {
+    if !matches!(language, "javascript" | "typescript" | "python" | "go") {
         return;
     }
     let Some(old_context) = result.file_namespace.as_deref().map(str::to_owned) else {
         return;
     };
-    let mut module = file_module(logical_path);
-    if language == "python"
-        && logical_path
-            .file_stem()
-            .is_some_and(|stem| stem == "__init__")
-        && let Some((package, _)) = module.rsplit_once('.')
-    {
-        module.truncate(package.len());
-    }
+    let module = if language == "go" {
+        let package = old_context.rsplit('.').next().unwrap_or(&old_context);
+        if logical_path.is_absolute() {
+            package.to_owned()
+        } else {
+            let mut parts: Vec<std::borrow::Cow<'_, str>> = Vec::new();
+            for part in logical_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .components()
+            {
+                match part {
+                    Component::Normal(s) => parts.push(s.to_string_lossy()),
+                    Component::ParentDir => {
+                        parts.pop();
+                    }
+                    _ => {}
+                }
+            }
+            if parts.last().is_none_or(|p| p != package) {
+                parts.push(package.into());
+            }
+            parts.join(".")
+        }
+    } else {
+        let mut m = file_module(logical_path);
+        if language == "python"
+            && logical_path
+                .file_stem()
+                .is_some_and(|stem| stem == "__init__")
+            && let Some((package, _)) = m.rsplit_once('.')
+        {
+            m.truncate(package.len());
+        }
+        m
+    };
     if module.is_empty() || module == old_context {
         return;
     }
@@ -282,16 +382,37 @@ pub fn qualify_in_repo(language: &str, logical_path: &Path, result: &mut Extract
     let explicit_fqns: FxHashSet<String> = result
         .symbols
         .iter()
-        .filter(|s| s.qualified_name_origin != QualifiedNameOrigin::File)
+        .filter(|s| {
+            !matches!(
+                s.qualified_name_origin,
+                QualifiedNameOrigin::File | QualifiedNameOrigin::Package
+            )
+        })
         .filter_map(|s| s.qualified_name.clone())
         .collect();
 
     let mut cleared_prefixes: Vec<String> = Vec::new();
     let mut old_names: Vec<Option<String>> = vec![None; result.symbols.len()];
-    let mut any_file_origin_kept = false;
+    let mut any_file_origin_kept = language == "go";
 
+    for relation in &mut result.relations {
+        if !relation.indirect_call
+            && relation.to_qualified_hint_origin == QualifiedNameOrigin::Package
+            && let Some(suffix) = relation
+                .to_qualified_hint
+                .as_deref()
+                .and_then(|hint| hint.strip_prefix(old_context.as_str()))
+                .and_then(|hint| hint.strip_prefix('.'))
+        {
+            relation.to_qualified_hint = Some(format!("{module}.{suffix}"));
+            any_file_origin_kept = true;
+        }
+    }
     for (i, symbol) in result.symbols.iter_mut().enumerate() {
-        if symbol.qualified_name_origin != QualifiedNameOrigin::File {
+        if !matches!(
+            symbol.qualified_name_origin,
+            QualifiedNameOrigin::File | QualifiedNameOrigin::Package
+        ) {
             continue;
         }
         let Some(current_qn) = symbol.qualified_name.as_deref() else {
@@ -353,22 +474,27 @@ pub fn qualify_in_repo(language: &str, logical_path: &Path, result: &mut Extract
                     rel.from.clear();
                     rel.from.push_str(next);
                 }
-                if let Some(&(new_to, bare)) = old_to_new.get(rel.to.as_str()) {
-                    let next = new_to.unwrap_or(bare);
-                    rel.to.clear();
-                    rel.to.push_str(next);
-                }
-                if let Some(hint_val) = rel.to_qualified_hint.as_deref()
-                    && let Some(&(new_hint, _)) = old_to_new.get(hint_val)
-                {
-                    match new_hint {
-                        Some(rebased) => {
-                            if let Some(slot) = rel.to_qualified_hint.as_mut() {
-                                slot.clear();
-                                slot.push_str(rebased);
+                if !rel.indirect_call {
+                    if let Some(&(new_to, bare)) = old_to_new.get(rel.to.as_str()) {
+                        let next = new_to.unwrap_or(bare);
+                        rel.to.clear();
+                        rel.to.push_str(next);
+                    }
+                    if let Some(hint_val) = rel.to_qualified_hint.as_deref()
+                        && let Some(&(new_hint, _)) = old_to_new.get(hint_val)
+                    {
+                        match new_hint {
+                            Some(rebased) => {
+                                if let Some(slot) = rel.to_qualified_hint.as_mut() {
+                                    slot.clear();
+                                    slot.push_str(rebased);
+                                }
+                            }
+                            None => {
+                                rel.to_qualified_hint = None;
+                                rel.to_qualified_hint_origin = QualifiedNameOrigin::Native;
                             }
                         }
-                        None => rel.to_qualified_hint = None,
                     }
                 }
             }
@@ -380,6 +506,7 @@ pub fn qualify_in_repo(language: &str, logical_path: &Path, result: &mut Extract
         let policy = match language {
             "typescript" => crate::callable_identity::Policy::Typescript,
             "python" => crate::callable_identity::Policy::Python,
+            "go" => crate::callable_identity::Policy::Go,
             _ => crate::callable_identity::Policy::Javascript,
         };
         crate::callable_identity::finish(policy, &mut result.symbols, &mut result.relations);
@@ -618,6 +745,9 @@ fn rewrite_endpoints(
                 relation.from.clone_from(name);
             }
         }
+        if relation.indirect_call {
+            continue;
+        }
         if matches!(relation.relation_type, RelationType::Calls) {
             let is_unqualified =
                 relation.is_inferred_callable_owner() || relation.to_qualified_hint.is_none();
@@ -658,6 +788,7 @@ fn rewrite_endpoints(
                 relation
                     .to_qualified_hint
                     .clone_from(&symbol.qualified_name);
+                relation.to_qualified_hint_origin = symbol.qualified_name_origin;
             }
         }
     }

@@ -369,3 +369,115 @@ fn native_calls_and_materialized_graphs_keep_sibling_owners_separate() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+#[test]
+fn qualified_names_materialize_consistently_across_all_tier1_languages() {
+    use rgctl_plugin_api::QualifiedNameOrigin;
+    let registry = Arc::new(rgctl_languages::default_registry());
+    let extractor = Extractor::new(registry).with_repo_root("/repo");
+    for case in CASES {
+        let path = Path::new("/repo/scopes").join(case.file);
+        let file = extractor
+            .extract_file_with_source(&path, case.source.as_bytes().to_vec())
+            .unwrap();
+        let symbols = file.symbols.clone();
+        let mut builder = GraphBuilder::new();
+        extractor.populate_graph(&[file], &mut builder).unwrap();
+        let (nodes, _) = builder.into_graph();
+        assert!(
+            nodes
+                .iter()
+                .any(|n| n.node_type == NodeType::File && n.file_path.as_deref() == path.to_str()),
+            "{}: missing file scope",
+            case.language
+        );
+        for symbol in symbols.iter().filter(|s| {
+            matches!(
+                s.symbol_type,
+                SymbolType::Function
+                    | SymbolType::Method
+                    | SymbolType::Class
+                    | SymbolType::Struct
+                    | SymbolType::Interface
+                    | SymbolType::Variable
+                    | SymbolType::Module
+            )
+        }) {
+            let node = nodes
+                .iter()
+                .find(|n| {
+                    n.node_type != NodeType::File
+                        && n.name.as_str() == symbol.name
+                        && n.start_line == Some(symbol.location.start_line)
+                        && n.file_path.as_deref() == path.to_str()
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}: missing graph declaration {}",
+                        case.language, symbol.name
+                    )
+                });
+            assert_eq!(
+                node.qualified_name.as_deref(),
+                symbol.qualified_name.as_deref(),
+                "{}: {} lost its qualified identity",
+                case.language,
+                symbol.name
+            );
+            if symbol.qualified_name_origin == QualifiedNameOrigin::Package {
+                assert_eq!(case.language, "go");
+                assert!(
+                    symbol
+                        .qualified_name
+                        .as_deref()
+                        .unwrap()
+                        .starts_with("scopes.span.")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn indirect_call_facts_never_become_declaration_edges_across_tier1() {
+    let registry = Arc::new(rgctl_languages::default_registry());
+    let extractor = Extractor::new(registry);
+    for case in CASES.iter().filter(|case| case.calls) {
+        let mut file = extractor
+            .extract_file_with_source(Path::new(case.file), case.source.as_bytes().to_vec())
+            .unwrap();
+        let mut call = file
+            .relations
+            .iter()
+            .find(|r| r.relation_type == RelationType::Calls)
+            .unwrap()
+            .clone();
+        call.indirect_call = true;
+        call.exact_callable_resolution = true;
+        let restored: rgctl_plugin_api::Relation =
+            serde_json::from_slice(&serde_json::to_vec(&call).unwrap()).unwrap();
+        assert!(restored.indirect_call, "{}", case.language);
+        file.relations
+            .retain(|r| r.relation_type != RelationType::Calls);
+        file.relations.push(restored);
+        let mut builder = GraphBuilder::new();
+        extractor.populate_graph(&[file], &mut builder).unwrap();
+        assert!(
+            builder
+                .take_parked_relations()
+                .iter()
+                .all(|r| r.relation_type != RelationType::Calls),
+            "{}",
+            case.language
+        );
+        let report = builder.take_callable_resolution_report();
+        assert_eq!(report.unresolved_calls, 1, "{}", case.language);
+        assert!(report.samples[0].indirect_call, "{}", case.language);
+        let (_, edges) = builder.into_graph();
+        assert!(
+            edges.iter().all(|e| e.edge_type != EdgeType::Calls),
+            "{}",
+            case.language
+        );
+    }
+}

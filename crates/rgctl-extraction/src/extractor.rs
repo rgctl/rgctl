@@ -190,11 +190,18 @@ impl Extractor {
                         if Path::new(old).file_stem() != path.file_stem() {
                             return None;
                         }
+                        let old_file = old.to_owned();
                         let new_file = path_str.to_string();
                         for sym in &mut hit.symbols {
                             sym.location.file = new_file.clone();
                         }
                         for rel in &mut hit.relations {
+                            if rel.from == old_file {
+                                rel.from.clone_from(&new_file);
+                            }
+                            if rel.to == old_file {
+                                rel.to.clone_from(&new_file);
+                            }
                             rel.location.file = new_file.clone();
                         }
                     }

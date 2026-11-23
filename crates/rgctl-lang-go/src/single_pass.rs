@@ -170,6 +170,16 @@ pub fn extract_all_single_pass(
     file_path: &Path,
     source: &[u8],
 ) -> Result<ExtractAllResult> {
+    extract_all_single_pass_in_repo(plugin, file_path, None, source)
+}
+
+/// Repository-aware single-pass Go extraction deriving `dir.package` once when `logical_path` is provided.
+pub fn extract_all_single_pass_in_repo(
+    plugin: &GoPlugin,
+    file_path: &Path,
+    logical_path: Option<&Path>,
+    source: &[u8],
+) -> Result<ExtractAllResult> {
     let tree = parse_with_pool("go", go_grammar(), source).map_err(|e| Error::ParseError {
         file: file_path.to_path_buf(),
         line: 0,
@@ -182,6 +192,7 @@ pub fn extract_all_single_pass(
     let mut ctx = SinglePassCtx::new(dispatch);
     let mut relations = Vec::new();
     let mut pending_calls: Vec<PendingCall<'_>> = Vec::new();
+    let mut call_bindings = GoCallBindings::default();
     let mut depth_warned = false;
 
     let mut stack = vec![Visit::Pre(root, 0)];
@@ -210,6 +221,7 @@ pub fn extract_all_single_pass(
                     continue;
                 }
 
+                call_bindings.observe(node, source);
                 let mask = rgctl_plugin_api::dispatch_lookup_tracked(dispatch, node.kind_id());
                 if mask.is_passive() {
                     for i in (0..node.child_count()).rev() {
@@ -348,7 +360,17 @@ pub fn extract_all_single_pass(
     }
 
     // Flush calls with the complete symbol list (forward-reference safe).
-    let call_file_index = CallFileIndex::new(file_path, &ctx.symbols);
+    let raw_pkg = crate::plugin::package_name(root, source);
+    let go_module: Option<std::borrow::Cow<'_, str>> = match (raw_pkg, logical_path) {
+        (Some(pkg), Some(lp)) => Some(std::borrow::Cow::Owned(
+            rgctl_plugin_helpers::qualified_names::go_repo_package_module(lp, pkg),
+        )),
+        (Some(pkg), None) => Some(std::borrow::Cow::Borrowed(pkg)),
+        (None, _) => None,
+    };
+    let call_file_index = CallFileIndex::new(file_path, &ctx.symbols)
+        .with_go_package_name(go_module.as_deref())
+        .with_go_bindings(call_bindings);
     for pending in pending_calls {
         let identity_relation_start = relations.len();
         let Some(from_fn) = ctx.symbols.get(pending.from_symbol_idx) else {
@@ -383,11 +405,17 @@ pub fn extract_all_single_pass(
         &mut relations,
     );
 
+    let mut result = ExtractAllResult::from_parts(ctx.symbols, relations);
+    result.file_namespace = rgctl_plugin_helpers::qualified_names::qualify_go_file(
+        file_path,
+        go_module.as_deref(),
+        &mut result.symbols,
+        &mut result.relations,
+    );
     rgctl_plugin_helpers::callable_identity::finish(
         rgctl_plugin_helpers::callable_identity::Policy::Go,
-        &mut ctx.symbols,
-        &mut relations,
+        &mut result.symbols,
+        &mut result.relations,
     );
-
-    Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
+    Ok(result)
 }

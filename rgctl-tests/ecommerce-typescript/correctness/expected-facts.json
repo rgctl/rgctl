@@ -42,8 +42,20 @@
         "from": "src.module_qualification.Foo.collisionCaller",
         "to": "src.module_qualification.Foo.create",
         "severity": "required"
-      }
-    ],
+      },
+      {
+        "edge": "calls",
+        "from": "binding_direct",
+        "to": "binding_helper",
+        "severity": "required"
+      },
+    {
+      "edge": "calls",
+      "from": "binding_after",
+      "to": "binding_helper",
+      "severity": "required"
+    }
+  ],
     "forbidden_edges": [
       {
         "from": "src.module_qualification.first.app.moduleExercise",
@@ -68,6 +80,16 @@
       {
         "from": "src.module_qualification.Foo.collisionCaller",
         "to": "Foo.create",
+        "edge_type": "calls"
+      },
+      {
+        "from": "binding_parameter",
+        "to": "binding_helper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "binding_local",
+        "to": "binding_helper",
         "edge_type": "calls"
       }
     ]
@@ -808,6 +830,79 @@
         "create"
       ],
       "exact_callers": []
+    },
+    "tier1_lexical_binding_helper": {
+      "match": {
+        "name": "binding_helper",
+        "file": "correctness/binding_targets.ts"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_helper",
+        "file_suffix": "correctness/binding_targets.ts",
+        "language": "typescript"
+      }
+    },
+    "tier1_lexical_binding_parameter": {
+      "match": {
+        "name": "binding_parameter",
+        "file": "correctness/binding_targets.ts"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_parameter",
+        "file_suffix": "correctness/binding_targets.ts",
+        "language": "typescript"
+      },
+      "exact_callees": []
+    },
+    "tier1_lexical_binding_local": {
+      "match": {
+        "name": "binding_local",
+        "file": "correctness/binding_targets.ts"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_local",
+        "file_suffix": "correctness/binding_targets.ts",
+        "language": "typescript"
+      },
+      "exact_callees": []
+    },
+    "tier1_lexical_binding_direct": {
+      "match": {
+        "name": "binding_direct",
+        "file": "correctness/binding_targets.ts"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_direct",
+        "file_suffix": "correctness/binding_targets.ts",
+        "language": "typescript"
+      },
+      "exact_callees": [
+        "binding_helper"
+      ]
+    },
+    "tier1_lexical_binding_after": {
+      "match": {
+        "name": "binding_after",
+        "file": "correctness/binding_targets.ts"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_after",
+        "file_suffix": "correctness/binding_targets.ts",
+        "language": "typescript"
+      },
+      "exact_callees": [
+        "binding_helper"
+      ]
     }
   },
   "dead_code": {

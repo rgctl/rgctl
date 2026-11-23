@@ -3,11 +3,20 @@
 //! Extracts symbols, relationships, and complexity metrics from Go source code
 //! using TreeSitter.
 
-use crate::single_pass::{extract_all_single_pass, go_ast_handlers};
+use crate::single_pass::{
+    extract_all_single_pass, extract_all_single_pass_in_repo, go_ast_handlers,
+};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
 use std::path::Path;
 use tree_sitter::Node;
+
+pub(crate) fn package_name<'s>(root: Node<'_>, source: &'s [u8]) -> Option<&'s str> {
+    root.named_children(&mut root.walk())
+        .find(|n| n.kind() == "package_clause")
+        .and_then(|n| n.named_child(0))
+        .and_then(|n| n.utf8_text(source).ok())
+}
 
 /// Go language plugin
 pub struct GoPlugin;
@@ -1148,7 +1157,19 @@ impl LanguagePlugin for GoPlugin {
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let tree = self.parse(file_path, source)?;
-        self.symbols_from_tree(tree.root_node(), source, file_path)
+        let mut symbols = self.symbols_from_tree(tree.root_node(), source, file_path)?;
+        rgctl_plugin_helpers::qualified_names::qualify_go_file(
+            file_path,
+            package_name(tree.root_node(), source),
+            &mut symbols,
+            &mut [],
+        );
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Go,
+            &mut symbols,
+            &mut [],
+        );
+        Ok(symbols)
     }
 
     fn extract_relations(
@@ -1168,11 +1189,31 @@ impl LanguagePlugin for GoPlugin {
             &mut sym_copy,
             &mut relations,
         );
+        rgctl_plugin_helpers::qualified_names::qualify_go_file(
+            file_path,
+            package_name(root, source),
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Go,
+            &mut sym_copy,
+            &mut relations,
+        );
         Ok(relations)
     }
 
     fn extract_all(&self, file_path: &Path, source: &[u8]) -> Result<ExtractAllResult> {
         extract_all_single_pass(self, file_path, source)
+    }
+
+    fn extract_all_in_repo(
+        &self,
+        file_path: &Path,
+        logical_path: Option<&Path>,
+        source: &[u8],
+    ) -> Result<ExtractAllResult> {
+        extract_all_single_pass_in_repo(self, file_path, logical_path, source)
     }
 
     fn declared_ast_handlers(&self) -> Option<&AstHandlerTable> {
@@ -1451,10 +1492,12 @@ func helper() {}
         let symbols = plugin.extract_symbols(path, source).unwrap();
         let relations = plugin.extract_relations(path, source, &symbols).unwrap();
         assert!(
-            relations
-                .iter()
-                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "helper"),
-            "expected Calls -> helper, got {relations:?}"
+            relations.iter().any(|r| {
+                matches!(r.relation_type, RelationType::Calls)
+                    && r.to == "helper"
+                    && r.to_qualified_hint.as_deref() == Some("demo.helper")
+            }),
+            "expected Calls -> helper (hint demo.helper), got {relations:?}"
         );
     }
 

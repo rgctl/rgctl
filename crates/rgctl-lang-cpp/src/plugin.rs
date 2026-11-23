@@ -667,9 +667,11 @@ fn walk_cpp_calls(
         .iter()
         .filter(|s| s.symbol_type == SymbolType::Function)
         .collect();
+    let mut lexical_targets = rgctl_plugin_api::LexicalCallTargets::new("cpp");
     let mut stack = vec![(root, 0usize, initial_scope)];
 
     while let Some((node, depth, scope)) = stack.pop() {
+        lexical_targets.observe(node, source);
         if depth > MAX_DEPTH {
             tracing::warn!(
                 file = ?file_path,
@@ -730,6 +732,7 @@ fn walk_cpp_calls(
             stack.push((child, depth + 1, child_scope.clone()));
         }
     }
+    lexical_targets.apply(file_path, symbols, relations);
 }
 
 /// Prefix single-segment qualified calls with the enclosing namespace parent

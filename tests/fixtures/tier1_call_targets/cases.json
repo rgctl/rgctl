@@ -1,0 +1,196 @@
+[
+  {
+    "language": "c",
+    "file": "binding_targets.c",
+    "project": "rgctl-tests/ecommerce-c",
+    "fixture": "correctness/binding_targets.c",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "cpp",
+    "file": "binding_targets.cpp",
+    "project": "rgctl-tests/ecommerce-cpp",
+    "fixture": "correctness/binding_targets.cpp",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "csharp",
+    "file": "binding_targets.cs",
+    "project": "rgctl-tests/ecommerce-csharp",
+    "fixture": "correctness/binding_targets.cs",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "go",
+    "file": "binding_targets.go",
+    "project": "rgctl-tests/ecommerce-go",
+    "fixture": "correctness/binding_targets.go",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "groovy",
+    "file": "binding_targets.groovy",
+    "project": "rgctl-tests/ecommerce-groovy",
+    "fixture": "correctness/binding_targets.groovy",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "java",
+    "file": "BindingTargets.java",
+    "project": "rgctl-tests/ecommerce-java",
+    "fixture": "correctness/BindingTargets.java",
+    "indirect_applicable": false,
+    "reason": "Java invokes functional objects through declared interface methods; local variables do not shadow method names."
+  },
+  {
+    "language": "javascript",
+    "file": "binding_targets.js",
+    "project": "rgctl-tests/ecommerce-javascript",
+    "fixture": "correctness/binding_targets.js",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "typescript",
+    "file": "binding_targets.ts",
+    "project": "rgctl-tests/ecommerce-typescript",
+    "fixture": "correctness/binding_targets.ts",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "kotlin",
+    "file": "binding_targets.kt",
+    "project": "rgctl-tests/ecommerce-kotlin",
+    "fixture": "correctness/binding_targets.kt",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "php",
+    "file": "binding_targets.php",
+    "project": "rgctl-tests/ecommerce-php",
+    "fixture": "correctness/binding_targets.php",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function."
+  },
+  {
+    "language": "puppet",
+    "file": "binding_targets.pp",
+    "project": "rgctl-tests/ecommerce-puppet",
+    "fixture": "correctness/binding_targets.pp",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function."
+  },
+  {
+    "language": "python",
+    "file": "binding_targets.py",
+    "project": "rgctl-tests/ecommerce-python",
+    "fixture": "correctness/binding_targets.py",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "ruby",
+    "file": "binding_targets.rb",
+    "project": "rgctl-tests/ecommerce-ruby",
+    "fixture": "correctness/binding_targets.rb",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function."
+  },
+  {
+    "language": "rust",
+    "file": "binding_targets.rs",
+    "project": "rgctl-tests/ecommerce-rust",
+    "fixture": "correctness/binding_targets.rs",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "swift",
+    "file": "binding_targets.swift",
+    "project": "tests/fixtures/correctness_matrix/swift",
+    "fixture": "correctness/binding_targets.swift",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "scala",
+    "file": "binding_targets.scala",
+    "project": "tests/fixtures/correctness_matrix/scala",
+    "fixture": "correctness/binding_targets.scala",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "dart",
+    "file": "binding_targets.dart",
+    "project": "tests/fixtures/correctness_matrix/dart",
+    "fixture": "correctness/binding_targets.dart",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "elixir",
+    "file": "binding_targets.ex",
+    "project": "tests/fixtures/correctness_matrix/elixir",
+    "fixture": "correctness/binding_targets.ex",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function."
+  },
+  {
+    "language": "lua",
+    "file": "binding_targets.lua",
+    "project": "tests/fixtures/correctness_matrix/lua",
+    "fixture": "correctness/binding_targets.lua",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function.",
+    "scope_after": true
+  },
+  {
+    "language": "bash",
+    "file": "binding_targets.sh",
+    "project": "tests/fixtures/correctness_matrix/bash",
+    "fixture": "correctness/binding_targets.sh",
+    "indirect_applicable": true,
+    "reason": "Native value-invocation syntax; callback parameter and local binding must not select the same-named global function."
+  },
+  {
+    "language": "sql",
+    "indirect_applicable": false,
+    "reason": "Procedural dollar-quoted bodies are opaque to the bundled SQL grammar; no native function-value Calls facts."
+  },
+  {
+    "language": "hcl",
+    "indirect_applicable": false,
+    "reason": "Declarative configuration has no project function-value call declarations."
+  },
+  {
+    "language": "erb",
+    "indirect_applicable": false,
+    "reason": "Template extraction does not provide native procedural callable symbols."
+  },
+  {
+    "language": "markdown",
+    "indirect_applicable": false,
+    "reason": "Documentation extraction has no native executable callable declarations."
+  }
+]

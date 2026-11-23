@@ -14,6 +14,8 @@ pub struct CallFileIndex<'a> {
     file_str: Cow<'a, str>,
     /// Maps bare function name → `Some(&Symbol)` when unique in `file_path`, or `None` when ambiguous.
     unique_fn_by_name: HashMap<&'a str, Option<&'a Symbol>>,
+    go_package: Option<Box<str>>,
+    go_bindings: Option<crate::GoCallBindings<'a>>,
 }
 
 impl<'a> CallFileIndex<'a> {
@@ -33,7 +35,32 @@ impl<'a> CallFileIndex<'a> {
         Self {
             file_str,
             unique_fn_by_name,
+            go_package: None,
+            go_bindings: None,
         }
+    }
+
+    /// Record the declared Go package once, using the existing parse tree.
+    pub fn with_go_package(mut self, root: Node<'_>, source: &[u8]) -> Self {
+        let mut cursor = root.walk();
+        self.go_package = root.named_children(&mut cursor).find_map(|node| {
+            (node.kind() == "package_clause")
+                .then(|| node.named_child(0)?.utf8_text(source).ok().map(Into::into))
+                .flatten()
+        });
+        self
+    }
+
+    /// Record an already-derived Go package or repository-qualified package prefix.
+    pub fn with_go_package_name(mut self, package: Option<&str>) -> Self {
+        self.go_package = package.map(Into::into);
+        self
+    }
+
+    /// Attach binding evidence collected during the existing Go traversal.
+    pub fn with_go_bindings(mut self, bindings: crate::GoCallBindings<'a>) -> Self {
+        self.go_bindings = Some(bindings.finish());
+        self
     }
 
     /// Borrow the cached file path string.
@@ -433,10 +460,27 @@ fn push_call_relation_from_opt_index(
         .unwrap_or_else(|| from_fn.name.clone());
 
     let mut inferred_owner = false;
+    let indirect_call = language == "go"
+        && file_index
+            .and_then(|index| index.go_bindings.as_ref())
+            .is_some_and(|bindings| bindings.shadows_call(node, source));
+    let mut hint_origin = crate::QualifiedNameOrigin::Native;
     let (to_type_hint, to_qualified_hint) = match language {
-        "go" => {
+        "go" if !indirect_call => {
             let ty = go_call_type_hint(node, source, symbols, from_fn);
-            let qh = ty.as_ref().map(|t| format!("{t}.{callee}"));
+            let qh = ty.as_ref().map(|t| format!("{t}.{callee}")).or_else(|| {
+                crate::go_call_bindings::bare_call_target(node)?;
+                // Preserve explicit constructor/type-owner identities supplied by Go.
+                if let Some(symbol) = file_index?.unique_same_file_fn(&callee)
+                    && symbol.qualified_name_origin == crate::QualifiedNameOrigin::Native
+                    && symbol.qualified_name.is_some()
+                {
+                    return symbol.qualified_name.clone();
+                }
+                let package = file_index?.go_package.as_deref()?;
+                hint_origin = crate::QualifiedNameOrigin::Package;
+                Some(format!("{package}.{callee}"))
+            });
             (ty, qh)
         }
         "rust" => {
@@ -528,7 +572,9 @@ fn push_call_relation_from_opt_index(
     // Prefer a unique same-file match unless an MRO type hint points to a different owner
     // (otherwise an unrelated `Other.save` in the same file would hijack `this.save()`
     // on `Impl extends Base` when `Base` lives in another file).
-    let unique_only: Option<&Symbol> = if let Some(idx) = file_index {
+    let unique_only: Option<&Symbol> = if indirect_call {
+        None
+    } else if let Some(idx) = file_index {
         idx.unique_same_file_fn(&callee)
     } else {
         let mut found: Option<&Symbol> = None;
@@ -574,6 +620,8 @@ fn push_call_relation_from_opt_index(
         },
         metadata: meta,
         to_qualified_hint,
+        to_qualified_hint_origin: hint_origin,
+        indirect_call,
         to_type_hint,
         call_site_start_byte,
         call_site_byte_len,
@@ -1558,7 +1606,15 @@ pub fn walk_calls(
         .filter(|s| s.symbol_type == SymbolType::Function)
         .collect();
     let file_index = CallFileIndex::new(file_path, symbols);
+    let file_index = if language == "go" {
+        file_index.with_go_package(root, source)
+    } else {
+        file_index
+    };
+    let mut lexical_targets = crate::LexicalCallTargets::new(language);
     let mut stack = vec![(root, 0usize)];
+    let mut go_bindings = crate::GoCallBindings::default();
+    let mut go_calls = Vec::new();
 
     while let Some((node, depth)) = stack.pop() {
         if depth > MAX_DEPTH {
@@ -1570,9 +1626,39 @@ pub fn walk_calls(
             continue;
         }
 
+        lexical_targets.observe(node, source);
+        if language == "go" {
+            go_bindings.observe(node, source);
+        }
         if call_kinds.contains(&node.kind())
             && let Some(from_fn) = containing_function(node, &function_symbols)
         {
+            if language == "go" {
+                go_calls.push((node, from_fn));
+            } else {
+                push_call_relation_from_indexed(
+                    node,
+                    source,
+                    file_path,
+                    symbols,
+                    &file_index,
+                    from_fn,
+                    language,
+                    relations,
+                );
+            }
+        }
+
+        let child_count = node.child_count();
+        for i in (0..child_count).rev() {
+            if let Some(child) = node.child(i) {
+                stack.push((child, depth + 1));
+            }
+        }
+    }
+    if language == "go" {
+        let file_index = file_index.with_go_bindings(go_bindings);
+        for (node, from_fn) in go_calls {
             push_call_relation_from_indexed(
                 node,
                 source,
@@ -1584,12 +1670,6 @@ pub fn walk_calls(
                 relations,
             );
         }
-
-        let child_count = node.child_count();
-        for i in (0..child_count).rev() {
-            if let Some(child) = node.child(i) {
-                stack.push((child, depth + 1));
-            }
-        }
     }
+    lexical_targets.apply(file_path, symbols, relations);
 }

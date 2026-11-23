@@ -1,0 +1,3 @@
+class BindingTargets { static int binding_helper(){return 111;} static int binding_parameter(System.Func<int> binding_helper){return binding_helper();} static int binding_direct(){return binding_helper();} static int binding_local(System.Func<int> callback){ var binding_helper=callback; return binding_helper(); } 
+static int binding_after(System.Func<int> callback) { { var binding_helper=callback; binding_helper(); } return binding_helper(); }
+}

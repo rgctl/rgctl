@@ -5,7 +5,27 @@
   "graph": {
     "severity": "required",
     "min_functions": 30,
-    "min_calls_edges": 10
+    "min_calls_edges": 10,
+    "expected_relations": [
+      {
+        "edge": "calls",
+        "from": "binding_direct",
+        "to": "binding_helper",
+        "severity": "required"
+      }
+    ],
+    "forbidden_edges": [
+      {
+        "from": "binding_parameter",
+        "to": "binding_helper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "binding_local",
+        "to": "binding_helper",
+        "edge_type": "calls"
+      }
+    ]
   },
   "symbols": {
     "correctnessRoot": {
@@ -560,6 +580,63 @@
           "correctnessMid"
         ]
       }
+    },
+    "tier1_lexical_binding_helper": {
+      "match": {
+        "name": "binding_helper",
+        "file": "correctness/BindingTargets.java"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_helper",
+        "file_suffix": "correctness/BindingTargets.java",
+        "language": "java"
+      }
+    },
+    "tier1_lexical_binding_parameter": {
+      "match": {
+        "name": "binding_parameter",
+        "file": "correctness/BindingTargets.java"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_parameter",
+        "file_suffix": "correctness/BindingTargets.java",
+        "language": "java"
+      },
+      "exact_callees": []
+    },
+    "tier1_lexical_binding_local": {
+      "match": {
+        "name": "binding_local",
+        "file": "correctness/BindingTargets.java"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_local",
+        "file_suffix": "correctness/BindingTargets.java",
+        "language": "java"
+      },
+      "exact_callees": []
+    },
+    "tier1_lexical_binding_direct": {
+      "match": {
+        "name": "binding_direct",
+        "file": "correctness/BindingTargets.java"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "binding_direct",
+        "file_suffix": "correctness/BindingTargets.java",
+        "language": "java"
+      },
+      "exact_callees": [
+        "binding_helper"
+      ]
     }
   },
   "dead_code": {

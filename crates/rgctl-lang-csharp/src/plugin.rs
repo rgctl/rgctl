@@ -805,9 +805,11 @@ impl CSharpPlugin {
                 entries
             })
             .collect();
+        let mut lexical_targets = rgctl_plugin_api::LexicalCallTargets::new("csharp");
         let mut stack = vec![(root, 0usize)];
 
         while let Some((node, depth)) = stack.pop() {
+            lexical_targets.observe(node, source);
             if depth > MAX_TREE_DEPTH {
                 continue;
             }
@@ -860,6 +862,7 @@ impl CSharpPlugin {
                 stack.push((child, depth + 1));
             }
         }
+        lexical_targets.apply(file_path, symbols, relations);
     }
 
     fn infer_csharp_call_hints(
