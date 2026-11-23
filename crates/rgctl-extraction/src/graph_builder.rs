@@ -12,9 +12,53 @@ use rgctl_graph::segmented_spill::{FinishedSpill, SegmentedSpill};
 use rgctl_graph::structural_sketch::build_token_bloom;
 use rgctl_plugin_api::{ComplexityMetrics, ConfigKey, Relation, RelationType, Symbol, SymbolType};
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
+use std::borrow::{Borrow, Cow};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
+
+trait SymbolIndexLookup {
+    fn key_parts(&self) -> (u32, &str, NodeType);
+}
+
+impl SymbolIndexLookup for (u32, Box<str>, NodeType) {
+    #[inline]
+    fn key_parts(&self) -> (u32, &str, NodeType) {
+        (self.0, &self.1, self.2)
+    }
+}
+
+impl SymbolIndexLookup for (u32, &str, NodeType) {
+    #[inline]
+    fn key_parts(&self) -> (u32, &str, NodeType) {
+        (self.0, self.1, self.2)
+    }
+}
+
+impl PartialEq for dyn SymbolIndexLookup + '_ {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.key_parts() == other.key_parts()
+    }
+}
+
+impl Eq for dyn SymbolIndexLookup + '_ {}
+
+impl Hash for dyn SymbolIndexLookup + '_ {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key_parts().hash(state);
+    }
+}
+
+impl<'a> Borrow<dyn SymbolIndexLookup + 'a> for (u32, Box<str>, NodeType) {
+    #[inline]
+    fn borrow(&self) -> &(dyn SymbolIndexLookup + 'a) {
+        self
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct LineSpan {
@@ -69,7 +113,7 @@ pub(crate) enum NonInheritancePlan {
 /// Builds graph nodes and edges from extracted data.
 #[derive(Default)]
 pub struct GraphBuilder {
-    symbol_index: FxHashMap<(String, NodeType), Uuid>,
+    symbol_index: FxHashMap<(u32, Box<str>, NodeType), Uuid>,
     /// First callable `(signature_hash, line_span)` keyed by first node `Uuid`
     /// for non-discriminated `symbol_index` keys (zero duplicate key `String` clones).
     callable_disc: FxHashMap<Uuid, (u64, LineSpan)>,
@@ -98,7 +142,7 @@ pub struct GraphBuilder {
     resolution_stats: ResolutionStats,
     // Fast resolution indexes (built on demand)
     /// Qualified name → candidate UUIDs (may be ambiguous when FQNs collide).
-    symbols_by_qualified: FxHashMap<String, Vec<Uuid>>,
+    symbols_by_qualified: FxHashMap<String, SmallVec<[Uuid; 1]>>,
     symbols_by_suffix: FxHashMap<String, Vec<Uuid>>,
     indexes_built: bool,
     /// `OwnerType.field` → simple field type (for late Go selector resolution; spill-safe).
@@ -250,6 +294,22 @@ impl GraphBuilder {
     }
 
     #[inline]
+    fn lookup_file_id(&self, file: &str) -> Option<u32> {
+        if let Some((ref active_path, idx)) = self.active_file_raw
+            && active_path == file
+        {
+            return Some(idx);
+        }
+        self.file_intern_map.get(file).copied()
+    }
+
+    #[inline]
+    fn get_symbol_id(&self, file_id: u32, name: &str, node_type: NodeType) -> Option<Uuid> {
+        let q = (file_id, name, node_type);
+        self.symbol_index.get(&q as &dyn SymbolIndexLookup).copied()
+    }
+
+    #[inline]
     fn file_str(&self, idx: u32) -> Option<&str> {
         self.interned_files.get(idx as usize).map(Box::as_ref)
     }
@@ -318,7 +378,10 @@ impl GraphBuilder {
         }
     }
 
-    fn index_symbol_resolution(&mut self, key: &str, node: &Node) {
+    fn index_symbol_resolution(&mut self, name_part: &str, node: &Node, generated_qualified: bool) {
+        if rgctl_plugin_helpers::qualified_names::is_anonymous_callable(&node.name) {
+            return;
+        }
         if let Some(qualified) = &node.qualified_name {
             self.symbols_by_qualified
                 .entry(qualified.to_string())
@@ -328,8 +391,15 @@ impl GraphBuilder {
             // Skip for C struct field nodes (`Struct.field`, label `field`) — bare names
             // like `data` would collide across the whole kernel.
             let is_field_member = node.has_label("field");
-            let parts: Vec<&str> = qualified.split('.').collect();
-            if !is_field_member && parts.len() >= 3 {
+            // File path components are not package or receiver aliases. Keep
+            // the full qualified identity and bare lookup without expanding
+            // every suffix of every path for generated file or lexical names.
+            let parts: Vec<&str> = if !is_field_member && !generated_qualified {
+                qualified.split('.').collect()
+            } else {
+                Vec::new()
+            };
+            if parts.len() >= 3 {
                 for i in 0..parts.len() {
                     let suffix = parts[i..].join(".");
                     self.symbols_by_suffix
@@ -397,34 +467,29 @@ impl GraphBuilder {
                 .or_default()
                 .push(node.id);
         }
-        // `symbol_key` is `file::name` or `file::a::b::…` / `file::Qualified.Name`.
+        if generated_qualified {
+            return;
+        }
         // Strip internal `#field` partition tag before populating suffix lookup keys.
-        let clean_key = key.strip_suffix("#field").unwrap_or(key);
-        // For unqualified `file::name` the bare-name insert above already covers
-        // resolution — skip to avoid a duplicate push + alloc per C-like symbol.
-        match clean_key.matches("::").count() {
-            0 => {}
-            1 => {
-                if let Some((_, tail)) = clean_key.split_once("::") {
-                    let duplicate_bare =
-                        node.qualified_name.is_none() && tail == node.name.as_str();
-                    if !duplicate_bare {
-                        self.symbols_by_suffix
-                            .entry(tail.to_string())
-                            .or_default()
-                            .push(node.id);
-                    }
-                }
+        let clean_name = name_part.strip_suffix("#field").unwrap_or(name_part);
+        if clean_name.contains("::") {
+            let parts: Vec<&str> = clean_name.split("::").collect();
+            for i in 0..parts.len() {
+                let suffix = parts[i..].join("::");
+                self.symbols_by_suffix
+                    .entry(suffix)
+                    .or_default()
+                    .push(node.id);
             }
-            _ => {
-                let parts: Vec<&str> = clean_key.split("::").collect();
-                for i in 1..parts.len() {
-                    let suffix = parts[i..].join("::");
-                    self.symbols_by_suffix
-                        .entry(suffix)
-                        .or_default()
-                        .push(node.id);
-                }
+        } else {
+            // For unqualified bare names the insert above already covers resolution —
+            // skip to avoid a duplicate push + alloc per C-like symbol.
+            let duplicate_bare = node.qualified_name.is_none() && clean_name == node.name.as_str();
+            if !duplicate_bare {
+                self.symbols_by_suffix
+                    .entry(clean_name.to_string())
+                    .or_default()
+                    .push(node.id);
             }
         }
     }
@@ -582,29 +647,27 @@ impl GraphBuilder {
         let discriminator_opt = symbol
             .identity_discriminator_str()
             .filter(|v| !v.is_empty());
-        let mut key = (
-            symbol_key(
-                &symbol.location.file,
-                &symbol.name,
-                symbol.qualified_name.as_deref(),
-            ),
-            node_type,
-        );
-        let has_identity_discriminator = if let Some(discriminator) = discriminator_opt {
-            key.0.push('\u{1f}');
-            key.0.push_str(discriminator);
-            true
+        let file_intern = self.intern_file(&symbol.location.file);
+        let mut key_file_intern = file_intern;
+        let base_name = symbol
+            .qualified_name
+            .as_deref()
+            .unwrap_or(symbol.name.as_str());
+        let mut key_name: Cow<'_, str> = if let Some(discriminator) = discriminator_opt {
+            Cow::Owned(format!("{base_name}\u{1f}{discriminator}"))
         } else {
-            false
+            Cow::Borrowed(base_name)
         };
+        let has_identity_discriminator = discriminator_opt.is_some();
         // C `#include` paths are per-translation-unit; dedupe globally by path string
         // so kernel-scale repos do not materialize one Import node per occurrence.
         if symbol.symbol_type == SymbolType::Import
             && !symbol.metadata.is_null()
             && symbol.metadata.get("kind").and_then(|v| v.as_str()) == Some("include")
         {
-            key.0 = format!("c_include::{}", symbol.name);
-            if let Some(&id) = self.symbol_index.get(&key) {
+            key_file_intern = self.intern_file("c_include");
+            key_name = Cow::Borrowed(symbol.name.as_str());
+            if let Some(id) = self.get_symbol_id(key_file_intern, &key_name, node_type) {
                 self.add_edge(file_id, id, EdgeType::Uses);
                 return id;
             }
@@ -612,12 +675,14 @@ impl GraphBuilder {
         let mut qn_override: Option<String> = None;
         let mut overloaded_base_qn: Option<String> = None;
         if has_identity_discriminator {
-            if let Some(&id) = self.symbol_index.get(&key) {
+            if let Some(id) = self.get_symbol_id(key_file_intern, &key_name, node_type) {
                 return id;
             }
         } else if let Some(id) = self.resolve_overload_collision(
             symbol,
-            &mut key,
+            key_file_intern,
+            node_type,
+            &mut key_name,
             &mut qn_override,
             &mut overloaded_base_qn,
         ) {
@@ -862,10 +927,20 @@ impl GraphBuilder {
         {
             self.callable_parameters.insert(id, parameters.to_owned());
         }
-        let file_intern = self.intern_file(&symbol.location.file);
         self.symbol_files.insert(id, file_intern);
-        self.index_symbol_resolution(&key.0, &node);
-        self.symbol_index.insert(key, id);
+        self.index_symbol_resolution(
+            &key_name,
+            &node,
+            symbol.qualified_name_origin != rgctl_plugin_api::QualifiedNameOrigin::Native,
+        );
+        self.symbol_index.insert(
+            (
+                key_file_intern,
+                key_name.into_owned().into_boxed_str(),
+                node_type,
+            ),
+            id,
+        );
         self.index_type_method(symbol, id);
         self.index_import_binding(symbol);
         self.commit_node(node);
@@ -964,6 +1039,10 @@ impl GraphBuilder {
         if symbol.language_str() == Some("typescript") {
             self.signature_families.insert(id);
         }
+        // A logical module or lexical function prefix is not a receiver type.
+        if symbol.qualified_name_origin != rgctl_plugin_api::QualifiedNameOrigin::Native {
+            return;
+        }
         let Some(qn) = symbol.qualified_name.as_deref() else {
             return;
         };
@@ -986,15 +1065,17 @@ impl GraphBuilder {
     /// Keep a second callable that shares a qualified name when its signature differs.
     ///
     /// Returns the existing node id when this symbol is a duplicate. Otherwise
-    /// rewrites `key` / `qn_override` so the overload is stored beside the first.
-    fn resolve_overload_collision(
+    /// rewrites `key_name` / `qn_override` so the overload is stored beside the first.
+    fn resolve_overload_collision<'a>(
         &mut self,
-        symbol: &Symbol,
-        key: &mut (String, NodeType),
+        symbol: &'a Symbol,
+        file_intern: u32,
+        node_type: NodeType,
+        key_name: &mut Cow<'a, str>,
         qn_override: &mut Option<String>,
         overloaded_base_qn: &mut Option<String>,
     ) -> Option<Uuid> {
-        let existing = *self.symbol_index.get(key)?;
+        let existing = self.get_symbol_id(file_intern, key_name, node_type)?;
         if !matches!(
             symbol.symbol_type,
             SymbolType::Function | SymbolType::Method
@@ -1010,20 +1091,12 @@ impl GraphBuilder {
                 .as_deref()
                 .unwrap_or(symbol.name.as_str());
             let mut overloaded = format!("{base}({})", overload_params(symbol));
-            let mut next_key = (
-                symbol_key(&symbol.location.file, &symbol.name, Some(&overloaded)),
-                key.1,
-            );
-            if let Some(&id) = self.symbol_index.get(&next_key) {
+            if let Some(id) = self.get_symbol_id(file_intern, &overloaded, node_type) {
                 if self.callable_disc.get(&id).map(|(d, _)| *d) == Some(disc) {
                     return Some(id);
                 }
                 overloaded = format!("{overloaded}#{disc:x}");
-                next_key = (
-                    symbol_key(&symbol.location.file, &symbol.name, Some(&overloaded)),
-                    key.1,
-                );
-                if let Some(&id2) = self.symbol_index.get(&next_key) {
+                if let Some(id2) = self.get_symbol_id(file_intern, &overloaded, node_type) {
                     return Some(id2);
                 }
             }
@@ -1039,8 +1112,8 @@ impl GraphBuilder {
                 });
             }
             *overloaded_base_qn = Some(base.to_string());
+            *key_name = Cow::Owned(overloaded.clone());
             *qn_override = Some(overloaded);
-            *key = next_key;
             return None;
         }
         Some(existing)
@@ -1079,13 +1152,13 @@ impl GraphBuilder {
             .qualified_name
             .clone()
             .unwrap_or_else(|| symbol.name.clone());
+        let file_intern = self.intern_file(&symbol.location.file);
         for field in &symbol.fields {
             let field_qn = format!("{owner_qn}.{}", field.name);
-            let key = (
-                symbol_key(&symbol.location.file, &field.name, Some(field_qn.as_str())),
-                NodeType::Variable,
-            );
-            if self.symbol_index.contains_key(&key) {
+            if self
+                .get_symbol_id(file_intern, &field_qn, NodeType::Variable)
+                .is_some()
+            {
                 continue;
             }
             let mut node = Node::new(NodeType::Variable, field.name.clone())
@@ -1128,8 +1201,11 @@ impl GraphBuilder {
                 node = node.with_property("visibility".to_string(), vis.clone());
             }
             let field_id = node.id;
-            self.index_symbol_resolution(&key.0, &node);
-            self.symbol_index.insert(key, field_id);
+            self.index_symbol_resolution(&field_qn, &node, false);
+            self.symbol_index.insert(
+                (file_intern, field_qn.into_boxed_str(), NodeType::Variable),
+                field_id,
+            );
             self.commit_node(node);
             self.add_edge(field_id, file_id, EdgeType::DefinedIn);
             self.add_edge(file_id, field_id, EdgeType::Contains);
@@ -1144,23 +1220,24 @@ impl GraphBuilder {
         if self.spill.is_some() {
             return;
         }
-        let mut key = (
-            symbol_key(
-                &symbol.location.file,
-                &symbol.name,
-                symbol.qualified_name.as_deref(),
-            ),
-            symbol_type_to_node_type(symbol.symbol_type),
-        );
-        if let Some(discriminator) = symbol
+        let Some(file_intern) = self.lookup_file_id(&symbol.location.file) else {
+            return;
+        };
+        let base_name = symbol
+            .qualified_name
+            .as_deref()
+            .unwrap_or(symbol.name.as_str());
+        let name_key: Cow<'_, str> = if let Some(discriminator) = symbol
             .identity_discriminator_str()
             .filter(|v| !v.is_empty())
         {
-            key.0.push('\u{1f}');
-            key.0.push_str(discriminator);
-        }
-        if let Some(id) = self.symbol_index.get(&key)
-            && let Some(node) = self.nodes.iter_mut().find(|n| n.id == *id)
+            Cow::Owned(format!("{base_name}\u{1f}{discriminator}"))
+        } else {
+            Cow::Borrowed(base_name)
+        };
+        let node_type = symbol_type_to_node_type(symbol.symbol_type);
+        if let Some(id) = self.get_symbol_id(file_intern, &name_key, node_type)
+            && let Some(node) = self.nodes.iter_mut().find(|n| n.id == id)
         {
             node.properties
                 .insert("cyclomatic".to_string(), metrics.cyclomatic.to_string());
@@ -1189,15 +1266,13 @@ impl GraphBuilder {
         // Suffix / qualified indexes are filled in `index_symbol_resolution` at insert.
         // Rebuild suffix from symbol_index only if somehow empty (legacy / partial path).
         if self.symbols_by_suffix.is_empty() && !self.symbol_index.is_empty() {
-            for key in self.symbol_index.keys() {
-                let parts: Vec<&str> = key.0.split("::").collect();
-                for i in 1..parts.len() {
+            for ((_, name_part, _), uuid) in &self.symbol_index {
+                let parts: Vec<&str> = name_part.split("::").collect();
+                for i in 0..parts.len() {
                     let suffix = parts[i..].join("::");
-                    if let Some(uuid) = self.symbol_index.get(key) {
-                        let entry = self.symbols_by_suffix.entry(suffix).or_default();
-                        if !entry.contains(uuid) {
-                            entry.push(*uuid);
-                        }
+                    let entry = self.symbols_by_suffix.entry(suffix).or_default();
+                    if !entry.contains(uuid) {
+                        entry.push(*uuid);
                     }
                 }
             }
@@ -1208,7 +1283,8 @@ impl GraphBuilder {
             if self
                 .symbols_by_qualified
                 .get(owner)
-                .or_else(|| self.symbols_by_suffix.get(owner))
+                .map(SmallVec::as_slice)
+                .or_else(|| self.symbols_by_suffix.get(owner).map(Vec::as_slice))
                 .is_some_and(|ids| {
                     ids.iter().any(|id| {
                         matches!(
@@ -1294,17 +1370,18 @@ impl GraphBuilder {
         file: &str,
         discriminator: &str,
     ) -> Option<Uuid> {
-        let key = if discriminator.is_empty() {
-            format!("{file}::{name}")
+        let name_key: Cow<'_, str> = if discriminator.is_empty() {
+            Cow::Borrowed(name)
         } else {
-            format!("{file}::{name}\u{1f}{discriminator}")
+            Cow::Owned(format!("{name}\u{1f}{discriminator}"))
         };
-        let lookup = (key, NodeType::Function);
-        self.symbol_index.get(&lookup).copied().or_else(|| {
-            self.symbols_by_suffix
-                .get(&lookup.0[file.len() + 2..])
-                .and_then(|ids| self.unique_typed(ids, Some(NodeType::Function)))
-        })
+        self.lookup_file_id(file)
+            .and_then(|fid| self.get_symbol_id(fid, &name_key, NodeType::Function))
+            .or_else(|| {
+                self.symbols_by_suffix
+                    .get(name_key.as_ref())
+                    .and_then(|ids| self.unique_typed(ids, Some(NodeType::Function)))
+            })
     }
 
     // Argument tuples are evidence, not canonical identities: qualifiers,
@@ -1319,13 +1396,14 @@ impl GraphBuilder {
         let candidates = self
             .symbols_by_qualified
             .get(name)
+            .map(SmallVec::as_slice)
             .filter(|ids| {
                 ids.iter().any(|id| {
                     self.node_types.get(id) == Some(&NodeType::Function)
                         && (!free_only || !self.member_method_ids.contains(id))
                 })
             })
-            .or_else(|| self.symbols_by_suffix.get(name))?;
+            .or_else(|| self.symbols_by_suffix.get(name).map(Vec::as_slice))?;
         let mut known = false;
         let mut global = None;
         let mut local = None;
@@ -1386,13 +1464,14 @@ impl GraphBuilder {
             let candidates = self
                 .symbols_by_qualified
                 .get(name)
+                .map(SmallVec::as_slice)
                 .filter(|ids| {
                     ids.iter().any(|id| {
                         self.node_types.get(id) == Some(&NodeType::Function)
                             && (!free_only || !self.member_method_ids.contains(id))
                     })
                 })
-                .or_else(|| self.symbols_by_suffix.get(name))?;
+                .or_else(|| self.symbols_by_suffix.get(name).map(Vec::as_slice))?;
             let eligible = |id: &Uuid| {
                 self.node_types.get(id) == Some(&NodeType::Function)
                     && (!free_only || !self.member_method_ids.contains(id))
@@ -1648,7 +1727,8 @@ impl GraphBuilder {
             && self
                 .symbols_by_qualified
                 .get(target)
-                .or_else(|| self.symbols_by_suffix.get(target))
+                .map(SmallVec::as_slice)
+                .or_else(|| self.symbols_by_suffix.get(target).map(Vec::as_slice))
                 .is_some_and(|ids| self.unique_typed(ids, Some(NodeType::Function)).is_none());
         let mut to_id = if exact_id.is_some() {
             exact_id
@@ -1903,7 +1983,8 @@ impl GraphBuilder {
             && self
                 .symbols_by_qualified
                 .get(target)
-                .or_else(|| self.symbols_by_suffix.get(target))
+                .map(SmallVec::as_slice)
+                .or_else(|| self.symbols_by_suffix.get(target).map(Vec::as_slice))
                 .is_some_and(|ids| self.unique_typed(ids, Some(NodeType::Function)).is_none());
         let mut to_id = if exact_id.is_some() {
             exact_id
@@ -2562,8 +2643,8 @@ impl GraphBuilder {
         }
 
         const STUB_FILE: &str = "<external>";
-        let key = (symbol_key(STUB_FILE, simple, Some(qn.as_str())), node_type);
-        if let Some(&id) = self.symbol_index.get(&key) {
+        let stub_file_intern = self.intern_file(STUB_FILE);
+        if let Some(id) = self.get_symbol_id(stub_file_intern, &qn, node_type) {
             self.external_stub_ids.insert(id);
             return id;
         }
@@ -2593,7 +2674,10 @@ impl GraphBuilder {
                 token_bloom: node.token_bloom,
             });
         }
-        self.symbol_index.insert(key, id);
+        self.symbol_index.insert(
+            (stub_file_intern, qn.clone().into_boxed_str(), node_type),
+            id,
+        );
         self.external_stub_ids.insert(id);
         self.symbols_by_qualified.entry(qn).or_default().push(id);
         self.commit_node(node);
@@ -2968,25 +3052,23 @@ impl GraphBuilder {
     }
 
     fn exact_symbol(&self, name: &str, file: &str, expected: Option<NodeType>) -> Option<Uuid> {
-        let mut lookup = (
-            format!("{file}::{name}"),
-            expected.unwrap_or(NodeType::Function),
-        );
-        if expected.is_some() {
-            return self.symbol_index.get(&lookup).copied();
+        let file_id = self.lookup_file_id(file)?;
+        if let Some(nt) = expected {
+            return self.get_symbol_id(file_id, name, nt);
         }
         let candidates = self
             .symbols_by_qualified
             .get(name)
-            .or_else(|| self.symbols_by_suffix.get(name))?;
+            .map(SmallVec::as_slice)
+            .or_else(|| self.symbols_by_suffix.get(name).map(Vec::as_slice))?;
         let mut result = None;
         for id in candidates {
-            lookup.1 = *self.node_types.get(id)?;
-            if let Some(id) = self.symbol_index.get(&lookup) {
-                if result.is_some_and(|old| old != *id) {
+            let nt = *self.node_types.get(id)?;
+            if let Some(found) = self.get_symbol_id(file_id, name, nt) {
+                if result.is_some_and(|old| old != found) {
                     return None;
                 }
-                result = Some(*id);
+                result = Some(found);
             }
         }
         result
@@ -3002,16 +3084,20 @@ impl GraphBuilder {
         expected: Option<NodeType>,
         bare_fn_cache: Option<&mut FxHashMap<String, Option<Uuid>>>,
     ) -> Option<Uuid> {
-        // 1. Try exact match in current file
-        if let Some(id) = self.exact_symbol(name, file, expected) {
+        // 1. Try exact match in current file (probe qualified_hint first when present).
+        if let Some(hint) = qualified_hint
+            && let Some(id) = self.exact_symbol(hint, file, expected)
+        {
+            return Some(id);
+        }
+        if qualified_hint != Some(name)
+            && let Some(id) = self.exact_symbol(name, file, expected)
+        {
             return Some(id);
         }
 
-        // 2. Try qualified hint direct lookup (O(1)); prefer same-file exact match first
+        // 2. Try qualified hint global lookup (O(1)).
         if let Some(hint) = qualified_hint {
-            if let Some(id) = self.exact_symbol(hint, file, expected) {
-                return Some(id);
-            }
             if let Some(id) = self
                 .symbols_by_qualified
                 .get(hint)
@@ -3137,20 +3223,23 @@ impl GraphBuilder {
     ) -> Option<Uuid> {
         self.resolution_stats.total_calls += 1;
 
-        // 1. Try exact match in current file
-        if let Some(id) = self.exact_symbol(name, file, expected) {
+        // 1. Try exact match in current file (probe qualified_hint first when present).
+        if let Some(hint) = qualified_hint
+            && let Some(id) = self.exact_symbol(hint, file, expected)
+        {
+            self.resolution_stats.hashmap_hits += 1;
+            return Some(id);
+        }
+        if qualified_hint != Some(name)
+            && let Some(id) = self.exact_symbol(name, file, expected)
+        {
             self.resolution_stats.hashmap_hits += 1;
             return Some(id);
         }
 
-        // 2. Try qualified hint direct lookup (O(1)); prefer same-file exact match first
+        // 2. Try qualified hint global lookup (O(1)).
         if let Some(hint) = qualified_hint {
             self.resolution_stats.qualified_hint_scans += 1;
-
-            if let Some(id) = self.exact_symbol(hint, file, expected) {
-                self.resolution_stats.qualified_hint_hits += 1;
-                return Some(id);
-            }
 
             if let Some(id) = self
                 .symbols_by_qualified
@@ -3433,10 +3522,6 @@ pub enum ConfigUsageKind {
     EnvVar,
     /// Configuration key reference
     ConfigKey,
-}
-
-fn symbol_key(file: &str, name: &str, qualified: Option<&str>) -> String {
-    format!("{file}::{}", qualified.unwrap_or(name))
 }
 
 fn is_callable_kind(kind: NodeType) -> bool {

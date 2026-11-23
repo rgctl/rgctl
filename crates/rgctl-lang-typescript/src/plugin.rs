@@ -3,7 +3,9 @@
 //! Extracts symbols, relationships, and complexity metrics from TypeScript source code
 //! using TreeSitter.
 
-use crate::single_pass::{extract_all_single_pass, typescript_ast_handlers};
+use crate::single_pass::{
+    extract_all_single_pass, extract_all_single_pass_in_repo, typescript_ast_handlers,
+};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
 use rgctl_plugin_helpers::{
@@ -376,7 +378,11 @@ impl TypeScriptPlugin {
             .or_else(|| bound_function_expression_name(node, source))
             .unwrap_or_else(|| {
                 if is_expr {
-                    format!("anonymous@L{}", node.start_position().row + 1)
+                    format!(
+                        "anonymous@L{}:{}",
+                        node.start_position().row + 1,
+                        node.start_position().column + 1
+                    )
                 } else {
                     "anonymous".to_string()
                 }
@@ -392,7 +398,7 @@ impl TypeScriptPlugin {
             (
                 class_name.clone(),
                 Some(format!("{class_name}.<init>")),
-                serde_json::json!({ "language": "typescript", "is_constructor": true }),
+                serde_json::json!({ "is_constructor": true }),
             )
         } else {
             let qualified_name = if node.kind() == "method_definition" {
@@ -401,11 +407,7 @@ impl TypeScriptPlugin {
             } else {
                 None
             };
-            (
-                raw_name,
-                qualified_name,
-                serde_json::json!({ "language": "typescript" }),
-            )
+            (raw_name, qualified_name, serde_json::Value::Null)
         };
 
         let mut symbol = Symbol {
@@ -433,6 +435,7 @@ impl TypeScriptPlugin {
             modifiers,
             documentation: None,
             metadata,
+            language: Some(std::borrow::Cow::Borrowed("typescript")),
             ..Default::default()
         };
         rgctl_plugin_helpers::record_symbol_spans(
@@ -1746,7 +1749,14 @@ impl LanguagePlugin for TypeScriptPlugin {
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let tree = self.parse(file_path, source)?;
-        self.symbols_from_tree(tree.root_node(), source, file_path)
+        let mut symbols = self.symbols_from_tree(tree.root_node(), source, file_path)?;
+        rgctl_plugin_helpers::qualified_names::qualify_file(file_path, &mut symbols, &mut []);
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Typescript,
+            &mut symbols,
+            &mut [],
+        );
+        Ok(symbols)
     }
 
     fn extract_relations(
@@ -1766,11 +1776,30 @@ impl LanguagePlugin for TypeScriptPlugin {
             &mut sym_copy,
             &mut relations,
         );
+        rgctl_plugin_helpers::qualified_names::qualify_file(
+            file_path,
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Typescript,
+            &mut sym_copy,
+            &mut relations,
+        );
         Ok(relations)
     }
 
     fn extract_all(&self, file_path: &Path, source: &[u8]) -> Result<ExtractAllResult> {
         extract_all_single_pass(self, file_path, source)
+    }
+
+    fn extract_all_in_repo(
+        &self,
+        file_path: &Path,
+        logical_path: Option<&Path>,
+        source: &[u8],
+    ) -> Result<ExtractAllResult> {
+        extract_all_single_pass_in_repo(self, file_path, logical_path, source)
     }
 
     fn declared_ast_handlers(&self) -> Option<&AstHandlerTable> {
@@ -2023,7 +2052,7 @@ function helper(): void {}
         assert!(
             relations
                 .iter()
-                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "helper"),
+                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "test.helper"),
             "expected Calls -> helper, got {relations:?}"
         );
     }
@@ -2227,7 +2256,7 @@ export class UserService {
             .map(|r| (r.from.as_str(), r.to.as_str()))
             .collect();
         assert!(
-            injects.contains(&("UsersController", "UserService")),
+            injects.contains(&("users.controller.UsersController", "UserService")),
             "expected Injects UsersController -> UserService, got {injects:?}"
         );
         let ctrl = result

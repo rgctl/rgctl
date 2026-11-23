@@ -3,7 +3,9 @@
 //! Extracts symbols, relationships, and complexity metrics from JavaScript source code
 //! using TreeSitter.
 
-use crate::single_pass::{extract_all_single_pass, javascript_ast_handlers};
+use crate::single_pass::{
+    extract_all_single_pass, extract_all_single_pass_in_repo, javascript_ast_handlers,
+};
 use rgctl_plugin_api::{
     AstHandlerTable, ComplexityMetrics, Error, ExtractAllResult, Field, JS_CALL_KINDS,
     LanguagePlugin, Parameter, Relation, RelationType, Result, SourceLocation, Symbol, SymbolType,
@@ -88,7 +90,11 @@ impl JavaScriptPlugin {
             .or_else(|| bound_function_expression_name(node, source))
             .unwrap_or_else(|| {
                 if is_expr {
-                    format!("anonymous@L{}", node.start_position().row + 1)
+                    format!(
+                        "anonymous@L{}:{}",
+                        node.start_position().row + 1,
+                        node.start_position().column + 1
+                    )
                 } else {
                     "anonymous".to_string()
                 }
@@ -120,7 +126,7 @@ impl JavaScriptPlugin {
             (
                 class_name.clone(),
                 Some(format!("{class_name}.<init>")),
-                serde_json::json!({ "language": "javascript", "is_constructor": true }),
+                serde_json::json!({ "is_constructor": true }),
             )
         } else {
             let qualified_name = if node.kind() == "method_definition" {
@@ -129,11 +135,7 @@ impl JavaScriptPlugin {
             } else {
                 None
             };
-            (
-                raw_name,
-                qualified_name,
-                serde_json::json!({ "language": "javascript" }),
-            )
+            (raw_name, qualified_name, serde_json::Value::Null)
         };
 
         let mut symbol = Symbol {
@@ -161,6 +163,7 @@ impl JavaScriptPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
+            language: Some(std::borrow::Cow::Borrowed("javascript")),
             ..Default::default()
         };
         rgctl_plugin_helpers::record_symbol_spans(
@@ -1103,7 +1106,14 @@ impl LanguagePlugin for JavaScriptPlugin {
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let tree = self.parse(file_path, source)?;
-        self.symbols_from_tree(tree.root_node(), source, file_path)
+        let mut symbols = self.symbols_from_tree(tree.root_node(), source, file_path)?;
+        rgctl_plugin_helpers::qualified_names::qualify_file(file_path, &mut symbols, &mut []);
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Javascript,
+            &mut symbols,
+            &mut [],
+        );
+        Ok(symbols)
     }
 
     fn extract_relations(
@@ -1123,11 +1133,30 @@ impl LanguagePlugin for JavaScriptPlugin {
             &mut sym_copy,
             &mut relations,
         );
+        rgctl_plugin_helpers::qualified_names::qualify_file(
+            file_path,
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Javascript,
+            &mut sym_copy,
+            &mut relations,
+        );
         Ok(relations)
     }
 
     fn extract_all(&self, file_path: &Path, source: &[u8]) -> Result<ExtractAllResult> {
         extract_all_single_pass(self, file_path, source)
+    }
+
+    fn extract_all_in_repo(
+        &self,
+        file_path: &Path,
+        logical_path: Option<&Path>,
+        source: &[u8],
+    ) -> Result<ExtractAllResult> {
+        extract_all_single_pass_in_repo(self, file_path, logical_path, source)
     }
 
     fn declared_ast_handlers(&self) -> Option<&AstHandlerTable> {
@@ -1346,7 +1375,7 @@ function helper() {}
         assert!(
             relations
                 .iter()
-                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "helper"),
+                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "test.helper"),
             "expected Calls -> helper, got {relations:?}"
         );
     }

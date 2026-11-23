@@ -40,6 +40,24 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Ownership of a declaration's qualified name, independent of its spelling.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QualifiedNameOrigin {
+    /// Explicit name supplied by the language plugin.
+    #[default]
+    Native,
+    /// Generated name rooted in the logical file module; may be rebased.
+    File,
+    /// Generated name under an explicit lexical owner; never rebased.
+    Lexical,
+}
+impl QualifiedNameOrigin {
+    fn is_native(&self) -> bool {
+        *self == Self::Native
+    }
+}
+
 /// Normalized symbol visibility used for public/export classification.
 ///
 /// Derived once at extraction time (plugin-typed, `modifiers` tokens,
@@ -74,6 +92,10 @@ pub struct Symbol {
 
     /// Fully qualified name including module/namespace path
     pub qualified_name: Option<String>,
+
+    /// Provenance used to preserve native owners across logical-path rebasing.
+    #[serde(default, skip_serializing_if = "QualifiedNameOrigin::is_native")]
+    pub qualified_name_origin: QualifiedNameOrigin,
 
     /// Source location
     pub location: SourceLocation,
@@ -298,6 +320,7 @@ impl Default for Symbol {
             name: String::new(),
             symbol_type: SymbolType::Variable,
             qualified_name: None,
+            qualified_name_origin: QualifiedNameOrigin::Native,
             location: SourceLocation {
                 file: String::new(),
                 start_line: 0,
@@ -697,6 +720,9 @@ pub struct ExtractAllResult {
     pub relations: Vec<Relation>,
     /// Out-of-line content blobs keyed by Blake3 hex (`body_ref` / `blob_ref`).
     pub content_blobs: HashMap<String, String>,
+    /// Optional per-file module qualification provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_namespace: Option<Box<str>>,
 }
 
 impl ExtractAllResult {
@@ -706,6 +732,7 @@ impl ExtractAllResult {
             symbols,
             relations,
             content_blobs: HashMap::new(),
+            file_namespace: None,
         }
     }
 }
@@ -906,7 +933,19 @@ pub trait LanguagePlugin: Send + Sync {
             symbols,
             relations,
             content_blobs: HashMap::new(),
+            file_namespace: None,
         })
+    }
+
+    /// Extract symbols and relations in a single pass with an optional
+    /// repository-relative logical path for module qualification.
+    fn extract_all_in_repo(
+        &self,
+        file_path: &Path,
+        _logical_path: Option<&Path>,
+        source: &[u8],
+    ) -> Result<ExtractAllResult> {
+        self.extract_all(file_path, source)
     }
 
     /// Calculate complexity metrics for a symbol

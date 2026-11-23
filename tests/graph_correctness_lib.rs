@@ -210,6 +210,8 @@ struct IdentitySpec {
     severity: String,
     exact_name: Option<String>,
     canonical_fqn: Option<String>,
+    /// Exact language-native graph name, before blast's display normalization.
+    qualified_name: Option<String>,
     class_context: Option<String>,
     file_suffix: Option<String>,
     language: Option<String>,
@@ -499,10 +501,13 @@ impl GraphIndex {
     }
 
     fn has_calls_edge(&self, from: &str, to: &str) -> bool {
-        self.calls.iter().any(|(caller, callee)| {
-            caller.get("node").and_then(|n| n.as_str()) == Some(from)
-                && callee.get("node").and_then(|n| n.as_str()) == Some(to)
-        })
+        let matches = |endpoint: &Value, expected: &str| {
+            endpoint.get("node").and_then(Value::as_str) == Some(expected)
+                || endpoint.get("qualified_name").and_then(Value::as_str) == Some(expected)
+        };
+        self.calls
+            .iter()
+            .any(|(caller, callee)| matches(caller, from) && matches(callee, to))
     }
 
     fn find_functions(&self, name: &str, class_hint: Option<&str>) -> Vec<&Value> {
@@ -542,6 +547,13 @@ impl GraphIndex {
 
     fn find_matched(&self, m: &MatchSpec) -> Vec<&Value> {
         let mut hits = self.find_functions(&m.name, m.class.as_deref());
+        if let Some(file) = &m.file {
+            hits.retain(|f| {
+                f.get("file")
+                    .and_then(Value::as_str)
+                    .is_some_and(|p| p.replace('\\', "/").ends_with(file))
+            });
+        }
         if let Some(disc) = m.discriminator.as_deref().filter(|s| !s.is_empty()) {
             hits.retain(|f| entity_blob(f).contains(disc));
         }
@@ -693,6 +705,24 @@ fn run_json(bin: &Path, cwd: &Path, args: &[&str]) -> Option<Value> {
     serde_json::from_str(stdout.trim()).ok()
 }
 
+// Fixture assertions must not silently ignore functions or edges past a CLI page.
+fn run_json_complete(bin: &Path, cwd: &Path, args: &[&str]) -> Option<Value> {
+    let mut doc = run_json(bin, cwd, args)?;
+    let total = doc.get("total")?.as_u64()?;
+    if doc.get("returned")?.as_u64()? < total {
+        let limit = total.to_string();
+        let mut all_args = args.to_vec();
+        all_args.extend(["--limit", &limit]);
+        doc = run_json(bin, cwd, &all_args)?;
+    }
+    assert_eq!(
+        doc.get("returned").and_then(Value::as_u64),
+        Some(total),
+        "incomplete correctness query: {args:?}"
+    );
+    Some(doc)
+}
+
 fn symbol_candidates(m: &MatchSpec) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(file) = &m.file {
@@ -773,13 +803,7 @@ fn run_inspect(bin: &Path, cwd: &Path, m: &MatchSpec, layer: &str) -> Option<Val
 
 fn load_graph_index(bin: &Path, cwd: &Path) -> GraphIndex {
     let mut functions = Vec::new();
-    if let Some(data) = run_json(
-        bin,
-        cwd,
-        &[
-            "-f", "json", "find", "--type", "function", "--limit", "100000",
-        ],
-    ) {
+    if let Some(data) = run_json_complete(bin, cwd, &["-f", "json", "find", "--type", "function"]) {
         if let Some(entities) = data.get("entities").and_then(|rows| rows.as_array()) {
             for entity in entities {
                 functions.push(entity_as_legacy(entity));
@@ -787,7 +811,7 @@ fn load_graph_index(bin: &Path, cwd: &Path) -> GraphIndex {
         }
     }
     let mut calls = Vec::new();
-    if let Some(data) = run_json(
+    if let Some(data) = run_json_complete(
         bin,
         cwd,
         &[
@@ -800,8 +824,6 @@ fn load_graph_index(bin: &Path, cwd: &Path) -> GraphIndex {
             "function",
             "--to-type",
             "function",
-            "--limit",
-            "100000",
         ],
     ) {
         if let Some(edges) = data.get("edges").and_then(|rows| rows.as_array()) {
@@ -1464,19 +1486,7 @@ pub fn run_project(
         ));
     }
     for (i, er) in facts.graph.expected_relations.iter().enumerate() {
-        let doc = run_json(
-            bin,
-            &work,
-            &[
-                "-f",
-                "json",
-                "relations",
-                "--edge",
-                &er.edge,
-                "--limit",
-                "10000",
-            ],
-        );
+        let doc = run_json_complete(bin, &work, &["-f", "json", "relations", "--edge", &er.edge]);
         let hit = doc
             .as_ref()
             .and_then(|d| d.get("edges"))
@@ -1636,6 +1646,21 @@ fn check_symbol(
     ));
     if hits.is_empty() {
         return out;
+    }
+    if let Some(identity) = &entry.identity {
+        if let Some(want) = &identity.qualified_name {
+            let got = if hits.len() == 1 {
+                hits[0].get("qualified_name").and_then(Value::as_str)
+            } else {
+                None
+            };
+            out.push(check(
+                format!("symbol.{sid}.identity.qualified_name"),
+                &identity.severity,
+                got == Some(want.as_str()),
+                format!("want={want:?} got={got:?}"),
+            ));
+        }
     }
     if hits.len() == 1 && m.line.is_none() && m.discriminator.is_some() {
         m.line = hits[0]

@@ -6,6 +6,7 @@ pub mod ecmascript;
 pub mod framework;
 pub mod green_cst;
 pub mod python;
+pub mod qualified_names;
 pub mod spans;
 pub mod tree_sitter;
 
