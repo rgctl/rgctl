@@ -362,7 +362,9 @@ impl ColumnarGraphMmap {
             f(HotNodeRef {
                 idx: idx as u32,
                 id: Uuid::from_bytes(row.id),
-                node_type: crate::columnar_snapshot::node_type_from_u16(row.node_type)?,
+                node_type: crate::columnar_snapshot::node_type_from_u16(
+                    row.node_type & crate::columnar_snapshot::NODE_TYPE_MASK,
+                )?,
                 name,
                 file_path,
                 file_path_off: row.file_path_off,

@@ -367,6 +367,7 @@ impl KotlinPlugin {
                 "is_constructor": true,
                 "primary": is_primary,
             }),
+            visibility: crate::single_pass::kotlin_declaration_visibility(ctor_node, source),
             ..Default::default()
         };
         record_symbol_spans(

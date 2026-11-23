@@ -14,6 +14,52 @@ fn text<'s>(node: Node<'_>, source: &'s [u8]) -> &'s str {
     node.utf8_text(source).unwrap_or("")
 }
 
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TargetLang {
+    Disabled,
+    Bash,
+    C,
+    Cpp,
+    Dart,
+    Elixir,
+    Javascript,
+    Kotlin,
+    Lua,
+    Php,
+    Puppet,
+    Python,
+    Ruby,
+    Rust,
+    Swift,
+    Typescript,
+    Other,
+}
+
+impl TargetLang {
+    fn from_id(language: &str) -> Self {
+        match language {
+            "go" | "java" => Self::Disabled,
+            "bash" => Self::Bash,
+            "c" => Self::C,
+            "cpp" => Self::Cpp,
+            "dart" => Self::Dart,
+            "elixir" => Self::Elixir,
+            "javascript" => Self::Javascript,
+            "kotlin" => Self::Kotlin,
+            "lua" => Self::Lua,
+            "php" => Self::Php,
+            "puppet" => Self::Puppet,
+            "python" => Self::Python,
+            "ruby" => Self::Ruby,
+            "rust" => Self::Rust,
+            "swift" => Self::Swift,
+            "typescript" => Self::Typescript,
+            _ => Self::Other,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Scope {
     start: usize,
@@ -88,9 +134,11 @@ struct Call<'s> {
 /// A per-file collector. `observe` consumes the caller's existing preorder
 /// visits; `apply` indexes declarations once and never scans symbols per call.
 pub struct LexicalCallTargets<'s> {
+    lang: TargetLang,
     language: Cow<'static, str>,
     scopes: Vec<Scope>,
     functions: Vec<Scope>,
+    param_lists: Vec<(usize, usize)>,
     bindings: HashMap<&'s str, Vec<Binding>>,
     calls: Vec<Call<'s>>,
 }
@@ -98,35 +146,60 @@ impl<'s> LexicalCallTargets<'s> {
     /// Select the native language's value-invocation and scope rules.
     pub fn new(language: &str) -> Self {
         Self {
+            lang: TargetLang::from_id(language),
             language: intern_language_cow(language),
             scopes: Vec::new(),
             functions: Vec::new(),
+            param_lists: Vec::new(),
             bindings: HashMap::new(),
             calls: Vec::new(),
         }
     }
     /// Feed each node once, before visiting its children.
+    #[inline]
     pub fn observe(&mut self, node: Node<'_>, source: &'s [u8]) {
-        let lang = self.language.as_ref();
-        if matches!(lang, "go" | "java") {
+        if self.lang == TargetLang::Disabled || !node.is_named() {
             return;
         }
+        let start_byte = node.start_byte();
+        let end_byte = node.end_byte();
         while self
             .scopes
             .last()
-            .is_some_and(|s| node.start_byte() < s.start || node.end_byte() > s.end)
+            .is_some_and(|s| start_byte < s.start || end_byte > s.end)
         {
             self.scopes.pop();
         }
         while self
             .functions
             .last()
-            .is_some_and(|scope| node.start_byte() < scope.start || node.end_byte() > scope.end)
+            .is_some_and(|scope| start_byte < scope.start || end_byte > scope.end)
         {
             self.functions.pop();
         }
+        while self
+            .param_lists
+            .last()
+            .is_some_and(|&(s, e)| start_byte < s || end_byte > e)
+        {
+            self.param_lists.pop();
+        }
+
         let kind = node.kind();
-        let function = (lang == "elixir"
+        if matches!(
+            kind,
+            "parameters"
+                | "formal_parameters"
+                | "parameter_list"
+                | "function_value_parameters"
+                | "formal_parameter_list"
+                | "method_parameters"
+                | "lambda_parameters"
+        ) {
+            self.param_lists.push((start_byte, end_byte));
+        }
+
+        let function = (self.lang == TargetLang::Elixir
             && kind == "call"
             && node.child_by_field_name("target").is_some_and(|n| {
                 matches!(text(n, source), "def" | "defp" | "defmacro" | "defmacrop")
@@ -171,40 +244,45 @@ impl<'s> LexicalCallTargets<'s> {
                 | "catch_clause"
                 | "switch_section"
         );
-        let push_scope = function || (block && (lang != "python" || self.scopes.is_empty()));
-        let captures = !(lang == "rust" && kind == "function_item");
+        let push_scope =
+            function || (block && (self.lang != TargetLang::Python || self.scopes.is_empty()));
+        let captures = !(self.lang == TargetLang::Rust && kind == "function_item");
         if function
             && !self.functions.is_empty()
-            && !matches!(lang, "ruby" | "bash" | "php" | "puppet" | "elixir")
+            && !matches!(
+                self.lang,
+                TargetLang::Ruby
+                    | TargetLang::Bash
+                    | TargetLang::Php
+                    | TargetLang::Puppet
+                    | TargetLang::Elixir
+            )
             && let Some(name) = node.child_by_field_name("name")
             && matches!(name.kind(), "identifier" | "simple_identifier")
         {
             // A nested named function is a declaration, not an unknown value.
             // Keep its lexical binding so a same-named outer declaration
             // cannot hijack it; apply() uses the native callable's identity.
-            self.record(name, node, source, true, false);
+            self.record(name, node, kind, source, true, false);
         }
         if push_scope {
-            self.scopes.push(Scope {
-                start: node.start_byte(),
-                end: node.end_byte(),
+            let scope_val = Scope {
+                start: start_byte,
+                end: end_byte,
                 start_point: point(node),
                 end_point: (node.end_position().row + 1, node.end_position().column),
                 captures,
-            });
+            };
+            self.scopes.push(scope_val);
             if function {
-                self.functions.push(Scope {
-                    start: node.start_byte(),
-                    end: node.end_byte(),
-                    start_point: point(node),
-                    end_point: (node.end_position().row + 1, node.end_position().column),
-                    captures,
-                });
+                self.functions.push(scope_val);
             }
         }
-        self.parameters(node, source);
-        self.declaration(node, source);
-        if let Some((target, force)) = self.target(node, source) {
+        if !self.param_lists.is_empty() || (self.lang == TargetLang::Swift && kind == "parameter") {
+            self.parameters(node, kind, source);
+        }
+        self.declaration(node, kind, source);
+        if let Some((target, force)) = self.target(node, kind, source) {
             let p = node.start_position();
             let end = node.end_position();
             self.calls.push(Call {
@@ -226,6 +304,7 @@ impl<'s> LexicalCallTargets<'s> {
         &mut self,
         name: Node<'_>,
         declaration: Node<'_>,
+        declaration_kind: &str,
         source: &'s [u8],
         parameter: bool,
         hoist: bool,
@@ -246,7 +325,7 @@ impl<'s> LexicalCallTargets<'s> {
         let end = declaration.end_position();
         let start = if parameter
             || hoist
-            || matches!(self.language.as_ref(), "javascript" | "typescript")
+            || matches!(self.lang, TargetLang::Javascript | TargetLang::Typescript)
         {
             scope.start
         } else {
@@ -258,7 +337,7 @@ impl<'s> LexicalCallTargets<'s> {
             declaration: (point(declaration), (end.row + 1, end.column)),
             function: self.functions.last().map(|scope| scope.start),
             function_declaration: matches!(
-                declaration.kind(),
+                declaration_kind,
                 "function_declaration"
                     | "function_definition"
                     | "function_item"
@@ -268,11 +347,34 @@ impl<'s> LexicalCallTargets<'s> {
     }
     fn identifier(mut node: Node<'_>) -> Option<Node<'_>> {
         for _ in 0..64 {
+            let k = node.kind();
             if matches!(
-                node.kind(),
+                k,
                 "identifier" | "simple_identifier" | "variable_name" | "word" | "name"
             ) {
                 return Some(node);
+            }
+            // Property/element mutations (`obj.prop = ...`, `arr[i] = ...`, `self.x = ...`)
+            // mutate an existing receiver rather than introducing a lexical binding.
+            if matches!(
+                k,
+                "attribute"
+                    | "member_expression"
+                    | "field_expression"
+                    | "subscript"
+                    | "subscript_expression"
+                    | "index_expression"
+                    | "navigation_expression"
+                    | "call"
+                    | "call_expression"
+                    | "method_invocation"
+                    | "scoped_identifier"
+                    | "qualified_identifier"
+                    | "binary_expression"
+                    | "await_expression"
+                    | "await"
+            ) {
+                return None;
             }
             node = node
                 .child_by_field_name("declarator")
@@ -281,8 +383,25 @@ impl<'s> LexicalCallTargets<'s> {
         }
         None
     }
-    fn parameters(&mut self, node: Node<'_>, source: &'s [u8]) {
-        let kind = node.kind();
+    fn parameters(&mut self, node: Node<'_>, kind: &str, source: &'s [u8]) {
+        if !matches!(
+            kind,
+            "identifier"
+                | "simple_identifier"
+                | "variable_name"
+                | "parameter"
+                | "parameter_declaration"
+                | "formal_parameter"
+                | "simple_parameter"
+                | "optional_parameter"
+                | "required_parameter"
+                | "typed_parameter"
+                | "default_parameter"
+                | "typed_default_parameter"
+                | "rest_pattern"
+        ) {
+            return;
+        }
         let Some(parent) = node.parent() else {
             return;
         };
@@ -296,7 +415,7 @@ impl<'s> LexicalCallTargets<'s> {
                 | "method_parameters"
                 | "lambda_parameters"
         );
-        if !list && !(self.language == "swift" && kind == "parameter") {
+        if !list && !(self.lang == TargetLang::Swift && kind == "parameter") {
             return;
         }
         // Names in callback *types* do not enter the enclosing body's scope.
@@ -308,7 +427,7 @@ impl<'s> LexicalCallTargets<'s> {
         }) {
             return;
         }
-        if matches!(self.language.as_ref(), "c" | "cpp")
+        if matches!(self.lang, TargetLang::C | TargetLang::Cpp)
             && let Some(declarator) = parent.parent()
             && declarator.kind() == "function_declarator"
         {
@@ -329,16 +448,7 @@ impl<'s> LexicalCallTargets<'s> {
         }
         let name = match kind {
             "identifier" | "simple_identifier" | "variable_name" => Some(node),
-            "parameter"
-            | "parameter_declaration"
-            | "formal_parameter"
-            | "simple_parameter"
-            | "optional_parameter"
-            | "required_parameter"
-            | "typed_parameter"
-            | "default_parameter"
-            | "typed_default_parameter"
-            | "rest_pattern" => node
+            _ => node
                 .child_by_field_name("pattern")
                 .and_then(Self::identifier)
                 .or_else(|| {
@@ -360,20 +470,22 @@ impl<'s> LexicalCallTargets<'s> {
                         matches!(n.kind(), "identifier" | "simple_identifier" | "variable")
                     })
                 }),
-            _ => None,
         };
         if let Some(name) = name {
-            self.record(name, node, source, true, true);
+            self.record(name, node, kind, source, true, true);
         }
     }
-    fn declaration(&mut self, node: Node<'_>, source: &'s [u8]) {
+    fn declaration(&mut self, node: Node<'_>, kind: &str, source: &'s [u8]) {
         if matches!(
-            self.language.as_ref(),
-            "java" | "puppet" | "elixir" | "bash" | "ruby"
+            self.lang,
+            TargetLang::Disabled
+                | TargetLang::Puppet
+                | TargetLang::Elixir
+                | TargetLang::Bash
+                | TargetLang::Ruby
         ) {
             return;
         }
-        let kind = node.kind();
         let candidate = match kind {
             "variable_declarator" | "init_declarator" | "initialized_variable_definition" => node
                 .child_by_field_name("name")
@@ -390,7 +502,10 @@ impl<'s> LexicalCallTargets<'s> {
                 .or_else(|| node.child_by_field_name("left"))
                 .or_else(|| node.child_by_field_name("name")),
             "variable_declaration"
-                if matches!(self.language.as_ref(), "swift" | "dart" | "lua" | "kotlin") =>
+                if matches!(
+                    self.lang,
+                    TargetLang::Swift | TargetLang::Dart | TargetLang::Lua | TargetLang::Kotlin
+                ) =>
             {
                 node.child_by_field_name("name")
                     .or_else(|| node.child_by_field_name("pattern"))
@@ -405,39 +520,39 @@ impl<'s> LexicalCallTargets<'s> {
             _ => None,
         };
         if let Some(name) = candidate.and_then(Self::identifier) {
-            let hoist = self.language == "python"
-                || (matches!(self.language.as_ref(), "javascript" | "typescript")
+            let hoist = self.lang == TargetLang::Python
+                || (matches!(self.lang, TargetLang::Javascript | TargetLang::Typescript)
                     && node
                         .parent()
                         .is_some_and(|p| p.kind() == "variable_declaration"));
-            let declaration = if matches!(
+            let (declaration, decl_kind) = if matches!(
                 kind,
                 "variable_declarator" | "initialized_variable_definition"
             ) {
-                node.parent()
-                    .filter(|p| {
-                        matches!(
-                            p.kind(),
-                            "lexical_declaration"
-                                | "variable_declaration"
-                                | "local_variable_declaration"
-                        )
-                    })
-                    .unwrap_or(node)
+                match node.parent().filter(|p| {
+                    matches!(
+                        p.kind(),
+                        "lexical_declaration"
+                            | "variable_declaration"
+                            | "local_variable_declaration"
+                    )
+                }) {
+                    Some(p) => (p, p.kind()),
+                    None => (node, kind),
+                }
             } else {
-                node
+                (node, kind)
             };
-            self.record(name, declaration, source, false, hoist);
+            self.record(name, declaration, decl_kind, source, false, hoist);
         }
     }
-    fn target<'n>(&self, node: Node<'n>, source: &[u8]) -> Option<(Node<'n>, bool)> {
-        let lang = self.language.as_ref();
-        if lang == "bash" && node.kind() == "command" {
+    fn target<'n>(&self, node: Node<'n>, kind: &str, source: &[u8]) -> Option<(Node<'n>, bool)> {
+        if self.lang == TargetLang::Bash && kind == "command" {
             let name = node.child_by_field_name("name")?;
             let raw = text(name, source);
             return raw.contains('$').then_some((name, true));
         }
-        if lang == "puppet" && node.kind() == "function_call" {
+        if self.lang == TargetLang::Puppet && kind == "function_call" {
             let mut c = node.walk();
             let mut children = node.named_children(&mut c);
             if text(children.next()?, source) == "call" {
@@ -445,7 +560,7 @@ impl<'s> LexicalCallTargets<'s> {
             }
             return None;
         }
-        if lang == "ruby" && node.kind() == "call" {
+        if self.lang == TargetLang::Ruby && kind == "call" {
             if text(node.child_by_field_name("method")?, source) == "call" {
                 return node
                     .child_by_field_name("receiver")
@@ -454,14 +569,14 @@ impl<'s> LexicalCallTargets<'s> {
             }
             return None;
         }
-        if lang == "elixir" && node.kind() == "call" {
+        if self.lang == TargetLang::Elixir && kind == "call" {
             let target = node.child_by_field_name("target")?;
             return (target.kind() == "dot" && target.child_by_field_name("right").is_none())
                 .then(|| target.child_by_field_name("left").map(|n| (n, true)))
                 .flatten();
         }
         if !matches!(
-            node.kind(),
+            kind,
             "call"
                 | "call_expression"
                 | "invocation_expression"
@@ -479,7 +594,7 @@ impl<'s> LexicalCallTargets<'s> {
                 node.named_children(&mut c)
                     .find(|n| matches!(n.kind(), "identifier" | "simple_identifier"))
             })?;
-        if lang == "php" {
+        if self.lang == TargetLang::Php {
             return (target.kind() == "variable_name").then_some((target, true));
         }
         if node.child_by_field_name("object").is_some()
@@ -517,7 +632,7 @@ impl<'s> LexicalCallTargets<'s> {
         let mut owners: Vec<&Symbol> = Vec::new();
         for symbol in symbols.iter().filter(|s| {
             matches!(s.symbol_type, SymbolType::Function | SymbolType::Method)
-                && (self.language == "elixir" || s.callable_role_str() != Some("declaration"))
+                && (self.lang == TargetLang::Elixir || s.callable_role_str() != Some("declaration"))
         }) {
             functions.entry(&symbol.name).or_default().push(symbol);
             owners.push(symbol);
@@ -525,7 +640,12 @@ impl<'s> LexicalCallTargets<'s> {
         for values in functions.values_mut() {
             values.sort_unstable_by_key(|s| symbol_point(s));
         }
-        owners.sort_unstable_by_key(|s| symbol_point(s));
+        owners.sort_unstable_by_key(|s| {
+            (
+                symbol_point(s),
+                std::cmp::Reverse((s.location.end_line, s.location.end_column)),
+            )
+        });
         let mut sites: HashMap<Point, Vec<usize>> = HashMap::new();
         for (i, r) in relations
             .iter()
@@ -564,12 +684,12 @@ impl<'s> LexicalCallTargets<'s> {
                 .unwrap_or_default();
             if indices.is_empty() {
                 // A native emitter may omit an anonymous invocation entirely.
-                // Select its enclosing callable without an O(calls × symbols) scan.
+                // Select its innermost enclosing callable even after sibling nested functions.
                 let count = owners.partition_point(|s| {
                     symbol_point(s) <= (call.location.start_line, call.location.start_column)
                 });
-                if let Some(owner) = count.checked_sub(1).map(|i| owners[i]).filter(|s| {
-                    if self.language == "elixir" {
+                if let Some(owner) = owners[..count].iter().rev().copied().find(|s| {
+                    if self.lang == TargetLang::Elixir {
                         // Elixir's native symbol span may stop at the head of
                         // a one-line do: definition. The existing traversal
                         // supplies its complete definition scope instead.
@@ -606,7 +726,9 @@ impl<'s> LexicalCallTargets<'s> {
             }
             for index in indices {
                 let r = &mut relations[index];
-                if self.language == "ruby" && r.to_type_hint.is_some() && !r.inferred_callable_owner
+                if self.lang == TargetLang::Ruby
+                    && r.to_type_hint.is_some()
+                    && !r.inferred_callable_owner
                 {
                     // Preserve a receiver type proven by the native plugin;
                     // project objects may define an ordinary `call` method.
@@ -627,5 +749,46 @@ impl<'s> LexicalCallTargets<'s> {
                 r.indirect_call = true;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn field_mutation_does_not_shadow_rust_function_call() {
+        let src = br#"
+struct State { count: i32 }
+fn helper() -> i32 { 1 }
+fn mutate_and_call(mut helper_state: State) -> i32 {
+    helper_state.count = 2;
+    helper()
+}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let mut lct = LexicalCallTargets::new("rust");
+        let mut stack = vec![tree.root_node()];
+        while let Some(n) = stack.pop() {
+            lct.observe(n, src);
+            for i in (0..n.child_count()).rev() {
+                if let Some(c) = n.child(i) {
+                    stack.push(c);
+                }
+            }
+        }
+        assert!(
+            !lct.bindings.contains_key("helper"),
+            "field mutation must not bind helper"
+        );
+        assert_eq!(
+            lct.bindings.get("helper_state").map(Vec::len),
+            Some(1),
+            "field mutation `helper_state.count = 2` must not record a second binding"
+        );
     }
 }

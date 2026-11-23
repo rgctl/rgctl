@@ -3,7 +3,9 @@
 //! Extracts symbols, relationships, and complexity metrics from Go source code
 //! using TreeSitter.
 
-use crate::single_pass::{extract_all_single_pass, go_ast_handlers};
+use crate::single_pass::{
+    extract_all_single_pass, extract_all_single_pass_in_repo, go_ast_handlers,
+};
 use rgctl_plugin_api::*;
 use rgctl_plugin_api::{Error, Result};
 use std::path::Path;
@@ -1205,6 +1207,15 @@ impl LanguagePlugin for GoPlugin {
         extract_all_single_pass(self, file_path, source)
     }
 
+    fn extract_all_in_repo(
+        &self,
+        file_path: &Path,
+        logical_path: Option<&Path>,
+        source: &[u8],
+    ) -> Result<ExtractAllResult> {
+        extract_all_single_pass_in_repo(self, file_path, logical_path, source)
+    }
+
     fn declared_ast_handlers(&self) -> Option<&AstHandlerTable> {
         Some(go_ast_handlers())
     }
@@ -1481,10 +1492,12 @@ func helper() {}
         let symbols = plugin.extract_symbols(path, source).unwrap();
         let relations = plugin.extract_relations(path, source, &symbols).unwrap();
         assert!(
-            relations
-                .iter()
-                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "demo.helper"),
-            "expected Calls -> helper, got {relations:?}"
+            relations.iter().any(|r| {
+                matches!(r.relation_type, RelationType::Calls)
+                    && r.to == "helper"
+                    && r.to_qualified_hint.as_deref() == Some("demo.helper")
+            }),
+            "expected Calls -> helper (hint demo.helper), got {relations:?}"
         );
     }
 

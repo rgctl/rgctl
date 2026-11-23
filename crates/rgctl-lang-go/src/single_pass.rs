@@ -170,6 +170,16 @@ pub fn extract_all_single_pass(
     file_path: &Path,
     source: &[u8],
 ) -> Result<ExtractAllResult> {
+    extract_all_single_pass_in_repo(plugin, file_path, None, source)
+}
+
+/// Repository-aware single-pass Go extraction deriving `dir.package` once when `logical_path` is provided.
+pub fn extract_all_single_pass_in_repo(
+    plugin: &GoPlugin,
+    file_path: &Path,
+    logical_path: Option<&Path>,
+    source: &[u8],
+) -> Result<ExtractAllResult> {
     let tree = parse_with_pool("go", go_grammar(), source).map_err(|e| Error::ParseError {
         file: file_path.to_path_buf(),
         line: 0,
@@ -350,8 +360,16 @@ pub fn extract_all_single_pass(
     }
 
     // Flush calls with the complete symbol list (forward-reference safe).
+    let raw_pkg = crate::plugin::package_name(root, source);
+    let go_module: Option<std::borrow::Cow<'_, str>> = match (raw_pkg, logical_path) {
+        (Some(pkg), Some(lp)) => Some(std::borrow::Cow::Owned(
+            rgctl_plugin_helpers::qualified_names::go_repo_package_module(lp, pkg),
+        )),
+        (Some(pkg), None) => Some(std::borrow::Cow::Borrowed(pkg)),
+        (None, _) => None,
+    };
     let call_file_index = CallFileIndex::new(file_path, &ctx.symbols)
-        .with_go_package(root, source)
+        .with_go_package_name(go_module.as_deref())
         .with_go_bindings(call_bindings);
     for pending in pending_calls {
         let identity_relation_start = relations.len();
@@ -390,7 +408,7 @@ pub fn extract_all_single_pass(
     let mut result = ExtractAllResult::from_parts(ctx.symbols, relations);
     result.file_namespace = rgctl_plugin_helpers::qualified_names::qualify_go_file(
         file_path,
-        crate::plugin::package_name(root, source),
+        go_module.as_deref(),
         &mut result.symbols,
         &mut result.relations,
     );

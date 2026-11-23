@@ -34,6 +34,9 @@ pub struct GoCallBindings<'s> {
 impl<'s> GoCallBindings<'s> {
     /// Observe a node in source preorder, before descending into its children.
     pub fn observe(&mut self, node: Node<'_>, source: &'s [u8]) {
+        if !node.is_named() {
+            return;
+        }
         while self
             .scopes
             .last()

@@ -226,7 +226,9 @@ fn columnar_node_type(bytes: &[u8], index: u32) -> Result<u16, String> {
         return Err(format!("node index {index} out of range"));
     }
     let off = offset_nodes + idx * NODE_ROW_SIZE + 16;
-    Ok(u16::from_le_bytes(bytes[off..off + 2].try_into().unwrap()))
+    // Masked: v4 snapshots pack declaration/visibility bits into the
+    // `node_type` high bits (0x1000 / 0x4000 / 0x8000 / 0xC000).
+    Ok(u16::from_le_bytes(bytes[off..off + 2].try_into().unwrap()) & 0x0FFF)
 }
 
 #[cfg(test)]

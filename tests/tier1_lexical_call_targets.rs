@@ -202,3 +202,66 @@ fn lexical_target_fixture_inventory_matches_all_tier1_languages() {
         expected
     );
 }
+
+#[test]
+fn property_mutations_do_not_shadow_direct_calls_and_sibling_nested_fns_keep_indirect_owner() {
+    let registry = Arc::new(rgctl_languages::default_registry());
+    let extractor = Extractor::new(registry).with_repo_root("/repo");
+
+    // `helper.cache = True` / `helper.cache = true` mutates an attribute on the function
+    // object; it must NOT shadow `helper()` as an unknown local value.
+    for (rel_path, src) in [
+        (
+            "app/prop.py",
+            &b"def helper():\n    return 1\ndef caller():\n    helper.cache = True\n    return helper()\n"[..],
+        ),
+        (
+            "src/prop.js",
+            &b"function helper() { return 1; }\nfunction caller() { helper.cache = true; return helper(); }\n"[..],
+        ),
+    ] {
+        let file = extractor
+            .extract_file_with_source(&Path::new("/repo").join(rel_path), src.to_vec())
+            .unwrap();
+        assert!(
+            file.relations
+                .iter()
+                .any(|r| r.relation_type == RelationType::Calls && !r.indirect_call),
+            "{rel_path}: attribute mutation shadowed direct call: {:?}",
+            file.relations
+        );
+        let mut builder = GraphBuilder::new();
+        extractor.populate_graph(&[file], &mut builder).unwrap();
+        let (nodes, edges) = builder.into_graph();
+        let id = |name: &str| {
+            nodes
+                .iter()
+                .find(|n| n.node_type == NodeType::Function && n.name.as_str() == name)
+                .unwrap()
+                .id
+        };
+        assert!(
+            edges.iter().any(|e| {
+                e.edge_type == EdgeType::Calls && e.from == id("caller") && e.to == id("helper")
+            }),
+            "{rel_path}: direct call edge lost"
+        );
+    }
+
+    // Preceding nested function declaration inside `outer($cb)` must not hide `outer`
+    // when attaching omitted anonymous `$cb()` indirect call provenance.
+    let php_src = b"<?php\nfunction outer($cb) {\n    function sibling_helper() { return 1; }\n    return $cb();\n}\n";
+    let php_file = extractor
+        .extract_file_with_source(Path::new("/repo/src/nested.php"), php_src.to_vec())
+        .unwrap();
+    assert!(
+        php_file.relations.iter().any(|r| {
+            r.relation_type == RelationType::Calls
+                && r.from.contains("outer")
+                && r.to == "cb"
+                && r.indirect_call
+        }),
+        "PHP sibling nested function hid enclosing outer($cb): {:?}",
+        php_file.relations
+    );
+}

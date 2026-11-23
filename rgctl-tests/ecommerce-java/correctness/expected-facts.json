@@ -647,13 +647,13 @@
       {
         "name": "correctnessRoot",
         "kind": "unreferenced_function",
-        "confidence": "high",
+        "confidence": "low",
         "file": "CorrectnessHarness.java"
       },
       {
         "name": "correctnessDiamond",
         "kind": "unreferenced_function",
-        "confidence": "high"
+        "confidence": "low"
       }
     ],
     "must_not_contain": [

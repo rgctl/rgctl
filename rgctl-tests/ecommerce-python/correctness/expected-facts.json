@@ -40,7 +40,7 @@
       {
         "edge": "calls",
         "from": "app.module_qualification.Native.exercise",
-        "to": "create",
+        "to": "app.module_qualification.Native.create",
         "severity": "required"
       },
       {
@@ -729,9 +729,10 @@
       "unique": true,
       "identity": {
         "exact_name": "create",
-        "canonical_fqn": "create",
+        "canonical_fqn": "Native::create",
         "file_suffix": "app/module_qualification/Native.py",
-        "language": "python"
+        "language": "python",
+        "qualified_name": "app.module_qualification.Native.create"
       },
       "exact_callees": [],
       "exact_callers": [

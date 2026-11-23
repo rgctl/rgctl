@@ -461,7 +461,7 @@
       {
         "name": "correctness_root",
         "kind": "unreferenced_function",
-        "confidence": "high",
+        "confidence": "low",
         "file": "correctness_harness.c"
       }
     ],

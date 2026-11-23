@@ -599,13 +599,13 @@
       {
         "name": "CorrectnessRoot",
         "kind": "unreferenced_function",
-        "confidence": "high",
+        "confidence": "low",
         "file": "CorrectnessHarness.cs"
       },
       {
         "name": "CorrectnessHarness",
         "kind": "unreferenced_class",
-        "confidence": "medium"
+        "confidence": "low"
       }
     ],
     "must_not_contain": [

@@ -1,46 +1,37 @@
 //! JSON and text output formatting for `rgctl dead-code`.
+//!
+//! JSON output serializes [`DeadCodeReport`] directly (the struct already
+//! derives `Serialize` with the documented snake_case field names), so
+//! kernel-scale reports never build an intermediate `serde_json::Value`
+//! tree.
 
-use rgctl_analysis::dead_code::{DeadCodeConfidence, DeadCodeFinding, DeadCodeReport};
-use serde_json::json;
-
-pub fn report_to_json(report: &DeadCodeReport) -> serde_json::Value {
-    json!({
-        "schema_version": report.schema_version,
-        "summary": {
-            "total_symbols": report.summary.total_symbols,
-            "reachable_symbols": report.summary.reachable_symbols,
-            "dead_symbols": report.summary.dead_symbols,
-            "entry_points": report.summary.entry_points,
-        },
-        "findings": report.findings.iter().map(finding_to_json).collect::<Vec<_>>(),
-    })
-}
-
-fn finding_to_json(f: &DeadCodeFinding) -> serde_json::Value {
-    json!({
-        "symbol_name": f.symbol_name,
-        "qualified_name": f.qualified_name,
-        "file_path": f.file_path,
-        "start_line": f.start_line,
-        "end_line": f.end_line,
-        "node_type": f.node_type,
-        "kind": f.kind,
-        "confidence": f.confidence,
-        "reason": f.reason,
-        "node_id": f.node_id.to_string(),
-    })
-}
+use rgctl_analysis::dead_code::{
+    DeadCodeConfidence, DeadCodeFinding, DeadCodeKind, DeadCodeReport,
+};
 
 pub fn emit_text(report: &DeadCodeReport) -> String {
     let mut out = String::new();
 
-    out.push_str(&format!(
-        "Dead-code analysis: {} total symbols, {} reachable, {} dead ({} entry points)\n\n",
-        report.summary.total_symbols,
-        report.summary.reachable_symbols,
-        report.summary.dead_symbols,
-        report.summary.entry_points,
-    ));
+    let truncated = report.summary.dead_symbols != report.summary.returned;
+    let summary_line = if truncated {
+        format!(
+            "{} total symbols, {} reachable, {} dead ({} entry points), {} returned",
+            report.summary.total_symbols,
+            report.summary.reachable_symbols,
+            report.summary.dead_symbols,
+            report.summary.entry_points,
+            report.summary.returned,
+        )
+    } else {
+        format!(
+            "{} total symbols, {} reachable, {} dead ({} entry points)",
+            report.summary.total_symbols,
+            report.summary.reachable_symbols,
+            report.summary.dead_symbols,
+            report.summary.entry_points,
+        )
+    };
+    out.push_str(&format!("Dead-code analysis: {summary_line}\n\n"));
 
     if report.findings.is_empty() {
         out.push_str("No dead code detected.\n");
@@ -100,7 +91,23 @@ fn format_finding(out: &mut String, f: &DeadCodeFinding) {
         _ => "unknown".to_string(),
     };
     out.push_str(&format!(
-        "  {:?}  {}  ({})  {}\n",
-        f.kind, f.symbol_name, location, f.reason,
+        "  {}  {}  ({})  {}\n",
+        kind_label(&f.kind),
+        f.symbol_name,
+        location,
+        f.reason,
     ));
+}
+
+/// Human-readable snake_case label for a finding kind (avoids Rust `{:?}`
+/// `Debug` spellings like `UnreferencedFunction` in text output).
+fn kind_label(kind: &DeadCodeKind) -> &'static str {
+    match kind {
+        DeadCodeKind::UnusedImport => "unused_import",
+        DeadCodeKind::UnreferencedFunction => "unreferenced_function",
+        DeadCodeKind::UnreferencedClass => "unreferenced_class",
+        DeadCodeKind::UnreferencedVariable => "unreferenced_variable",
+        DeadCodeKind::UnreferencedModule => "unreferenced_module",
+        DeadCodeKind::UnreferencedType => "unreferenced_type",
+    }
 }

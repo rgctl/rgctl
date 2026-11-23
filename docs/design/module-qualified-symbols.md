@@ -1,18 +1,20 @@
-# File qualification for JavaScript, TypeScript and Python declarations
+# File and package qualification for JavaScript, TypeScript, Python and Go
 
-JavaScript, TypeScript and Python now supply `qualified_name` for declarations that
+JavaScript, TypeScript, Python and Go supply `qualified_name` for declarations that
 previously left it empty. `src/app.ts` emits `src.app.exercise`; a missing name
 inside that function includes its lexical owner. Existing explicit owner names
-and callable identity discriminators are preserved. Go qualification remains a separate follow-up under issue #204.
+and callable identity discriminators are preserved.
 
-Callables whose short names overlap file-derived and native-owned scopes
-keep their existing unqualified representation, together with their lexical
-descendants. For example, a free `create()`
-in `Foo.ts` must not merge with the native `Foo.create` method. This conservative
-exception is independent of file stem and cache order. Literal callable names
-containing dots also retain their existing representation, so a property such
-as `outer.inner` cannot merge with a nested `inner` function. Fully namespacing native
-members is a separate ownership-policy change.
+Callables whose candidate `qualified_name` (`{owner}.{name}`) directly collides
+with an explicit native-owned `qualified_name` in the same file keep their
+existing unqualified representation, together with their lexical descendants.
+For example, a free `create()` in a root-level `Foo.ts` (`Foo.create`) must not
+merge with the native `Foo.create` method, whereas `src/Foo.ts` qualifies free
+`create()` as `src.Foo.create` without colliding. Literal callable names
+containing dots also retain their existing representation, so a property such as
+`outer.inner` cannot merge with a nested `inner` function. Uncallable anonymous
+callbacks (`anonymous`, `anonymous@L{line}:{col}`, `<lambda@{line}:{col}>`) leave `qualified_name` unset
+while disambiguating any nested named declarations via `.L{line}`.
 
 The qualifier runs on extraction workers after the existing tree walk. It does
 not reparse source, read package-manager files, or load repository-wide state.
@@ -40,8 +42,8 @@ policies leave both markers unset.
 
 Identical source reused in another same-stem file or checkout cannot retain the
 first file's logical namespace. Native explicitly qualified names are not
-rebased. Facts-cache format 13 rejects older raw facts; extraction semantics 16
-forces graph regeneration for the changed declaration identities.
+rebased. Facts-cache format 16 rejects older raw facts; extraction semantics 19
+forces graph regeneration for the changed declaration identities and lexical call bindings.
 
 Tests cover combined/split API agreement, nested declarations, explicit class
 owners, same-stem modules in one graph, persistent cache reuse across checkout
@@ -60,3 +62,12 @@ Explicit native class/method and constructor names are preserved. Combined and
 split extraction APIs, same-stem modules, persistent initializer-cache reuse and
 free/member collisions have regression coverage. The Python ecommerce expected
 facts assert graph qualified names independently from blast display names.
+
+Go qualifies package-scoped declarations with `QualifiedNameOrigin::Package`
+(`dir.package.Symbol` in repositories, `package.Symbol` standalone) while
+retaining explicit receiver and constructor owners (`Widget.Use`,
+`Widget.<init>`), enabling same-package cross-file calls without cross-package
+collisions. Across applicable Tier 1 languages, invocations through callback
+parameters or local callable values carry `Relation.indirect_call = true` so
+known local function declarations resolve normally while value calls never
+bind to unrelated global declarations or emit external stubs.

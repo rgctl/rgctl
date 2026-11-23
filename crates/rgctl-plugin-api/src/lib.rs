@@ -64,6 +64,29 @@ impl QualifiedNameOrigin {
     }
 }
 
+/// Normalized symbol visibility used for public/export classification.
+///
+/// Derived once at extraction time (plugin-typed, `modifiers` tokens,
+/// metadata `visibility`, or language rules such as Go uppercase exports)
+/// and stored as 2 hot bits in the columnar `NodeRow` (packed into the
+/// `node_type` `u16` high bits) — query paths never touch cold
+/// `NodeExtension` payloads or `properties["modifiers"]` to classify
+/// public API seams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[repr(u8)]
+pub enum SymbolVisibility {
+    /// No visibility information (default; treated as not public).
+    #[default]
+    Unknown = 0,
+    /// Exported / externally visible API (`pub`, `public`, `export`, Go
+    /// uppercase exports, Elixir `def`, non-`static` C linkage).
+    Public = 1,
+    /// Private to the enclosing scope (`private`, `defp`, C `static`).
+    Private = 2,
+    /// Module / package internal (`internal`, `pub(crate)`, package-private).
+    Internal = 3,
+}
+
 /// A symbol extracted from source code (function, class, struct, variable, etc.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Symbol {
@@ -159,6 +182,15 @@ pub struct Symbol {
     /// Precomputed single-pass complexity metrics (avoids JSON round-trip per function).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub complexity: Option<ComplexityMetrics>,
+
+    /// Normalized visibility (typed — avoids per-symbol `modifiers` string
+    /// joins and cold property lookups on query paths).
+    #[serde(default, skip_serializing_if = "is_unknown_visibility")]
+    pub visibility: SymbolVisibility,
+}
+
+fn is_unknown_visibility(v: &SymbolVisibility) -> bool {
+    *v == SymbolVisibility::Unknown
 }
 
 fn is_false(b: &bool) -> bool {
@@ -323,6 +355,7 @@ impl Default for Symbol {
             superseded_definition: false,
             language: None,
             complexity: None,
+            visibility: SymbolVisibility::Unknown,
         }
     }
 }
@@ -919,6 +952,17 @@ pub trait LanguagePlugin: Send + Sync {
             content_blobs: HashMap::new(),
             file_namespace: None,
         })
+    }
+
+    /// Extract symbols and relations in a single pass with an optional
+    /// repository-relative logical path for module qualification.
+    fn extract_all_in_repo(
+        &self,
+        file_path: &Path,
+        _logical_path: Option<&Path>,
+        source: &[u8],
+    ) -> Result<ExtractAllResult> {
+        self.extract_all(file_path, source)
     }
 
     /// Calculate complexity metrics for a symbol

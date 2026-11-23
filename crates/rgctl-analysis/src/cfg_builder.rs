@@ -12,6 +12,10 @@ use std::collections::{HashMap, HashSet};
 use tracing::warn;
 use tree_sitter::{Node, Tree};
 
+#[cfg(test)]
+#[path = "cfg_predicate_tests.rs"]
+mod predicate_tests;
+
 /// Maximum AST recursion depth for CFG expression walks (matches C++ extraction cap).
 const AST_WALK_MAX_DEPTH: usize = 2048;
 
@@ -2304,7 +2308,11 @@ impl<'a> CfgBuilder<'a> {
             }
         }
         if rescue_nodes.is_empty() && ensure_node.is_none() {
-            self.visit_block(container, source)?;
+            // A Ruby `begin` is not a generic block wrapper. Dispatching the
+            // same node through visit_block would re-enter this handler.
+            for stmt in body_stmts {
+                self.visit_statement(stmt, source)?;
+            }
             return Ok(());
         }
 
@@ -2576,6 +2584,17 @@ impl<'a> CfgBuilder<'a> {
             let cond_node = cur_node
                 .child_by_field_name("condition")
                 .or_else(|| cur_node.child_by_field_name("operand"))
+                .or_else(|| {
+                    // Dart leaves the predicate unfielded; its body is fielded.
+                    if self.language != "dart" {
+                        return None;
+                    }
+                    let body = cur_node.child_by_field_name("consequence")?;
+                    let mut cursor = cur_node.walk();
+                    cur_node
+                        .named_children(&mut cursor)
+                        .find(|child| !child.is_extra() && child.end_byte() <= body.start_byte())
+                })
                 .or_else(|| {
                     // Field-less grammars (Puppet, Swift, Bash, …): first predicate-like child.
                     find_direct_child_kinds(
@@ -4205,7 +4224,7 @@ impl<'a> CfgBuilder<'a> {
             self.add_statement_to_current(Statement {
                 kind: StatementKind::Branch,
                 line: cond.start_position().row + 1,
-                text,
+                text: text.to_string(),
                 defined_vars: SmallVec::new(),
                 used_vars: SmallVec::new(),
             });
@@ -4217,7 +4236,7 @@ impl<'a> CfgBuilder<'a> {
             self.add_statement_to_current(Statement {
                 kind: StatementKind::Branch,
                 line: cond.start_position().row + 1,
-                text,
+                text: text.to_string(),
                 defined_vars: SmallVec::new(),
                 used_vars: SmallVec::new(),
             });
@@ -4226,13 +4245,20 @@ impl<'a> CfgBuilder<'a> {
             return Ok(());
         }
 
-        self.add_statement_to_current(Statement {
-            kind: StatementKind::Branch,
-            line: cond.start_position().row + 1,
-            text,
-            defined_vars: SmallVec::new(),
-            used_vars: SmallVec::new(),
-        });
+        // Conditions are value uses (and may contain assignments), not just
+        // control-flow labels. Reuse ordinary lowering to preserve lexical
+        // scope and def/use facts for the PDG.
+        if depth >= MAX_CFG_STATEMENT_DEPTH {
+            self.add_statement_to_current(Statement {
+                kind: StatementKind::Branch,
+                line: cond.start_position().row + 1,
+                text,
+                defined_vars: SmallVec::new(),
+                used_vars: SmallVec::new(),
+            });
+        } else {
+            self.add_statement(cond, source, StatementKind::Branch)?;
+        }
         self.note_setjmp_in_expr(cond, source);
         let from = self.current_block;
         self.cfg.add_edge(from, true_dest, CfgEdgeType::IfTrue);
@@ -9091,6 +9117,92 @@ end
 "#;
         let cfg = build_cfg_for_function("ruby", code, "example").unwrap();
         assert!(cfg.blocks.len() >= 2, "expected CFG for begin/rescue body");
+    }
+
+    #[test]
+    fn test_ruby_plain_begin_descends_into_its_body() {
+        for source in [
+            "def example\n begin\n end\nend\n",
+            "def example\n begin\n  work()\n end\nend\n",
+            "def example\n value = begin\n  work()\n end\n consume(value)\nend\n",
+        ] {
+            let tree = crate::language_profile::parse_source("ruby", source.as_bytes()).unwrap();
+            assert!(!tree.root_node().has_error());
+            let cfg = build_cfg_for_function("ruby", source, "example").unwrap();
+            let reachable = cfg.reachable_blocks();
+            assert!(!cfg.exits.is_empty());
+            assert!(cfg.exits.iter().all(|exit| reachable.contains(exit)));
+            assert!(!cfg.has_cycle());
+            if source.contains("work()") {
+                assert!(
+                    cfg.blocks
+                        .values()
+                        .flat_map(|b| &b.statements)
+                        .any(|s| s.text == "work()")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_ruby_nested_begin_preserves_reaching_definitions() {
+        use crate::pdg::ProgramDependenceGraph;
+        use crate::slicing::{BackwardSlicer, SliceCriterion};
+
+        let source = "def example\n enabled = false\n begin\n  enabled = true\n  begin\n   token = enabled\n  end\n end\n consume(token, enabled)\nend\n";
+        let cfg = build_cfg_for_function("ruby", source, "example").unwrap();
+        let pdg = ProgramDependenceGraph::build(&cfg, source.as_bytes()).unwrap();
+        for (variable, from, to) in [("enabled", 4, 6), ("token", 6, 9), ("enabled", 4, 9)] {
+            assert!(
+                pdg.data_deps.iter().any(|dep| dep.variable == variable
+                    && pdg.nodes[&dep.from].statement.line == from
+                    && pdg.nodes[&dep.to].statement.line == to),
+                "missing {variable}: {from} -> {to}"
+            );
+        }
+        let slice = BackwardSlicer::new(&pdg, &cfg)
+            .slice(SliceCriterion {
+                variable: "token".into(),
+                line: 9,
+            })
+            .unwrap();
+        assert!(slice.lines.contains(&4));
+        assert!(slice.lines.contains(&6));
+        assert!(slice.lines.contains(&9));
+        // Plain begin wrappers do not change local visibility or dependencies.
+        // Keep line numbers equal to compare with the unwrapped Ruby body.
+        let unwrapped = "def example\n enabled = false\n\n  enabled = true\n\n   token = enabled\n\n\n consume(token, enabled)\nend\n";
+        let reference_cfg = build_cfg_for_function("ruby", unwrapped, "example").unwrap();
+        let reference_pdg =
+            ProgramDependenceGraph::build(&reference_cfg, unwrapped.as_bytes()).unwrap();
+        let dependencies = |graph: &ProgramDependenceGraph| -> HashSet<_> {
+            graph
+                .data_deps
+                .iter()
+                .map(|dep| {
+                    (
+                        graph.nodes[&dep.from].statement.line,
+                        graph.nodes[&dep.to].statement.line,
+                        dep.variable.clone(),
+                        dep.dep_type as u8,
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(dependencies(&pdg), dependencies(&reference_pdg));
+    }
+
+    #[test]
+    fn test_ruby_plain_begin_preserves_return_termination() {
+        let source = "def example\n begin\n  return 1\n  hidden()\n end\n outside()\nend\n";
+        let cfg = build_cfg_for_function("ruby", source, "example").unwrap();
+        let statements: Vec<_> = cfg.blocks.values().flat_map(|b| &b.statements).collect();
+        assert!(statements.iter().any(|s| s.kind == StatementKind::Return));
+        assert!(
+            !statements
+                .iter()
+                .any(|s| s.text.contains("hidden") || s.text.contains("outside"))
+        );
     }
 
     #[test]

@@ -522,7 +522,7 @@
       {
         "name": "correctnessRoot",
         "kind": "unreferenced_function",
-        "confidence": "high",
+        "confidence": "low",
         "file": "correctness_harness.cpp"
       }
     ],

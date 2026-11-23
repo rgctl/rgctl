@@ -2720,6 +2720,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "smallvec",
  "tempfile",
  "toml_edit",
  "tracing",

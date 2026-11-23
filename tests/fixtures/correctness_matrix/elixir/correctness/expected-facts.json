@@ -243,6 +243,30 @@
       ]
     }
   },
+  "dead_code": {
+    "severity": "required",
+    "entry_point": "correctness_root",
+    "reachable_with_entry_point": ["correctness_root", "correctness_mid", "correctness_leaf"],
+    "must_contain": [
+      {
+        "name": "correctness_root",
+        "kind": "unreferenced_function",
+        "confidence": "low",
+        "file": "correctness_harness.ex"
+      },
+      {
+        "name": "audit_weight",
+        "kind": "unreferenced_function",
+        "confidence": "low",
+        "file": "correctness_harness.ex"
+      }
+    ],
+    "must_not_contain": [
+      "correctness_mid",
+      "correctness_leaf",
+      "archive_chargeback_audit"
+    ]
+  },
   "invariants": {
     "B1_blast_vs_calls": {
       "enabled": true,

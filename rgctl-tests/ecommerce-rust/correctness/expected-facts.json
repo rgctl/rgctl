@@ -575,13 +575,13 @@
       {
         "name": "correctness_root",
         "kind": "unreferenced_function",
-        "confidence": "high",
+        "confidence": "low",
         "file": "correctness.rs"
       },
       {
         "name": "correctness_diamond",
         "kind": "unreferenced_function",
-        "confidence": "high"
+        "confidence": "low"
       }
     ],
     "must_not_contain": [

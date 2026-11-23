@@ -70,6 +70,10 @@ impl CppPlugin {
             modifiers: vec![],
             documentation: None,
             metadata,
+            // Member functions follow class/struct access specifiers (`static`
+            // on a member is not internal linkage); anonymous namespaces and
+            // file-scope `static` functions carry internal linkage (Private).
+            visibility: cpp_function_visibility(node, source),
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, function_name_node(node));
@@ -1208,4 +1212,151 @@ void make() {
         );
         assert!(inst.len() >= 2, "expected heap + array new: {relations:?}");
     }
+
+    #[test]
+    fn test_cpp_member_and_anonymous_namespace_visibility() {
+        let source = br#"
+class Widget {
+    int implicitPrivate() { return 0; }
+private:
+    int deadPrivateMethod() { return 1; }
+protected:
+    int protectedMethod() { return 2; }
+public:
+    static int publicStaticFactory() { return 3; }
+    int publicMethod() { return 4; }
+};
+
+struct Pod {
+    int implicitPublic() { return 5; }
+private:
+    int privateStructMethod() { return 6; }
+};
+
+namespace {
+    int anonHelper() { return 7; }
+    class AnonWidget {
+    public:
+        int anonPublicMethod() { return 8; }
+    };
+}
+
+namespace named {
+    int namedFree() { return 9; }
+    static int namedStatic() { return 10; }
+}
+"#;
+        let plugin = CppPlugin::new().unwrap();
+        let out = plugin.extract_all(Path::new("vis.cpp"), source).unwrap();
+        let vis = |name: &str| {
+            out.symbols
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("missing symbol {name}"))
+                .visibility
+        };
+
+        assert_eq!(vis("implicitPrivate"), SymbolVisibility::Private);
+        assert_eq!(vis("deadPrivateMethod"), SymbolVisibility::Private);
+        assert_eq!(vis("protectedMethod"), SymbolVisibility::Private);
+        assert_eq!(vis("publicStaticFactory"), SymbolVisibility::Public);
+        assert_eq!(vis("publicMethod"), SymbolVisibility::Public);
+        assert_eq!(vis("implicitPublic"), SymbolVisibility::Public);
+        assert_eq!(vis("privateStructMethod"), SymbolVisibility::Private);
+        assert_eq!(vis("anonHelper"), SymbolVisibility::Private);
+        assert_eq!(vis("anonPublicMethod"), SymbolVisibility::Private);
+        assert_eq!(vis("namedFree"), SymbolVisibility::Public);
+        assert_eq!(vis("namedStatic"), SymbolVisibility::Private);
+    }
+}
+
+/// Typed visibility for a C++ function or method definition/declaration.
+///
+/// - Enclosing anonymous `namespace { ... }` (`name` child absent) → `Private`
+///   (internal linkage across the translation unit).
+/// - Inside a class/struct/union `field_declaration_list` → derived from the
+///   preceding `access_specifier` (`public` → `Public`, `private` | `protected`
+///   → `Private`; absent defaults to `Private` for `class_specifier` and
+///   `Public` for `struct_specifier` / `union_specifier`). `static` on a member
+///   denotes a C++ static member function, not internal linkage.
+/// - Otherwise (free function) → `Private` if `static`, else `Public`.
+pub(crate) fn cpp_function_visibility(
+    node: Node,
+    source: &[u8],
+) -> rgctl_plugin_api::SymbolVisibility {
+    use rgctl_plugin_api::SymbolVisibility as SV;
+    const MAX_ANCESTOR_DEPTH: usize = 64;
+
+    let mut member_vis: Option<SV> = None;
+    let mut cur = node;
+    for _ in 0..MAX_ANCESTOR_DEPTH {
+        let Some(parent) = cur.parent() else {
+            break;
+        };
+        if parent.kind() == "namespace_definition" && parent.child_by_field_name("name").is_none() {
+            return SV::Private;
+        }
+        if member_vis.is_none() && parent.kind() == "field_declaration_list" {
+            member_vis = Some(cpp_member_visibility(parent, node.start_byte(), source));
+        }
+        cur = parent;
+    }
+
+    member_vis.unwrap_or_else(|| {
+        if has_static_storage_class(node, source) {
+            SV::Private
+        } else {
+            SV::Public
+        }
+    })
+}
+
+fn cpp_member_visibility(
+    field_list: Node,
+    target_start_byte: usize,
+    source: &[u8],
+) -> rgctl_plugin_api::SymbolVisibility {
+    use rgctl_plugin_api::SymbolVisibility as SV;
+
+    let mut vis = match field_list.parent().map(|p| p.kind()) {
+        Some("class_specifier") => SV::Private,
+        _ => SV::Public,
+    };
+    let mut cursor = field_list.walk();
+    for child in field_list.children(&mut cursor) {
+        if child.start_byte() >= target_start_byte {
+            break;
+        }
+        if child.kind() == "access_specifier" {
+            vis = match access_label(child, source) {
+                "private" | "protected" => SV::Private,
+                _ => SV::Public,
+            };
+        }
+    }
+    vis
+}
+
+/// Whether the C++ function definition / declaration carries the `static`
+/// storage class specifier (internal linkage). Mirrors the C plugin helper:
+/// no allocation, boolean scan of specifier children.
+pub(crate) fn has_static_storage_class(node: Node, source: &[u8]) -> bool {
+    let is_static = |spec: Node| {
+        spec.kind() == "storage_class_specifier" && spec.utf8_text(source) == Ok("static")
+    };
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if is_static(child) {
+            return true;
+        }
+        if child.kind() == "declaration_specifiers" {
+            let mut spec_cursor = child.walk();
+            for spec in child.children(&mut spec_cursor) {
+                if is_static(spec) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }

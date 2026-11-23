@@ -1621,15 +1621,56 @@ rgctl -f json dead-code [--confidence high,medium,low] [--entry-point PAT]...
                         [--exclude PAT]... [--include-tests] [--limit N]
 ```
 
-Finds symbols that are unreachable from any entry point (`main` / `__init__`,
-framework annotations such as `@RestController` / `@Service` / `@Scheduled`,
-`ExposesRoute` edges, and user-supplied `--entry-point` patterns) **and** have
-no incoming reference edges — i.e. dead roots. Downstream helpers of a dead
-root and isolated recursion cycles are intentionally suppressed (root-only
-semantics).
+Finds symbols that are unreachable from any entry point **and** are dead
+roots — i.e. they have no incoming reference edges, or they only participate
+in an *isolated dead cycle* (e.g. `dead_a <-> dead_b` mutual recursion with
+zero callers outside the cycle). Downstream helpers of a dead root stay
+suppressed (root-only semantics). Bodiless declarations (`.h` prototypes,
+interface signatures — `callable_role == "declaration"`) are API surface
+and never reported.
+
+Entry points seeded automatically:
+
+- `main` on the simple name segment — lowercase `main` in any language
+  (Rust `main` / `crate::main`, Go, C/C++, Bash/Lua/Dart `main`), plus
+  PascalCase `Main` in C#/F# sources (`Program.Main`), and Python `__init__`.
+- Swift / Scala 3 `@main` attributes (via `AnnotatedWith` edges to an
+  `Annotation` node; both plugins emit the `@`-spelled target so a same-repo
+  `def main` cannot collide).
+- Scala `object Main extends App` (subclasses of the `App` trait, including
+  `extends Base with App` via `Implements` edges).
+- Elixir OTP: `Application.start/2` (module named `…Application`) and
+  GenServer/Supervisor behaviour callbacks (`init`, `handle_call`,
+  `handle_cast`, `handle_info`, `handle_continue`, `terminate`,
+  `code_change`, `format_status`, `child_spec`) — callbacks are seeded only
+  in modules that actually adopt the behaviour (`use GenServer` /
+  `@behaviour` edges).
+- Framework / lifecycle annotations (`@RestController`, `@Service`,
+  `@Scheduled`, `@Autowired`, `@Bean`, JAX-RS `@Path` / `@GET` / `@POST` /
+  `@PUT` / `@DELETE` / `@PATCH`, JUnit-family `@Test`, …) — matched on the
+  annotation's simple name, anchored and case-insensitive so look-alikes
+  (`@TestVisible`, `@BeanFactory`) do not match.
+- `ExposesRoute` edges and user-supplied `--entry-point` patterns.
+
+Members of root *types* (annotated classes, `@main` structs, `extends App`
+objects) are reached through qualified-name prefix propagation in the same
+file — real graphs carry `Contains` edges only for File→Symbol, never
+Type→Method. Propagated members seed the reachability BFS but are not
+counted in `summary.entry_points`.
+
+Confidence tiers reflect language visibility: unreferenced **public /
+exported** symbols classify as `low` (intentional API seam candidates),
+private ones as `high`. Visibility is derived once at extraction
+(plugin-typed `SymbolVisibility`, `visibility` metadata, `modifiers`
+tokens, or language rules — Go uppercase exports, Elixir `def`/`defp`,
+C `static` linkage) and stored as 2 hot `NodeRow` bits (columnar format
+v4), so the analyzer never decodes cold `NodeExtension` payloads: findings
+are built entirely from hot columns and zero-copy string reads.
 
 `--confidence` accepts only `high`, `medium`, `low` (comma-separated); invalid
 level names exit non-zero instead of silently returning an empty report.
+The filter is pushed into the analyzer — excluded tiers are skipped before
+any finding allocation.
 
 ### TypeScript shape
 
@@ -1639,8 +1680,9 @@ interface DeadCodeReport {
   summary: {
     total_symbols: number;   // analyzable symbols in scope
     reachable_symbols: number;
-    dead_symbols: number;    // after --confidence / --limit filters
+    dead_symbols: number;    // after --confidence filters, before --limit
     entry_points: number;
+    returned: number;        // findings in the payload after --limit
   };
   findings: Array<{
     symbol_name: string;
@@ -1652,7 +1694,7 @@ interface DeadCodeReport {
     kind: "unused_import" | "unreferenced_function" | "unreferenced_class"
         | "unreferenced_variable" | "unreferenced_module" | "unreferenced_type";
     confidence: "high" | "medium" | "low";
-    reason: string;
+    reason: string;          // cycle findings mention "isolated dead cycle"
     node_id: string;         // UUID
   }>;                        // ordered: high confidence first, then file/line
 }

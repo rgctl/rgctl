@@ -260,7 +260,7 @@ fn has_body(node: Node<'_>) -> bool {
     let mut cursor = node.walk();
     node.named_children(&mut cursor).any(|n| {
         let kind = n.kind();
-        kind.ends_with("_body")
+        if kind.ends_with("_body")
             || kind.ends_with("_block")
             || matches!(
                 kind,
@@ -271,6 +271,19 @@ fn has_body(node: Node<'_>) -> bool {
                     | "do_block"
                     | "keywords"
             )
+        {
+            return true;
+        }
+        // Elixir one-liner bodies (`def f(x), do: expr`) nest the `keywords`
+        // node inside the `arguments` child — still an implementation, not
+        // a bodiless declaration.
+        if kind == "arguments" {
+            let mut args_cursor = n.walk();
+            return n
+                .named_children(&mut args_cursor)
+                .any(|k| k.kind() == "keywords");
+        }
+        false
     })
 }
 fn generic_context(node: Node<'_>, source: &[u8]) -> (Vec<String>, Vec<(String, String)>, String) {

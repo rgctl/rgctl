@@ -172,6 +172,10 @@ impl Extractor {
             if self.lossless {
                 rgctl_plugin_api::set_capture_last_tree(true);
             }
+            let logical_path = self
+                .repo_root
+                .as_ref()
+                .and_then(|root| path.strip_prefix(root).ok());
             let mut extracted = if let Some(facts) = &self.facts {
                 let key = facts_key_for_hash(plugin.as_ref(), *digest.as_bytes());
                 let cached = facts.get(&key).and_then(|mut hit| {
@@ -206,22 +210,21 @@ impl Extractor {
                 if let Some(cached) = cached {
                     cached
                 } else {
-                    let fresh = plugin.extract_all(path, &source)?;
+                    let fresh = plugin.extract_all_in_repo(
+                        path,
+                        Some(Path::new("__rgctl_cache__")),
+                        &source,
+                    )?;
                     // Encode once into Arc<[u8]> — do not retain decoded trees in the cache.
                     facts.put(key, &fresh);
                     fresh
                 }
             } else {
-                plugin.extract_all(path, &source)?
+                plugin.extract_all_in_repo(path, logical_path, &source)?
             };
-            let logical_path = self
-                .repo_root
-                .as_ref()
-                .and_then(|root| path.strip_prefix(root).ok())
-                .unwrap_or(path);
             rgctl_plugin_helpers::qualified_names::qualify_in_repo(
                 plugin.language_id(),
-                logical_path,
+                logical_path.unwrap_or(path),
                 &mut extracted,
             );
             let config_usages = ConfigUsageDetector::detect(plugin.language_id(), &source, path);
