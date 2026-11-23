@@ -646,6 +646,7 @@ impl GraphBuilder {
                 name_token_len,
                 name_span_overflow,
             );
+        node.visibility = derive_symbol_visibility(symbol);
 
         if let Some(qn) = qn_override.as_deref().or(symbol.qualified_name.as_deref()) {
             node = node.with_qualified_name(qn);
@@ -3800,6 +3801,89 @@ fn is_mainframe_relation(relation: &Relation) -> bool {
     matches!(relation.language_str(), Some("cobol" | "pli" | "jcl"))
 }
 
+/// Derive the normalized [`SymbolVisibility`] once, at graph-build time.
+///
+/// Precedence (first wins):
+/// 1. Plugin-typed `symbol.visibility` (e.g. C `static` linkage, Elixir
+///    `def`/`defp`).
+/// 2. `metadata["visibility"]` (Java plugins).
+/// 3. `modifiers` tokens (`pub`, `public`, `export`, `private`, …).
+/// 4. Language rules: Go uppercase-initial exports; Elixir `kind`
+///    (`def`/`defmacro` public vs `defp`/`defmacrop` private).
+///
+/// The result is stored as 2 hot `NodeRow` bits so query paths (e.g.
+/// `rgctl dead-code` confidence tiers) never decode cold extensions or
+/// join `modifiers` strings per node.
+fn derive_symbol_visibility(
+    symbol: &rgctl_plugin_api::Symbol,
+) -> rgctl_plugin_api::SymbolVisibility {
+    use rgctl_plugin_api::SymbolVisibility as SV;
+    if symbol.visibility != SV::Unknown {
+        return symbol.visibility;
+    }
+    // 2. Plugin metadata marker (Java/PHP emit compound strings like
+    //    "public static" / "public const" — scan tokens).
+    if !symbol.metadata.is_null() {
+        if let Some(vis) = symbol
+            .metadata
+            .get("visibility")
+            .and_then(|v| v.as_str())
+            .and_then(|v| v.split_whitespace().find_map(visibility_from_token))
+        {
+            return vis;
+        }
+    }
+    // 3. Modifier tokens (declaration order; first visibility-relevant wins).
+    for modifier in &symbol.modifiers {
+        if let Some(vis) = visibility_from_token(modifier) {
+            return vis;
+        }
+    }
+    // 4. Language rules.
+    match symbol.language_str() {
+        Some("go") => {
+            // Go exports are uppercase-initial identifiers.
+            if symbol
+                .name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_uppercase())
+            {
+                SV::Public
+            } else {
+                SV::Unknown
+            }
+        }
+        Some("elixir") => {
+            if !symbol.metadata.is_null()
+                && let Some(kind) = symbol.metadata.get("kind").and_then(|v| v.as_str())
+            {
+                return match kind {
+                    "def" | "defmacro" => SV::Public,
+                    "defp" | "defmacrop" => SV::Private,
+                    _ => SV::Unknown,
+                };
+            }
+            SV::Unknown
+        }
+        _ => SV::Unknown,
+    }
+}
+
+/// Map a visibility-ish modifier / metadata token to a tier.
+fn visibility_from_token(token: &str) -> Option<rgctl_plugin_api::SymbolVisibility> {
+    use rgctl_plugin_api::SymbolVisibility as SV;
+    let token = token.trim();
+    Some(match token {
+        "pub" | "public" | "export" | "exported" | "open" | "global" => SV::Public,
+        // Rust path-restricted visibility (`pub(crate)`, `pub(in crate::…)`).
+        _ if token.starts_with("pub(") => SV::Internal,
+        "internal" | "package" | "package-private" | "module" => SV::Internal,
+        "private" | "protected" | "fileprivate" => SV::Private,
+        _ => return None,
+    })
+}
+
 fn relation_allows_external_stub(relation: &Relation) -> bool {
     match relation.relation_type {
         RelationType::Instantiates
@@ -4119,6 +4203,47 @@ fn is_super_call(name: &str, qualified_hint: Option<&str>, type_name: &str) -> b
 mod tests {
     use super::*;
     use rgctl_plugin_api::{ConfigValueType, SourceLocation, SymbolType};
+
+    #[test]
+    fn derive_symbol_visibility_precedence() {
+        use rgctl_plugin_api::SymbolVisibility as SV;
+        let mut s = sample_symbol();
+        // 1. Plugin-typed wins.
+        s.visibility = SV::Private;
+        assert_eq!(derive_symbol_visibility(&s), SV::Private);
+        s.visibility = SV::Unknown;
+        // 2. Metadata `visibility` marker (Java plugins).
+        s.metadata = serde_json::json!({"visibility": "public"});
+        assert_eq!(derive_symbol_visibility(&s), SV::Public);
+        s.metadata = serde_json::Value::Null;
+        // 3. Modifier tokens (declaration order; first visibility token wins).
+        s.modifiers = vec!["async".to_string(), "pub".to_string()];
+        assert_eq!(derive_symbol_visibility(&s), SV::Public);
+        s.modifiers = vec!["pub(crate)".to_string()];
+        assert_eq!(derive_symbol_visibility(&s), SV::Internal);
+        s.modifiers = vec!["private".to_string()];
+        assert_eq!(derive_symbol_visibility(&s), SV::Private);
+        s.modifiers = vec!["static".to_string(), "final".to_string()];
+        assert_eq!(
+            derive_symbol_visibility(&s),
+            SV::Unknown,
+            "non-visibility tokens"
+        );
+        // 4a. Go uppercase-initial exports.
+        s.modifiers = vec![];
+        s.name = "CorrectnessRoot".to_string();
+        s.language = Some(std::borrow::Cow::Borrowed("go"));
+        assert_eq!(derive_symbol_visibility(&s), SV::Public);
+        s.name = "correctnessRoot".to_string();
+        assert_eq!(derive_symbol_visibility(&s), SV::Unknown);
+        // 4b. Elixir def/defp kind metadata.
+        s.language = Some(std::borrow::Cow::Borrowed("elixir"));
+        s.name = "handle_call".to_string();
+        s.metadata = serde_json::json!({"kind": "def"});
+        assert_eq!(derive_symbol_visibility(&s), SV::Public);
+        s.metadata = serde_json::json!({"kind": "defp"});
+        assert_eq!(derive_symbol_visibility(&s), SV::Private);
+    }
 
     fn sample_symbol() -> Symbol {
         Symbol {

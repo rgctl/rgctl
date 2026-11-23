@@ -41,6 +41,9 @@
       "unique": true
     }
   },
+  "dead_code": {
+    "severity": "unsupported"
+  },
   "invariants": {
     "B2_gql_calls_nonzero": {
       "enabled": false

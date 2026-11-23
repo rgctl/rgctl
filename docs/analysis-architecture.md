@@ -148,7 +148,7 @@ rgctl cpg calls --function <symbol> -f json
 rgctl cpg mutations --field <field_name> -f json
 rgctl cpg flows --file <path> --line 42 --variable x --direction forward -f json
 
-# Dead-code detection via graph reachability (root-only, zero-cold-touch)
+# Dead-code detection via graph reachability (roots + isolated dead cycles, zero-cold-touch)
 rgctl dead-code -f json
 rgctl dead-code --confidence high,medium --entry-point main -f json
 ```

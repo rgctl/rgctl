@@ -300,7 +300,7 @@
       {
         "name": "correctnessRoot",
         "kind": "unreferenced_function",
-        "confidence": "high",
+        "confidence": "low",
         "file": "CorrectnessHarness.php"
       },
       {
@@ -311,7 +311,7 @@
       {
         "name": "correctnessDiamond",
         "kind": "unreferenced_function",
-        "confidence": "high"
+        "confidence": "low"
       }
     ],
     "must_not_contain": [
